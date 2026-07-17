@@ -129,7 +129,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/highlight-clips"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false, "error": "x"})),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": false, "error": "x"})),
             )
             .mount(&server)
             .await;

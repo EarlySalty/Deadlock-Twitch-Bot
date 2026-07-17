@@ -134,10 +134,7 @@ fn max_ttk<'a>(deaths: impl Iterator<Item = &'a Death>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn find_close_fights(
-    player_kills: &[&Death],
-    player_own_deaths: &[&Death],
-) -> Vec<HighlightEvent> {
+fn find_close_fights(player_kills: &[&Death], player_own_deaths: &[&Death]) -> Vec<HighlightEvent> {
     let mut results = Vec::new();
     let mut used_death_idx = std::collections::HashSet::new();
 
@@ -159,7 +156,11 @@ fn find_close_fights(
             let last_t = kill_t.max(death_t);
             let max_ttk = kill_ttk.max(death_ttk);
             let pre_roll = ((max_ttk as i64) + 5).min(MAX_PRE_ROLL_S);
-            let label = if kill_t > death_t { "Clutch Kill" } else { "Close Fight" };
+            let label = if kill_t > death_t {
+                "Clutch Kill"
+            } else {
+                "Close Fight"
+            };
             results.push(HighlightEvent {
                 event_type: EventType::CloseFight,
                 game_time_s: first_t,
@@ -212,7 +213,10 @@ fn collect_deaths(players: &[&serde_json::Value]) -> Vec<Death> {
     let mut deaths = Vec::new();
     for player in players {
         let slot = as_int(player.get("player_slot"));
-        let Some(details) = player.get("death_details").and_then(serde_json::Value::as_array) else {
+        let Some(details) = player
+            .get("death_details")
+            .and_then(serde_json::Value::as_array)
+        else {
             continue;
         };
         for death in details {
@@ -226,7 +230,9 @@ fn collect_deaths(players: &[&serde_json::Value]) -> Vec<Death> {
                 game_time_s,
                 killer_player_slot: as_int(death.get("killer_player_slot")),
                 killed_player_slot: slot,
-                time_to_kill_s: death.get("time_to_kill_s").and_then(serde_json::Value::as_f64),
+                time_to_kill_s: death
+                    .get("time_to_kill_s")
+                    .and_then(serde_json::Value::as_f64),
             });
         }
     }
@@ -386,8 +392,18 @@ mod tests {
     #[test]
     fn close_fight_clutch_vs_close() {
         // Kill nach eigenem Tod → "Clutch Kill"; Kill vor Tod → "Close Fight".
-        let kill = Death { game_time_s: 50, killer_player_slot: Some(0), killed_player_slot: Some(1), time_to_kill_s: Some(4.0) };
-        let own_death = Death { game_time_s: 40, killer_player_slot: Some(9), killed_player_slot: Some(0), time_to_kill_s: Some(2.0) };
+        let kill = Death {
+            game_time_s: 50,
+            killer_player_slot: Some(0),
+            killed_player_slot: Some(1),
+            time_to_kill_s: Some(4.0),
+        };
+        let own_death = Death {
+            game_time_s: 40,
+            killer_player_slot: Some(9),
+            killed_player_slot: Some(0),
+            time_to_kill_s: Some(2.0),
+        };
         let kills = vec![&kill];
         let deaths = vec![&own_death];
         let out = find_close_fights(&kills, &deaths);
@@ -400,9 +416,23 @@ mod tests {
 
     #[test]
     fn dedup_dominierte_events_entfernt() {
-        let outer = HighlightEvent { event_type: EventType::Teamfight, game_time_s: 100, duration_s: 30, kill_count: 4, label: "A".into(), pre_roll_s: 10 };
+        let outer = HighlightEvent {
+            event_type: EventType::Teamfight,
+            game_time_s: 100,
+            duration_s: 30,
+            kill_count: 4,
+            label: "A".into(),
+            pre_roll_s: 10,
+        };
         // inner liegt komplett im Fenster von outer → wird entfernt.
-        let inner = HighlightEvent { event_type: EventType::Multikill, game_time_s: 105, duration_s: 5, kill_count: 2, label: "B".into(), pre_roll_s: 0 };
+        let inner = HighlightEvent {
+            event_type: EventType::Multikill,
+            game_time_s: 105,
+            duration_s: 5,
+            kill_count: 2,
+            label: "B".into(),
+            pre_roll_s: 0,
+        };
         let out = deduplicate_events(vec![outer.clone(), inner]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].label, "A");

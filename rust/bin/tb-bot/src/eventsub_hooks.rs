@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_engagement::crew_review_store::CrewReviewStore;
 use tb_monitoring::{
     EventSubHooks, LiveStateStore, ModeratorProvisionOutcome, ModeratorProvisioner,
     SubscriptionManager,
@@ -763,6 +764,23 @@ impl EventSubHooks for RaidEventSubHooks {
         // Engagement-Off und Global-Ban-Sweep liefen bereits früher (siehe
         // on_stream_offline_engagement / on_stream_offline_global_ban). Hier nur
         // noch der Auto-Raid + Post-Stream-Analyse nach State-Finalize.
+        if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
+            match CrewReviewStore::new(self.pool.clone())
+                .close_channel_session(login, "stream_offline", Utc::now())
+                .await
+            {
+                Ok(true) => tracing::info!(
+                    login,
+                    "Ricky-Review: Session per EventSub-Offline geschlossen"
+                ),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    login,
+                    %error,
+                    "Ricky-Review: EventSub-Offline-Close fehlgeschlagen"
+                ),
+            }
+        }
         self.offline
             .handle_streamer_offline(twitch_user_id, login)
             .await;

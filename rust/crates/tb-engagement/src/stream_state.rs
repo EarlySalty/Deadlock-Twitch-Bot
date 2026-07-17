@@ -21,7 +21,10 @@ pub struct StreamState {
 
 impl StreamState {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, cache: Mutex::new(HashMap::new()) }
+        Self {
+            pool,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn check(&self, cl: &str) -> Result<bool, sqlx::Error> {
@@ -83,19 +86,37 @@ mod tests {
     use std::str::FromStr;
 
     async fn closed_pool() -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect_lazy_with(PgConnectOptions::new());
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy_with(PgConnectOptions::new());
         pool.close().await;
         pool
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_live_state (\
              twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, \
@@ -109,7 +130,9 @@ mod tests {
 
     #[tokio::test]
     async fn gate_live_und_deadlock() {
-        let Some(pool) = make_pool("t_eng_streamstate").await else { return };
+        let Some(pool) = make_pool("t_eng_streamstate").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES \
              ('1','live_dl', 1, 'Deadlock'), \

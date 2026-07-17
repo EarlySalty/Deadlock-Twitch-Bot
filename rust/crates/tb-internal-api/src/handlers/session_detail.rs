@@ -31,13 +31,13 @@
 //! | unerwartete Exception | 500 | `{"error":"internal_error","message":"failed to fetch session detail"}` |
 
 use axum::{
-    Json,
     extract::{Path, State},
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 #[cfg(test)]
 use sqlx::Row;
@@ -288,18 +288,18 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::get,
+        Extension, Router,
     };
     use chrono::TimeZone;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
+    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
     // ── Infrastruktur ─────────────────────────────────────────────────────────

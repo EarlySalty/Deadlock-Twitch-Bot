@@ -22,16 +22,40 @@ const SLANG_TERMS: &[(&str, &str, &[&str])] = &[
     ("souls", "Souls", &["soul", "soul orbs", "soul orb"]),
     ("soul orb", "Soul Orb", &["soul orbs", "orb", "orbs"]),
     ("lane phase", "Lane Phase", &["laning phase", "lane"]),
-    ("midboss", "Midboss", &["mid boss", "mid-boss", "patron mid"]),
+    (
+        "midboss",
+        "Midboss",
+        &["mid boss", "mid-boss", "patron mid"],
+    ),
     ("patron", "Patron", &["base boss", "endgame boss"]),
-    ("walker", "Walker", &["walkers", "boss tier 2", "tier 2 boss"]),
-    ("guardian", "Guardian", &["guardians", "boss tier 1", "tier 1 boss"]),
+    (
+        "walker",
+        "Walker",
+        &["walkers", "boss tier 2", "tier 2 boss"],
+    ),
+    (
+        "guardian",
+        "Guardian",
+        &["guardians", "boss tier 1", "tier 1 boss"],
+    ),
     ("rejuv", "Rejuvenator", &["rejuvenator", "rejuv buff"]),
     ("zip", "Zipline", &["zipline", "zips", "ziplines"]),
     ("flex slot", "Flex Slot", &["flexslot", "flex"]),
-    ("greens", "Weapon Items", &["green items", "green slot", "weapon items"]),
-    ("oranges", "Vitality Items", &["orange items", "orange slot", "vitality items"]),
-    ("purples", "Spirit Items", &["purple items", "purple slot", "spirit items"]),
+    (
+        "greens",
+        "Weapon Items",
+        &["green items", "green slot", "weapon items"],
+    ),
+    (
+        "oranges",
+        "Vitality Items",
+        &["orange items", "orange slot", "vitality items"],
+    ),
+    (
+        "purples",
+        "Spirit Items",
+        &["purple items", "purple slot", "spirit items"],
+    ),
     ("gank", "Gank", &["ganking", "ganked"]),
     ("rotate", "Rotate", &["rotation", "rotating"]),
     ("farm", "Farm", &["farming", "farmed"]),
@@ -62,7 +86,12 @@ pub fn slang_entries() -> Vec<VocabEntry> {
 /// Erstes nicht-leeres String-Feld aus den Keys.
 fn first_str(obj: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
-        .find_map(|k| obj.get(*k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()))
+        .find_map(|k| {
+            obj.get(*k)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
         .map(str::to_string)
 }
 
@@ -70,7 +99,12 @@ fn first_str(obj: &Value, keys: &[&str]) -> Option<String> {
 fn collect_aliases(obj: &Value, keys: &[&str], canonical: &str) -> Vec<String> {
     let canon_lower = canonical.to_lowercase();
     keys.iter()
-        .filter_map(|k| obj.get(*k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()))
+        .filter_map(|k| {
+            obj.get(*k)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
         .filter(|a| a.to_lowercase() != canon_lower)
         .map(str::to_string)
         .collect()
@@ -80,7 +114,10 @@ fn collect_aliases(obj: &Value, keys: &[&str], canonical: &str) -> Vec<String> {
 pub fn build_heroes_entries(heroes: &[Value]) -> Vec<VocabEntry> {
     let mut out = Vec::new();
     for hero in heroes {
-        let Some(canonical) = first_str(hero, &["name", "display_name", "english_name", "internal_name"]) else {
+        let Some(canonical) = first_str(
+            hero,
+            &["name", "display_name", "english_name", "internal_name"],
+        ) else {
             continue;
         };
         out.push(VocabEntry {
@@ -88,14 +125,19 @@ pub fn build_heroes_entries(heroes: &[Value]) -> Vec<VocabEntry> {
             canonical: canonical.clone(),
             category: "hero".to_string(),
             source: "deadlock_api".to_string(),
-            aliases: collect_aliases(hero, &["internal_name", "english_name", "short_name", "alt_name"], &canonical),
+            aliases: collect_aliases(
+                hero,
+                &["internal_name", "english_name", "short_name", "alt_name"],
+                &canonical,
+            ),
             weight: 5,
             updated_at: None,
         });
 
         if let Some(abilities) = hero.get("abilities").and_then(Value::as_array) {
             for ability in abilities {
-                let Some(canon_ab) = first_str(ability, &["name", "display_name", "english_name"]) else {
+                let Some(canon_ab) = first_str(ability, &["name", "display_name", "english_name"])
+                else {
                     continue;
                 };
                 out.push(VocabEntry {
@@ -103,7 +145,11 @@ pub fn build_heroes_entries(heroes: &[Value]) -> Vec<VocabEntry> {
                     canonical: canon_ab.clone(),
                     category: "ability".to_string(),
                     source: "deadlock_api".to_string(),
-                    aliases: collect_aliases(ability, &["internal_name", "english_name"], &canon_ab),
+                    aliases: collect_aliases(
+                        ability,
+                        &["internal_name", "english_name"],
+                        &canon_ab,
+                    ),
                     weight: 3,
                     updated_at: None,
                 });
@@ -125,7 +171,11 @@ pub fn build_items_entries(items: &[Value]) -> Vec<VocabEntry> {
             canonical: canonical.clone(),
             category: "item".to_string(),
             source: "deadlock_api".to_string(),
-            aliases: collect_aliases(item, &["internal_name", "english_name", "short_name"], &canonical),
+            aliases: collect_aliases(
+                item,
+                &["internal_name", "english_name", "short_name"],
+                &canonical,
+            ),
             weight: 4,
             updated_at: None,
         });
@@ -160,7 +210,11 @@ async fn fetch_json(http: &reqwest::Client, url: &str) -> Vec<Value> {
 }
 
 /// Lädt Heroes/Abilities + Items aus der Deadlock-API (URLs injizierbar).
-pub async fn fetch_deadlock_vocab(http: &reqwest::Client, heroes_url: &str, items_url: &str) -> Vec<VocabEntry> {
+pub async fn fetch_deadlock_vocab(
+    http: &reqwest::Client,
+    heroes_url: &str,
+    items_url: &str,
+) -> Vec<VocabEntry> {
     let (heroes, items) = tokio::join!(fetch_json(http, heroes_url), fetch_json(http, items_url));
     let mut out = build_heroes_entries(&heroes);
     out.extend(build_items_entries(&items));
@@ -169,7 +223,15 @@ pub async fn fetch_deadlock_vocab(http: &reqwest::Client, heroes_url: &str, item
 
 /// Synchronisiert das Vokabular → (geschrieben, übersprungen).
 pub async fn seed_vocab(pool: &PgPool, include_slang: bool, include_api: bool) -> (usize, usize) {
-    seed_vocab_with(pool, &reqwest::Client::new(), include_slang, include_api, HEROES_URL, ITEMS_URL).await
+    seed_vocab_with(
+        pool,
+        &reqwest::Client::new(),
+        include_slang,
+        include_api,
+        HEROES_URL,
+        ITEMS_URL,
+    )
+    .await
 }
 
 async fn seed_vocab_with(
@@ -238,47 +300,89 @@ mod tests {
     async fn fetch_deadlock_vocab_via_wrapper_und_array() {
         let server = MockServer::start().await;
         // Heroes als {"data": [...]}-Wrapper.
-        Mock::given(method("GET")).and(path("/heroes"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"name": "Bebop"}]})))
-            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/heroes"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data": [{"name": "Bebop"}]})),
+            )
+            .mount(&server)
+            .await;
         // Items als nacktes Array.
-        Mock::given(method("GET")).and(path("/items"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"name": "Headshot Booster"}])))
-            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/items"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"name": "Headshot Booster"}])),
+            )
+            .mount(&server)
+            .await;
 
         let http = reqwest::Client::new();
-        let entries = fetch_deadlock_vocab(&http, &format!("{}/heroes", server.uri()), &format!("{}/items", server.uri())).await;
-        assert!(entries.iter().any(|e| e.canonical == "Bebop" && e.category == "hero"));
-        assert!(entries.iter().any(|e| e.canonical == "Headshot Booster" && e.category == "item"));
+        let entries = fetch_deadlock_vocab(
+            &http,
+            &format!("{}/heroes", server.uri()),
+            &format!("{}/items", server.uri()),
+        )
+        .await;
+        assert!(entries
+            .iter()
+            .any(|e| e.canonical == "Bebop" && e.category == "hero"));
+        assert!(entries
+            .iter()
+            .any(|e| e.canonical == "Headshot Booster" && e.category == "item"));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, \
              category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', \
              aliases JSONB NOT NULL DEFAULT '[]'::JSONB, weight INTEGER NOT NULL DEFAULT 1, \
              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn seed_slang_only_schreibt_in_db() {
-        let Some(pool) = make_pool("t_sm_seed").await else { return };
+        let Some(pool) = make_pool("t_sm_seed").await else {
+            return;
+        };
         let http = reqwest::Client::new();
-        let (written, skipped) = seed_vocab_with(&pool, &http, true, false, "http://x", "http://x").await;
+        let (written, skipped) =
+            seed_vocab_with(&pool, &http, true, false, "http://x", "http://x").await;
         assert_eq!(written, 25);
         assert_eq!(skipped, 0);
         // Alle 25 Slang-Terme sind unique (lowercase) → 25 Zeilen.
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deadlock_vocab WHERE category='slang'").fetch_one(&pool).await.unwrap();
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deadlock_vocab WHERE category='slang'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(n, 25);
     }
 }

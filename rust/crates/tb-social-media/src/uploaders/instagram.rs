@@ -10,7 +10,10 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot, PlatformUploader, UploadError};
+use super::{
+    as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot,
+    PlatformUploader, UploadError,
+};
 use crate::video_processor::format_hashtags;
 
 const MAX_FILE_MB: f64 = 1024.0;
@@ -63,47 +66,78 @@ impl InstagramUploader {
     }
 
     /// Erstellt den Reel-Media-Container und liefert die Container-ID.
-    pub async fn create_media_container(&self, video_url: &str, caption: &str, share_to_feed: bool) -> Result<String, UploadError> {
+    pub async fn create_media_container(
+        &self,
+        video_url: &str,
+        caption: &str,
+        share_to_feed: bool,
+    ) -> Result<String, UploadError> {
         let resp = self
             .http
-            .post(format!("{}/{}/media", self.api_base, self.business_account_id))
+            .post(format!(
+                "{}/{}/media",
+                self.api_base, self.business_account_id
+            ))
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("media_type", "REELS"),
                 ("video_url", video_url),
                 ("caption", caption),
-                ("share_to_feed", if share_to_feed { "true" } else { "false" }),
+                (
+                    "share_to_feed",
+                    if share_to_feed { "true" } else { "false" },
+                ),
             ])
             .send()
             .await
             .map_err(|e| UploadError::Request(e.to_string()))?;
         let data = expect_ok_json(resp, "Instagram create container").await?;
-        data["id"].as_str().map(str::to_string).ok_or_else(|| UploadError::Api("No container ID in response".to_string()))
+        data["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| UploadError::Api("No container ID in response".to_string()))
     }
 
     /// Veröffentlicht den Container und liefert die Media-ID.
     pub async fn publish_container(&self, container_id: &str) -> Result<String, UploadError> {
         let resp = self
             .http
-            .post(format!("{}/{}/media_publish", self.api_base, self.business_account_id))
-            .query(&[("access_token", self.access_token.as_str()), ("creation_id", container_id)])
+            .post(format!(
+                "{}/{}/media_publish",
+                self.api_base, self.business_account_id
+            ))
+            .query(&[
+                ("access_token", self.access_token.as_str()),
+                ("creation_id", container_id),
+            ])
             .send()
             .await
             .map_err(|e| UploadError::Request(e.to_string()))?;
         let data = expect_ok_json(resp, "Instagram publish").await?;
-        data["id"].as_str().map(str::to_string).ok_or_else(|| UploadError::Api("No media ID in response".to_string()))
+        data["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| UploadError::Api("No media ID in response".to_string()))
     }
 
     /// Reel aus einer öffentlichen Video-URL veröffentlichen (Container → Publish).
-    pub async fn upload_reel(&self, video_url: &str, caption: &str, share_to_feed: bool) -> Result<String, UploadError> {
-        let container_id = self.create_media_container(video_url, caption, share_to_feed).await?;
+    pub async fn upload_reel(
+        &self,
+        video_url: &str,
+        caption: &str,
+        share_to_feed: bool,
+    ) -> Result<String, UploadError> {
+        let container_id = self
+            .create_media_container(video_url, caption, share_to_feed)
+            .await?;
         self.publish_container(&container_id).await
     }
 
     /// Platzhalter — Video-Hosting ist nicht implementiert (1:1 wie Python).
     pub async fn upload_to_temporary_host(&self, _video_path: &str) -> Result<String, UploadError> {
         Err(UploadError::NotImplemented(
-            "Video hosting not implemented. Upload video to public hosting and pass the URL.".to_string(),
+            "Video hosting not implemented. Upload video to public hosting and pass the URL."
+                .to_string(),
         ))
     }
 }
@@ -122,7 +156,13 @@ impl PlatformUploader for InstagramUploader {
         validate_local_file(video_path, MAX_FILE_MB)
     }
 
-    async fn upload_video(&self, video_path: &str, _title: &str, description: &str, hashtags: &[String]) -> Result<String, UploadError> {
+    async fn upload_video(
+        &self,
+        video_path: &str,
+        _title: &str,
+        description: &str,
+        hashtags: &[String],
+    ) -> Result<String, UploadError> {
         // Instagram braucht eine öffentliche URL — der lokale Pfad reicht nicht.
         if !is_url(video_path) {
             return Err(UploadError::Validation(
@@ -130,7 +170,10 @@ impl PlatformUploader for InstagramUploader {
             ));
         }
         self.validate_video(video_path)?;
-        let caption = truncate_chars(&format!("{description}\n\n{}", format_hashtags(hashtags)), CAPTION_MAX);
+        let caption = truncate_chars(
+            &format!("{description}\n\n{}", format_hashtags(hashtags)),
+            CAPTION_MAX,
+        );
         self.upload_reel(video_path, &caption, true).await
     }
 
@@ -139,7 +182,10 @@ impl PlatformUploader for InstagramUploader {
             let resp = self
                 .http
                 .get(format!("{}/{}", self.api_base, media_id))
-                .query(&[("access_token", self.access_token.as_str()), ("fields", "status_code,media_type,timestamp")])
+                .query(&[
+                    ("access_token", self.access_token.as_str()),
+                    ("fields", "status_code,media_type,timestamp"),
+                ])
                 .send()
                 .await
                 .map_err(|e| UploadError::Request(e.to_string()))?;
@@ -149,11 +195,18 @@ impl PlatformUploader for InstagramUploader {
         result.unwrap_or_else(|_| json!({}))
     }
 
-    async fn fetch_video_analytics(&self, media_id: &str, bucket: &str) -> Result<AnalyticsSnapshot, UploadError> {
+    async fn fetch_video_analytics(
+        &self,
+        media_id: &str,
+        bucket: &str,
+    ) -> Result<AnalyticsSnapshot, UploadError> {
         let media_resp = self
             .http
             .get(format!("{}/{}", self.api_base, media_id))
-            .query(&[("access_token", self.access_token.as_str()), ("fields", "like_count,comments_count,video_view_count")])
+            .query(&[
+                ("access_token", self.access_token.as_str()),
+                ("fields", "like_count,comments_count,video_view_count"),
+            ])
             .send()
             .await
             .map_err(|e| UploadError::Request(e.to_string()))?;
@@ -163,18 +216,26 @@ impl PlatformUploader for InstagramUploader {
         let insights_resp = self
             .http
             .get(format!("{}/{}/insights", self.api_base, media_id))
-            .query(&[("access_token", self.access_token.as_str()), ("metric", "saved,shares,total_interactions")])
+            .query(&[
+                ("access_token", self.access_token.as_str()),
+                ("metric", "saved,shares,total_interactions"),
+            ])
             .send()
             .await;
         let insights = match insights_resp {
-            Ok(r) if r.status().as_u16() == 200 => r.json::<Value>().await.unwrap_or_else(|_| json!({})),
+            Ok(r) if r.status().as_u16() == 200 => {
+                r.json::<Value>().await.unwrap_or_else(|_| json!({}))
+            }
             _ => json!({}),
         };
 
         let shares = insights["data"]
             .as_array()
             .and_then(|items| {
-                items.iter().find(|i| i["name"] == json!("shares")).map(|i| as_count(i["values"].get(0).map(|v| &v["value"])))
+                items
+                    .iter()
+                    .find(|i| i["name"] == json!("shares"))
+                    .map(|i| as_count(i["values"].get(0).map(|v| &v["value"])))
             })
             .unwrap_or(0);
 
@@ -213,7 +274,12 @@ mod tests {
 
         let uploader = InstagramUploader::new("tok", BIZ).with_api_base(server.uri());
         let id = uploader
-            .upload_video("https://cdn.example/clip.mp4", "ignored", "Beschreibung", &["deadlock".into()])
+            .upload_video(
+                "https://cdn.example/clip.mp4",
+                "ignored",
+                "Beschreibung",
+                &["deadlock".into()],
+            )
             .await
             .unwrap();
         assert_eq!(id, "media-99");
@@ -223,9 +289,15 @@ mod tests {
     async fn lokaler_pfad_und_not_implemented() {
         let uploader = InstagramUploader::new("tok", BIZ);
         // Lokaler Pfad (keine URL) → Validation.
-        assert!(matches!(uploader.upload_video("/tmp/clip.mp4", "t", "d", &[]).await, Err(UploadError::Validation(_))));
+        assert!(matches!(
+            uploader.upload_video("/tmp/clip.mp4", "t", "d", &[]).await,
+            Err(UploadError::Validation(_))
+        ));
         // Temporäres Hosting nicht implementiert (1:1 Python).
-        assert!(matches!(uploader.upload_to_temporary_host("/tmp/clip.mp4").await, Err(UploadError::NotImplemented(_))));
+        assert!(matches!(
+            uploader.upload_to_temporary_host("/tmp/clip.mp4").await,
+            Err(UploadError::NotImplemented(_))
+        ));
     }
 
     #[tokio::test]
@@ -247,7 +319,10 @@ mod tests {
             .await;
 
         let uploader = InstagramUploader::new("tok", BIZ).with_api_base(server.uri());
-        let stats = uploader.fetch_video_analytics("media-1", "d1").await.unwrap();
+        let stats = uploader
+            .fetch_video_analytics("media-1", "d1")
+            .await
+            .unwrap();
         assert_eq!(stats.views, 500);
         assert_eq!(stats.likes, 40);
         assert_eq!(stats.comments, 10);

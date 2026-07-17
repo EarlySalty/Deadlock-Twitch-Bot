@@ -672,8 +672,15 @@ mod tests {
         let mut cands = vec![candidate("alice")];
         enricher.enrich(&mut cands).await;
 
-        assert_eq!(cands[0].followers_total, 500, "neueste Session-Zahl aus Cache");
-        assert_eq!(followers.calls.load(Ordering::SeqCst), 0, "kein Helix-Call bei Cache-Treffer");
+        assert_eq!(
+            cands[0].followers_total, 500,
+            "neueste Session-Zahl aus Cache"
+        );
+        assert_eq!(
+            followers.calls.load(Ordering::SeqCst),
+            0,
+            "kein Helix-Call bei Cache-Treffer"
+        );
     }
 
     /// followers_end NULL → COALESCE fällt auf followers_start zurück.
@@ -719,7 +726,11 @@ mod tests {
         let mut cands = vec![candidate("ghost")];
         enricher.enrich(&mut cands).await;
         assert_eq!(cands[0].followers_total, 777, "Helix-Fallback ohne Cache");
-        assert_eq!(followers.calls.load(Ordering::SeqCst), 1, "genau ein Helix-Call");
+        assert_eq!(
+            followers.calls.load(Ordering::SeqCst),
+            1,
+            "genau ein Helix-Call"
+        );
     }
 
     /// Erwarteter App-Token-Scope-Miss 403 bleibt benign und erzeugt kein
@@ -901,7 +912,11 @@ mod tests {
         let transport = Arc::new(SequenceTransport {
             broadcaster_id: "200".into(),
             statuses: Mutex::new(
-                [Some("webhook_callback_verification_pending"), Some("enabled")].into(),
+                [
+                    Some("webhook_callback_verification_pending"),
+                    Some("enabled"),
+                ]
+                .into(),
             ),
             last: Mutex::new(None),
         });
@@ -919,7 +934,10 @@ mod tests {
         });
         let mut poll = poll_with(transport);
         poll.wait_timeout = std::time::Duration::from_millis(20);
-        assert!(!poll.wait_until_enabled("200").await, "pending bis Deadline → nicht ready");
+        assert!(
+            !poll.wait_until_enabled("200").await,
+            "pending bis Deadline → nicht ready"
+        );
     }
 
     /// Terminaler Fehlerstatus → sofort false.

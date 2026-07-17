@@ -256,7 +256,12 @@ impl StripeClient {
 
     /// Baut die Stripe-Connect-Authorize-URL (reine String-Erzeugung, kein HTTP).
     /// Entspricht `STRIPE_CONNECT_AUTHORIZE_URL` mit `scope=read_write`.
-    pub fn connect_authorize_url(&self, client_id: &str, redirect_uri: &str, state: &str) -> String {
+    pub fn connect_authorize_url(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+        state: &str,
+    ) -> String {
         let query = form_urlencode(&[
             ("response_type", "code"),
             ("client_id", client_id),
@@ -387,8 +392,14 @@ mod tests {
 
     #[test]
     fn missing_secret_key_is_rejected() {
-        assert!(matches!(StripeClient::new(""), Err(StripeError::SecretKeyMissing)));
-        assert!(matches!(StripeClient::new("   "), Err(StripeError::SecretKeyMissing)));
+        assert!(matches!(
+            StripeClient::new(""),
+            Err(StripeError::SecretKeyMissing)
+        ));
+        assert!(matches!(
+            StripeClient::new("   "),
+            Err(StripeError::SecretKeyMissing)
+        ));
         assert!(StripeClient::new("sk_test_x").is_ok());
     }
 
@@ -442,7 +453,10 @@ mod tests {
             .await
             .expect("checkout session created");
 
-        assert_eq!(session.get("id").and_then(|v| v.as_str()), Some("cs_test_123"));
+        assert_eq!(
+            session.get("id").and_then(|v| v.as_str()),
+            Some("cs_test_123")
+        );
         assert_eq!(
             session.get("url").and_then(|v| v.as_str()),
             Some("https://checkout.stripe.com/c/pay/cs_test_123")
@@ -469,7 +483,10 @@ mod tests {
             .await
             .expect_err("should fail");
         match err {
-            StripeError::Api { status, stripe_type } => {
+            StripeError::Api {
+                status,
+                stripe_type,
+            } => {
                 assert_eq!(status, 400);
                 assert_eq!(stripe_type.as_deref(), Some("invalid_request_error"));
             }
@@ -497,7 +514,10 @@ mod tests {
             .cancel_subscription_at_period_end("sub_123")
             .await
             .expect("cancel ok");
-        assert_eq!(sub.get("cancel_at_period_end").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            sub.get("cancel_at_period_end").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]

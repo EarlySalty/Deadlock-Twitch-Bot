@@ -95,7 +95,11 @@ fn normalize_ws(s: &str) -> String {
 fn starter_of(text: &str) -> String {
     text.split_whitespace()
         .next()
-        .map(|w| w.to_lowercase().trim_end_matches(['.', ',', '!', '?']).to_string())
+        .map(|w| {
+            w.to_lowercase()
+                .trim_end_matches(['.', ',', '!', '?'])
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -131,7 +135,11 @@ fn select_examples(texts: &[String], max_n: usize) -> Vec<String> {
 /// Setzt die finale Beispiel-Liste zusammen: Gold (erste [`GOLD_KEEP`]) zuerst,
 /// dann channel-eigene, dann Seeds — dedupliziert, bis [`MAX_EXAMPLES`].
 fn assemble_examples(channel_examples: &[String]) -> Vec<String> {
-    let gold: Vec<String> = GOLD_EXAMPLES.iter().take(GOLD_KEEP).map(|s| s.to_string()).collect();
+    let gold: Vec<String> = GOLD_EXAMPLES
+        .iter()
+        .take(GOLD_KEEP)
+        .map(|s| s.to_string())
+        .collect();
     let seed: Vec<String> = SEED_EXAMPLES.iter().map(|s| s.to_string()).collect();
     let sources: [&[String]; 3] = [&gold, channel_examples, &seed];
 
@@ -161,7 +169,11 @@ fn build_fragment(examples: &[String]) -> String {
     if examples.is_empty() {
         return String::new();
     }
-    let lines = examples.iter().map(|e| format!("- {e}")).collect::<Vec<_>>().join("\n");
+    let lines = examples
+        .iter()
+        .map(|e| format!("- {e}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "So schreiben echte Leute hier — kurz, trocken, mit Banter, oft nur ein paar Wörter. \
          Ahme NUR Schreibweise, Ton und Länge nach (Kleinschreibung/Slang wie üblich, knapp, \
@@ -179,7 +191,10 @@ pub struct StyleExamples {
 
 impl StyleExamples {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, cache: Mutex::new(HashMap::new()) }
+        Self {
+            pool,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn load_user_turns(&self, channel_login: &str, limit: i64) -> Vec<String> {
@@ -214,7 +229,10 @@ impl StyleExamples {
         let fragment = build_fragment(&examples);
         {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            cache.insert(channel_login.to_string(), (Instant::now(), fragment.clone()));
+            cache.insert(
+                channel_login.to_string(),
+                (Instant::now(), fragment.clone()),
+            );
         }
         fragment
     }
@@ -275,12 +293,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -294,7 +328,9 @@ mod tests {
 
     #[tokio::test]
     async fn style_fragment_enthaelt_gold_und_channel() {
-        let Some(pool) = make_pool("t_eng_style").await else { return };
+        let Some(pool) = make_pool("t_eng_style").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES \
              ('nani','user','der dive war komplett wild heute')",

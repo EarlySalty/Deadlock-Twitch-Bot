@@ -11,9 +11,9 @@ use chrono::{DateTime, Utc};
 
 use crate::types::SendOutcome;
 
+pub use tb_transport_twitch::AnnouncementOutcome;
 /// Ban-/Timeout-Ergebnis: kanonisch im Transport definiert.
 pub use tb_transport_twitch::BanOutcome;
-pub use tb_transport_twitch::AnnouncementOutcome;
 
 /// Port für ausgehende Chat-/Moderations-Aktionen mit dem Bot-Token.
 #[async_trait]
@@ -74,25 +74,14 @@ pub trait ChatApi: Send + Sync {
     ) -> Result<BanOutcome, String>;
 
     /// `DELETE /helix/moderation/bans`.
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String>;
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String>;
 
     /// `DELETE /helix/moderation/chat` — einzelne Nachricht löschen.
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String>;
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String>;
 
     /// `GET /helix/users?id=` → `created_at` (Account-Alter für Spam-/
     /// Scam-Eskalatoren). None = User nicht gefunden.
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String>;
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String>;
 
     /// `GET /helix/users?login=` → user_id.
     async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String>;

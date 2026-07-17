@@ -132,7 +132,12 @@ impl MatchContext {
 
     async fn fetch_heroes(&self) -> HashMap<i64, String> {
         let url = format!("{}/v2/heroes", self.assets_base);
-        let resp = self.http.get(&url).query(&[("only_active", "true")]).send().await;
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("only_active", "true")])
+            .send()
+            .await;
         let data: Value = match resp.and_then(reqwest::Response::error_for_status) {
             Ok(r) => match r.json().await {
                 Ok(d) => d,
@@ -175,7 +180,11 @@ impl MatchContext {
             cache.1 = fresh.clone();
             return fresh;
         }
-        self.hero_cache.lock().unwrap_or_else(|p| p.into_inner()).1.clone()
+        self.hero_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .1
+            .clone()
     }
 
     async fn upsert_match_state(
@@ -269,14 +278,21 @@ fn value_to_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
-        Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         other => other.to_string(),
     }
 }
 
 /// Erstes Feld mit „truthy" Wert aus der Schlüssel-Liste (Python `a or b or …`).
 fn first_truthy<'a>(item: &'a Value, keys: &[&str]) -> Option<&'a Value> {
-    keys.iter().find_map(|k| item.get(*k).filter(|v| json_truthy(v)))
+    keys.iter()
+        .find_map(|k| item.get(*k).filter(|v| json_truthy(v)))
 }
 
 /// `_parse_ts`: Unix-Int/Float → Zeitstempel, ISO-String → rfc3339.
@@ -286,7 +302,9 @@ fn parse_ts(value: &Value) -> Option<DateTime<Utc>> {
             let secs = n.as_i64().or_else(|| n.as_f64().map(|f| f as i64))?;
             DateTime::from_timestamp(secs, 0)
         }
-        Value::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc)),
+        Value::String(s) => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc)),
         _ => None,
     }
 }
@@ -296,7 +314,10 @@ fn parse_ts(value: &Value) -> Option<DateTime<Utc>> {
 /// 0 < Alter < 90 Min.
 fn extract_match_fields(item: &Value, now: DateTime<Utc>) -> ExtractedMatch {
     let hero_id = item.get("hero_id").and_then(as_i64_flex);
-    let match_id = item.get("match_id").filter(|v| !v.is_null()).map(value_to_string);
+    let match_id = item
+        .get("match_id")
+        .filter(|v| !v.is_null())
+        .map(value_to_string);
     let match_started_at = first_truthy(
         item,
         &["start_time", "match_start", "started_at", "start_time_iso"],
@@ -313,7 +334,12 @@ fn extract_match_fields(item: &Value, now: DateTime<Utc>) -> ExtractedMatch {
         }
         _ => false,
     };
-    ExtractedMatch { hero_id, match_id, match_started_at, is_live }
+    ExtractedMatch {
+        hero_id,
+        match_id,
+        match_started_at,
+        is_live,
+    }
 }
 
 #[cfg(test)]
@@ -326,7 +352,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn snap(is_live: bool, hero_name: Option<&str>, hero_id: Option<i64>, started: Option<DateTime<Utc>>) -> MatchSnapshot {
+    fn snap(
+        is_live: bool,
+        hero_name: Option<&str>,
+        hero_id: Option<i64>,
+        started: Option<DateTime<Utc>>,
+    ) -> MatchSnapshot {
         MatchSnapshot {
             channel_login: "nani".to_string(),
             hero_id,
@@ -344,24 +375,51 @@ mod tests {
         // nicht live → leer
         assert_eq!(snap(false, Some("Haze"), None, None).fragment_at(now), "");
         // live mit Name + Dauer
-        let s = snap(true, Some("Haze"), Some(5), Some(now - Duration::minutes(30)));
-        assert_eq!(s.fragment_at(now), "Streamer spielt aktuell Haze. Match läuft seit ~30 Min.");
+        let s = snap(
+            true,
+            Some("Haze"),
+            Some(5),
+            Some(now - Duration::minutes(30)),
+        );
+        assert_eq!(
+            s.fragment_at(now),
+            "Streamer spielt aktuell Haze. Match läuft seit ~30 Min."
+        );
         // live ohne Name, mit id
         let s2 = snap(true, None, Some(7), None);
         assert_eq!(s2.fragment_at(now), "Streamer spielt aktuell Hero #7.");
         // live ohne Name + ohne id
         let s3 = snap(true, None, None, None);
-        assert_eq!(s3.fragment_at(now), "Streamer spielt aktuell einem unbekannten Hero.");
+        assert_eq!(
+            s3.fragment_at(now),
+            "Streamer spielt aktuell einem unbekannten Hero."
+        );
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_channel_match_state (\
              channel_login TEXT PRIMARY KEY, hero_id INT, hero_name TEXT, match_id TEXT, \
@@ -376,7 +434,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_match_state_aus_db() {
-        let Some(pool) = make_pool("t_eng_match").await else { return };
+        let Some(pool) = make_pool("t_eng_match").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_channel_match_state \
              (channel_login, hero_id, hero_name, match_id, match_started_at, last_synced_at, is_live) \
@@ -396,7 +456,10 @@ mod tests {
 
     #[test]
     fn parse_ts_int_und_iso() {
-        assert_eq!(parse_ts(&json!(1_700_000_000)), DateTime::from_timestamp(1_700_000_000, 0));
+        assert_eq!(
+            parse_ts(&json!(1_700_000_000)),
+            DateTime::from_timestamp(1_700_000_000, 0)
+        );
         assert!(parse_ts(&json!("2021-05-01T00:00:00Z")).is_some());
         assert_eq!(parse_ts(&json!("garbage")), None);
         assert_eq!(parse_ts(&json!(true)), None);
@@ -406,22 +469,35 @@ mod tests {
     fn extract_is_live_heuristik() {
         let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let recent = 1_700_000_000 - 600; // 10 Min vor now
-        // live: Start da, kein End, keine Dauer.
-        let e = extract_match_fields(&json!({"hero_id": 5, "match_id": "m1", "start_time": recent}), now);
+                                          // live: Start da, kein End, keine Dauer.
+        let e = extract_match_fields(
+            &json!({"hero_id": 5, "match_id": "m1", "start_time": recent}),
+            now,
+        );
         assert!(e.is_live);
         assert_eq!(e.hero_id, Some(5));
         assert_eq!(e.match_id.as_deref(), Some("m1"));
         // Dauer gesetzt → nicht live.
-        assert!(!extract_match_fields(&json!({"start_time": recent, "duration_s": 1800}), now).is_live);
+        assert!(
+            !extract_match_fields(&json!({"start_time": recent, "duration_s": 1800}), now).is_live
+        );
         // End gesetzt → nicht live.
-        assert!(!extract_match_fields(&json!({"start_time": recent, "end_time": recent + 1800}), now).is_live);
+        assert!(
+            !extract_match_fields(
+                &json!({"start_time": recent, "end_time": recent + 1800}),
+                now
+            )
+            .is_live
+        );
         // zu alt (> 90 Min) → nicht live.
         assert!(!extract_match_fields(&json!({"start_time": 1_700_000_000 - 7000}), now).is_live);
     }
 
     #[tokio::test]
     async fn poll_setzt_live_und_hero() {
-        let Some(pool) = make_pool("t_eng_match_poll").await else { return };
+        let Some(pool) = make_pool("t_eng_match_poll").await else {
+            return;
+        };
         let dl = MockServer::start().await;
         let recent = Utc::now().timestamp() - 600;
         Mock::given(method("GET"))
@@ -434,7 +510,9 @@ mod tests {
         let assets = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v2/heroes"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": 5, "name": "Haze"}])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"id": 5, "name": "Haze"}])),
+            )
             .mount(&assets)
             .await;
 

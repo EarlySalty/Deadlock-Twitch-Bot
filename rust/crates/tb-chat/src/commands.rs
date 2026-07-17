@@ -1027,6 +1027,25 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_lurk(&self, event: &ChatMessageEvent) {
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT COALESCE(lurk_command_enabled, 1)
+               FROM streamer_plans
+              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+                 OR twitch_user_id = $2
+              LIMIT 1",
+        )
+        .bind(&event.broadcaster_user_login)
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, channel = %event.broadcaster_user_login, "!lurk Toggle konnte nicht gelesen werden");
+            true
+        });
+        if !enabled {
+            return;
+        }
         self.reply(event, "verschwindet in den lurk 🐒").await;
     }
 
@@ -2509,6 +2528,7 @@ mod tests {
                 twitch_login TEXT,
                 plan_name TEXT,
                 lurker_tax_enabled INTEGER DEFAULT 0,
+                lurk_command_enabled INTEGER DEFAULT 1,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
                 manual_plan_expires_at TIMESTAMPTZ,
@@ -3295,5 +3315,43 @@ mod tests {
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("bezahlten"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn lurk_command_default_antwortet_wie_bisher() {
+        let pool = pool_or_skip!("cmd_lurk_default");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        let handled = engine
+            .handle(&make_event("!lurk", false, false), true)
+            .await;
+
+        assert!(handled);
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("verschwindet in den lurk"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn lurk_command_aus_antwortet_nicht() {
+        let pool = pool_or_skip!("cmd_lurk_disabled");
+        apply_ddl(&pool).await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurk_command_enabled) \
+             VALUES ('bc123', 'testchannel', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        let handled = engine
+            .handle(&make_event("!lurk", false, false), true)
+            .await;
+
+        assert!(handled);
+        assert_eq!(api.message_count().await, 0);
     }
 }

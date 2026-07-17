@@ -276,15 +276,13 @@ mod tests {
             .and(path("/twitch/api/v2/overview"))
             .and(query_param("streamer", "nanikeks"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "ok": true })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
             )
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -316,9 +314,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -344,15 +341,15 @@ mod tests {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/twitch/api/v2/lurker-analysis"))
-            .respond_with(ResponseTemplate::new(401).set_body_json(
-                serde_json::json!({ "error": "unauthorized" }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({ "error": "unauthorized" })),
+            )
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -505,7 +502,10 @@ mod tests {
             .unwrap();
         let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(val["received_host"].as_str().unwrap_or(""), "127.0.0.1:8769");
+        assert_eq!(
+            val["received_host"].as_str().unwrap_or(""),
+            "127.0.0.1:8769"
+        );
     }
 
     // ─── 8. x-forwarded-host wird transparent durchgereicht (Parität) ─────
@@ -577,9 +577,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -591,9 +590,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
-            resp.headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok()),
+            resp.headers().get("location").and_then(|v| v.to_str().ok()),
             Some("https://id.twitch.tv/oauth2/authorize?x=1"),
             "Location muss unverändert beim Client ankommen"
         );
@@ -603,14 +600,13 @@ mod tests {
 
     #[tokio::test]
     async fn patch_und_delete_werden_weitergereicht() {
-        let upstream = Router::new()
-            .route(
-                "/twitch/api/v2/roadmap/:id",
-                any(|req: axum::http::Request<Body>| async move {
-                    let method = req.method().to_string();
-                    axum::Json(serde_json::json!({ "method": method }))
-                }),
-            );
+        let upstream = Router::new().route(
+            "/twitch/api/v2/roadmap/:id",
+            any(|req: axum::http::Request<Body>| async move {
+                let method = req.method().to_string();
+                axum::Json(serde_json::json!({ "method": method }))
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -655,9 +651,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()

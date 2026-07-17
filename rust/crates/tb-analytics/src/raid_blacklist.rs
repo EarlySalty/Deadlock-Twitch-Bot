@@ -155,14 +155,20 @@ mod tests {
         let entry = check_entry(&pool, "ziel").await.expect("check");
         let (reason, added_at) = entry.expect("muss vorhanden sein");
         assert_eq!(reason, "manual_ban:absolut");
-        assert!(!added_at.is_empty(), "added_at muss aus Default gesetzt sein");
+        assert!(
+            !added_at.is_empty(),
+            "added_at muss aus Default gesetzt sein"
+        );
     }
 
     #[tokio::test]
     async fn check_unbekannt_ist_none() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_rbl_check_none").await;
-        assert!(check_entry(&pool, "niemand").await.expect("check").is_none());
+        assert!(check_entry(&pool, "niemand")
+            .await
+            .expect("check")
+            .is_none());
     }
 
     #[tokio::test]

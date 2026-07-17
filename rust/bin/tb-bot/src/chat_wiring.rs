@@ -57,6 +57,7 @@ use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::sender_auth::SenderAuthStore;
 use tb_engagement::stealth_sender::StealthSender;
 use tb_engagement::types::IncomingMessage;
+use tb_engagement::CrewReviewTrigger;
 use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
@@ -628,6 +629,7 @@ pub struct ChatRuntimePorts {
     pub invite_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
+    pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
 pub async fn build_runtime(
@@ -644,6 +646,7 @@ pub async fn build_runtime(
         invite_relay,
         scam_notifier,
         raid_greeting,
+        crew_review_trigger,
     } = ports;
     let ChatApiHandle {
         api,
@@ -789,16 +792,19 @@ pub async fn build_runtime(
     });
     let alerter = Arc::new(ModAlerter::new(http.clone()));
     let crew_judge: Arc<dyn CrewJudge> = Arc::new(OpenAiCrewJudge::from_env());
-    let scout_crew_guard = Arc::new(CrewGuard::new(
-        tb_chat::crew_guard::crew_guard_enabled(),
-        Arc::clone(&crew_judge),
-        Arc::clone(&alerter),
-        pool.clone(),
-        bot_user_id.clone(),
-        Arc::clone(&account_age),
-        Arc::clone(&crew_centroid),
-        true,
-    ));
+    let scout_crew_guard = Arc::new(
+        CrewGuard::new(
+            tb_chat::crew_guard::crew_guard_enabled(),
+            Arc::clone(&crew_judge),
+            Arc::clone(&alerter),
+            pool.clone(),
+            bot_user_id.clone(),
+            Arc::clone(&account_age),
+            Arc::clone(&crew_centroid),
+            true,
+        )
+        .with_crew_review_trigger(crew_review_trigger.clone()),
+    );
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
@@ -846,7 +852,7 @@ pub async fn build_runtime(
         account_age,
         crew_judge,
         crew_centroid,
-        crew_review_trigger: None,
+        crew_review_trigger,
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));

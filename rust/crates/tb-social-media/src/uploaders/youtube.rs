@@ -19,7 +19,10 @@ use reqwest::header::{CONTENT_TYPE, LOCATION};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::{as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot, PlatformUploader, UploadError};
+use super::{
+    as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot,
+    PlatformUploader, UploadError,
+};
 use crate::video_processor::format_hashtags;
 
 const DESCRIPTION_MAX: usize = 5000;
@@ -71,7 +74,11 @@ impl YouTubeUploader {
     }
 
     /// Überschreibt Upload- und API-Basis-URL (für Tests).
-    pub fn with_bases(mut self, upload_base: impl Into<String>, api_base: impl Into<String>) -> Self {
+    pub fn with_bases(
+        mut self,
+        upload_base: impl Into<String>,
+        api_base: impl Into<String>,
+    ) -> Self {
         self.upload_base = upload_base.into();
         self.api_base = api_base.into();
         self
@@ -100,14 +107,21 @@ impl YouTubeUploader {
             .map_err(|e| UploadError::Request(e.to_string()))?;
         if resp.status().as_u16() != 200 {
             let body = resp.text().await.unwrap_or_default();
-            return Err(UploadError::Api(format!("YouTube token refresh failed: {body}")));
+            return Err(UploadError::Api(format!(
+                "YouTube token refresh failed: {body}"
+            )));
         }
-        let data: Value = resp.json().await.map_err(|e| UploadError::Request(e.to_string()))?;
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| UploadError::Request(e.to_string()))?;
         let new_token = data
             .get("access_token")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| UploadError::Api("YouTube token refresh: no access_token in response".to_string()))?
+            .ok_or_else(|| {
+                UploadError::Api("YouTube token refresh: no access_token in response".to_string())
+            })?
             .to_string();
         *self.access_token.lock().await = new_token.clone();
         Ok(new_token)
@@ -137,14 +151,18 @@ impl YouTubeUploader {
             }
             if resp.status().as_u16() != 200 {
                 let err = resp.text().await.unwrap_or_default();
-                return Err(UploadError::Api(format!("YouTube resumable init failed: {err}")));
+                return Err(UploadError::Api(format!(
+                    "YouTube resumable init failed: {err}"
+                )));
             }
             return resp
                 .headers()
                 .get(LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string)
-                .ok_or_else(|| UploadError::Api("YouTube resumable init: no Location header".to_string()));
+                .ok_or_else(|| {
+                    UploadError::Api("YouTube resumable init: no Location header".to_string())
+                });
         }
     }
 
@@ -163,13 +181,23 @@ impl YouTubeUploader {
             let err = resp.text().await.unwrap_or_default();
             return Err(UploadError::Api(format!("YouTube upload failed: {err}")));
         }
-        let data: Value = resp.json().await.map_err(|e| UploadError::Request(e.to_string()))?;
-        data["id"].as_str().map(str::to_string).ok_or_else(|| UploadError::Api("No video id in response".to_string()))
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| UploadError::Request(e.to_string()))?;
+        data["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| UploadError::Api("No video id in response".to_string()))
     }
 
     /// GET `…/videos?part=<part>&id=<video_id>` mit demselben inline 401-Retry
     /// wie `init_resumable` (Token mitten im Call abgelaufen → einmal refreshen).
-    async fn get_videos(&self, part: &str, video_id: &str) -> Result<reqwest::Response, UploadError> {
+    async fn get_videos(
+        &self,
+        part: &str,
+        video_id: &str,
+    ) -> Result<reqwest::Response, UploadError> {
         let mut token = self.token().await;
         let mut refreshed = false;
         loop {
@@ -202,7 +230,13 @@ impl PlatformUploader for YouTubeUploader {
         validate_local_file(video_path, f64::INFINITY)
     }
 
-    async fn upload_video(&self, video_path: &str, title: &str, description: &str, hashtags: &[String]) -> Result<String, UploadError> {
+    async fn upload_video(
+        &self,
+        video_path: &str,
+        title: &str,
+        description: &str,
+        hashtags: &[String],
+    ) -> Result<String, UploadError> {
         if self.token().await.is_empty() {
             return Err(UploadError::NotAuthenticated);
         }
@@ -227,7 +261,9 @@ impl PlatformUploader for YouTubeUploader {
 
     async fn get_video_status(&self, video_id: &str) -> Value {
         let result = async {
-            let resp = self.get_videos("status,processingDetails", video_id).await?;
+            let resp = self
+                .get_videos("status,processingDetails", video_id)
+                .await?;
             let data = expect_ok_json(resp, "YouTube status fetch").await?;
             let item = data["items"].get(0).cloned().unwrap_or_else(|| json!({}));
             if item.is_null() || item.as_object().map(|o| o.is_empty()).unwrap_or(true) {
@@ -242,13 +278,20 @@ impl PlatformUploader for YouTubeUploader {
         result.unwrap_or_else(|_| json!({}))
     }
 
-    async fn fetch_video_analytics(&self, video_id: &str, bucket: &str) -> Result<AnalyticsSnapshot, UploadError> {
+    async fn fetch_video_analytics(
+        &self,
+        video_id: &str,
+        bucket: &str,
+    ) -> Result<AnalyticsSnapshot, UploadError> {
         if self.token().await.is_empty() {
             return Err(UploadError::NotAuthenticated);
         }
         let resp = self.get_videos("statistics", video_id).await?;
         let data = expect_ok_json(resp, "YouTube analytics").await?;
-        let stats = data["items"].get(0).map(|i| i["statistics"].clone()).unwrap_or_else(|| json!({}));
+        let stats = data["items"]
+            .get(0)
+            .map(|i| i["statistics"].clone())
+            .unwrap_or_else(|| json!({}));
         Ok(AnalyticsSnapshot::build(
             bucket,
             "youtube_data_api_v3",
@@ -279,7 +322,9 @@ mod tests {
         // Schritt 1: init liefert Location-Header.
         Mock::given(method("POST"))
             .and(path("/videos"))
-            .respond_with(ResponseTemplate::new(200).insert_header("Location", session_url.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("Location", session_url.as_str()),
+            )
             .mount(&server)
             .await;
         // Schritt 2: PUT der Bytes → Video-ID.
@@ -291,7 +336,10 @@ mod tests {
 
         let uploader = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
         let video = temp_video().await;
-        let id = uploader.upload_video(&video, "Titel", "Desc", &["deadlock".into()]).await.unwrap();
+        let id = uploader
+            .upload_video(&video, "Titel", "Desc", &["deadlock".into()])
+            .await
+            .unwrap();
         assert_eq!(id, "yt-123");
     }
 
@@ -299,14 +347,31 @@ mod tests {
     async fn fehlerpfade() {
         let video = temp_video().await;
         // Kein Token.
-        assert!(matches!(YouTubeUploader::new("").upload_video(&video, "t", "d", &[]).await, Err(UploadError::NotAuthenticated)));
+        assert!(matches!(
+            YouTubeUploader::new("")
+                .upload_video(&video, "t", "d", &[])
+                .await,
+            Err(UploadError::NotAuthenticated)
+        ));
         // Fehlende Datei.
-        assert!(matches!(YouTubeUploader::new("tok").upload_video("/nope.mp4", "t", "d", &[]).await, Err(UploadError::Validation(_))));
+        assert!(matches!(
+            YouTubeUploader::new("tok")
+                .upload_video("/nope.mp4", "t", "d", &[])
+                .await,
+            Err(UploadError::Validation(_))
+        ));
         // init non-200 OHNE Refresh-Creds → kein Retry, harter Api-Fehler (1:1).
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/videos")).respond_with(ResponseTemplate::new(401).set_body_string("unauth")).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauth"))
+            .mount(&server)
+            .await;
         let up = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
-        assert!(matches!(up.upload_video(&video, "t", "d", &[]).await, Err(UploadError::Api(_))));
+        assert!(matches!(
+            up.upload_video(&video, "t", "d", &[]).await,
+            Err(UploadError::Api(_))
+        ));
     }
 
     fn refresh_creds(token_url: String) -> YouTubeRefreshCreds {
@@ -338,13 +403,18 @@ mod tests {
         // Token-Refresh-Endpoint liefert frisches Access-Token.
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "access_token": "fresh", "expires_in": 3600 })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "access_token": "fresh", "expires_in": 3600 })),
+            )
             .mount(&server)
             .await;
         // Zweiter init-Aufruf (frisches Token) → 200 + Location.
         Mock::given(method("POST"))
             .and(path("/videos"))
-            .respond_with(ResponseTemplate::new(200).insert_header("Location", session_url.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("Location", session_url.as_str()),
+            )
             .with_priority(2)
             .mount(&server)
             .await;
@@ -359,7 +429,10 @@ mod tests {
             .with_bases(server.uri(), server.uri())
             .with_refresh(refresh_creds(format!("{}/token", server.uri())));
         let video = temp_video().await;
-        let id = uploader.upload_video(&video, "Titel", "Desc", &["deadlock".into()]).await.unwrap();
+        let id = uploader
+            .upload_video(&video, "Titel", "Desc", &["deadlock".into()])
+            .await
+            .unwrap();
         assert_eq!(id, "yt-refreshed");
         // Token wurde inline ersetzt.
         assert_eq!(uploader.token().await, "fresh");
@@ -370,13 +443,24 @@ mod tests {
     #[tokio::test]
     async fn init_401_mit_scheiterndem_refresh_endet_im_fehler() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/videos")).respond_with(ResponseTemplate::new(401).set_body_string("expired")).mount(&server).await;
-        Mock::given(method("POST")).and(path("/token")).respond_with(ResponseTemplate::new(400).set_body_string("invalid_grant")).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid_grant"))
+            .mount(&server)
+            .await;
         let uploader = YouTubeUploader::new("stale")
             .with_bases(server.uri(), server.uri())
             .with_refresh(refresh_creds(format!("{}/token", server.uri())));
         let video = temp_video().await;
-        assert!(matches!(uploader.upload_video(&video, "t", "d", &[]).await, Err(UploadError::Api(_))));
+        assert!(matches!(
+            uploader.upload_video(&video, "t", "d", &[]).await,
+            Err(UploadError::Api(_))
+        ));
     }
 
     #[tokio::test]

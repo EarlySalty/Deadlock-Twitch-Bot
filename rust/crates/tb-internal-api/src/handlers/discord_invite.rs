@@ -1,9 +1,9 @@
 //! GET /internal/twitch/v1/streamer/:login/discord-invite
 
 use axum::{
-    Json,
     extract::{Path, State},
     response::IntoResponse,
+    Json,
 };
 use serde::Serialize;
 use sqlx::PgPool;

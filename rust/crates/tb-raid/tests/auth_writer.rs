@@ -377,14 +377,24 @@ async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
                 Some(1),
                 Some(0),
             ),
-            ("62".to_string(), Some("blocked".to_string()), Some(0), Some(0)),
+            (
+                "62".to_string(),
+                Some("blocked".to_string()),
+                Some(0),
+                Some(0)
+            ),
             (
                 "63".to_string(),
                 Some("bot_banned".to_string()),
                 Some(0),
                 Some(0),
             ),
-            ("64".to_string(), Some("blocked".to_string()), Some(1), Some(0)),
+            (
+                "64".to_string(),
+                Some("blocked".to_string()),
+                Some(1),
+                Some(0)
+            ),
             (
                 "65".to_string(),
                 Some("bot_banned".to_string()),

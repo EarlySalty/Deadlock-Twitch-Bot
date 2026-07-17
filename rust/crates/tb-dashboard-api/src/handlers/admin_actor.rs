@@ -4,9 +4,7 @@ use axum::http::{header, HeaderMap};
 use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME};
 
 fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    let cookie_header = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())?;
+    let cookie_header = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())?;
     cookie_header.split(';').find_map(|pair| {
         let pair = pair.trim();
         pair.split_once('=')

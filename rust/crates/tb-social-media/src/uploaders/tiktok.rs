@@ -6,7 +6,10 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot, PlatformUploader, UploadError};
+use super::{
+    as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot,
+    PlatformUploader, UploadError,
+};
 use crate::video_processor::format_hashtags;
 
 const MAX_FILE_MB: f64 = 287.6;
@@ -28,7 +31,11 @@ impl TikTokUploader {
     /// benötigt (Token kommt fertig vom credential_manager) — der Uploader hält
     /// nur das Access-Token.
     pub fn new(access_token: impl Into<String>) -> Self {
-        Self { access_token: access_token.into(), api_base: DEFAULT_API_BASE.to_string(), http: reqwest::Client::new() }
+        Self {
+            access_token: access_token.into(),
+            api_base: DEFAULT_API_BASE.to_string(),
+            http: reqwest::Client::new(),
+        }
     }
 
     /// Überschreibt die API-Basis-URL (für Tests).
@@ -65,20 +72,31 @@ impl TikTokUploader {
                 .http
                 .post(format!("{}/post/publish/video/chunk/", self.api_base))
                 .bearer_auth(&self.access_token)
-                .query(&[("upload_id", upload_id), ("chunk_index", &chunk_index.to_string())])
+                .query(&[
+                    ("upload_id", upload_id),
+                    ("chunk_index", &chunk_index.to_string()),
+                ])
                 .multipart(form)
                 .send()
                 .await
                 .map_err(|e| UploadError::Request(e.to_string()))?;
             if resp.status().as_u16() != 200 {
                 let body = resp.text().await.unwrap_or_default();
-                return Err(UploadError::Api(format!("TikTok chunk upload failed: {body}")));
+                return Err(UploadError::Api(format!(
+                    "TikTok chunk upload failed: {body}"
+                )));
             }
         }
         Ok(())
     }
 
-    async fn publish_post(&self, upload_id: &str, title: &str, caption: &str, privacy_level: &str) -> Result<String, UploadError> {
+    async fn publish_post(
+        &self,
+        upload_id: &str,
+        title: &str,
+        caption: &str,
+        privacy_level: &str,
+    ) -> Result<String, UploadError> {
         let resp = self
             .http
             .post(format!("{}/post/publish/", self.api_base))
@@ -115,16 +133,26 @@ impl PlatformUploader for TikTokUploader {
         validate_local_file(video_path, MAX_FILE_MB)
     }
 
-    async fn upload_video(&self, video_path: &str, title: &str, description: &str, hashtags: &[String]) -> Result<String, UploadError> {
+    async fn upload_video(
+        &self,
+        video_path: &str,
+        title: &str,
+        description: &str,
+        hashtags: &[String],
+    ) -> Result<String, UploadError> {
         if self.access_token.is_empty() {
             return Err(UploadError::NotAuthenticated);
         }
         self.validate_video(video_path)?;
         let upload_id = self.init_upload().await?;
         self.upload_chunks(video_path, &upload_id).await?;
-        let caption = truncate_chars(&format!("{description}\n\n{}", format_hashtags(hashtags)), CAPTION_MAX);
+        let caption = truncate_chars(
+            &format!("{description}\n\n{}", format_hashtags(hashtags)),
+            CAPTION_MAX,
+        );
         let title = truncate_chars(title, TITLE_MAX);
-        self.publish_post(&upload_id, &title, &caption, DEFAULT_PRIVACY).await
+        self.publish_post(&upload_id, &title, &caption, DEFAULT_PRIVACY)
+            .await
     }
 
     async fn get_video_status(&self, video_id: &str) -> Value {
@@ -144,7 +172,11 @@ impl PlatformUploader for TikTokUploader {
         result.unwrap_or_else(|_| json!({}))
     }
 
-    async fn fetch_video_analytics(&self, video_id: &str, bucket: &str) -> Result<AnalyticsSnapshot, UploadError> {
+    async fn fetch_video_analytics(
+        &self,
+        video_id: &str,
+        bucket: &str,
+    ) -> Result<AnalyticsSnapshot, UploadError> {
         if self.access_token.is_empty() {
             return Err(UploadError::NotAuthenticated);
         }
@@ -160,7 +192,10 @@ impl PlatformUploader for TikTokUploader {
             .await
             .map_err(|e| UploadError::Request(e.to_string()))?;
         let payload = expect_ok_json(resp, "TikTok analytics").await?;
-        let item = payload["data"]["videos"].get(0).cloned().unwrap_or_else(|| json!({}));
+        let item = payload["data"]["videos"]
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         Ok(AnalyticsSnapshot::build(
             bucket,
             "tiktok_open_api_v2",
@@ -190,7 +225,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/post/publish/video/init/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "upload_id": "u-1" } })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "data": { "upload_id": "u-1" } })),
+            )
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -200,14 +237,22 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/post/publish/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "publish_id": "pub-42" } })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "data": { "publish_id": "pub-42" } })),
+            )
             .mount(&server)
             .await;
 
         let uploader = TikTokUploader::new("tok").with_api_base(server.uri());
         let video = temp_video().await;
         let id = uploader
-            .upload_video(&video, "Mein Titel", "Beschreibung", &["deadlock".into(), "haze".into()])
+            .upload_video(
+                &video,
+                "Mein Titel",
+                "Beschreibung",
+                &["deadlock".into(), "haze".into()],
+            )
             .await
             .unwrap();
         assert_eq!(id, "pub-42");
@@ -218,7 +263,10 @@ mod tests {
         // Kein Token → NotAuthenticated (vor jedem HTTP).
         let video = temp_video().await;
         let no_tok = TikTokUploader::new("");
-        assert!(matches!(no_tok.upload_video(&video, "t", "d", &[]).await, Err(UploadError::NotAuthenticated)));
+        assert!(matches!(
+            no_tok.upload_video(&video, "t", "d", &[]).await,
+            Err(UploadError::NotAuthenticated)
+        ));
 
         // init liefert non-200 → Api-Fehler.
         let server = MockServer::start().await;
@@ -228,11 +276,19 @@ mod tests {
             .mount(&server)
             .await;
         let uploader = TikTokUploader::new("tok").with_api_base(server.uri());
-        assert!(matches!(uploader.upload_video(&video, "t", "d", &[]).await, Err(UploadError::Api(_))));
+        assert!(matches!(
+            uploader.upload_video(&video, "t", "d", &[]).await,
+            Err(UploadError::Api(_))
+        ));
 
         // Fehlende Datei → Validation.
         let uploader2 = TikTokUploader::new("tok").with_api_base(server.uri());
-        assert!(matches!(uploader2.upload_video("/nope/missing.mp4", "t", "d", &[]).await, Err(UploadError::Validation(_))));
+        assert!(matches!(
+            uploader2
+                .upload_video("/nope/missing.mp4", "t", "d", &[])
+                .await,
+            Err(UploadError::Validation(_))
+        ));
     }
 
     #[tokio::test]
@@ -247,7 +303,10 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/post/publish/status/fetch/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "status": "PROCESSING_DOWNLOAD" } })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "data": { "status": "PROCESSING_DOWNLOAD" } })),
+            )
             .mount(&server)
             .await;
 

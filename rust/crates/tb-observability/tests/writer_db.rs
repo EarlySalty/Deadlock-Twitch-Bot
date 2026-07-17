@@ -11,8 +11,7 @@ use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
 use tb_observability::{
-    AnalyticsDecision, AnalyticsObservabilityService, ObservabilityWriter,
-    RaidObservabilityService,
+    AnalyticsDecision, AnalyticsObservabilityService, ObservabilityWriter, RaidObservabilityService,
 };
 
 macro_rules! pool_or_skip {
@@ -69,11 +68,10 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
 
 async fn wait_for_rows(pool: &PgPool, expected: i64) -> i64 {
     for _ in 0..50 {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_observability_events")
-                .fetch_one(pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_observability_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
         if count >= expected {
             return count;
         }
@@ -161,9 +159,7 @@ async fn analytics_terminal_decision_row_written() {
         runtime_state: BTreeMap::new(),
         extra: BTreeMap::new(),
     };
-    decision
-        .extra
-        .insert("chatter_count".to_string(), json!(5));
+    decision.extra.insert("chatter_count".to_string(), json!(5));
     svc.log_decision(decision);
 
     drop(writer);

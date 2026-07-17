@@ -48,7 +48,14 @@ pub struct AnalyticsSnapshot {
 impl AnalyticsSnapshot {
     /// Baut den Snapshot inkl. `engagement_rate = (likes+comments+shares)/views*100`
     /// (nur falls `views > 0`).
-    pub fn build(bucket: &str, provider: &str, views: i64, likes: i64, comments: i64, shares: i64) -> Self {
+    pub fn build(
+        bucket: &str,
+        provider: &str,
+        views: i64,
+        likes: i64,
+        comments: i64,
+        shares: i64,
+    ) -> Self {
         let engagement_rate = if views > 0 {
             Some((likes + comments + shares) as f64 / views as f64 * 100.0)
         } else {
@@ -90,16 +97,23 @@ pub trait PlatformUploader: Send + Sync {
     async fn get_video_status(&self, video_id: &str) -> Value;
 
     /// Best-effort-Statistiken eines veröffentlichten Clips.
-    async fn fetch_video_analytics(&self, video_id: &str, bucket: &str) -> Result<AnalyticsSnapshot, UploadError>;
+    async fn fetch_video_analytics(
+        &self,
+        video_id: &str,
+        bucket: &str,
+    ) -> Result<AnalyticsSnapshot, UploadError>;
 }
 
 /// Datei existiert + Größe ≤ `max_mb` MB (für lokale Pfade).
 pub fn validate_local_file(video_path: &str, max_mb: f64) -> Result<(), UploadError> {
     let path = Path::new(video_path);
-    let meta = std::fs::metadata(path).map_err(|_| UploadError::Validation(format!("Video file not found: {video_path}")))?;
+    let meta = std::fs::metadata(path)
+        .map_err(|_| UploadError::Validation(format!("Video file not found: {video_path}")))?;
     let size_mb = meta.len() as f64 / (1024.0 * 1024.0);
     if size_mb > max_mb {
-        return Err(UploadError::Validation(format!("Video too large: {size_mb:.1}MB (max {max_mb}MB)")));
+        return Err(UploadError::Validation(format!(
+            "Video too large: {size_mb:.1}MB (max {max_mb}MB)"
+        )));
     }
     Ok(())
 }
@@ -113,14 +127,22 @@ pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
 /// Liest einen Zähler aus JSON (Zahl oder String) mit Default 0.
 pub(crate) fn as_count(value: Option<&Value>) -> i64 {
     value
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
         .unwrap_or(0)
 }
 
 /// Erwartet HTTP 200 + JSON-Body (mirror Pythons `if resp.status != 200`).
-pub(crate) async fn expect_ok_json(resp: reqwest::Response, ctx: &str) -> Result<Value, UploadError> {
+pub(crate) async fn expect_ok_json(
+    resp: reqwest::Response,
+    ctx: &str,
+) -> Result<Value, UploadError> {
     if resp.status().as_u16() == 200 {
-        resp.json::<Value>().await.map_err(|e| UploadError::Request(e.to_string()))
+        resp.json::<Value>()
+            .await
+            .map_err(|e| UploadError::Request(e.to_string()))
     } else {
         let body = resp.text().await.unwrap_or_default();
         Err(UploadError::Api(format!("{ctx} failed: {body}")))

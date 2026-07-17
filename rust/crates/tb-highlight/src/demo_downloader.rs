@@ -38,7 +38,10 @@ pub async fn get_demo_path(base_url: &str, cache_dir: &Path, match_id: i64) -> O
     let raw = match decompress_bz2(&bz2_data) {
         Some(raw) => raw,
         None => {
-            tracing::error!(match_id, "HighlightClipper: Demo-Dekomprimierung fehlgeschlagen");
+            tracing::error!(
+                match_id,
+                "HighlightClipper: Demo-Dekomprimierung fehlgeschlagen"
+            );
             return None;
         }
     };
@@ -111,10 +114,7 @@ async fn get_demo_url(base_url: &str, match_id: i64) -> Option<String> {
 
 /// Lädt die Bytes der Demo-URL (120s Timeout). HTTP ≠ 2xx oder Fehler → `None`.
 async fn download_bytes(url: &str) -> Option<Vec<u8>> {
-    let client = match reqwest::Client::builder()
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-    {
+    let client = match reqwest::Client::builder().timeout(DOWNLOAD_TIMEOUT).build() {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(%error, "HighlightClipper: Demo-Download-Client konnte nicht gebaut werden");

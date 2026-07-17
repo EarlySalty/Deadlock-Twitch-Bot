@@ -57,7 +57,10 @@ fn internal_base_url() -> String {
 }
 
 fn nonempty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Ergebnis eines Internal-API-Aufrufs.
@@ -85,7 +88,12 @@ async fn bridge_auth_url(path_and_query: &str) -> BridgeResult {
         Ok(c) => c,
         Err(_) => return BridgeResult::Unavailable,
     };
-    let resp = match client.get(&url).header("X-Internal-Token", token).send().await {
+    let resp = match client
+        .get(&url)
+        .header("X-Internal-Token", token)
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("raid bridge transport error: {e}");
@@ -114,7 +122,9 @@ async fn bridge_auth_url(path_and_query: &str) -> BridgeResult {
 /// Session-Login des Dashboard-Nutzers (lowercased), falls vorhanden.
 fn session_login(auth: &DashboardAuthLevel) -> Option<String> {
     match auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.trim().to_lowercase()),
+        DashboardAuthLevel::Partner { twitch_login, .. } => {
+            Some(twitch_login.trim().to_lowercase())
+        }
         DashboardAuthLevel::Admin { actor: Some(actor) } => {
             Some(actor.twitch_login.trim().to_lowercase())
         }
@@ -124,10 +134,7 @@ fn session_login(auth: &DashboardAuthLevel) -> Option<String> {
 }
 
 fn is_admin(auth: &DashboardAuthLevel) -> bool {
-    matches!(
-        auth,
-        DashboardAuthLevel::Admin { .. }
-    )
+    matches!(auth, DashboardAuthLevel::Admin { .. })
 }
 
 /// `GET /twitch/raid/auth` — startet den Raid-OAuth-Flow.
@@ -145,7 +152,11 @@ pub async fn raid_auth_handler(
         // Expliziter Override: nur erlaubt wenn eigener Login ODER Admin.
         let is_own = own_login.as_deref() == Some(requested_login.as_str());
         if !is_own && !is_admin(&auth) {
-            return (StatusCode::UNAUTHORIZED, "Du darfst diesen Login nicht autorisieren.").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Du darfst diesen Login nicht autorisieren.",
+            )
+                .into_response();
         }
         requested_login
     } else if let Some(login) = own_login {
@@ -158,12 +169,16 @@ pub async fn raid_auth_handler(
         } else {
             scope_profile.clone()
         };
-        let allow_public =
-            effective_profile == BASE_SCOPE_PROFILE && (source.is_empty() || source == "website_onboarding");
+        let allow_public = effective_profile == BASE_SCOPE_PROFILE
+            && (source.is_empty() || source == "website_onboarding");
         if allow_public {
             PUBLIC_ONBOARDING_LOGIN.to_string()
         } else {
-            return (StatusCode::UNAUTHORIZED, "Für diesen Kanal ist kein öffentlicher Onboarding-Link freigeschaltet.").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Für diesen Kanal ist kein öffentlicher Onboarding-Link freigeschaltet.",
+            )
+                .into_response();
         }
     };
 
@@ -176,9 +191,11 @@ pub async fn raid_auth_handler(
     match bridge_auth_url(&path).await {
         BridgeResult::Url(url) => Redirect::to(&url).into_response(),
         BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Ungültige Anfrage.").into_response(),
-        BridgeResult::Expired | BridgeResult::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Der Anmeldedienst ist gerade nicht erreichbar. Bitte versuche es später erneut.").into_response()
-        }
+        BridgeResult::Expired | BridgeResult::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Der Anmeldedienst ist gerade nicht erreichbar. Bitte versuche es später erneut.",
+        )
+            .into_response(),
     }
 }
 
@@ -197,9 +214,11 @@ pub async fn raid_go_handler(Query(q): Query<RaidGoQuery>) -> Response {
         BridgeResult::Url(url) => Redirect::to(&url).into_response(),
         BridgeResult::Expired => expired_link_page(),
         BridgeResult::Bad => (StatusCode::BAD_REQUEST, "Ungültiger Link.").into_response(),
-        BridgeResult::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Der Dienst ist gerade nicht erreichbar. Bitte versuche es später erneut.").into_response()
-        }
+        BridgeResult::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Der Dienst ist gerade nicht erreichbar. Bitte versuche es später erneut.",
+        )
+            .into_response(),
     }
 }
 
@@ -258,7 +277,10 @@ mod tests {
 
     #[test]
     fn session_login_lowercased() {
-        assert_eq!(session_login(&partner("EarlySalty")).as_deref(), Some("earlysalty"));
+        assert_eq!(
+            session_login(&partner("EarlySalty")).as_deref(),
+            Some("earlysalty")
+        );
         assert!(session_login(&DashboardAuthLevel::None).is_none());
     }
 
@@ -311,11 +333,8 @@ mod tests {
         clear_internal_env();
         // Kein Login, keine Session, base-scope → öffentliches Onboarding ist
         // erlaubt; Bridge ohne Token → 503 (nicht 401).
-        let res = raid_auth_handler(
-            DashboardAuthLevel::None,
-            Query(RaidAuthQuery::default()),
-        )
-        .await;
+        let res =
+            raid_auth_handler(DashboardAuthLevel::None, Query(RaidAuthQuery::default())).await;
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

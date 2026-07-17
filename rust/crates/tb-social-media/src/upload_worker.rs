@@ -279,8 +279,14 @@ impl UploadTask {
             local_path = self
                 .download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id)
                 .await?;
-            self.update_upload_status_logged(item, "processing", None, None, "processing_downloaded")
-                .await;
+            self.update_upload_status_logged(
+                item,
+                "processing",
+                None,
+                None,
+                "processing_downloaded",
+            )
+            .await;
         }
 
         let converted_path = self
@@ -371,9 +377,14 @@ impl UploadTask {
         error_message: Option<&str>,
         context: &'static str,
     ) {
-        if let Err(error) =
-            update_upload_status(&self.pool, item.id, status, external_video_id, error_message)
-                .await
+        if let Err(error) = update_upload_status(
+            &self.pool,
+            item.id,
+            status,
+            external_video_id,
+            error_message,
+        )
+        .await
         {
             tracing::warn!(
                 %error,

@@ -12,9 +12,9 @@
 //! Discord-ID statt des Logins.
 
 use axum::{
-    Json,
     extract::{Query, State},
     response::IntoResponse,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;

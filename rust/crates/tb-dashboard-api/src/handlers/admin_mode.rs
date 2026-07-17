@@ -9,11 +9,11 @@
 //! `SameSite=Lax`-Session-Cookie.
 
 use axum::{
-    Json, Router,
     extract::Extension,
-    http::{HeaderValue, header::SET_COOKIE},
+    http::{header::SET_COOKIE, HeaderValue},
     response::{IntoResponse, Response},
     routing::post,
+    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -21,8 +21,8 @@ use tb_http_core::ApiError;
 
 use crate::{
     auth::{
-        level::{DashboardAuthLevel, is_admin_login},
-        session::{SameSite, build_transient_session_cookie, clear_session_cookie},
+        level::{is_admin_login, DashboardAuthLevel},
+        session::{build_transient_session_cookie, clear_session_cookie, SameSite},
     },
     handlers::{auth_login::OAuthLoginConfig, auth_status::ADMIN_MODE_COOKIE},
 };
@@ -86,9 +86,9 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
-        Json,
-        http::{StatusCode, header::SET_COOKIE},
+        http::{header::SET_COOKIE, StatusCode},
         response::IntoResponse,
+        Json,
     };
 
     fn twitch_admin() -> DashboardAuthLevel {

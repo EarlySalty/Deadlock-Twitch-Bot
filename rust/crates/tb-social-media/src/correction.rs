@@ -76,7 +76,10 @@ struct VocabIndex {
 /// Tokenisiert kleingeschrieben (für den Index-Aufbau).
 fn tokens_lower(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
-    token_re().find_iter(&lower).map(|m| m.as_str().to_string()).collect()
+    token_re()
+        .find_iter(&lower)
+        .map(|m| m.as_str().to_string())
+        .collect()
 }
 
 fn build_index(entries: &[VocabEntry]) -> VocabIndex {
@@ -103,7 +106,9 @@ fn build_index(entries: &[VocabEntry]) -> VocabIndex {
             if tokens.len() == 1 {
                 let key = tokens[0].clone();
                 // exact: first-wins.
-                exact.entry(key.clone()).or_insert_with(|| canonical.to_string());
+                exact
+                    .entry(key.clone())
+                    .or_insert_with(|| canonical.to_string());
                 singles.push((key, canonical.to_string(), entry.weight.max(1)));
             } else {
                 multi.insert(tokens.join(" "), canonical.to_string());
@@ -123,7 +128,11 @@ fn build_index(entries: &[VocabEntry]) -> VocabIndex {
     }
     let singles = dedup.into_iter().map(|(t, (c, w))| (t, c, w)).collect();
 
-    VocabIndex { exact, multi, singles }
+    VocabIndex {
+        exact,
+        multi,
+        singles,
+    }
 }
 
 /// Ersetzt Multi-Word-Phrasen (längste zuerst, Word-Boundary, Whitespace-tolerant).
@@ -218,9 +227,16 @@ pub fn correct_transcript(transcript: &str, vocab: &[VocabEntry]) -> CorrectionR
 
     // detected dedupe, Reihenfolge erhalten.
     let mut seen = std::collections::HashSet::new();
-    let detected_terms: Vec<String> = detected.into_iter().filter(|t| seen.insert(t.clone())).collect();
+    let detected_terms: Vec<String> = detected
+        .into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .collect();
 
-    CorrectionResult { corrected, detected_terms, replacements }
+    CorrectionResult {
+        corrected,
+        detected_terms,
+        replacements,
+    }
 }
 
 #[cfg(test)]
@@ -251,7 +267,10 @@ mod tests {
 
     #[test]
     fn exakte_und_fuzzy_korrektur() {
-        let vocab = vec![entry("haze", "Haze", &[], 5), entry("bebop", "Bebop", &[], 5)];
+        let vocab = vec![
+            entry("haze", "Haze", &[], 5),
+            entry("bebop", "Bebop", &[], 5),
+        ];
         let r = correct_transcript("ich spiele haze und bebob heute", &vocab);
         // "haze" exakt → Haze; "bebob" fuzzy (dist 1, len 5 → thresh 1) → Bebop.
         assert!(r.corrected.contains("Haze"));
@@ -259,7 +278,10 @@ mod tests {
         assert!(r.detected_terms.contains(&"Haze".to_string()));
         assert!(r.detected_terms.contains(&"Bebop".to_string()));
         // Replacements erfasst (Original→Ersetzung), nur bei echter Änderung.
-        assert!(r.replacements.iter().any(|(o, n)| o == "bebob" && n == "Bebop"));
+        assert!(r
+            .replacements
+            .iter()
+            .any(|(o, n)| o == "bebob" && n == "Bebop"));
     }
 
     #[test]

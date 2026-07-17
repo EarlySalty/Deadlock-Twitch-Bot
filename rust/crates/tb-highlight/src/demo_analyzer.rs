@@ -102,7 +102,10 @@ pub async fn detect_all_events(
     let abilities = boon::abilities(boon_path, demo_path).await;
     let raw_kills = boon::kills_from_demo(boon_path, demo_path, twitch_login).await;
     if raw_kills.is_empty() {
-        tracing::warn!(login = twitch_login, "HighlightClipper: Keine Kills im Demo gefunden");
+        tracing::warn!(
+            login = twitch_login,
+            "HighlightClipper: Keine Kills im Demo gefunden"
+        );
         return Vec::new();
     }
 
@@ -206,7 +209,13 @@ pub fn moments_to_events(moments: &[KillMoment], min_score: i64) -> Vec<Highligh
             let best = cluster
                 .iter()
                 .copied()
-                .reduce(|a, b| if b.excitement_score() > a.excitement_score() { b } else { a })
+                .reduce(|a, b| {
+                    if b.excitement_score() > a.excitement_score() {
+                        b
+                    } else {
+                        a
+                    }
+                })
                 .unwrap();
             let max_combo = cluster.iter().map(|x| x.combo_score).max().unwrap();
             let pre_roll = (max_combo * 3 + 15).min(35);
@@ -214,7 +223,8 @@ pub fn moments_to_events(moments: &[KillMoment], min_score: i64) -> Vec<Highligh
             events.push(HighlightEvent {
                 event_type: EventType::Multikill,
                 game_time_s: cluster[0].game_time_s as i64,
-                duration_s: (cluster[cluster.len() - 1].game_time_s - cluster[0].game_time_s) as i64,
+                duration_s: (cluster[cluster.len() - 1].game_time_s - cluster[0].game_time_s)
+                    as i64,
                 kill_count: count,
                 label: format!(
                     "{} ({} Kills) — {}",
@@ -336,7 +346,13 @@ fn build_combo_label(abilities: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn km(tick: i64, health_pct: f64, high_impact: bool, combo_score: i64, label: &str) -> KillMoment {
+    fn km(
+        tick: i64,
+        health_pct: f64,
+        high_impact: bool,
+        combo_score: i64,
+        label: &str,
+    ) -> KillMoment {
         KillMoment {
             game_time_s: tick as f64 / TICK_RATE as f64,
             tick,
@@ -365,11 +381,17 @@ mod tests {
     fn combo_label_pretty_fallback_dedup() {
         assert_eq!(build_combo_label(&[]), "Kill");
         assert_eq!(
-            build_combo_label(&["citadel_ability_hook".into(), "citadel_ability_uppercut".into()]),
+            build_combo_label(&[
+                "citadel_ability_hook".into(),
+                "citadel_ability_uppercut".into()
+            ]),
             "Hook → Uppercut"
         );
         // Fallback-Title-Case für unbekannte Ability.
-        assert_eq!(build_combo_label(&["ability_unknown_thing".into()]), "Unknown Thing");
+        assert_eq!(
+            build_combo_label(&["ability_unknown_thing".into()]),
+            "Unknown Thing"
+        );
         // Duplikate werden zusammengefasst.
         assert_eq!(
             build_combo_label(&["citadel_ability_hook".into(), "citadel_ability_hook".into()]),

@@ -306,8 +306,16 @@ async fn conflict_updates_only_last_seen_at() {
         .unwrap();
     assert_eq!(messages, 5, "messages NICHT überschrieben");
     assert!(!seen, "seen_via_chatters_api NICHT überschrieben");
-    assert_eq!(first_at.timestamp(), first_msg.timestamp(), "first_message_at fix");
-    assert_eq!(last.timestamp(), tick.timestamp(), "nur last_seen_at aktualisiert");
+    assert_eq!(
+        first_at.timestamp(),
+        first_msg.timestamp(),
+        "first_message_at fix"
+    );
+    assert_eq!(
+        last.timestamp(),
+        tick.timestamp(),
+        "nur last_seen_at aktualisiert"
+    );
 }
 
 #[tokio::test]
@@ -328,9 +336,15 @@ async fn is_first_time_streamer_via_preread() {
     .await
     .unwrap();
 
-    record_chatters_for_streamer(&pool, &s, &logins(&["Alice", "Bob"]), Some("mybot"), Utc::now())
-        .await
-        .unwrap();
+    record_chatters_for_streamer(
+        &pool,
+        &s,
+        &logins(&["Alice", "Bob"]),
+        Some("mybot"),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
 
     let alice_ft: bool = sqlx::query_scalar(
         "SELECT is_first_time_streamer FROM twitch_session_chatters WHERE chatter_login='alice'",
@@ -380,18 +394,27 @@ async fn rollup_no_increment_on_conflict() {
         .unwrap();
     assert_eq!(msgs, 7, "total_messages NICHT inkrementiert");
     assert_eq!(sessions, 3, "total_sessions NICHT inkrementiert");
-    assert_eq!(first_at.timestamp(), earlier.timestamp(), "first_seen_at fix");
-    assert_eq!(last.timestamp(), tick.timestamp(), "last_seen_at aktualisiert");
+    assert_eq!(
+        first_at.timestamp(),
+        earlier.timestamp(),
+        "first_seen_at fix"
+    );
+    assert_eq!(
+        last.timestamp(),
+        tick.timestamp(),
+        "last_seen_at aktualisiert"
+    );
 
     // Neuer Chatter → Insert mit total_sessions=1.
     record_chatters_for_streamer(&pool, &s, &logins(&["Bob"]), Some("mybot"), tick)
         .await
         .unwrap();
-    let bob_sessions: i32 =
-        sqlx::query_scalar("SELECT total_sessions FROM twitch_chatter_rollup WHERE chatter_login='bob'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let bob_sessions: i32 = sqlx::query_scalar(
+        "SELECT total_sessions FROM twitch_chatter_rollup WHERE chatter_login='bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(bob_sessions, 1);
 }
 
@@ -449,7 +472,11 @@ async fn chatter_id_persisted_into_session_and_rollup() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(session_id.as_deref(), Some("111"), "chatter_id in session_chatters");
+    assert_eq!(
+        session_id.as_deref(),
+        Some("111"),
+        "chatter_id in session_chatters"
+    );
 
     let rollup_id: Option<String> = sqlx::query_scalar(
         "SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login = 'alice'",
@@ -491,12 +518,17 @@ async fn rollup_chatter_id_coalesce_on_conflict() {
     .await
     .unwrap();
 
-    let bob_id: Option<String> =
-        sqlx::query_scalar("SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login='bob'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(bob_id.as_deref(), Some("OLD"), "bestehende ID gewinnt (COALESCE)");
+    let bob_id: Option<String> = sqlx::query_scalar(
+        "SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login='bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        bob_id.as_deref(),
+        Some("OLD"),
+        "bestehende ID gewinnt (COALESCE)"
+    );
 
     let alice_id: Option<String> = sqlx::query_scalar(
         "SELECT chatter_id FROM twitch_chatter_rollup WHERE chatter_login='alice'",
@@ -504,7 +536,11 @@ async fn rollup_chatter_id_coalesce_on_conflict() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(alice_id.as_deref(), Some("222"), "NULL→neue ID nachgetragen");
+    assert_eq!(
+        alice_id.as_deref(),
+        Some("222"),
+        "NULL→neue ID nachgetragen"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +705,11 @@ async fn streamer_fallback_only_when_token_present() {
     )
     .await;
     assert!(!r2.0);
-    assert_eq!(fetcher2.streamer_call_count(), 0, "kein Token = kein Fallback");
+    assert_eq!(
+        fetcher2.streamer_call_count(),
+        0,
+        "kein Token = kein Fallback"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -700,7 +740,11 @@ async fn not_mod_backoff_skips_bot_path_on_next_poll() {
         &mut stats,
     )
     .await;
-    assert_eq!(fetcher.bot_call_count(), 1, "erster Poll feuert den Bot-Call");
+    assert_eq!(
+        fetcher.bot_call_count(),
+        1,
+        "erster Poll feuert den Bot-Call"
+    );
     assert_eq!(stats.bot_path_failure, 1);
     assert_eq!(stats.bot_path_skipped_backoff, 0);
 
@@ -754,7 +798,10 @@ async fn bot_path_success_clears_existing_backoff() {
         &mut stats,
     )
     .await;
-    assert!(backoff.contains_for_test("nani").await, "Backoff-Eintrag gesetzt");
+    assert!(
+        backoff.contains_for_test("nani").await,
+        "Backoff-Eintrag gesetzt"
+    );
 
     // Schritt 2: Fenster abgelaufen → Bot-Pfad läuft, Bot ist wieder Mod (200).
     let fetcher_ok = ScriptedFetcher::new(vec![FetchOutcome::Ok(logins(&["alice"]))], vec![]);
@@ -828,7 +875,11 @@ async fn streamer_token_channel_polled_via_fallback_despite_backoff() {
     assert_eq!(r.1, logins(&["carol"]));
     assert_eq!(stats2.bot_path_skipped_backoff, 1, "Bot-Pfad übersprungen");
     assert_eq!(fetcher.bot_call_count(), 0, "kein Bot-Call im Backoff");
-    assert_eq!(fetcher.streamer_call_count(), 1, "Streamer-Fallback gefeuert");
+    assert_eq!(
+        fetcher.streamer_call_count(),
+        1,
+        "Streamer-Fallback gefeuert"
+    );
     assert_eq!(stats2.fallback_to_streamer_token, 1);
 }
 
@@ -911,10 +962,11 @@ async fn cycle_without_bot_token_uses_streamer_fallback() {
 
     let stats = collector.run_cycle().await;
     assert_eq!(stats.chatters_written, 1);
-    let exists: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters WHERE chatter_login='carol'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_session_chatters WHERE chatter_login='carol'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(exists, 1);
 }

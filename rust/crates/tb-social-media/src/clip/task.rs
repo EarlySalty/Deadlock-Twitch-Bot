@@ -72,7 +72,10 @@ impl ClipFetchTask {
     }
 }
 
-fn spawn_logged(task: &'static str, future: impl std::future::Future<Output = ()> + Send + 'static) {
+fn spawn_logged(
+    task: &'static str,
+    future: impl std::future::Future<Output = ()> + Send + 'static,
+) {
     let handle = tokio::spawn(future);
     tokio::spawn(async move {
         if let Err(error) = handle.await {

@@ -101,7 +101,10 @@ pub async fn log_decision(
     result: &HandleResult,
     cost_usd: Option<f64>,
 ) {
-    let logged_text = result.response_text.as_deref().or(result.shadow_text.as_deref());
+    let logged_text = result
+        .response_text
+        .as_deref()
+        .or(result.shadow_text.as_deref());
     let _ = sqlx::query!(
         "INSERT INTO twitch_engagement_log \
          (channel_login, triggered_by_msg_id, decision, response_text, referenced_thread_ids, \
@@ -134,26 +137,46 @@ mod tests {
     use std::str::FromStr;
 
     async fn closed_pool() -> PgPool {
-        let pool = PgPoolOptions::new().max_connections(1).connect_lazy_with(PgConnectOptions::new());
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy_with(PgConnectOptions::new());
         pool.close().await;
         pool
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (\
              channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, \
              steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], \
              output_mode TEXT NOT NULL DEFAULT 'off')",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE TABLE twitch_user_engagement_optout (twitch_user_id TEXT PRIMARY KEY, opted_out_at TIMESTAMPTZ DEFAULT NOW())")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
@@ -166,22 +189,32 @@ mod tests {
              cost_usd_estimate DOUBLE PRECISION, latency_ms INT, \
              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn settings_optout_partner() {
-        let Some(pool) = make_pool("t_eng_gate").await else { return };
+        let Some(pool) = make_pool("t_eng_gate").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, steam_id, tabu_topics) VALUES ('nani', TRUE, '123', ARRAY['politik','religion'])")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_user_engagement_optout (twitch_user_id) VALUES ('u_out')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_user_engagement_optout (twitch_user_id) VALUES ('u_out')")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('Nani', 1), ('passiv', 0)").execute(&pool).await.unwrap();
 
         let s = load_settings(&pool, "nani").await.unwrap();
         assert!(s.enabled);
         assert_eq!(s.steam_id.as_deref(), Some("123"));
-        assert_eq!(s.tabu_topics, vec!["politik".to_string(), "religion".to_string()]);
+        assert_eq!(
+            s.tabu_topics,
+            vec!["politik".to_string(), "religion".to_string()]
+        );
         // output_mode kommt aus dem Spalten-Default → off (kein Output ohne Toggle).
         assert_eq!(s.output_mode, OutputMode::Off);
         assert!(load_settings(&pool, "unbekannt").await.is_none());
@@ -189,8 +222,14 @@ mod tests {
         // Explizit gesetzter Modus wird gelesen.
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('livech', TRUE, 'live'), ('shadowch', TRUE, 'shadow')")
             .execute(&pool).await.unwrap();
-        assert_eq!(load_settings(&pool, "livech").await.unwrap().output_mode, OutputMode::Live);
-        assert_eq!(load_settings(&pool, "shadowch").await.unwrap().output_mode, OutputMode::Shadow);
+        assert_eq!(
+            load_settings(&pool, "livech").await.unwrap().output_mode,
+            OutputMode::Live
+        );
+        assert_eq!(
+            load_settings(&pool, "shadowch").await.unwrap().output_mode,
+            OutputMode::Shadow
+        );
 
         assert!(is_opted_out(&pool, "u_out").await);
         assert!(!is_opted_out(&pool, "u_in").await);
@@ -215,7 +254,9 @@ mod tests {
 
     #[tokio::test]
     async fn log_decision_schreibt() {
-        let Some(pool) = make_pool("t_eng_gate_log").await else { return };
+        let Some(pool) = make_pool("t_eng_gate_log").await else {
+            return;
+        };
         let result = HandleResult {
             decision: Decision::Spoke,
             response_text: Some("antwort".to_string()),

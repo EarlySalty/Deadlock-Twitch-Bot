@@ -355,12 +355,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<InviteInfo> = resp.json().await?;
-        envelope.result.filter(|_| envelope.ok).ok_or_else(|| {
-            DiscordError::BrokerError {
+        envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or_else(|| DiscordError::BrokerError {
                 status: 502,
                 body: "missing create-invite result".to_string(),
-            }
-        })
+            })
     }
 
     /// Legt eine Discord-Rolle über den Broker an
@@ -388,10 +389,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<CreateRoleResponse> = resp.json().await?;
-        let parsed = envelope.result.filter(|_| envelope.ok).ok_or(DiscordError::BrokerError {
-            status: 502,
-            body: "missing create-role result".to_string(),
-        })?;
+        let parsed = envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or(DiscordError::BrokerError {
+                status: 502,
+                body: "missing create-role result".to_string(),
+            })?;
         Ok(parsed.role_id)
     }
 
@@ -1077,7 +1081,10 @@ mod tests {
             .await;
 
         let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
-        let invite = relay.create_invite(123, "streamer-invite:test").await.unwrap();
+        let invite = relay
+            .create_invite(123, "streamer-invite:test")
+            .await
+            .unwrap();
         assert_eq!(invite.invite_url, "https://discord.gg/abc");
         assert_eq!(invite.code, "abc");
         assert_eq!(invite.channel_id, 123);

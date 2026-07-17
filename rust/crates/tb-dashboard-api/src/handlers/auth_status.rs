@@ -7,10 +7,10 @@
 //! All-null-Payload beantwortet.
 
 use axum::{
-    Json,
     extract::{Extension, State},
-    http::{HeaderMap, header},
+    http::{header, HeaderMap},
     response::{IntoResponse, Response},
+    Json,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -20,8 +20,8 @@ use tokio::sync::Mutex;
 
 use crate::auth::{
     level::{
-        AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DEFAULT_ADMIN_LOGIN,
-        DashboardAuthLevel, is_admin_login,
+        is_admin_login, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId,
+        DashboardAuthLevel, DEFAULT_ADMIN_LOGIN,
     },
     session::DashboardAuthState,
 };
@@ -82,16 +82,12 @@ pub async fn auth_status_handler(
     headers: HeaderMap,
 ) -> Response {
     let csrf_token = match (admin_session, partner_session, auth_state) {
-        (Some(Extension(session)), _, Some(Extension(state))) => state
-            .admin_csrf_token(&session.0)
-            .await
-            .ok()
-            .flatten(),
-        (_, Some(Extension(session)), Some(Extension(state))) => state
-            .partner_csrf_token(&session.0)
-            .await
-            .ok()
-            .flatten(),
+        (Some(Extension(session)), _, Some(Extension(state))) => {
+            state.admin_csrf_token(&session.0).await.ok().flatten()
+        }
+        (_, Some(Extension(session)), Some(Extension(state))) => {
+            state.partner_csrf_token(&session.0).await.ok().flatten()
+        }
         _ => None,
     };
     match &auth {
@@ -357,11 +353,11 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{HeaderMap, Request, StatusCode},
         routing::get,
+        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
@@ -425,16 +421,15 @@ mod tests {
             axum::http::header::COOKIE,
             axum::http::HeaderValue::from_static("tb_admin_mode=2"),
         );
-        let response =
-            auth_status_handler(
-                twitch_admin(),
-                None,
-                None,
-                None,
-                State(unavailable_pool()),
-                headers,
-            )
-            .await;
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            headers,
+        )
+        .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], true);
@@ -473,16 +468,15 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_actor_ohne_mode_cookie_sieht_partner_praesentation() {
-        let response =
-            auth_status_handler(
-                twitch_admin(),
-                None,
-                None,
-                None,
-                State(unavailable_pool()),
-                HeaderMap::new(),
-            )
-            .await;
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], false);

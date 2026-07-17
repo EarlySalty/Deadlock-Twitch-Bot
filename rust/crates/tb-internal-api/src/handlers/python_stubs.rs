@@ -379,10 +379,7 @@ pub async fn chat_action_handler(
             if let Some(detail) = detail {
                 body["detail"] = serde_json::json!(detail);
             }
-            (
-                StatusCode::OK,
-                Json(body),
-            )
+            (StatusCode::OK, Json(body))
         }
     }
 }

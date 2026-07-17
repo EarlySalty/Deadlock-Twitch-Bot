@@ -64,9 +64,7 @@ impl StreamerLinkConfig {
         let state_path = std::env::var("STREAMER_LINK_STATE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                PathBuf::from(
-                    "/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json",
-                )
+                PathBuf::from("/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json")
             });
         Self {
             notify_channel_id: env_u64("STREAMER_LINK_NOTIFY_CHANNEL_ID", 1374364800817303632),
@@ -194,8 +192,7 @@ fn norm_key(value: &str) -> String {
         let bytes = ascii.as_bytes();
         let mut i = 0;
         while i <= bytes.len() {
-            let boundary = i == bytes.len()
-                || !(bytes[i].is_ascii_alphanumeric());
+            let boundary = i == bytes.len() || !(bytes[i].is_ascii_alphanumeric());
             if boundary {
                 if i > start {
                     result.push(&ascii[start..i]);
@@ -324,7 +321,13 @@ async fn grant_role(relay: &BrokerRelay, guild_id: u64, user_id: u64, role_id: u
     }
 }
 
-async fn notify_embed(relay: &BrokerRelay, channel_id: u64, title: &str, description: &str, color: u32) {
+async fn notify_embed(
+    relay: &BrokerRelay,
+    channel_id: u64,
+    title: &str,
+    description: &str,
+    color: u32,
+) {
     let payload = SendRichMessage {
         channel_id: channel_id as i64,
         content: None,
@@ -372,7 +375,10 @@ async fn run_scan(
         return;
     }
 
-    tracing::info!(count = new_candidates.len(), "streamer_link: neue Kandidaten gefunden");
+    tracing::info!(
+        count = new_candidates.len(),
+        "streamer_link: neue Kandidaten gefunden"
+    );
 
     // Discord-Member-Index aufbauen
     let members = match relay.list_members().await {
@@ -393,13 +399,21 @@ async fn run_scan(
 
         let login_key = norm_key(&login);
         if login_key.is_empty() {
-            state.mark(&login, "no_match", serde_json::json!({"reason": "leerer Schlüssel"}));
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": "leerer Schlüssel"}),
+            );
             stats.3 += 1;
             continue;
         }
 
         let Some((member, ratio, exact_unique)) = index.best_match(&login_key) else {
-            state.mark(&login, "no_match", serde_json::json!({"reason": format!("kein Member")}));
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": format!("kein Member")}),
+            );
             stats.3 += 1;
             notify_embed(
                 relay,
@@ -415,13 +429,21 @@ async fn run_scan(
         };
 
         if ratio < FUZZY_FLOOR {
-            state.mark(&login, "no_match", serde_json::json!({"reason": format!("Ähnlichkeit {ratio:.2} < {FUZZY_FLOOR}")}));
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": format!("Ähnlichkeit {ratio:.2} < {FUZZY_FLOOR}")}),
+            );
             stats.3 += 1;
             continue;
         }
 
         if used_member_ids.contains(&member.id) {
-            state.mark(&login, "no_match", serde_json::json!({"reason": "Member-Kollision"}));
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": "Member-Kollision"}),
+            );
             stats.3 += 1;
             continue;
         }

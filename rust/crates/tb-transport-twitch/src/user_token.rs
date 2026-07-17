@@ -267,11 +267,10 @@ impl HelixClient {
             .json()
             .await
             .map_err(|error| UserTokenError::Other(format!("invalid users response: {error}")))?;
-        let owner = body
-            .data
-            .into_iter()
-            .next()
-            .ok_or_else(|| UserTokenError::Other("missing user data in response".to_string()))?;
+        let owner =
+            body.data.into_iter().next().ok_or_else(|| {
+                UserTokenError::Other("missing user data in response".to_string())
+            })?;
         if owner.id.trim().is_empty() || owner.login.trim().is_empty() {
             return Err(UserTokenError::Other(
                 "invalid user payload in response".to_string(),
@@ -434,9 +433,10 @@ mod tests {
 
         let client = client_for(&server);
         // Abgelaufene Cooldown-Deadline setzen (Vergangenheit) → nicht mehr aktiv.
-        client
-            .user_auth_blocked_until
-            .store(crate::token::unix_now() - 1, std::sync::atomic::Ordering::Release);
+        client.user_auth_blocked_until.store(
+            crate::token::unix_now() - 1,
+            std::sync::atomic::Ordering::Release,
+        );
         assert!(!client.is_client_auth_blocked());
 
         client.refresh_user_token("alt").await.unwrap();
@@ -506,7 +506,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let owner = client_for(&server).fetch_token_owner("frisch").await.unwrap();
+        let owner = client_for(&server)
+            .fetch_token_owner("frisch")
+            .await
+            .unwrap();
         assert_eq!(owner.id, "993954638");
         // Login wird lowercase-normalisiert (Python: .strip().lower()).
         assert_eq!(owner.login, "denoshock");
@@ -517,9 +520,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/helix/users"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
 

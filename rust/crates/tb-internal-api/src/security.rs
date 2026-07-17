@@ -55,7 +55,10 @@ pub fn host_without_port(raw: Option<&str>) -> String {
     // `[::1]` / `[::1]:8776` → Inhalt zwischen den Klammern.
     if let Some(stripped) = host.strip_prefix('[') {
         if let Some(end) = stripped.find(']') {
-            return stripped[..end].to_lowercase().trim_end_matches('.').to_string();
+            return stripped[..end]
+                .to_lowercase()
+                .trim_end_matches('.')
+                .to_string();
         }
         return stripped.to_lowercase().trim_end_matches('.').to_string();
     }
@@ -74,7 +77,10 @@ pub fn host_without_port(raw: Option<&str>) -> String {
     // Genau ein `:` → host:port; nur abschneiden wenn der Port numerisch ist.
     if normalized.matches(':').count() == 1 {
         if let Some((host_part, port_part)) = normalized.rsplit_once(':') {
-            if !host_part.is_empty() && !port_part.is_empty() && port_part.bytes().all(|b| b.is_ascii_digit()) {
+            if !host_part.is_empty()
+                && !port_part.is_empty()
+                && port_part.bytes().all(|b| b.is_ascii_digit())
+            {
                 return host_part.to_string();
             }
         }
@@ -301,8 +307,8 @@ fn resolve_runtime_role(raw: Option<&str>) -> String {
 /// Liest die Runtime-Rolle aus der Umgebung (`TWITCH_RUNTIME_ROLE`, Fallback
 /// `TWITCH_SPLIT_RUNTIME_ROLE`) und normalisiert sie.
 fn runtime_role_from_env() -> String {
-    let raw = nonempty_env("TWITCH_RUNTIME_ROLE")
-        .or_else(|| nonempty_env("TWITCH_SPLIT_RUNTIME_ROLE"));
+    let raw =
+        nonempty_env("TWITCH_RUNTIME_ROLE").or_else(|| nonempty_env("TWITCH_SPLIT_RUNTIME_ROLE"));
     resolve_runtime_role(raw.as_deref())
 }
 
@@ -366,7 +372,10 @@ pub fn enforce_internal_api_runtime(
     }
 
     if port != expected_port {
-        return Err(RuntimeHardeningError(port_error_message(expected_port, port)));
+        return Err(RuntimeHardeningError(port_error_message(
+            expected_port,
+            port,
+        )));
     }
 
     Ok(resolved_role)
@@ -524,7 +533,10 @@ mod tests {
         assert!(is_loopback_request(Some("http://localhost"), loopback));
         assert!(is_loopback_request(None, loopback));
         // Fremder Origin trotz Loopback-Peer → abgelehnt.
-        assert!(!is_loopback_request(Some("https://evil.example.com"), loopback));
+        assert!(!is_loopback_request(
+            Some("https://evil.example.com"),
+            loopback
+        ));
         // Loopback-Origin aber externer Peer → abgelehnt.
         assert!(!is_loopback_request(Some("http://localhost"), external));
     }
@@ -699,7 +711,11 @@ mod tests {
             // Kern der Lücke: Loopback-Peer, aber fremder Origin → 403.
             let app = guarded_router("secret");
             let res = app
-                .oneshot(req("127.0.0.1", Some("https://evil.example.com"), Some("secret")))
+                .oneshot(req(
+                    "127.0.0.1",
+                    Some("https://evil.example.com"),
+                    Some("secret"),
+                ))
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -709,7 +725,11 @@ mod tests {
         async fn loopback_peer_with_loopback_origin_passes() {
             let app = guarded_router("secret");
             let res = app
-                .oneshot(req("127.0.0.1", Some("http://localhost:8776"), Some("secret")))
+                .oneshot(req(
+                    "127.0.0.1",
+                    Some("http://localhost:8776"),
+                    Some("secret"),
+                ))
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::OK);

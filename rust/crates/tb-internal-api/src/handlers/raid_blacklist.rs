@@ -290,7 +290,10 @@ mod tests {
             .route(&format!("{base}/raid/blacklist/check"), get(check_handler))
             .with_state(pool)
             .layer(Extension(ExpectedToken(token.to_string())))
-            .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
+            .layer(middleware::from_fn_with_state(
+                token.to_string(),
+                internal_auth,
+            ))
             .layer(middleware::from_fn(loopback_only))
     }
 
@@ -299,7 +302,9 @@ mod tests {
             .method(method)
             .uri(uri)
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -401,7 +406,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["blacklisted"], false);
-        assert!(j.get("reason").is_none(), "reason darf fehlen wenn nicht geblacklistet");
+        assert!(
+            j.get("reason").is_none(),
+            "reason darf fehlen wenn nicht geblacklistet"
+        );
         assert!(j.get("added_at").is_none());
     }
 
@@ -434,7 +442,10 @@ mod tests {
         assert_eq!(j["login"], "foo_bar");
         assert_eq!(j["blacklisted"], true);
         assert_eq!(j["reason"], "x");
-        assert!(j["added_at"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(j["added_at"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
     }
 
     #[tokio::test]
@@ -483,7 +494,12 @@ mod tests {
         // leer
         let resp = app
             .clone()
-            .oneshot(req("GET", &format!("{base}/raid/blacklist"), "", Some("secret")))
+            .oneshot(req(
+                "GET",
+                &format!("{base}/raid/blacklist"),
+                "",
+                Some("secret"),
+            ))
             .await
             .unwrap();
         assert_eq!(json_body(resp).await["entries"], serde_json::json!([]));
@@ -498,7 +514,12 @@ mod tests {
             .await
             .unwrap();
         let resp2 = app
-            .oneshot(req("GET", &format!("{base}/raid/blacklist"), "", Some("secret")))
+            .oneshot(req(
+                "GET",
+                &format!("{base}/raid/blacklist"),
+                "",
+                Some("secret"),
+            ))
             .await
             .unwrap();
         let j = json_body(resp2).await;

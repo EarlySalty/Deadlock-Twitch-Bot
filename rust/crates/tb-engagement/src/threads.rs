@@ -14,7 +14,8 @@ use sqlx::PgPool;
 
 use crate::minimax_chat::{ChatMessage, EngagementMinimaxClient};
 
-const EXTRACTOR_SYSTEM_PROMPT: &str = "Du bist ein Konversations-Analyst für einen Twitch-Chat. Lies die folgenden \
+const EXTRACTOR_SYSTEM_PROMPT: &str =
+    "Du bist ein Konversations-Analyst für einen Twitch-Chat. Lies die folgenden \
 Chat-Nachrichten und identifiziere Konversations-Fäden, die für einen späteren \
 Follow-up wertvoll sein könnten — Dinge mit echtem zwischenmenschlichem Wert: \
 anstehende Ereignisse (OP, Reise, Prüfung), kürzliche Erlebnisse die \
@@ -181,7 +182,11 @@ impl Threads {
              WHERE status='open' AND updated_at < NOW() - INTERVAL '30 days'",
         )
         .await;
-        CloseCounts { open_to_due, awaiting_to_closed, open_to_closed }
+        CloseCounts {
+            open_to_due,
+            awaiting_to_closed,
+            open_to_closed,
+        }
     }
 
     async fn load_recent_user_turns(
@@ -261,7 +266,9 @@ impl Threads {
         hours: i32,
         limit: i64,
     ) -> i64 {
-        let rows = self.load_recent_user_turns(channel_login, hours, limit).await;
+        let rows = self
+            .load_recent_user_turns(channel_login, hours, limit)
+            .await;
         if rows.is_empty() {
             return 0;
         }
@@ -284,7 +291,11 @@ impl Threads {
         let response = match minimax
             .generate(
                 EXTRACTOR_SYSTEM_PROMPT,
-                &[ChatMessage { role: "user".to_string(), content: user_prompt, name: None }],
+                &[ChatMessage {
+                    role: "user".to_string(),
+                    content: user_prompt,
+                    name: None,
+                }],
                 800,
                 480,
             )
@@ -323,10 +334,26 @@ impl Threads {
 
         let mut inserted = 0;
         for item in arr {
-            let uid = item.get("twitch_user_id").and_then(Value::as_str).unwrap_or("").trim();
-            let login = item.get("twitch_login").and_then(Value::as_str).unwrap_or("").trim();
-            let ttype = item.get("thread_type").and_then(Value::as_str).unwrap_or("").trim();
-            let summary = item.get("summary").and_then(Value::as_str).unwrap_or("").trim();
+            let uid = item
+                .get("twitch_user_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let login = item
+                .get("twitch_login")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let ttype = item
+                .get("thread_type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let summary = item
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
             if uid.is_empty() || login.is_empty() || ttype.is_empty() || summary.is_empty() {
                 continue;
             }
@@ -440,12 +467,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_user_threads (\
              id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, twitch_login TEXT NOT NULL, \
@@ -502,7 +545,9 @@ mod tests {
 
     #[tokio::test]
     async fn extract_threads_und_dedup() {
-        let Some(pool) = make_pool("t_eng_threads_extract").await else { return };
+        let Some(pool) = make_pool("t_eng_threads_extract").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, twitch_user_id, twitch_login, content) \
              VALUES ('nani','user','u1','user','ich hab morgen OP')",
@@ -543,7 +588,9 @@ mod tests {
 
     #[tokio::test]
     async fn load_filtert_und_ordnet() {
-        let Some(pool) = make_pool("t_eng_threads").await else { return };
+        let Some(pool) = make_pool("t_eng_threads").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_user_threads (twitch_user_id, twitch_login, channel_login, thread_type, summary, status, last_referenced_at) VALUES \
              ('u','user','nani','recurring_interest','offen', 'open', NULL), \
@@ -566,7 +613,9 @@ mod tests {
 
     #[tokio::test]
     async fn mark_referenced_flippt_due() {
-        let Some(pool) = make_pool("t_eng_threads_mark").await else { return };
+        let Some(pool) = make_pool("t_eng_threads_mark").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_user_threads (id, twitch_user_id, twitch_login, thread_type, summary, status) \
              VALUES (1,'u','user','upcoming_event','x','follow_up_due'), (2,'u','user','life_status','y','open')",
@@ -576,15 +625,20 @@ mod tests {
         .unwrap();
         let t = Threads::new(pool.clone());
         t.mark_referenced(&[1, 2]).await.unwrap();
-        let status: Vec<(i64, String)> = sqlx::query_as("SELECT id, status FROM twitch_user_threads ORDER BY id")
-            .fetch_all(&pool).await.unwrap();
+        let status: Vec<(i64, String)> =
+            sqlx::query_as("SELECT id, status FROM twitch_user_threads ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert_eq!(status[0], (1, "awaiting_response".to_string())); // follow_up_due → awaiting
         assert_eq!(status[1], (2, "open".to_string())); // open bleibt open
     }
 
     #[tokio::test]
     async fn auto_close_lifecycle() {
-        let Some(pool) = make_pool("t_eng_threads_close").await else { return };
+        let Some(pool) = make_pool("t_eng_threads_close").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_user_threads (twitch_user_id, twitch_login, thread_type, summary, status, due_at, updated_at) VALUES \
              ('u','user','upcoming_event','fällig','open', NOW() - INTERVAL '1 hour', NOW()), \

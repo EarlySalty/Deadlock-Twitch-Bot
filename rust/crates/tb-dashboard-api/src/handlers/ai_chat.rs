@@ -69,7 +69,10 @@ fn history_messages(session: &ChatSession) -> Vec<Value> {
             if role != "user" && role != "assistant" {
                 return None;
             }
-            let content = e.get("content").and_then(Value::as_str).filter(|c| !c.is_empty())?;
+            let content = e
+                .get("content")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty())?;
             Some(json!({ "role": role, "content": content }))
         })
         .collect()
@@ -130,26 +133,48 @@ pub async fn ai_chat_handler(
         Err(_) => return json_err(StatusCode::BAD_REQUEST, json!({ "error": "invalid_json" })),
     };
 
-    let requested_streamer =
-        payload.get("streamer").and_then(Value::as_str).unwrap_or("").trim();
+    let requested_streamer = payload
+        .get("streamer")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if requested_streamer.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, json!({ "error": "streamer required" }));
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "streamer required" }),
+        );
     }
-    let streamer =
-        match crate::auth::resolve_streamer_scope(&auth, Some(requested_streamer), true) {
-            Ok(Some(s)) => s,
-            Ok(None) => {
-                return json_err(StatusCode::BAD_REQUEST, json!({ "error": "streamer required" }))
-            }
-            Err(resp) => return resp,
-        };
+    let streamer = match crate::auth::resolve_streamer_scope(&auth, Some(requested_streamer), true)
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "streamer required" }),
+            )
+        }
+        Err(resp) => return resp,
+    };
     let analysis_id = match parse_analysis_id(payload.get("analysis_id")) {
         Some(id) => id,
-        None => return json_err(StatusCode::BAD_REQUEST, json!({ "error": "analysis_id required" })),
+        None => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "analysis_id required" }),
+            )
+        }
     };
-    let message = payload.get("message").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let message = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if message.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, json!({ "error": "message required" }));
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "message required" }),
+        );
     }
 
     // Plan-Gate für Nicht-Admin/Localhost.
@@ -175,13 +200,22 @@ pub async fn ai_chat_handler(
     let session_key = chat_session_key(&streamer, analysis_id);
     let session = match AI_STATE.lock().unwrap().get_session(&session_key) {
         Some(s) => s,
-        None => return json_err(StatusCode::NOT_FOUND, json!({ "error": "chat_session_not_found" })),
+        None => {
+            return json_err(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "chat_session_not_found" }),
+            )
+        }
     };
 
     // Ratelimit prüfen (mutiert ggf. MiniMax-Stundenfenster).
     let now = Utc::now();
-    let (remaining_before, reset_ts) =
-        AI_STATE.lock().unwrap().remaining_follow_ups(&streamer, &session.model, session.follow_up_count, now);
+    let (remaining_before, reset_ts) = AI_STATE.lock().unwrap().remaining_follow_ups(
+        &streamer,
+        &session.model,
+        session.follow_up_count,
+        now,
+    );
     if remaining_before <= 0 {
         if session.model == AI_MODEL_MINIMAX {
             let retry_after = (reset_ts.unwrap_or(0) - Utc::now().timestamp()).max(0);
@@ -210,8 +244,13 @@ pub async fn ai_chat_handler(
 
     // History + Verbrauch (re-lock).
     let now2 = Utc::now();
-    let (remaining_after, reset_ts2) =
-        AI_STATE.lock().unwrap().record_and_consume(&session_key, &streamer, &message, &reply, now2);
+    let (remaining_after, reset_ts2) = AI_STATE.lock().unwrap().record_and_consume(
+        &session_key,
+        &streamer,
+        &message,
+        &reply,
+        now2,
+    );
 
     let mut response = json!({ "message": reply, "followUpsRemaining": remaining_after });
     if session.model == AI_MODEL_MINIMAX {
@@ -230,12 +269,30 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     fn session(model: &str) -> ChatSession {
@@ -290,21 +347,35 @@ mod tests {
 
     #[tokio::test]
     async fn none_auth_401() {
-        let Some(pool) = make_pool("t_ai_chat_401").await else { return };
-        let resp = ai_chat_handler(DashboardAuthLevel::None, State(pool), "{}".into()).await.into_response();
+        let Some(pool) = make_pool("t_ai_chat_401").await else {
+            return;
+        };
+        let resp = ai_chat_handler(DashboardAuthLevel::None, State(pool), "{}".into())
+            .await
+            .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn invalid_json_400() {
-        let Some(pool) = make_pool("t_ai_chat_json").await else { return };
-        let resp = ai_chat_handler(DashboardAuthLevel::admin(), State(pool), "nicht json".into()).await.into_response();
+        let Some(pool) = make_pool("t_ai_chat_json").await else {
+            return;
+        };
+        let resp = ai_chat_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            "nicht json".into(),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn fehlende_felder_400() {
-        let Some(pool) = make_pool("t_ai_chat_fields").await else { return };
+        let Some(pool) = make_pool("t_ai_chat_fields").await else {
+            return;
+        };
         // analysis_id fehlt.
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
@@ -318,7 +389,9 @@ mod tests {
 
     #[tokio::test]
     async fn partner_fremder_streamer_403() {
-        let Some(pool) = make_pool("t_ai_chat_owner_mismatch").await else { return };
+        let Some(pool) = make_pool("t_ai_chat_owner_mismatch").await else {
+            return;
+        };
         let resp = ai_chat_handler(
             DashboardAuthLevel::Partner {
                 twitch_login: "owner".into(),
@@ -335,12 +408,15 @@ mod tests {
 
     #[tokio::test]
     async fn session_not_found_404() {
-        let Some(pool) = make_pool("t_ai_chat_404").await else { return };
+        let Some(pool) = make_pool("t_ai_chat_404").await else {
+            return;
+        };
         // Localhost (kein Plan-Gate), gültige Felder, aber keine Session.
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            json!({"streamer": "t6chatnosession", "analysis_id": 999999, "message": "hi"}).to_string(),
+            json!({"streamer": "t6chatnosession", "analysis_id": 999999, "message": "hi"})
+                .to_string(),
         )
         .await
         .into_response();
@@ -349,7 +425,9 @@ mod tests {
 
     #[tokio::test]
     async fn opus_limit_erschoepft_429() {
-        let Some(pool) = make_pool("t_ai_chat_429").await else { return };
+        let Some(pool) = make_pool("t_ai_chat_429").await else {
+            return;
+        };
         // Session mit aufgebrauchtem Opus-Limit (follow_up_count = 3).
         let mut s = session(AI_MODEL_OPUS);
         s.streamer = "t6chat429".into();

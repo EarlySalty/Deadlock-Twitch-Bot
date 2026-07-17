@@ -105,8 +105,7 @@ pub fn encrypt(key_b64: &str, plaintext: &[u8]) -> Result<String, FernetError> {
     raw.extend_from_slice(&iv);
     raw.extend_from_slice(&buf);
 
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(&key.signing).expect("HMAC-Key immer gültig");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.signing).expect("HMAC-Key immer gültig");
     mac.update(&raw);
     raw.extend_from_slice(&mac.finalize().into_bytes());
 
@@ -159,8 +158,7 @@ pub fn decrypt(key_b64: &str, token: &str, ttl_secs: Option<u64>) -> Result<Vec<
     let signed_data = &raw[..hmac_offset];
     let presented_hmac = &raw[hmac_offset..];
 
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(signing_key).expect("HMAC-Key immer gültig");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(signing_key).expect("HMAC-Key immer gültig");
     mac.update(signed_data);
     mac.verify_slice(presented_hmac)
         .map_err(|_| FernetError::HmacMismatch)?;
@@ -293,7 +291,8 @@ mod tests {
     #[test]
     fn encrypt_mit_falschem_key_nicht_entschluesselbar() {
         let token = encrypt(TEST_KEY, b"geheim").unwrap();
-        let err = decrypt("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", &token, None).unwrap_err();
+        let err =
+            decrypt("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", &token, None).unwrap_err();
         assert!(matches!(err, FernetError::HmacMismatch));
     }
 
@@ -306,7 +305,11 @@ mod tests {
             "from cryptography.fernet import Fernet\n\
              print(Fernet(b'{TEST_KEY}').decrypt(b'{token}').decode(), end='')"
         );
-        let out = match std::process::Command::new("python3").arg("-c").arg(&script).output() {
+        let out = match std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .output()
+        {
             Ok(o) => o,
             Err(_) => return, // kein python3 → Test übersprungen
         };
@@ -332,7 +335,8 @@ mod tests {
         //   print(f.encrypt(payload.encode()).decode())
         // "
         const JSON_TOKEN: &str = "gAAAAABqK38fqbEmIzhS9kQSi9jD0KF-FELkYjcon3hQr4KFXhxPzodR-l7l1YOT6eP4KznLWyL9Gw_lovSBJo6A24XavZNYAJ4tFHo95s1ToarvSVmh1oWjoml3vsA7V06DtP5ExhV1QPdfIR_3jqxJXKxMdyHAzQ==";
-        let raw = decrypt(TEST_KEY, JSON_TOKEN, None).expect("JSON-Token muss entschlüsselbar sein");
+        let raw =
+            decrypt(TEST_KEY, JSON_TOKEN, None).expect("JSON-Token muss entschlüsselbar sein");
         let s = std::str::from_utf8(&raw).unwrap();
         let v: serde_json::Value = serde_json::from_str(s).unwrap();
         assert_eq!(v["twitch_login"], "testuser");

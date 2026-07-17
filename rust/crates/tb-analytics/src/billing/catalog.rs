@@ -332,10 +332,18 @@ pub fn product_id_default(plan_id: &str) -> Option<&'static str> {
 /// kaufmännischer Rundung (`(x*p + 50) / 100`) und der Effektiv-Monatsrundung
 /// (`(total + cycle/2) / cycle`). Da alle Werte nicht-negativ sind, entspricht
 /// Rusts Integer-Division Pythons `//`.
-pub fn compute_plan_price(monthly_net_cents: u32, cycle_months: u32, cycle_discount: u32) -> PlanPrice {
+pub fn compute_plan_price(
+    monthly_net_cents: u32,
+    cycle_months: u32,
+    cycle_discount: u32,
+) -> PlanPrice {
     let cycle = cycle_months;
     let subtotal = monthly_net_cents.saturating_mul(cycle);
-    let discount_percent = if cycle > 1 && subtotal > 0 { cycle_discount } else { 0 };
+    let discount_percent = if cycle > 1 && subtotal > 0 {
+        cycle_discount
+    } else {
+        0
+    };
     let discount_cents = if discount_percent > 0 {
         (subtotal.saturating_mul(discount_percent) + 50) / 100
     } else {
@@ -607,7 +615,11 @@ fn parse_cycle_key(raw: &str) -> Option<u32> {
 /// eingecheckter Default gewinnt für bekannte Pläne; nur für Pläne OHNE
 /// eingecheckten Default greift die übergebene Vault-Map. `vault_price_map` kommt
 /// aus [`parse_price_id_mapping`]; in Produktion via [`price_id_map_from_env`].
-pub fn resolved_price_id(plan_id: &str, cycle_months: u32, vault_price_map: &PriceMap) -> Option<String> {
+pub fn resolved_price_id(
+    plan_id: &str,
+    cycle_months: u32,
+    vault_price_map: &PriceMap,
+) -> Option<String> {
     let cycle = normalize_billing_cycle(cycle_months);
     if let Some(default) = price_id_default(plan_id, cycle) {
         return Some(default.to_string());
@@ -716,10 +728,18 @@ mod tests {
             for &cycle in &[1u32, 12u32] {
                 let price = plan.price_for_cycle(cycle);
                 assert_eq!(price.cycle_months, cycle);
-                assert_eq!(price.subtotal_net_cents, monthly * cycle, "subtotal {id}/{cycle}m");
+                assert_eq!(
+                    price.subtotal_net_cents,
+                    monthly * cycle,
+                    "subtotal {id}/{cycle}m"
+                );
                 assert_eq!(price.discount_percent, 0, "discount_percent {id}/{cycle}m");
                 assert_eq!(price.discount_cents, 0, "discount_cents {id}/{cycle}m");
-                assert_eq!(price.total_net_cents, monthly * cycle, "total {id}/{cycle}m");
+                assert_eq!(
+                    price.total_net_cents,
+                    monthly * cycle,
+                    "total {id}/{cycle}m"
+                );
                 assert_eq!(
                     price.effective_monthly_net_cents, *monthly,
                     "effective_monthly {id}/{cycle}m"
@@ -777,7 +797,10 @@ mod tests {
         );
         // raid_free hat keinen Stripe-Price (kostenlos).
         assert_eq!(price_id_default("raid_free", 1), None);
-        assert_eq!(product_id_default("chat_quiet"), Some("prod_UYKKvIg1sbjVrl"));
+        assert_eq!(
+            product_id_default("chat_quiet"),
+            Some("prod_UYKKvIg1sbjVrl")
+        );
         assert_eq!(product_id_default("raid_boost"), None);
 
         // Jeder kostenpflichtige Plan hat Price-IDs für beide Zyklen.
@@ -838,7 +861,12 @@ mod tests {
         let cat12 = catalog_json(12);
         assert_eq!(cat12["cycle_months"], 12);
         assert_eq!(cat12["cycle_label"], "12 Monate");
-        let cq12 = cat12["plans"].as_array().unwrap().iter().find(|p| p["id"] == "chat_quiet").unwrap();
+        let cq12 = cat12["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "chat_quiet")
+            .unwrap();
         assert_eq!(cq12["price"]["subtotal_net_cents"], 2388);
         assert_eq!(cq12["price"]["total_net_cents"], 2388);
         assert_eq!(cq12["price"]["total_net_label"], "23,88 EUR");
@@ -925,7 +953,8 @@ mod tests {
             let mut sorted = plan.entitlements.to_vec();
             sorted.sort_unstable();
             assert_eq!(
-                plan.entitlements, &sorted[..],
+                plan.entitlements,
+                &sorted[..],
                 "entitlements for {} must be sorted (Python plan_entitlements sorts)",
                 plan.id
             );
@@ -950,7 +979,12 @@ mod tests {
     /// die reinen Chat-/Raid-Pläne nicht.
     #[test]
     fn analytics_flag_only_on_analysis_plans() {
-        for id in ["raid_boost", "bundle_chat_quiet_raid_boost", "raid_free", "chat_quiet"] {
+        for id in [
+            "raid_boost",
+            "bundle_chat_quiet_raid_boost",
+            "raid_free",
+            "chat_quiet",
+        ] {
             assert!(
                 !crate::plan::plan_has_analytics(id),
                 "{id} darf kein analytics-Flag tragen"
@@ -963,7 +997,10 @@ mod tests {
             "bundle_analysis_raid_boost",
             "analytics_trial",
         ] {
-            assert!(crate::plan::plan_has_analytics(id), "{id} muss analytics-Flag tragen");
+            assert!(
+                crate::plan::plan_has_analytics(id),
+                "{id} muss analytics-Flag tragen"
+            );
         }
     }
 }

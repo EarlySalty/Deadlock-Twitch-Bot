@@ -126,7 +126,10 @@ mod tests {
     async fn ohne_token_401() {
         let port = Arc::new(StubPort::default());
         let resp = router(Some(port.clone()))
-            .oneshot(req(None, r#"{"broadcasterId":"1","broadcasterLogin":"nani"}"#))
+            .oneshot(req(
+                None,
+                r#"{"broadcasterId":"1","broadcasterLogin":"nani"}"#,
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

@@ -28,6 +28,7 @@ const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/abbo",
     "/twitch/abbo/bezahlen",
     "/twitch/abbo/kündigen",
+    "/twitch/abbo/lurk-command-settings",
     "/twitch/abbo/lurker-tax-settings",
     "/twitch/abbo/promo-message",
     "/twitch/abbo/promo-settings",
@@ -154,10 +155,7 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
     }
 
     // Active-Status prüfen.
-    if state
-        .is_partner_active(twitch_login, twitch_user_id)
-        .await
-    {
+    if state.is_partner_active(twitch_login, twitch_user_id).await {
         return next.run(Request::from_parts(parts, body)).await;
     }
 
@@ -225,7 +223,9 @@ mod tests {
     fn passive_allowed_exact_und_prefix() {
         assert!(path_matches_passive_allowed("/twitch/verwaltung"));
         assert!(path_matches_passive_allowed("/twitch/abbo/kündigen"));
-        assert!(path_matches_passive_allowed("/twitch/api/billing/trial/start"));
+        assert!(path_matches_passive_allowed(
+            "/twitch/api/billing/trial/start"
+        ));
         assert!(path_matches_passive_allowed("/twitch/api/v2/auth-status"));
         assert!(!path_matches_passive_allowed("/twitch/api/v2/overview"));
         assert!(!path_matches_passive_allowed("/analyse"));

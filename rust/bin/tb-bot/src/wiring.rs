@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_engagement::crew_review_store::CrewReviewStore;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::{
@@ -108,6 +109,7 @@ fn map_eventsub_create_error(error: EventSubCreateError) -> SubscriptionCreateEr
 /// Raid-/Score-Hooks bleiben Noop. Voll verdrahtet: `RaidEventSubHooks`.
 pub struct SubscriptionEventSubHooks {
     pub manager: Arc<SubscriptionManager>,
+    pub pool: PgPool,
 }
 
 #[async_trait::async_trait]
@@ -116,6 +118,21 @@ impl EventSubHooks for SubscriptionEventSubHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+    }
+
+    async fn on_stream_offline(&self, _twitch_user_id: &str, login: Option<&str>) {
+        if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
+            if let Err(error) = CrewReviewStore::new(self.pool.clone())
+                .close_channel_session(login, "stream_offline", chrono::Utc::now())
+                .await
+            {
+                tracing::warn!(
+                    login,
+                    %error,
+                    "Ricky-Review: Fallback-EventSub-Offline-Close fehlgeschlagen"
+                );
+            }
+        }
     }
 }
 

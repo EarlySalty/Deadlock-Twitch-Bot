@@ -50,7 +50,9 @@ impl ClaudeClient {
         model: Option<String>,
         timeout: Option<Duration>,
     ) -> Self {
-        let api_key = api_key.filter(|k| !k.is_empty()).or_else(|| nonempty_env("ANTHROPIC_API_KEY"));
+        let api_key = api_key
+            .filter(|k| !k.is_empty())
+            .or_else(|| nonempty_env("ANTHROPIC_API_KEY"));
         let base_url = base_url
             .filter(|u| !u.is_empty())
             .or_else(|| nonempty_env("ANTHROPIC_BASE_URL"))
@@ -110,7 +112,10 @@ impl ClaudeClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(ClaudeError::Http(format!("HTTP {status}: {text}")));
         }
-        let payload: Value = resp.json().await.map_err(|e| ClaudeError::Http(e.to_string()))?;
+        let payload: Value = resp
+            .json()
+            .await
+            .map_err(|e| ClaudeError::Http(e.to_string()))?;
         Ok(payload.get("content").cloned().unwrap_or(Value::Null))
     }
 }
@@ -157,12 +162,20 @@ mod tests {
     async fn ohne_key_unavailable() {
         // Expliziter leerer Key + kein Env → Unavailable. (Base-URL gesetzt, damit
         // kein echter Call passiert, falls Env-Key existiert.)
-        let client = ClaudeClient::new(Some(String::new()), Some("http://127.0.0.1:1/messages".into()), None, None);
+        let client = ClaudeClient::new(
+            Some(String::new()),
+            Some("http://127.0.0.1:1/messages".into()),
+            None,
+            None,
+        );
         if client.api_key.is_some() {
             // ANTHROPIC_API_KEY ist in der Umgebung gesetzt → Test überspringen.
             return;
         }
-        let err = client.create_message(None, json!([]), 10).await.unwrap_err();
+        let err = client
+            .create_message(None, json!([]), 10)
+            .await
+            .unwrap_err();
         assert!(matches!(err, ClaudeError::Unavailable(_)));
     }
 
@@ -174,8 +187,16 @@ mod tests {
             .respond_with(ResponseTemplate::new(400).set_body_string("credit balance is too low"))
             .mount(&server)
             .await;
-        let client = ClaudeClient::new(Some("k".into()), Some(format!("{}/messages", server.uri())), None, None);
-        let err = client.create_message(None, json!([]), 10).await.unwrap_err();
+        let client = ClaudeClient::new(
+            Some("k".into()),
+            Some(format!("{}/messages", server.uri())),
+            None,
+            None,
+        );
+        let err = client
+            .create_message(None, json!([]), 10)
+            .await
+            .unwrap_err();
         match err {
             ClaudeError::Http(msg) => assert!(msg.contains("credit balance is too low")),
             other => panic!("erwartete Http, war {other:?}"),

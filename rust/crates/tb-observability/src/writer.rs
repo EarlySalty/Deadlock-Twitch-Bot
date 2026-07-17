@@ -72,7 +72,12 @@ pub fn sanitize_payload(payload: &StoragePayload) -> Option<ObservabilityRow> {
 }
 
 fn encode_details(details: &std::collections::BTreeMap<String, Value>) -> String {
-    let value = Value::Object(details.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+    let value = Value::Object(
+        details
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
     serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
 }
 

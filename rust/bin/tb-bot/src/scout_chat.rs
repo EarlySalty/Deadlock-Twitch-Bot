@@ -17,6 +17,8 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::task_supervisor::TaskSupervisor;
+
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
 const ANON_NICK: &str = "justinfan13371338";
@@ -41,10 +43,12 @@ impl ScoutIrcMembership {
         pool: PgPool,
         crew_guard: Option<Arc<CrewGuard>>,
         crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        supervisor: &TaskSupervisor,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
-        tokio::spawn(run_membership(rx, tracker, crew_guard, crew_review_trigger));
+        let task = run_membership(rx, tracker, crew_guard, crew_review_trigger);
+        supervisor.spawn("scout_irc_membership", task);
         Self { tx }
     }
 
@@ -61,30 +65,19 @@ pub struct ScoutChatAdapter {
 }
 
 impl ScoutChatAdapter {
-    pub fn new(pool: PgPool, crew_guard: Arc<CrewGuard>) -> Self {
-        Self::start(pool, Some(crew_guard), None)
-    }
-
-    pub fn storage_only(pool: PgPool) -> Self {
-        Self::start(pool, None, None)
-    }
-
-    #[allow(dead_code)] // Task 7 verdrahtet die konkrete Produktionsinstanz.
     pub fn with_crew_review_trigger(
         pool: PgPool,
         crew_guard: Option<Arc<CrewGuard>>,
         crew_review_trigger: Arc<dyn CrewReviewTrigger>,
-    ) -> Self {
-        Self::start(pool, crew_guard, Some(crew_review_trigger))
-    }
-
-    fn start(
-        pool: PgPool,
-        crew_guard: Option<Arc<CrewGuard>>,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        supervisor: &TaskSupervisor,
     ) -> Self {
         Self {
-            membership: ScoutIrcMembership::start(pool, crew_guard, crew_review_trigger),
+            membership: ScoutIrcMembership::start(
+                pool,
+                crew_guard,
+                Some(crew_review_trigger),
+                supervisor,
+            ),
         }
     }
 
@@ -663,12 +656,6 @@ mod tests {
                 "b".to_string()
             ]))
         );
-    }
-
-    #[test]
-    fn sink_konstruktion_braucht_nur_db_pool_und_crew_guard_keine_schreib_api() {
-        let _constructor: fn(sqlx::PgPool, Arc<CrewGuard>) -> ScoutChatAdapter =
-            ScoutChatAdapter::new;
     }
 
     #[test]

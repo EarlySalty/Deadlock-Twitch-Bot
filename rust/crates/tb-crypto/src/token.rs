@@ -75,7 +75,8 @@ mod tests {
         assert_eq!(t.len(), 43);
         assert!(!t.contains('='), "kein Padding wie secrets.token_urlsafe");
         assert!(
-            t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             "nur url-safe-Alphabet"
         );
     }

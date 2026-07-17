@@ -160,7 +160,11 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             .raw_completion("", prompt, 60000, 0.5)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(parse_ai_analysis_points_with_context(&raw, ai_model, "ai-analysis"))
+        Ok(parse_ai_analysis_points_with_context(
+            &raw,
+            ai_model,
+            "ai-analysis",
+        ))
     }
 }
 

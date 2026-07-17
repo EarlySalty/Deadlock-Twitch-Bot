@@ -61,25 +61,43 @@ mod tests {
 
     #[test]
     fn fehlend_ergibt_default() {
-        assert_eq!(parse_bounded_query_int(None, "days", 30, 7, 365).unwrap(), 30);
+        assert_eq!(
+            parse_bounded_query_int(None, "days", 30, 7, 365).unwrap(),
+            30
+        );
     }
 
     #[test]
     fn leer_und_whitespace_ergibt_default() {
-        assert_eq!(parse_bounded_query_int(Some(""), "days", 30, 7, 365).unwrap(), 30);
-        assert_eq!(parse_bounded_query_int(Some("   "), "days", 30, 7, 365).unwrap(), 30);
+        assert_eq!(
+            parse_bounded_query_int(Some(""), "days", 30, 7, 365).unwrap(),
+            30
+        );
+        assert_eq!(
+            parse_bounded_query_int(Some("   "), "days", 30, 7, 365).unwrap(),
+            30
+        );
     }
 
     #[test]
     fn numerisch_wird_geparst_und_getrimmt() {
-        assert_eq!(parse_bounded_query_int(Some(" 90 "), "days", 30, 7, 365).unwrap(), 90);
+        assert_eq!(
+            parse_bounded_query_int(Some(" 90 "), "days", 30, 7, 365).unwrap(),
+            90
+        );
     }
 
     #[test]
     fn out_of_range_wird_geklemmt_nicht_400() {
         // Python: min(max(parsed, minimum), maximum) — KEIN Fehler.
-        assert_eq!(parse_bounded_query_int(Some("1"), "days", 30, 7, 365).unwrap(), 7);
-        assert_eq!(parse_bounded_query_int(Some("9999"), "days", 30, 7, 365).unwrap(), 365);
+        assert_eq!(
+            parse_bounded_query_int(Some("1"), "days", 30, 7, 365).unwrap(),
+            7
+        );
+        assert_eq!(
+            parse_bounded_query_int(Some("9999"), "days", 30, 7, 365).unwrap(),
+            365
+        );
     }
 
     #[test]
@@ -92,8 +110,7 @@ mod tests {
 
     #[test]
     fn fehlername_steckt_in_der_meldung() {
-        let (_, Json(body)) =
-            parse_bounded_query_int(Some("x"), "months", 12, 1, 24).unwrap_err();
+        let (_, Json(body)) = parse_bounded_query_int(Some("x"), "months", 12, 1, 24).unwrap_err();
         assert_eq!(body, json!({ "error": "months must be an integer" }));
     }
 }

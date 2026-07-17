@@ -24,7 +24,10 @@ pub const AI_MODEL_MINIMAX: &str = "minimax";
 /// außer den „aus"-Werten deaktiviert die Ratelimits. Default (unset) = aus.
 fn pentest_disable_rate_limits() -> bool {
     match std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS") {
-        Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
+        Ok(v) => !matches!(
+            v.trim().to_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        ),
         Err(_) => false,
     }
 }
@@ -67,7 +70,8 @@ impl AiState {
         let session_cutoff = now - Duration::hours(CHAT_SESSION_RETENTION_HOURS);
         self.sessions.retain(|_, s| s.created_at >= session_cutoff);
         let counter_cutoff = now - Duration::hours(1);
-        self.hourly_counts.retain(|_, (_, window_start)| *window_start >= counter_cutoff);
+        self.hourly_counts
+            .retain(|_, (_, window_start)| *window_start >= counter_cutoff);
     }
 
     pub fn in_progress_contains(&self, streamer: &str) -> bool {
@@ -100,14 +104,21 @@ impl AiState {
             return (1_000_000_000, None);
         }
         if model == AI_MODEL_OPUS {
-            return ((OPUS_SESSION_FOLLOW_UP_LIMIT - follow_up_count).max(0), None);
+            return (
+                (OPUS_SESSION_FOLLOW_UP_LIMIT - follow_up_count).max(0),
+                None,
+            );
         }
-        let (mut count, mut window_start) =
-            self.hourly_counts.get(streamer).copied().unwrap_or((0, now));
+        let (mut count, mut window_start) = self
+            .hourly_counts
+            .get(streamer)
+            .copied()
+            .unwrap_or((0, now));
         if now - window_start >= Duration::hours(1) {
             count = 0;
             window_start = now;
-            self.hourly_counts.insert(streamer.to_string(), (count, window_start));
+            self.hourly_counts
+                .insert(streamer.to_string(), (count, window_start));
         }
         let remaining = (MINIMAX_HOURLY_FOLLOW_UP_LIMIT - count).max(0);
         let reset_ts = (window_start + Duration::hours(1)).timestamp();
@@ -126,33 +137,55 @@ impl AiState {
         now: DateTime<Utc>,
     ) -> (i64, Option<i64>) {
         let now_iso = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-        let model = self.sessions.get(key).map(|s| s.model.clone()).unwrap_or_default();
+        let model = self
+            .sessions
+            .get(key)
+            .map(|s| s.model.clone())
+            .unwrap_or_default();
         if let Some(s) = self.sessions.get_mut(key) {
-            s.history.push(json!({ "role": "user", "content": user_msg, "timestamp": now_iso }));
-            s.history.push(json!({ "role": "assistant", "content": reply, "timestamp": now_iso }));
+            s.history
+                .push(json!({ "role": "user", "content": user_msg, "timestamp": now_iso }));
+            s.history
+                .push(json!({ "role": "assistant", "content": reply, "timestamp": now_iso }));
         }
 
         if pentest_disable_rate_limits() {
-            let fc = self.sessions.get(key).map(|s| s.follow_up_count).unwrap_or(0);
+            let fc = self
+                .sessions
+                .get(key)
+                .map(|s| s.follow_up_count)
+                .unwrap_or(0);
             return self.remaining_follow_ups(streamer, &model, fc, now);
         }
         if model == AI_MODEL_OPUS {
             if let Some(s) = self.sessions.get_mut(key) {
                 s.follow_up_count += 1;
             }
-            let fc = self.sessions.get(key).map(|s| s.follow_up_count).unwrap_or(0);
+            let fc = self
+                .sessions
+                .get(key)
+                .map(|s| s.follow_up_count)
+                .unwrap_or(0);
             return self.remaining_follow_ups(streamer, &model, fc, now);
         }
         // MiniMax: Stundenzähler erhöhen (Fenster ggf. zurücksetzen).
-        let (mut count, mut window_start) =
-            self.hourly_counts.get(streamer).copied().unwrap_or((0, now));
+        let (mut count, mut window_start) = self
+            .hourly_counts
+            .get(streamer)
+            .copied()
+            .unwrap_or((0, now));
         if now - window_start >= Duration::hours(1) {
             count = 0;
             window_start = now;
         }
         count += 1;
-        self.hourly_counts.insert(streamer.to_string(), (count, window_start));
-        let fc = self.sessions.get(key).map(|s| s.follow_up_count).unwrap_or(0);
+        self.hourly_counts
+            .insert(streamer.to_string(), (count, window_start));
+        let fc = self
+            .sessions
+            .get(key)
+            .map(|s| s.follow_up_count)
+            .unwrap_or(0);
         self.remaining_follow_ups(streamer, &model, fc, now)
     }
 }
@@ -192,7 +225,10 @@ mod tests {
         // Über Limit → 0 (nicht negativ).
         assert_eq!(st.remaining_follow_ups("nani", AI_MODEL_OPUS, 5, now).0, 0);
         // Opus hat keinen reset_ts.
-        assert_eq!(st.remaining_follow_ups("nani", AI_MODEL_OPUS, 0, now).1, None);
+        assert_eq!(
+            st.remaining_follow_ups("nani", AI_MODEL_OPUS, 0, now).1,
+            None
+        );
     }
 
     #[test]
@@ -214,7 +250,11 @@ mod tests {
         assert_eq!(s.history[1]["content"], "antwort");
         // Stunde später → Fenster-Reset → wieder 10.
         let later = now + Duration::hours(2);
-        assert_eq!(st.remaining_follow_ups("nani", AI_MODEL_MINIMAX, 0, later).0, 10);
+        assert_eq!(
+            st.remaining_follow_ups("nani", AI_MODEL_MINIMAX, 0, later)
+                .0,
+            10
+        );
     }
 
     #[test]
@@ -232,9 +272,13 @@ mod tests {
         let mut st = AiState::default();
         let now = Utc::now();
         st.insert_session("frisch".into(), session(AI_MODEL_OPUS, 0, now));
-        st.insert_session("alt".into(), session(AI_MODEL_OPUS, 0, now - Duration::hours(25)));
+        st.insert_session(
+            "alt".into(),
+            session(AI_MODEL_OPUS, 0, now - Duration::hours(25)),
+        );
         st.hourly_counts.insert("recent".into(), (3, now));
-        st.hourly_counts.insert("stale".into(), (3, now - Duration::hours(2)));
+        st.hourly_counts
+            .insert("stale".into(), (3, now - Duration::hours(2)));
         st.cleanup(now);
         assert!(st.get_session("frisch").is_some());
         assert!(st.get_session("alt").is_none());

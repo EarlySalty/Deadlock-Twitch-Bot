@@ -309,9 +309,11 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let (mut parts, _) = request.into_parts();
-        parts.extensions.insert(
-            crate::auth::level::AuthenticatedAdminSessionId("zentral-gueltig".into()),
-        );
+        parts
+            .extensions
+            .insert(crate::auth::level::AuthenticatedAdminSessionId(
+                "zentral-gueltig".into(),
+            ));
 
         assert_eq!(admin_session_ids(&parts), vec!["zentral-gueltig"]);
     }
@@ -412,7 +414,11 @@ mod tests {
     #[test]
     fn origin_mit_port_match() {
         // Host trägt Port, Origin nur Host → Host-Vergleich ignoriert Port.
-        let h = headers_with("dash.example.com:8769", Some("https://dash.example.com"), None);
+        let h = headers_with(
+            "dash.example.com:8769",
+            Some("https://dash.example.com"),
+            None,
+        );
         assert_eq!(check_same_origin(&h), OriginCheck::SameOrigin);
     }
 
@@ -508,18 +514,23 @@ mod tests {
         .execute(&pool)
         .await
         .ok()?;
-        let state = DashboardAuthState::new(pool.clone(), "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string());
+        let state = DashboardAuthState::new(
+            pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
+        );
         Some((pool, state))
     }
 
     async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
-        sqlx::query("DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3")
-            .bind(id)
-            .bind(login)
-            .bind(user_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "DELETE FROM twitch_partners WHERE id = $1 OR twitch_login = $2 OR twitch_user_id = $3",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status)
              VALUES ($1, $2, $3, 'active')
@@ -533,7 +544,11 @@ mod tests {
         .unwrap();
     }
 
-    async fn post_with_state(state: DashboardAuthState, cookie: Option<String>, origin: Option<&str>) -> Response {
+    async fn post_with_state(
+        state: DashboardAuthState,
+        cookie: Option<String>,
+        origin: Option<&str>,
+    ) -> Response {
         let app = guarded_router();
         let mut builder = Request::builder()
             .method("POST")
@@ -552,29 +567,65 @@ mod tests {
 
     #[tokio::test]
     async fn same_origin_session_ohne_token_passiert() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062401, "csrf_fallback", "9062401").await;
-        let session = state.create_partner_session("csrf_fallback", "9062401", "CSRF Fallback").await.unwrap();
-        let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://dashboard.example.com")).await;
+        let session = state
+            .create_partner_session("csrf_fallback", "9062401", "CSRF Fallback")
+            .await
+            .unwrap();
+        let resp = post_with_state(
+            state.clone(),
+            Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)),
+            Some("https://dashboard.example.com"),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062401").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&session.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062401")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn cross_origin_session_ohne_token_403() {
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062402, "csrf_cross", "9062402").await;
-        let session = state.create_partner_session("csrf_cross", "9062402", "CSRF Cross").await.unwrap();
-        let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://evil.example.org")).await;
+        let session = state
+            .create_partner_session("csrf_cross", "9062402", "CSRF Cross")
+            .await
+            .unwrap();
+        let resp = post_with_state(
+            state.clone(),
+            Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)),
+            Some("https://evil.example.org"),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062402").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&session.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062402")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn same_origin_ohne_session_403() {
-        let Some((_pool, state)) = maybe_test_state().await else { return; };
+        let Some((_pool, state)) = maybe_test_state().await else {
+            return;
+        };
         let resp = post_with_state(state, None, Some("https://dashboard.example.com")).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
@@ -585,7 +636,9 @@ mod tests {
         // NEBEN einer gültigen `twitch_dash_session`. Der CSRF-Layer darf nicht am stale
         // Admin-Cookie hängenbleiben, sondern muss die gültige Partner-Session
         // akzeptieren — sonst invalid_csrf auf allen Schreib-POSTs.
-        let Some((pool, state)) = maybe_test_state().await else { return; };
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
         ensure_partner(&pool, 9062403, "csrf_both", "9062403").await;
         let session = state
             .create_partner_session("csrf_both", "9062403", "CSRF Both")

@@ -278,17 +278,20 @@ async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Resp
             twitch_user_id,
             ..
         } => {
-            let access =
-                tb_analytics::partner_access::load_partner_access_state(pool, twitch_login, twitch_user_id)
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
-                        tb_analytics::partner_access::AccessState {
-                            analytics_access_allowed: true,
-                            landing_access_allowed: true,
-                            ..Default::default()
-                        }
-                    });
+            let access = tb_analytics::partner_access::load_partner_access_state(
+                pool,
+                twitch_login,
+                twitch_user_id,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
+                tb_analytics::partner_access::AccessState {
+                    analytics_access_allowed: true,
+                    landing_access_allowed: true,
+                    ..Default::default()
+                }
+            });
 
             if !access.landing_access_allowed {
                 return Some(
@@ -455,8 +458,8 @@ fn parse_url_hostname(candidate: &str) -> String {
 
 /// Dist-Wurzel des Dashboard-Builds (von `/analyse` und `/twitch/demo` geteilt).
 pub(crate) fn dist_root() -> PathBuf {
-    let base = std::env::var("DASHBOARD_V2_DIST_PATH")
-        .unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
+    let base =
+        std::env::var("DASHBOARD_V2_DIST_PATH").unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
     PathBuf::from(base)
 }
 
@@ -490,7 +493,8 @@ async fn serve_asset_from_root(dist: PathBuf, raw_path: &str) -> Response {
             (header::CACHE_CONTROL, cache_control_for_asset(raw_path)),
         ],
         data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 fn cache_control_for_asset(raw_path: &str) -> &'static str {
@@ -594,7 +598,10 @@ mod tests {
     fn nicht_admin_host_abgelehnt() {
         // Regulärer Nutzer-Host → kein Admin-Host.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(!is_admin_dashboard_host_request(&user));
 
         // Localhost → kein Admin-Host.
@@ -621,27 +628,39 @@ mod tests {
 
         // Nutzer-Host → kein Gate, Request läuft weiter.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(admin_dashboard_host_page_gate(&user).is_none());
     }
 
     #[tokio::test]
     async fn asset_handler_setzt_cache_header() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("tb_spa_asset_test_{unique}"));
         let assets = root.join("assets");
         tokio::fs::create_dir_all(&assets).await.unwrap();
-        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');").await.unwrap();
+        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');")
+            .await
+            .unwrap();
 
         let resp = serve_asset_from_root(root.clone(), "assets/index-abc123.js").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("public, max-age=31536000, immutable"))
+            Some(&HeaderValue::from_static(
+                "public, max-age=31536000, immutable"
+            ))
         );
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("application/javascript; charset=utf-8"))
+            Some(&HeaderValue::from_static(
+                "application/javascript; charset=utf-8"
+            ))
         );
         let body = body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"console.log('ok');");

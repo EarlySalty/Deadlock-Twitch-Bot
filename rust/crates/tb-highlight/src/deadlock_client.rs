@@ -75,9 +75,10 @@ fn json_truthy(v: &serde_json::Value) -> bool {
 
 fn extract_match_list(payload: serde_json::Value) -> Vec<serde_json::Value> {
     match payload {
-        serde_json::Value::Array(items) => {
-            items.into_iter().filter(serde_json::Value::is_object).collect()
-        }
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter(serde_json::Value::is_object)
+            .collect(),
         serde_json::Value::Object(map) => {
             // Python: matches = payload.get("matches") or payload.get("data") or []
             let chosen = [map.get("matches"), map.get("data")]

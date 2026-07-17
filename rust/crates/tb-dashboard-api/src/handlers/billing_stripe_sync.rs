@@ -44,9 +44,7 @@ use axum::{
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 
-use tb_analytics::billing::{
-    catalog_json, is_paid_plan_id, price_id_default, product_id_default,
-};
+use tb_analytics::billing::{catalog_json, is_paid_plan_id, price_id_default, product_id_default};
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::handlers::billing_page::BillingPageConfig;
@@ -112,7 +110,10 @@ pub async fn sync_products_handler(
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .unwrap_or(plan_id);
-        let plan_description = plan.get("description").and_then(Value::as_str).unwrap_or("");
+        let plan_description = plan
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
 
         // ── Produkt: eingecheckter Default → gegen Stripe verifizieren (P2.113) ──
         //    Live: retrieve_product + deleted-Flag prüfen; schlägt der Retrieve fehl
@@ -157,7 +158,11 @@ pub async fn sync_products_handler(
                 .await
             {
                 Ok(obj) => {
-                    product_id = obj.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                    product_id = obj
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
                     if product_id.is_empty() {
                         return stripe_fail("stripe_product_id_missing", plan_id, None);
                     }
@@ -253,9 +258,17 @@ pub async fn sync_products_handler(
                         .await
                     {
                         Ok(obj) => {
-                            price_id = obj.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                            price_id = obj
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
                             if price_id.is_empty() {
-                                return stripe_fail("stripe_price_id_missing", plan_id, Some(cycle));
+                                return stripe_fail(
+                                    "stripe_price_id_missing",
+                                    plan_id,
+                                    Some(cycle),
+                                );
                             }
                             created_prices += 1;
                             price_status = "created";
@@ -325,7 +338,11 @@ fn cycle_plan_total_net_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
     cycle_catalog
         .get("plans")
         .and_then(Value::as_array)
-        .and_then(|plans| plans.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(plan_id)))
+        .and_then(|plans| {
+            plans
+                .iter()
+                .find(|p| p.get("id").and_then(Value::as_str) == Some(plan_id))
+        })
         .and_then(|p| p.get("price"))
         .and_then(|price| price.get("total_net_cents"))
         .and_then(Value::as_i64)
@@ -376,7 +393,12 @@ fn is_stripe_deleted(obj: &Value) -> bool {
 
 /// Parst das `dry_run`-Flag aus JSON- ODER Form-Body (Python akzeptiert beides).
 fn parse_dry_run(body: &[u8]) -> bool {
-    let truthy = |s: &str| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+    let truthy = |s: &str| {
+        matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    };
     // JSON?
     if let Ok(v) = serde_json::from_slice::<Value>(body) {
         if let Some(b) = v.get("dry_run") {
@@ -447,7 +469,9 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["dry_run"], true);
         assert_eq!(v["persisted_to_windows_vault"], false);
@@ -468,11 +492,20 @@ mod tests {
         // Eingecheckte Defaults füllen beide Maps. chat_quiet hat sowohl Product-
         // als auch Price-Default; raid_boost nur Price-Default (kein Product).
         let pmap = v["product_id_map"].as_object().unwrap();
-        assert!(pmap.contains_key("chat_quiet"), "product_id_map ohne chat_quiet");
+        assert!(
+            pmap.contains_key("chat_quiet"),
+            "product_id_map ohne chat_quiet"
+        );
         let prmap = v["price_id_map"].as_object().unwrap();
         let boost_cycles = prmap["raid_boost"].as_object().unwrap();
-        assert!(boost_cycles.contains_key("1"), "price_id_map ohne raid_boost/1m");
-        assert!(boost_cycles.contains_key("12"), "price_id_map ohne raid_boost/12m");
+        assert!(
+            boost_cycles.contains_key("1"),
+            "price_id_map ohne raid_boost/1m"
+        );
+        assert!(
+            boost_cycles.contains_key("12"),
+            "price_id_map ohne raid_boost/12m"
+        );
     }
 
     /// P2.113: Live-Sync, bei dem `retrieve_price` für eine eingecheckte Default-ID
@@ -505,7 +538,10 @@ mod tests {
         // Default-Produkte existieren und sind nicht gelöscht → bleiben reused.
         Mock::given(method("GET"))
             .and(path_regex(r"^/v1/products/prod_.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_default", "deleted": false })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "id": "prod_default", "deleted": false })),
+            )
             .mount(&server)
             .await;
         // Product-Create (Fallback; bei intakten Defaults nicht aufgerufen).
@@ -517,7 +553,9 @@ mod tests {
         // Price-Create → neuer Preis (Self-Heal).
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/prices$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_recreated" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "price_recreated" })),
+            )
             .mount(&server)
             .await;
 
@@ -544,18 +582,29 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
 
         // Kein Preis darf als 'reused' (verifizierter Default) gezählt werden, da
         // jeder Retrieve fehlschlug.
-        assert_eq!(v["reused_prices"], 0, "fehlgeschlagener retrieve zählte als reused");
+        assert_eq!(
+            v["reused_prices"], 0,
+            "fehlgeschlagener retrieve zählte als reused"
+        );
         // Alle Preise wurden neu angelegt.
-        assert!(v["created_prices"].as_u64().unwrap() > 0, "kein Preis recreated");
+        assert!(
+            v["created_prices"].as_u64().unwrap() > 0,
+            "kein Preis recreated"
+        );
         // Statt 'reused' steht in den Reports 'created'.
         for op in v["operations"].as_array().unwrap() {
             for price in op["prices"].as_array().unwrap() {
-                assert_ne!(price["status"], "reused", "Default galt trotz 404 als reused");
+                assert_ne!(
+                    price["status"], "reused",
+                    "Default galt trotz 404 als reused"
+                );
             }
         }
         // Maps + readiness sind weiterhin vorhanden, checkout_ready=true (Client da).
@@ -592,13 +641,18 @@ mod tests {
         // Default-Produkt-Retrieve → deleted:true → Default verworfen.
         Mock::given(method("GET"))
             .and(path_regex(r"^/v1/products/prod_.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_x", "deleted": true })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "id": "prod_x", "deleted": true })),
+            )
             .mount(&server)
             .await;
         // Product-Create → neues Produkt (Self-Heal).
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/products$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })),
+            )
             .mount(&server)
             .await;
         // Preise: Default-Retrieve OK → bleiben reused (Preis-Pfad nicht im Fokus).
@@ -614,7 +668,9 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/prices$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })),
+            )
             .mount(&server)
             .await;
 
@@ -641,11 +697,16 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
 
         // Kein Produkt darf als verifizierter Default 'reused' zählen.
-        assert_eq!(v["reused_products"], 0, "gelöschter Default zählte als reused");
+        assert_eq!(
+            v["reused_products"], 0,
+            "gelöschter Default zählte als reused"
+        );
         // Die Default-Produkte (4 Pläne) wurden neu angelegt.
         assert!(
             v["created_products"].as_u64().unwrap() >= 4,
@@ -653,7 +714,10 @@ mod tests {
         );
         // Kein Operations-Eintrag trägt product.status == reused.
         for op in v["operations"].as_array().unwrap() {
-            assert_ne!(op["product"]["status"], "reused", "Default galt trotz deleted als reused");
+            assert_ne!(
+                op["product"]["status"], "reused",
+                "Default galt trotz deleted als reused"
+            );
         }
     }
 
@@ -677,7 +741,9 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/products$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "prod_recreated" })),
+            )
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -692,7 +758,9 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path_regex(r"^/v1/prices$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "price_created" })),
+            )
             .mount(&server)
             .await;
 
@@ -720,9 +788,14 @@ mod tests {
         .await;
         // Kein Abbruch: weiterhin 200 OK trotz 5xx beim Retrieve.
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(v["reused_products"], 0, "transienter Fehler zählte als reused");
+        assert_eq!(
+            v["reused_products"], 0,
+            "transienter Fehler zählte als reused"
+        );
         assert!(
             v["created_products"].as_u64().unwrap() >= 4,
             "Produkte nach Retrieve-Fehler nicht recreated"

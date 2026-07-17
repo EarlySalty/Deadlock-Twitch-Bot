@@ -49,7 +49,9 @@ pub async fn scam_revoke_handler(
     };
     if body.verdict_id <= 0 {
         tracing::warn!("scam-guard revoke mit ungueltiger verdict_id abgelehnt");
-        return Err(ApiError::bad_request("verdict_id must be a positive integer"));
+        return Err(ApiError::bad_request(
+            "verdict_id must be a positive integer",
+        ));
     }
 
     let result = port.revoke(body.verdict_id).await;
@@ -86,7 +88,9 @@ pub async fn scam_enforce_handler(
     };
     if body.verdict_id <= 0 {
         tracing::warn!("scam-guard enforce mit ungueltiger verdict_id abgelehnt");
-        return Err(ApiError::bad_request("verdict_id must be a positive integer"));
+        return Err(ApiError::bad_request(
+            "verdict_id must be a positive integer",
+        ));
     }
 
     let result = port.enforce(body.verdict_id).await;
@@ -140,7 +144,9 @@ mod tests {
             .method("POST")
             .uri(format!("{INTERNAL_API_BASE_PATH}/scam-guard/revoke"))
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -223,7 +229,9 @@ mod tests {
             .method("POST")
             .uri(format!("{INTERNAL_API_BASE_PATH}/scam-guard/enforce"))
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }

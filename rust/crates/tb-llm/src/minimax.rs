@@ -117,8 +117,10 @@ impl LlmProvider for MiniMaxClient {
             .map_err(|e| LlmError::Http(e.to_string()))?
             .error_for_status()
             .map_err(|e| LlmError::Http(e.to_string()))?;
-        let payload: serde_json::Value =
-            resp.json().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let payload: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
         let latency_ms = started.elapsed().as_millis() as i64;
 
         let text = payload

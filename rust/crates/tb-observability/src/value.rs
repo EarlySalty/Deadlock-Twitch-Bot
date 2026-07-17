@@ -173,7 +173,10 @@ mod tests {
 
     #[test]
     fn safe_text_trims_and_limits_and_nullifies_empty() {
-        assert_eq!(safe_observability_text("  hi \n", 80).as_deref(), Some("hi"));
+        assert_eq!(
+            safe_observability_text("  hi \n", 80).as_deref(),
+            Some("hi")
+        );
         assert_eq!(safe_observability_text("   ", 80), None);
         assert_eq!(
             safe_observability_text(&"a".repeat(100), 40).unwrap().len(),

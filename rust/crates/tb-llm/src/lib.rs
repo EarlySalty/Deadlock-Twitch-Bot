@@ -30,6 +30,4 @@ pub mod provider;
 
 pub use anthropic::AnthropicClient;
 pub use minimax::MiniMaxClient;
-pub use provider::{
-    CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message,
-};
+pub use provider::{CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message};

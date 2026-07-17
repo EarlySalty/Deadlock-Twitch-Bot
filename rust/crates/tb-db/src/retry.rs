@@ -98,7 +98,9 @@ impl RetryPolicy {
     /// (`attempt` ist 1-basiert). Verdoppelt ausgehend von `base_delay`, gedeckelt
     /// durch `max_delay` — identisch zu `_transaction_retry_sleep` in Python.
     fn backoff(&self, attempt: u32) -> Duration {
-        let factor = 1u32.checked_shl(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+        let factor = 1u32
+            .checked_shl(attempt.saturating_sub(1))
+            .unwrap_or(u32::MAX);
         let delay = self.base_delay.saturating_mul(factor);
         delay.min(self.max_delay)
     }
@@ -110,7 +112,10 @@ fn is_retryable(err: &DbError) -> bool {
         return false;
     };
     matches!(
-        sqlx_err.as_database_error().and_then(|db| db.code()).as_deref(),
+        sqlx_err
+            .as_database_error()
+            .and_then(|db| db.code())
+            .as_deref(),
         Some(SERIALIZATION_FAILURE | DEADLOCK_DETECTED)
     )
 }

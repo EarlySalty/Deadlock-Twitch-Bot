@@ -156,7 +156,10 @@ mod tests {
             "/streamer/foo?ref=x&y=1"
         );
         let no_q: Uri = "/website/foo".parse().unwrap();
-        assert_eq!(with_query("/streamer/foo".to_string(), &no_q), "/streamer/foo");
+        assert_eq!(
+            with_query("/streamer/foo".to_string(), &no_q),
+            "/streamer/foo"
+        );
     }
 
     #[tokio::test]

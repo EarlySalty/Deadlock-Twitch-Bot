@@ -21,7 +21,11 @@ kein Vorwort, keine Meta.";
 
 /// Build-Prompt für das Channel-Profil (Python `_build_prompt`).
 fn build_profile_prompt(streamer: &str, lines: &[String]) -> String {
-    let block = lines.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n");
+    let block = lines
+        .iter()
+        .map(|m| format!("- {m}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "Hier echte Chat-Nachrichten aus dem Twitch-Channel von {streamer} (ein \
          Deadlock-Streamer). Fass in 2-4 knappen Stichpunkten zusammen, was man über DIESEN \
@@ -139,7 +143,12 @@ impl ChannelBackground {
             return None;
         }
         let raw = minimax
-            .raw_completion(SYS, &build_profile_prompt(channel_login, &lines), BUILD_MAX_TOKENS, 0.4)
+            .raw_completion(
+                SYS,
+                &build_profile_prompt(channel_login, &lines),
+                BUILD_MAX_TOKENS,
+                0.4,
+            )
             .await
             .ok()?;
         let stripped = strip_think(&raw);
@@ -148,8 +157,14 @@ impl ChannelBackground {
             return None;
         }
         let text: String = trimmed.chars().take(PROFILE_MAX_CHARS).collect();
-        self.upsert(channel_login, &text, lines.len() as i64).await.ok()?;
-        tracing::info!(channel = channel_login, msgs = lines.len(), "ChannelBackground: Profil aktualisiert");
+        self.upsert(channel_login, &text, lines.len() as i64)
+            .await
+            .ok()?;
+        tracing::info!(
+            channel = channel_login,
+            msgs = lines.len(),
+            "ChannelBackground: Profil aktualisiert"
+        );
         Some(text)
     }
 
@@ -181,19 +196,38 @@ mod tests {
         assert!(frag.contains("niemals auswendig aufsagen"));
         assert!(frag.contains("spielt viel Haze, chiller Vibe"));
 
-        let prompt = build_profile_prompt("nani", &["zeile eins".to_string(), "zeile zwei".to_string()]);
+        let prompt = build_profile_prompt(
+            "nani",
+            &["zeile eins".to_string(), "zeile zwei".to_string()],
+        );
         assert!(prompt.contains("Channel von nani"));
         assert!(prompt.contains("- zeile eins"));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -215,10 +249,16 @@ mod tests {
 
     #[tokio::test]
     async fn rebuild_und_fragment_e2e() {
-        let Some(pool) = make_pool("t_eng_chbg").await else { return };
+        let Some(pool) = make_pool("t_eng_chbg").await else {
+            return;
+        };
         // 15 User-Msgs (jeweils > 3 Zeichen).
-        let mut q = String::from("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ");
-        let vals: Vec<String> = (0..15).map(|i| format!("('nani','user','nachricht nummer {i}')")).collect();
+        let mut q = String::from(
+            "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ",
+        );
+        let vals: Vec<String> = (0..15)
+            .map(|i| format!("('nani','user','nachricht nummer {i}')"))
+            .collect();
         q.push_str(&vals.join(","));
         sqlx::query(&q).execute(&pool).await.unwrap();
 
@@ -240,7 +280,7 @@ mod tests {
         let bg = ChannelBackground::new(pool.clone());
         let profile = bg.rebuild_channel_profile("nani", &minimax).await;
         assert_eq!(profile.as_deref(), Some("- spielt Haze\n- chiller vibe")); // <think> raus
-        // Persistiert → Fragment.
+                                                                               // Persistiert → Fragment.
         let frag = bg.get_channel_profile_fragment("nani").await;
         assert!(frag.contains("- spielt Haze"));
         // channels_with_data findet nani (15 >= 15).
@@ -249,7 +289,9 @@ mod tests {
 
     #[tokio::test]
     async fn rebuild_zu_wenig_msgs_none() {
-        let Some(pool) = make_pool("t_eng_chbg_few").await else { return };
+        let Some(pool) = make_pool("t_eng_chbg_few").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('nani','user','nur eine lange nachricht')")
             .execute(&pool).await.unwrap();
         let minimax = EngagementMinimaxClient::new(
@@ -258,6 +300,11 @@ mod tests {
             Some("m".to_string()),
             None,
         );
-        assert_eq!(ChannelBackground::new(pool).rebuild_channel_profile("nani", &minimax).await, None);
+        assert_eq!(
+            ChannelBackground::new(pool)
+                .rebuild_channel_profile("nani", &minimax)
+                .await,
+            None
+        );
     }
 }

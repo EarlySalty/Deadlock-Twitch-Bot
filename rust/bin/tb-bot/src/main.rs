@@ -51,6 +51,7 @@ mod raid_arrival_wiring;
 mod raid_greeting;
 mod raid_oauth_impl;
 mod reauth_reminder;
+mod ricky_review_wiring;
 mod scam_enforce_impl;
 mod scam_notify_impl;
 mod scam_revoke_impl;
@@ -210,6 +211,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tb_config::Settings;
 use tb_crypto::FieldCipher;
+use tb_engagement::crew_review_store::CrewReviewStore;
 use tb_internal_api::build_internal_router;
 use tb_monitoring::poller::{ChannelInfoSource, PollHooks, StreamSource};
 use tb_monitoring::sessions::store::SessionStore;
@@ -273,6 +275,10 @@ struct SubscriptionPollHooks {
     recruit_last_check: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
+struct ReviewOnlyPollHooks {
+    pool: sqlx::PgPool,
+}
+
 async fn mark_partner_inactivity_flagged(
     pool: &sqlx::PgPool,
     login: &str,
@@ -330,6 +336,7 @@ impl PollHooks for SubscriptionPollHooks {
     }
 
     async fn on_stream_offline_raid(&self, twitch_user_id: &str, login: Option<&str>) {
+        close_ricky_review_for_offline(&self.pool, login, "poll").await;
         if let Some(handler) = &self.offline_raid {
             handler.handle_streamer_offline(twitch_user_id, login).await;
         }
@@ -414,6 +421,36 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
+#[async_trait::async_trait]
+impl PollHooks for ReviewOnlyPollHooks {
+    async fn on_stream_offline_raid(&self, _twitch_user_id: &str, login: Option<&str>) {
+        close_ricky_review_for_offline(&self.pool, login, "poll").await;
+    }
+}
+
+async fn close_ricky_review_for_offline(pool: &sqlx::PgPool, login: Option<&str>, source: &str) {
+    let Some(login) = login.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    match CrewReviewStore::new(pool.clone())
+        .close_channel_session(login, "stream_offline", chrono::Utc::now())
+        .await
+    {
+        Ok(true) => tracing::info!(
+            login,
+            source,
+            "Ricky-Review: Session per Offline-Signal geschlossen"
+        ),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            login,
+            source,
+            %error,
+            "Ricky-Review: Offline-Close fehlgeschlagen"
+        ),
+    }
+}
+
 /// Sprachfilter fürs Kategorie-Sampling/Scout. Python hartkodiert
 /// `TWITCH_LANGUAGE="de de-de de-at de-ch"` (core/constants.py); hier ist ein
 /// Env-Override via `TWITCH_LANGUAGE_FILTERS` erlaubt, aber leer/ungesetzt fällt
@@ -467,6 +504,7 @@ async fn main() {
         tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
     }
 
+    let ricky_review = ricky_review_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let port: u16 = optional_env_u16("PORT", 8776);
 
     // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
@@ -692,9 +730,8 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
-    let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> = chat_api_handle
-        .as_ref()
-        .map(|h| {
+    let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
+        chat_api_handle.as_ref().map(|h| {
             Arc::new(raid_greeting::RaidGreetingMonitor::new(
                 h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
             ))
@@ -1082,6 +1119,7 @@ async fn main() {
             }
             Arc::new(SubscriptionEventSubHooks {
                 manager: manager.clone(),
+                pool: pool.clone(),
             })
         }
         _ => Arc::new(NoopEventSubHooks),
@@ -1118,6 +1156,7 @@ async fn main() {
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
                     raid_greeting: raid_greeting_monitor.clone(),
+                    crew_review_trigger: Some(Arc::clone(&ricky_review)),
                 },
                 eventsub_hooks.clone(),
                 supervisor.clone(),
@@ -1227,20 +1266,20 @@ async fn main() {
                 tb_analytics::post_stream::schedule_report_retry_job(pool.clone(), 1800),
             );
         }
-        supervisor.spawn("title_nightly_knowledge", tb_chat::title_jobs::schedule_nightly_knowledge_job(
-            pool.clone(),
-            300,
-        ));
-        supervisor.spawn("title_weekly_insight", tb_chat::title_jobs::schedule_weekly_insight_job(
-            pool.clone(),
-            600,
-        ));
+        supervisor.spawn(
+            "title_nightly_knowledge",
+            tb_chat::title_jobs::schedule_nightly_knowledge_job(pool.clone(), 300),
+        );
+        supervisor.spawn(
+            "title_weekly_insight",
+            tb_chat::title_jobs::schedule_weekly_insight_job(pool.clone(), 600),
+        );
         // Self-Learning des Conversation-Scam-Guards: erstmals nach 900s, danach
         // alle 6h aus bestätigten Scams + aufgehobenen Fehlalarmen destillieren.
-        supervisor.spawn("conversation_scam_learning", tb_chat::conversation_scam::schedule_scam_learnings(
-            pool.clone(),
-            900,
-        ));
+        supervisor.spawn(
+            "conversation_scam_learning",
+            tb_chat::conversation_scam::schedule_scam_learnings(pool.clone(), 900),
+        );
     }
 
     // P1.21/P1.22/P2.63: 6h-Subs+Ads-Snapshot-Collector (Python
@@ -1370,11 +1409,20 @@ async fn main() {
     {
         // Cipher-freie Worker: Retention-Cleanup, Approval-Queue, Report-Dispatcher.
         let retention = tb_social_media::retention_worker::RetentionWorker::new(pool.clone());
-        supervisor.spawn("social_retention_worker", async move { retention.run().await });
+        supervisor.spawn(
+            "social_retention_worker",
+            async move { retention.run().await },
+        );
         let approval = tb_social_media::approval_worker::ApprovalWorker::new(pool.clone());
-        supervisor.spawn("social_approval_worker", async move { approval.run().await });
+        supervisor.spawn(
+            "social_approval_worker",
+            async move { approval.run().await },
+        );
         let reports = tb_social_media::report_dispatcher::ReportDispatcher::new(pool.clone());
-        supervisor.spawn("social_report_dispatcher", async move { reports.run().await });
+        supervisor.spawn(
+            "social_report_dispatcher",
+            async move { reports.run().await },
+        );
 
         // Enrichment: LLM-Dispatcher (Consent aus Settings). Transkription ist
         // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
@@ -1385,7 +1433,10 @@ async fn main() {
         );
         let enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
-        supervisor.spawn("social_enrichment_worker", async move { enrichment.run().await });
+        supervisor.spawn(
+            "social_enrichment_worker",
+            async move { enrichment.run().await },
+        );
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
@@ -1413,7 +1464,10 @@ async fn main() {
                     cipher.clone(),
                     refresh_oauth,
                 );
-                supervisor.spawn("social_token_refresh_worker", async move { refresh.run().await });
+                supervisor.spawn(
+                    "social_token_refresh_worker",
+                    async move { refresh.run().await },
+                );
 
                 let insights_creds =
                     tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
@@ -1421,7 +1475,10 @@ async fn main() {
                     pool.clone(),
                     insights_creds,
                 );
-                supervisor.spawn("social_insights_worker", async move { insights.run().await });
+                supervisor.spawn(
+                    "social_insights_worker",
+                    async move { insights.run().await },
+                );
             }
             Err(e) => {
                 tracing::warn!(
@@ -1505,7 +1562,7 @@ async fn main() {
                         chat_api: recruit_chat_api.clone(),
                         recruit_last_check: std::sync::Mutex::new(None),
                     }),
-                    None => Arc::new(tb_monitoring::NoopPollHooks),
+                    None => Arc::new(ReviewOnlyPollHooks { pool: pool.clone() }),
                 };
                 let language_filters: Vec<String> = language_filters_from_env();
                 let source: Arc<dyn StreamSource> = Arc::new(HelixStreamSource {
@@ -1562,9 +1619,11 @@ async fn main() {
         let scout_game =
             std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
         let scout_lang_filters: Vec<String> = language_filters_from_env();
-        let scout_chat_adapter = scout_crew_guard.as_ref().map_or_else(
-            || scout_chat::ScoutChatAdapter::storage_only(pool.clone()),
-            |crew_guard| scout_chat::ScoutChatAdapter::new(pool.clone(), Arc::clone(crew_guard)),
+        let scout_chat_adapter = scout_chat::ScoutChatAdapter::with_crew_review_trigger(
+            pool.clone(),
+            scout_crew_guard.as_ref().map(Arc::clone),
+            Arc::clone(&ricky_review),
+            &supervisor,
         );
         let scout_task = tb_monitoring::build_scout_task(
             pool.clone(),
@@ -1609,9 +1668,10 @@ async fn main() {
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
-        supervisor.spawn("streamer_link_matcher", streamer_link::streamer_link_task(
-            sl_pool, sl_relay, sl_config, sl_base, sl_token,
-        ));
+        supervisor.spawn(
+            "streamer_link_matcher",
+            streamer_link::streamer_link_task(sl_pool, sl_relay, sl_config, sl_base, sl_token),
+        );
     }
 
     // Chatters-Poller (#11): 30s-Collect (Helix `GET /chat/chatters` → Lurker-/
@@ -1702,6 +1762,7 @@ async fn main() {
         Some(Arc::new(InternalBulkReauthAdapter {
             store: tb_raid::ReauthAdminStore::new(pool.clone()),
         }));
+    let shutdown_pool = pool.clone();
     let app = build_internal_router(
         pool,
         token,
@@ -1740,11 +1801,35 @@ async fn main() {
             tracing::error!("Bind-Fehler auf {addr}: {e}");
             std::process::exit(1);
         });
+    let shutdown_supervisor = supervisor.clone();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "SIGTERM-Handler konnte nicht registriert werden");
+            std::process::exit(1);
+        });
 
     if let Err(error) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        let _ = sigterm.recv().await;
+        tracing::info!("SIGTERM empfangen; Background-Tasks werden gestoppt");
+        shutdown_supervisor.shutdown().await;
+        match CrewReviewStore::new(shutdown_pool)
+            .close_all_open_sessions("process_shutdown", chrono::Utc::now())
+            .await
+        {
+            Ok(closed) => tracing::info!(
+                closed,
+                "Ricky-Review: offene Sessions beim Shutdown geschlossen"
+            ),
+            Err(error) => tracing::error!(
+                %error,
+                "Ricky-Review: process_shutdown-Close fehlgeschlagen"
+            ),
+        }
+    })
     .await
     {
         tracing::error!(%error, "Internal-API Server beendet");

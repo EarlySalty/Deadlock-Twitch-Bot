@@ -12,10 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::Path as AxumPath, response::IntoResponse, Json};
 use chrono::SecondsFormat;
 use serde_json::{json, Value};
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 const SLUGS: [&str; 4] = ["impressum", "datenschutz", "agb", "sicherheit"];
@@ -84,7 +84,10 @@ fn default_legal_page_document(slug: &str) -> LegalDoc {
 }
 
 fn nonempty_trim(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 fn legal_payload(doc: &LegalDoc) -> Value {
@@ -106,7 +109,11 @@ async fn load_legal_page_document_at(path: &Path, slug: &str) -> LegalDoc {
     let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
         return doc;
     };
-    let Some(entry) = parsed.as_object().and_then(|o| o.get(slug)).and_then(Value::as_object) else {
+    let Some(entry) = parsed
+        .as_object()
+        .and_then(|o| o.get(slug))
+        .and_then(Value::as_object)
+    else {
         return doc;
     };
     if let Some(t) = entry.get("title").and_then(Value::as_str) {
@@ -254,13 +261,21 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("tb-legal-{}-{}-{}/legal.json", tag, std::process::id(), nanos))
+        std::env::temp_dir().join(format!(
+            "tb-legal-{}-{}-{}/legal.json",
+            tag,
+            std::process::id(),
+            nanos
+        ))
     }
 
     #[test]
     fn normalize_slug_varianten() {
         assert_eq!(normalize_slug(Some("AGB")).as_deref(), Some("agb"));
-        assert_eq!(normalize_slug(Some("  impressum ")).as_deref(), Some("impressum"));
+        assert_eq!(
+            normalize_slug(Some("  impressum ")).as_deref(),
+            Some("impressum")
+        );
         assert_eq!(normalize_slug(Some("bogus")), None);
         assert_eq!(normalize_slug(None), None);
     }
@@ -275,13 +290,17 @@ mod tests {
 
     #[tokio::test]
     async fn load_invalider_slug_404() {
-        let err = load_legal(&temp_path("badslug"), "quatsch").await.unwrap_err();
+        let err = load_legal(&temp_path("badslug"), "quatsch")
+            .await
+            .unwrap_err();
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn load_fehlende_datei_gibt_default() {
-        let v = load_legal(&temp_path("missing"), "impressum").await.unwrap();
+        let v = load_legal(&temp_path("missing"), "impressum")
+            .await
+            .unwrap();
         assert_eq!(v["slug"], "impressum");
         assert_eq!(v["title"], "Impressum");
         assert!(v["body"].as_str().unwrap().len() > 10);
@@ -292,7 +311,9 @@ mod tests {
     async fn save_dann_load_roundtrip_und_default_titel() {
         let path = temp_path("rt");
         // ohne title → Default-Titel bleibt; body gesetzt.
-        let saved = save_legal(&path, "agb", r#"{"body":"<p>Neue AGB ä</p>"}"#.as_bytes()).await.unwrap();
+        let saved = save_legal(&path, "agb", r#"{"body":"<p>Neue AGB ä</p>"}"#.as_bytes())
+            .await
+            .unwrap();
         assert_eq!(saved["slug"], "agb");
         assert_eq!(saved["title"], "Allgemeine Geschäftsbedingungen"); // Default
         assert_eq!(saved["body"], "<p>Neue AGB ä</p>");
@@ -313,11 +334,19 @@ mod tests {
     #[tokio::test]
     async fn save_eigener_titel_und_leerer_titel_400() {
         let path = temp_path("title");
-        let saved = save_legal(&path, "impressum", br#"{"title":"Mein Impressum","body":"x"}"#).await.unwrap();
+        let saved = save_legal(
+            &path,
+            "impressum",
+            br#"{"title":"Mein Impressum","body":"x"}"#,
+        )
+        .await
+        .unwrap();
         assert_eq!(saved["title"], "Mein Impressum");
 
         // title vorhanden aber leer → 400.
-        let err = save_legal(&path, "impressum", br#"{"title":"   ","body":"x"}"#).await.unwrap_err();
+        let err = save_legal(&path, "impressum", br#"{"title":"   ","body":"x"}"#)
+            .await
+            .unwrap_err();
         assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
 
         let _ = tokio::fs::remove_file(&path).await;
@@ -326,9 +355,13 @@ mod tests {
     #[tokio::test]
     async fn save_ohne_body_400_und_invalid_slug_404() {
         let path = temp_path("nobody");
-        let err = save_legal(&path, "agb", br#"{"title":"x"}"#).await.unwrap_err();
+        let err = save_legal(&path, "agb", br#"{"title":"x"}"#)
+            .await
+            .unwrap_err();
         assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
-        let err = save_legal(&path, "bogus", br#"{"body":"x"}"#).await.unwrap_err();
+        let err = save_legal(&path, "bogus", br#"{"body":"x"}"#)
+            .await
+            .unwrap_err();
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
@@ -336,7 +369,12 @@ mod tests {
     async fn handler_unauth_auth_required_401() {
         let r = get_handler(DashboardAuthLevel::None, AxumPath("impressum".to_string())).await;
         assert_eq!(r.into_response().status(), StatusCode::UNAUTHORIZED);
-        let r = save_handler(DashboardAuthLevel::None, AxumPath("impressum".to_string()), axum::body::Bytes::from(r#"{"body":"x"}"#)).await;
+        let r = save_handler(
+            DashboardAuthLevel::None,
+            AxumPath("impressum".to_string()),
+            axum::body::Bytes::from(r#"{"body":"x"}"#),
+        )
+        .await;
         assert_eq!(r.into_response().status(), StatusCode::UNAUTHORIZED);
     }
 }

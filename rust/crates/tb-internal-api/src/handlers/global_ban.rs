@@ -254,9 +254,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -460,7 +458,10 @@ mod tests {
 
         // chatter_id aus twitch_user_id gelandet → Check per ID trifft.
         let banned = db::check_ban(&pool, "anderername", "12345").await.unwrap();
-        assert!(banned, "twitch_user_id muss als chatter_id gespeichert sein");
+        assert!(
+            banned,
+            "twitch_user_id muss als chatter_id gespeichert sein"
+        );
     }
 
     #[tokio::test]
@@ -501,9 +502,15 @@ mod tests {
     async fn list_liefert_snake_case_felder_wie_python() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_gb_list_shape").await;
-        db::add_ban(&pool, "shapeuser", Some("99"), Some("Test"), Some("internal_api"))
-            .await
-            .unwrap();
+        db::add_ban(
+            &pool,
+            "shapeuser",
+            Some("99"),
+            Some("Test"),
+            Some("internal_api"),
+        )
+        .await
+        .unwrap();
         let app = make_router(pool, "secret");
 
         let base = tb_http_core::INTERNAL_API_BASE_PATH;

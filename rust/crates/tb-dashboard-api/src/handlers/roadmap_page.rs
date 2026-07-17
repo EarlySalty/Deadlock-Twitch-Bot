@@ -61,11 +61,7 @@ const PAGE_SHELL: &str = r#"<!doctype html>
 pub async fn roadmap_page_handler() -> Response {
     let body = admin_roadmap::load_roadmap_body().await;
     let html = PAGE_SHELL.replacen("{body}", &body, 1);
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
 }
 
 /// Baut den öffentlichen Roadmap-Router (kein Auth, kein Pool).
@@ -84,13 +80,25 @@ mod tests {
     async fn roadmap_seite_rendert_body_in_schale() {
         let app = build_roadmap_page_router();
         let resp = app
-            .oneshot(Request::builder().uri("/twitch/roadmap").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/roadmap")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap();
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(ct.contains("text/html"));
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let html = String::from_utf8_lossy(&bytes);
         // Schale vorhanden + Default-Body (enthält "Roadmap") eingebettet.
         assert!(html.contains("<!doctype html>"));

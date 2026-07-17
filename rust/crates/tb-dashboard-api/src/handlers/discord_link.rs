@@ -71,7 +71,11 @@ pub async fn link_start_handler(auth: DashboardAuthLevel, Query(q): Query<LinkQu
     };
 
     let Some(token) = broker_token() else {
-        return redirect_status(&next_path, None, Some("Discord-Link ist aktuell nicht verfügbar."));
+        return redirect_status(
+            &next_path,
+            None,
+            Some("Discord-Link ist aktuell nicht verfügbar."),
+        );
     };
 
     let payload = json!({
@@ -93,13 +97,25 @@ pub async fn link_start_handler(auth: DashboardAuthLevel, Query(q): Query<LinkQu
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let state_id = data.get("state_id").and_then(Value::as_str).unwrap_or("").trim();
+            let state_id = data
+                .get("state_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
             if authorize_url.is_empty() || state_id.is_empty() {
-                return redirect_status(&next_path, None, Some("Discord-Link ist aktuell nicht verfügbar."));
+                return redirect_status(
+                    &next_path,
+                    None,
+                    Some("Discord-Link ist aktuell nicht verfügbar."),
+                );
             }
             Redirect::to(&authorize_url).into_response()
         }
-        None => redirect_status(&next_path, None, Some("Discord-Link ist aktuell nicht verfügbar.")),
+        None => redirect_status(
+            &next_path,
+            None,
+            Some("Discord-Link ist aktuell nicht verfügbar."),
+        ),
     }
 }
 
@@ -110,26 +126,55 @@ pub async fn link_complete_handler(
     Query(q): Query<CompleteQuery>,
 ) -> Response {
     let Some((twitch_login, twitch_user_id)) = partner_identity(&auth) else {
-        return redirect_status(FALLBACK_PATH, None, Some("Twitch-Session fehlt. Bitte erneut anmelden."));
+        return redirect_status(
+            FALLBACK_PATH,
+            None,
+            Some("Twitch-Session fehlt. Bitte erneut anmelden."),
+        );
     };
 
     if let Some(err) = q.error.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return redirect_status(FALLBACK_PATH, None, Some(&format!("Discord OAuth Fehler: {err}")));
+        return redirect_status(
+            FALLBACK_PATH,
+            None,
+            Some(&format!("Discord OAuth Fehler: {err}")),
+        );
     }
-    let Some(state_id) = q.state_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(state_id) = q
+        .state_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
         return redirect_status(FALLBACK_PATH, None, Some("Fehlender Discord-OAuth-State."));
     };
 
     let Some(token) = broker_token() else {
-        return redirect_status(FALLBACK_PATH, None, Some("Discord-Link ist aktuell nicht verfügbar."));
+        return redirect_status(
+            FALLBACK_PATH,
+            None,
+            Some("Discord-Link ist aktuell nicht verfügbar."),
+        );
     };
 
-    let Some(session) = broker_post(BROKER_CONSUME_PATH, &token, &json!({ "state_id": state_id })).await
+    let Some(session) = broker_post(
+        BROKER_CONSUME_PATH,
+        &token,
+        &json!({ "state_id": state_id }),
+    )
+    .await
     else {
-        return redirect_status(FALLBACK_PATH, None, Some("Discord-User konnte nicht geladen werden."));
+        return redirect_status(
+            FALLBACK_PATH,
+            None,
+            Some("Discord-User konnte nicht geladen werden."),
+        );
     };
 
-    let metadata = session.get("service_metadata").cloned().unwrap_or(Value::Null);
+    let metadata = session
+        .get("service_metadata")
+        .cloned()
+        .unwrap_or(Value::Null);
     let next_path = normalize_next(metadata.get("next_path").and_then(Value::as_str));
 
     // Bindung an die aktive Twitch-Session prüfen (Python 1749-1761).
@@ -145,23 +190,46 @@ pub async fn link_complete_handler(
         .unwrap_or("")
         .trim()
         .to_string();
-    let login_mismatch = !expected_login.is_empty() && expected_login != twitch_login.to_ascii_lowercase();
+    let login_mismatch =
+        !expected_login.is_empty() && expected_login != twitch_login.to_ascii_lowercase();
     let user_mismatch = !expected_user_id.is_empty()
         && !twitch_user_id.is_empty()
         && expected_user_id != twitch_user_id;
     if login_mismatch || user_mismatch {
-        return redirect_status(&next_path, None, Some("Discord-Link passt nicht zur aktiven Twitch-Session."));
+        return redirect_status(
+            &next_path,
+            None,
+            Some("Discord-Link passt nicht zur aktiven Twitch-Session."),
+        );
     }
 
-    let discord_id = session.get("discord_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let discord_id = session
+        .get("discord_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if discord_id.is_empty() || !discord_id.chars().all(|c| c.is_ascii_digit()) {
-        return redirect_status(&next_path, None, Some("Discord-User konnte nicht geladen werden."));
+        return redirect_status(
+            &next_path,
+            None,
+            Some("Discord-User konnte nicht geladen werden."),
+        );
     }
-    let discord_name = session.get("discord_name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let discord_name = session
+        .get("discord_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let has_roles = session
         .get("discord_roles")
         .and_then(Value::as_array)
-        .map(|roles| roles.iter().any(|r| r.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false)))
+        .map(|roles| {
+            roles
+                .iter()
+                .any(|r| r.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false))
+        })
         .unwrap_or(false);
 
     // DB-Write: Discord-Profil setzen (Python `_discord_profile`). member-Flag =
@@ -182,7 +250,11 @@ pub async fn link_complete_handler(
         Ok(false) => redirect_status(&next_path, None, Some("Streamer nicht gefunden.")),
         Err(error) => {
             tracing::error!(%error, "discord link completion failed");
-            redirect_status(&next_path, None, Some("Discord-Daten konnten nicht gespeichert werden."))
+            redirect_status(
+                &next_path,
+                None,
+                Some("Discord-Daten konnten nicht gespeichert werden."),
+            )
         }
     }
 }
@@ -191,7 +263,10 @@ pub async fn link_complete_handler(
 pub fn build_discord_link_router(pool: PgPool) -> Router {
     Router::new()
         .route("/twitch/auth/discord/link", get(link_start_handler))
-        .route("/twitch/auth/discord/link/complete", get(link_complete_handler))
+        .route(
+            "/twitch/auth/discord/link/complete",
+            get(link_complete_handler),
+        )
         .with_state(pool)
 }
 
@@ -200,7 +275,12 @@ pub fn build_discord_link_router(pool: PgPool) -> Router {
 /// `(twitch_login_lowercased, twitch_user_id)` des eingeloggten Partners, sonst
 /// `None` (Admin/Localhost/None haben keinen verknüpfbaren Streamer-Bezug).
 fn partner_identity(auth: &DashboardAuthLevel) -> Option<(String, String)> {
-    if let DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } = auth {
+    if let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = auth
+    {
         let login = twitch_login.trim().to_ascii_lowercase();
         if !login.is_empty() {
             return Some((login, twitch_user_id.trim().to_string()));
@@ -211,7 +291,11 @@ fn partner_identity(auth: &DashboardAuthLevel) -> Option<(String, String)> {
 
 /// Broker-Token aus dem Prozess-Env (Infisical). Nie geloggt.
 fn broker_token() -> Option<String> {
-    for key in ["TWITCH_INTERNAL_API_TOKEN", "MASTER_BROKER_TOKEN", "MAIN_BOT_INTERNAL_TOKEN"] {
+    for key in [
+        "TWITCH_INTERNAL_API_TOKEN",
+        "MASTER_BROKER_TOKEN",
+        "MAIN_BOT_INTERNAL_TOKEN",
+    ] {
         if let Ok(value) = std::env::var(key) {
             let value = value.trim();
             if !value.is_empty() {
@@ -292,7 +376,10 @@ mod tests {
 
     #[test]
     fn next_normalisierung_blockt_offene_redirects() {
-        assert_eq!(normalize_next(Some("/twitch/verwaltung")), "/twitch/verwaltung");
+        assert_eq!(
+            normalize_next(Some("/twitch/verwaltung")),
+            "/twitch/verwaltung"
+        );
         assert_eq!(normalize_next(Some("//evil.com")), FALLBACK_PATH);
         assert_eq!(normalize_next(Some("https://evil.com")), FALLBACK_PATH);
         assert_eq!(normalize_next(Some("")), FALLBACK_PATH);
@@ -301,7 +388,10 @@ mod tests {
 
     #[test]
     fn partner_identity_nur_fuer_partner() {
-        assert_eq!(partner_identity(&partner("Nani", "42")), Some(("nani".into(), "42".into())));
+        assert_eq!(
+            partner_identity(&partner("Nani", "42")),
+            Some(("nani".into(), "42".into()))
+        );
         assert_eq!(partner_identity(&DashboardAuthLevel::admin()), None);
         assert_eq!(partner_identity(&DashboardAuthLevel::None), None);
     }
@@ -322,7 +412,9 @@ mod tests {
     async fn link_start_unauth_redirect_login() {
         let resp = link_start_handler(
             DashboardAuthLevel::None,
-            Query(LinkQuery { next: Some("/twitch/verwaltung".into()) }),
+            Query(LinkQuery {
+                next: Some("/twitch/verwaltung".into()),
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);

@@ -67,7 +67,8 @@ pub trait ShadowReviewSink: Send + Sync {
     /// `Ok(())` heißt: alle Items sind sicher angekommen und dürfen als
     /// weitergeleitet markiert werden. Ein `Err` lässt die Markierung aus, der
     /// nächste Lauf reicht dieselben Items erneut ein.
-    async fn forward_for_review(&self, items: &[ShadowReviewItem]) -> Result<(), ShadowReviewError>;
+    async fn forward_for_review(&self, items: &[ShadowReviewItem])
+        -> Result<(), ShadowReviewError>;
 }
 
 /// Liest die noch nicht weitergeleiteten Shadow-Zeilen (älteste zuerst).
@@ -195,12 +196,28 @@ mod tests {
     /// (`ts`-Spalte + additiver `shadow_forwarded_at`-Marker aus der Migration).
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_log (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, triggered_by_msg_id TEXT, \
@@ -239,7 +256,9 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_nur_offene_shadowed() {
-        let Some(pool) = make_pool("t_eng_shadowrev_fetch").await else { return };
+        let Some(pool) = make_pool("t_eng_shadowrev_fetch").await else {
+            return;
+        };
         // Älteste Shadow-Zeile zuerst (ts -10), dann eine jüngere (ts 0).
         let id_old = insert_log(&pool, "shadowed", Some("alt"), -10).await;
         let id_new = insert_log(&pool, "shadowed", Some("neu"), 0).await;
@@ -268,7 +287,9 @@ mod tests {
 
     #[tokio::test]
     async fn forward_markiert_und_ist_idempotent() {
-        let Some(pool) = make_pool("t_eng_shadowrev_forward").await else { return };
+        let Some(pool) = make_pool("t_eng_shadowrev_forward").await else {
+            return;
+        };
         insert_log(&pool, "shadowed", Some("eins"), -2).await;
         insert_log(&pool, "shadowed", Some("zwei"), -1).await;
 
@@ -298,10 +319,15 @@ mod tests {
 
     #[tokio::test]
     async fn sink_fehler_markiert_nichts() {
-        let Some(pool) = make_pool("t_eng_shadowrev_failsink").await else { return };
+        let Some(pool) = make_pool("t_eng_shadowrev_failsink").await else {
+            return;
+        };
         insert_log(&pool, "shadowed", Some("eins"), -1).await;
 
-        let sink = FakeSink { fail: true, ..Default::default() };
+        let sink = FakeSink {
+            fail: true,
+            ..Default::default()
+        };
         let err = forward_pending_reviews(&pool, &sink, 50).await.unwrap_err();
         assert!(matches!(err, ShadowReviewError::Sink(_)));
 
@@ -318,17 +344,24 @@ mod tests {
 
     #[tokio::test]
     async fn forward_ohne_offene_ist_noop() {
-        let Some(pool) = make_pool("t_eng_shadowrev_empty").await else { return };
+        let Some(pool) = make_pool("t_eng_shadowrev_empty").await else {
+            return;
+        };
         insert_log(&pool, "spoke", Some("nur live"), 0).await;
         let sink = FakeSink::default();
         let marked = forward_pending_reviews(&pool, &sink, 50).await.unwrap();
         assert_eq!(marked, 0);
-        assert!(sink.batches().is_empty(), "kein Sink-Call ohne offene Zeilen");
+        assert!(
+            sink.batches().is_empty(),
+            "kein Sink-Call ohne offene Zeilen"
+        );
     }
 
     #[tokio::test]
     async fn mark_forwarded_leere_ids_noop() {
-        let Some(pool) = make_pool("t_eng_shadowrev_markempty").await else { return };
+        let Some(pool) = make_pool("t_eng_shadowrev_markempty").await else {
+            return;
+        };
         assert_eq!(mark_forwarded(&pool, &[]).await.unwrap(), 0);
     }
 }

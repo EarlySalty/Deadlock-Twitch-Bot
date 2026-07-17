@@ -99,9 +99,7 @@ fn score_string(score: &serde_json::Map<String, Value>, key: &str) -> Option<Str
 }
 
 fn score_snapshot_from_pending(target_stream_data: Option<&Value>) -> Option<ScoreSnapshot> {
-    let score = target_stream_data?
-        .get("_partner_score")?
-        .as_object()?;
+    let score = target_stream_data?.get("_partner_score")?.as_object()?;
     Some(ScoreSnapshot {
         last_computed_at: score_string(score, "last_computed_at"),
         final_score: score_f64(score, "final_score", 0.0),
@@ -316,9 +314,7 @@ impl ConfirmResolver {
         .bind(target_stream_started_at)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(id
-            .and_then(|v| i32::try_from(v).ok())
-            .filter(|v| *v != 0))
+        Ok(id.and_then(|v| i32::try_from(v).ok()).filter(|v| *v != 0))
     }
 }
 
@@ -522,17 +518,29 @@ mod tests {
                      VALUES ('200', 'dst', '2026-06-10T16:00:00+00:00', 'Deadlock', NULL)")
             .execute(&pool).await.unwrap();
         // Eine bereits beendete Session (darf NICHT gewählt werden).
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
-                     VALUES (11, 'dst', '2026-06-10T10:00:00+00:00', '2026-06-10T12:00:00+00:00')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+                     VALUES (11, 'dst', '2026-06-10T10:00:00+00:00', '2026-06-10T12:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Die offene Session, deren started_at exakt zu live_state.last_started_at passt.
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
-                     VALUES (42, 'dst', '2026-06-10T16:00:00+00:00', NULL)")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+                     VALUES (42, 'dst', '2026-06-10T16:00:00+00:00', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Eine weitere offene Session eines anderen Streamers (Login-Filter greift).
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
-                     VALUES (99, 'andere', '2026-06-10T17:00:00+00:00', NULL)")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+                     VALUES (99, 'andere', '2026-06-10T17:00:00+00:00', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let resolver = ConfirmResolver::new(pool.clone(), "deadlock");
         let ctx = ConfirmContext {
@@ -563,9 +571,13 @@ mod tests {
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_started_at, last_game, active_session_id)
                      VALUES ('200', '', '2026-06-10T16:00:00+00:00', 'Deadlock', 0)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
-                     VALUES (55, 'dst', '2026-06-10T15:00:00+00:00', NULL)")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+                     VALUES (55, 'dst', '2026-06-10T15:00:00+00:00', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let resolver = ConfirmResolver::new(pool.clone(), "deadlock");
         let ctx = ConfirmContext {

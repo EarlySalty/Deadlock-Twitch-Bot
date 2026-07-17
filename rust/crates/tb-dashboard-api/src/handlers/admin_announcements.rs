@@ -10,10 +10,15 @@
 //! des admin_config_routers (B3-7). updated_by nutzt die Discord-Admin-Session,
 //! sonst Pythons Fallback `admin`.
 
-use axum::{extract::{Extension, State}, http::HeaderMap, response::IntoResponse, Json};
+use crate::auth::level::DashboardAuthLevel;
+use axum::{
+    extract::{Extension, State},
+    http::HeaderMap,
+    response::IntoResponse,
+    Json,
+};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 use crate::auth::session::DashboardAuthState;
@@ -105,20 +110,41 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
         // load_global_promo_mode legt twitch_global_promo_modes selbst an.
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
     }
 
     async fn body_json(r: Result<impl IntoResponse, ApiError>) -> (StatusCode, Value) {
         let resp = r.into_response();
         let status = resp.status();
         let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     fn partner_auth() -> DashboardAuthLevel {
@@ -131,7 +157,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_fresh_ist_leer() {
-        let Some(pool) = make_pool("t_ann_get").await else { return };
+        let Some(pool) = make_pool("t_ann_get").await else {
+            return;
+        };
         let (s, j) = body_json(get_handler(DashboardAuthLevel::admin(), State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["body"], "");
@@ -141,12 +169,25 @@ mod tests {
 
     #[tokio::test]
     async fn unauth_auth_required_401() {
-        let Some(pool) = make_pool("t_ann_unauth").await else { return };
-        let (s, j) = body_json(get_handler(DashboardAuthLevel::None, State(pool.clone())).await).await;
+        let Some(pool) = make_pool("t_ann_unauth").await else {
+            return;
+        };
+        let (s, j) =
+            body_json(get_handler(DashboardAuthLevel::None, State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         assert_eq!(j["error"], "auth_required");
         assert_eq!(j["required"], "admin");
-        let (s, j) = body_json(save_handler(DashboardAuthLevel::None, None, HeaderMap::new(), State(pool), Bytes::from(r#"{"body":"x"}"#)).await).await;
+        let (s, j) = body_json(
+            save_handler(
+                DashboardAuthLevel::None,
+                None,
+                HeaderMap::new(),
+                State(pool),
+                Bytes::from(r#"{"body":"x"}"#),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         assert_eq!(j["error"], "auth_required");
         assert_eq!(j["required"], "admin");
@@ -154,12 +195,24 @@ mod tests {
 
     #[tokio::test]
     async fn partner_admin_required_403() {
-        let Some(pool) = make_pool("t_ann_partner").await else { return };
+        let Some(pool) = make_pool("t_ann_partner").await else {
+            return;
+        };
         let (s, j) = body_json(get_handler(partner_auth(), State(pool.clone())).await).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
         assert_eq!(j["error"], "admin_required");
         assert_eq!(j["required"], "admin");
-        let (s, j) = body_json(save_handler(partner_auth(), None, HeaderMap::new(), State(pool), Bytes::from(r#"{"body":"x"}"#)).await).await;
+        let (s, j) = body_json(
+            save_handler(
+                partner_auth(),
+                None,
+                HeaderMap::new(),
+                State(pool),
+                Bytes::from(r#"{"body":"x"}"#),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::FORBIDDEN);
         assert_eq!(j["error"], "admin_required");
         assert_eq!(j["required"], "admin");
@@ -167,17 +220,41 @@ mod tests {
 
     #[tokio::test]
     async fn save_ohne_body_key_400() {
-        let Some(pool) = make_pool("t_ann_nobody").await else { return };
-        let (s, j) = body_json(save_handler(DashboardAuthLevel::admin(), None, HeaderMap::new(), State(pool), Bytes::from(r#"{"foo":1}"#)).await).await;
+        let Some(pool) = make_pool("t_ann_nobody").await else {
+            return;
+        };
+        let (s, j) = body_json(
+            save_handler(
+                DashboardAuthLevel::admin(),
+                None,
+                HeaderMap::new(),
+                State(pool),
+                Bytes::from(r#"{"foo":1}"#),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "validation_failed");
     }
 
     #[tokio::test]
     async fn save_und_roundtrip() {
-        let Some(pool) = make_pool("t_ann_save").await else { return };
+        let Some(pool) = make_pool("t_ann_save").await else {
+            return;
+        };
         // Default-Modus standard → custom_message darf beliebig sein.
-        let (s, j) = body_json(save_handler(DashboardAuthLevel::admin(), None, HeaderMap::new(), State(pool.clone()), Bytes::from(r#"{"body":"Event-Wochenende!"}"#)).await).await;
+        let (s, j) = body_json(
+            save_handler(
+                DashboardAuthLevel::admin(),
+                None,
+                HeaderMap::new(),
+                State(pool.clone()),
+                Bytes::from(r#"{"body":"Event-Wochenende!"}"#),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["body"], "Event-Wochenende!");
         assert_eq!(j["lastUpdatedBy"], "admin");

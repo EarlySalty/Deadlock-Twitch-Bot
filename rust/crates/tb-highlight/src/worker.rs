@@ -20,7 +20,9 @@ use crate::config::{
 use crate::event_detector::{detect_events, HighlightEvent};
 use crate::state::{is_match_processed, mark_match_processed, HighlightState};
 use crate::twitch_vod::TwitchVodApi;
-use crate::{deadlock_client, demo_analyzer, demo_downloader, highlight_sender, partners, twitch_vod};
+use crate::{
+    deadlock_client, demo_analyzer, demo_downloader, highlight_sender, partners, twitch_vod,
+};
 
 /// Ein zu verarbeitendes Match (gefiltert + normalisiert aus der Match-History).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,10 +45,9 @@ pub fn filter_recent_matches(
     let mut filtered: Vec<RecentMatch> = Vec::new();
     for m in matches {
         let Some(obj) = m.as_object() else { continue };
-        let (Some(match_id), Some(start_time)) = (
-            as_int(obj.get("match_id")),
-            as_int(obj.get("start_time")),
-        ) else {
+        let (Some(match_id), Some(start_time)) =
+            (as_int(obj.get("match_id")), as_int(obj.get("start_time")))
+        else {
             continue;
         };
         if start_time <= min_start || is_match_processed(state, login, match_id) {
@@ -158,7 +159,10 @@ impl HighlightClipperWorker {
             tracing::info!("HighlightClipper: Keine aktiven Partner mit Steam-ID gefunden");
             return;
         }
-        tracing::info!(count = streamers.len(), "HighlightClipper: Partner werden verarbeitet");
+        tracing::info!(
+            count = streamers.len(),
+            "HighlightClipper: Partner werden verarbeitet"
+        );
 
         let mut state = crate::state::load_state(&self.config.state_path);
         let now = chrono::Utc::now().timestamp();
@@ -167,7 +171,8 @@ impl HighlightClipperWorker {
             let Ok(account_id) = account_id_str.parse::<i64>() else {
                 continue;
             };
-            self.process_streamer(&mut state, &login, account_id, now).await;
+            self.process_streamer(&mut state, &login, account_id, now)
+                .await;
         }
     }
 
@@ -226,23 +231,21 @@ impl HighlightClipperWorker {
         clip_dir: &Path,
     ) {
         let match_id = m.match_id;
-        let match_info = match deadlock_client::get_match_metadata(
-            &self.config.deadlock_api_base,
-            match_id,
-        )
-        .await
-        {
-            Ok(match_info) => match_info,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    login,
-                    match_id,
-                    "HighlightClipper: Match-Metadaten nicht ladbar"
-                );
-                serde_json::json!({})
-            }
-        };
+        let match_info =
+            match deadlock_client::get_match_metadata(&self.config.deadlock_api_base, match_id)
+                .await
+            {
+                Ok(match_info) => match_info,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        login,
+                        match_id,
+                        "HighlightClipper: Match-Metadaten nicht ladbar"
+                    );
+                    serde_json::json!({})
+                }
+            };
         let hero_id = get_hero_id(account_id, &match_info);
         let mut events: Vec<HighlightEvent> = Vec::new();
 
@@ -277,7 +280,10 @@ impl HighlightClipperWorker {
         if events.is_empty() {
             let api_events = detect_events(account_id, &match_info);
             if !api_events.is_empty() {
-                tracing::info!(login, "HighlightClipper: Demo-Analyse leer, nutze API-Fallback");
+                tracing::info!(
+                    login,
+                    "HighlightClipper: Demo-Analyse leer, nutze API-Fallback"
+                );
                 events = api_events;
             }
         }
@@ -381,10 +387,10 @@ mod tests {
         let state = HighlightState::new();
         let matches = vec![
             json!({"match_id": 1, "start_time": now - 100, "match_duration_s": 1800}), // frisch
-            json!({"match_id": 2, "start_time": now - 90000}),                          // > 24h alt
-            json!({"match_id": 3, "start_time": now - 50}),                             // frisch, neuer
-            json!("kein-objekt"),                                                       // übersprungen
-            json!({"start_time": now - 10}),                                            // ohne match_id
+            json!({"match_id": 2, "start_time": now - 90000}),                         // > 24h alt
+            json!({"match_id": 3, "start_time": now - 50}), // frisch, neuer
+            json!("kein-objekt"),                           // übersprungen
+            json!({"start_time": now - 10}),                // ohne match_id
         ];
         let out = filter_recent_matches(&matches, &state, "nani", now);
         // 1 und 3 bleiben, sortiert nach start_time (1 vor 3).
@@ -401,7 +407,10 @@ mod tests {
         let mut state = HighlightState::new();
         state.insert(
             "nani".into(),
-            crate::state::StreamerState { processed_matches: vec![5], last_checked: 0 },
+            crate::state::StreamerState {
+                processed_matches: vec![5],
+                last_checked: 0,
+            },
         );
         let matches = vec![json!({"match_id": 5, "start_time": now - 100})];
         assert!(filter_recent_matches(&matches, &state, "nani", now).is_empty());

@@ -98,7 +98,10 @@ pub async fn admin_index_handler(auth: DashboardAuthLevel) -> Response {
 ///
 /// Python: `_serve_admin_dashboard_path` (api_overview.py:649-660) +
 /// `_admin_dashboard_path_should_serve_index` (Z. 451-458).
-pub async fn admin_path_handler(auth: DashboardAuthLevel, Path(raw_path): Path<String>) -> Response {
+pub async fn admin_path_handler(
+    auth: DashboardAuthLevel,
+    Path(raw_path): Path<String>,
+) -> Response {
     if let Some(denied) = admin_auth_gate(&auth) {
         return denied;
     }
@@ -123,13 +126,7 @@ fn admin_auth_gate(auth: &DashboardAuthLevel) -> Option<Response> {
     if auth.is_privileged() {
         None
     } else {
-        Some(
-            (
-                StatusCode::UNAUTHORIZED,
-                "Admin access required.",
-            )
-                .into_response(),
-        )
+        Some((StatusCode::UNAUTHORIZED, "Admin access required.").into_response())
     }
 }
 
@@ -164,11 +161,7 @@ fn admin_dist_root() -> PathBuf {
 async fn serve_admin_index() -> Response {
     let index = admin_dist_root().join("index.html");
     match tokio::fs::read(&index).await {
-        Ok(bytes) => (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(),
         Err(_) => (
             StatusCode::NOT_FOUND,
             "Admin dashboard not built. Run npm run build in bot/admin_dashboard/",
@@ -250,7 +243,10 @@ mod tests {
     async fn root_privilegiert_geht_zu_admin() {
         let resp = root_handler(DashboardAuthLevel::admin()).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/twitch/admin");
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap(),
+            "/twitch/admin"
+        );
     }
 
     #[tokio::test]
@@ -299,11 +295,8 @@ mod tests {
     #[tokio::test]
     async fn admin_path_deeplink_admin_serviert_index_kein_proxy() {
         // Deep-Link ohne Dateiendung → Shell-Serving-Pfad, Auth passiert.
-        let resp = admin_path_handler(
-            DashboardAuthLevel::admin(),
-            Path("/streamers".to_string()),
-        )
-        .await;
+        let resp =
+            admin_path_handler(DashboardAuthLevel::admin(), Path("/streamers".to_string())).await;
         assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 

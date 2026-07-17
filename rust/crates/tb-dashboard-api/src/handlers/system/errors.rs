@@ -15,11 +15,11 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::sync::OnceLock;
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::Query, response::IntoResponse, Json};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 // ── Konstanten (Python api_admin.py:69-70) ───────────────────────────────────
@@ -195,11 +195,19 @@ fn parse_error_line(source: &str, line_number: usize, raw_line: &str) -> Option<
         timestamp = parts[0].trim().to_string();
         level = parts[2].trim().to_string();
         let m = parts[3].trim();
-        message = if m.is_empty() { line.to_string() } else { m.to_string() };
+        message = if m.is_empty() {
+            line.to_string()
+        } else {
+            m.to_string()
+        };
     } else if parts.len() >= 2 {
         timestamp = parts[0].trim().to_string();
         let m = parts[parts.len() - 1].trim();
-        message = if m.is_empty() { line.to_string() } else { m.to_string() };
+        message = if m.is_empty() {
+            line.to_string()
+        } else {
+            m.to_string()
+        };
     }
 
     let sanitized_message = sanitize_log_text(&message, MESSAGE_MAX_LENGTH);
@@ -293,25 +301,27 @@ fn sanitize_log_text(raw: &str, max_length: usize) -> String {
     let p = secret_patterns();
 
     // header/cookie/query/kv: Präfix erhalten, nur den Wert maskieren.
-    let s = p
-        .header
-        .replace_all(text, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .cookie
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.header.replace_all(text, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.cookie.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
     // quoted_kv: Gruppe 1 = `"key":`, Gruppe 2 = Wert.
-    let s = p
-        .quoted_kv
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.quoted_kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
     // kv: Gruppe 1 = key, 2 = Separator, 3 = Wert.
     let s = p.kv.replace_all(&s, |c: &regex::Captures| {
         format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
     });
-    let s = p
-        .query
-        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
+    let s = p.query.replace_all(&s, |c: &regex::Captures| {
+        format!("{}={}", &c[1], mask_secret(&c[2]))
+    });
     let s = p.jwt.replace_all(&s, mask_secret("[jwt]").as_str());
-    let s = p.oauth.replace_all(&s, mask_secret("[oauth-token]").as_str());
+    let s = p
+        .oauth
+        .replace_all(&s, mask_secret("[oauth-token]").as_str());
 
     truncate_chars(&s, max_length)
 }
@@ -356,7 +366,10 @@ mod tests {
     #[test]
     fn maskiert_authorization_header() {
         let out = sanitize_log_text("Authorization: Bearer abcdef123456 rest", 2000);
-        assert!(out.contains("Authorization: Bearer [redacted:"), "out={out}");
+        assert!(
+            out.contains("Authorization: Bearer [redacted:"),
+            "out={out}"
+        );
         assert!(!out.contains("abcdef123456"));
         assert!(out.contains(" rest"));
     }
@@ -375,7 +388,10 @@ mod tests {
         assert!(!out.contains(jwt), "JWT muss maskiert sein: {out}");
         let oauth = "oauth:abcdefghijklmnop";
         let out2 = sanitize_log_text(oauth, 2000);
-        assert!(!out2.contains(oauth), "oauth-Token muss maskiert sein: {out2}");
+        assert!(
+            !out2.contains(oauth),
+            "oauth-Token muss maskiert sein: {out2}"
+        );
     }
 
     #[test]

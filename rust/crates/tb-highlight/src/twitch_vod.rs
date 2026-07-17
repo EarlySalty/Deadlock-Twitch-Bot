@@ -68,8 +68,14 @@ pub fn select_vod_for_match(
     match_duration_s: i64,
 ) -> Option<VodMatch> {
     for vod in vods {
-        let created_at = vod.get("created_at").and_then(serde_json::Value::as_str).unwrap_or("");
-        let duration = vod.get("duration").and_then(serde_json::Value::as_str).unwrap_or("");
+        let created_at = vod
+            .get("created_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let duration = vod
+            .get("duration")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         let Some(started_at) = parse_twitch_datetime(created_at) else {
             continue;
         };
@@ -86,7 +92,10 @@ pub fn select_vod_for_match(
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            return Some(VodMatch { vod_id, vod_started_at: started_at });
+            return Some(VodMatch {
+                vod_id,
+                vod_started_at: started_at,
+            });
         }
     }
     None
@@ -291,7 +300,9 @@ fn parse_twitch_datetime(value: &str) -> Option<i64> {
     if text.is_empty() {
         return None;
     }
-    DateTime::parse_from_rfc3339(text).ok().map(|dt| dt.timestamp())
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|dt| dt.timestamp())
 }
 
 /// Parst eine Twitch-Dauer wie „1h2m3s" zu Sekunden; kein Match → 0.
@@ -336,7 +347,10 @@ mod tests {
     #[test]
     fn parse_datetime_iso_und_leer() {
         // 2021-05-01T00:00:00Z = 1619827200
-        assert_eq!(parse_twitch_datetime("2021-05-01T00:00:00Z"), Some(1619827200));
+        assert_eq!(
+            parse_twitch_datetime("2021-05-01T00:00:00Z"),
+            Some(1619827200)
+        );
         assert_eq!(parse_twitch_datetime("  "), None);
         assert_eq!(parse_twitch_datetime("kein-datum"), None);
     }
@@ -357,7 +371,13 @@ mod tests {
         ];
         // Match startet 1h nach VOD-Start, dauert 10min.
         let m = select_vod_for_match(&vods, 1619827200 + 3600, 600);
-        assert_eq!(m, Some(VodMatch { vod_id: "222".into(), vod_started_at: 1619827200 }));
+        assert_eq!(
+            m,
+            Some(VodMatch {
+                vod_id: "222".into(),
+                vod_started_at: 1619827200
+            })
+        );
     }
 
     #[test]
@@ -374,10 +394,16 @@ mod tests {
             PathBuf::from("/x/clip.raw.mp4"),
             PathBuf::from("/x/clip.raw.ts"),
         ];
-        assert_eq!(pick_downloaded_video(&paths), Some(PathBuf::from("/x/clip.raw.mp4")));
+        assert_eq!(
+            pick_downloaded_video(&paths),
+            Some(PathBuf::from("/x/clip.raw.mp4"))
+        );
         // Ohne bevorzugte Endung → erste Datei.
         let other = vec![PathBuf::from("/x/clip.raw.flv")];
-        assert_eq!(pick_downloaded_video(&other), Some(PathBuf::from("/x/clip.raw.flv")));
+        assert_eq!(
+            pick_downloaded_video(&other),
+            Some(PathBuf::from("/x/clip.raw.flv"))
+        );
         assert_eq!(pick_downloaded_video(&[]), None);
     }
 
@@ -398,7 +424,10 @@ mod tests {
 
     #[test]
     fn ffmpeg_cmd_reencode_args() {
-        let cmd = build_ffmpeg_cmd(Path::new("/clips/c.raw.mp4"), Path::new("/clips/c.compressed.mp4"));
+        let cmd = build_ffmpeg_cmd(
+            Path::new("/clips/c.raw.mp4"),
+            Path::new("/clips/c.compressed.mp4"),
+        );
         assert_eq!(cmd[0], FFMPEG_PATH);
         assert!(cmd.contains(&"scale=-2:720".to_string()));
         assert!(cmd.contains(&"libx264".to_string()));
@@ -415,22 +444,44 @@ mod tests {
         async fn get_user_info(&self, _login: &str) -> Option<serde_json::Value> {
             self.user.clone()
         }
-        async fn get_archive_videos(&self, _channel_id: &str, _first: u32) -> Vec<serde_json::Value> {
+        async fn get_archive_videos(
+            &self,
+            _channel_id: &str,
+            _first: u32,
+        ) -> Vec<serde_json::Value> {
             self.vods.clone()
         }
     }
 
     #[tokio::test]
     async fn channel_id_aus_user_info() {
-        let api = MockApi { user: Some(json!({"id": "12345"})), vods: vec![] };
-        assert_eq!(get_channel_id(&api, "nani").await, Some("12345".to_string()));
+        let api = MockApi {
+            user: Some(json!({"id": "12345"})),
+            vods: vec![],
+        };
+        assert_eq!(
+            get_channel_id(&api, "nani").await,
+            Some("12345".to_string())
+        );
         // Numerische ID wird zu String.
-        let api_num = MockApi { user: Some(json!({"id": 678})), vods: vec![] };
-        assert_eq!(get_channel_id(&api_num, "nani").await, Some("678".to_string()));
+        let api_num = MockApi {
+            user: Some(json!({"id": 678})),
+            vods: vec![],
+        };
+        assert_eq!(
+            get_channel_id(&api_num, "nani").await,
+            Some("678".to_string())
+        );
         // Leere ID / kein User → None.
-        let api_empty = MockApi { user: Some(json!({"id": ""})), vods: vec![] };
+        let api_empty = MockApi {
+            user: Some(json!({"id": ""})),
+            vods: vec![],
+        };
         assert_eq!(get_channel_id(&api_empty, "nani").await, None);
-        let api_none = MockApi { user: None, vods: vec![] };
+        let api_none = MockApi {
+            user: None,
+            vods: vec![],
+        };
         assert_eq!(get_channel_id(&api_none, "nani").await, None);
     }
 
@@ -438,9 +489,17 @@ mod tests {
     async fn find_vod_nutzt_archive_und_select() {
         let api = MockApi {
             user: None,
-            vods: vec![json!({"id": "222", "created_at": "2021-05-01T00:00:00Z", "duration": "2h"})],
+            vods: vec![
+                json!({"id": "222", "created_at": "2021-05-01T00:00:00Z", "duration": "2h"}),
+            ],
         };
         let m = find_vod_for_match(&api, "ch", 1619827200 + 3600, 600).await;
-        assert_eq!(m, Some(VodMatch { vod_id: "222".into(), vod_started_at: 1619827200 }));
+        assert_eq!(
+            m,
+            Some(VodMatch {
+                vod_id: "222".into(),
+                vod_started_at: 1619827200
+            })
+        );
     }
 }

@@ -166,7 +166,8 @@ mod tests {
         let wire = PartnerLoginToken::new("s".into(), "/x".into(), 1000, 180).sign(SECRET);
         let (_p, sig) = wire.split_once('.').unwrap();
         // Anderen Payload mit der alten Signatur kombinieren → BadSignature.
-        let forged_payload = URL_SAFE_NO_PAD.encode(br#"{"v":1,"sid":"evil","next":"/x","iat":1000,"exp":1180}"#);
+        let forged_payload =
+            URL_SAFE_NO_PAD.encode(br#"{"v":1,"sid":"evil","next":"/x","iat":1000,"exp":1180}"#);
         let forged = format!("{forged_payload}.{sig}");
         assert_eq!(
             PartnerLoginToken::verify(&forged, SECRET, 1100).unwrap_err(),

@@ -92,9 +92,7 @@ fn budget_from_env() -> i64 {
 /// der Aufrufer loggt und macht best-effort weiter.
 async fn build_pool() -> sqlx::Result<PgPool> {
     let dsn = dsn_from_env().ok_or_else(|| {
-        sqlx::Error::Configuration(
-            "kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into(),
-        )
+        sqlx::Error::Configuration("kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into())
     })?;
     // Wenige Verbindungen genügen — das Ledger wird nur sporadisch beschrieben.
     let pool = PgPoolOptions::new()
@@ -461,15 +459,17 @@ mod tests {
         };
         // ts im exakten Schreibformat (ISO-8601 UTC, Sekunden, +00:00) bilden.
         let now_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false);
-        let old_ts = (Utc::now() - chrono::Duration::hours(6))
-            .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let old_ts =
+            (Utc::now() - chrono::Duration::hours(6)).to_rfc3339_opts(SecondsFormat::Secs, false);
         // Aktuell (zählt): zweimal je 100 total.
         for _ in 0..2 {
-            sqlx::query("INSERT INTO minimax_usage (ts, source, total) VALUES ($1, 'twitch-bot', 100)")
-                .bind(&now_ts)
-                .execute(&pool)
-                .await
-                .unwrap();
+            sqlx::query(
+                "INSERT INTO minimax_usage (ts, source, total) VALUES ($1, 'twitch-bot', 100)",
+            )
+            .bind(&now_ts)
+            .execute(&pool)
+            .await
+            .unwrap();
         }
         // Alt (>5h, zählt NICHT): 999 total vor 6 Stunden.
         sqlx::query("INSERT INTO minimax_usage (ts, source, total) VALUES ($1, 'twitch-bot', 999)")

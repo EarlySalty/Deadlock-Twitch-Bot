@@ -158,7 +158,11 @@ impl BrokerDiscordAdminOAuthClient {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .ok()?;
-        Some(Self { base_url, token, http })
+        Some(Self {
+            base_url,
+            token,
+            http,
+        })
     }
 
     async fn post(&self, path: &str, payload: &Value) -> Result<Value, DiscordAdminOAuthError> {
@@ -220,7 +224,10 @@ impl DiscordAdminOAuthClient for BrokerDiscordAdminOAuthClient {
         if authorize_url.is_empty() || state_id.is_empty() {
             return Err(DiscordAdminOAuthError);
         }
-        Ok(DiscordAuthorize { authorize_url, state_id })
+        Ok(DiscordAuthorize {
+            authorize_url,
+            state_id,
+        })
     }
 
     async fn consume_result(
@@ -320,8 +327,10 @@ pub fn discord_admin_login_config_from_env() -> Option<DiscordAdminLoginConfig> 
     let admin_base_url = admin_base_url_from_env()?;
     let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
     let cookie_domain = shared_admin_cookie_domain_from_env();
-    let owner_user_id = optional_u64_env(&["TWITCH_ADMIN_OWNER_USER_ID", "DISCORD_ADMIN_OWNER_USER_ID"]);
-    let admin_guild_ids = parse_u64_csv_env(&["TWITCH_ADMIN_DISCORD_GUILD_IDS", "DISCORD_ADMIN_GUILD_IDS"]);
+    let owner_user_id =
+        optional_u64_env(&["TWITCH_ADMIN_OWNER_USER_ID", "DISCORD_ADMIN_OWNER_USER_ID"]);
+    let admin_guild_ids =
+        parse_u64_csv_env(&["TWITCH_ADMIN_DISCORD_GUILD_IDS", "DISCORD_ADMIN_GUILD_IDS"]);
     let client = BrokerDiscordAdminOAuthClient::new(base_url, token)?;
     Some(DiscordAdminLoginConfig {
         admin_base_url,
@@ -385,34 +394,38 @@ pub async fn login_handler(
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(%error, "Discord-Admin-Session-Lookup beim Login fehlgeschlagen");
-                    return no_store((
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "Admin-Session konnte gerade nicht geprüft werden.",
-                    ).into_response());
+                    return no_store(
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Admin-Session konnte gerade nicht geprüft werden.",
+                        )
+                            .into_response(),
+                    );
                 }
             }
         }
     }
 
     let complete_url = admin_route_url(&config.admin_base_url, ADMIN_COMPLETE_PATH, &[]);
-    let auth = match config
-        .client
-        .initiate(
-            "identify",
-            &complete_url,
-            "twitch-admin",
-            json!({ "next_path": next_path }),
-        )
-        .await
-    {
-        Ok(auth) => auth,
-        Err(_) => {
-            return no_store((
+    let auth =
+        match config
+            .client
+            .initiate(
+                "identify",
+                &complete_url,
+                "twitch-admin",
+                json!({ "next_path": next_path }),
+            )
+            .await
+        {
+            Ok(auth) => auth,
+            Err(_) => {
+                return no_store((
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Discord Admin OAuth ist nicht konfiguriert. Bitte internen API-Token setzen.",
             ).into_response());
-        }
-    };
+            }
+        };
 
     let safe_auth_url = safe_discord_admin_login_redirect(&auth.authorize_url, &config);
     if unbrauchbares_admin_cookie {
@@ -443,7 +456,12 @@ pub async fn shared_callback_handler(
     }
 
     let mut params = vec![("state_id", state_id)];
-    if let Some(error) = query.error.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(error) = query
+        .error
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         params.push(("error", error));
     }
     let target = admin_route_url(&base_url, ADMIN_COMPLETE_PATH, &params);
@@ -468,47 +486,68 @@ pub async fn complete_handler(
     if state_id.is_empty() {
         return no_store((StatusCode::BAD_REQUEST, "Fehlender state_id.").into_response());
     }
-    if let Some(error) = query.error.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return no_store((
-            StatusCode::UNAUTHORIZED,
-            format!("Discord OAuth Fehler: {}", sanitize_inline(error)),
-        ).into_response());
+    if let Some(error) = query
+        .error
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return no_store(
+            (
+                StatusCode::UNAUTHORIZED,
+                format!("Discord OAuth Fehler: {}", sanitize_inline(error)),
+            )
+                .into_response(),
+        );
     }
 
     let session = match config.client.consume_result(state_id).await {
         Ok(session) => session,
         Err(_) => {
-            return no_store((
-                StatusCode::UNAUTHORIZED,
-                "Discord User konnte nicht geladen werden.",
-            ).into_response());
+            return no_store(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Discord User konnte nicht geladen werden.",
+                )
+                    .into_response(),
+            );
         }
     };
     let discord_id = session.discord_id.trim();
     if discord_id.is_empty() || !discord_id.chars().all(|c| c.is_ascii_digit()) {
-        return no_store((
-            StatusCode::UNAUTHORIZED,
-            "Discord User konnte nicht geladen werden.",
-        ).into_response());
+        return no_store(
+            (
+                StatusCode::UNAUTHORIZED,
+                "Discord User konnte nicht geladen werden.",
+            )
+                .into_response(),
+        );
     }
     let Ok(user_id) = discord_id.parse::<u64>() else {
-        return no_store((
-            StatusCode::UNAUTHORIZED,
-            "Discord User konnte nicht geladen werden.",
-        ).into_response());
+        return no_store(
+            (
+                StatusCode::UNAUTHORIZED,
+                "Discord User konnte nicht geladen werden.",
+            )
+                .into_response(),
+        );
     };
 
-    let (allowed, reason) = discord_admin_privilege_reason(user_id, &session.discord_roles, &config);
+    let (allowed, reason) =
+        discord_admin_privilege_reason(user_id, &session.discord_roles, &config);
     if !allowed {
         tracing::warn!(
             user_id = %user_id,
             reason = reason,
             "AUDIT twitch-dashboard discord login denied"
         );
-        return no_store((
-            StatusCode::FORBIDDEN,
-            "Kein Zugriff. Es wird Administrator-Recht oder die Moderator-Rolle benötigt.",
-        ).into_response());
+        return no_store(
+            (
+                StatusCode::FORBIDDEN,
+                "Kein Zugriff. Es wird Administrator-Recht oder die Moderator-Rolle benötigt.",
+            )
+                .into_response(),
+        );
     }
 
     let username = session.discord_name.trim();
@@ -546,10 +585,13 @@ pub async fn complete_handler(
         Ok(created) => created,
         Err(error) => {
             tracing::error!(%error, "Discord-Admin-Session konnte nicht gespeichert werden");
-            return no_store((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Die gemeinsame Admin-Session konnte nicht gespeichert werden.",
-            ).into_response());
+            return no_store(
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Die gemeinsame Admin-Session konnte nicht gespeichert werden.",
+                )
+                    .into_response(),
+            );
         }
     };
 
@@ -570,10 +612,13 @@ pub async fn complete_handler(
         .is_err()
     {
         state.invalidate_session(&created.session_id).await;
-        return no_store((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Die gemeinsame Admin-Session konnte nicht synchronisiert werden.",
-        ).into_response());
+        return no_store(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Die gemeinsame Admin-Session konnte nicht synchronisiert werden.",
+            )
+                .into_response(),
+        );
     }
 
     tracing::info!(
@@ -713,10 +758,7 @@ fn parse_discord_admin_session(data: Value) -> Option<DiscordAdminSession> {
                     .collect()
             })
             .unwrap_or_default(),
-        service_metadata: data
-            .get("service_metadata")
-            .cloned()
-            .unwrap_or(Value::Null),
+        service_metadata: data.get("service_metadata").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -864,7 +906,11 @@ fn build_admin_cookie(config: &DiscordAdminLoginConfig, session_id: &str) -> Str
     let mut cookie = format!(
         "{ADMIN_COOKIE_NAME}={session_id}; Path=/; Max-Age={ADMIN_SESSION_TTL_SECS}; HttpOnly; SameSite=Lax"
     );
-    if let Some(domain) = config.cookie_domain.as_deref().filter(|d| !d.trim().is_empty()) {
+    if let Some(domain) = config
+        .cookie_domain
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+    {
         cookie.push_str("; Domain=");
         cookie.push_str(domain.trim());
     }
@@ -896,18 +942,20 @@ fn no_store(mut response: Response) -> Response {
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-store, max-age=0"),
     );
-    response.headers_mut().insert(
-        header::PRAGMA,
-        HeaderValue::from_static("no-cache"),
-    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     response
 }
 
 fn discord_unconfigured() -> Response {
-    no_store((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Discord Admin OAuth ist nicht konfiguriert. Bitte internen API-Token setzen.",
-    ).into_response())
+    no_store(
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Discord Admin OAuth ist nicht konfiguriert. Bitte internen API-Token setzen.",
+        )
+            .into_response(),
+    )
 }
 
 fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -925,7 +973,10 @@ fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn passive_fp_from_headers(headers: &HeaderMap) -> String {
     let header_value = |name: header::HeaderName| -> &str {
-        headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("")
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
     };
     let platform = headers
         .get("sec-ch-ua-platform")
@@ -985,7 +1036,10 @@ fn is_loopback_host(host: &str) -> bool {
     host == "localhost"
         || host == "127.0.0.1"
         || host == "::1"
-        || host.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 fn value_to_string(value: &Value) -> String {
@@ -1013,9 +1067,7 @@ fn form_value(body: &Bytes, key: &str) -> Option<String> {
 
 fn normalize_js_fp(raw: &str) -> String {
     let candidate = raw.trim().to_ascii_lowercase();
-    if (8..=64).contains(&candidate.len())
-        && candidate.chars().all(|ch| ch.is_ascii_hexdigit())
-    {
+    if (8..=64).contains(&candidate.len()) && candidate.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return candidate;
     }
     use sha2::{Digest, Sha256};
@@ -1044,9 +1096,13 @@ fn non_empty_env(key: &str) -> Option<String> {
 }
 
 fn internal_token_from_env() -> Option<String> {
-    ["TWITCH_INTERNAL_API_TOKEN", "MASTER_BROKER_TOKEN", "MAIN_BOT_INTERNAL_TOKEN"]
-        .iter()
-        .find_map(|key| non_empty_env(key))
+    [
+        "TWITCH_INTERNAL_API_TOKEN",
+        "MASTER_BROKER_TOKEN",
+        "MAIN_BOT_INTERNAL_TOKEN",
+    ]
+    .iter()
+    .find_map(|key| non_empty_env(key))
 }
 
 fn admin_base_url_from_env() -> Option<String> {
@@ -1360,8 +1416,14 @@ mod tests {
     fn base_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("admin.test"));
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("Mozilla/5.0 Test"));
-        headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("de,en;q=0.9"));
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("Mozilla/5.0 Test"),
+        );
+        headers.insert(
+            header::ACCEPT_LANGUAGE,
+            HeaderValue::from_static("de,en;q=0.9"),
+        );
         headers.insert("sec-ch-ua-platform", HeaderValue::from_static("\"Linux\""));
         headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
         headers
@@ -1396,7 +1458,10 @@ mod tests {
             normalize_discord_admin_next_path(Some("/twitch/admin/legacy?tab=x")),
             "/twitch/admin/legacy?tab=x"
         );
-        assert_eq!(normalize_discord_admin_next_path(Some("//evil.test")), ADMIN_FALLBACK_PATH);
+        assert_eq!(
+            normalize_discord_admin_next_path(Some("//evil.test")),
+            ADMIN_FALLBACK_PATH
+        );
         assert_eq!(
             normalize_discord_admin_next_path(Some("https://evil.test/twitch/admin")),
             ADMIN_FALLBACK_PATH
@@ -1440,7 +1505,9 @@ mod tests {
 
     #[tokio::test]
     async fn login_start_delegiert_mit_identify_scope() {
-        let Some(pool) = maybe_pool("discord_admin_login_start").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_login_start").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let cfg = config(fake_client(Vec::new()));
@@ -1449,11 +1516,18 @@ mod tests {
             Some(Extension(state)),
             Some(Extension(cfg)),
             base_headers(),
-            Query(AdminLoginQuery { next: Some("/twitch/admin/legacy".into()) }),
+            Query(AdminLoginQuery {
+                next: Some("/twitch/admin/legacy".into()),
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(location.starts_with("https://discord.com/oauth2/authorize"));
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
@@ -1516,9 +1590,9 @@ mod tests {
     }
 
     fn geloeschtes_admin_cookie(response: &Response) -> bool {
-        cookies(response).iter().any(|c| {
-            c.starts_with(&format!("{ADMIN_COOKIE_NAME}=;")) && c.contains("Max-Age=0")
-        })
+        cookies(response)
+            .iter()
+            .any(|c| c.starts_with(&format!("{ADMIN_COOKIE_NAME}=;")) && c.contains("Max-Age=0"))
     }
 
     /// Live-Vorfall 2026-07-10: Der Passive-FP änderte sich (Browser-Update), der
@@ -1528,7 +1602,9 @@ mod tests {
     /// Forward-Auth und den Nutzer in den frischen OAuth-Flow schicken.
     #[tokio::test]
     async fn login_bei_passive_fp_mismatch_startet_oauth_statt_panel_redirect() {
-        let Some(pool) = maybe_pool("discord_admin_login_fp_mismatch").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_login_fp_mismatch").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let session_id = gebundene_admin_session(&state, &base_headers()).await;
@@ -1542,7 +1618,12 @@ mod tests {
         )
         .await;
 
-        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             location.starts_with("https://discord.com/oauth2/authorize"),
             "muss frischen OAuth-Flow starten, nicht ins Panel zurueckschicken: {location}"
@@ -1558,7 +1639,9 @@ mod tests {
     /// zurückschicken.
     #[tokio::test]
     async fn login_bei_fp_pending_startet_oauth_statt_panel_redirect() {
-        let Some(pool) = maybe_pool("discord_admin_login_fp_pending").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_login_fp_pending").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let headers = base_headers();
@@ -1584,7 +1667,12 @@ mod tests {
         )
         .await;
 
-        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             location.starts_with("https://discord.com/oauth2/authorize"),
             "fp_pending-Session darf nicht als eingeloggt gelten: {location}"
@@ -1593,7 +1681,9 @@ mod tests {
 
     #[tokio::test]
     async fn login_bei_zentral_abgelehnter_session_startet_oauth_und_raeumt_cookie() {
-        let Some(pool) = maybe_pool("discord_admin_login_central_rejected").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_login_central_rejected").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let session_id = lokale_discord_dashboard_session(&state).await;
@@ -1607,7 +1697,12 @@ mod tests {
         )
         .await;
 
-        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             location.starts_with("https://discord.com/oauth2/authorize"),
             "zentral abgelehnte Session muss frischen OAuth-Flow starten: {location}"
@@ -1622,7 +1717,9 @@ mod tests {
     /// Redirect ins Panel, Session-Cookie bleibt gesetzt.
     #[tokio::test]
     async fn login_bei_lokal_und_zentral_gueltiger_session_redirectet_ins_panel() {
-        let Some(pool) = maybe_pool("discord_admin_login_central_valid").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_login_central_valid").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let session_id = lokale_discord_dashboard_session(&state).await;
@@ -1636,7 +1733,12 @@ mod tests {
         )
         .await;
 
-        let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(location, ADMIN_FALLBACK_PATH);
         assert!(
             cookies(&response)
@@ -1648,7 +1750,9 @@ mod tests {
 
     #[tokio::test]
     async fn state_ist_nur_einmal_konsumierbar() {
-        let Some(pool) = maybe_pool("discord_admin_state_once").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_state_once").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let roles = vec![DEFAULT_DASHBOARD_MODERATOR_ROLE_ID.to_string()];
@@ -1659,7 +1763,10 @@ mod tests {
             Some(Extension(state.clone())),
             Some(Extension(cfg.clone())),
             base_headers(),
-            Query(CompleteQuery { state_id: Some("once".into()), error: None }),
+            Query(CompleteQuery {
+                state_id: Some("once".into()),
+                error: None,
+            }),
         )
         .await;
         assert_eq!(first.status(), StatusCode::SEE_OTHER);
@@ -1669,7 +1776,10 @@ mod tests {
             Some(Extension(state)),
             Some(Extension(cfg)),
             base_headers(),
-            Query(CompleteQuery { state_id: Some("once".into()), error: None }),
+            Query(CompleteQuery {
+                state_id: Some("once".into()),
+                error: None,
+            }),
         )
         .await;
         assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
@@ -1678,7 +1788,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_mintet_session_fuer_admin_discord_user() {
-        let Some(pool) = maybe_pool("discord_admin_mint").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_mint").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let roles = vec![DEFAULT_DASHBOARD_MODERATOR_ROLE_ID.to_string()];
@@ -1692,11 +1804,17 @@ mod tests {
             Some(Extension(state.clone())),
             Some(Extension(cfg)),
             base_headers(),
-            Query(CompleteQuery { state_id: Some("admin".into()), error: None }),
+            Query(CompleteQuery {
+                state_id: Some("admin".into()),
+                error: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(response.headers().get(header::LOCATION).unwrap(), FINGERPRINT_PATH);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            FINGERPRINT_PATH
+        );
         let response_cookies = cookies(&response);
         assert_eq!(response_cookies.len(), 2);
         let set_cookie = response_cookies.join("\n");
@@ -1707,21 +1825,29 @@ mod tests {
         assert!(set_cookie.contains("Max-Age=1209600"));
 
         let sid = cookie_value(&response, ADMIN_COOKIE_NAME);
-        assert_eq!(client.imported.lock().await.as_slice(), std::slice::from_ref(&sid));
+        assert_eq!(
+            client.imported.lock().await.as_slice(),
+            std::slice::from_ref(&sid)
+        );
         let fp = state
             .load_admin_session_fingerprint(&sid)
             .await
             .unwrap()
             .expect("Session muss in der DB liegen");
         assert_eq!(fp.client_ip, "203.0.113.7");
-        assert_eq!(fp.passive_fp, build_passive_fp("Mozilla/5.0 Test", "de", "Linux"));
+        assert_eq!(
+            fp.passive_fp,
+            build_passive_fp("Mozilla/5.0 Test", "de", "Linux")
+        );
         assert!(fp.fp_pending);
         assert_eq!(fp.username, "AdminUser");
     }
 
     #[tokio::test]
     async fn nicht_admin_wird_abgelehnt_ohne_cookie() {
-        let Some(pool) = maybe_pool("discord_admin_denied").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_denied").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let cfg = config(fake_client(vec![(
@@ -1733,7 +1859,10 @@ mod tests {
             Some(Extension(state)),
             Some(Extension(cfg)),
             base_headers(),
-            Query(CompleteQuery { state_id: Some("nope".into()), error: None }),
+            Query(CompleteQuery {
+                state_id: Some("nope".into()),
+                error: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1742,7 +1871,9 @@ mod tests {
 
     #[tokio::test]
     async fn fingerprint_submit_schliesst_pending_session_ab() {
-        let Some(pool) = maybe_pool("discord_admin_fp_submit").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_fp_submit").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let created = state
@@ -1787,7 +1918,9 @@ mod tests {
 
     #[tokio::test]
     async fn logout_loescht_admin_session_und_cookie() {
-        let Some(pool) = maybe_pool("discord_admin_logout").await else { return; };
+        let Some(pool) = maybe_pool("discord_admin_logout").await else {
+            return;
+        };
         ensure_sessions_table(&pool).await;
         let state = DashboardAuthState::new(pool, test_fernet_key());
         let created = state
@@ -1802,7 +1935,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(state.load_admin_session(&created.session_id).await.unwrap().is_some());
+        assert!(state
+            .load_admin_session(&created.session_id)
+            .await
+            .unwrap()
+            .is_some());
         let client = fake_client(Vec::new());
         let cfg = config(client.clone());
         let mut headers = HeaderMap::new();
@@ -1815,7 +1952,12 @@ mod tests {
             .unwrap(),
         );
 
-        let response = logout_handler(Some(Extension(state.clone())), Some(Extension(cfg)), headers).await;
+        let response = logout_handler(
+            Some(Extension(state.clone())),
+            Some(Extension(cfg)),
+            headers,
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             response.headers().get(header::LOCATION).unwrap(),
@@ -1826,7 +1968,11 @@ mod tests {
         assert!(set_cookie.contains("Max-Age=0"));
         assert!(set_cookie.contains("Domain=deutsche-deadlock-community.de"));
         assert_eq!(cookies(&response).len(), 2);
-        assert!(state.load_admin_session(&created.session_id).await.unwrap().is_none());
+        assert!(state
+            .load_admin_session(&created.session_id)
+            .await
+            .unwrap()
+            .is_none());
         assert_eq!(
             client.revoked.lock().await.as_slice(),
             &["veraltet".to_string(), created.session_id]

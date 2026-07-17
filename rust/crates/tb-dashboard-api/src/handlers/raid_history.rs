@@ -84,7 +84,11 @@ fn render_raid_history_rows(rows: &[Value]) -> String {
 
     rows.iter()
         .map(|entry| {
-            let success_icon = if bool_field(entry, "success") { "OK" } else { "X" };
+            let success_icon = if bool_field(entry, "success") {
+                "OK"
+            } else {
+                "X"
+            };
             let executed_at = string_field(entry, "executedAt")
                 .chars()
                 .take(19)

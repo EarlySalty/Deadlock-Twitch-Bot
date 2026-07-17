@@ -200,7 +200,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(still_enabled, "gelowercaster Login trifft die exakte Zeile nicht");
+        assert!(
+            still_enabled,
+            "gelowercaster Login trifft die exakte Zeile nicht"
+        );
         // Sweep wurde dennoch (gelowercased) geplant.
         let sweep_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM twitch_global_ban_sweep_due WHERE broadcaster_login='mixedcase')",

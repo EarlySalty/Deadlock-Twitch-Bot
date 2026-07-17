@@ -37,7 +37,11 @@ pub struct ReportDispatcher {
 
 impl ReportDispatcher {
     pub fn new(pool: PgPool) -> Self {
-        Self { writer: SocialMediaReportWriter::new(pool.clone()), pool, interval: Duration::from_secs(INTERVAL_SECS) }
+        Self {
+            writer: SocialMediaReportWriter::new(pool.clone()),
+            pool,
+            interval: Duration::from_secs(INTERVAL_SECS),
+        }
     }
 
     /// Erzeugt den Wochenreport für die aktuelle Woche (sofern noch nicht
@@ -46,7 +50,11 @@ impl ReportDispatcher {
         let period_end = weekly_anchor(Utc::now());
         let period_start = period_end - ChronoDuration::days(7);
         let marker = Value::String(period_end.to_rfc3339());
-        if get_setting(&self.pool, KEY_ADMIN_WEEKLY_REPORT_SENT).await.as_ref() == Some(&marker) {
+        if get_setting(&self.pool, KEY_ADMIN_WEEKLY_REPORT_SENT)
+            .await
+            .as_ref()
+            == Some(&marker)
+        {
             return false;
         }
 
@@ -97,21 +105,47 @@ mod tests {
     #[test]
     fn weekly_anchor_ist_montag_mitternacht() {
         // Mittwoch 2026-06-17 15:30 → Montag 2026-06-15 00:00.
-        let now = DateTime::parse_from_rfc3339("2026-06-17T15:30:00+00:00").unwrap().with_timezone(&Utc);
-        assert_eq!(weekly_anchor(now), DateTime::parse_from_rfc3339("2026-06-15T00:00:00+00:00").unwrap());
+        let now = DateTime::parse_from_rfc3339("2026-06-17T15:30:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            weekly_anchor(now),
+            DateTime::parse_from_rfc3339("2026-06-15T00:00:00+00:00").unwrap()
+        );
         // Montag bleibt Montag.
-        let mon = DateTime::parse_from_rfc3339("2026-06-15T08:00:00+00:00").unwrap().with_timezone(&Utc);
-        assert_eq!(weekly_anchor(mon), DateTime::parse_from_rfc3339("2026-06-15T00:00:00+00:00").unwrap());
+        let mon = DateTime::parse_from_rfc3339("2026-06-15T08:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            weekly_anchor(mon),
+            DateTime::parse_from_rfc3339("2026-06-15T00:00:00+00:00").unwrap()
+        );
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -125,20 +159,36 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_generiert_einmal_pro_woche() {
-        let Some(pool) = make_pool("t_sm_report_dispatch").await else { return };
+        let Some(pool) = make_pool("t_sm_report_dispatch").await else {
+            return;
+        };
         std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback
         let dispatcher = ReportDispatcher::new(pool.clone());
 
         // Erster Lauf generiert den Admin-Report + setzt den Marker.
         assert!(dispatcher.dispatch_weekly_admin_report().await);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_media_reports WHERE kind = 'admin'").fetch_one(&pool).await.unwrap();
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM social_media_reports WHERE kind = 'admin'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(n, 1);
-        let marker: Option<String> = sqlx::query_scalar("SELECT value::text FROM social_media_settings WHERE key = $1").bind(KEY_ADMIN_WEEKLY_REPORT_SENT).fetch_optional(&pool).await.unwrap().flatten();
+        let marker: Option<String> =
+            sqlx::query_scalar("SELECT value::text FROM social_media_settings WHERE key = $1")
+                .bind(KEY_ADMIN_WEEKLY_REPORT_SENT)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+                .flatten();
         assert!(marker.is_some());
 
         // Zweiter Lauf in derselben Woche → kein neuer Report (Idempotenz).
         assert!(!dispatcher.dispatch_weekly_admin_report().await);
-        let n2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_media_reports WHERE kind = 'admin'").fetch_one(&pool).await.unwrap();
+        let n2: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM social_media_reports WHERE kind = 'admin'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(n2, 1);
     }
 }

@@ -789,7 +789,7 @@ pub async fn archive_with_message(
     login: &str,
     raw_mode: &str,
 ) -> Result<ArchiveOutcome, sqlx::Error> {
-    use tb_analytics::streamers_crud::{ArchiveMode, archive_streamer};
+    use tb_analytics::streamers_crud::{archive_streamer, ArchiveMode};
 
     // desired wie Python `_dashboard_archive` (mode_clean → desired).
     let desired = match raw_mode.trim().to_lowercase().as_str() {

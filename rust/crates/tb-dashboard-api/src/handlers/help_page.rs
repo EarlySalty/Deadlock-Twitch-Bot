@@ -266,7 +266,10 @@ mod tests {
     /// Struktur nicht anfassen.
     #[test]
     fn branding_laesst_die_struktur_unangetastet() {
-        let html = page("Bot-Befehle", "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>");
+        let html = page(
+            "Bot-Befehle",
+            "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>",
+        );
 
         assert!(html.contains("<h1>Bot-Befehle</h1>"));
         assert!(html.contains("<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>"));

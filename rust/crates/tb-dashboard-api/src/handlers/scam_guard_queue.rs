@@ -199,9 +199,7 @@ pub async fn ignore_handler(
     .await
     {
         Ok(Some(action_taken)) => action_taken,
-        Ok(None) => {
-            return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found")
-        }
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found"),
         Err(error) => {
             tracing::error!(%error, "scam-guard queue ignore lookup database error");
             return error_response(

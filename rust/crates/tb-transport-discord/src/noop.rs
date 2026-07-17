@@ -41,10 +41,7 @@ impl DiscordBackend for HeadlessNoop {
         })
     }
 
-    async fn send_alert_embed(
-        &self,
-        _payload: SendAlertEmbed,
-    ) -> Result<SendResult, DiscordError> {
+    async fn send_alert_embed(&self, _payload: SendAlertEmbed) -> Result<SendResult, DiscordError> {
         Ok(SendResult {
             ok: true,
             result: SendResultInner {

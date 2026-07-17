@@ -114,12 +114,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, role TEXT NOT NULL, \
@@ -134,9 +150,13 @@ mod tests {
 
     #[tokio::test]
     async fn append_rollen_und_nullables() {
-        let Some(pool) = make_pool("t_eng_conv_append").await else { return };
+        let Some(pool) = make_pool("t_eng_conv_append").await else {
+            return;
+        };
         let buf = ConversationBuffer::new(pool.clone());
-        buf.append_user_turn("nani", "u1", "chatter1", "frage", Some("m1")).await.unwrap();
+        buf.append_user_turn("nani", "u1", "chatter1", "frage", Some("m1"))
+            .await
+            .unwrap();
         buf.append_assistant_turn("nani", "antwort").await.unwrap();
 
         let turns = buf.load_recent_buffer("nani", 100).await.unwrap();
@@ -154,7 +174,9 @@ mod tests {
 
     #[tokio::test]
     async fn load_chronologisch_und_limit() {
-        let Some(pool) = make_pool("t_eng_conv_order").await else { return };
+        let Some(pool) = make_pool("t_eng_conv_order").await else {
+            return;
+        };
         let buf = ConversationBuffer::new(pool.clone());
         // Kontrollierte ts für deterministische Reihenfolge.
         sqlx::query(
@@ -176,7 +198,10 @@ mod tests {
         // Limit 2 → die zwei JÜNGSTEN (mittel, neu), chronologisch sortiert.
         let limited = buf.load_recent_buffer("nani", 2).await.unwrap();
         assert_eq!(
-            limited.iter().map(|t| t.content.as_str()).collect::<Vec<_>>(),
+            limited
+                .iter()
+                .map(|t| t.content.as_str())
+                .collect::<Vec<_>>(),
             vec!["mittel", "neu"]
         );
     }

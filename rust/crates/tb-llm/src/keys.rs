@@ -40,7 +40,12 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn clear() {
-        for v in ["MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX", "ANTHROPIC_API_KEY"] {
+        for v in [
+            "MINIMAX_TOKEN_PLAN_KEY",
+            "MINIMAX_API_KEY",
+            "MINMAX",
+            "ANTHROPIC_API_KEY",
+        ] {
             std::env::remove_var(v);
         }
     }

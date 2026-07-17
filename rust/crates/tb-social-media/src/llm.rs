@@ -64,7 +64,8 @@ pub struct LlmTextResponse {
 
 // ---------- Prompts ----------
 
-pub const SYSTEM_PROMPT: &str = "You are a social-media copywriter for short Deadlock gameplay clips.\n\
+pub const SYSTEM_PROMPT: &str =
+    "You are a social-media copywriter for short Deadlock gameplay clips.\n\
 Deadlock is a hero-shooter MOBA by Valve. Your job: turn a clip transcript\n\
 plus detected Deadlock vocabulary into ready-to-publish posts for\n\
 YouTube Shorts, TikTok and Instagram Reels.\n\n\
@@ -105,15 +106,27 @@ pub fn render_user_prompt(request: &LlmRequest) -> String {
     } else {
         request.detected_terms.join(", ")
     };
-    let title_hint = request.clip_title.as_deref().filter(|s| !s.is_empty()).unwrap_or("(none)");
-    let game = request.game_name.as_deref().filter(|s| !s.is_empty()).unwrap_or("Deadlock");
+    let title_hint = request
+        .clip_title
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("(none)");
+    let game = request
+        .game_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Deadlock");
     let duration = match request.duration_seconds {
         Some(d) => format!("{:.0}s", d),
         None => "unknown".to_string(),
     };
     let transcript = {
         let t = request.transcript.trim();
-        if t.is_empty() { "(empty transcript - rely on detected terms)" } else { t }
+        if t.is_empty() {
+            "(empty transcript - rely on detected terms)"
+        } else {
+            t
+        }
     };
     format!(
         "{streamer_block}\nGame: {game}\nClip duration: {duration}\n\
@@ -207,11 +220,15 @@ fn truncate(text: &str, limit: usize) -> String {
 fn extract_platform(payload: &Value, platform: &str) -> Result<PlatformEnrichment, LlmError> {
     let block = payload.get(platform).filter(|v| v.is_object());
     let Some(block) = block else {
-        return Err(LlmError::ProviderError(format!("missing platform block: {platform}")));
+        return Err(LlmError::ProviderError(format!(
+            "missing platform block: {platform}"
+        )));
     };
     let title = coerce_str(block.get("title"));
     if title.is_empty() {
-        return Err(LlmError::ProviderError(format!("empty title for platform: {platform}")));
+        return Err(LlmError::ProviderError(format!(
+            "empty title for platform: {platform}"
+        )));
     }
     Ok(PlatformEnrichment {
         title: Some(truncate(&title, title_limit(platform))),
@@ -223,7 +240,10 @@ fn extract_platform(payload: &Value, platform: &str) -> Result<PlatformEnrichmen
 fn strip_code_fence(text: &str) -> String {
     let stripped = text.trim();
     if let Some(body) = stripped.strip_prefix("```") {
-        let body = body.strip_prefix("json").or_else(|| body.strip_prefix("JSON")).unwrap_or(body);
+        let body = body
+            .strip_prefix("json")
+            .or_else(|| body.strip_prefix("JSON"))
+            .unwrap_or(body);
         let body = body.strip_suffix("```").unwrap_or(body);
         return body.trim().to_string();
     }
@@ -235,7 +255,9 @@ fn find_json_object(text: &str) -> Result<String, LlmError> {
     let cleaned = strip_code_fence(text);
     let chars: Vec<char> = cleaned.chars().collect();
     let Some(start) = chars.iter().position(|&c| c == '{') else {
-        return Err(LlmError::ProviderError("LLM output contained no JSON object".to_string()));
+        return Err(LlmError::ProviderError(
+            "LLM output contained no JSON object".to_string(),
+        ));
     };
     let (mut depth, mut in_string, mut escape) = (0i32, false, false);
     for (idx, &ch) in chars.iter().enumerate().skip(start) {
@@ -257,16 +279,25 @@ fn find_json_object(text: &str) -> Result<String, LlmError> {
             _ => {}
         }
     }
-    Err(LlmError::ProviderError("LLM output had no balanced JSON object".to_string()))
+    Err(LlmError::ProviderError(
+        "LLM output had no balanced JSON object".to_string(),
+    ))
 }
 
 /// Parst die Roh-LLM-Ausgabe in eine [`LlmResponse`] (Python `parse_llm_payload`).
-pub fn parse_llm_payload(raw_text: &str, provider: &str, model: &str, cost: Option<f64>) -> Result<LlmResponse, LlmError> {
+pub fn parse_llm_payload(
+    raw_text: &str,
+    provider: &str,
+    model: &str,
+    cost: Option<f64>,
+) -> Result<LlmResponse, LlmError> {
     let json_text = find_json_object(raw_text)?;
     let payload: Value = serde_json::from_str(&json_text)
         .map_err(|e| LlmError::ProviderError(format!("invalid JSON from LLM: {e}")))?;
     if !payload.is_object() {
-        return Err(LlmError::ProviderError("LLM JSON must be an object".to_string()));
+        return Err(LlmError::ProviderError(
+            "LLM JSON must be an object".to_string(),
+        ));
     }
     Ok(LlmResponse {
         youtube: extract_platform(&payload, "youtube")?,
@@ -301,7 +332,13 @@ mod tests {
         let tags2 = coerce_hashtags(Some(&serde_json::json!("#deadlock, haze frost")));
         assert!(tags2.contains(&"#haze".to_string()) && tags2.contains(&"#frost".to_string()));
         // #deadlock schon da → nicht doppelt.
-        assert_eq!(tags2.iter().filter(|t| t.to_lowercase() == "#deadlock").count(), 1);
+        assert_eq!(
+            tags2
+                .iter()
+                .filter(|t| t.to_lowercase() == "#deadlock")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -341,7 +378,11 @@ mod tests {
         let req = LlmRequest {
             transcript: "haze ist stark".to_string(),
             detected_terms: vec!["Haze".to_string()],
-            streamer: Some(StreamerProfile { streamer_login: "nani".to_string(), language: Some("de".to_string()), ..Default::default() }),
+            streamer: Some(StreamerProfile {
+                streamer_login: "nani".to_string(),
+                language: Some("de".to_string()),
+                ..Default::default()
+            }),
             clip_title: Some("Insane play".to_string()),
             game_name: None,
             duration_seconds: Some(28.7),

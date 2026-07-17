@@ -84,9 +84,7 @@ pub mod video_processor;
 pub mod vocab;
 
 pub use clip::{
-    repository::ClipRepository,
-    helix::HelixClipSource,
-    service::ClipFetchService,
+    helix::HelixClipSource, repository::ClipRepository, service::ClipFetchService,
     task::ClipFetchTask,
 };
 

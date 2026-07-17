@@ -172,8 +172,11 @@ mod tests {
     fn live_state_nur_wenn_in_deadlock() {
         let path = make_test_db("live");
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute("INSERT INTO steam_links (user_id, steam_id) VALUES (200, 'sid')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO steam_links (user_id, steam_id) VALUES (200, 'sid')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO live_player_state \
              (steam_id, in_deadlock_now, in_match_now_strict, deadlock_hero, deadlock_party_hint, deadlock_stage) \
@@ -188,8 +191,11 @@ mod tests {
         assert_eq!(ls.stage.as_deref(), Some("laning"));
 
         // in_deadlock_now = 0 → None.
-        conn.execute("UPDATE live_player_state SET in_deadlock_now = 0 WHERE steam_id = 'sid'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE live_player_state SET in_deadlock_now = 0 WHERE steam_id = 'sid'",
+            [],
+        )
+        .unwrap();
         assert!(get_live_state_for_discord_user(&path, 200).is_none());
     }
 }

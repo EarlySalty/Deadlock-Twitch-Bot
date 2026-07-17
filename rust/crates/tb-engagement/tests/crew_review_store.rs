@@ -470,6 +470,214 @@ async fn trigger_und_aktivitaets_append_erzeugen_nie_zwei_aktive_sessions() {
 }
 
 #[tokio::test]
+async fn inactive_close_beendet_abgelaufene_sessions_und_ist_idempotent() {
+    let Some(pool) = test_pool("crew_review_inactive_close").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+    let old_cycle = store
+        .record_trigger(&input(
+            "inactive-old",
+            "inactive-old-1",
+            now - chrono::Duration::minutes(10) - chrono::Duration::seconds(1),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let boundary_cycle = store
+        .record_trigger(&input(
+            "inactive-boundary",
+            "inactive-boundary-1",
+            now - chrono::Duration::minutes(10),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let fresh_cycle = store
+        .record_trigger(&input(
+            "inactive-fresh",
+            "inactive-fresh-1",
+            now - chrono::Duration::minutes(9),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let ended_cycles: Vec<String> = sqlx::query_scalar(
+        "SELECT started.metadata->>'cycle_id'
+           FROM twitch_crew_review_events ended
+           JOIN twitch_crew_review_events started
+             ON started.review_session_id = ended.review_session_id
+            AND started.event_kind = 'session_started'
+          WHERE ended.event_kind = 'session_ended'
+          ORDER BY started.channel_login",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ended_cycles,
+        vec![boundary_cycle.to_string(), old_cycle.to_string()]
+    );
+    let fresh_ended: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM twitch_crew_review_events ended
+           JOIN twitch_crew_review_events started
+             ON started.review_session_id = ended.review_session_id
+          WHERE started.metadata->>'cycle_id' = $1
+            AND ended.event_kind = 'session_ended'",
+    )
+    .bind(fresh_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(fresh_ended, 0);
+    let reasons: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT metadata
+           FROM twitch_crew_review_events
+          WHERE event_kind = 'session_ended'
+          ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(reasons
+        .iter()
+        .all(|metadata| metadata["reason"] == "inactivity_timeout"));
+}
+
+#[tokio::test]
+async fn inactive_close_serialisiert_mit_neuer_aktivitaet_ohne_eine_frische_session_zu_beenden() {
+    let Some(pool) = test_pool("crew_review_inactive_close_race").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+
+    let append_first_cycle = store
+        .record_trigger(&input(
+            "inactive-append-first",
+            "append-first-1",
+            now - chrono::Duration::minutes(11),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let append_first_session: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE metadata->>'cycle_id' = $1
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(append_first_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut activity = event(
+        append_first_session,
+        "inactive-append-first",
+        ReviewEventKind::StreamerTranscript,
+        now - chrono::Duration::minutes(1),
+        Uuid::new_v4(),
+    );
+    activity.metadata["subject_mentioned"] = json!(true);
+    store.append_event(activity).await.unwrap();
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let close_first_cycle = store
+        .record_trigger(&input(
+            "inactive-close-first",
+            "close-first-1",
+            now - chrono::Duration::minutes(11),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let close_first_session: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE metadata->>'cycle_id' = $1
+            AND event_kind = 'ricky_message'",
+    )
+    .bind(close_first_cycle.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        1
+    );
+    let mut stale_activity = event(
+        close_first_session,
+        "inactive-close-first",
+        ReviewEventKind::StreamerTranscript,
+        now - chrono::Duration::minutes(1),
+        Uuid::new_v4(),
+    );
+    stale_activity.metadata["subject_mentioned"] = json!(true);
+    assert!(matches!(
+        store.append_event(stale_activity).await,
+        Err(StoreError::StaleSession)
+    ));
+
+    let trigger_race_old = store
+        .record_trigger(&input(
+            "inactive-trigger-race",
+            "trigger-race-1",
+            now - chrono::Duration::minutes(11),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let trigger_race_new = store
+        .record_trigger(&input("inactive-trigger-race", "trigger-race-2", now))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(trigger_race_old, trigger_race_new);
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        1
+    );
+    let active = store.active_sessions(now).await.unwrap();
+    let active_logins: Vec<&str> = active
+        .iter()
+        .map(|session| session.channel_login.as_str())
+        .collect();
+    assert!(active_logins.contains(&"inactive-append-first"));
+    assert!(active_logins.contains(&"inactive-trigger-race"));
+    assert!(!active_logins.contains(&"inactive-close-first"));
+}
+
+#[tokio::test]
 async fn beendete_neueste_session_laesst_keine_aeltere_wiederauferstehen() {
     let Some(pool) = test_pool("crew_review_latest_session_by_id").await else {
         return;

@@ -95,10 +95,14 @@ pub fn parse_kills_from_demo(output: &str, twitch_login: &str) -> Vec<DemoKill> 
             continue;
         }
         if in_death {
-            if line.trim() == "--" || (line.starts_with("[tick") && !line.contains("player_death")) {
+            if line.trim() == "--" || (line.starts_with("[tick") && !line.contains("player_death"))
+            {
                 if current_attacker.to_lowercase() == login_lower {
                     if let Some(tick) = current_tick {
-                        kills.push(DemoKill { tick, pawn: current_pawn });
+                        kills.push(DemoKill {
+                            tick,
+                            pawn: current_pawn,
+                        });
                     }
                 }
                 in_death = false;
@@ -249,8 +253,7 @@ pub async fn get_min_health_in_window(
     }
     let mut tick = start_tick;
     while tick < end_tick {
-        if let Some((hp, max_hp)) =
-            get_health_at_tick(boon_path, demo_path, entity_idx, tick).await
+        if let Some((hp, max_hp)) = get_health_at_tick(boon_path, demo_path, entity_idx, tick).await
         {
             if max_hp > 0 {
                 let pct = (hp as f64 / max_hp as f64).min(1.0);
@@ -297,7 +300,13 @@ mod tests {
                    \tattacker_pawn: 999\n\
                    --\n";
         let kills = parse_kills_from_demo(out, "heroplayer");
-        assert_eq!(kills, vec![DemoKill { tick: 1000, pawn: Some(12345) }]);
+        assert_eq!(
+            kills,
+            vec![DemoKill {
+                tick: 1000,
+                pawn: Some(12345)
+            }]
+        );
     }
 
     #[test]
@@ -308,7 +317,13 @@ mod tests {
                    \tattacker_pawn: 42\n\
                    [tick 510] some_other_event\n";
         let kills = parse_kills_from_demo(out, "heroplayer");
-        assert_eq!(kills, vec![DemoKill { tick: 500, pawn: Some(42) }]);
+        assert_eq!(
+            kills,
+            vec![DemoKill {
+                tick: 500,
+                pawn: Some(42)
+            }]
+        );
     }
 
     #[test]

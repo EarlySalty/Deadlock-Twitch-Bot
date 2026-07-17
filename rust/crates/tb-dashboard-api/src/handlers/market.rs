@@ -1073,8 +1073,14 @@ mod tests {
             html.contains("/twitch/api/market_data"),
             "page must fetch market_data"
         );
-        assert!(html.contains("function renderMarket"), "page must render data");
-        assert!(html.contains(MR_TITLE), "page must carry the final German title");
+        assert!(
+            html.contains("function renderMarket"),
+            "page must render data"
+        );
+        assert!(
+            html.contains(MR_TITLE),
+            "page must carry the final German title"
+        );
         assert!(html.contains("<html"), "must be HTML");
     }
 

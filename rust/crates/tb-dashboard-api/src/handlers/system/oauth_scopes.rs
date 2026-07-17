@@ -4,15 +4,15 @@
 //! Admin-Scope-Diff-Panel. Bei fehlendem Schema (z. B. frische DB) wird eine
 //! leere `items`-Liste statt eines 500ers geliefert (Python-Parität).
 
-use axum::{Json, extract::State, response::IntoResponse};
+use crate::auth::level::DashboardAuthLevel;
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_analytics::system_oauth_scopes::{
-    CRITICAL_SCOPES, REQUIRED_SCOPES, SCOPE_COLUMN_LABELS, load_oauth_scope_rows, partner_status,
-    scope_snapshot,
+    load_oauth_scope_rows, partner_status, scope_snapshot, CRITICAL_SCOPES, REQUIRED_SCOPES,
+    SCOPE_COLUMN_LABELS,
 };
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 #[derive(Serialize)]
@@ -141,11 +141,11 @@ fn is_missing_schema_error(e: &sqlx::Error) -> bool {
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         routing::get,
+        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
@@ -247,12 +247,10 @@ mod tests {
         assert_eq!(v["summary"]["missingScopeCount"], 1);
         assert_eq!(v["items"][0]["login"], "a");
         assert_eq!(v["items"][0]["oauthStatus"], "partial");
-        assert!(
-            v["requiredScopes"]
-                .as_array()
-                .unwrap()
-                .contains(&Value::String("channel:bot".into()))
-        );
+        assert!(v["requiredScopes"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("channel:bot".into())));
     }
 
     #[tokio::test]

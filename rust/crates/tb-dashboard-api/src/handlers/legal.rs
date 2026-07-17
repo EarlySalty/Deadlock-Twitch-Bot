@@ -604,9 +604,7 @@ struct LegalDocument {
 fn legal_pages_storage_path() -> std::path::PathBuf {
     std::env::var("TB_LEGAL_PAGES_PATH")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::path::PathBuf::from("data/admin_dashboard/legal_pages.json")
-        })
+        .unwrap_or_else(|_| std::path::PathBuf::from("data/admin_dashboard/legal_pages.json"))
 }
 
 fn load_legal_page_document(slug: &str) -> Option<LegalDocument> {
@@ -667,13 +665,7 @@ fn render_legal_page(
 ) -> String {
     let footer_html = footer_links
         .iter()
-        .map(|(href, label)| {
-            format!(
-                "<a href='{}'>{}</a>",
-                escape_html(href),
-                escape_html(label)
-            )
-        })
+        .map(|(href, label)| format!("<a href='{}'>{}</a>", escape_html(href), escape_html(label)))
         .collect::<Vec<_>>()
         .join(" &nbsp;&middot;&nbsp; ");
     let robots_meta = if noindex {
@@ -805,7 +797,10 @@ impl LegalGateConfig {
         Self {
             site_key: read("TWITCH_LEGAL_TURNSTILE_SITE_KEY", "TURNSTILE_SITE_KEY"),
             secret_key: read("TWITCH_LEGAL_TURNSTILE_SECRET_KEY", "TURNSTILE_SECRET_KEY"),
-            cookie_secret: read("TWITCH_LEGAL_GATE_COOKIE_SECRET", "LEGAL_GATE_COOKIE_SECRET"),
+            cookie_secret: read(
+                "TWITCH_LEGAL_GATE_COOKIE_SECRET",
+                "LEGAL_GATE_COOKIE_SECRET",
+            ),
         }
     }
 
@@ -1045,7 +1040,11 @@ async fn verify_turnstile_token(
         }
     };
 
-    if !result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         tracing::warn!(
             error_codes = ?result.get("error-codes"),
             "legal_verify: siteverify success=false"
@@ -1335,7 +1334,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            format!("{LEGAL_GATE_COOKIE_NAME}={forged}").parse().unwrap(),
+            format!("{LEGAL_GATE_COOKIE_NAME}={forged}")
+                .parse()
+                .unwrap(),
         );
         assert!(!gate_cookie_is_valid(&config, &headers));
     }
@@ -1353,10 +1354,16 @@ mod tests {
     #[test]
     fn ua_blockliste_greift() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::USER_AGENT, "Mozilla/5.0 GPTBot/1.0".parse().unwrap());
+        headers.insert(
+            header::USER_AGENT,
+            "Mozilla/5.0 GPTBot/1.0".parse().unwrap(),
+        );
         assert!(is_blocked_legal_page_user_agent(&headers));
         let mut ok = HeaderMap::new();
-        ok.insert(header::USER_AGENT, "Mozilla/5.0 Firefox/127.0".parse().unwrap());
+        ok.insert(
+            header::USER_AGENT,
+            "Mozilla/5.0 Firefox/127.0".parse().unwrap(),
+        );
         assert!(!is_blocked_legal_page_user_agent(&ok));
     }
 

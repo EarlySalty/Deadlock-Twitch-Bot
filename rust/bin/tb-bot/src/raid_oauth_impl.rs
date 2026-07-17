@@ -254,8 +254,9 @@ impl StreamerContextResolver for PgStreamerContextResolver {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            let (identity_login, identity_user_id) =
-                self.linked_twitch_identity_for_discord_user(discord_user_id).await;
+            let (identity_login, identity_user_id) = self
+                .linked_twitch_identity_for_discord_user(discord_user_id)
+                .await;
             if identity_login.is_none() && identity_user_id.is_none() {
                 return false;
             }
@@ -456,10 +457,7 @@ async fn resolve_integration_state(
                 RaidOAuthError::Internal
             })?;
         if let Some(first) = rows.first() {
-            result_login = first
-                .twitch_login
-                .as_deref()
-                .and_then(normalize_login_db);
+            result_login = first.twitch_login.as_deref().and_then(normalize_login_db);
             result_user_id = first
                 .twitch_user_id
                 .as_deref()
@@ -478,7 +476,12 @@ async fn resolve_integration_state(
             if let Some(l) = row.twitch_login.as_deref().and_then(normalize_login_db) {
                 candidate_logins.insert(l);
             }
-            if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(u) = row
+                .twitch_user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 candidate_user_ids.insert(u.to_string());
             }
             if row.manual_partner_opt_out.unwrap_or(0) != 0 {
@@ -489,8 +492,9 @@ async fn resolve_integration_state(
 
     // 2. Partner-State per Twitch-Login abfragen.
     if let Some(login) = twitch_login {
-        let login_normalized = normalize_login_db(login)
-            .ok_or(RaidOAuthError::BadRequest("invalid twitch_login".to_string()))?;
+        let login_normalized = normalize_login_db(login).ok_or(RaidOAuthError::BadRequest(
+            "invalid twitch_login".to_string(),
+        ))?;
         let row_opt = query_partner_row_by_login(pool, &login_normalized)
             .await
             .map_err(|e| {
@@ -504,7 +508,12 @@ async fn resolve_integration_state(
                 }
                 candidate_logins.insert(l);
             }
-            if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(u) = row
+                .twitch_user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 if result_user_id.is_none() {
                     result_user_id = Some(u.to_string());
                 }
@@ -549,26 +558,24 @@ async fn resolve_integration_state(
             if !au.is_empty() {
                 auth_user_id = Some(au.to_string());
             }
-            authorized = row.raid_enabled.unwrap_or(false)
-                || row.authorized_at.is_some();
+            authorized = row.raid_enabled.unwrap_or(false) || row.authorized_at.is_some();
         }
     }
     if !uid_auth_row_found {
-        let login_to_try = result_login
-            .as_deref()
-            .or(twitch_login)
-            .unwrap_or("");
+        let login_to_try = result_login.as_deref().or(twitch_login).unwrap_or("");
         if !login_to_try.is_empty() {
-            let auth = query_auth_by_login(pool, login_to_try)
-                .await
-                .map_err(|e| {
-                    tracing::error!("resolve_integration_state DB-Fehler (auth by login): {e}");
-                    RaidOAuthError::Internal
-                })?;
+            let auth = query_auth_by_login(pool, login_to_try).await.map_err(|e| {
+                tracing::error!("resolve_integration_state DB-Fehler (auth by login): {e}");
+                RaidOAuthError::Internal
+            })?;
             if let Some(row) = auth {
-                authorized = row.raid_enabled.unwrap_or(false)
-                    || row.authorized_at.is_some();
-                if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                authorized = row.raid_enabled.unwrap_or(false) || row.authorized_at.is_some();
+                if let Some(u) = row
+                    .twitch_user_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     if auth_user_id.is_none() {
                         auth_user_id = Some(u.to_string());
                     }
@@ -592,14 +599,17 @@ async fn resolve_integration_state(
     if result_user_id.is_none() {
         let login_to_try = result_login.as_deref().or(twitch_login).unwrap_or("");
         if !login_to_try.is_empty() {
-            let auth = query_auth_by_login(pool, login_to_try)
-                .await
-                .map_err(|e| {
-                    tracing::error!("resolve_integration_state DB-Fehler (fallback auth): {e}");
-                    RaidOAuthError::Internal
-                })?;
+            let auth = query_auth_by_login(pool, login_to_try).await.map_err(|e| {
+                tracing::error!("resolve_integration_state DB-Fehler (fallback auth): {e}");
+                RaidOAuthError::Internal
+            })?;
             if let Some(row) = auth {
-                if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(u) = row
+                    .twitch_user_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     result_user_id = Some(u.to_string());
                     candidate_user_ids.insert(u.to_string());
                 }
@@ -714,13 +724,21 @@ impl TbRaidOAuthImpl {
     ) -> Self {
         // Fail-closed: gesetzte (auch leere) Variable aktiviert den Guard —
         // nur eine NICHT gesetzte Variable bedeutet guard-aus (policy.py).
-        let allowed_guild_ids =
-            parse_allowlist(std::env::var("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS").ok().as_deref());
-        let allowed_channel_ids = parse_allowlist(
-            std::env::var("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS").ok().as_deref(),
+        let allowed_guild_ids = parse_allowlist(
+            std::env::var("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS")
+                .ok()
+                .as_deref(),
         );
-        let allowed_role_ids =
-            parse_allowlist(std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS").ok().as_deref());
+        let allowed_channel_ids = parse_allowlist(
+            std::env::var("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS")
+                .ok()
+                .as_deref(),
+        );
+        let allowed_role_ids = parse_allowlist(
+            std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS")
+                .ok()
+                .as_deref(),
+        );
         let success_redirect_url = std::env::var("TWITCH_RAID_SUCCESS_REDIRECT_URL")
             .ok()
             .map(|v| v.trim().to_string())
@@ -825,7 +843,10 @@ impl TbRaidOAuthImpl {
         let twitch_login = normalize_login_db(&twitch_login)
             .or_else(|| normalize_login_db(login))
             .ok_or_else(|| {
-                tracing::warn!(login, "raid requirements Partner hat keinen validen Twitch-Login");
+                tracing::warn!(
+                    login,
+                    "raid requirements Partner hat keinen validen Twitch-Login"
+                );
                 RaidOAuthError::NotFound
             })?;
         let discord_user_id = normalize_discord_user_id_db(&discord_user_id).ok_or_else(|| {
@@ -1026,7 +1047,12 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             return Ok(None);
         };
 
-        let url = build_authorize_url(&self.client_id, &self.redirect_uri, &info.scope_profile, state);
+        let url = build_authorize_url(
+            &self.client_id,
+            &self.redirect_uri,
+            &info.scope_profile,
+            state,
+        );
         Ok(Some(url))
     }
 
@@ -1058,12 +1084,14 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         {
             Ok(url) => url,
             Err(error) => {
-                self.clear_requirements_marker(&partner.twitch_user_id).await;
+                self.clear_requirements_marker(&partner.twitch_user_id)
+                    .await;
                 return Err(error);
             }
         };
         let Ok(user_id) = partner.discord_user_id.parse::<u64>() else {
-            self.clear_requirements_marker(&partner.twitch_user_id).await;
+            self.clear_requirements_marker(&partner.twitch_user_id)
+                .await;
             tracing::warn!(
                 login = %partner.twitch_login,
                 "raid requirements Partner hat ungueltige Discord-ID nach Normalisierung"
@@ -1073,10 +1101,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         let content = format!(
             "{RAID_REQUIREMENTS_DM_BODY}\n\n[{RAID_REQUIREMENTS_BUTTON_LABEL}]({auth_url})"
         );
-        let result = match relay
-            .send_user_dm(SendUserDm { user_id, content })
-            .await
-        {
+        let result = match relay.send_user_dm(SendUserDm { user_id, content }).await {
             Ok(result) => result,
             Err(error) => {
                 tracing::error!(
@@ -1117,11 +1142,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         channel_id: Option<&serde_json::Value>,
         role_id: Option<&serde_json::Value>,
     ) -> Result<(), RaidOAuthError> {
-        self.enforce_discord_scope(
-            &guild_id.cloned(),
-            &channel_id.cloned(),
-            &role_id.cloned(),
-        )
+        self.enforce_discord_scope(&guild_id.cloned(), &channel_id.cloned(), &role_id.cloned())
     }
 
     /// OAuth-Callback verarbeiten.
@@ -1287,7 +1308,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         {
             expected_login = requested_login.clone();
         }
-        if expected_user_id.is_empty() && !expected_login.is_empty() && twitch_login != expected_login
+        if expected_user_id.is_empty()
+            && !expected_login.is_empty()
+            && twitch_login != expected_login
         {
             tracing::warn!(
                 expected = %expected_login,
@@ -1308,7 +1331,10 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             .filter(|s| !s.is_empty())
             .collect();
         let allowed: std::collections::BTreeSet<&str> =
-            scopes_for_profile(&state_info.scope_profile).iter().copied().collect();
+            scopes_for_profile(&state_info.scope_profile)
+                .iter()
+                .copied()
+                .collect();
         let unexpected: Vec<&str> = granted
             .iter()
             .map(String::as_str)
@@ -1325,7 +1351,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
 
         // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
         // Schritt 10 (Python: VOR save_auth geprüft).
-        let had_existing_auth = self.has_saved_auth_record(&twitch_user_id, &twitch_login).await;
+        let had_existing_auth = self
+            .has_saved_auth_record(&twitch_user_id, &twitch_login)
+            .await;
 
         // 9. Tokens verschlüsselt persistieren (Python `save_auth`).
         let new_auth = tb_raid::auth_writer::NewAuth {
@@ -1651,7 +1679,10 @@ mod tests {
 
     #[test]
     fn normalize_login_db_trimmt_und_lowercased() {
-        assert_eq!(normalize_login_db("  DragScope  "), Some("dragscope".to_string()));
+        assert_eq!(
+            normalize_login_db("  DragScope  "),
+            Some("dragscope".to_string())
+        );
         assert_eq!(normalize_login_db(""), None);
         assert_eq!(normalize_login_db("  "), None);
         assert_eq!(normalize_login_db("a"), None); // len < 2
@@ -1672,21 +1703,15 @@ mod tests {
         let notify = tokio::sync::Notify::new();
 
         request_chat_subscription_reconcile(&Ok::<(), ()>(()), Some(&notify));
-        tokio::time::timeout(
-            std::time::Duration::from_millis(20),
-            notify.notified(),
-        )
-        .await
-        .expect("erfolgreiches Setup muss Reconcile auslösen");
+        tokio::time::timeout(std::time::Duration::from_millis(20), notify.notified())
+            .await
+            .expect("erfolgreiches Setup muss Reconcile auslösen");
 
         request_chat_subscription_reconcile(&Err::<(), ()>(()), Some(&notify));
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(20),
-                notify.notified(),
-            )
-            .await
-            .is_err(),
+            tokio::time::timeout(std::time::Duration::from_millis(20), notify.notified(),)
+                .await
+                .is_err(),
             "fehlgeschlagenes Setup darf kein Reconcile auslösen"
         );
     }
@@ -1939,7 +1964,11 @@ mod db_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_ctx_empty").await;
         let resolver = PgStreamerContextResolver { pool };
-        assert!(!resolver.has_existing_streamer_context("unknown_login").await);
+        assert!(
+            !resolver
+                .has_existing_streamer_context("unknown_login")
+                .await
+        );
     }
 
     #[tokio::test]
@@ -2027,8 +2056,14 @@ mod db_tests {
         .unwrap();
         let port = make_requirements_impl(&pool, relay);
 
-        let first = port.requirements("dragscope").await.expect("first requirements");
-        let second = port.requirements("dragscope").await.expect("second requirements");
+        let first = port
+            .requirements("dragscope")
+            .await
+            .expect("first requirements");
+        let second = port
+            .requirements("dragscope")
+            .await
+            .expect("second requirements");
         assert_eq!(first, RAID_REQUIREMENTS_RESULT_MESSAGE);
         assert_eq!(second, RAID_REQUIREMENTS_RESULT_MESSAGE);
         server.verify().await;
@@ -2060,7 +2095,9 @@ mod db_tests {
         .expect("auth insert");
         let resolver = PgStreamerContextResolver { pool };
         assert!(
-            resolver.has_existing_streamer_context("pendingstreamer").await,
+            resolver
+                .has_existing_streamer_context("pendingstreamer")
+                .await,
             "pending/disabled Auth-Zeile muss als Kontext zählen"
         );
     }
@@ -2090,7 +2127,9 @@ mod db_tests {
         .expect("partner insert");
         let resolver = PgStreamerContextResolver { pool };
         assert!(
-            resolver.has_existing_streamer_context("discord:123450000").await,
+            resolver
+                .has_existing_streamer_context("discord:123450000")
+                .await,
             "discord:<id> mit verknüpftem aktivem Partner muss Kontext liefern"
         );
     }
@@ -2101,7 +2140,11 @@ mod db_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_ctx_discord_none").await;
         let resolver = PgStreamerContextResolver { pool };
-        assert!(!resolver.has_existing_streamer_context("discord:999111000").await);
+        assert!(
+            !resolver
+                .has_existing_streamer_context("discord:999111000")
+                .await
+        );
     }
 
     // P2.32: linked identity wird aus twitch_streamer_identities gelesen, auch wenn
@@ -2167,11 +2210,13 @@ mod db_tests {
     async fn token_blacklist_unter_schwelle_false() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_bl_under").await;
-        sqlx::query("INSERT INTO twitch_token_blacklist (twitch_user_id, error_count) VALUES ($1, 2)")
-            .bind("uid_bl")
-            .execute(&pool)
-            .await
-            .expect("insert");
+        sqlx::query(
+            "INSERT INTO twitch_token_blacklist (twitch_user_id, error_count) VALUES ($1, 2)",
+        )
+        .bind("uid_bl")
+        .execute(&pool)
+        .await
+        .expect("insert");
         assert!(!is_token_blacklisted(&pool, "uid_bl").await);
     }
 
@@ -2179,11 +2224,13 @@ mod db_tests {
     async fn token_blacklist_genau_schwelle_true() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_bl_exact").await;
-        sqlx::query("INSERT INTO twitch_token_blacklist (twitch_user_id, error_count) VALUES ($1, 3)")
-            .bind("uid_bl3")
-            .execute(&pool)
-            .await
-            .expect("insert");
+        sqlx::query(
+            "INSERT INTO twitch_token_blacklist (twitch_user_id, error_count) VALUES ($1, 3)",
+        )
+        .bind("uid_bl3")
+        .execute(&pool)
+        .await
+        .expect("insert");
         assert!(is_token_blacklisted(&pool, "uid_bl3").await);
     }
 
@@ -2320,7 +2367,10 @@ mod db_tests {
         let result = resolve_integration_state(&pool, Some("777888999"), None)
             .await
             .expect("resolve");
-        assert!(result.token_blacklisted, "token_blacklisted sollte true sein");
+        assert!(
+            result.token_blacklisted,
+            "token_blacklisted sollte true sein"
+        );
         assert!(result.blocked, "sollte geblockt sein");
     }
 
@@ -2329,14 +2379,12 @@ mod db_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_is_rbl").await;
 
-        sqlx::query(
-            "INSERT INTO twitch_raid_blacklist (target_login, reason) VALUES ($1, $2)",
-        )
-        .bind("rbl_streamer")
-        .bind("manual")
-        .execute(&pool)
-        .await
-        .expect("raid bl insert");
+        sqlx::query("INSERT INTO twitch_raid_blacklist (target_login, reason) VALUES ($1, $2)")
+            .bind("rbl_streamer")
+            .bind("manual")
+            .execute(&pool)
+            .await
+            .expect("raid bl insert");
 
         let result = resolve_integration_state(&pool, None, Some("rbl_streamer"))
             .await
@@ -2692,7 +2740,11 @@ mod callback_tests {
             unreachable!("refresh im Callback-Test ungenutzt")
         }
         async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
-            self.exchange.lock().unwrap().take().expect("exchange einmal")
+            self.exchange
+                .lock()
+                .unwrap()
+                .take()
+                .expect("exchange einmal")
         }
         async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
             self.owner.lock().unwrap().take().expect("owner einmal")
@@ -2737,7 +2789,10 @@ mod callback_tests {
             expected_twitch_user_id: expected_user_id.map(str::to_string),
             discord_user_id: None,
         };
-        store.persist(&token, &state, Utc::now()).await.expect("persist");
+        store
+            .persist(&token, &state, Utc::now())
+            .await
+            .expect("persist");
         token
     }
 
@@ -2750,9 +2805,16 @@ mod callback_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_cb_ok").await;
         let state = seed_state(&pool, "dragscope", None, None).await;
-        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "dragscope")).await;
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "111", "dragscope"),
+        )
+        .await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 200, "body: {}", result.body_html);
         assert_eq!(result.title, "Autorisierung erfolgreich");
         assert!(result.redirect_url.is_some(), "Erfolg braucht redirect_url");
@@ -2806,7 +2868,10 @@ mod callback_tests {
         )
         .await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 200, "body: {}", result.body_html);
 
         for _ in 0..50 {
@@ -2839,9 +2904,16 @@ mod callback_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_cb_uid_mismatch").await;
         let state = seed_state(&pool, "dragscope", None, Some("999")).await;
-        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "dragscope")).await;
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "111", "dragscope"),
+        )
+        .await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 403);
         assert_eq!(result.title, "Falscher Twitch-Account");
         assert!(result.redirect_url.is_none());
@@ -2859,9 +2931,16 @@ mod callback_tests {
         let pool = make_pool(&dsn, "test_cb_login_mismatch").await;
         // requested_login wird zur Login-Erwartung (kein discord:/public:-Präfix).
         let state = seed_state(&pool, "erwarteter_kanal", None, None).await;
-        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "anderer_kanal")).await;
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "111", "anderer_kanal"),
+        )
+        .await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 403);
         assert_eq!(result.title, "Falscher Twitch-Account");
     }
@@ -2872,9 +2951,16 @@ mod callback_tests {
         let pool = make_pool(&dsn, "test_cb_discord_login").await;
         // Synthetischer Onboarding-Login → kein Mismatch trotz fremdem Kanal.
         let state = seed_state(&pool, "discord:42", None, None).await;
-        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "irgendein_kanal")).await;
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "111", "irgendein_kanal"),
+        )
+        .await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 200, "body: {}", result.body_html);
     }
 
@@ -2887,7 +2973,10 @@ mod callback_tests {
         scopes.push("channel:manage:broadcast"); // außerhalb des Profils
         let imp = make_impl(&pool, StubTokenClient::ok(&scopes, "111", "dragscope")).await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 400);
         assert_eq!(result.title, "Ungültige Berechtigungen");
 
@@ -2905,7 +2994,10 @@ mod callback_tests {
         let state = seed_state(&pool, "dragscope", None, None).await;
         let imp = make_impl(&pool, StubTokenClient::exchange_fails()).await;
 
-        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
         // Python: äußerer except → failure_title/body der internen API.
         assert_eq!(result.status, 500);
         assert_eq!(result.title, "Autorisierung fehlgeschlagen");
@@ -2920,11 +3012,17 @@ mod callback_tests {
         // State-Check kein Twitch-Call passiert.
         let imp = make_impl(
             &pool,
-            StubTokenClient { exchange: Mutex::new(None), owner: Mutex::new(None) },
+            StubTokenClient {
+                exchange: Mutex::new(None),
+                owner: Mutex::new(None),
+            },
         )
         .await;
 
-        let result = imp.oauth_callback("code-1", "unbekannt", "").await.expect("callback");
+        let result = imp
+            .oauth_callback("code-1", "unbekannt", "")
+            .await
+            .expect("callback");
         assert_eq!(result.status, 400);
         assert_eq!(result.title, "Ungültiger State");
     }

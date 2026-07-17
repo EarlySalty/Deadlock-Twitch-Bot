@@ -91,7 +91,9 @@ pub fn extract_text(content: &Value) -> String {
                     if let Some(t) = item.get("text").and_then(Value::as_str) {
                         return Some(t.to_string());
                     }
-                    item.get("content").and_then(Value::as_str).map(str::to_string)
+                    item.get("content")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
                 })
                 .filter(|p| !p.is_empty())
                 .collect();
@@ -151,7 +153,10 @@ impl LlmProvider for AnthropicClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(LlmError::Http(format!("HTTP {status}: {text}")));
         }
-        let payload: Value = resp.json().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let payload: Value = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
         let latency_ms = started.elapsed().as_millis() as i64;
 
         let text = extract_text(payload.get("content").unwrap_or(&Value::Null));

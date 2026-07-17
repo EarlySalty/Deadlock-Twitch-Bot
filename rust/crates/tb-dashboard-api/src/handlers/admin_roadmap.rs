@@ -12,10 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{response::IntoResponse, Json};
 use chrono::SecondsFormat;
 use serde_json::{json, Value};
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 /// Eingebetteter Default-Body (Python `_default_roadmap_body`, `.strip()`).
@@ -57,7 +57,10 @@ fn text_document_payload(doc: &RoadmapDoc) -> Value {
 }
 
 fn nonempty_trim(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Lädt das Dokument aus `path` (Python `load_roadmap_document`).
@@ -96,7 +99,11 @@ async fn save_roadmap_document_at(
     let now = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
     let last_updated_by = {
         let t = updated_by.trim();
-        if t.is_empty() { None } else { Some(t.to_string()) }
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
     };
     let serialized = serde_json::to_string_pretty(&json!({
         "body": body,
@@ -165,7 +172,12 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("tb-roadmap-{}-{}-{}/roadmap.json", tag, std::process::id(), nanos))
+        std::env::temp_dir().join(format!(
+            "tb-roadmap-{}-{}-{}/roadmap.json",
+            tag,
+            std::process::id(),
+            nanos
+        ))
     }
 
     #[test]
@@ -187,7 +199,9 @@ mod tests {
     #[tokio::test]
     async fn save_dann_load_roundtrip() {
         let path = temp_path("rt");
-        let saved = save_roadmap_document_at(&path, "Meine Roadmap ä", "admin").await.unwrap();
+        let saved = save_roadmap_document_at(&path, "Meine Roadmap ä", "admin")
+            .await
+            .unwrap();
         assert_eq!(saved.body, "Meine Roadmap ä");
         assert_eq!(saved.last_updated_by.as_deref(), Some("admin"));
         assert!(saved.last_updated_at.is_some());
@@ -199,7 +213,9 @@ mod tests {
 
         // leerer body beim Speichern → load fällt auf Default zurück (Python:
         // body nur uebernommen wenn nicht-leer).
-        let _ = save_roadmap_document_at(&path, "   ", "admin").await.unwrap();
+        let _ = save_roadmap_document_at(&path, "   ", "admin")
+            .await
+            .unwrap();
         let loaded2 = load_roadmap_document_at(&path).await;
         assert_eq!(loaded2.body, default_roadmap_body());
 
@@ -212,9 +228,13 @@ mod tests {
 
     #[tokio::test]
     async fn unauth_auth_required_401() {
-        assert_eq!(status_of(get_handler(DashboardAuthLevel::None).await).await, StatusCode::UNAUTHORIZED);
         assert_eq!(
-            status_of(save_handler(DashboardAuthLevel::None, Bytes::from(r#"{"body":"x"}"#)).await).await,
+            status_of(get_handler(DashboardAuthLevel::None).await).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status_of(save_handler(DashboardAuthLevel::None, Bytes::from(r#"{"body":"x"}"#)).await)
+                .await,
             StatusCode::UNAUTHORIZED
         );
     }

@@ -38,13 +38,14 @@ pub fn load_steam_account_ids(db_path: &Path, discord_ids: &[i64]) -> HashMap<i6
         tracing::warn!(path = %db_path.display(), "HighlightClipper: Steam-Links-DB nicht gefunden");
         return result;
     }
-    let conn = match rusqlite::Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "HighlightClipper: Steam-Links-DB nicht öffenbar");
-            return result;
-        }
-    };
+    let conn =
+        match rusqlite::Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "HighlightClipper: Steam-Links-DB nicht öffenbar");
+                return result;
+            }
+        };
 
     let placeholders = vec!["?"; discord_ids.len()].join(",");
     let sql = format!(
@@ -86,7 +87,8 @@ pub fn load_manual_steamids(path: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return result;
     };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    else {
         tracing::warn!("HighlightClipper: steamids.json konnte nicht gelesen werden");
         return result;
     };
@@ -193,7 +195,13 @@ fn json_to_str(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         other => other.to_string(),
     }
 }
@@ -229,8 +237,11 @@ mod tests {
                 [(base + 5).to_string()],
             )
             .unwrap();
-            conn.execute("INSERT INTO steam_links VALUES (20, ?1, 1)", [base.to_string()])
-                .unwrap();
+            conn.execute(
+                "INSERT INTO steam_links VALUES (20, ?1, 1)",
+                [base.to_string()],
+            )
+            .unwrap();
             conn.execute(
                 "INSERT INTO steam_links VALUES (30, ?1, 0)",
                 [(base + 99).to_string()],
@@ -260,7 +271,7 @@ mod tests {
         assert_eq!(m.get("nani"), Some(&"12345".to_string()));
         assert_eq!(m.get("num"), Some(&"678".to_string())); // str(678)
         assert!(!m.contains_key("leer")); // falsy value
-        // Fehlende Datei → leer.
+                                          // Fehlende Datei → leer.
         assert!(load_manual_steamids(&dir.join("missing.json")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -269,7 +280,7 @@ mod tests {
     fn combine_db_und_manual_override() {
         let rows = vec![
             ("nani".to_string(), 10),
-            ("  ".to_string(), 11), // leerer Login → raus
+            ("  ".to_string(), 11),    // leerer Login → raus
             ("other".to_string(), 12), // ohne SQLite-Auflösung → raus
         ];
         let mut d2a = HashMap::new();
@@ -299,13 +310,29 @@ mod db_tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
         // dyn: format!-DDL im temporären Test-Schema, technisch kein sqlx-Makro.
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // dyn: DDL im temporären Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state \
@@ -326,7 +353,9 @@ mod db_tests {
 
     #[tokio::test]
     async fn query_partner_streamers_filtert_und_parst() {
-        let Some(pool) = make_pool("t9bii_partner_query").await else { return };
+        let Some(pool) = make_pool("t9bii_partner_query").await else {
+            return;
+        };
         // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state VALUES \
@@ -339,12 +368,17 @@ mod db_tests {
         .await
         .unwrap();
         // Nur 'nani': aktiv + parsebare Discord-ID. Andere fallen raus.
-        assert_eq!(query_partner_streamers(&pool).await, vec![("nani".to_string(), 12345)]);
+        assert_eq!(
+            query_partner_streamers(&pool).await,
+            vec![("nani".to_string(), 12345)]
+        );
     }
 
     #[tokio::test]
     async fn get_partner_streamers_voller_pfad() {
-        let Some(pool) = make_pool("t9bii_partner_full").await else { return };
+        let Some(pool) = make_pool("t9bii_partner_full").await else {
+            return;
+        };
         // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state VALUES \

@@ -30,13 +30,18 @@ pub fn load_state(state_path: &Path) -> HighlightState {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) else {
         return HighlightState::new();
     };
-    let Some(streamers) = payload.get("streamers").and_then(serde_json::Value::as_object) else {
+    let Some(streamers) = payload
+        .get("streamers")
+        .and_then(serde_json::Value::as_object)
+    else {
         return HighlightState::new();
     };
 
     let mut result = HighlightState::new();
     for (login, data) in streamers {
-        let Some(obj) = data.as_object() else { continue };
+        let Some(obj) = data.as_object() else {
+            continue;
+        };
         let processed_matches = obj
             .get("processed_matches")
             .and_then(serde_json::Value::as_array)
@@ -45,7 +50,10 @@ pub fn load_state(state_path: &Path) -> HighlightState {
         let last_checked = obj.get("last_checked").and_then(json_as_int).unwrap_or(0);
         result.insert(
             login.clone(),
-            StreamerState { processed_matches, last_checked },
+            StreamerState {
+                processed_matches,
+                last_checked,
+            },
         );
     }
     result
@@ -138,11 +146,17 @@ mod tests {
         let mut state = HighlightState::new();
         state.insert(
             "streamerb".to_string(),
-            StreamerState { processed_matches: vec![100, 200], last_checked: 42 },
+            StreamerState {
+                processed_matches: vec![100, 200],
+                last_checked: 42,
+            },
         );
         state.insert(
             "streamera".to_string(),
-            StreamerState { processed_matches: vec![], last_checked: 0 },
+            StreamerState {
+                processed_matches: vec![],
+                last_checked: 0,
+            },
         );
         save_state(&p, &state).unwrap();
         let loaded = load_state(&p);

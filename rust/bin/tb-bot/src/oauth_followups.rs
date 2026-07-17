@@ -224,9 +224,8 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
                 Err(error)
             }
             Err(e) => {
-                let error = format!(
-                    "Error adding bot as moderator in channel {broadcaster_id}: {e}"
-                );
+                let error =
+                    format!("Error adding bot as moderator in channel {broadcaster_id}: {e}");
                 tracing::error!("{error}");
                 Err(error)
             }

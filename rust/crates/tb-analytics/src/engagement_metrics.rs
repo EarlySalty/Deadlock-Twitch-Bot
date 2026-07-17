@@ -55,11 +55,21 @@ pub fn calculate_engagement(inp: &EngagementInputs) -> EngagementOutputs {
     let passive = ((tracked as i64) - (inp.active_chatters as i64)).max(0);
     let chatters_coverage = safe_ratio(api_seen, tracked);
     let active_ratio = safe_ratio(active, tracked);
-    let chat_penetration_pct =
-        if tracked > 0.0 { Some((active_ratio * 100.0 * 10.0).round() / 10.0) } else { None };
-    let messages_per_100 =
-        if vm > 0.0 { Some((msgs / vm * 100.0 * 100.0).round() / 100.0) } else { None };
-    let legacy = if avg_v > 0.0 { Some((active / avg_v * 100.0 * 10.0).round() / 10.0) } else { None };
+    let chat_penetration_pct = if tracked > 0.0 {
+        Some((active_ratio * 100.0 * 10.0).round() / 10.0)
+    } else {
+        None
+    };
+    let messages_per_100 = if vm > 0.0 {
+        Some((msgs / vm * 100.0 * 100.0).round() / 100.0)
+    } else {
+        None
+    };
+    let legacy = if avg_v > 0.0 {
+        Some((active / avg_v * 100.0 * 10.0).round() / 10.0)
+    } else {
+        None
+    };
     let reliable = passive >= 1 && chatters_coverage >= 0.2;
     let has_data = tracked > 0.0 || active > 0.0 || msgs > 0.0 || vm > 0.0;
     let method: &'static str = if !has_data {

@@ -110,11 +110,17 @@ impl EngagementIrcReader {
             }
         };
         let (rd, mut wr) = stream.into_split();
-        if let Err(error) = wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes()).await {
+        if let Err(error) = wr
+            .write_all(format!("NICK {ANON_NICK}\r\n").as_bytes())
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: NICK-Handshake fehlgeschlagen");
             return None;
         }
-        if let Err(error) = wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n").await {
+        if let Err(error) = wr
+            .write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: CAP-Handshake fehlgeschlagen");
             return None;
         }

@@ -137,7 +137,11 @@ fn client_ip(parts: &Parts) -> String {
 /// erstem `Accept-Language`-Eintrag und `Sec-CH-UA-Platform` (Python-Parität).
 fn current_passive_fp(parts: &Parts) -> String {
     let header = |name: axum::http::HeaderName| -> &str {
-        parts.headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("")
+        parts
+            .headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
     };
     let ua = header(axum::http::header::USER_AGENT);
     let lang = header(axum::http::header::ACCEPT_LANGUAGE);
@@ -154,7 +158,11 @@ mod tests {
     use super::*;
 
     fn empty_parts() -> Parts {
-        axum::http::Request::builder().body(()).unwrap().into_parts().0
+        axum::http::Request::builder()
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0
     }
 
     #[tokio::test]
@@ -164,7 +172,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get("X-Admin-User").unwrap(), "admin");
         assert_eq!(
-            resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap(),
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .unwrap(),
             "no-store, max-age=0"
         );
     }
@@ -182,7 +192,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert!(resp.headers().get("X-Admin-User").is_none());
         assert_eq!(
-            resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap(),
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .unwrap(),
             "no-store, max-age=0"
         );
     }
@@ -230,6 +242,9 @@ mod tests {
             .unwrap()
             .into_parts()
             .0;
-        assert_eq!(current_passive_fp(&parts), build_passive_fp("ua", "de", "Windows"));
+        assert_eq!(
+            current_passive_fp(&parts),
+            build_passive_fp("ua", "de", "Windows")
+        );
     }
 }

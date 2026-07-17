@@ -60,7 +60,12 @@ impl EnrichmentWorker {
             // Batch nicht ab (mirror Pythons try/except je Clip).
             if let Err(error) = self
                 .pipeline
-                .run(clip_db_id, self.transcriber.as_deref(), self.llm.as_ref(), false)
+                .run(
+                    clip_db_id,
+                    self.transcriber.as_deref(),
+                    self.llm.as_ref(),
+                    false,
+                )
                 .await
             {
                 tracing::warn!(
@@ -104,12 +109,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, clip_title TEXT, duration_seconds DOUBLE PRECISION, game_name TEXT, upload_local_path TEXT, local_file_path TEXT, discarded_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
@@ -121,20 +142,38 @@ mod tests {
     }
 
     async fn enrichment_status(pool: &PgPool, clip: i32) -> Option<String> {
-        sqlx::query_scalar("SELECT status FROM social_media_clip_enrichment WHERE clip_db_id = $1").bind(clip).fetch_optional(pool).await.unwrap()
+        sqlx::query_scalar("SELECT status FROM social_media_clip_enrichment WHERE clip_db_id = $1")
+            .bind(clip)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn worker_verarbeitet_nur_pending() {
-        let Some(pool) = make_pool("t_sm_enrichment_worker").await else { return };
+        let Some(pool) = make_pool("t_sm_enrichment_worker").await else {
+            return;
+        };
         // A: ohne Enrichment, mit Datei → Kandidat.
         let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, upload_local_path) VALUES ('a', 'nani', '/a.mp4') RETURNING id").fetch_one(&pool).await.unwrap();
         // B: Enrichment-Status failed → Kandidat.
         let b: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, local_file_path) VALUES ('b', 'nani', '/b.mp4') RETURNING id").fetch_one(&pool).await.unwrap();
-        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'failed')").bind(b).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'failed')",
+        )
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
         // C: bereits done → kein Kandidat.
         let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, upload_local_path) VALUES ('c', 'nani', '/c.mp4') RETURNING id").fetch_one(&pool).await.unwrap();
-        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'done')").bind(c).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'done')",
+        )
+        .bind(c)
+        .execute(&pool)
+        .await
+        .unwrap();
         // D: ohne Datei → kein Kandidat.
         let d: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('d', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
@@ -146,8 +185,14 @@ mod tests {
         // Worker ohne Transcriber + scheiterndes LLM → A/B enden bei skipped_no_key.
         let worker = EnrichmentWorker::new(pool.clone(), Arc::new(FailingLlm));
         worker.run_once().await;
-        assert_eq!(enrichment_status(&pool, a).await.as_deref(), Some("skipped_no_key"));
-        assert_eq!(enrichment_status(&pool, b).await.as_deref(), Some("skipped_no_key"));
+        assert_eq!(
+            enrichment_status(&pool, a).await.as_deref(),
+            Some("skipped_no_key")
+        );
+        assert_eq!(
+            enrichment_status(&pool, b).await.as_deref(),
+            Some("skipped_no_key")
+        );
         assert_eq!(enrichment_status(&pool, c).await.as_deref(), Some("done")); // unangetastet
     }
 }

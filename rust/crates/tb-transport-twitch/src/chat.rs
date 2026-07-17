@@ -131,7 +131,8 @@ struct AnnouncementSecretPatterns {
 fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
     static PATTERNS: OnceLock<AnnouncementSecretPatterns> = OnceLock::new();
     PATTERNS.get_or_init(|| {
-        const KEYS: &str = r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
+        const KEYS: &str =
+            r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
         let compile = |p: &str| Regex::new(p).unwrap_or_else(|_| Regex::new(r"$.^").unwrap());
         AnnouncementSecretPatterns {
             header: compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;}]+)"),
@@ -150,22 +151,24 @@ fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
 
 fn redact_announcement_detail(raw: &str) -> String {
     let p = announcement_secret_patterns();
-    let s = p
-        .header
-        .replace_all(raw, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .bearer
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .quoted_kv
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.header.replace_all(raw, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.bearer.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.quoted_kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
     let s = p.kv.replace_all(&s, |c: &regex::Captures| {
         format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
     });
-    let s = p
-        .query
-        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
-    p.jwt.replace_all(&s, mask_secret("[jwt]").as_str()).into_owned()
+    let s = p.query.replace_all(&s, |c: &regex::Captures| {
+        format!("{}={}", &c[1], mask_secret(&c[2]))
+    });
+    p.jwt
+        .replace_all(&s, mask_secret("[jwt]").as_str())
+        .into_owned()
 }
 
 /// Drop-Reason aus der Helix-Antwort auf `POST /chat/messages`.
@@ -854,12 +857,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -871,12 +872,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "msg", "blue", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "msg", "blue", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -888,12 +887,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .send_announcement("111", "bot1", "msg", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .send_announcement("111", "bot1", "msg", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1104,12 +1101,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .delete_chat_message("111", "bot1", "msg-abc", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .delete_chat_message("111", "bot1", "msg-abc", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1121,12 +1116,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
+            .await
+            .unwrap());
     }
 
     // -----------------------------------------------------------------------
@@ -1149,10 +1142,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let users = client
-            .get_users_created_at(&["123"], "tok")
-            .await
-            .unwrap();
+        let users = client.get_users_created_at(&["123"], "tok").await.unwrap();
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].login, "testuser");
         let dt = parse_created_at(&users[0].created_at);
@@ -1199,10 +1189,7 @@ mod tests {
         let client = mock_client(&server).await;
         Mock::given(method("GET"))
             .and(path("/helix/users"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
         let user = client.get_user_by_login("nobody", "tok").await.unwrap();

@@ -52,7 +52,11 @@ impl ClipFetchService {
             }
         };
 
-        let clips = match self.helix.fetch_clips(&user_id, login, self.clip_limit).await {
+        let clips = match self
+            .helix
+            .fetch_clips(&user_id, login, self.clip_limit)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 return error_result(login, &e.to_string(), started);

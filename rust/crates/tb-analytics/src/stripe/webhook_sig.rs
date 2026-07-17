@@ -195,8 +195,13 @@ mod tests {
     #[test]
     fn multiple_v1_signatures_match_when_any_is_valid() {
         let header = format!("t={TIMESTAMP},v1=deadbeef,v1={V1}");
-        let result =
-            verify_signature(PAYLOAD.as_bytes(), &header, SECRET, TIMESTAMP, DEFAULT_TOLERANCE_SECONDS);
+        let result = verify_signature(
+            PAYLOAD.as_bytes(),
+            &header,
+            SECRET,
+            TIMESTAMP,
+            DEFAULT_TOLERANCE_SECONDS,
+        );
         assert_eq!(result, Ok(TIMESTAMP));
     }
 

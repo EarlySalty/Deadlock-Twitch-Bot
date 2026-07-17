@@ -67,7 +67,11 @@ impl TitleRateLimiter {
 
     /// Prüft + verbucht eine Anfrage. `Err` mit `retry_after`, wenn das Budget
     /// im Fenster erschöpft ist (Python `check_and_record`).
-    pub fn check_and_record(&self, streamer_id: &str, source: &str) -> Result<(), RateLimitExceeded> {
+    pub fn check_and_record(
+        &self,
+        streamer_id: &str,
+        source: &str,
+    ) -> Result<(), RateLimitExceeded> {
         let now = Instant::now();
         let key = format!("{streamer_id}:{source}");
         let limit = if source == "dashboard" {
@@ -122,7 +126,8 @@ pub struct TitleResult {
 fn emoji_regex() -> Regex {
     // Python EMOJI_PATTERN. \x{10000}-\x{10ffff} deckt die astralen Emoji
     // bereits ab; die zusätzlichen BMP-Bereiche fürs Symbol-Set.
-    Regex::new(r"[\x{10000}-\x{10ffff}\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]").unwrap()
+    Regex::new(r"[\x{10000}-\x{10ffff}\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]")
+        .unwrap()
 }
 
 /// Anteil der Titel mit mindestens einem Emoji (Python `_emoji_ratio`).
@@ -231,11 +236,7 @@ pub fn sanitize_generated_title(title: &str, keywords: &str, rank_display: Optio
         Regex::new(&pat).unwrap().replace_all(c, "").into_owned()
     };
     if let Some(rd) = rank_display {
-        let allowed = rd
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let allowed = rd.split_whitespace().next().unwrap_or("").to_lowercase();
         for name in CANONICAL_RANK_NAMES {
             if name.to_lowercase() != allowed {
                 cleaned = strip_rank(&cleaned, name);
@@ -261,9 +262,18 @@ pub fn sanitize_generated_title(title: &str, keywords: &str, rank_display: Optio
         .into_owned();
 
     // Whitespace + doppelte Trenner aufräumen.
-    cleaned = Regex::new(r"\s{2,}").unwrap().replace_all(&cleaned, " ").into_owned();
-    cleaned = Regex::new(r"\s+([|:,-])").unwrap().replace_all(&cleaned, "$1").into_owned();
-    cleaned = Regex::new(r"([|:,-]){2,}").unwrap().replace_all(&cleaned, "$1").into_owned();
+    cleaned = Regex::new(r"\s{2,}")
+        .unwrap()
+        .replace_all(&cleaned, " ")
+        .into_owned();
+    cleaned = Regex::new(r"\s+([|:,-])")
+        .unwrap()
+        .replace_all(&cleaned, "$1")
+        .into_owned();
+    cleaned = Regex::new(r"([|:,-]){2,}")
+        .unwrap()
+        .replace_all(&cleaned, "$1")
+        .into_owned();
     cleaned.trim_matches(|c| " -|:,".contains(c)).to_string()
 }
 
@@ -373,15 +383,20 @@ pub fn build_title_prompt(
 
     let mut sorted: Vec<&PromptHistoryItem> = title_history.iter().collect();
     sorted.sort_by(|a, b| {
-        let ka = (a.relative_perf.unwrap_or(0.0), a.engagement_rate.unwrap_or(0.0));
-        let kb = (b.relative_perf.unwrap_or(0.0), b.engagement_rate.unwrap_or(0.0));
+        let ka = (
+            a.relative_perf.unwrap_or(0.0),
+            a.engagement_rate.unwrap_or(0.0),
+        );
+        let kb = (
+            b.relative_perf.unwrap_or(0.0),
+            b.engagement_rate.unwrap_or(0.0),
+        );
         kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let top_reference_lines =
         lines_or_default(sorted.iter().take(8).map(|t| history_line(t)).collect());
-    let history_lines =
-        lines_or_default(title_history.iter().take(20).map(history_line).collect());
+    let history_lines = lines_or_default(title_history.iter().take(20).map(history_line).collect());
     let benchmark_lines = lines_or_default(
         knowledge_titles
             .iter()
@@ -532,7 +547,12 @@ pub fn resolve_minimax_key() -> Option<String> {
 /// auf einen „wahren" Wert gesetzt ist.
 fn pentest_disable_rate_limits() -> bool {
     std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS")
-        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
+        .map(|v| {
+            !matches!(
+                v.trim().to_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -872,7 +892,10 @@ mod tests {
         let raw = "{\"primary_title\":\"Bester Titel\",\"alternatives\":[\"A1\",\"A2\",\"A3\"],\"title_analysis\":[]}";
         let parsed = parse_title_response(raw);
         assert_eq!(parsed.primary, "Bester Titel");
-        assert_eq!(parsed.alternatives, vec!["A1".to_string(), "A2".to_string()]);
+        assert_eq!(
+            parsed.alternatives,
+            vec!["A1".to_string(), "A2".to_string()]
+        );
     }
 
     #[test]
@@ -883,7 +906,8 @@ mod tests {
     #[test]
     fn sanitize_entfernt_nicht_erlaubte_raenge() {
         // rank_display = "Archon 3" → nur "archon" erlaubt; "Phantom" wird entfernt.
-        let out = sanitize_generated_title("Archon Grind als Phantom 2", "ranked", Some("Archon 3"));
+        let out =
+            sanitize_generated_title("Archon Grind als Phantom 2", "ranked", Some("Archon 3"));
         assert!(out.contains("Archon"));
         assert!(!out.to_lowercase().contains("phantom"));
     }
@@ -1112,7 +1136,9 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         // Leere History → None ohne HTTP-Call.
-        assert!(generate_insight_with("http://unused", "k", &[], "p").await.is_none());
+        assert!(generate_insight_with("http://unused", "k", &[], "p")
+            .await
+            .is_none());
 
         // Kein JSON → None.
         let server = MockServer::start().await;
@@ -1126,6 +1152,8 @@ mod tests {
             relative_perf: 1.0,
             engagement_rate: 0.1,
         }];
-        assert!(generate_insight_with(&server.uri(), "k", &history, "p").await.is_none());
+        assert!(generate_insight_with(&server.uri(), "k", &history, "p")
+            .await
+            .is_none());
     }
 }

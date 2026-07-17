@@ -41,14 +41,10 @@ impl HelixClipSource {
         cursor: Option<&str>,
     ) -> Result<ClipPage, HelixError> {
         let per_page = HELIX_PAGE_SIZE.min(limit);
-        let mut req = self
-            .client
-            .get("/clips")
-            .await?
-            .query(&[
-                ("broadcaster_id", broadcaster_id),
-                ("first", &per_page.to_string()),
-            ]);
+        let mut req = self.client.get("/clips").await?.query(&[
+            ("broadcaster_id", broadcaster_id),
+            ("first", &per_page.to_string()),
+        ]);
 
         if let Some(c) = cursor {
             req = req.query(&[("after", c)]);
@@ -133,14 +129,8 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         .and_then(|t| t.as_str())
         .unwrap_or("")
         .to_string();
-    let duration_seconds = v
-        .get("duration")
-        .and_then(|d| d.as_f64())
-        .unwrap_or(0.0);
-    let view_count = v
-        .get("view_count")
-        .and_then(|vc| vc.as_i64())
-        .unwrap_or(0);
+    let duration_seconds = v.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+    let view_count = v.get("view_count").and_then(|vc| vc.as_i64()).unwrap_or(0);
     let game_name = v
         .get("game_name")
         .and_then(|g| g.as_str())

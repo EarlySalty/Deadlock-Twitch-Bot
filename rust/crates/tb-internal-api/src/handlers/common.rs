@@ -42,15 +42,15 @@ mod tests {
 
     #[test]
     fn pick_primary_gewinnt_wenn_nicht_leer() {
-        assert_eq!(
-            pick_first_truthy(Some("a".into()), Some("b".into())),
-            "a"
-        );
+        assert_eq!(pick_first_truthy(Some("a".into()), Some("b".into())), "a");
     }
 
     #[test]
     fn pick_fallback_bei_leerem_primary() {
-        assert_eq!(pick_first_truthy(Some(String::new()), Some("b".into())), "b");
+        assert_eq!(
+            pick_first_truthy(Some(String::new()), Some("b".into())),
+            "b"
+        );
         assert_eq!(pick_first_truthy(None, Some("b".into())), "b");
     }
 

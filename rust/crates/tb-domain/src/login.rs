@@ -7,9 +7,25 @@
 
 /// Reservierte erste Pfadsegmente von twitch.tv, die keine Kanäle sind.
 const RESERVED_SEGMENTS: &[&str] = &[
-    "clip", "clips", "dashboard", "directory", "downloads", "friends", "inventory", "jobs",
-    "login", "messages", "p", "payments", "search", "settings", "signup", "subscriptions",
-    "turbo", "videos", "wallet",
+    "clip",
+    "clips",
+    "dashboard",
+    "directory",
+    "downloads",
+    "friends",
+    "inventory",
+    "jobs",
+    "login",
+    "messages",
+    "p",
+    "payments",
+    "search",
+    "settings",
+    "signup",
+    "subscriptions",
+    "turbo",
+    "videos",
+    "wallet",
 ];
 const TWITCH_HOST_SUFFIX: &str = "twitch.tv";
 

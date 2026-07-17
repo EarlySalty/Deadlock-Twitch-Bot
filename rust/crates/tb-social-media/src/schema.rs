@@ -148,22 +148,46 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // Basistabellen (sonst scheitern FK/ALTER).
-        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, created_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_analytics (clip_id INTEGER, platform TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_social_analytics (clip_id INTEGER, platform TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn ensure_schema_idempotent_und_vollstaendig() {
-        let Some(pool) = make_pool("t_sm_schema").await else { return };
+        let Some(pool) = make_pool("t_sm_schema").await else {
+            return;
+        };
         // Zweimal laufen → idempotent (kein Fehler beim zweiten Lauf).
         ensure_schema(&pool).await.unwrap();
         ensure_schema(&pool).await.unwrap();
@@ -192,10 +216,18 @@ mod tests {
 
         // Retention-Trigger gesetzt: Insert mit created_at → retention_until = +14d.
         sqlx::query("INSERT INTO twitch_clips_social_media (created_at) VALUES (NOW())")
-            .execute(&pool).await.unwrap();
-        let (created, retention): (chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>) =
-            sqlx::query_as("SELECT created_at, retention_until FROM twitch_clips_social_media LIMIT 1")
-                .fetch_one(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (created, retention): (
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ) = sqlx::query_as(
+            "SELECT created_at, retention_until FROM twitch_clips_social_media LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let retention = retention.expect("retention_until vom Trigger gesetzt");
         let delta = (retention - created).num_days();
         assert_eq!(delta, 14);

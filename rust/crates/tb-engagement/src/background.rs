@@ -113,15 +113,21 @@ async fn run_auto_closer_once(pool: &PgPool) {
 }
 
 async fn run_global_sentiment_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    GlobalSentiment::new(pool.clone()).rebuild_global_sentiment(minimax).await;
+    GlobalSentiment::new(pool.clone())
+        .rebuild_global_sentiment(minimax)
+        .await;
 }
 
 async fn run_soul_anchor_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    SoulStore::new(pool.clone()).reflect_and_store_anchor(minimax).await;
+    SoulStore::new(pool.clone())
+        .reflect_and_store_anchor(minimax)
+        .await;
 }
 
 async fn run_channel_profile_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    ChannelBackground::new(pool.clone()).rebuild_all_channel_profiles(minimax).await;
+    ChannelBackground::new(pool.clone())
+        .rebuild_all_channel_profiles(minimax)
+        .await;
 }
 
 /// Captured + transkribiert einen Stream-Ausschnitt eines Channels und legt das
@@ -134,7 +140,12 @@ async fn run_transcribe_capture(
     transcriber: &OpenAiTranscriber,
 ) {
     let capture = match capturer
-        .capture(channel, transcript_capture_seconds().max(0) as u64, &transcript_quality(), None)
+        .capture(
+            channel,
+            transcript_capture_seconds().max(0) as u64,
+            &transcript_quality(),
+            None,
+        )
         .await
     {
         Ok(c) => c,
@@ -175,7 +186,10 @@ async fn run_transcribe_capture(
         engine: result.engine,
         model: Some(result.model).filter(|m| !m.is_empty()),
     };
-    if let Err(error) = StreamTranscripts::new(pool.clone()).append_segment(&segment).await {
+    if let Err(error) = StreamTranscripts::new(pool.clone())
+        .append_segment(&segment)
+        .await
+    {
         tracing::warn!(
             %error,
             channel,
@@ -270,7 +284,9 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
                     }
                     if last_trim.is_none_or(|t| t.elapsed() >= TRANSCRIPT_TRIM_INTERVAL) {
                         last_trim = Some(Instant::now());
-                        StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
+                        StreamTranscripts::new(pool.clone())
+                            .trim_segments(None, None)
+                            .await;
                     }
                 }
                 None => tracing::debug!(
@@ -284,15 +300,33 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
 
 /// Spawnt alle acht Background-Loops als tokio-Tasks (Python `ensure_started`).
 pub fn spawn_all(pool: PgPool) {
-    spawn_logged("engagement_thread_extractor", schedule_thread_extractor(pool.clone()));
-    spawn_logged("engagement_match_poller", schedule_match_poller(pool.clone()));
+    spawn_logged(
+        "engagement_thread_extractor",
+        schedule_thread_extractor(pool.clone()),
+    );
+    spawn_logged(
+        "engagement_match_poller",
+        schedule_match_poller(pool.clone()),
+    );
     spawn_logged("engagement_auto_closer", schedule_auto_closer(pool.clone()));
-    spawn_logged("engagement_conversation_trim", schedule_conversation_trim(pool.clone()));
-    spawn_logged("engagement_global_sentiment", schedule_global_sentiment(pool.clone()));
+    spawn_logged(
+        "engagement_conversation_trim",
+        schedule_conversation_trim(pool.clone()),
+    );
+    spawn_logged(
+        "engagement_global_sentiment",
+        schedule_global_sentiment(pool.clone()),
+    );
     spawn_logged("engagement_soul_anchor", schedule_soul_anchor(pool.clone()));
-    spawn_logged("engagement_channel_profile", schedule_channel_profile(pool.clone()));
+    spawn_logged(
+        "engagement_channel_profile",
+        schedule_channel_profile(pool.clone()),
+    );
     if stream_transcripts_enabled() {
-        spawn_logged("engagement_stream_transcripts", schedule_stream_transcripts(pool));
+        spawn_logged(
+            "engagement_stream_transcripts",
+            schedule_stream_transcripts(pool),
+        );
     } else {
         tracing::info!("Engagement-Stream-Transkription deaktiviert");
     }
@@ -336,12 +370,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_engagement_conversation (id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, ts TIMESTAMPTZ NOT NULL DEFAULT NOW())")
@@ -353,13 +403,17 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_channels_und_trim() {
-        let Some(pool) = make_pool("t_eng_bg").await else { return };
+        let Some(pool) = make_pool("t_eng_bg").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, steam_id) VALUES ('nani', TRUE, '123'), ('aus', FALSE, '9'), ('nosteam', TRUE, NULL)")
             .execute(&pool).await.unwrap();
         let chans = load_enabled_channels(&pool).await;
         // Nur enabled: nani + nosteam (aus ist disabled).
         assert_eq!(chans.len(), 2);
-        assert!(chans.iter().any(|(c, s)| c == "nani" && s.as_deref() == Some("123")));
+        assert!(chans
+            .iter()
+            .any(|(c, s)| c == "nani" && s.as_deref() == Some("123")));
         assert!(chans.iter().any(|(c, s)| c == "nosteam" && s.is_none()));
 
         // 3 Turns für 'nani', trim auf 1 → 2 gelöscht.
@@ -368,17 +422,26 @@ mod tests {
             .execute(&pool).await.unwrap();
         let deleted = trim_conversation(&pool, 1).await;
         assert_eq!(deleted, 2);
-        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation").fetch_one(&pool).await.unwrap();
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(remaining, 1);
     }
 
     #[tokio::test]
     async fn auto_closer_once_laeuft() {
-        let Some(pool) = make_pool("t_eng_bg_close").await else { return };
+        let Some(pool) = make_pool("t_eng_bg_close").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_user_threads (twitch_user_id, twitch_login, thread_type, summary, status, due_at) VALUES ('u','user','upcoming_event','x','open', NOW() - INTERVAL '1 hour')")
             .execute(&pool).await.unwrap();
         run_auto_closer_once(&pool).await;
-        let status: String = sqlx::query_scalar("SELECT status FROM twitch_user_threads LIMIT 1").fetch_one(&pool).await.unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM twitch_user_threads LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(status, "follow_up_due"); // open+fällig → follow_up_due
     }
 }

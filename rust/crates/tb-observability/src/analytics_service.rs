@@ -235,7 +235,10 @@ fn build_payload(decision: &AnalyticsDecision) -> BTreeMap<String, Value> {
         "flow".into(),
         json!(non_empty_lower(&decision.flow, "analytics")),
     );
-    payload.insert("login".into(), opt_string(&normalize_login(&decision.login)));
+    payload.insert(
+        "login".into(),
+        opt_string(&normalize_login(&decision.login)),
+    );
     payload.insert(
         "session_id".into(),
         decision.session_id.map(|v| json!(v)).unwrap_or(Value::Null),
@@ -244,7 +247,10 @@ fn build_payload(decision: &AnalyticsDecision) -> BTreeMap<String, Value> {
         "decision".into(),
         json!(non_empty(&decision.decision, "unknown")),
     );
-    payload.insert("reason".into(), json!(non_empty(&decision.reason, "unknown")));
+    payload.insert(
+        "reason".into(),
+        json!(non_empty(&decision.reason, "unknown")),
+    );
     payload.insert(
         "request_attempted".into(),
         decision
@@ -258,7 +264,10 @@ fn build_payload(decision: &AnalyticsDecision) -> BTreeMap<String, Value> {
     );
     payload.insert(
         "http_status".into(),
-        decision.http_status.map(|v| json!(v)).unwrap_or(Value::Null),
+        decision
+            .http_status
+            .map(|v| json!(v))
+            .unwrap_or(Value::Null),
     );
     payload.insert(
         "scope_state".into(),
@@ -275,7 +284,11 @@ fn build_payload(decision: &AnalyticsDecision) -> BTreeMap<String, Value> {
 }
 
 fn normalize_login(login: &str) -> String {
-    login.trim().to_lowercase().trim_start_matches('#').to_string()
+    login
+        .trim()
+        .to_lowercase()
+        .trim_start_matches('#')
+        .to_string()
 }
 
 fn non_empty(value: &str, fallback: &str) -> String {
@@ -354,15 +367,20 @@ mod tests {
     #[test]
     fn counter_accumulates_and_skips_empty() {
         let svc = AnalyticsObservabilityService::new(None, true, false, false);
-        assert_eq!(svc.increment_counter("analytics_chatters_success_total", 1), 1);
-        assert_eq!(svc.increment_counter("analytics_chatters_success_total", 1), 2);
+        assert_eq!(
+            svc.increment_counter("analytics_chatters_success_total", 1),
+            1
+        );
+        assert_eq!(
+            svc.increment_counter("analytics_chatters_success_total", 1),
+            2
+        );
         assert_eq!(svc.increment_counter("", 9), 0);
     }
 
     #[test]
     fn flow_id_increments() {
-        let svc =
-            AnalyticsObservabilityService::with_millis_source(None, Arc::new(|| 7000));
+        let svc = AnalyticsObservabilityService::with_millis_source(None, Arc::new(|| 7000));
         assert_eq!(svc.next_flow_id("Chatters"), "chatters-7000-1");
         assert_eq!(svc.next_flow_id(""), "analytics-7000-2");
     }

@@ -58,9 +58,7 @@ pub(crate) async fn gate(
     }
 }
 
-fn csrf_cookie_candidates(
-    headers: &axum::http::HeaderMap,
-) -> Vec<(String, &'static str)> {
+fn csrf_cookie_candidates(headers: &axum::http::HeaderMap) -> Vec<(String, &'static str)> {
     let mut candidates = Vec::new();
     for session_id in cookie_values(headers, ADMIN_COOKIE_NAME) {
         if !session_id.is_empty() {

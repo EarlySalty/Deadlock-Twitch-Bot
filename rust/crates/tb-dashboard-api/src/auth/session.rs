@@ -674,7 +674,10 @@ impl DashboardAuthState {
     }
 
     /// Liefert den CSRF-Token einer gültigen Twitch-Partner-Session.
-    pub async fn partner_csrf_token(&self, session_id: &str) -> Result<Option<String>, sqlx::Error> {
+    pub async fn partner_csrf_token(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
         self.csrf_token_for_type(session_id, "twitch").await
     }
 

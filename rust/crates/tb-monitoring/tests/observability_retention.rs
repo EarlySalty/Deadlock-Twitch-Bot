@@ -43,11 +43,10 @@ async fn observability_retention_entfernt_alte_zeilen() {
         .expect("cleanup");
     assert_eq!(deleted, 1);
 
-    let remaining: Vec<String> = sqlx::query_scalar(
-        "SELECT flow_id FROM twitch_observability_events ORDER BY flow_id",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("remaining rows");
+    let remaining: Vec<String> =
+        sqlx::query_scalar("SELECT flow_id FROM twitch_observability_events ORDER BY flow_id")
+            .fetch_all(&pool)
+            .await
+            .expect("remaining rows");
     assert_eq!(remaining, vec!["new".to_string()]);
 }

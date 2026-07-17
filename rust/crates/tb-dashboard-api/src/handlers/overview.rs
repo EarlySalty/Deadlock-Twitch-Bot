@@ -180,25 +180,47 @@ fn generate_insights(
     let mut out = Vec::new();
     // Retention
     if retention_sample_count < 3 {
-        out.push(Finding { kind: "info", title: "Retention-Daten unzureichend",
-            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Retention-Werte.".into() });
+        out.push(Finding {
+            kind: "info",
+            title: "Retention-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Retention-Werte.".into(),
+        });
     } else if ret_10m_pct < RETENTION_LOW {
-        out.push(Finding { kind: "neg", title: "Niedrige Retention",
-            text: format!("10-Min Retention bei {ret_10m_pct:.1}%. Verbessere den Stream-Einstieg.") });
+        out.push(Finding {
+            kind: "neg",
+            title: "Niedrige Retention",
+            text: format!(
+                "10-Min Retention bei {ret_10m_pct:.1}%. Verbessere den Stream-Einstieg."
+            ),
+        });
     } else if ret_10m_pct > RETENTION_HIGH {
-        out.push(Finding { kind: "pos", title: "Starke Retention",
-            text: format!("Exzellente {ret_10m_pct:.1}% Retention. Dein Content fesselt!") });
+        out.push(Finding {
+            kind: "pos",
+            title: "Starke Retention",
+            text: format!("Exzellente {ret_10m_pct:.1}% Retention. Dein Content fesselt!"),
+        });
     }
     // Chat
     if chat_sample_count < 3 {
-        out.push(Finding { kind: "info", title: "Chat-Daten unzureichend",
-            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Chat-Metriken.".into() });
+        out.push(Finding {
+            kind: "info",
+            title: "Chat-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Chat-Metriken.".into(),
+        });
     } else if chat_100 < CHAT_LOW {
-        out.push(Finding { kind: "warn", title: "Niedrige Chat-Aktivitat",
-            text: format!("Nur {chat_100:.1} Chatter/100 Peak-Viewer (Proxy). Mehr Interaktion fordern!") });
+        out.push(Finding {
+            kind: "warn",
+            title: "Niedrige Chat-Aktivitat",
+            text: format!(
+                "Nur {chat_100:.1} Chatter/100 Peak-Viewer (Proxy). Mehr Interaktion fordern!"
+            ),
+        });
     } else if chat_100 > CHAT_HIGH {
-        out.push(Finding { kind: "pos", title: "Aktive Community",
-            text: format!("{chat_100:.1} Chatter/100 Peak-Viewer (Proxy) - sehr engagiert!") });
+        out.push(Finding {
+            kind: "pos",
+            title: "Aktive Community",
+            text: format!("{chat_100:.1} Chatter/100 Peak-Viewer (Proxy) - sehr engagiert!"),
+        });
     }
     // Followers
     if follower_valid_count > 0 {
@@ -206,11 +228,19 @@ fn generate_insights(
             out.push(Finding { kind: "neg", title: "Follower-Verlust",
                 text: format!("Netto {followers_per_hour:.2} Follower/Stunde ({total_followers:+} gesamt). Gewonnen: {gained_followers_per_hour:.2}/h. Unfollows uberwiegen.") });
         } else if followers_per_hour < 0.5 {
-            out.push(Finding { kind: "warn", title: "Langsames Follower-Wachstum",
-                text: format!("Nur {followers_per_hour:.2} Follower/Stunde. Regelmaig an Follows erinnern!") });
+            out.push(Finding {
+                kind: "warn",
+                title: "Langsames Follower-Wachstum",
+                text: format!(
+                    "Nur {followers_per_hour:.2} Follower/Stunde. Regelmaig an Follows erinnern!"
+                ),
+            });
         } else if followers_per_hour > 3.0 {
-            out.push(Finding { kind: "pos", title: "Starkes Wachstum",
-                text: format!("{followers_per_hour:.1} Follower/Stunde - ausgezeichnet!") });
+            out.push(Finding {
+                kind: "pos",
+                title: "Starkes Wachstum",
+                text: format!("{followers_per_hour:.1} Follower/Stunde - ausgezeichnet!"),
+            });
         }
     }
     out
@@ -227,19 +257,28 @@ fn generate_actions(
 ) -> Vec<ActionItem> {
     let mut out = Vec::new();
     if retention_sample_count >= 3 && ret_10m_pct < RETENTION_LOW {
-        out.push(ActionItem { tag: "Retention",
-            text: "Starte mit einem starken Hook in den ersten 2 Minuten.", priority: "high" });
+        out.push(ActionItem {
+            tag: "Retention",
+            text: "Starte mit einem starken Hook in den ersten 2 Minuten.",
+            priority: "high",
+        });
     }
     if chat_sample_count >= 3 && chat_100 < CHAT_LOW {
-        out.push(ActionItem { tag: "Engagement",
-            text: "Stelle alle 5-10 Minuten eine direkte Frage an den Chat.", priority: "medium" });
+        out.push(ActionItem {
+            tag: "Engagement",
+            text: "Stelle alle 5-10 Minuten eine direkte Frage an den Chat.",
+            priority: "medium",
+        });
     }
     if follower_valid_count > 0 && followers_per_hour < 0.0 {
         out.push(ActionItem { tag: "Growth",
             text: "Follower-Verlust! Prufe ob Content-Wechsel oder lange Pausen Unfollows verursachen.", priority: "high" });
     } else if follower_valid_count > 0 && followers_per_hour < 1.0 {
-        out.push(ActionItem { tag: "Growth",
-            text: "Erinnere alle 20-30 Minuten an Follow mit konkretem Grund.", priority: "medium" });
+        out.push(ActionItem {
+            tag: "Growth",
+            text: "Erinnere alle 20-30 Minuten an Follow mit konkretem Grund.",
+            priority: "medium",
+        });
     }
     out
 }
@@ -538,12 +577,25 @@ pub async fn overview_handler(
     let gained = metrics.gained_followers.unwrap_or(0);
     let curr_ret = metrics.avg_retention_10m.unwrap_or(0.0) * 100.0;
     let curr_ret_sample = metrics.retention_sample_count.unwrap_or(0);
-    let per_hour = |n: i64| if airtime > 0.0 { n as f64 / airtime } else { 0.0 };
+    let per_hour = |n: i64| {
+        if airtime > 0.0 {
+            n as f64 / airtime
+        } else {
+            0.0
+        }
+    };
 
     let prev_avg = prev.as_ref().and_then(|p| p.avg_avg_viewers).unwrap_or(0.0);
     let prev_fol = prev.as_ref().and_then(|p| p.total_followers).unwrap_or(0);
-    let prev_ret = prev.as_ref().and_then(|p| p.avg_retention_10m).unwrap_or(0.0) * 100.0;
-    let prev_ret_sample = prev.as_ref().and_then(|p| p.retention_sample_count).unwrap_or(0);
+    let prev_ret = prev
+        .as_ref()
+        .and_then(|p| p.avg_retention_10m)
+        .unwrap_or(0.0)
+        * 100.0;
+    let prev_ret_sample = prev
+        .as_ref()
+        .and_then(|p| p.retention_sample_count)
+        .unwrap_or(0);
 
     let avg_viewers_trend = calc_trend(metrics.avg_avg_viewers.unwrap_or(0.0), prev_avg);
     // Python: bei |curr|<5 UND |prev|<5 unterdrücken, sonst auf ±999 kappen.
@@ -664,9 +716,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -800,11 +850,14 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(OverviewParams { streamer: Some("nobody".into()), days: 30 }),
+            Query(OverviewParams {
+                streamer: Some("nobody".into()),
+                days: 30,
+            }),
         )
-            .await
-            .unwrap()
-            .into_response();
+        .await
+        .unwrap()
+        .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 256).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -851,11 +904,14 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(OverviewParams { streamer: Some("streamer_x".into()), days: 30 }),
+            Query(OverviewParams {
+                streamer: Some("streamer_x".into()),
+                days: 30,
+            }),
         )
-            .await
-            .unwrap()
-            .into_response();
+        .await
+        .unwrap()
+        .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -871,7 +927,7 @@ mod tests {
         assert_eq!(v["summary"]["followersGained"], 5);
         assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
         assert_eq!(v["summary"]["retentionReliable"], false); // nur 1 Sample (<3)
-        // Chatter-Felder (nightbot=Bot raus, bob nur via API).
+                                                              // Chatter-Felder (nightbot=Bot raus, bob nur via API).
         assert_eq!(v["summary"]["activeChatters"], 1);
         assert_eq!(v["summary"]["uniqueViewers"], 2);
         assert_eq!(v["summary"]["uniqueChatters"], 1);
@@ -950,16 +1006,30 @@ mod tests {
     fn health_scores_formel_exakt() {
         // category_percentile gesetzt → reach = 20 + 0.5*80 = 60.
         let s = calculate_health_scores(
-            100.0, 40.0, 5, 12.0, 5, 2.0, 4,
+            100.0,
+            40.0,
+            5,
+            12.0,
+            5,
+            2.0,
+            4,
             Some(0.5),
-            OverviewMonetization { sub_events: 2, bits_events: 0, hype_trains: 1 },
-            OverviewNetworkStats { sent: 3, received: 1, sent_viewers: 0 },
+            OverviewMonetization {
+                sub_events: 2,
+                bits_events: 0,
+                hype_trains: 1,
+            },
+            OverviewNetworkStats {
+                sent: 3,
+                received: 1,
+                sent_viewers: 0,
+            },
         );
         assert_eq!(s.reach, 60);
         assert_eq!(s.retention, 60); // min(100, 40*1.5)
         assert_eq!(s.engagement, 60); // min(100, 12*5)
         assert_eq!(s.growth, 40); // min(100, 2*20)
-        // weighted = 2*3 + 0 + 1*5 = 11; sc=max(1,4)=4; (11/4)*10=27.5 -> 27.
+                                  // weighted = 2*3 + 0 + 1*5 = 11; sc=max(1,4)=4; (11/4)*10=27.5 -> 27.
         assert_eq!(s.monetization, 27);
         // total=3+1=4; recip=min(3,1)*10=10; 4*8+10=42.
         assert_eq!(s.network, 42);
@@ -998,11 +1068,25 @@ mod tests {
 
         fn sess(duration: i64, avg: f64, chatters: i64, ret: f64) -> OverviewSession {
             OverviewSession {
-                id: 0, date: String::new(), start_time: String::new(),
-                duration, start_viewers: 0, peak_viewers: 0, end_viewers: 0,
-                avg_viewers: avg, retention_5m: 0.0, retention_10m: ret, retention_20m: 0.0,
-                dropoff_pct: 0.0, unique_chatters: chatters, total_chatter_sessions: chatters, first_time_chatters: 0,
-                returning_chatters: 0, followers_start: 0, followers_end: 0, title: String::new(),
+                id: 0,
+                date: String::new(),
+                start_time: String::new(),
+                duration,
+                start_viewers: 0,
+                peak_viewers: 0,
+                end_viewers: 0,
+                avg_viewers: avg,
+                retention_5m: 0.0,
+                retention_10m: ret,
+                retention_20m: 0.0,
+                dropoff_pct: 0.0,
+                unique_chatters: chatters,
+                total_chatter_sessions: chatters,
+                first_time_chatters: 0,
+                returning_chatters: 0,
+                followers_start: 0,
+                followers_end: 0,
+                title: String::new(),
             }
         }
         // <3 Sessions → beide 0.
@@ -1033,11 +1117,20 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_overview_window_resolve").await;
         // Localhost/Admin (privilegiert) → Full, egal welcher Streamer.
-        assert_eq!(resolve_read_window(&pool, true, Some("nani")).await, WindowMode::Full);
+        assert_eq!(
+            resolve_read_window(&pool, true, Some("nani")).await,
+            WindowMode::Full
+        );
         // Kein Streamer-Kontext → Full.
-        assert_eq!(resolve_read_window(&pool, false, None).await, WindowMode::Full);
+        assert_eq!(
+            resolve_read_window(&pool, false, None).await,
+            WindowMode::Full
+        );
         // Partner ohne Plan (unbekannter Streamer) → LastStream (Paywall).
-        assert_eq!(resolve_read_window(&pool, false, Some("ghost_free")).await, WindowMode::LastStream);
+        assert_eq!(
+            resolve_read_window(&pool, false, Some("ghost_free")).await,
+            WindowMode::LastStream
+        );
     }
 
     /// `window_since_dates(LastStream)` → since = MAX(started_at) der beendeten
@@ -1055,9 +1148,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let (since, prev) = window_since_dates(&pool, Some("nani"), 30, WindowMode::LastStream).await;
+        let (since, prev) =
+            window_since_dates(&pool, Some("nani"), 30, WindowMode::LastStream).await;
         assert_eq!(since, prev, "last_stream: prev == since (keine Trends)");
-        assert!(since.starts_with("2026-02-01"), "MAX(started_at) der beendeten Sessions, war {since}");
+        assert!(
+            since.starts_with("2026-02-01"),
+            "MAX(started_at) der beendeten Sessions, war {since}"
+        );
         // Full: prev liegt vor since.
         let (fs, fp) = window_since_dates(&pool, Some("nani"), 30, WindowMode::Full).await;
         assert!(fp < fs, "full: prev_since vor since");

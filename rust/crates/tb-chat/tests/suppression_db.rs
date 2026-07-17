@@ -134,7 +134,14 @@ async fn upsert_aktualisiert_bestehenden_eintrag() {
 
     let ttl_kurz = Duration::seconds(10);
     store
-        .upsert_suppression("kanal2", None, "partner_raid", "channel_settings", None, ttl_kurz)
+        .upsert_suppression(
+            "kanal2",
+            None,
+            "partner_raid",
+            "channel_settings",
+            None,
+            ttl_kurz,
+        )
         .await
         .unwrap();
 
@@ -248,7 +255,14 @@ async fn check_suppression_recruitment_7_tage() {
 
     let ttl = Duration::seconds(tb_chat::moderation::SUPPRESSION_RECRUITMENT_SECS);
     store
-        .upsert_suppression("recr_kanal", None, "recruitment", "channel_settings", None, ttl)
+        .upsert_suppression(
+            "recr_kanal",
+            None,
+            "recruitment",
+            "channel_settings",
+            None,
+            ttl,
+        )
         .await
         .unwrap();
 

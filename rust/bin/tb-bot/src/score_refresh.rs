@@ -133,12 +133,7 @@ fn boost_active(row: &BoostFlagRaw, now: DateTime<Utc>) -> bool {
     if row.raid_boost_enabled.unwrap_or(0) != 0 {
         return true;
     }
-    let plan_name = row
-        .plan_name
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
+    let plan_name = row.plan_name.as_deref().unwrap_or("").trim().to_lowercase();
     if legacy_plan_name_has_raid_priority(&plan_name) {
         return true;
     }
@@ -818,7 +813,10 @@ mod tests {
         // Großschreibung wird wie in Python vor dem Lookup normalisiert.
         assert!(boost_active(&boost_row(0, "Bundle", "", None), now));
         assert!(boost_active(&boost_row(0, "raid_boost", "", None), now));
-        assert!(boost_active(&boost_row(0, "chat_quiet_bundle", "", None), now));
+        assert!(boost_active(
+            &boost_row(0, "chat_quiet_bundle", "", None),
+            now
+        ));
         // Pläne ohne raid.priority-Entitlement:
         assert!(!boost_active(&boost_row(0, "werbefrei", "", None), now));
         assert!(!boost_active(&boost_row(0, "analysis", "", None), now));
@@ -829,7 +827,10 @@ mod tests {
     fn boost_aus_manuellem_plan_override() {
         let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
         // Ohne Ablauf: aktiv.
-        assert!(boost_active(&boost_row(0, "", "bundle_komplett", None), now));
+        assert!(boost_active(
+            &boost_row(0, "", "bundle_komplett", None),
+            now
+        ));
         // Zukunft: aktiv; Vergangenheit: abgelaufen.
         assert!(boost_active(
             &boost_row(0, "", "bundle_komplett", Some("2026-12-31T00:00:00+00:00")),
@@ -840,7 +841,10 @@ mod tests {
             now
         ));
         // Plan ohne raid.priority bleibt aus, auch wenn aktiv.
-        assert!(!boost_active(&boost_row(0, "", "analysis_dashboard", None), now));
+        assert!(!boost_active(
+            &boost_row(0, "", "analysis_dashboard", None),
+            now
+        ));
     }
 
     #[test]
@@ -963,16 +967,33 @@ mod tests {
         // Knapp innerhalb: genau auf der Grenze (>= cutoff → soll enthalten sein)
         let s_grenze = make_session("alice", lookback_cutoff, Some(3600));
         // Knapp außerhalb: eine Sekunde vor der Grenze (soll herausgefiltert werden)
-        let s_aussen = make_session("alice", lookback_cutoff - chrono::Duration::seconds(1), Some(3600));
+        let s_aussen = make_session(
+            "alice",
+            lookback_cutoff - chrono::Duration::seconds(1),
+            Some(3600),
+        );
         // Normal innerhalb
         let s_innen = make_session("alice", now - chrono::Duration::days(1), Some(3600));
 
         let all = [&s_grenze, &s_aussen, &s_innen];
-        let recent: Vec<_> = all.iter().filter(|s| s.started_at >= lookback_cutoff).collect();
+        let recent: Vec<_> = all
+            .iter()
+            .filter(|s| s.started_at >= lookback_cutoff)
+            .collect();
 
-        assert_eq!(recent.len(), 2, "Grenz-Session und innere Session sollen enthalten sein");
-        assert!(recent.iter().any(|s| s.started_at == lookback_cutoff), "Grenz-Session (>=) muss drin sein");
-        assert!(!recent.iter().any(|s| s.started_at == s_aussen.started_at), "Session außerhalb muss raus");
+        assert_eq!(
+            recent.len(),
+            2,
+            "Grenz-Session und innere Session sollen enthalten sein"
+        );
+        assert!(
+            recent.iter().any(|s| s.started_at == lookback_cutoff),
+            "Grenz-Session (>=) muss drin sein"
+        );
+        assert!(
+            !recent.iter().any(|s| s.started_at == s_aussen.started_at),
+            "Session außerhalb muss raus"
+        );
     }
 
     #[test]

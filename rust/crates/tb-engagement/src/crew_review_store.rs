@@ -96,7 +96,7 @@ impl CrewReviewStore {
                 )
                 AND has_started
                 AND NOT has_ended
-                AND last_activity_at >= $2 - INTERVAL '10 minutes'
+                AND last_activity_at > $2 - INTERVAL '10 minutes'
               ORDER BY last_activity_at DESC
               LIMIT 1"
         );
@@ -251,6 +251,61 @@ impl CrewReviewStore {
         .bind(&channels)
         .fetch_all(&mut *transaction)
         .await?;
+        for (session_id, channel_login, subject_twitch_user_id) in &sessions {
+            insert_event_chunks(
+                &mut transaction,
+                &session_ended_event(
+                    *session_id,
+                    channel_login,
+                    subject_twitch_user_id.clone(),
+                    reason,
+                    occurred_at,
+                ),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(sessions.len() as u64)
+    }
+
+    pub async fn close_inactive_sessions(
+        &self,
+        reason: &str,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let channels_sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT DISTINCT channel_login
+               FROM session_activity
+              WHERE has_started
+                AND NOT has_ended
+                AND last_activity_at <= $1 - INTERVAL '10 minutes'
+              ORDER BY channel_login"
+        );
+        let channels: Vec<String> = sqlx::query_scalar(&channels_sql)
+            .bind(occurred_at)
+            .fetch_all(&mut *transaction)
+            .await?;
+        for channel in &channels {
+            lock_channel(&mut transaction, channel).await?;
+        }
+
+        let sessions_sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT review_session_id, channel_login, subject_twitch_user_id
+               FROM session_activity
+              WHERE has_started
+                AND NOT has_ended
+                AND channel_login = ANY($2::text[])
+                AND last_activity_at <= $1 - INTERVAL '10 minutes'
+              ORDER BY channel_login, review_session_id"
+        );
+        let sessions: Vec<(Uuid, String, String)> = sqlx::query_as(&sessions_sql)
+            .bind(occurred_at)
+            .bind(&channels)
+            .fetch_all(&mut *transaction)
+            .await?;
         for (session_id, channel_login, subject_twitch_user_id) in &sessions {
             insert_event_chunks(
                 &mut transaction,
@@ -466,7 +521,7 @@ impl CrewReviewStore {
                      ORDER BY latest.id DESC
                      LIMIT 1
                 )
-                AND last_activity_at >= $1 - INTERVAL '10 minutes'
+                AND last_activity_at > $1 - INTERVAL '10 minutes'
               ORDER BY last_activity_at, review_session_id"
         );
         let rows: Vec<SessionRow> = sqlx::query_as(&sql).bind(now).fetch_all(&self.pool).await?;
