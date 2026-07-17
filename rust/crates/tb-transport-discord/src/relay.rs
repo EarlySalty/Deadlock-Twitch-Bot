@@ -586,11 +586,13 @@ mod tests {
             message_id: "123456789012345678".to_string(),
             reason: "Shadow-Review verworfen".to_string(),
         };
-        let expected_key = BrokerRelay::idempotency_key("delete", &payload);
         Mock::given(method("POST"))
             .and(path("/internal/master/v1/discord/delete-message"))
             .and(header("X-Internal-Token", "test-token"))
-            .and(header("X-Idempotency-Key", expected_key.as_str()))
+            .and(header(
+                "X-Idempotency-Key",
+                "delete-b327ea2ca5251b1edb1c53de25e8137505f21173d785600b",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
