@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Instant};
 
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -989,6 +989,79 @@ async fn modellcycle_wird_trotz_konkurrierender_chunk_locks_nur_einmal_geclaimt(
         .map(|event| event.id)
         .collect::<Vec<_>>();
     assert_eq!(claimed_ids, input_ids);
+}
+
+#[tokio::test]
+async fn grosser_frischer_modellcycle_wird_ohne_tabellenstatistik_schnell_geclaimt() {
+    let Some(pool) = test_pool("crew_review_large_fresh_cycle_claim").await else {
+        return;
+    };
+    sqlx::query(
+        "ALTER TABLE twitch_crew_review_events SET (
+            autovacuum_enabled = false,
+            toast.autovacuum_enabled = false
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let session_id = seed_session(&pool, "large-fresh-cycle", now).await;
+    let cycle_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, content, metadata, expires_at
+         )
+         SELECT $1, 'large-fresh-cycle', $2, 'streamer_transcript',
+                $3 + input_no * INTERVAL '1 microsecond', 'chunk',
+                jsonb_build_object('cycle_id', $4::text),
+                $3 + INTERVAL '6 months'
+           FROM generate_series(1, 30001) AS inputs(input_no)",
+    )
+    .bind(session_id)
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(now)
+    .bind(cycle_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let was_analyzed: bool = sqlx::query_scalar(
+        "SELECT last_analyze IS NOT NULL OR last_autoanalyze IS NOT NULL
+           FROM pg_stat_user_tables
+          WHERE relid = 'twitch_crew_review_events'::regclass",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !was_analyzed,
+        "frische Testtabelle darf keine Statistik haben"
+    );
+
+    let started = Instant::now();
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        store.pending_model_inputs(session_id),
+    )
+    .await
+    .expect("30.001 frische Inputs muessen innerhalb von 15s claimbar sein")
+    .unwrap()
+    .unwrap();
+    let elapsed = started.elapsed();
+    eprintln!("30.001 frische Inputs geclaimt in {elapsed:?}");
+    assert_eq!(first.events.len(), 30_001);
+
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        store.pending_model_inputs(session_id),
+    )
+    .await
+    .expect("zweiter Claim muss innerhalb von 5s abgeschlossen sein")
+    .unwrap();
+    assert!(second.is_none());
 }
 
 #[tokio::test]

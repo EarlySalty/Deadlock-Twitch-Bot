@@ -301,18 +301,25 @@ impl CrewReviewStore {
         let claim_id = Uuid::new_v4();
         let mut transaction = self.pool.begin().await?;
         let cycle_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT pending.metadata->>'cycle_id'
+            "WITH terminal_cycles AS MATERIALIZED (
+                SELECT DISTINCT completed.review_session_id,
+                       completed.metadata->>'cycle_id' AS cycle_id
+                  FROM twitch_crew_review_events completed
+                 WHERE completed.review_session_id = $1
+                   AND completed.event_kind IN ('ai_decision', 'provider_error')
+                   AND completed.metadata ? 'cycle_id'
+                   AND jsonb_typeof(completed.metadata->'cycle_id') = 'string'
+                   AND NULLIF(btrim(completed.metadata->>'cycle_id'), '') IS NOT NULL
+            )
+             SELECT pending.metadata->>'cycle_id'
                FROM twitch_crew_review_events pending
+               LEFT JOIN terminal_cycles terminal
+                 ON terminal.review_session_id = pending.review_session_id
+                AND terminal.cycle_id = pending.metadata->>'cycle_id'
               WHERE pending.review_session_id = $1
                 AND pending.event_kind IN ('ricky_message', 'streamer_transcript')
                 AND pending.metadata ? 'cycle_id'
-                AND NOT EXISTS (
-                    SELECT 1
-                      FROM twitch_crew_review_events completed
-                     WHERE completed.review_session_id = pending.review_session_id
-                       AND completed.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
-                       AND completed.event_kind IN ('ai_decision', 'provider_error')
-                )
+                AND terminal.cycle_id IS NULL
               GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
              HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
                 AND BOOL_AND(
@@ -341,20 +348,27 @@ impl CrewReviewStore {
         }
         let claimed_ids: Vec<i64> = sqlx::query_scalar(
             "WITH eligible_cycles AS (
+                WITH terminal_cycles AS MATERIALIZED (
+                    SELECT DISTINCT completed.review_session_id,
+                           completed.metadata->>'cycle_id' AS cycle_id
+                      FROM twitch_crew_review_events completed
+                     WHERE completed.review_session_id = $1
+                       AND completed.event_kind IN ('ai_decision', 'provider_error')
+                       AND completed.metadata ? 'cycle_id'
+                       AND jsonb_typeof(completed.metadata->'cycle_id') = 'string'
+                       AND NULLIF(btrim(completed.metadata->>'cycle_id'), '') IS NOT NULL
+                )
                 SELECT pending.review_session_id,
                        pending.metadata->>'cycle_id' AS cycle_id
                   FROM twitch_crew_review_events pending
+                  LEFT JOIN terminal_cycles terminal
+                    ON terminal.review_session_id = pending.review_session_id
+                   AND terminal.cycle_id = pending.metadata->>'cycle_id'
                  WHERE pending.review_session_id = $1
                    AND pending.event_kind IN ('ricky_message', 'streamer_transcript')
                    AND pending.metadata ? 'cycle_id'
                    AND pending.metadata->>'cycle_id' = ANY($2::text[])
-                   AND NOT EXISTS (
-                       SELECT 1
-                         FROM twitch_crew_review_events completed
-                        WHERE completed.review_session_id = pending.review_session_id
-                          AND completed.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
-                          AND completed.event_kind IN ('ai_decision', 'provider_error')
-                   )
+                   AND terminal.cycle_id IS NULL
                  GROUP BY pending.review_session_id, pending.metadata->>'cycle_id'
                 HAVING BOOL_AND(pending.expires_at > NOW() + INTERVAL '5 minutes')
                    AND BOOL_AND(

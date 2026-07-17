@@ -46,6 +46,13 @@ CREATE UNIQUE INDEX twitch_crew_review_events_ricky_source_uidx
 CREATE INDEX twitch_crew_review_events_session_occurred_idx
     ON twitch_crew_review_events (review_session_id, occurred_at);
 
+CREATE INDEX twitch_crew_review_events_terminal_cycle_idx
+    ON twitch_crew_review_events (review_session_id, (metadata->>'cycle_id'))
+    WHERE event_kind IN ('ai_decision', 'provider_error')
+      AND metadata ? 'cycle_id'
+      AND jsonb_typeof(metadata->'cycle_id') = 'string'
+      AND NULLIF(btrim(metadata->>'cycle_id'), '') IS NOT NULL;
+
 CREATE INDEX twitch_crew_review_events_channel_occurred_idx
     ON twitch_crew_review_events (channel_login, occurred_at DESC);
 
