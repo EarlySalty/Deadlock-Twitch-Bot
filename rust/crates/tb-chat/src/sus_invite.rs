@@ -10,11 +10,9 @@
 //!    Schwellen: sessions `>= 3` OR messages `>= 40` OR first_seen_at `>= 14 Tage` alt.
 //!    Python-Kommentar nennt 20 Nachrichten, der Code prüft 40 — Code gewinnt.
 //! 4. Cooldown: 300 Sekunden pro (channel, chatter) (moderation.py Z. 871).
-//! 5. Aktion: KEIN Ban / Delete. Dieses Modul trifft nur die ENTSCHEIDUNG und
-//!    gibt einen [`SusInviteHit`] zurück — die Pipeline schreibt daraufhin die
-//!    Review-Log-Zeile (status="SUSPICIOUS_DISCORD_INVITE", reason="discord.gg
-//!    link in partner chat") und feuert den Discord-Alert (kind="sus_invite"),
-//!    exakt wie Python (moderation.py Z. 882–899).
+//! 5. Aktion: Dieses Modul trifft nur die ENTSCHEIDUNG und gibt einen
+//!    [`SusInviteHit`] zurück — die Pipeline schreibt daraufhin Review-Log,
+//!    feuert den Discord-Alert und setzt den Timeout.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -22,7 +20,7 @@ use std::time::Instant;
 
 use regex::Regex;
 use sqlx::PgPool;
-use tracing::warn;
+use tracing::info;
 
 use crate::types::ChatMessageEvent;
 
@@ -34,6 +32,39 @@ use crate::types::ChatMessageEvent;
 fn discord_invite_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)discord\.gg/[A-Za-z0-9]+").expect("DISCORD_INVITE_RE ist konstant"))
+}
+
+/// Spiegelt den Community-Invite aus `promos.rs`.
+const OWN_DISCORD_INVITE_CODE: &str = "z5tfvhuqq2";
+
+fn contains_foreign_discord_invite(content: &str) -> bool {
+    discord_invite_re().find_iter(content).any(|invite| {
+        let Some((_, code)) = invite.as_str().rsplit_once('/') else {
+            return false;
+        };
+        !code.eq_ignore_ascii_case(OWN_DISCORD_INVITE_CODE)
+    })
+}
+
+fn log_decision(
+    content: &str,
+    channel_login: &str,
+    chatter_login: &str,
+    verdict: &str,
+    reason: &str,
+    result: &str,
+) {
+    let input = content.chars().take(200).collect::<String>();
+    info!(
+        input = %input,
+        channel = channel_login,
+        chatter = chatter_login,
+        verdict,
+        confidence = 1.0,
+        reason,
+        result,
+        "Sus-Invite-Entscheidung"
+    );
 }
 
 /// Cooldown pro (channel, chatter) in Sekunden (moderation.py Z. 871: `< 300.0`).
@@ -95,37 +126,90 @@ impl SusInviteCheck {
         channel_login: &str,
     ) -> Option<SusInviteHit> {
         let content = event.text();
+        let chatter_login = event.chatter_user_login.to_lowercase();
         if !discord_invite_re().is_match(content) {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "no_discord_invite",
+                "no_action",
+            );
             return None;
         }
-
-        let chatter_login = event.chatter_user_login.to_lowercase();
+        if !contains_foreign_discord_invite(content) {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "own_discord_invite",
+                "no_action",
+            );
+            return None;
+        }
         if chatter_login.is_empty() {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "missing_chatter_login",
+                "no_action",
+            );
             return None;
         }
 
         // Moderatoren und Broadcaster überspringen (moderation.py Z. 858–859)
         if event.is_mod_or_broadcaster() {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "mod_or_broadcaster",
+                "no_action",
+            );
             return None;
         }
 
         // Etablierte Chatter überspringen (moderation.py Z. 862–863)
-        if self.is_established_chatter(channel_login, &chatter_login).await {
+        if self
+            .is_established_chatter(channel_login, &chatter_login)
+            .await
+        {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "established_chatter",
+                "no_action",
+            );
             return None;
         }
 
         // Cooldown-Check (moderation.py Z. 865–873)
         if !self.cooldown_ok(channel_login, &chatter_login) {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "cooldown",
+                "no_action",
+            );
             return None;
         }
 
-        warn!(
-            "Sus Discord-Invite in #{} von {}: {}",
+        log_decision(
+            content,
             channel_login,
-            chatter_login,
-            // Zeichen-basiert kürzen (Python content[:200]); Byte-Slice könnte an
-            // einer Multibyte-Grenze panischen.
-            content.chars().take(200).collect::<String>()
+            &chatter_login,
+            "timeout",
+            "foreign_discord_invite",
+            "hit",
         );
 
         Some(SusInviteHit {
@@ -253,6 +337,25 @@ mod tests {
     fn discord_invite_regex_keine_tld_ohne_slash() {
         // Ohne Slash-Code kein Match
         assert!(!discord_invite_re().is_match("discord.gg"));
+    }
+
+    #[test]
+    fn eigener_discord_invite_ist_kein_fremder_invite() {
+        assert!(!contains_foreign_discord_invite(
+            "https://discord.gg/Z5TfVHuQq2"
+        ));
+    }
+
+    #[test]
+    fn fremder_discord_invite_wird_erkannt() {
+        assert!(contains_foreign_discord_invite("discord.gg/abc123"));
+    }
+
+    #[test]
+    fn eigener_und_fremder_discord_invite_wird_erkannt() {
+        assert!(contains_foreign_discord_invite(
+            "discord.gg/z5TfVHuQq2 und discord.gg/abc123"
+        ));
     }
 
     #[test]

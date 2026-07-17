@@ -1,3 +1,11 @@
+## #384 — PLATZHALTER: Fremde Discord-Links führen zum Timeout
+
+**Problem:** PLATZHALTER: Fremde Discord-Invite-Links wurden bisher nur gemeldet, aber nicht automatisch moderiert.
+
+**Änderung:** PLATZHALTER: Neue Chatter erhalten für fremde Discord-Invite-Links einen Timeout; Community-Link, Mods, Broadcaster und etablierte Chatter bleiben ausgenommen.
+
+**Aktuelles Verhalten:** PLATZHALTER: Fremde Discord-Invite-Links lösen in Partner-Kanälen einen zehnminütigen Timeout aus.
+
 ## #383 — Bot merkt jetzt selbst, wenn er in einem Kanal gebannt ist
 
 **Problem:** Wurde der Bot in einem Partner-Kanal gebannt, lief die Live-Ankündigung auf Discord trotzdem weiter — wir haben also für Kanäle geworben, in denen wir gar nicht mehr erwünscht waren. Der Bot hat den Ban stündlich korrekt erkannt, das Wissen aber nur ins Protokoll geschrieben und danach verworfen. Zusätzlich hätte selbst eine gesetzte Pause nicht gehalten: Sie wurde wieder aufgehoben, sobald der Zugriff des Streamers gültig war — und der hat mit einem Ban nichts zu tun.
