@@ -26,6 +26,24 @@ export type DiscordFlagMode = 'mark' | 'unmark';
 export type PartnerChatActionMode = 'message' | 'action' | 'announcement';
 export type PartnerChatAnnouncementColor = 'blue' | 'green' | 'orange' | 'purple' | 'primary';
 
+export interface GlobalBanEntry {
+  chatter_login: string;
+  chatter_id?: string | null;
+  reason?: string | null;
+  added_by?: string | null;
+  added_at?: string | null;
+}
+
+export interface GlobalBanChannel {
+  twitch_login: string;
+  global_ban_enforcement_enabled: boolean;
+}
+
+export interface GlobalBanAdminData {
+  entries: GlobalBanEntry[];
+  channels: GlobalBanChannel[];
+}
+
 export interface StreamerRow {
   login: string;
   displayName?: string;

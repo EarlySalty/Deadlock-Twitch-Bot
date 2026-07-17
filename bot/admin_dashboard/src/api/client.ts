@@ -21,6 +21,7 @@ import type {
   ErrorLogsResponse,
   EventSubStatusResponse,
   GutschriftDocument,
+  GlobalBanAdminData,
   InternalHomeOverview,
   LegalPageDocument,
   LegalPageSlug,
@@ -796,6 +797,25 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
 export async function fetchAnnouncements(): Promise<AdminTextDocument> {
   const payload = await admin<Record<string, unknown>>('/announcements');
   return parseAdminTextDocument(payload);
+}
+
+export function fetchGlobalBans(): Promise<GlobalBanAdminData> {
+  return admin<GlobalBanAdminData>('/global-bans');
+}
+
+export function addGlobalBan(body: { login: string; reason?: string }): Promise<{ ok: boolean }> {
+  return postAdminJson('/global-bans/add', body);
+}
+
+export function removeGlobalBan(login: string): Promise<{ ok: boolean; removed: boolean }> {
+  return postAdminJson('/global-bans/remove', { login });
+}
+
+export function setGlobalBanChannelEnforcement(
+  login: string,
+  enabled: boolean,
+): Promise<{ twitch_login: string; global_ban_enforcement_enabled: boolean }> {
+  return postAdminJson(`/global-bans/channels/${encodeURIComponent(login)}`, { enabled });
 }
 
 export async function saveAnnouncements(body: string): Promise<AdminTextDocument> {

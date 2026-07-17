@@ -19,6 +19,7 @@ import {
   ReceiptText,
   Search,
   ScrollText,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Swords,
@@ -72,6 +73,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'Streamer-Research', to: '/community/research', icon: Search },
       { label: 'Engagement AI', to: '/community/engagement', icon: Sparkles },
       { label: 'Chat Actions', to: '/community/chat', icon: MessageSquare },
+      { label: 'PLATZHALTER: <Globale Ban-Verwaltung>', to: '/community/global-bans', icon: ShieldAlert },
     ],
   },
   {

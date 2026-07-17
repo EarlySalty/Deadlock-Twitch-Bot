@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AdminConfigScope, LegalPageSlug, MarketShareScope, StreamerView } from '@/api/types';
 import {
+  addGlobalBan,
   addStreamer,
   archiveStreamer,
   blockStreamer,
@@ -22,6 +23,7 @@ import {
   fetchDatabaseStats,
   fetchErrorLogs,
   fetchEventSubStatus,
+  fetchGlobalBans,
   fetchLegalPage,
   fetchRoadmap,
   generateGutschriften,
@@ -30,12 +32,14 @@ import {
   saveLegalPage,
   saveRoadmap,
   setAffiliateCommissionRate,
+  setGlobalBanChannelEnforcement,
   sendPartnerChatAction,
   fetchSubscriptions,
   fetchSystemHealth,
   fetchEngagementSettings,
   toggleEngagement,
   removeStreamer,
+  removeGlobalBan,
   reloadBot,
   toggleStreamerDiscordFlag,
   toggleAffiliateActive,
@@ -146,6 +150,39 @@ export function useAnnouncements() {
     queryKey: ['admin-announcements'],
     queryFn: fetchAnnouncements,
     staleTime: 30_000,
+  });
+}
+
+export function useGlobalBans() {
+  return useQuery({
+    queryKey: ['admin-global-bans'],
+    queryFn: fetchGlobalBans,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddGlobalBan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: addGlobalBan,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-global-bans'] }),
+  });
+}
+
+export function useRemoveGlobalBan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: removeGlobalBan,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-global-bans'] }),
+  });
+}
+
+export function useSetGlobalBanChannelEnforcement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, enabled }: { login: string; enabled: boolean }) =>
+      setGlobalBanChannelEnforcement(login, enabled),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-global-bans'] }),
   });
 }
 

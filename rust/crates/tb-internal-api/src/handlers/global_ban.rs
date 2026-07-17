@@ -14,7 +14,7 @@
 //! Body-Werte dafür genauso (`global_ban.py:41`).
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     Json,
 };
@@ -95,6 +95,29 @@ pub struct BanEntryResponse {
 pub struct ListResponse {
     pub ok: bool,
     pub entries: Vec<BanEntryResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct SetChannelRequest {
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct ChannelResponse {
+    pub twitch_login: String,
+    pub global_ban_enforcement_enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct ChannelListResponse {
+    pub ok: bool,
+    pub channels: Vec<ChannelResponse>,
+}
+
+#[derive(Serialize)]
+pub struct SetChannelResponse {
+    pub ok: bool,
+    pub channel: ChannelResponse,
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -224,6 +247,71 @@ pub async fn list_handler(
     }))
 }
 
+/// `GET /internal/twitch/v1/globalban/channels`
+pub async fn list_channels_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    let channels = db::list_channel_enforcement(&pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "list_channel_enforcement DB-Fehler");
+            ApiError::internal()
+        })?
+        .into_iter()
+        .map(|channel| ChannelResponse {
+            twitch_login: channel.twitch_login,
+            global_ban_enforcement_enabled: channel.global_ban_enforcement_enabled,
+        })
+        .collect();
+
+    Ok(Json(ChannelListResponse { ok: true, channels }))
+}
+
+/// `POST /internal/twitch/v1/globalban/channels/:login`
+pub async fn set_channel_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(login): Path<String>,
+    Json(body): Json<SetChannelRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    let login = required_login(Some(login), None)?;
+    let channel = db::set_channel_enforcement(&pool, &login, body.enabled)
+        .await
+        .map_err(|error| {
+            tracing::error!(channel = login, %error, "set_channel_enforcement DB-Fehler");
+            ApiError::internal()
+        })?
+        .ok_or_else(|| ApiError::not_found_with("channel not found"))?;
+
+    tracing::info!(
+        channel = channel.twitch_login,
+        urteil = if channel.global_ban_enforcement_enabled {
+            "anwenden"
+        } else {
+            "übersprungen"
+        },
+        grund = "global_ban_channel_setting_updated",
+        "GlobalBan-Enforcement-Einstellung geändert"
+    );
+
+    Ok(Json(SetChannelResponse {
+        ok: true,
+        channel: ChannelResponse {
+            twitch_login: channel.twitch_login,
+            global_ban_enforcement_enabled: channel.global_ban_enforcement_enabled,
+        },
+    }))
+}
+
 // ── Handler-Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -254,9 +342,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -329,6 +415,21 @@ mod tests {
         .expect("DDL blacklist");
 
         sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners (
+                twitch_login TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'active',
+                admin_archived_at TIMESTAMPTZ,
+                departnered_at TIMESTAMPTZ,
+                global_ban_enforcement_enabled BOOLEAN NOT NULL DEFAULT TRUE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL partners");
+
+        sqlx::query(
             "TRUNCATE twitch_chatter_global_ban, twitch_chatter_global_ban_applied, twitch_raid_blacklist",
         )
         .execute(&pool)
@@ -346,6 +447,14 @@ mod tests {
             .route(&format!("{base}/globalban/add"), post(add_handler))
             .route(&format!("{base}/globalban/remove"), post(remove_handler))
             .route(&format!("{base}/globalban/check"), get(check_handler))
+            .route(
+                &format!("{base}/globalban/channels"),
+                get(list_channels_handler),
+            )
+            .route(
+                &format!("{base}/globalban/channels/:login"),
+                post(set_channel_handler),
+            )
             .with_state(pool)
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(
@@ -384,6 +493,58 @@ mod tests {
         let req = loopback_req_json("GET", &format!("{base}/globalban"), "", None);
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn channel_toggle_route_erfordert_auth_ohne_db_zugriff() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("lazy pool");
+        let app = make_router(pool, "secret");
+        let base = tb_http_core::INTERNAL_API_BASE_PATH;
+        let req = loopback_req_json(
+            "POST",
+            &format!("{base}/globalban/channels/kanal"),
+            r#"{"enabled":false}"#,
+            None,
+        );
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn channel_toggle_router_setzt_flag_und_liste_liefert_es() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_handler_gb_channel_toggle").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ('kanal')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let app = make_router(pool, "secret");
+        let base = tb_http_core::INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req_json(
+            "POST",
+            &format!("{base}/globalban/channels/kanal"),
+            r#"{"enabled":false}"#,
+            Some("secret"),
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = loopback_req_json(
+            "GET",
+            &format!("{base}/globalban/channels"),
+            "",
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["channels"][0]["twitch_login"], "kanal");
+        assert_eq!(json["channels"][0]["global_ban_enforcement_enabled"], false);
     }
 
     #[tokio::test]
@@ -460,7 +621,10 @@ mod tests {
 
         // chatter_id aus twitch_user_id gelandet → Check per ID trifft.
         let banned = db::check_ban(&pool, "anderername", "12345").await.unwrap();
-        assert!(banned, "twitch_user_id muss als chatter_id gespeichert sein");
+        assert!(
+            banned,
+            "twitch_user_id muss als chatter_id gespeichert sein"
+        );
     }
 
     #[tokio::test]
@@ -501,9 +665,15 @@ mod tests {
     async fn list_liefert_snake_case_felder_wie_python() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_gb_list_shape").await;
-        db::add_ban(&pool, "shapeuser", Some("99"), Some("Test"), Some("internal_api"))
-            .await
-            .unwrap();
+        db::add_ban(
+            &pool,
+            "shapeuser",
+            Some("99"),
+            Some("Test"),
+            Some("internal_api"),
+        )
+        .await
+        .unwrap();
         let app = make_router(pool, "secret");
 
         let base = tb_http_core::INTERNAL_API_BASE_PATH;

@@ -2363,6 +2363,31 @@ impl PartnerRoster for DbPartnerRoster {
         .unwrap_or(0)
             != 0
     }
+
+    async fn global_ban_enforcement_enabled(&self, channel: &str) -> bool {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT global_ban_enforcement_enabled \
+             FROM twitch_partners \
+             WHERE LOWER(twitch_login) = LOWER($1)",
+        )
+        .bind(channel)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(enabled)) => enabled,
+            Ok(None) => true,
+            Err(error) => {
+                tracing::warn!(
+                    channel,
+                    %error,
+                    urteil = "anwenden",
+                    grund = "global_ban_optout_query_failed_default_enabled",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                true
+            }
+        }
+    }
 }
 
 // ===========================================================================

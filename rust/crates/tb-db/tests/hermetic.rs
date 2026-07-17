@@ -58,6 +58,14 @@ fn cfg_single(dsn: String) -> DbConfig {
 
 const B2_SESSION_ID_BIGINT_MIGRATION: &str =
     include_str!("../../../migrations/20260622140000_b2_session_id_bigint.sql");
+const GLOBALBAN_CHANNEL_OPTOUT_MIGRATION: &str =
+    include_str!("../../../migrations/20260717120000_globalban_channel_optout.sql");
+
+#[test]
+fn globalban_channel_optout_migration_default_is_enabled() {
+    assert!(GLOBALBAN_CHANNEL_OPTOUT_MIGRATION
+        .contains("global_ban_enforcement_enabled BOOLEAN NOT NULL DEFAULT TRUE"));
+}
 
 async fn column_type(pool: &sqlx::PgPool, table: &str, column: &str) -> String {
     sqlx::query_scalar(
@@ -207,6 +215,19 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     tb_db::run_migrations(&pool)
         .await
         .expect("migrate (2nd, idempotent)");
+
+    let global_ban_enabled: bool = sqlx::query_scalar(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) \
+         VALUES ('global-ban-default', 'global_ban_default', 'active') \
+         RETURNING global_ban_enforcement_enabled",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("global ban enforcement default");
+    assert!(
+        global_ban_enabled,
+        "neue Partner müssen globale Bans standardmäßig anwenden"
+    );
 
     let scalar_i64 = |sql: &'static str| {
         let pool = pool.clone();
