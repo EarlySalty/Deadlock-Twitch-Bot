@@ -86,6 +86,15 @@ export TB_CHAT_ENABLED="${TB_CHAT_ENABLED:-0}"
 # unbekannten Accounts via OPENAI_API_KEY (aus Infisical).
 export CREW_GUARD_ENABLED="${CREW_GUARD_ENABLED:-1}"
 export CREW_GUARD_MODEL="${CREW_GUARD_MODEL:-gpt-5.4-mini}"
+# Ricky-Review: rein interner Shadow-Modus. Er zeichnet nur beim exakten
+# Ziel-Account auf, hält Audio im RAM und sendet niemals in einen Twitch-Chat.
+export RICKY_SHADOW_REVIEW_ENABLED="${RICKY_SHADOW_REVIEW_ENABLED:-1}"
+export RICKY_SHADOW_REVIEW_CHANNEL_ID="${RICKY_SHADOW_REVIEW_CHANNEL_ID:-1374364800817303632}"
+export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECONDS:-20}"
+export RICKY_SHADOW_REVIEW_YTDLP_BIN="${RICKY_SHADOW_REVIEW_YTDLP_BIN:-$ROOT_DIR/.venv/bin/yt-dlp}"
+export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
+export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}"
+export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}"
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): mangels reinem Write-Token in Infisical
 # nutzt der Bot den ohnehin vorhandenen all-rights Service-Token. Ein explizit

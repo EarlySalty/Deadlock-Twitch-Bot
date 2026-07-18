@@ -24,12 +24,15 @@ const SESSION_ACTIVITY_CTE: &str = "WITH session_activity AS (
            MIN(channel_login) AS channel_login,
            MIN(subject_twitch_user_id) AS subject_twitch_user_id,
            MIN(occurred_at) FILTER (WHERE event_kind = 'session_started') AS started_at,
-           MAX(occurred_at) FILTER (
-               WHERE event_kind = 'ricky_message'
-                  OR (event_kind = 'streamer_transcript'
-                      AND metadata->'subject_mentioned' = 'true'::jsonb)
-                  OR (event_kind = 'ai_decision'
-                      AND metadata->'topic_active' = 'true'::jsonb)
+           COALESCE(
+               MAX(occurred_at) FILTER (
+                   WHERE event_kind = 'ricky_message'
+                      OR (event_kind = 'streamer_transcript'
+                          AND metadata->'subject_mentioned' = 'true'::jsonb)
+                      OR (event_kind = 'ai_decision'
+                          AND metadata->'topic_active' = 'true'::jsonb)
+               ),
+               MIN(occurred_at) FILTER (WHERE event_kind = 'session_started')
            ) AS last_activity_at,
            BOOL_OR(event_kind = 'session_started') AS has_started,
            BOOL_OR(event_kind = 'session_ended') AS has_ended
@@ -251,6 +254,77 @@ impl CrewReviewStore {
         .bind(&channels)
         .fetch_all(&mut *transaction)
         .await?;
+        for (session_id, channel_login, subject_twitch_user_id) in &sessions {
+            insert_event_chunks(
+                &mut transaction,
+                &session_ended_event(
+                    *session_id,
+                    channel_login,
+                    subject_twitch_user_id.clone(),
+                    reason,
+                    occurred_at,
+                ),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(sessions.len() as u64)
+    }
+
+    pub async fn close_inactive_sessions(
+        &self,
+        reason: &str,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let channel_sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT channel_login
+               FROM session_activity
+              WHERE has_started
+                AND NOT has_ended
+                AND review_session_id = (
+                    SELECT latest.review_session_id
+                      FROM twitch_crew_review_events latest
+                     WHERE latest.channel_login = session_activity.channel_login
+                       AND latest.event_kind = 'session_started'
+                     ORDER BY latest.id DESC
+                     LIMIT 1
+                )
+                AND last_activity_at <= $1 - INTERVAL '10 minutes'
+              ORDER BY channel_login"
+        );
+        let channels: Vec<String> = sqlx::query_scalar(&channel_sql)
+            .bind(occurred_at)
+            .fetch_all(&mut *transaction)
+            .await?;
+        for channel in &channels {
+            lock_channel(&mut transaction, channel).await?;
+        }
+
+        let session_sql = format!(
+            "{SESSION_ACTIVITY_CTE}
+             SELECT review_session_id, channel_login, subject_twitch_user_id
+               FROM session_activity
+              WHERE has_started
+                AND NOT has_ended
+                AND channel_login = ANY($2::text[])
+                AND review_session_id = (
+                    SELECT latest.review_session_id
+                      FROM twitch_crew_review_events latest
+                     WHERE latest.channel_login = session_activity.channel_login
+                       AND latest.event_kind = 'session_started'
+                     ORDER BY latest.id DESC
+                     LIMIT 1
+                )
+                AND last_activity_at <= $1 - INTERVAL '10 minutes'
+              ORDER BY channel_login, review_session_id"
+        );
+        let sessions: Vec<(Uuid, String, String)> = sqlx::query_as(&session_sql)
+            .bind(occurred_at)
+            .bind(&channels)
+            .fetch_all(&mut *transaction)
+            .await?;
         for (session_id, channel_login, subject_twitch_user_id) in &sessions {
             insert_event_chunks(
                 &mut transaction,
@@ -506,6 +580,34 @@ impl CrewReviewStore {
                 .fetch_all(&self.pool)
                 .await?,
         )
+    }
+
+    pub async fn pending_model_session_ids(&self, limit: i64) -> Result<Vec<Uuid>, StoreError> {
+        if limit <= 0 {
+            return Ok(Vec::new());
+        }
+        Ok(sqlx::query_scalar(
+            "SELECT pending.review_session_id
+               FROM twitch_crew_review_events pending
+              WHERE pending.event_kind IN ('ricky_message', 'streamer_transcript')
+                AND pending.metadata ? 'cycle_id'
+                AND jsonb_typeof(pending.metadata->'cycle_id') = 'string'
+                AND NULLIF(btrim(pending.metadata->>'cycle_id'), '') IS NOT NULL
+                AND pending.expires_at > clock_timestamp() + INTERVAL '5 minutes'
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM twitch_crew_review_events terminal
+                     WHERE terminal.review_session_id = pending.review_session_id
+                       AND terminal.metadata->>'cycle_id' = pending.metadata->>'cycle_id'
+                       AND terminal.event_kind IN ('ai_decision', 'provider_error')
+                )
+              GROUP BY pending.review_session_id
+              ORDER BY MIN(pending.occurred_at), MIN(pending.id), pending.review_session_id
+              LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn pending_model_inputs(

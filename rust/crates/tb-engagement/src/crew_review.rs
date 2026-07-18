@@ -20,28 +20,28 @@ pub struct ReviewFact {
 pub const REVIEW_FACTS: [ReviewFact; 5] = [
     ReviewFact {
         id: "community_ban_2026_05_29",
-        claim: "Ricky wurde aus der Deutschen Deadlock Community entfernt.",
+        claim: "Ricky wurde am 29. Mai 2026 aus dem Discord der Deutschen Deadlock Community entfernt.",
         source: "Discord-Mitteilung des Betreibers vom 29.05.2026",
     },
     ReviewFact {
         id: "racist_greeting_report",
-        claim: "Als Bann-Grund wurde unter anderem eine rassistische Begrüßung mit dem N-Wort genannt.",
+        claim: "Als Grund dafür wurde unter anderem genannt, dass er Leute dort mit dem N-Wort begrüßt habe.",
         source: "dieselbe Discord-Mitteilung",
     },
     ReviewFact {
         id: "cs2_cheat_stream",
         claim: "Als weiterer Grund wurde genannt, dass er CS2-Cheating selbst gestreamt und gerechtfertigt habe.",
-        source: "Discord-Mitteilung und Betreiberbeobachtung",
+        source: "Discord-Mitteilung des Betreibers vom 29.05.2026",
     },
     ReviewFact {
         id: "post_ban_discord_recruitment",
-        claim: "Nach dem Bann entstand ein eigener Discord; anschließend wurden Personen aus der Community und weitere Kontakte dafür angeworben.",
+        claim: "Nach dem Bann hat Ricky zusammen mit einer anderen Person einen neuen Discord aufgemacht und anschließend Leute aus der Community sowie weitere Kontakte dafür angeworben.",
         source: "Discord-Mitteilung und dokumentierte Kontakte",
     },
     ReviewFact {
         id: "twitch_pitch_history",
-        claim: "In der Twitch-Datenbank liegen kanalübergreifende Nachrichten vor, in denen der Account einen Deadlock-Community-Discord anbietet oder nach Interesse fragt.",
-        source: "twitch_chat_messages, exakte Twitch-User-ID",
+        claim: "Zwischen dem 29. Mai und 17. Juli 2026 wurden 145 Nachrichten von Rickys Twitch-Account in neun Kanälen gespeichert; in acht davon bot er einen Deadlock-Community-Discord an oder fragte nach Interesse.",
+        source: "Read-only-Abfrage von twitch_chat_messages, exakte Twitch-User-ID, Stand 17.07.2026",
     },
 ];
 
@@ -53,19 +53,22 @@ Antworte ausschließlich als genau ein JSON-Objekt ohne Zusatztext und mit exakt
 
 Feste Regeln:
 - Nutze nur die fünf Fakten unten und gib jede tatsächlich verwendete ID in used_fact_ids zurück.
+- Jeder verwendete Fakt muss im Draft wortgleich und vollständig stehen. Paraphrasiere, kürze, verschärfe oder deute keinen Fakt um.
+- Außer den verwendeten Fakt-Sätzen sind nur diese neutralen Füllteile erlaubt: „nach dem, was ich dazu mitbekommen habe“, „zur Einordnung“, „kurz dazu“, „wichtig“, „außerdem“ und „und“.
 - Erfinde, ergänze oder diagnostiziere nichts. Keine Aussage über Charakter, Absicht, Motivation, psychischen Zustand, Nazi-/Extremismuszugehörigkeit, eigene Anwesenheit, Augenzeugenschaft oder menschliche Identität.
 - Bezeichne das rassistische Wort ausschließlich als „N-Wort“. Keine Beleidigungen.
 - Drafts sind natürliches, kurzes bis mittellanges deutsches Chatdeutsch aus dritter Person, nicht amtlich oder juristisch, maximal 450 Zeichen.
 - Reason ist kein Freitext: silent nutzt no_relevant_fact, initial_warning nutzt initial_fact_warning und reply nutzt fact_based_reply.
 - Die einzige erlaubte epistemische Ich-Form lautet exakt „nach dem, was ich dazu mitbekommen habe“ und behauptet keine persönliche Beobachtung.
 - Beantworte konkrete Rückfragen nur mit passenden Fakten statt mit der Gesamtchronik. Gibt es keinen passenden belegten Fakt, antworte mit action=silent und draft=null.
+- Die Fakten 2 und 3 stammen nicht aus der Twitch-Datenbank. Nur Fakt 5 beschreibt die Twitch-Datenbank. Vermische oder erweitere diese Quellen nicht.
 
 Freigegebene Fakten und Quellenarten:
-1. community_ban_2026_05_29 — Ricky wurde aus der Deutschen Deadlock Community entfernt. — Discord-Mitteilung des Betreibers vom 29.05.2026
-2. racist_greeting_report — Als Bann-Grund wurde unter anderem eine rassistische Begrüßung mit dem N-Wort genannt. — dieselbe Discord-Mitteilung
-3. cs2_cheat_stream — Als weiterer Grund wurde genannt, dass er CS2-Cheating selbst gestreamt und gerechtfertigt habe. — Discord-Mitteilung und Betreiberbeobachtung
-4. post_ban_discord_recruitment — Nach dem Bann entstand ein eigener Discord; anschließend wurden Personen aus der Community und weitere Kontakte dafür angeworben. — Discord-Mitteilung und dokumentierte Kontakte
-5. twitch_pitch_history — In der Twitch-Datenbank liegen kanalübergreifende Nachrichten vor, in denen der Account einen Deadlock-Community-Discord anbietet oder nach Interesse fragt. — twitch_chat_messages, exakte Twitch-User-ID"#;
+1. community_ban_2026_05_29 — Ricky wurde am 29. Mai 2026 aus dem Discord der Deutschen Deadlock Community entfernt. — Discord-Mitteilung des Betreibers vom 29.05.2026
+2. racist_greeting_report — Als Grund dafür wurde unter anderem genannt, dass er Leute dort mit dem N-Wort begrüßt habe. — dieselbe Discord-Mitteilung
+3. cs2_cheat_stream — Als weiterer Grund wurde genannt, dass er CS2-Cheating selbst gestreamt und gerechtfertigt habe. — Discord-Mitteilung des Betreibers vom 29.05.2026
+4. post_ban_discord_recruitment — Nach dem Bann hat Ricky zusammen mit einer anderen Person einen neuen Discord aufgemacht und anschließend Leute aus der Community sowie weitere Kontakte dafür angeworben. — Discord-Mitteilung und dokumentierte Kontakte
+5. twitch_pitch_history — Zwischen dem 29. Mai und 17. Juli 2026 wurden 145 Nachrichten von Rickys Twitch-Account in neun Kanälen gespeichert; in acht davon bot er einen Deadlock-Community-Discord an oder fragte nach Interesse. — Read-only-Abfrage von twitch_chat_messages, exakte Twitch-User-ID, Stand 17.07.2026"#;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -608,11 +611,11 @@ mod tests {
     const FACTS: [(&str, &str); 5] = [
         (
             "community_ban_2026_05_29",
-            "Ricky wurde aus der Deutschen Deadlock Community entfernt.",
+            "Ricky wurde am 29. Mai 2026 aus dem Discord der Deutschen Deadlock Community entfernt.",
         ),
         (
             "racist_greeting_report",
-            "Als Bann-Grund wurde unter anderem eine rassistische Begrüßung mit dem N-Wort genannt.",
+            "Als Grund dafür wurde unter anderem genannt, dass er Leute dort mit dem N-Wort begrüßt habe.",
         ),
         (
             "cs2_cheat_stream",
@@ -620,11 +623,11 @@ mod tests {
         ),
         (
             "post_ban_discord_recruitment",
-            "Nach dem Bann entstand ein eigener Discord; anschließend wurden Personen aus der Community und weitere Kontakte dafür angeworben.",
+            "Nach dem Bann hat Ricky zusammen mit einer anderen Person einen neuen Discord aufgemacht und anschließend Leute aus der Community sowie weitere Kontakte dafür angeworben.",
         ),
         (
             "twitch_pitch_history",
-            "In der Twitch-Datenbank liegen kanalübergreifende Nachrichten vor, in denen der Account einen Deadlock-Community-Discord anbietet oder nach Interesse fragt.",
+            "Zwischen dem 29. Mai und 17. Juli 2026 wurden 145 Nachrichten von Rickys Twitch-Account in neun Kanälen gespeichert; in acht davon bot er einen Deadlock-Community-Discord an oder fragte nach Interesse.",
         ),
     ];
 
@@ -722,6 +725,14 @@ mod tests {
             assert!(REVIEW_SYSTEM_PROMPT.contains(fact.source));
         }
         assert!(!REVIEW_SYSTEM_PROMPT.contains(&["ni", "gger"].concat()));
+    }
+
+    #[test]
+    fn cheating_fakt_bleibt_auf_die_betreiber_mitteilung_begrenzt() {
+        assert_eq!(
+            REVIEW_FACTS[2].source,
+            "Discord-Mitteilung des Betreibers vom 29.05.2026"
+        );
     }
 
     #[test]

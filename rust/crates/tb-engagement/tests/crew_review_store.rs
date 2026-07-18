@@ -2256,6 +2256,89 @@ async fn startup_close_beendet_auch_inaktive_sessions_und_ist_idempotent() {
 }
 
 #[tokio::test]
+async fn inactive_close_beendet_exakt_zehn_minuten_und_laesst_frische_offen() {
+    let Some(pool) = test_pool("crew_review_inactive_close_exact").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    let stale_id = seed_session(
+        &pool,
+        "inactive-close-stale",
+        now - chrono::Duration::minutes(10),
+    )
+    .await;
+    let fresh_id = seed_session(
+        &pool,
+        "inactive-close-fresh",
+        now - chrono::Duration::minutes(10) + chrono::Duration::milliseconds(1),
+    )
+    .await;
+
+    assert_eq!(
+        store
+            .close_inactive_sessions("inactivity_timeout", now)
+            .await
+            .unwrap(),
+        1
+    );
+
+    let ended: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT review_session_id, metadata
+           FROM twitch_crew_review_events
+          WHERE event_kind = 'session_ended'
+          ORDER BY review_session_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].0, stale_id);
+    assert_eq!(ended[0].1["reason"], "inactivity_timeout");
+    assert!(store
+        .active_sessions(now)
+        .await
+        .unwrap()
+        .iter()
+        .any(|session| session.session_id == fresh_id));
+}
+
+#[tokio::test]
+async fn geschlossene_session_mit_offenem_cycle_bleibt_fuer_recovery_sichtbar() {
+    let Some(pool) = test_pool("crew_review_closed_pending_recovery").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc::now();
+    store
+        .record_trigger(&input("closed-pending", "closed-pending-1", now))
+        .await
+        .unwrap()
+        .unwrap();
+    let session_id: Uuid = sqlx::query_scalar(
+        "SELECT review_session_id
+           FROM twitch_crew_review_events
+          WHERE source_message_id = 'closed-pending-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    store
+        .close_channel_session(
+            "closed-pending",
+            "stream_offline",
+            now + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.pending_model_session_ids(10).await.unwrap(),
+        vec![session_id]
+    );
+}
+
+#[tokio::test]
 async fn modellabschluss_schreibt_draft_und_genau_ein_terminal_atomar() {
     let Some(pool) = test_pool("crew_review_atomic_model_completion").await else {
         return;

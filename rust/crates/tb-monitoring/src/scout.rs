@@ -333,17 +333,23 @@ impl ScoutTask {
         self
     }
 
-    /// Startet den Task wenn `TB_SCOUT_ENABLED=1` gesetzt ist.
+    /// Gibt den Task zurück, wenn `TB_SCOUT_ENABLED=1` gesetzt ist.
     ///
-    /// Gibt `true` zurück wenn tatsächlich gestartet.
-    pub fn start_if_enabled(self) -> bool {
+    /// Der Aufrufer behält damit die Verantwortung für Supervision und Shutdown.
+    pub fn run_if_enabled(self) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
         let enabled = std::env::var("TB_SCOUT_ENABLED")
             .map(|v| v.trim() == "1")
             .unwrap_or(false);
+        self.into_run(enabled)
+    }
 
+    fn into_run(
+        self,
+        enabled: bool,
+    ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
         if !enabled {
             tracing::info!("scout: Task deaktiviert (TB_SCOUT_ENABLED≠1)");
-            return false;
+            return None;
         }
 
         tracing::info!(
@@ -353,8 +359,7 @@ impl ScoutTask {
             self.interval.as_secs(),
         );
 
-        tokio::spawn(self.run());
-        true
+        Some(self.run())
     }
 
     async fn run(mut self) {
@@ -600,8 +605,14 @@ impl ScoutTask {
             }
         }
 
-        let mut desired_channels: Vec<String> = existing_monitored
-            .iter()
+        // Der anonyme Read-Sink muss alle aktuell gefundenen Live-Kanäle sehen,
+        // auch bereits bekannte Partner, die nie `is_monitored_only` sind.
+        // Den bestehenden Roster behalten wir zusätzlich bis zum entprellten
+        // Remove, damit ein einzelner leerer/fehlgeschlagener Helix-Fetch nicht
+        // sofort alle IRC-Memberships kappt.
+        let mut desired_channels: Vec<String> = current_streams
+            .keys()
+            .chain(existing_monitored)
             .chain(new_logins)
             .filter(|login| !remove_set.contains(login.as_str()))
             .cloned()
@@ -703,6 +714,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aktivierter_scout_gibt_seinen_lauf_zur_externen_supervision_zurueck() {
+        let task = task_with_chat(Arc::new(RecordingChatSink::default()));
+
+        assert!(task.into_run(true).is_some());
+    }
+
+    #[tokio::test]
     async fn sync_chat_joint_neue_und_partet_entfernte() {
         let chat = Arc::new(RecordingChatSink::default());
         let task = task_with_chat(chat.clone());
@@ -737,6 +755,31 @@ mod tests {
         assert_eq!(*chat.joined.lock().unwrap(), vec![vec!["neu".to_string()]]);
         // entfernte Kanäle werden gepartet.
         assert_eq!(*chat.parted.lock().unwrap(), vec![vec!["weg".to_string()]]);
+    }
+
+    #[tokio::test]
+    async fn sync_chat_nimmt_auch_bekannte_partner_in_den_live_roster() {
+        let chat = Arc::new(RecordingChatSink::default());
+        let task = task_with_chat(chat.clone());
+
+        let mut current = HashMap::new();
+        current.insert("partner".to_string(), snap("partner"));
+
+        task.sync_chat(
+            &current,
+            &HashSet::new(),
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .await;
+
+        assert_eq!(
+            *chat.set.lock().unwrap(),
+            vec![vec!["partner".to_string()]],
+            "der anonyme Read-Roster muss jeden aktuell live gefundenen Kanal enthalten"
+        );
     }
 
     #[tokio::test]
