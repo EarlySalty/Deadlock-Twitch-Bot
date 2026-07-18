@@ -10,8 +10,10 @@ use tb_engagement::crew_review::{
 use tb_engagement::crew_review_store::{CrewReviewStore, DiscordCard, StoreError};
 use uuid::Uuid;
 
-const MIGRATION: &str =
+const TABLE_MIGRATION: &str =
     include_str!("../../../migrations/20260717121000_twitch_crew_review_events.sql");
+const CHANNEL_MIGRATION: &str =
+    include_str!("../../../migrations/20260717121500_twitch_crew_review_discord_channel.sql");
 const DISCORD_CHANNEL_ID: i64 = 1374364800817303632;
 type TombstoneRow = (
     Option<String>,
@@ -24,7 +26,7 @@ type TombstoneRow = (
 );
 type DiscordPostedRow = (i64, Option<i64>, Option<String>, Option<Uuid>);
 
-async fn test_pool(schema: &str) -> Option<PgPool> {
+async fn isolated_pool(schema: &str) -> Option<PgPool> {
     let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
         Ok(dsn) => dsn,
         Err(_) if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") => {
@@ -59,10 +61,19 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
         .connect_with(options)
         .await
         .expect("connect isolated test schema");
-    sqlx::raw_sql(MIGRATION)
+    Some(pool)
+}
+
+async fn test_pool(schema: &str) -> Option<PgPool> {
+    let pool = isolated_pool(schema).await?;
+    sqlx::raw_sql(TABLE_MIGRATION)
         .execute(&pool)
         .await
-        .expect("apply crew review migration");
+        .expect("apply crew review table migration");
+    sqlx::raw_sql(CHANNEL_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("apply crew review Discord channel migration");
     Some(pool)
 }
 
@@ -119,6 +130,54 @@ fn event(
         model: Some("model".to_owned()),
         confidence: Some(0.75),
     }
+}
+
+#[tokio::test]
+async fn channel_migration_backfillt_legacy_nachrichten_und_sichert_das_id_paar() {
+    let Some(pool) = isolated_pool("crew_review_channel_upgrade").await else {
+        return;
+    };
+    sqlx::raw_sql(TABLE_MIGRATION).execute(&pool).await.unwrap();
+    let event_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, metadata, discord_message_id
+         ) VALUES ($1, 'legacy-channel', $2, 'ai_draft', NOW(), $3, 'legacy-message')
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(json!({"cycle_id": Uuid::new_v4().to_string()}))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(CHANNEL_MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stored: (Option<i64>, Option<String>) = sqlx::query_as(
+        "SELECT discord_channel_id, discord_message_id
+           FROM twitch_crew_review_events
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, Some(DISCORD_CHANNEL_ID));
+    assert_eq!(stored.1.as_deref(), Some("legacy-message"));
+
+    let constraint = sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_channel_id = NULL
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await;
+    assert!(constraint.is_err());
 }
 
 async fn wait_for_advisory_query(pool: &PgPool, query_fragment: &str) {

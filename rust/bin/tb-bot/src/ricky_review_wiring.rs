@@ -1193,8 +1193,10 @@ mod tests {
     use tb_engagement::crew_review_store::CrewReviewStore;
     use tb_monitoring::NoopEventSubHooks;
 
-    const MIGRATION: &str =
+    const TABLE_MIGRATION: &str =
         include_str!("../../../migrations/20260717121000_twitch_crew_review_events.sql");
+    const CHANNEL_MIGRATION: &str =
+        include_str!("../../../migrations/20260717121500_twitch_crew_review_discord_channel.sql");
     const SERVICE_WRAPPER: &str = include_str!("../../../scripts/run_tb_bot_service.sh");
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1738,7 +1740,11 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
+        sqlx::raw_sql(TABLE_MIGRATION).execute(&pool).await.unwrap();
+        sqlx::raw_sql(CHANNEL_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
