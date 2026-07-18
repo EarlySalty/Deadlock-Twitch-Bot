@@ -10,8 +10,11 @@ use tb_engagement::crew_review::{
 use tb_engagement::crew_review_store::{CrewReviewStore, DiscordCard, StoreError};
 use uuid::Uuid;
 
-const MIGRATION: &str =
+const TABLE_MIGRATION: &str =
     include_str!("../../../migrations/20260717121000_twitch_crew_review_events.sql");
+const CHANNEL_MIGRATION: &str =
+    include_str!("../../../migrations/20260717121500_twitch_crew_review_discord_channel.sql");
+const DISCORD_CHANNEL_ID: i64 = 1374364800817303632;
 type TombstoneRow = (
     Option<String>,
     serde_json::Value,
@@ -21,8 +24,9 @@ type TombstoneRow = (
     String,
     Option<chrono::DateTime<Utc>>,
 );
+type DiscordPostedRow = (i64, Option<i64>, Option<String>, Option<Uuid>);
 
-async fn test_pool(schema: &str) -> Option<PgPool> {
+async fn isolated_pool(schema: &str) -> Option<PgPool> {
     let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
         Ok(dsn) => dsn,
         Err(_) if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") => {
@@ -57,10 +61,19 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
         .connect_with(options)
         .await
         .expect("connect isolated test schema");
-    sqlx::raw_sql(MIGRATION)
+    Some(pool)
+}
+
+async fn test_pool(schema: &str) -> Option<PgPool> {
+    let pool = isolated_pool(schema).await?;
+    sqlx::raw_sql(TABLE_MIGRATION)
         .execute(&pool)
         .await
-        .expect("apply crew review migration");
+        .expect("apply crew review table migration");
+    sqlx::raw_sql(CHANNEL_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("apply crew review Discord channel migration");
     Some(pool)
 }
 
@@ -117,6 +130,54 @@ fn event(
         model: Some("model".to_owned()),
         confidence: Some(0.75),
     }
+}
+
+#[tokio::test]
+async fn channel_migration_backfillt_legacy_nachrichten_und_sichert_das_id_paar() {
+    let Some(pool) = isolated_pool("crew_review_channel_upgrade").await else {
+        return;
+    };
+    sqlx::raw_sql(TABLE_MIGRATION).execute(&pool).await.unwrap();
+    let event_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, metadata, discord_message_id
+         ) VALUES ($1, 'legacy-channel', $2, 'ai_draft', NOW(), $3, 'legacy-message')
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(json!({"cycle_id": Uuid::new_v4().to_string()}))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(CHANNEL_MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stored: (Option<i64>, Option<String>) = sqlx::query_as(
+        "SELECT discord_channel_id, discord_message_id
+           FROM twitch_crew_review_events
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, Some(DISCORD_CHANNEL_ID));
+    assert_eq!(stored.1.as_deref(), Some("legacy-message"));
+
+    let constraint = sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_channel_id = NULL
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await;
+    assert!(constraint.is_err());
 }
 
 async fn wait_for_advisory_query(pool: &PgPool, query_fragment: &str) {
@@ -589,16 +650,21 @@ async fn tombstone_entfernt_inhalt_aber_behaelt_delete_retry() {
         ))
         .await
         .unwrap();
-    sqlx::query("UPDATE twitch_crew_review_events SET discord_message_id = $1 WHERE id = $2")
-        .bind("discord-tombstone")
-        .bind(event_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_crew_review_events
+            SET discord_message_id = $1, discord_channel_id = $2
+          WHERE id = $3",
+    )
+    .bind("discord-tombstone")
+    .bind(DISCORD_CHANNEL_ID)
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let long_error = "provider_timeout_with_unbounded_raw_details_".repeat(4);
     store
-        .tombstone_group("discord-tombstone", &long_error)
+        .tombstone_group(DISCORD_CHANNEL_ID, "discord-tombstone", &long_error)
         .await
         .unwrap();
 
@@ -656,10 +722,11 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
         .unwrap();
     sqlx::query(
         "UPDATE twitch_crew_review_events
-            SET discord_message_id = 'discord-mixed'
+            SET discord_message_id = 'discord-mixed', discord_channel_id = $2
           WHERE id = ANY($1::bigint[])",
     )
     .bind(vec![expired_id, fresh_id])
+    .bind(DISCORD_CHANNEL_ID)
     .execute(&pool)
     .await
     .unwrap();
@@ -670,7 +737,10 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
         .unwrap()
         .is_empty());
     assert_eq!(
-        store.delete_expired_group("discord-mixed").await.unwrap(),
+        store
+            .delete_expired_group(DISCORD_CHANNEL_ID, "discord-mixed")
+            .await
+            .unwrap(),
         0
     );
     let remaining: Vec<i64> = sqlx::query_scalar(
@@ -695,7 +765,10 @@ async fn geloeschte_discord_gruppe_entfernt_erst_danach_db_zeilen() {
     assert_eq!(groups[0].discord_message_id, "discord-mixed");
     assert_eq!(groups[0].event_ids, vec![expired_id, fresh_id]);
     assert_eq!(
-        store.delete_expired_group("discord-mixed").await.unwrap(),
+        store
+            .delete_expired_group(DISCORD_CHANNEL_ID, "discord-mixed")
+            .await
+            .unwrap(),
         2
     );
 }
@@ -777,10 +850,11 @@ async fn pending_queues_gruppieren_nur_unverarbeitete_und_ungepostete_events() {
 
     sqlx::query(
         "UPDATE twitch_crew_review_events
-            SET discord_message_id = 'discord-posted'
+            SET discord_message_id = 'discord-posted', discord_channel_id = $2
           WHERE id = ANY($1::bigint[])",
     )
     .bind(vec![pending_ricky, completed_input])
+    .bind(DISCORD_CHANNEL_ID)
     .execute(&pool)
     .await
     .unwrap();
@@ -1627,10 +1701,11 @@ async fn discord_claim_gruppiert_ungepostete_zeilen_nach_session_und_cycle() {
         .unwrap();
     sqlx::query(
         "UPDATE twitch_crew_review_events
-            SET discord_message_id = 'discord-already-posted'
+            SET discord_message_id = 'discord-already-posted', discord_channel_id = $2
           WHERE id = $1",
     )
     .bind(posted_id)
+    .bind(DISCORD_CHANNEL_ID)
     .execute(&pool)
     .await
     .unwrap();
@@ -1902,7 +1977,12 @@ async fn mark_discord_sent_ist_fuer_unvollstaendige_oder_fremde_claims_atomar() 
         .unwrap();
 
     assert!(store
-        .mark_discord_sent(&[first_id], cycle.claim_id, "discord-incomplete")
+        .mark_discord_sent(
+            &[first_id],
+            cycle.claim_id,
+            DISCORD_CHANNEL_ID,
+            "discord-incomplete",
+        )
         .await
         .is_err());
     let posted: Vec<Option<String>> = sqlx::query_scalar(
@@ -1918,11 +1998,21 @@ async fn mark_discord_sent_ist_fuer_unvollstaendige_oder_fremde_claims_atomar() 
     assert_eq!(posted, vec![None, None]);
 
     assert!(store
-        .mark_discord_sent(&[first_id, second_id], Uuid::new_v4(), "discord-foreign")
+        .mark_discord_sent(
+            &[first_id, second_id],
+            Uuid::new_v4(),
+            DISCORD_CHANNEL_ID,
+            "discord-foreign",
+        )
         .await
         .is_err());
     store
-        .mark_discord_sent(&[first_id, second_id], cycle.claim_id, "discord-valid")
+        .mark_discord_sent(
+            &[first_id, second_id],
+            cycle.claim_id,
+            DISCORD_CHANNEL_ID,
+            "discord-valid",
+        )
         .await
         .unwrap();
 
@@ -1954,7 +2044,12 @@ async fn mark_discord_sent_ist_fuer_unvollstaendige_oder_fremde_claims_atomar() 
     .await
     .unwrap();
     assert!(store
-        .mark_discord_sent(&[expired_id], expired_claim.claim_id, "discord-expired")
+        .mark_discord_sent(
+            &[expired_id],
+            expired_claim.claim_id,
+            DISCORD_CHANNEL_ID,
+            "discord-expired",
+        )
         .await
         .is_err());
 }
@@ -1992,7 +2087,12 @@ async fn vollstaendige_cycles_desselben_discord_batches_lassen_sich_getrennt_mar
     assert_eq!(cycles[0].claim_id, cycles[1].claim_id);
 
     store
-        .mark_discord_sent(&[first_id], cycles[0].claim_id, "discord-first")
+        .mark_discord_sent(
+            &[first_id],
+            cycles[0].claim_id,
+            DISCORD_CHANNEL_ID,
+            "discord-first",
+        )
         .await
         .unwrap();
     let second_claim: Option<Uuid> =
@@ -2003,7 +2103,12 @@ async fn vollstaendige_cycles_desselben_discord_batches_lassen_sich_getrennt_mar
             .unwrap();
     assert_eq!(second_claim, Some(cycles[1].claim_id));
     store
-        .mark_discord_sent(&[second_id], cycles[1].claim_id, "discord-second")
+        .mark_discord_sent(
+            &[second_id],
+            cycles[1].claim_id,
+            DISCORD_CHANNEL_ID,
+            "discord-second",
+        )
         .await
         .unwrap();
 }
@@ -2701,6 +2806,7 @@ async fn discord_mehrkarten_markierung_persistiert_vollstaendig_und_expired_getr
         .await
         .unwrap();
     let cycle = store.pending_discord_cycles(1).await.unwrap().remove(0);
+    let discord_channel_id = DISCORD_CHANNEL_ID;
 
     store
         .mark_discord_cards_sent(
@@ -2715,11 +2821,12 @@ async fn discord_mehrkarten_markierung_persistiert_vollstaendig_und_expired_getr
                 },
             ],
             cycle.claim_id,
+            discord_channel_id,
         )
         .await
         .unwrap();
-    let posted: Vec<(i64, Option<String>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, discord_message_id, discord_claim_id
+    let posted: Vec<DiscordPostedRow> = sqlx::query_as(
+        "SELECT id, discord_channel_id, discord_message_id, discord_claim_id
            FROM twitch_crew_review_events
           WHERE id = ANY($1::bigint[])
           ORDER BY id",
@@ -2731,8 +2838,18 @@ async fn discord_mehrkarten_markierung_persistiert_vollstaendig_und_expired_getr
     assert_eq!(
         posted,
         vec![
-            (first_id, Some("discord-card-first".to_owned()), None),
-            (second_id, Some("discord-card-second".to_owned()), None),
+            (
+                first_id,
+                Some(discord_channel_id),
+                Some("discord-card-first".to_owned()),
+                None,
+            ),
+            (
+                second_id,
+                Some(discord_channel_id),
+                Some("discord-card-second".to_owned()),
+                None,
+            ),
         ]
     );
     assert!(store.pending_discord_cycles(1).await.unwrap().is_empty());
@@ -2748,6 +2865,9 @@ async fn discord_mehrkarten_markierung_persistiert_vollstaendig_und_expired_getr
     .unwrap();
     let groups = store.expired_discord_groups(now, 10).await.unwrap();
     assert_eq!(groups.len(), 2);
+    assert!(groups
+        .iter()
+        .all(|group| group.discord_channel_id == discord_channel_id));
     assert_eq!(groups[0].event_ids.len(), 1);
     assert_eq!(groups[1].event_ids.len(), 1);
     assert_eq!(
@@ -2832,7 +2952,9 @@ async fn discord_mehrkarten_markierung_rollt_ungueltige_mengen_vollstaendig_zuru
         }],
     ];
     for cards in invalid_cards {
-        let result = store.mark_discord_cards_sent(&cards, cycle.claim_id).await;
+        let result = store
+            .mark_discord_cards_sent(&cards, cycle.claim_id, DISCORD_CHANNEL_ID)
+            .await;
         assert!(matches!(result, Err(StoreError::InvalidClaim)));
         let rows: Vec<(Option<String>, Option<Uuid>)> = sqlx::query_as(
             "SELECT discord_message_id, discord_claim_id
@@ -2863,6 +2985,7 @@ async fn discord_mehrkarten_markierung_rollt_ungueltige_mengen_vollstaendig_zuru
                 },
             ],
             cycle.claim_id,
+            DISCORD_CHANNEL_ID,
         )
         .await
         .unwrap();
@@ -3036,6 +3159,7 @@ async fn discord_markierung_schreibt_nach_lease_ablauf_im_row_lock_nichts() {
                     },
                 ],
                 cycle.claim_id,
+                DISCORD_CHANNEL_ID,
             )
             .await
     });

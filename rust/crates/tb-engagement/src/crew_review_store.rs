@@ -899,9 +899,10 @@ impl CrewReviewStore {
         &self,
         event_ids: &[i64],
         claim_id: Uuid,
+        channel_id: i64,
         message_id: &str,
     ) -> Result<(), StoreError> {
-        if event_ids.is_empty() || message_id.trim().is_empty() {
+        if event_ids.is_empty() || channel_id <= 0 || message_id.trim().is_empty() {
             return Err(StoreError::InvalidClaim);
         }
         let requested_ids: HashSet<i64> = event_ids.iter().copied().collect();
@@ -965,17 +966,19 @@ impl CrewReviewStore {
         }
         let updated = sqlx::query(
             "UPDATE twitch_crew_review_events
-                SET discord_message_id = $1,
+                SET discord_channel_id = $1,
+                    discord_message_id = $2,
                     discord_deleted_at = NULL,
                     last_delete_error = NULL,
                     discord_claim_id = NULL,
                     discord_claim_until = NULL
-              WHERE id = ANY($2::bigint[])
-                AND discord_claim_id = $3
+              WHERE id = ANY($3::bigint[])
+                AND discord_claim_id = $4
                 AND discord_claim_until > clock_timestamp()
                 AND expires_at > clock_timestamp()
                 AND discord_message_id IS NULL",
         )
+        .bind(channel_id)
         .bind(message_id)
         .bind(event_ids)
         .bind(claim_id)
@@ -994,8 +997,10 @@ impl CrewReviewStore {
         &self,
         cards: &[DiscordCard],
         claim_id: Uuid,
+        channel_id: i64,
     ) -> Result<(), StoreError> {
-        if cards.is_empty()
+        if channel_id <= 0
+            || cards.is_empty()
             || cards
                 .iter()
                 .any(|card| card.event_ids.is_empty() || card.message_id.trim().is_empty())
@@ -1070,17 +1075,19 @@ impl CrewReviewStore {
         for card in cards {
             let updated = sqlx::query(
                 "UPDATE twitch_crew_review_events
-                    SET discord_message_id = $1,
+                    SET discord_channel_id = $1,
+                        discord_message_id = $2,
                         discord_deleted_at = NULL,
                         last_delete_error = NULL,
                         discord_claim_id = NULL,
                         discord_claim_until = NULL
-                  WHERE id = ANY($2::bigint[])
-                    AND discord_claim_id = $3
+                  WHERE id = ANY($3::bigint[])
+                    AND discord_claim_id = $4
                     AND discord_claim_until > clock_timestamp()
                     AND expires_at > clock_timestamp()
                     AND discord_message_id IS NULL",
             )
+            .bind(channel_id)
             .bind(&card.message_id)
             .bind(&card.event_ids)
             .bind(claim_id)
@@ -1103,15 +1110,16 @@ impl CrewReviewStore {
         if limit <= 0 {
             return Ok(Vec::new());
         }
-        let rows: Vec<(String, Vec<i64>)> = sqlx::query_as(
-            "SELECT discord_message_id, ARRAY_AGG(id ORDER BY id)
+        let rows: Vec<(i64, String, Vec<i64>)> = sqlx::query_as(
+            "SELECT discord_channel_id, discord_message_id, ARRAY_AGG(id ORDER BY id)
                FROM twitch_crew_review_events
-              WHERE discord_message_id IS NOT NULL
-              GROUP BY discord_message_id
+              WHERE discord_channel_id IS NOT NULL
+                AND discord_message_id IS NOT NULL
+              GROUP BY discord_channel_id, discord_message_id
              HAVING BOOL_AND(expires_at <= NOW())
                 AND BOOL_AND(model_claim_until IS NULL OR model_claim_until <= NOW())
                 AND BOOL_AND(discord_claim_until IS NULL OR discord_claim_until <= NOW())
-              ORDER BY MIN(expires_at), discord_message_id
+              ORDER BY MIN(expires_at), discord_channel_id, discord_message_id
               LIMIT $1",
         )
         .bind(limit)
@@ -1119,15 +1127,19 @@ impl CrewReviewStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(discord_message_id, event_ids)| ExpiredDiscordGroup {
-                discord_message_id,
-                event_ids,
-            })
+            .map(
+                |(discord_channel_id, discord_message_id, event_ids)| ExpiredDiscordGroup {
+                    discord_channel_id,
+                    discord_message_id,
+                    event_ids,
+                },
+            )
             .collect())
     }
 
     pub async fn tombstone_group(
         &self,
+        channel_id: i64,
         message_id: &str,
         error_class: &str,
     ) -> Result<(), StoreError> {
@@ -1136,24 +1148,27 @@ impl CrewReviewStore {
             "UPDATE twitch_crew_review_events event
                 SET content = NULL,
                     metadata = jsonb_build_object(
-                        'error_class', $2::text,
+                        'error_class', $3::text,
                         'tombstoned_at', NOW()
                     ),
                     provider = NULL,
                     model = NULL,
                     confidence = NULL,
-                    last_delete_error = $2,
+                    last_delete_error = $3,
                     tombstoned_at = NOW()
-              WHERE event.discord_message_id = $1
+              WHERE event.discord_channel_id = $1
+                AND event.discord_message_id = $2
                 AND (event.model_claim_until IS NULL OR event.model_claim_until <= NOW())
                 AND (event.discord_claim_until IS NULL OR event.discord_claim_until <= NOW())
                 AND NOT EXISTS (
                     SELECT 1
                       FROM twitch_crew_review_events fresh
-                     WHERE fresh.discord_message_id = event.discord_message_id
+                     WHERE fresh.discord_channel_id = event.discord_channel_id
+                       AND fresh.discord_message_id = event.discord_message_id
                        AND fresh.expires_at > NOW()
                 )",
         )
+        .bind(channel_id)
         .bind(message_id)
         .bind(error_class)
         .execute(&self.pool)
@@ -1161,10 +1176,15 @@ impl CrewReviewStore {
         Ok(())
     }
 
-    pub async fn delete_expired_group(&self, message_id: &str) -> Result<u64, StoreError> {
+    pub async fn delete_expired_group(
+        &self,
+        channel_id: i64,
+        message_id: &str,
+    ) -> Result<u64, StoreError> {
         Ok(sqlx::query(
             "DELETE FROM twitch_crew_review_events expired
-              WHERE expired.discord_message_id = $1
+              WHERE expired.discord_channel_id = $1
+                AND expired.discord_message_id = $2
                 AND expired.expires_at <= NOW()
                 AND (
                     expired.model_claim_until IS NULL
@@ -1177,10 +1197,12 @@ impl CrewReviewStore {
                 AND NOT EXISTS (
                     SELECT 1
                       FROM twitch_crew_review_events fresh
-                     WHERE fresh.discord_message_id = expired.discord_message_id
+                     WHERE fresh.discord_channel_id = expired.discord_channel_id
+                       AND fresh.discord_message_id = expired.discord_message_id
                        AND fresh.expires_at > NOW()
                 )",
         )
+        .bind(channel_id)
         .bind(message_id)
         .execute(&self.pool)
         .await?

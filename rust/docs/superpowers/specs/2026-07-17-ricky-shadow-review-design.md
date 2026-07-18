@@ -135,12 +135,18 @@ Kernfelder:
 - `provider TEXT NULL`
 - `model TEXT NULL`
 - `confidence DOUBLE PRECISION NULL`
+- `discord_channel_id BIGINT NULL`
 - `discord_message_id TEXT NULL`
 - `discord_deleted_at TIMESTAMPTZ NULL`
 - `last_delete_error TEXT NULL`
 - `tombstoned_at TIMESTAMPTZ NULL`
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
 - `expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '6 months')`
+
+Die Discord-Kanal-ID kommt über eine additive Folgemigration. Bereits vorhandene
+Review-Zeilen mit Discord-Nachrichten-ID werden dabei auf den festgelegten
+Review-Kanal zurückgefüllt; anschließend erzwingen Constraints, dass Kanal- und
+Nachrichten-ID nur gemeinsam gesetzt sind und die Kanal-ID positiv ist.
 
 Indizes liegen auf `(review_session_id, occurred_at)`,
 `(channel_login, occurred_at DESC)` und `expires_at`.
@@ -157,8 +163,10 @@ und Roh-Audio sind verboten.
 
 - Cleanup läuft beim Botstart und danach einmal täglich.
 - Für abgelaufene Datensätze werden zuerst alle unterschiedlichen
-  `discord_message_id` einzeln aus Discord gelöscht; Discord `404` gilt als
-  bereits gelöscht.
+  Paare aus `discord_channel_id` und `discord_message_id` einzeln aus Discord
+  gelöscht; Discord `404` gilt als bereits gelöscht. Die beim Versand
+  gespeicherte Kanal-ID bleibt dafür maßgeblich, auch wenn sich die
+  Runtime-Konfiguration später ändert.
 - Der Twitch-Bot erhält dafür keinen Discord-Token. Er ruft den authentifizierten
   Master-Broker-Endpunkt
   `/internal/master/v1/discord/delete-message` auf; der Broker führt die
@@ -187,7 +195,8 @@ und Roh-Audio sind verboten.
 - `allowed_mentions.parse` ist leer; gespeicherter Text darf keine Erwähnung
   auslösen.
 - Lange Inhalte werden deterministisch in mehrere Karten geteilt. Jede erzeugte
-  Discord-Nachrichten-ID wird den enthaltenen Review-Ereignissen zugeordnet.
+  Discord-Nachrichten-ID und ihr Ursprungskanal werden den enthaltenen
+  Review-Ereignissen zugeordnet.
 - Ein einzelner langer Transkripttext wird bereits beim Speichern an
   Wortgrenzen in fortlaufend nummerierte `streamer_transcript`-Ereignisse
   geteilt. Dadurch gehört jedes Ereignis genau zu einer Discord-Karte und die
