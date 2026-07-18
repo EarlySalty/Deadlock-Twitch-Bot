@@ -1,10 +1,9 @@
 ALTER TABLE twitch_crew_review_events
-    ADD COLUMN IF NOT EXISTS discord_channel_id BIGINT;
+    ADD COLUMN discord_channel_id BIGINT;
 
 UPDATE twitch_crew_review_events
- SET discord_channel_id = 1374364800817303632
- WHERE discord_message_id IS NOT NULL
-   AND discord_channel_id IS NULL;
+   SET discord_channel_id = 1374364800817303632
+ WHERE discord_message_id IS NOT NULL;
 
 ALTER TABLE twitch_crew_review_events
     ADD CONSTRAINT twitch_crew_review_events_discord_identity_pair_chk

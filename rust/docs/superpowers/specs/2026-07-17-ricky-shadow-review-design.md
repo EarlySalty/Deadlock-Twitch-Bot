@@ -144,9 +144,8 @@ Kernfelder:
 - `expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '6 months')`
 
 Die Discord-Kanal-ID kommt über eine additive Folgemigration. Bereits vorhandene
-Review-Zeilen mit Discord-Nachrichten-ID und noch fehlender Kanal-ID werden dabei
-auf den festgelegten Review-Kanal zurückgefüllt; eine schon gespeicherte Kanal-ID
-bleibt unverändert. Anschließend erzwingen Constraints, dass Kanal- und
+Review-Zeilen mit Discord-Nachrichten-ID werden dabei auf den festgelegten
+Review-Kanal zurückgefüllt; anschließend erzwingen Constraints, dass Kanal- und
 Nachrichten-ID nur gemeinsam gesetzt sind und die Kanal-ID positiv ist.
 
 Indizes liegen auf `(review_session_id, occurred_at)`,
