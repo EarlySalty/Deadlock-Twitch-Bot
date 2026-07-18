@@ -135,6 +135,7 @@ Kernfelder:
 - `provider TEXT NULL`
 - `model TEXT NULL`
 - `confidence DOUBLE PRECISION NULL`
+- `discord_channel_id BIGINT NULL`
 - `discord_message_id TEXT NULL`
 - `discord_deleted_at TIMESTAMPTZ NULL`
 - `last_delete_error TEXT NULL`
@@ -157,8 +158,10 @@ und Roh-Audio sind verboten.
 
 - Cleanup läuft beim Botstart und danach einmal täglich.
 - Für abgelaufene Datensätze werden zuerst alle unterschiedlichen
-  `discord_message_id` einzeln aus Discord gelöscht; Discord `404` gilt als
-  bereits gelöscht.
+  Paare aus `discord_channel_id` und `discord_message_id` einzeln aus Discord
+  gelöscht; Discord `404` gilt als bereits gelöscht. Die beim Versand
+  gespeicherte Kanal-ID bleibt dafür maßgeblich, auch wenn sich die
+  Runtime-Konfiguration später ändert.
 - Der Twitch-Bot erhält dafür keinen Discord-Token. Er ruft den authentifizierten
   Master-Broker-Endpunkt
   `/internal/master/v1/discord/delete-message` auf; der Broker führt die
@@ -187,7 +190,8 @@ und Roh-Audio sind verboten.
 - `allowed_mentions.parse` ist leer; gespeicherter Text darf keine Erwähnung
   auslösen.
 - Lange Inhalte werden deterministisch in mehrere Karten geteilt. Jede erzeugte
-  Discord-Nachrichten-ID wird den enthaltenen Review-Ereignissen zugeordnet.
+  Discord-Nachrichten-ID und ihr Ursprungskanal werden den enthaltenen
+  Review-Ereignissen zugeordnet.
 - Ein einzelner langer Transkripttext wird bereits beim Speichern an
   Wortgrenzen in fortlaufend nummerierte `streamer_transcript`-Ereignisse
   geteilt. Dadurch gehört jedes Ereignis genau zu einer Discord-Karte und die

@@ -304,7 +304,7 @@ fn start_enabled(
         Arc::clone(&discord),
         config.channel_id,
     );
-    spawn_retention(supervisor, store.clone(), discord, config.channel_id);
+    spawn_retention(supervisor, store.clone(), discord);
     tracing::info!(
         channel_id = config.channel_id,
         segment_seconds = config.segment_seconds,
@@ -407,16 +407,14 @@ fn spawn_retention(
     supervisor: &TaskSupervisor,
     store: CrewReviewStore,
     discord: Arc<dyn DiscordBackend>,
-    channel_id: i64,
 ) {
     supervisor.spawn("ricky_review_retention", async move {
-        if let Err(error) = cleanup_once(&store, discord.as_ref(), Utc::now(), channel_id).await {
+        if let Err(error) = cleanup_once(&store, discord.as_ref(), Utc::now()).await {
             tracing::warn!(%error, "Ricky-Review Retention-Cleanup fehlgeschlagen");
         }
         loop {
             tokio::time::sleep(RETENTION_INTERVAL).await;
-            if let Err(error) = cleanup_once(&store, discord.as_ref(), Utc::now(), channel_id).await
-            {
+            if let Err(error) = cleanup_once(&store, discord.as_ref(), Utc::now()).await {
                 tracing::warn!(%error, "Ricky-Review Retention-Cleanup fehlgeschlagen");
             }
         }
@@ -825,7 +823,7 @@ async fn forward_discord_once(
         }
         if !sent_cards.is_empty() {
             store
-                .mark_discord_cards_sent(&sent_cards, cycle.claim_id)
+                .mark_discord_cards_sent(&sent_cards, cycle.claim_id, channel_id)
                 .await
                 .map_err(|error| error.to_string())?;
             sent += sent_cards.len() as u64;
@@ -1035,7 +1033,6 @@ async fn cleanup_once(
     store: &CrewReviewStore,
     discord: &dyn DiscordBackend,
     now: DateTime<Utc>,
-    channel_id: i64,
 ) -> Result<(), String> {
     store
         .delete_expired_unposted(now)
@@ -1048,7 +1045,7 @@ async fn cleanup_once(
     {
         let delete = discord
             .delete_message(DeleteMessage {
-                channel_id,
+                channel_id: group.discord_channel_id,
                 message_id: group.discord_message_id.clone(),
                 reason: RETENTION_DELETE_REASON.to_owned(),
             })
@@ -1056,13 +1053,17 @@ async fn cleanup_once(
         match delete {
             Ok(()) => {
                 store
-                    .delete_expired_group(&group.discord_message_id)
+                    .delete_expired_group(group.discord_channel_id, &group.discord_message_id)
                     .await
                     .map_err(|error| error.to_string())?;
             }
             Err(error) => {
                 store
-                    .tombstone_group(&group.discord_message_id, &discord_error_class(&error))
+                    .tombstone_group(
+                        group.discord_channel_id,
+                        &group.discord_message_id,
+                        &discord_error_class(&error),
+                    )
                     .await
                     .map_err(|error| error.to_string())?;
             }

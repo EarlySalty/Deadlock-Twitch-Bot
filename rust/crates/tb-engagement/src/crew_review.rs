@@ -592,6 +592,7 @@ pub struct ReviewSession {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpiredDiscordGroup {
+    pub discord_channel_id: i64,
     pub discord_message_id: String,
     pub event_ids: Vec<i64>,
 }

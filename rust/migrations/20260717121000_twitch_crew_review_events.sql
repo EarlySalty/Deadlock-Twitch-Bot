@@ -25,6 +25,7 @@ CREATE TABLE twitch_crew_review_events (
     model_claim_until TIMESTAMPTZ,
     discord_claim_id UUID,
     discord_claim_until TIMESTAMPTZ,
+    discord_channel_id BIGINT,
     discord_message_id TEXT,
     discord_deleted_at TIMESTAMPTZ,
     last_delete_error TEXT,
@@ -34,7 +35,9 @@ CREATE TABLE twitch_crew_review_events (
     CHECK ((model_claim_id IS NULL) = (model_claim_until IS NULL)),
     CHECK (model_claim_until IS NULL OR model_claim_until < expires_at),
     CHECK ((discord_claim_id IS NULL) = (discord_claim_until IS NULL)),
-    CHECK (discord_claim_until IS NULL OR discord_claim_until < expires_at)
+    CHECK (discord_claim_until IS NULL OR discord_claim_until < expires_at),
+    CHECK ((discord_channel_id IS NULL) = (discord_message_id IS NULL)),
+    CHECK (discord_channel_id IS NULL OR discord_channel_id > 0)
 );
 
 CREATE UNIQUE INDEX twitch_crew_review_events_ricky_source_uidx

@@ -2,7 +2,7 @@
 
 **Problem:** Hinweise zu einem auffälligen Account lagen bisher getrennt in Chat, Stream und Moderationskontext; Entwürfe ließen sich dadurch nicht zusammenhängend prüfen, und Discord-Kopien hatten keine eigene Löschfrist.
 
-**Änderung:** Schreibt exakt der hinterlegte Twitch-Account, sammelt ein interner Shadow-Lauf die neue Nachricht, kurzzeitig transkribierte Stream-Reaktionen und beleggebundene Antwortentwürfe in einer eigenen Review-Ablage. Jeder Zyklus wird zusätzlich in den internen Discord-Kanal gespiegelt; Datenbankeinträge und die zugehörigen Discord-Nachrichten werden nach sechs Monaten einzeln entfernt.
+**Änderung:** Schreibt exakt der hinterlegte Twitch-Account, sammelt ein interner Shadow-Lauf die neue Nachricht, kurzzeitig transkribierte Stream-Reaktionen und beleggebundene Antwortentwürfe in einer eigenen Review-Ablage. Jeder Zyklus wird zusätzlich in den internen Discord-Kanal gespiegelt; Datenbankeinträge und die zugehörigen Discord-Nachrichten werden nach sechs Monaten anhand ihres gespeicherten Ursprungskanals einzeln entfernt.
 
 **Aktuelles Verhalten:** Der Lauf dient ausschließlich der internen Prüfung und sendet selbst nichts auf Twitch. Roh-Audio wird nie gespeichert, und bei einem Providerfehler bleibt der Bot still.
 

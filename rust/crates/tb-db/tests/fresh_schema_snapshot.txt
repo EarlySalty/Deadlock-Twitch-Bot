@@ -557,6 +557,7 @@ twitch_crew_review_events|channel_login|text|NO|
 twitch_crew_review_events|confidence|double precision|YES|
 twitch_crew_review_events|content|text|YES|
 twitch_crew_review_events|created_at|timestamp with time zone|NO|now()
+twitch_crew_review_events|discord_channel_id|bigint|YES|
 twitch_crew_review_events|discord_claim_id|uuid|YES|
 twitch_crew_review_events|discord_claim_until|timestamp with time zone|YES|
 twitch_crew_review_events|discord_deleted_at|timestamp with time zone|YES|
