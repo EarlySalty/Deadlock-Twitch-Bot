@@ -238,8 +238,9 @@ die freigegebenen Produktregeln:
 
 ## Fehlerverhalten
 
-- Audioquelle nicht verfügbar: `provider_error`, Sitzung bleibt bis zum Timeout
-  aktiv und versucht das nächste Segment erneut.
+- Audioquelle nicht verfügbar: `provider_error`; die Sitzung wird als
+  `stream_unavailable` geschlossen, damit kein veralteter Stream-Kontext
+  weiterverwendet wird.
 - OpenAI-Timeout/Fehler: Fehlerereignis, kein Fireworks-Aufruf für dieses Segment.
 - Fireworks-Timeout/Fehler/ungültiges JSON: Fehlerereignis, kein Entwurf.
 - DB-Fehler: kein Discord-Post für den betroffenen Zyklus; der Bot läuft weiter.

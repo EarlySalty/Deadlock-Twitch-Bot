@@ -988,7 +988,7 @@ fn discord_event_content(event: &ReviewEvent) -> String {
         return sanitize_discord_text(content);
     }
     if event.event_kind == ReviewEventKind::AiDecision {
-        let parts = ["action", "topic_active", "reason", "used_fact_ids"]
+        let mut parts = ["action", "topic_active", "reason", "used_fact_ids"]
             .into_iter()
             .filter_map(|key| {
                 event
@@ -997,6 +997,9 @@ fn discord_event_content(event: &ReviewEvent) -> String {
                     .map(|value| format!("{key}={}", compact_metadata_value(value)))
             })
             .collect::<Vec<_>>();
+        if let Some(confidence) = event.confidence {
+            parts.push(format!("confidence={confidence:.3}"));
+        }
         if !parts.is_empty() {
             return sanitize_discord_text(&parts.join(" "));
         }
@@ -1386,6 +1389,24 @@ mod tests {
 
         assert_eq!(error.provider, "openai_transcribe");
         assert_eq!(error.error_class, "unavailable");
+    }
+
+    #[test]
+    fn discord_entscheidung_zeigt_die_gespeicherte_confidence() {
+        let cycle_id = Uuid::new_v4();
+        let mut event = review_event(10, cycle_id, ReviewEventKind::AiDecision, None);
+        event.metadata = json!({
+            "cycle_id": cycle_id.to_string(),
+            "action": "reply",
+            "topic_active": true,
+            "reason": "fact_based_reply",
+            "used_fact_ids": ["community_ban_2026_05_29"],
+        });
+        event.confidence = Some(0.875);
+
+        let rendered = discord_event_content(&event);
+
+        assert!(rendered.contains("confidence=0.875"));
     }
 
     #[test]
