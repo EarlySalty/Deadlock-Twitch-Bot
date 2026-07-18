@@ -58,6 +58,8 @@ fn cfg_single(dsn: String) -> DbConfig {
 
 const B2_SESSION_ID_BIGINT_MIGRATION: &str =
     include_str!("../../../migrations/20260622140000_b2_session_id_bigint.sql");
+const EXP_SNAPSHOT_CONFLICT_INDEX_MIGRATION: &str =
+    include_str!("../../../migrations/20260718063000_exp_snapshot_conflict_index.sql");
 
 async fn column_type(pool: &sqlx::PgPool, table: &str, column: &str) -> String {
     sqlx::query_scalar(
@@ -158,6 +160,70 @@ async fn b2_session_id_bigint_migration_repairs_integer_columns() {
         column_type(&pool, "twitch_session_chatters", "session_id").await,
         "bigint"
     );
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn exp_snapshot_migration_repairs_missing_conflict_index() {
+    let admin_dsn = skip_without_db!();
+    let admin = tb_db::connect(&cfg(admin_dsn.clone()))
+        .await
+        .expect("admin connect");
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dbname = format!("tb_exp_snapshot_{}_{}", std::process::id(), nanos);
+
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+        .execute(&admin)
+        .await
+        .expect("create exp snapshot db");
+
+    let pool = tb_db::connect(&cfg_single(swap_db(&admin_dsn, &dbname)))
+        .await
+        .expect("connect exp snapshot db");
+    sqlx::query(
+        "CREATE TABLE public.exp_snapshots (
+            id BIGSERIAL PRIMARY KEY,
+            exp_session_id BIGINT NOT NULL,
+            ts_utc TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create exp_snapshots");
+
+    sqlx::raw_sql(EXP_SNAPSHOT_CONFLICT_INDEX_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("apply exp snapshot conflict-index migration");
+
+    for _ in 0..2 {
+        sqlx::query(
+            "INSERT INTO public.exp_snapshots (exp_session_id, ts_utc)
+             VALUES (42, '2026-07-18T04:30:00Z')
+             ON CONFLICT (exp_session_id, ts_utc) DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .expect("conflict target must be backed by a unique index");
+    }
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.exp_snapshots")
+        .fetch_one(&pool)
+        .await
+        .expect("count exp snapshots");
+    assert_eq!(rows, 1);
 
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
