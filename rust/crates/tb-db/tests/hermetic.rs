@@ -232,6 +232,67 @@ async fn exp_snapshot_migration_repairs_missing_conflict_index() {
         .ok();
 }
 
+#[tokio::test]
+async fn exp_snapshot_migration_preserves_existing_duplicates() {
+    let admin_dsn = skip_without_db!();
+    let admin = tb_db::connect(&cfg(admin_dsn.clone()))
+        .await
+        .expect("admin connect");
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dbname = format!("tb_exp_duplicates_{}_{}", std::process::id(), nanos);
+
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+        .execute(&admin)
+        .await
+        .expect("create exp duplicates db");
+
+    let pool = tb_db::connect(&cfg_single(swap_db(&admin_dsn, &dbname)))
+        .await
+        .expect("connect exp duplicates db");
+    sqlx::query(
+        "CREATE TABLE public.exp_snapshots (
+            id BIGSERIAL PRIMARY KEY,
+            exp_session_id BIGINT NOT NULL,
+            ts_utc TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create exp_snapshots");
+    sqlx::query(
+        "INSERT INTO public.exp_snapshots (exp_session_id, ts_utc)
+         VALUES (42, '2026-07-18T04:30:00Z'), (42, '2026-07-18T04:30:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed duplicate snapshots");
+
+    sqlx::raw_sql(EXP_SNAPSHOT_CONFLICT_INDEX_MIGRATION)
+        .execute(&pool)
+        .await
+        .expect("migration must not fail or delete existing rows");
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.exp_snapshots")
+        .fetch_one(&pool)
+        .await
+        .expect("count preserved duplicates");
+    assert_eq!(rows, 2);
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+}
+
 /// F1-DoD: Eine frische, leere DB ist allein durch `run_migrations()` vollständig
 /// aufsetzbar. Legt eine eigene Wegwerf-Datenbank an, installiert timescaledb,
 /// migriert und prüft die erwarteten Schema-Objekte. Idempotenz wird durch das

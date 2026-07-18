@@ -90,6 +90,14 @@ impl ExpSessionStore {
             peak_viewers: Option<i32>,
         }
         let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(
+                hashtextextended('tb-monitoring:exp_snapshot:' || $1::text, 0)
+            )",
+        )
+        .bind(exp_session_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let row: Option<AggregateRow> = sqlx::query_as!(
             AggregateRow,
             r#"
@@ -112,19 +120,24 @@ impl ExpSessionStore {
         let start = parse_dt_utc(&started_at_raw).unwrap_or(now);
         let minutes_from_start =
             (((now - start).num_seconds().max(0) as f64 / 60.0) * 100.0).round() as f32 / 100.0;
+        let snapshot_ts = iso_seconds(now);
 
-        let inserted: Option<i64> = sqlx::query_scalar!(
+        let inserted: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO exp_snapshots (exp_session_id, ts_utc, viewer_count, minutes_from_start)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (exp_session_id, ts_utc) DO NOTHING
+            SELECT $1, $2, $3, $4
+             WHERE NOT EXISTS (
+                SELECT 1 FROM exp_snapshots
+                 WHERE exp_session_id = $1 AND ts_utc = $2
+             )
+            ON CONFLICT DO NOTHING
             RETURNING id
             "#,
-            exp_session_id,
-            iso_seconds(now),
-            viewer_count,
-            minutes_from_start,
         )
+        .bind(exp_session_id)
+        .bind(snapshot_ts)
+        .bind(viewer_count)
+        .bind(minutes_from_start)
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {

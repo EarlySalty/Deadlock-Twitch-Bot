@@ -601,6 +601,35 @@ async fn exp_hooks_idempotent_und_vollstaendig() {
 }
 
 #[tokio::test]
+async fn exp_samples_bleiben_ohne_conflict_index_idempotent() {
+    let pool = pool_or_skip!("t4b_exp_without_conflict_index");
+    sqlx::query("DROP INDEX idx_exp_snapshots_session_ts")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let exp = ExpSessionTracker::new(ExpSessionStore::new(pool.clone()));
+    let stream = deadlock_stream("s-no-index", "drag", 11);
+    let now = Utc::now();
+    exp.on_session_start("drag", &stream, now - Duration::minutes(1))
+        .await;
+    exp.on_session_sample("drag", &stream, now).await;
+    exp.on_session_sample("drag", &stream, now).await;
+
+    let snapshots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM exp_snapshots")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let samples: i32 =
+        sqlx::query_scalar("SELECT samples FROM exp_sessions WHERE stream_id = 's-no-index'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(snapshots, 1);
+    assert_eq!(samples, 1);
+}
+
+#[tokio::test]
 async fn offline_source_state_liest_restzustand_nach_offline() {
     let pool = pool_or_skip!("t6_live_remnant");
     let store = LiveStateStore::new(pool.clone());
