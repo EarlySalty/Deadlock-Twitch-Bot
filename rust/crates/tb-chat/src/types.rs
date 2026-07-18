@@ -116,7 +116,11 @@ impl ChatMessageEvent {
                     ev.broadcaster_user_login = login.to_string();
                 }
                 // Mod-Aktionen (Ban/Delete) im Quell-Kanal brauchen dessen ID.
-                if let Some(mid) = self.source_message_id.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(mid) = self
+                    .source_message_id
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                {
                     ev.message_id = mid.to_string();
                 }
                 ev.source_broadcaster_user_id = None;
@@ -163,7 +167,10 @@ mod tests {
     fn ohne_shared_chat_unveraendert_geliehen() {
         let ev = base_event();
         let norm = ev.with_effective_channel();
-        assert!(matches!(norm, Cow::Borrowed(_)), "kein Klon ohne Shared Chat");
+        assert!(
+            matches!(norm, Cow::Borrowed(_)),
+            "kein Klon ohne Shared Chat"
+        );
         assert_eq!(norm.broadcaster_user_id, "host_a");
         assert_eq!(norm.message_id, "msg_host");
     }
@@ -180,7 +187,10 @@ mod tests {
         assert_eq!(norm.broadcaster_user_id, "source_b");
         assert_eq!(norm.broadcaster_user_login, "source_b_login");
         assert_eq!(norm.message_id, "msg_source");
-        assert!(norm.source_broadcaster_user_id.is_none(), "Quell-Felder geleert");
+        assert!(
+            norm.source_broadcaster_user_id.is_none(),
+            "Quell-Felder geleert"
+        );
 
         // Idempotent: erneute Normalisierung ist ein No-op (geliehen).
         let again = norm.with_effective_channel();

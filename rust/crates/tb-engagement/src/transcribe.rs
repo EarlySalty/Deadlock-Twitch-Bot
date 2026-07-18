@@ -9,11 +9,14 @@
 
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::process::Command;
 
 const DEFAULT_OPENAI_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-1";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 /// Transkriptions-Ergebnis (Teilmenge von Pythons `TranscriptionResult`, die der
 /// Engagement-Loop verwendet).
@@ -23,6 +26,21 @@ pub struct TranscriptionResult {
     pub duration_seconds: f64,
     pub engine: String,
     pub model: String,
+}
+
+/// Klassifizierter Whisper-Fehler ohne Provider-Body, Request oder Secret.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum TranscribeError {
+    #[error("unavailable")]
+    Unavailable,
+    #[error("timeout")]
+    Timeout,
+    #[error("transport")]
+    Transport,
+    #[error("http_status({0})")]
+    HttpStatus(u16),
+    #[error("decode")]
+    Decode,
 }
 
 /// ffmpeg-Extraktion + OpenAI-Whisper-API.
@@ -35,17 +53,24 @@ pub struct OpenAiTranscriber {
 }
 
 impl OpenAiTranscriber {
-    /// Aus Env: `OPENAI_API_KEY` (Pflicht), `OPENAI_WHISPER_MODEL` (Default
-    /// `whisper-1`), `FFMPEG_BIN` (Default `ffmpeg`). `None` ohne API-Key
-    /// (Python `_OpenAIWhisperEngine` wirft dann `TranscriberUnavailable`).
+    /// Aus Env: `OPENAI_API_KEY` (Pflicht), `OPENAI_WHISPER_MODEL` (Legacy,
+    /// Default `whisper-1`) und `FFMPEG_BIN` (Default `ffmpeg`). `None` ohne
+    /// API-Key (Python `_OpenAIWhisperEngine` wirft dann
+    /// `TranscriberUnavailable`). Der neue RAM-Pfad bleibt fest auf
+    /// `whisper-1`.
     pub fn from_env() -> Option<Self> {
         let api_key = nonempty_env("OPENAI_API_KEY")?;
         Some(Self {
             api_key,
-            model: nonempty_env("OPENAI_WHISPER_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            model: nonempty_env("OPENAI_WHISPER_MODEL")
+                .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             base_url: DEFAULT_OPENAI_URL.to_string(),
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok()?,
         })
     }
 
@@ -64,11 +89,17 @@ impl OpenAiTranscriber {
     /// Extrahiert Audio in ein Temp-WAV und transkribiert es (Python
     /// `transcribe_clip`). Das Temp-Verzeichnis wird immer aufgeräumt.
     pub async fn transcribe_clip(&self, video_path: &Path) -> Result<TranscriptionResult, String> {
-        let dir = std::env::temp_dir().join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+        let dir =
+            std::env::temp_dir().join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| e.to_string())?;
         let wav = dir.join("audio.wav");
         let result = match self.extract_audio(video_path, &wav).await {
-            Ok(()) => self.transcribe_wav(&wav).await,
+            Ok(()) => self
+                .transcribe_wav(&wav)
+                .await
+                .map_err(|error| error.to_string()),
             Err(e) => Err(e),
         };
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -91,20 +122,46 @@ impl OpenAiTranscriber {
             .map_err(|e| format!("ffmpeg nicht startbar: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("ffmpeg-Audio-Extraktion fehlgeschlagen: {}", truncate(&stderr, 300)));
+            return Err(format!(
+                "ffmpeg-Audio-Extraktion fehlgeschlagen: {}",
+                truncate(&stderr, 300)
+            ));
         }
         Ok(())
     }
 
     /// Lädt das WAV hoch und parst die verbose_json-Antwort.
-    async fn transcribe_wav(&self, wav: &Path) -> Result<TranscriptionResult, String> {
-        let bytes = tokio::fs::read(wav).await.map_err(|e| format!("WAV nicht lesbar: {e}"))?;
-        let part = reqwest::multipart::Part::bytes(bytes)
+    async fn transcribe_wav(&self, wav: &Path) -> Result<TranscriptionResult, TranscribeError> {
+        let bytes = tokio::fs::read(wav)
+            .await
+            .map_err(|_| TranscribeError::Unavailable)?;
+        self.transcribe_bytes_with_model(bytes, &self.model).await
+    }
+
+    /// Transkribiert synthetische PCM-WAV-Bytes direkt aus dem Arbeitsspeicher.
+    pub async fn transcribe_bytes(
+        &self,
+        wav_bytes: Vec<u8>,
+    ) -> Result<TranscriptionResult, TranscribeError> {
+        self.transcribe_bytes_with_model(wav_bytes, DEFAULT_MODEL)
+            .await
+    }
+
+    async fn transcribe_bytes_with_model(
+        &self,
+        wav_bytes: Vec<u8>,
+        model: &str,
+    ) -> Result<TranscriptionResult, TranscribeError> {
+        if wav_bytes.is_empty() || wav_bytes.len() > MAX_UPLOAD_BYTES {
+            return Err(TranscribeError::Unavailable);
+        }
+        let part = reqwest::multipart::Part::bytes(wav_bytes)
             .file_name("audio.wav")
             .mime_str("audio/wav")
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| TranscribeError::Unavailable)?;
         let form = reqwest::multipart::Form::new()
-            .text("model", self.model.clone())
+            .text("model", model.to_owned())
+            .text("language", "de")
             .text("response_format", "verbose_json")
             .text("timestamp_granularities[]", "segment")
             .part("file", part);
@@ -115,24 +172,54 @@ impl OpenAiTranscriber {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?;
-        let payload: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        let text = payload.get("text").and_then(serde_json::Value::as_str).unwrap_or("").trim().to_string();
-        let duration = payload.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            .map_err(classify_transport_error)?;
+        if !resp.status().is_success() {
+            return Err(TranscribeError::HttpStatus(resp.status().as_u16()));
+        }
+        let payload: serde_json::Value = resp.json().await.map_err(classify_decode_error)?;
+        let text = payload
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(TranscribeError::Decode)?
+            .trim()
+            .to_string();
+        let duration = payload
+            .get("duration")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,
             engine: "openai_api".to_string(),
-            model: self.model.clone(),
+            model: model.to_string(),
         })
+    }
+}
+
+fn classify_transport_error(error: reqwest::Error) -> TranscribeError {
+    if error.is_timeout() {
+        TranscribeError::Timeout
+    } else {
+        TranscribeError::Transport
+    }
+}
+
+fn classify_decode_error(error: reqwest::Error) -> TranscribeError {
+    if error.is_timeout() {
+        TranscribeError::Timeout
+    } else if error.is_decode() {
+        TranscribeError::Decode
+    } else {
+        TranscribeError::Transport
     }
 }
 
 /// Env-Var nur wenn gesetzt UND nicht leer.
 fn nonempty_env(var: &str) -> Option<String> {
-    std::env::var(var).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Byte-sichere Kürzung für Log-/Fehler-Texte.
@@ -143,22 +230,47 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use std::time::Duration;
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn transcriber(base: &str) -> OpenAiTranscriber {
+        transcriber_with_timeout(base, Duration::from_secs(60))
+    }
+
+    fn transcriber_with_timeout(base: &str, timeout: Duration) -> OpenAiTranscriber {
         OpenAiTranscriber {
-            api_key: "k".to_string(),
-            model: "whisper-1".to_string(),
+            api_key: "test-key".to_string(),
+            model: DEFAULT_MODEL.to_string(),
             base_url: base.to_string(),
             ffmpeg_bin: "ffmpeg".to_string(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
         }
+    }
+
+    async fn successful_server(text: &str) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": text,
+                "duration": 12.5
+            })))
+            .mount(&server)
+            .await;
+        server
     }
 
     #[tokio::test]
     async fn transcribe_wav_parst_text_und_dauer() {
-        let dir = std::env::temp_dir().join(format!("eng-whisper-test-{}", tb_crypto::random_hex_token(6)));
+        let dir = std::env::temp_dir().join(format!(
+            "eng-whisper-test-{}",
+            tb_crypto::random_hex_token(6)
+        ));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let wav = dir.join("audio.wav");
         tokio::fs::write(&wav, b"RIFFfake-wav-bytes").await.unwrap();
@@ -186,8 +298,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transcribe_wav_behaelt_das_legacy_modell() {
+        let dir = std::env::temp_dir().join(format!(
+            "eng-whisper-test-{}",
+            tb_crypto::random_hex_token(6)
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let wav = dir.join("audio.wav");
+        tokio::fs::write(&wav, b"RIFFfake-wav-bytes").await.unwrap();
+        let server = successful_server("legacy").await;
+        let mut transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+        transcriber.model = "legacy-whisper-model".to_string();
+
+        let result = transcriber.transcribe_wav(&wav).await.unwrap();
+
+        assert_eq!(result.model, "legacy-whisper-model");
+        let requests = server.received_requests().await.unwrap();
+        let body = String::from_utf8_lossy(&requests[0].body);
+        assert!(body.contains("name=\"model\"\r\n\r\nlegacy-whisper-model\r\n"));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
     async fn transcribe_wav_http_fehler_ist_err() {
-        let dir = std::env::temp_dir().join(format!("eng-whisper-test-{}", tb_crypto::random_hex_token(6)));
+        let dir = std::env::temp_dir().join(format!(
+            "eng-whisper-test-{}",
+            tb_crypto::random_hex_token(6)
+        ));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let wav = dir.join("audio.wav");
         tokio::fs::write(&wav, b"x").await.unwrap();
@@ -200,7 +337,197 @@ mod tests {
             .await;
 
         let t = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
-        assert!(t.transcribe_wav(&wav).await.is_err());
+        assert_eq!(
+            t.transcribe_wav(&wav).await.unwrap_err(),
+            TranscribeError::HttpStatus(401)
+        );
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_sendet_whisper_1_und_language_de() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(header("Authorization", "Bearer test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "synthetisches transkript",
+                "duration": 1.25
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+        let result = transcriber
+            .transcribe_bytes(b"RIFF....WAVE".to_vec())
+            .await
+            .unwrap();
+
+        assert_eq!(result.model, "whisper-1");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        let content_type_is_multipart = request
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("multipart/form-data; boundary="));
+        assert!(
+            content_type_is_multipart,
+            "Content-Type ist nicht Multipart"
+        );
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(
+            body.contains("name=\"file\"; filename=\"audio.wav\""),
+            "WAV-Dateiname fehlt"
+        );
+        assert!(body.contains("Content-Type: audio/wav"), "WAV-MIME fehlt");
+        assert!(
+            body.contains("name=\"model\"\r\n\r\nwhisper-1\r\n"),
+            "Whisper-Modell fehlt"
+        );
+        assert!(
+            body.contains("name=\"language\"\r\n\r\nde\r\n"),
+            "Sprachvorgabe fehlt"
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_leerer_text_bleibt_leer() {
+        let server = successful_server("  \n\t ").await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+        let result = transcriber
+            .transcribe_bytes(b"RIFF....WAVE".to_vec())
+            .await
+            .unwrap();
+
+        assert!(result.text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_timeout_ist_klassifiziert() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_json(serde_json::json!({"text": "zu spaet"})),
+            )
+            .mount(&server)
+            .await;
+        let transcriber = transcriber_with_timeout(
+            &format!("{}/v1/audio/transcriptions", server.uri()),
+            Duration::from_millis(20),
+        );
+
+        assert_eq!(
+            transcriber
+                .transcribe_bytes(b"RIFF....WAVE".to_vec())
+                .await
+                .unwrap_err(),
+            TranscribeError::Timeout
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_status_ist_klassifiziert_und_sanitized() {
+        for status in [401_u16, 429, 500] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/audio/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_string("SENSITIVE_PROVIDER_BODY_MARKER"),
+                )
+                .mount(&server)
+                .await;
+            let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+            let err = transcriber
+                .transcribe_bytes(b"RIFF....WAVE".to_vec())
+                .await
+                .unwrap_err();
+
+            assert_eq!(err, TranscribeError::HttpStatus(status));
+            assert!(!err.to_string().contains("SENSITIVE_PROVIDER_BODY_MARKER"));
+            assert!(!format!("{err:?}").contains("SENSITIVE_PROVIDER_BODY_MARKER"));
+        }
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_folgt_keinen_redirects() {
+        let target = successful_server("darf nicht erreicht werden").await;
+        let source = MockServer::start().await;
+        let target_url = format!("{}/v1/audio/transcriptions", target.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", target_url.as_str()))
+            .mount(&source)
+            .await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", source.uri()));
+
+        let result = transcriber.transcribe_bytes(b"RIFF....WAVE".to_vec()).await;
+
+        assert_eq!(result.unwrap_err(), TranscribeError::HttpStatus(307));
+        assert_eq!(target.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_decode_fehler_ist_klassifiziert() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("kein json und kein provider-body im fehler"),
+            )
+            .mount(&server)
+            .await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+        assert_eq!(
+            transcriber
+                .transcribe_bytes(b"RIFF....WAVE".to_vec())
+                .await
+                .unwrap_err(),
+            TranscribeError::Decode
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_ohne_textfeld_ist_decode_fehler() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"duration": 1.0})),
+            )
+            .mount(&server)
+            .await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+        assert_eq!(
+            transcriber
+                .transcribe_bytes(b"RIFF....WAVE".to_vec())
+                .await
+                .unwrap_err(),
+            TranscribeError::Decode
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribe_bytes_25_mb_cap_greift_vor_request() {
+        let server = successful_server("darf nicht aufgerufen werden").await;
+        let transcriber = transcriber(&format!("{}/v1/audio/transcriptions", server.uri()));
+
+        let err = transcriber
+            .transcribe_bytes(vec![0; 25 * 1024 * 1024 + 1])
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, TranscribeError::Unavailable);
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 }
