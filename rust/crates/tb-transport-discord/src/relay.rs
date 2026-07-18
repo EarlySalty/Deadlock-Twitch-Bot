@@ -506,7 +506,7 @@ impl DiscordBackend for BrokerRelay {
         let key = Self::idempotency_key("delete", &payload);
         let resp = self.post_with_retry(DELETE_PATH, &payload, &key).await?;
 
-        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+        if resp.status().is_success() {
             return Ok(());
         }
 
@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_message_behandelt_404_als_bereits_geloescht() {
+    async fn delete_message_behandelt_broker_404_als_retry_fehler() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/internal/master/v1/discord/delete-message"))
@@ -628,7 +628,10 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_ok());
+        assert!(matches!(
+            result,
+            Err(DiscordError::BrokerError { status: 404, .. })
+        ));
     }
 
     #[tokio::test]

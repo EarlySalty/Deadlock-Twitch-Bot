@@ -164,9 +164,11 @@ und Roh-Audio sind verboten.
 - Cleanup läuft beim Botstart und danach einmal täglich.
 - Für abgelaufene Datensätze werden zuerst alle unterschiedlichen
   Paare aus `discord_channel_id` und `discord_message_id` einzeln aus Discord
-  gelöscht; Discord `404` gilt als bereits gelöscht. Die beim Versand
-  gespeicherte Kanal-ID bleibt dafür maßgeblich, auch wenn sich die
-  Runtime-Konfiguration später ändert.
+  gelöscht. Der Broker übersetzt eine auf Discord fehlende Nachricht in einen
+  erfolgreichen idempotenten Antwortstatus; eine HTTP-`404` des Broker-Endpunkts
+  bleibt dagegen ein Löschfehler mit Retry. Die beim Versand gespeicherte
+  Kanal-ID bleibt maßgeblich, auch wenn sich die Runtime-Konfiguration später
+  ändert.
 - Der Twitch-Bot erhält dafür keinen Discord-Token. Er ruft den authentifizierten
   Master-Broker-Endpunkt
   `/internal/master/v1/discord/delete-message` auf; der Broker führt die
