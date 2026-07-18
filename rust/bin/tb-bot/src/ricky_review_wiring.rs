@@ -12,6 +12,7 @@ use tb_engagement::crew_review::{
     ReviewError, ReviewEvent, ReviewEventKind, ReviewModelInput, ReviewSession, RickyChatInput,
     FIREWORKS_DEFAULT_MODEL,
 };
+use tb_engagement::crew_review_store::DiscordCard;
 use tb_engagement::crew_review_store::{CrewReviewStore, StoreError};
 use tb_engagement::transcribe::{OpenAiTranscriber, TranscribeError};
 use tb_transport_discord::{
@@ -294,11 +295,42 @@ where
         return Ok(());
     };
     let events = store.session_events(session_id).await?;
-    let input = model_input(&events, &claim.events);
-    match decider.decide_review(&input).await {
-        Ok(decision) => complete_decision(store, claim, decision, now).await,
-        Err(error) => complete_provider_error(store, claim, error, now).await,
+    let claim_id = claim.claim_id;
+    let claim_until = claim.claim_until;
+    for group in model_event_groups_by_cycle(&claim.events)? {
+        let claim = ClaimedModelInputs {
+            claim_id,
+            claim_until,
+            events: group.events,
+        };
+        let input = model_input(&events, &claim.events);
+        match decider.decide_review(&input).await {
+            Ok(decision) => complete_decision(store, claim, decision, now).await?,
+            Err(error) => complete_provider_error(store, claim, error, now).await?,
+        }
     }
+    Ok(())
+}
+
+struct ModelEventGroup {
+    cycle_id: Uuid,
+    events: Vec<ReviewEvent>,
+}
+
+fn model_event_groups_by_cycle(events: &[ReviewEvent]) -> Result<Vec<ModelEventGroup>, StoreError> {
+    let mut groups: Vec<ModelEventGroup> = Vec::new();
+    for event in events {
+        let cycle_id = event_cycle_id(event)?;
+        if let Some(group) = groups.iter_mut().find(|group| group.cycle_id == cycle_id) {
+            group.events.push(event.clone());
+        } else {
+            groups.push(ModelEventGroup {
+                cycle_id,
+                events: vec![event.clone()],
+            });
+        }
+    }
+    Ok(groups)
 }
 
 fn model_input(events: &[ReviewEvent], pending: &[ReviewEvent]) -> ReviewModelInput {
@@ -484,26 +516,37 @@ async fn forward_discord_once(
         .pending_discord_cycles(limit)
         .await
         .map_err(|error| error.to_string())?;
-    let cards = discord_payloads_for_cycles(&cycles);
     let mut sent = 0;
-    for card in cards {
-        let result = discord
-            .send_rich_message(card.payload)
-            .await
-            .map_err(|error| error.to_string())?;
-        for cycle in card.cycles {
-            store
-                .mark_discord_sent(&cycle.event_ids, cycle.claim_id, &result.result.message_id)
+    for cycle in cycles {
+        let cards = discord_payloads_for_cycles(std::slice::from_ref(&cycle));
+        let mut sent_cards = Vec::new();
+        for card in cards {
+            let result = discord
+                .send_rich_message(card.payload)
                 .await
                 .map_err(|error| error.to_string())?;
+            let event_ids = card
+                .cycles
+                .into_iter()
+                .flat_map(|cycle| cycle.event_ids)
+                .collect();
+            sent_cards.push(DiscordCard {
+                event_ids,
+                message_id: result.result.message_id,
+            });
         }
-        sent += 1;
+        if !sent_cards.is_empty() {
+            store
+                .mark_discord_cards_sent(&sent_cards, cycle.claim_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            sent += sent_cards.len() as u64;
+        }
     }
     Ok(sent)
 }
 
 struct PackedCycle {
-    claim_id: Uuid,
     event_ids: Vec<i64>,
 }
 
@@ -516,40 +559,50 @@ fn discord_payloads_for_cycles(
     cycles: &[tb_engagement::crew_review::ReviewCycle],
 ) -> Vec<PackedDiscordCard> {
     let mut cards = Vec::new();
-    let mut current_text = String::new();
-    let mut current_cycles = Vec::new();
-
     for cycle in cycles {
-        let mut text = cycle_text(cycle);
-        if text.chars().count() > DISCORD_CARD_MAX_CHARS {
-            text = truncate_chars(&text, DISCORD_CARD_MAX_CHARS);
-        }
-        let separator = if current_text.is_empty() { "" } else { "\n\n" };
-        let would_len =
-            current_text.chars().count() + separator.chars().count() + text.chars().count();
-        if !current_text.is_empty() && would_len > DISCORD_CARD_MAX_CHARS {
-            cards.push(card_from_parts(
-                std::mem::take(&mut current_text),
-                std::mem::take(&mut current_cycles),
-            ));
-        }
-        if !current_text.is_empty() {
-            current_text.push_str("\n\n");
-        }
-        current_text.push_str(&text);
-        current_cycles.push(PackedCycle {
-            claim_id: cycle.claim_id,
-            event_ids: cycle.events.iter().map(|event| event.id).collect(),
-        });
-    }
-
-    if !current_text.is_empty() {
-        cards.push(card_from_parts(current_text, current_cycles));
+        cards.extend(discord_payloads_for_cycle(cycle));
     }
     cards
 }
 
-fn card_from_parts(content: String, cycles: Vec<PackedCycle>) -> PackedDiscordCard {
+fn discord_payloads_for_cycle(
+    cycle: &tb_engagement::crew_review::ReviewCycle,
+) -> Vec<PackedDiscordCard> {
+    let header = cycle_header(cycle);
+    let mut cards = Vec::new();
+    let mut current_text = header.clone();
+    let mut current_event_ids = Vec::new();
+    let mut has_event_text = false;
+    let header_chars = header.chars().count();
+
+    for event in &cycle.events {
+        let segments = event_text_segments(event, header_chars);
+        for (index, segment) in segments.into_iter().enumerate() {
+            let separator_chars = usize::from(has_event_text || current_text == header);
+            let would_len =
+                current_text.chars().count() + separator_chars + segment.chars().count();
+            if has_event_text && would_len > DISCORD_CARD_MAX_CHARS {
+                cards.push(card_from_parts(
+                    std::mem::replace(&mut current_text, header.clone()),
+                    std::mem::take(&mut current_event_ids),
+                ));
+            }
+            current_text.push('\n');
+            current_text.push_str(&segment);
+            if index == 0 {
+                current_event_ids.push(event.id);
+            }
+            has_event_text = true;
+        }
+    }
+
+    if has_event_text {
+        cards.push(card_from_parts(current_text, current_event_ids));
+    }
+    cards
+}
+
+fn card_from_parts(content: String, event_ids: Vec<i64>) -> PackedDiscordCard {
     let components = json!([{
         "type": 17,
         "accent_color": RICKY_REVIEW_GOLD,
@@ -558,7 +611,7 @@ fn card_from_parts(content: String, cycles: Vec<PackedCycle>) -> PackedDiscordCa
         ]
     }]);
     PackedDiscordCard {
-        cycles,
+        cycles: vec![PackedCycle { event_ids }],
         payload: SendRichMessage {
             channel_id: RICKY_REVIEW_CHANNEL_ID,
             content: None,
@@ -570,26 +623,71 @@ fn card_from_parts(content: String, cycles: Vec<PackedCycle>) -> PackedDiscordCa
     }
 }
 
-fn cycle_text(cycle: &tb_engagement::crew_review::ReviewCycle) -> String {
-    let mut lines = vec![format!(
+fn cycle_header(cycle: &tb_engagement::crew_review::ReviewCycle) -> String {
+    format!(
         "PLATZHALTER: Ricky-Review-Karte #{}",
         sanitize_discord_text(&cycle.channel_login)
-    )];
-    for event in &cycle.events {
-        let content = event.content.as_deref().unwrap_or_else(|| {
-            event
-                .metadata
-                .get("error_class")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-        });
-        lines.push(format!(
-            "PLATZHALTER: {} {}",
-            event.event_kind.as_str(),
-            sanitize_discord_text(content)
-        ));
+    )
+}
+
+fn event_text_segments(event: &ReviewEvent, header_chars: usize) -> Vec<String> {
+    let content = discord_event_content(event);
+    if content.is_empty() {
+        return vec![format!("PLATZHALTER: {}", event.event_kind.as_str())];
     }
-    lines.join("\n")
+    let first_prefix = format!("PLATZHALTER: {} ", event.event_kind.as_str());
+    let next_prefix = format!(
+        "PLATZHALTER: {} PLATZHALTER: Fortsetzung ",
+        event.event_kind.as_str()
+    );
+    let mut chunks = Vec::new();
+    let mut remaining = content.as_str();
+    let mut first = true;
+    while !remaining.is_empty() {
+        let prefix = if first { &first_prefix } else { &next_prefix };
+        let max_content = DISCORD_CARD_MAX_CHARS
+            .saturating_sub(header_chars)
+            .saturating_sub(1)
+            .saturating_sub(prefix.chars().count())
+            .max(1);
+        let chunk: String = remaining.chars().take(max_content).collect();
+        let chunk_len = chunk.len();
+        chunks.push(format!("{prefix}{chunk}"));
+        remaining = &remaining[chunk_len..];
+        first = false;
+    }
+    chunks
+}
+
+fn discord_event_content(event: &ReviewEvent) -> String {
+    if let Some(content) = event
+        .content
+        .as_deref()
+        .filter(|content| !content.is_empty())
+    {
+        return sanitize_discord_text(content);
+    }
+    if event.event_kind == ReviewEventKind::AiDecision {
+        let parts: Vec<String> = ["action", "topic_active", "reason", "used_fact_ids"]
+            .into_iter()
+            .filter_map(|key| {
+                event
+                    .metadata
+                    .get(key)
+                    .map(|value| format!("{key}={}", compact_metadata_value(value)))
+            })
+            .collect();
+        if !parts.is_empty() {
+            return sanitize_discord_text(&parts.join(" "));
+        }
+    }
+    let fallback = event
+        .metadata
+        .get("error_class")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| compact_metadata_value(&event.metadata));
+    sanitize_discord_text(&fallback)
 }
 
 async fn cleanup_once(
@@ -680,8 +778,16 @@ fn sanitize_discord_text(value: &str) -> String {
         .collect()
 }
 
-fn truncate_chars(value: &str, max: usize) -> String {
-    value.chars().take(max).collect()
+fn compact_metadata_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(compact_metadata_value)
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => value.to_string(),
+    }
 }
 
 fn nonempty_env(name: &str) -> Option<String> {
@@ -718,14 +824,25 @@ mod tests {
     #[derive(Clone)]
     struct FakeDecider {
         result: Arc<Mutex<Result<ReviewDecision, ReviewError>>>,
+        inputs: Arc<Mutex<Vec<tb_engagement::crew_review::ReviewModelInput>>>,
+    }
+
+    impl FakeDecider {
+        fn new(result: Result<ReviewDecision, ReviewError>) -> Self {
+            Self {
+                result: Arc::new(Mutex::new(result)),
+                inputs: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
     }
 
     #[async_trait::async_trait]
     impl super::ReviewDecider for FakeDecider {
         async fn decide_review(
             &self,
-            _input: &tb_engagement::crew_review::ReviewModelInput,
+            input: &tb_engagement::crew_review::ReviewModelInput,
         ) -> Result<ReviewDecision, ReviewError> {
+            self.inputs.lock().unwrap().push(input.clone());
             self.result.lock().unwrap().clone()
         }
     }
@@ -748,6 +865,7 @@ mod tests {
         deletes: Mutex<Vec<String>>,
         delete_result: Mutex<Option<Result<(), DiscordError>>>,
         pool_seen_before_delete: Mutex<Option<PgPool>>,
+        expire_discord_claims_after_send: Mutex<Option<PgPool>>,
     }
 
     #[async_trait::async_trait]
@@ -757,10 +875,26 @@ mod tests {
             payload: SendRichMessage,
         ) -> Result<SendResult, DiscordError> {
             self.sends.lock().unwrap().push(payload);
+            let message_no = self.sends.lock().unwrap().len();
+            let expire_pool = self
+                .expire_discord_claims_after_send
+                .lock()
+                .unwrap()
+                .clone();
+            if let Some(pool) = expire_pool {
+                sqlx::query(
+                    "UPDATE twitch_crew_review_events
+                        SET discord_claim_until = NOW() - INTERVAL '1 second'
+                      WHERE discord_claim_id IS NOT NULL",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
             Ok(SendResult {
                 ok: true,
                 result: SendResultInner {
-                    message_id: "discord-1".to_owned(),
+                    message_id: format!("discord-{message_no}"),
                 },
             })
         }
@@ -847,12 +981,16 @@ mod tests {
     }
 
     fn ricky_input(channel: &str, msg: &str) -> RickyChatInput {
+        ricky_input_with_content(channel, msg, "Ricky fragt nach Discord")
+    }
+
+    fn ricky_input_with_content(channel: &str, msg: &str, content: &str) -> RickyChatInput {
         RickyChatInput {
             channel_login: channel.to_owned(),
             subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_owned(),
             source_message_id: Some(msg.to_owned()),
             occurred_at: Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap(),
-            content: "Ricky fragt nach Discord".to_owned(),
+            content: content.to_owned(),
         }
     }
 
@@ -885,6 +1023,16 @@ mod tests {
         kind: ReviewEventKind,
         occurred_at: chrono::DateTime<Utc>,
     ) -> NewReviewEvent {
+        event_for_cycle(session_id, channel, kind, occurred_at, Uuid::new_v4())
+    }
+
+    fn event_for_cycle(
+        session_id: Uuid,
+        channel: &str,
+        kind: ReviewEventKind,
+        occurred_at: chrono::DateTime<Utc>,
+        cycle_id: Uuid,
+    ) -> NewReviewEvent {
         NewReviewEvent {
             session_id,
             channel_login: channel.to_owned(),
@@ -893,11 +1041,63 @@ mod tests {
             source_message_id: None,
             occurred_at,
             content: Some("PLATZHALTER: Testinhalt @everyone <@42>".to_owned()),
-            metadata: json!({"cycle_id": Uuid::new_v4().to_string()}),
+            metadata: json!({"cycle_id": cycle_id.to_string()}),
             provider: Some("test".to_owned()),
             model: Some("test".to_owned()),
             confidence: Some(0.7),
         }
+    }
+
+    fn review_event(
+        id: i64,
+        session_id: Uuid,
+        channel: &str,
+        kind: ReviewEventKind,
+        content: Option<String>,
+        metadata: serde_json::Value,
+    ) -> tb_engagement::crew_review::ReviewEvent {
+        tb_engagement::crew_review::ReviewEvent {
+            id,
+            session_id,
+            channel_login: channel.to_owned(),
+            subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_owned(),
+            event_kind: kind,
+            source_message_id: None,
+            occurred_at: Utc::now(),
+            content,
+            metadata,
+            provider: None,
+            model: None,
+            confidence: None,
+            discord_message_id: None,
+            discord_deleted_at: None,
+            last_delete_error: None,
+            tombstoned_at: None,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+        }
+    }
+
+    fn review_cycle(
+        claim_id: Uuid,
+        channel: &str,
+        events: Vec<tb_engagement::crew_review::ReviewEvent>,
+    ) -> tb_engagement::crew_review::ReviewCycle {
+        tb_engagement::crew_review::ReviewCycle {
+            cycle_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            channel_login: channel.to_owned(),
+            claim_id,
+            claim_until: Utc::now(),
+            events,
+        }
+    }
+
+    fn payload_text(payload: &SendRichMessage) -> String {
+        payload.components.as_ref().unwrap()[0]["components"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 
     #[tokio::test]
@@ -911,9 +1111,7 @@ mod tests {
             .await
             .unwrap();
 
-        let decider = FakeDecider {
-            result: Arc::new(Mutex::new(Ok(reply_decision()))),
-        };
+        let decider = FakeDecider::new(Ok(reply_decision()));
         super::process_once(
             &store,
             &decider,
@@ -966,9 +1164,7 @@ mod tests {
             .await
             .unwrap();
 
-        let decider = FakeDecider {
-            result: Arc::new(Mutex::new(Err(ReviewError::Timeout))),
-        };
+        let decider = FakeDecider::new(Err(ReviewError::Timeout));
         super::process_once(
             &store,
             &decider,
@@ -985,6 +1181,104 @@ mod tests {
                 .unwrap();
         assert!(rows.contains(&"provider_error".to_owned()));
         assert!(!rows.contains(&"ai_draft".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn mehrere_offene_modellcycles_werden_getrennt_ohne_reclaim_delay_verarbeitet() {
+        let Some(pool) = test_pool("ricky_review_split_model_cycles").await else {
+            return;
+        };
+        let store = CrewReviewStore::new(pool.clone());
+        let mut first = ricky_input_with_content("model-split", "msg-model-a", "Ricky A");
+        first.occurred_at = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+        let first_cycle = store.record_trigger(&first).await.unwrap().unwrap();
+        let mut second = ricky_input_with_content("model-split", "msg-model-b", "Ricky B");
+        second.occurred_at = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 1).unwrap();
+        let second_cycle = store.record_trigger(&second).await.unwrap().unwrap();
+        let session_id = session_id_for(&pool, "msg-model-a").await;
+        let decider = FakeDecider::new(Ok(reply_decision()));
+
+        super::process_pending_inputs(
+            &store,
+            &decider,
+            session_id,
+            Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 2).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let inputs = decider.inputs.lock().unwrap().clone();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].ricky_messages, vec!["Ricky A"]);
+        assert_eq!(inputs[1].ricky_messages, vec!["Ricky B"]);
+        let terminal_counts: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT metadata->>'cycle_id', COUNT(*)
+               FROM twitch_crew_review_events
+              WHERE event_kind = 'ai_decision'
+              GROUP BY metadata->>'cycle_id'
+              ORDER BY metadata->>'cycle_id'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let mut expected = vec![(first_cycle.to_string(), 1), (second_cycle.to_string(), 1)];
+        expected.sort();
+        assert_eq!(terminal_counts, expected);
+    }
+
+    #[test]
+    fn claimed_model_inputs_werden_deterministisch_pro_cycle_getrennt() {
+        let session_id = Uuid::new_v4();
+        let first_cycle = Uuid::new_v4();
+        let second_cycle = Uuid::new_v4();
+        let events = vec![
+            review_event(
+                1,
+                session_id,
+                "model-groups",
+                ReviewEventKind::RickyMessage,
+                Some("Ricky A".to_owned()),
+                json!({"cycle_id": first_cycle.to_string()}),
+            ),
+            review_event(
+                2,
+                session_id,
+                "model-groups",
+                ReviewEventKind::StreamerTranscript,
+                Some("Transcript B".to_owned()),
+                json!({"cycle_id": second_cycle.to_string()}),
+            ),
+            review_event(
+                3,
+                session_id,
+                "model-groups",
+                ReviewEventKind::StreamerTranscript,
+                Some("Transcript A".to_owned()),
+                json!({"cycle_id": first_cycle.to_string()}),
+            ),
+        ];
+
+        let groups = super::model_event_groups_by_cycle(&events).unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].cycle_id, first_cycle);
+        assert_eq!(
+            groups[0]
+                .events
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(groups[1].cycle_id, second_cycle);
+        assert_eq!(
+            groups[1]
+                .events
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     #[test]
@@ -1031,6 +1325,352 @@ mod tests {
         let rendered = serde_json::to_string(components).unwrap();
         assert!(!rendered.contains("@everyone"));
         assert!(!rendered.contains("<@"));
+    }
+
+    #[test]
+    fn discord_payloads_trennen_einen_cycle_an_eventgrenzen_ohne_inhaltverlust() {
+        let claim_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let cycle_id = Uuid::new_v4();
+        let long = "7".repeat(super::DISCORD_CARD_MAX_CHARS - 160);
+        let tail = "8".repeat(240);
+        let cycle = review_cycle(
+            claim_id,
+            "split-events",
+            vec![
+                review_event(
+                    11,
+                    session_id,
+                    "split-events",
+                    ReviewEventKind::AiDraft,
+                    Some(long.clone()),
+                    json!({"cycle_id": cycle_id.to_string()}),
+                ),
+                review_event(
+                    12,
+                    session_id,
+                    "split-events",
+                    ReviewEventKind::ProviderError,
+                    Some(tail.clone()),
+                    json!({"cycle_id": cycle_id.to_string()}),
+                ),
+            ],
+        );
+
+        let payloads = super::discord_payloads_for_cycles(&[cycle]);
+
+        assert_eq!(
+            payloads
+                .iter()
+                .map(|payload| {
+                    payload
+                        .cycles
+                        .iter()
+                        .flat_map(|cycle| cycle.event_ids.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![vec![11], vec![12]]
+        );
+        let rendered = payloads
+            .iter()
+            .map(|payload| payload_text(&payload.payload))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches('7').count(), long.len());
+        assert_eq!(rendered.matches('8').count(), tail.len());
+    }
+
+    #[test]
+    fn discord_payloads_teilen_ein_uebergrosses_event_verlustfrei_und_ordnen_id_einmal_zu() {
+        let claim_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let cycle_id = Uuid::new_v4();
+        let content = "7".repeat(super::DISCORD_CARD_MAX_CHARS * 2 + 123);
+        let cycle = review_cycle(
+            claim_id,
+            "split-one-event",
+            vec![review_event(
+                21,
+                session_id,
+                "split-one-event",
+                ReviewEventKind::AiDecision,
+                Some(content.clone()),
+                json!({"cycle_id": cycle_id.to_string()}),
+            )],
+        );
+
+        let payloads = super::discord_payloads_for_cycles(&[cycle]);
+
+        assert!(payloads.len() > 1);
+        assert_eq!(
+            payloads
+                .iter()
+                .flat_map(|payload| {
+                    payload
+                        .cycles
+                        .iter()
+                        .flat_map(|cycle| cycle.event_ids.clone())
+                })
+                .collect::<Vec<_>>(),
+            vec![21]
+        );
+        let rendered = payloads
+            .iter()
+            .map(|payload| payload_text(&payload.payload))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches('7').count(), content.len());
+    }
+
+    #[test]
+    fn contentlose_ai_decision_zeigt_discord_relevante_metadaten_ohne_mentions() {
+        let claim_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let cycle_id = Uuid::new_v4();
+        let cycle = review_cycle(
+            claim_id,
+            "decision-meta",
+            vec![review_event(
+                31,
+                session_id,
+                "decision-meta",
+                ReviewEventKind::AiDecision,
+                None,
+                json!({
+                    "cycle_id": cycle_id.to_string(),
+                    "action": "reply",
+                    "topic_active": true,
+                    "reason": "Grund @everyone <@42>",
+                    "used_fact_ids": ["fact_a", "fact_b"],
+                }),
+            )],
+        );
+
+        let payloads = super::discord_payloads_for_cycles(&[cycle]);
+        let rendered = payload_text(&payloads[0].payload);
+
+        assert!(rendered.contains("reply"));
+        assert!(rendered.contains("true"));
+        assert!(rendered.contains("Grund"));
+        assert!(rendered.contains("fact_a"));
+        assert!(rendered.contains("fact_b"));
+        assert!(!rendered.contains("@everyone"));
+        assert!(!rendered.contains("<@"));
+    }
+
+    #[tokio::test]
+    async fn forward_discord_markiert_mehrkarten_cycle_atomar() {
+        let Some(pool) = test_pool("ricky_review_forward_multicard").await else {
+            return;
+        };
+        let store = CrewReviewStore::new(pool.clone());
+        store
+            .record_trigger(&ricky_input("forward-multi", "msg-forward-multi"))
+            .await
+            .unwrap();
+        let session_id = session_id_for(&pool, "msg-forward-multi").await;
+        let cycle_id = Uuid::new_v4();
+        let first_id = store
+            .append_event(event_for_cycle(
+                session_id,
+                "forward-multi",
+                ReviewEventKind::AiDraft,
+                Utc::now(),
+                cycle_id,
+            ))
+            .await
+            .unwrap();
+        let second_id = store
+            .append_event(event_for_cycle(
+                session_id,
+                "forward-multi",
+                ReviewEventKind::AiDecision,
+                Utc::now() + chrono::Duration::seconds(1),
+                cycle_id,
+            ))
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_crew_review_events
+                SET content = CASE
+                    WHEN id = $1 THEN $3
+                    WHEN id = $2 THEN $4
+                    ELSE content
+                END
+              WHERE id = ANY($5::bigint[])",
+        )
+        .bind(first_id)
+        .bind(second_id)
+        .bind("A".repeat(super::DISCORD_CARD_MAX_CHARS - 160))
+        .bind("B".repeat(240))
+        .bind(vec![first_id, second_id])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let discord = FakeDiscord::default();
+
+        super::forward_discord_once(&store, &discord, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(discord.sends.lock().unwrap().len(), 2);
+        let posted: Vec<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, discord_message_id
+               FROM twitch_crew_review_events
+              WHERE id = ANY($1::bigint[])
+              ORDER BY id",
+        )
+        .bind(vec![first_id, second_id])
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            posted,
+            vec![
+                (first_id, Some("discord-1".to_owned())),
+                (second_id, Some("discord-2".to_owned())),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_discord_teilt_uebergrosses_einzelevent_und_markiert_event_einmal() {
+        let Some(pool) = test_pool("ricky_review_forward_single_oversize").await else {
+            return;
+        };
+        let store = CrewReviewStore::new(pool.clone());
+        store
+            .record_trigger(&ricky_input("forward-single", "msg-forward-single"))
+            .await
+            .unwrap();
+        let session_id = session_id_for(&pool, "msg-forward-single").await;
+        let cycle_id = Uuid::new_v4();
+        let event_id = store
+            .append_event(event_for_cycle(
+                session_id,
+                "forward-single",
+                ReviewEventKind::AiDecision,
+                Utc::now(),
+                cycle_id,
+            ))
+            .await
+            .unwrap();
+        let content = "7".repeat(super::DISCORD_CARD_MAX_CHARS * 2 + 123);
+        sqlx::query("UPDATE twitch_crew_review_events SET content = $1 WHERE id = $2")
+            .bind(&content)
+            .bind(event_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let discord = FakeDiscord::default();
+
+        let sent = super::forward_discord_once(&store, &discord, 10)
+            .await
+            .unwrap();
+
+        assert!(sent > 1);
+        let (send_count, rendered) = {
+            let sends = discord.sends.lock().unwrap();
+            (
+                sends.len(),
+                sends
+                    .iter()
+                    .map(payload_text)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        };
+        assert_eq!(send_count as u64, sent);
+        assert_eq!(rendered.matches('7').count(), content.len());
+        let posted: Option<String> = sqlx::query_scalar(
+            "SELECT discord_message_id FROM twitch_crew_review_events WHERE id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(posted, Some("discord-1".to_owned()));
+        assert!(store.pending_discord_cycles(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn forward_discord_markierungsfehler_laesst_cycle_retrybar_unmarkiert() {
+        let Some(pool) = test_pool("ricky_review_forward_mark_fail").await else {
+            return;
+        };
+        let store = CrewReviewStore::new(pool.clone());
+        store
+            .record_trigger(&ricky_input("forward-fail", "msg-forward-fail"))
+            .await
+            .unwrap();
+        let session_id = session_id_for(&pool, "msg-forward-fail").await;
+        let cycle_id = Uuid::new_v4();
+        let first_id = store
+            .append_event(event_for_cycle(
+                session_id,
+                "forward-fail",
+                ReviewEventKind::AiDraft,
+                Utc::now(),
+                cycle_id,
+            ))
+            .await
+            .unwrap();
+        let second_id = store
+            .append_event(event_for_cycle(
+                session_id,
+                "forward-fail",
+                ReviewEventKind::AiDecision,
+                Utc::now() + chrono::Duration::seconds(1),
+                cycle_id,
+            ))
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_crew_review_events
+                SET content = CASE
+                    WHEN id = $1 THEN $3
+                    WHEN id = $2 THEN $4
+                    ELSE content
+                END
+              WHERE id = ANY($5::bigint[])",
+        )
+        .bind(first_id)
+        .bind(second_id)
+        .bind("A".repeat(super::DISCORD_CARD_MAX_CHARS - 160))
+        .bind("B".repeat(240))
+        .bind(vec![first_id, second_id])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let discord = FakeDiscord::default();
+        *discord.expire_discord_claims_after_send.lock().unwrap() = Some(pool.clone());
+
+        let result = super::forward_discord_once(&store, &discord, 10).await;
+
+        assert!(result.is_err());
+        assert_eq!(discord.sends.lock().unwrap().len(), 2);
+        let posted: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT discord_message_id
+               FROM twitch_crew_review_events
+              WHERE id = ANY($1::bigint[])
+              ORDER BY id",
+        )
+        .bind(vec![first_id, second_id])
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(posted, vec![None, None]);
+        let retry = store.pending_discord_cycles(10).await.unwrap();
+        assert_eq!(retry.len(), 1);
+        assert_eq!(
+            retry[0]
+                .events
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            vec![first_id, second_id]
+        );
     }
 
     #[tokio::test]

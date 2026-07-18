@@ -948,17 +948,16 @@ impl CrewReviewStore {
         cards: &[DiscordCard],
         claim_id: Uuid,
     ) -> Result<(), StoreError> {
-        if cards.is_empty()
-            || cards
-                .iter()
-                .any(|card| card.event_ids.is_empty() || card.message_id.trim().is_empty())
-        {
+        if cards.is_empty() || cards.iter().any(|card| card.message_id.trim().is_empty()) {
             return Err(StoreError::InvalidClaim);
         }
         let event_ids: Vec<i64> = cards
             .iter()
             .flat_map(|card| card.event_ids.iter().copied())
             .collect();
+        if event_ids.is_empty() {
+            return Err(StoreError::InvalidClaim);
+        }
         let requested_ids: HashSet<i64> = event_ids.iter().copied().collect();
         if requested_ids.len() != event_ids.len() {
             return Err(StoreError::InvalidClaim);
