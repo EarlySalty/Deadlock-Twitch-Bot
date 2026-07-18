@@ -180,6 +180,49 @@ async fn channel_migration_backfillt_legacy_nachrichten_und_sichert_das_id_paar(
     assert!(constraint.is_err());
 }
 
+#[tokio::test]
+async fn channel_migration_bewahrt_bereits_gespeicherten_ursprungskanal() {
+    let Some(pool) = isolated_pool("crew_review_channel_existing").await else {
+        return;
+    };
+    sqlx::raw_sql(TABLE_MIGRATION).execute(&pool).await.unwrap();
+    sqlx::query("ALTER TABLE twitch_crew_review_events ADD COLUMN discord_channel_id BIGINT")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let existing_channel_id = 424242_i64;
+    let event_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_crew_review_events (
+            review_session_id, channel_login, subject_twitch_user_id,
+            event_kind, occurred_at, metadata, discord_channel_id, discord_message_id
+         ) VALUES ($1, 'existing-channel', $2, 'ai_draft', NOW(), $3, $4, 'existing-message')
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(RICKY_TWITCH_USER_ID)
+    .bind(json!({"cycle_id": Uuid::new_v4().to_string()}))
+    .bind(existing_channel_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(CHANNEL_MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT discord_channel_id
+           FROM twitch_crew_review_events
+          WHERE id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, existing_channel_id);
+}
+
 async fn wait_for_advisory_query(pool: &PgPool, query_fragment: &str) {
     let reached = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
