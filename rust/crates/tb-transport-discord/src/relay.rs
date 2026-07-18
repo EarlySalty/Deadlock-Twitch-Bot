@@ -4,8 +4,8 @@
 //! und einfacher Retry-Logik (max. 2 Versuche bei Timeout).
 
 use crate::backend::{
-    DiscordBackend, DiscordError, EditRichMessage, SendAlertEmbed, SendResult, SendRichMessage,
-    SendUserDm,
+    DeleteMessage, DiscordBackend, DiscordError, EditRichMessage, SendAlertEmbed, SendResult,
+    SendRichMessage, SendUserDm,
 };
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -15,6 +15,7 @@ use tb_config::BrokerConfig;
 
 const SEND_PATH: &str = "/internal/master/v1/discord/send-rich-message";
 const EDIT_PATH: &str = "/internal/master/v1/discord/edit-rich-message";
+const DELETE_PATH: &str = "/internal/master/v1/discord/delete-message";
 const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
 const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
@@ -501,6 +502,19 @@ impl DiscordBackend for BrokerRelay {
         Ok(())
     }
 
+    async fn delete_message(&self, payload: DeleteMessage) -> Result<(), DiscordError> {
+        let key = Self::idempotency_key("delete", &payload);
+        let resp = self.post_with_retry(DELETE_PATH, &payload, &key).await?;
+
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Err(DiscordError::BrokerError { status, body })
+    }
+
     async fn send_user_dm(&self, payload: SendUserDm) -> Result<SendResult, DiscordError> {
         let key = Self::idempotency_key("send-dm", &payload);
         let resp = self.post_with_retry(SEND_DM_PATH, &payload, &key).await?;
@@ -541,6 +555,7 @@ impl DiscordBackend for BrokerRelay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeleteMessage;
     use tb_config::BrokerConfig;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -561,6 +576,59 @@ mod tests {
             allowed_role_ids: vec![99],
             view_spec: None,
         }
+    }
+
+    #[tokio::test]
+    async fn delete_message_sendet_auth_payload_und_idempotency_key() {
+        let server = MockServer::start().await;
+        let payload = DeleteMessage {
+            channel_id: 123,
+            message_id: "123456789012345678".to_string(),
+            reason: "Shadow-Review verworfen".to_string(),
+        };
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/delete-message"))
+            .and(header("X-Internal-Token", "test-token"))
+            .and(header(
+                "X-Idempotency-Key",
+                "delete-b327ea2ca5251b1edb1c53de25e8137505f21173d785600b",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        relay.delete_message(payload).await.unwrap();
+        server.verify().await;
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["channel_id"], 123);
+        assert_eq!(body["message_id"], "123456789012345678");
+        assert_eq!(body["reason"], "Shadow-Review verworfen");
+    }
+
+    #[tokio::test]
+    async fn delete_message_behandelt_404_als_bereits_geloescht() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/delete-message"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let result = relay
+            .delete_message(DeleteMessage {
+                channel_id: 123,
+                message_id: "123456789012345679".to_string(),
+                reason: "Shadow-Review verworfen".to_string(),
+            })
+            .await;
+
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

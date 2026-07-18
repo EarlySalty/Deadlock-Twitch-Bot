@@ -846,6 +846,7 @@ pub async fn build_runtime(
         account_age,
         crew_judge,
         crew_centroid,
+        crew_review_trigger: None,
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
@@ -2705,6 +2706,7 @@ mod chat_notification_tests {
             account_age: Arc::new(NoopAccountAge),
             crew_judge: Arc::new(OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(Centroid::default()),
+            crew_review_trigger: None,
         })
     }
 

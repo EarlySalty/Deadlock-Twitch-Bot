@@ -43,6 +43,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use dashmap::DashMap;
 use sqlx::PgPool;
+use tb_engagement::CrewReviewTrigger;
 use tracing::{debug, info, warn};
 
 use crate::api::{BanOutcome, ChatApi};
@@ -651,6 +652,7 @@ pub struct ChatPipelineParts {
     pub account_age: Arc<dyn AccountAgePort>,
     pub crew_judge: Arc<dyn CrewJudge>,
     pub crew_centroid: Arc<crate::style_score::Centroid>,
+    pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
@@ -666,16 +668,19 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::new(
-            crew_guard_enabled(),
-            Arc::clone(&parts.crew_judge),
-            Arc::clone(&parts.alerter),
-            parts.pool.clone(),
-            parts.bot_user_id.clone(),
-            Arc::clone(&parts.account_age),
-            Arc::clone(&parts.crew_centroid),
-            false,
-        ));
+        let crew_guard = Arc::new(
+            CrewGuard::new(
+                crew_guard_enabled(),
+                Arc::clone(&parts.crew_judge),
+                Arc::clone(&parts.alerter),
+                parts.pool.clone(),
+                parts.bot_user_id.clone(),
+                Arc::clone(&parts.account_age),
+                Arc::clone(&parts.crew_centroid),
+                false,
+            )
+            .with_crew_review_trigger(parts.crew_review_trigger.clone()),
+        );
         Self {
             parts,
             crew_guard,
@@ -1746,6 +1751,7 @@ mod tests {
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
     use tb_engagement::minimax_chat::EngagementMinimaxClient;
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
@@ -1815,6 +1821,15 @@ mod tests {
     #[derive(Default)]
     struct RecordingChatApi {
         calls: Mutex<Vec<String>>,
+    }
+
+    #[derive(Default)]
+    struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
+
+    impl CrewReviewTrigger for RecordingCrewReviewTrigger {
+        fn observe(&self, input: RickyChatInput) {
+            self.0.lock().expect("Recording-Lock").push(input);
+        }
     }
 
     impl RecordingChatApi {
@@ -2116,6 +2131,14 @@ mod tests {
     }
 
     fn pipeline_for_non_partner(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+        pipeline_with_crew_review_trigger(api, pool, None)
+    }
+
+    fn pipeline_with_crew_review_trigger(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    ) -> ChatPipeline {
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
         let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
@@ -2188,6 +2211,7 @@ mod tests {
             account_age: Arc::new(NoopAccountAge),
             crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
+            crew_review_trigger,
         })
     }
 
@@ -2372,6 +2396,7 @@ mod tests {
             account_age: Arc::new(NoopAccountAge),
             crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
+            crew_review_trigger: None,
         });
         (pipeline, invite_api)
     }
@@ -2482,6 +2507,37 @@ mod tests {
         let pipeline = pipeline_for_non_partner(api, pool);
 
         assert!(!pipeline.handle(&strong_timeout_event()).await);
+    }
+
+    #[tokio::test]
+    async fn shared_chat_whitespace_source_id_faellt_im_handle_auf_message_id_zurueck() {
+        let Some(pool) = moderation_test_pool("pipeline_shared_chat_ricky_fallback").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        let trigger = Arc::new(RecordingCrewReviewTrigger::default());
+        let trigger_port: Arc<dyn CrewReviewTrigger> = trigger.clone();
+        let pipeline = pipeline_with_crew_review_trigger(
+            Arc::new(RecordingChatApi::default()),
+            pool,
+            Some(trigger_port),
+        );
+        let mut event = strong_timeout_event();
+        event.broadcaster_user_id = "host-id".to_string();
+        event.broadcaster_user_login = "host".to_string();
+        event.chatter_user_id = RICKY_TWITCH_USER_ID.to_string();
+        event.chatter_user_login = "helmbombenricky".to_string();
+        event.message_id = "fallback-7".to_string();
+        event.source_broadcaster_user_id = Some("broadcaster-id".to_string());
+        event.source_broadcaster_user_login = Some("channel".to_string());
+        event.source_message_id = Some("  ".to_string());
+
+        pipeline.handle(&event).await;
+
+        let inputs = trigger.0.lock().expect("Recording-Lock");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
+        assert_eq!(inputs[0].source_message_id.as_deref(), Some("fallback-7"));
     }
 
     #[tokio::test]

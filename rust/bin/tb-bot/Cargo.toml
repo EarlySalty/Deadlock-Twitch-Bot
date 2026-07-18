@@ -8,7 +8,7 @@ name = "tb-bot"
 path = "src/main.rs"
 
 [dependencies]
-tokio              = { workspace = true }
+tokio              = { workspace = true, features = ["signal"] }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 axum               = { workspace = true }

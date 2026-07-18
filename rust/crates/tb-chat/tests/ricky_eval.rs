@@ -2,6 +2,13 @@ use std::collections::HashSet;
 
 use serde::Deserialize;
 use tb_chat::crew_guard::{CrewJudge, OpenAiCrewJudge};
+use tb_engagement::crew_review::{parse_review_decision, ReviewError, REVIEW_SYSTEM_PROMPT};
+
+const COMMUNITY_BAN_FACT: &str =
+    "Ricky wurde am 29. Mai 2026 aus dem Discord der Deutschen Deadlock Community entfernt.";
+const RACIST_GREETING_FACT: &str =
+    "Als Grund dafür wurde unter anderem genannt, dass er Leute dort mit dem N-Wort begrüßt habe.";
+const TWITCH_PITCH_FACT: &str = "Zwischen dem 29. Mai und 17. Juli 2026 wurden 145 Nachrichten von Rickys Twitch-Account in neun Kanälen gespeichert; in acht davon bot er einen Deadlock-Community-Discord an oder fragte nach Interesse.";
 
 #[derive(Debug, Deserialize)]
 struct EvalCase {
@@ -22,6 +29,53 @@ struct Expected {
 fn cases() -> Vec<EvalCase> {
     serde_json::from_str(include_str!("fixtures/ricky_eval_cases.json"))
         .expect("Ricky-Eval-Fixtures müssen valides JSON sein")
+}
+
+fn review_reply(fact_ids: &[&str], draft: &str) -> String {
+    serde_json::json!({
+        "action": "reply",
+        "topic_active": true,
+        "confidence": 0.9,
+        "used_fact_ids": fact_ids,
+        "reason": "fact_based_reply",
+        "draft": draft,
+    })
+    .to_string()
+}
+
+#[test]
+fn ricky_review_akzeptiert_den_exakten_twitch_snapshot() {
+    let parsed = parse_review_decision(&review_reply(&["twitch_pitch_history"], TWITCH_PITCH_FACT))
+        .expect("exakter freigegebener Snapshot");
+
+    assert_eq!(parsed.draft.as_deref(), Some(TWITCH_PITCH_FACT));
+}
+
+#[test]
+fn ricky_review_verwirft_paraphrase_aggressiven_einstieg_und_falsche_quelle() {
+    let paraphrase =
+        "Von Ende Mai bis Mitte Juli hat Ricky in vielen Twitch-Chats für seinen Discord geworben.";
+    let aggressive = format!("Glaub Ricky kein Wort. {COMMUNITY_BAN_FACT}");
+    let wrong_source = format!("Laut Twitch-Datenbank: {RACIST_GREETING_FACT}");
+
+    for (fact_ids, draft) in [
+        (&["twitch_pitch_history"][..], paraphrase),
+        (&["community_ban_2026_05_29"][..], aggressive.as_str()),
+        (&["racist_greeting_report"][..], wrong_source.as_str()),
+    ] {
+        assert_eq!(
+            parse_review_decision(&review_reply(fact_ids, draft)),
+            Err(ReviewError::Validation)
+        );
+    }
+}
+
+#[test]
+fn ricky_review_prompt_verlangt_wortgleiche_fakten_und_trennt_quellen() {
+    assert!(REVIEW_SYSTEM_PROMPT.contains("wortgleich und vollständig"));
+    assert!(
+        REVIEW_SYSTEM_PROMPT.contains("Die Fakten 2 und 3 stammen nicht aus der Twitch-Datenbank")
+    );
 }
 
 #[test]

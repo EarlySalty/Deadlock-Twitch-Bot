@@ -1,13 +1,16 @@
-//! Anonymer Read-only-Chat-Sink für die live Deadlock-`monitored-only`-Kanäle
-//! des Scouts. Der Sink besitzt bewusst weder `ChatApi` noch Helix-Handle.
+//! Anonymer Read-only-Chat-Sink für alle vom Scout aktuell gefundenen
+//! Deadlock-Live-Kanäle. Der Sink besitzt bewusst weder `ChatApi` noch
+//! Bot-Token oder Helix-Schreib-Handle.
 
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
 use tb_chat::types::ChatMessageBody;
 use tb_chat::{ChatMessageEvent, ChatterTracker, CrewGuard};
+use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
 use tb_engagement::irc_message::parse_privmsg;
 use tb_monitoring::scout::ScoutChatSink;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -15,13 +18,17 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::task_supervisor::TaskSupervisor;
+
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
-const ANON_NICK: &str = "justinfan13371338";
+const ANON_NICK_BASE: usize = 13_371_338;
 const CONNECT_BACKOFF: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const JOIN_STAGGER: Duration = Duration::from_millis(600);
-const MAX_CHANNELS: usize = 250;
+/// Twitch erlaubt pro Chat-User höchstens 100 gleichzeitig gejointe Räume.
+/// Der anonyme Read-Pfad verteilt größere Roster deshalb auf mehrere Nicks.
+const MAX_CHANNELS_PER_CONNECTION: usize = 100;
 
 #[derive(Debug, PartialEq, Eq)]
 enum MembershipCommand {
@@ -35,10 +42,25 @@ struct ScoutIrcMembership {
 }
 
 impl ScoutIrcMembership {
-    fn start(pool: PgPool, crew_guard: Option<Arc<CrewGuard>>) -> Self {
+    fn start(
+        pool: PgPool,
+        crew_guard: Option<Arc<CrewGuard>>,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        supervisor: &TaskSupervisor,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
-        tokio::spawn(run_membership(rx, tracker, crew_guard));
+        let shard_supervisor = supervisor.clone();
+        supervisor.spawn(
+            "scout_chat_membership_coordinator",
+            run_membership_coordinator(
+                rx,
+                tracker,
+                crew_guard,
+                crew_review_trigger,
+                shard_supervisor,
+            ),
+        );
         Self { tx }
     }
 
@@ -55,15 +77,41 @@ pub struct ScoutChatAdapter {
 }
 
 impl ScoutChatAdapter {
-    pub fn new(pool: PgPool, crew_guard: Arc<CrewGuard>) -> Self {
-        Self {
-            membership: ScoutIrcMembership::start(pool, Some(crew_guard)),
-        }
+    pub fn new(
+        pool: PgPool,
+        crew_guard: Arc<CrewGuard>,
+        crew_review_trigger: Arc<dyn CrewReviewTrigger>,
+        supervisor: &TaskSupervisor,
+    ) -> Self {
+        Self::start(
+            pool,
+            Some(crew_guard),
+            Some(crew_review_trigger),
+            supervisor,
+        )
     }
 
-    pub fn storage_only(pool: PgPool) -> Self {
+    pub fn storage_only(
+        pool: PgPool,
+        crew_review_trigger: Arc<dyn CrewReviewTrigger>,
+        supervisor: &TaskSupervisor,
+    ) -> Self {
+        Self::start(pool, None, Some(crew_review_trigger), supervisor)
+    }
+
+    fn start(
+        pool: PgPool,
+        crew_guard: Option<Arc<CrewGuard>>,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        supervisor: &TaskSupervisor,
+    ) -> Self {
         Self {
-            membership: ScoutIrcMembership::start(pool, None),
+            membership: ScoutIrcMembership::start(
+                pool,
+                crew_guard,
+                crew_review_trigger,
+                supervisor,
+            ),
         }
     }
 
@@ -113,14 +161,64 @@ fn normalize_channels(logins: &[String]) -> Vec<String> {
         .collect();
     channels.sort_unstable();
     channels.dedup();
-    channels.truncate(MAX_CHANNELS);
     channels
+}
+
+async fn run_membership_coordinator(
+    mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
+    tracker: Arc<ChatterTracker>,
+    crew_guard: Option<Arc<CrewGuard>>,
+    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    supervisor: TaskSupervisor,
+) {
+    let mut channels = HashSet::new();
+    let mut shard_senders = Vec::<mpsc::UnboundedSender<MembershipCommand>>::new();
+    while let Some(command) = rx.recv().await {
+        apply_disconnected(command, &mut channels);
+        let shards = channel_shards(&channels);
+        while shard_senders.len() < shards.len() {
+            let shard_index = shard_senders.len();
+            let (shard_tx, shard_rx) = mpsc::unbounded_channel();
+            supervisor.spawn(
+                "scout_chat_membership_shard",
+                run_membership(
+                    shard_rx,
+                    Arc::clone(&tracker),
+                    crew_guard.clone(),
+                    crew_review_trigger.clone(),
+                    anonymous_nick(shard_index),
+                ),
+            );
+            shard_senders.push(shard_tx);
+        }
+        for (index, sender) in shard_senders.iter().enumerate() {
+            let assigned = shards.get(index).cloned().unwrap_or_default();
+            if sender.send(MembershipCommand::Set(assigned)).is_err() {
+                tracing::warn!(shard = index, "scout-chat: IRC-Shard ist beendet");
+            }
+        }
+    }
+}
+
+fn channel_shards(channels: &HashSet<String>) -> Vec<Vec<String>> {
+    let mut sorted: Vec<String> = channels.iter().cloned().collect();
+    sorted.sort_unstable();
+    sorted
+        .chunks(MAX_CHANNELS_PER_CONNECTION)
+        .map(<[String]>::to_vec)
+        .collect()
+}
+
+fn anonymous_nick(shard_index: usize) -> String {
+    format!("justinfan{:08}", ANON_NICK_BASE.saturating_add(shard_index))
 }
 
 async fn run_membership(
     mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
     tracker: Arc<ChatterTracker>,
     crew_guard: Option<Arc<CrewGuard>>,
+    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    anonymous_nick: String,
 ) {
     let mut channels = HashSet::new();
     loop {
@@ -131,7 +229,7 @@ async fn run_membership(
             apply_disconnected(command, &mut channels);
         }
 
-        match connect().await {
+        match connect(&anonymous_nick).await {
             Some((reader, writer)) => {
                 serve(
                     reader,
@@ -140,6 +238,7 @@ async fn run_membership(
                     &mut channels,
                     &tracker,
                     crew_guard.as_deref(),
+                    crew_review_trigger.as_deref(),
                 )
                 .await
             }
@@ -171,15 +270,13 @@ fn apply_disconnected(command: MembershipCommand, channels: &mut HashSet<String>
 }
 
 fn add_channels(channels: &mut HashSet<String>, logins: Vec<String>) -> Vec<String> {
-    let available = MAX_CHANNELS.saturating_sub(channels.len());
     logins
         .into_iter()
         .filter(|login| channels.insert(login.clone()))
-        .take(available)
         .collect()
 }
 
-async fn connect() -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+async fn connect(anonymous_nick: &str) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
     let stream = match TcpStream::connect((IRC_HOST, IRC_PORT)).await {
         Ok(stream) => stream,
         Err(error) => {
@@ -189,7 +286,7 @@ async fn connect() -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
     };
     let (read, mut write) = stream.into_split();
     for command in [
-        format!("NICK {ANON_NICK}\r\n"),
+        format!("NICK {anonymous_nick}\r\n"),
         "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n".to_string(),
     ] {
         if let Err(error) = write.write_all(command.as_bytes()).await {
@@ -238,6 +335,7 @@ async fn serve(
     channels: &mut HashSet<String>,
     tracker: &ChatterTracker,
     crew_guard: Option<&CrewGuard>,
+    crew_review_trigger: Option<&dyn CrewReviewTrigger>,
 ) {
     let mut initial: Vec<String> = channels.iter().cloned().collect();
     initial.sort_unstable();
@@ -257,10 +355,12 @@ async fn serve(
                     return;
                 }
                 Ok(_) if line.trim_end().starts_with("PING") => pong(&mut writer, line.trim_end()).await,
-                Ok(_) => match crew_guard {
-                    Some(crew_guard) => track_privmsg(tracker, crew_guard, line.trim_end()).await,
-                    None => track_privmsg_storage_only(tracker, line.trim_end()).await,
-                },
+                Ok(_) => track_privmsg_inner(
+                    tracker,
+                    crew_guard,
+                    crew_review_trigger,
+                    line.trim_end(),
+                ).await,
             },
             command = rx.recv() => match command {
                 Some(command) => apply_connected(command, channels, &mut writer).await,
@@ -270,15 +370,22 @@ async fn serve(
     }
 }
 
+#[cfg(test)]
 async fn track_privmsg(tracker: &ChatterTracker, crew_guard: &CrewGuard, line: &str) {
-    track_privmsg_inner(tracker, Some(crew_guard), line).await;
+    track_privmsg_inner(tracker, Some(crew_guard), None, line).await;
 }
 
+#[cfg(test)]
 async fn track_privmsg_storage_only(tracker: &ChatterTracker, line: &str) {
-    track_privmsg_inner(tracker, None, line).await;
+    track_privmsg_inner(tracker, None, None, line).await;
 }
 
-async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewGuard>, line: &str) {
+async fn track_privmsg_inner(
+    tracker: &ChatterTracker,
+    crew_guard: Option<&CrewGuard>,
+    crew_review_trigger: Option<&dyn CrewReviewTrigger>,
+    line: &str,
+) {
     let Some(parsed) = parse_privmsg(line) else {
         return;
     };
@@ -300,13 +407,48 @@ async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewG
         broadcaster_user_login: channel,
         chatter_user_id: chatter_id.to_string(),
         chatter_user_login: chatter,
-        message_id: parsed.tags.get("id").cloned().unwrap_or_default(),
+        message_id: parsed
+            .tags
+            .get("id")
+            .map_or("", String::as_str)
+            .trim()
+            .to_string(),
         message: ChatMessageBody {
             text: content,
             fragments: Vec::new(),
         },
+        source_message_id: parsed
+            .tags
+            .get("source-id")
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string),
         ..Default::default()
     };
+    if event.chatter_user_id == RICKY_TWITCH_USER_ID {
+        if let Some(trigger) = crew_review_trigger {
+            let source_message_id = event
+                .source_message_id
+                .clone()
+                .or_else(|| (!event.message_id.is_empty()).then(|| event.message_id.clone()));
+            let trigger_observe = || {
+                trigger.observe(RickyChatInput {
+                    channel_login: event.broadcaster_user_login.clone(),
+                    subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
+                    source_message_id,
+                    occurred_at: chrono::Utc::now(),
+                    content: event.text().to_string(),
+                });
+            };
+            if catch_unwind(AssertUnwindSafe(trigger_observe)).is_err() {
+                tracing::warn!(
+                    channel = %event.broadcaster_user_login,
+                    chatter = %event.chatter_user_login,
+                    "scout-chat: Crew-Review-Trigger panicked"
+                );
+            }
+        }
+    }
     tracker.track(&event).await;
     if let Some(crew_guard) = crew_guard {
         crew_guard.observe(&event);
@@ -374,6 +516,7 @@ mod tests {
     use tb_chat::scam_pitch::AccountAgePort;
     use tb_chat::style_score::Centroid;
     use tb_chat::{CrewGuard, CrewJudge, CrewVerdict, ModAlerter};
+    use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -474,6 +617,112 @@ mod tests {
         }
     }
 
+    mod scout_review_trigger {
+        use super::*;
+        use std::sync::Mutex;
+
+        const RICKY_WITH_SOURCE_ID: &str = "@room-id=99;user-id=147713656;id=irc-copy-99;source-id=origin-42;tmi-sent-ts=1784138400123 :helmbombenricky!helmbombenricky@helmbombenricky.tmi.twitch.tv PRIVMSG #monitored :hallo zusammen";
+
+        #[derive(Default)]
+        struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
+
+        impl CrewReviewTrigger for RecordingCrewReviewTrigger {
+            fn observe(&self, input: RickyChatInput) {
+                self.0.lock().expect("Recording-Lock").push(input);
+            }
+        }
+
+        struct PanickingCrewReviewTrigger;
+
+        impl CrewReviewTrigger for PanickingCrewReviewTrigger {
+            fn observe(&self, _input: RickyChatInput) {
+                panic!("Trigger-Test-Panik");
+            }
+        }
+
+        #[tokio::test]
+        async fn storage_only_triggert_exakte_id_direkt() {
+            let pool = pool_or_skip!("scout_review_trigger_storage_only");
+            seed_session(&pool, "Deadlock").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+            let trigger = RecordingCrewReviewTrigger::default();
+
+            track_privmsg_inner(&tracker, None, Some(&trigger), RICKY_WITH_SOURCE_ID).await;
+
+            {
+                let inputs = trigger.0.lock().expect("Recording-Lock");
+                assert_eq!(inputs.len(), 1);
+                assert_eq!(inputs[0].channel_login, "monitored");
+                assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
+                assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
+                assert_eq!(inputs[0].content, "hallo zusammen");
+            }
+            assert_eq!(message_count(&pool).await, 1);
+        }
+
+        #[tokio::test]
+        async fn trigger_panik_wird_isoliert_und_storage_laeuft_weiter() {
+            let pool = pool_or_skip!("scout_review_trigger_panic");
+            seed_session(&pool, "Deadlock").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+
+            track_privmsg_inner(
+                &tracker,
+                None,
+                Some(&PanickingCrewReviewTrigger),
+                RICKY_WITH_SOURCE_ID,
+            )
+            .await;
+
+            assert_eq!(message_count(&pool).await, 1);
+        }
+
+        #[tokio::test]
+        async fn gleicher_login_mit_falscher_user_id_triggert_nicht() {
+            let pool = pool_or_skip!("scout_review_trigger_wrong_id");
+            seed_session(&pool, "Deadlock").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool, false);
+            let trigger = RecordingCrewReviewTrigger::default();
+            let line = RICKY_WITH_SOURCE_ID.replace("user-id=147713656", "user-id=999999");
+
+            track_privmsg_inner(&tracker, None, Some(&trigger), &line).await;
+
+            assert!(trigger.0.lock().expect("Recording-Lock").is_empty());
+        }
+
+        #[tokio::test]
+        async fn irc_id_ist_fallback_ohne_source_id() {
+            let pool = pool_or_skip!("scout_review_trigger_id_fallback");
+            seed_session(&pool, "Deadlock").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool, false);
+            let trigger = RecordingCrewReviewTrigger::default();
+            let line = RICKY_WITH_SOURCE_ID
+                .replace("id=irc-copy-99;source-id=origin-42", "id=irc-fallback-7");
+
+            track_privmsg_inner(&tracker, None, Some(&trigger), &line).await;
+
+            let inputs = trigger.0.lock().expect("Recording-Lock");
+            assert_eq!(inputs.len(), 1);
+            assert_eq!(
+                inputs[0].source_message_id.as_deref(),
+                Some("irc-fallback-7")
+            );
+        }
+
+        #[tokio::test]
+        async fn direkter_trigger_haengt_nicht_am_deadlock_storage_gate() {
+            let pool = pool_or_skip!("scout_review_trigger_storage_gate");
+            seed_session(&pool, "Arc Raiders").await;
+            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
+            let trigger = RecordingCrewReviewTrigger::default();
+
+            track_privmsg_inner(&tracker, None, Some(&trigger), RICKY_WITH_SOURCE_ID).await;
+
+            assert_eq!(trigger.0.lock().expect("Recording-Lock").len(), 1);
+            assert_eq!(message_count(&pool).await, 0);
+        }
+    }
+
     #[tokio::test]
     async fn join_channels_ruft_membership_real() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -492,20 +741,28 @@ mod tests {
 
     #[test]
     fn sink_konstruktion_braucht_nur_db_pool_und_crew_guard_keine_schreib_api() {
-        let _constructor: fn(sqlx::PgPool, Arc<CrewGuard>) -> ScoutChatAdapter =
-            ScoutChatAdapter::new;
+        let _constructor: fn(
+            sqlx::PgPool,
+            Arc<CrewGuard>,
+            Arc<dyn CrewReviewTrigger>,
+            &TaskSupervisor,
+        ) -> ScoutChatAdapter = ScoutChatAdapter::new;
     }
 
     #[test]
-    fn membership_cap_gilt_auch_fuer_join_kommandos() {
+    fn membership_sharding_verliert_bei_mehr_als_100_kanaelen_nichts() {
         let mut channels = HashSet::new();
-        let logins = (0..=MAX_CHANNELS)
-            .map(|index| format!("channel{index}"))
-            .collect();
+        let logins: Vec<String> = (0..251).map(|index| format!("channel{index}")).collect();
 
-        apply_disconnected(MembershipCommand::Join(logins), &mut channels);
+        apply_disconnected(MembershipCommand::Join(logins.clone()), &mut channels);
+        let shards = channel_shards(&channels);
 
-        assert_eq!(channels.len(), MAX_CHANNELS);
+        assert_eq!(channels.len(), logins.len());
+        assert_eq!(shards.len(), 3);
+        assert!(shards
+            .iter()
+            .all(|shard| shard.len() <= MAX_CHANNELS_PER_CONNECTION));
+        assert_eq!(shards.iter().map(Vec::len).sum::<usize>(), logins.len());
     }
 
     #[tokio::test]

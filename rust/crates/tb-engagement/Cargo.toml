@@ -8,12 +8,14 @@ async-trait = { workspace = true }
 chrono     = { workspace = true }
 regex      = { workspace = true }
 reqwest    = { workspace = true, features = ["multipart"] }
+serde      = { workspace = true }
 serde_json = { workspace = true }
-sqlx       = { workspace = true }
+sqlx       = { workspace = true, features = ["uuid"] }
 thiserror  = { workspace = true }
 tracing    = { workspace = true }
 rand       = { workspace = true }
 tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
+uuid       = { workspace = true }
 tb-crypto  = { workspace = true }
 tb-llm     = { workspace = true }
 
