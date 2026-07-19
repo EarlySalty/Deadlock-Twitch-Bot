@@ -286,7 +286,7 @@ fn pick_downloaded_video(paths: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Parst einen Twitch-ISO-Zeitstempel zu Unix-Sekunden; leer/ungültig → None.
-fn parse_twitch_datetime(value: &str) -> Option<i64> {
+pub(crate) fn parse_twitch_datetime(value: &str) -> Option<i64> {
     let text = value.trim();
     if text.is_empty() {
         return None;
@@ -295,7 +295,7 @@ fn parse_twitch_datetime(value: &str) -> Option<i64> {
 }
 
 /// Parst eine Twitch-Dauer wie „1h2m3s" zu Sekunden; kein Match → 0.
-fn parse_duration_seconds(value: &str) -> i64 {
+pub(crate) fn parse_duration_seconds(value: &str) -> i64 {
     let text = value.trim();
     let re = Regex::new(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$").expect("static regex");
     let Some(caps) = re.captures(text) else {

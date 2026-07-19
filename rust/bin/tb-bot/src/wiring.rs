@@ -108,6 +108,7 @@ fn map_eventsub_create_error(error: EventSubCreateError) -> SubscriptionCreateEr
 /// Raid-/Score-Hooks bleiben Noop. Voll verdrahtet: `RaidEventSubHooks`.
 pub struct SubscriptionEventSubHooks {
     pub manager: Arc<SubscriptionManager>,
+    pub vod_export: Option<Arc<crate::eventsub_hooks::VodExportOfflineHandler>>,
 }
 
 #[async_trait::async_trait]
@@ -116,6 +117,12 @@ impl EventSubHooks for SubscriptionEventSubHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+    }
+
+    async fn on_stream_offline(&self, twitch_user_id: &str, login: Option<&str>) {
+        if let Some(vod_export) = &self.vod_export {
+            vod_export.spawn_for_offline(twitch_user_id, login);
+        }
     }
 }
 

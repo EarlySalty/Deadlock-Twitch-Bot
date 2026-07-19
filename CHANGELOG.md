@@ -1,11 +1,17 @@
-## #392 — Deadlock-Clips laufen automatisch in OBS-Pausen
+## #393 — Deadlock-Clips laufen automatisch in OBS-Pausen
 
 **Problem:** Stream-Pausen mussten bisher manuell mit passenden Videos oder Clips bestückt werden; vorhandene Deadlock-Clips aktiver Partner ließen sich nicht als gemeinsamer, aktueller Loop nutzen.
 
 **Änderung:** Eine öffentliche OBS-Seite lädt ausschließlich bestehende Twitch-Clips aktiver, nicht ausgeschlossener Partner, filtert sie auf Deadlock und hält den Pool kurzzeitig im Speicher. Der Player mischt jeden Durchlauf und spielt jeden Clip genau einmal, bevor ein neuer Durchlauf beginnt.
 
 **Aktuelles Verhalten:** Die Pause-Loop-URL kann direkt als OBS-Browser-Quelle genutzt werden; der Clip-Pool aktualisiert sich automatisch, ohne neue Clips oder Videos zu erzeugen.
+## #392 — VOD-Export für dach_lock läuft automatisch
 
+**Problem:** VODs mussten von Hand heruntergeladen und manuell weitergegeben werden — Aufwand pro Stream, und ein öffentlicher Upload wäre datenschutzmäßig unnötig.
+
+**Änderung:** Nach jedem Stream-Ende von dach_lock lädt der Bot das komplette VOD herunter, legt es verschlüsselt in einem privaten Speicher ab und schickt eine befristete Freigabe direkt per Discord-DM.
+
+**Aktuelles Verhalten:** Der Link ist 7 Tage gültig, danach nicht mehr erreichbar. Kein manueller Schritt mehr nötig.
 ## #391 — Streamer können das Netzwerk fair vergleichen
 
 **Problem:** Die gesammelten Stream- und Raid-Daten waren nur einzeln im Dashboard sichtbar; dadurch ließ sich schwer erkennen, welche Kanäle Momentum haben und wo Raids wirklich ankommen.

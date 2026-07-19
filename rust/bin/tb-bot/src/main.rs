@@ -261,6 +261,7 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 use auto_raid::OfflineRaidHandler;
 use eventsub_hooks::{
     BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks, RaidTrackingResolverAdapter,
+    VodExportOfflineHandler,
 };
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManualRaidAdapter};
@@ -755,6 +756,32 @@ async fn main() {
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
+    let vod_export = helix.as_ref().clone().and_then(|helix_client| {
+        let relay = match BrokerRelay::new(&settings.broker) {
+            Ok(relay) => relay,
+            Err(error) => {
+                tracing::warn!(%error, "VOD-Export deaktiviert: BrokerRelay nicht verfügbar");
+                return None;
+            }
+        };
+        let bucket = std::env::var("VOD_EXPORT_STORJ_BUCKET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "server-backup".to_string());
+        let yt_dlp_path = std::env::current_dir()
+            .unwrap_or_default()
+            .join(".venv/bin/yt-dlp");
+        let api: Arc<dyn tb_highlight::twitch_vod::TwitchVodApi> = Arc::new(HelixVodSource {
+            helix: helix_client,
+        });
+        Some(Arc::new(VodExportOfflineHandler::new(
+            api,
+            relay,
+            yt_dlp_path,
+            bucket,
+        )))
+    });
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -1118,6 +1145,7 @@ async fn main() {
                 arrival,
                 guard: blacklist_guard,
                 reauth_reminder,
+                vod_export: vod_export.clone(),
                 pool: pool.clone(),
             })
         }
@@ -1130,6 +1158,7 @@ async fn main() {
             }
             Arc::new(SubscriptionEventSubHooks {
                 manager: manager.clone(),
+                vod_export: vod_export.clone(),
             })
         }
         _ => Arc::new(NoopEventSubHooks),
