@@ -84,6 +84,7 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 pub fn build_public_router(pool: PgPool) -> Router {
     use handlers::{
         bans, health_probe, network, network_stats, overlay, raids, self_explainer, social_media,
+        streamer_comparison,
     };
 
     Router::new()
@@ -112,6 +113,10 @@ pub fn build_public_router(pool: PgPool) -> Router {
             get(network_stats::network_stats_handler),
         )
         .route(
+            "/twitch/api/v2/public/streamer-comparison",
+            get(streamer_comparison::streamer_comparison_handler),
+        )
+        .route(
             "/twitch/api/v2/public/overlay",
             get(overlay::overlay_api_handler),
         )
@@ -132,6 +137,9 @@ pub fn build_public_router(pool: PgPool) -> Router {
             get(social_media::oauth_callback_handler),
         )
         .with_state(pool)
+        .layer(Extension(
+            streamer_comparison::StreamerComparisonCache::default(),
+        ))
         .layer(CorsLayer::permissive())
 }
 

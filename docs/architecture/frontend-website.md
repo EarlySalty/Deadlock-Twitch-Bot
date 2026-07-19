@@ -6,7 +6,7 @@
 
 ## 1. Zweck & Abgrenzung
 
-`website/` ist die **öffentliche Marketing-/Onboarding-Site**: Landing-Page (Hero, Feature-/Raid-/Clip-Demos), Streamer-Onboarding, Bot-FAQ und das **Affiliate-Portal/Vertriebler**. Sie erklärt den Bot, führt Streamer ins Onboarding und ist der öffentliche Einstieg.
+`website/` ist die **öffentliche Marketing-/Onboarding-Site**: Landing-Page (Hero, Feature-/Raid-/Clip-Demos), Streamer-Onboarding, Bot-FAQ, der aggregierte Streamer-Vergleich und das **Affiliate-Portal/Vertriebler**. Sie erklärt den Bot, führt Streamer ins Onboarding und ist der öffentliche Einstieg.
 
 Abgrenzung: Reines Frontend (statisch/prerendert). Dynamik kommt aus wenigen API-Aufrufen (Live-Ban-Feed, Bot-Frage-Box). Das Affiliate-**Backend** liegt in [dashboard.md](dashboard.md).
 
@@ -15,8 +15,8 @@ Abgrenzung: Reines Frontend (statisch/prerendert). Dynamik kommt aus wenigen API
 | Aspekt | Detail |
 |--------|--------|
 | **Stack** | React + TypeScript, Vite (**Multi-Entry** + Prerender), framer-motion, tailwind. |
-| **Entries** | `App.tsx` (Haupt-Landing) + separate Mount-Punkte: `affiliate-portal.tsx`, `faq.tsx`, `onboarding.tsx`, `vertriebler.tsx`; `main.tsx` enthält `prerender` (SSG). |
-| **API** | wenige öffentliche Endpunkte (Ban-Feed, Self-Explainer-Frage-Box). |
+| **Entries** | `App.tsx` (Haupt-Landing) + separate Mount-Punkte: `affiliate-portal.tsx`, `faq.tsx`, `onboarding.tsx`, `streamer-comparison.tsx`, `vertriebler.tsx`; `main.tsx` enthält `prerender` (SSG). |
+| **API** | öffentliche Endpunkte für Ban-Feed, Self-Explainer und aggregierten Streamer-Vergleich. |
 | **Wissensbasis** | `data/twitchKnowledgeBase.ts` (858 Z.) — FAQ-/Onboarding-Inhalte (auch vom FAQ-Bot indiziert). |
 
 ## 3. Struktur im Überblick
@@ -24,7 +24,7 @@ Abgrenzung: Reines Frontend (statisch/prerendert). Dynamik kommt aus wenigen API
 | Verzeichnis | Inhalt |
 |-------------|--------|
 | `(root)` | `App.tsx` + Entry-Mounts (`affiliate-portal`, `faq`, `onboarding`, `vertriebler`), `main.tsx` (Prerender). |
-| `pages/` | `AffiliatePortal` (1298 Z.), `AffiliateProgramPage`, `BotFaqPage`, `StreamerOnboardingPage`. |
+| `pages/` | `AffiliatePortal` (1298 Z.), `AffiliateProgramPage`, `BotFaqPage`, `StreamerOnboardingPage`, `StreamerComparisonPage`. |
 | `components/sections/` | Landing-Abschnitte: `Hero`, `RaidDemo`, `RaidExplainer`, `RaidSystem`, `ClipManager`, `Dashboard`, `Community`, `Features`, `Stats`, `CTA`, `BanFeed`, `BotQuestionBox`, `AffiliateSection`. |
 | `components/layout/` | `Navbar`, `Footer`, `PublicInfoHeader`/`PublicInfoFooter`, `AffiliateNavbar`. |
 | `components/ui/` | `GlowButton`, `GradientText`, `AnimatedCounter`, `ScrollReveal`, `FeatureCard`, `BrowserMockup`, `SectionHeading`. |
@@ -36,7 +36,7 @@ Abgrenzung: Reines Frontend (statisch/prerendert). Dynamik kommt aus wenigen API
 
 1. **Build/Prerender:** Vite baut mehrere Entries; `main.tsx::prerender` erzeugt statisches HTML (schnelle, SEO-freundliche Auslieferung).
 2. **Landing:** `App.tsx` setzt die `sections/` zusammen (Hero → Features → Raid-Demos → Clip → Community → CTA), `useScrollSpy` markiert den aktiven Abschnitt, `useCountUp`/`AnimatedCounter` animieren Kennzahlen.
-3. **Dynamik:** `BanFeed`/`useBanFeed` zieht den **Live-Ban-Feed** aus einem öffentlichen Endpoint (zeigt die Moderations-Bans des Bots). `BotQuestionBox` schickt Nutzerfragen an den **Self-Explainer-Endpoint** (grounded, Anti-Injection — siehe [chat.md](chat.md)) und zeigt die Antwort direkt.
+3. **Dynamik:** `BanFeed`/`useBanFeed` zieht den **Live-Ban-Feed** aus einem öffentlichen Endpoint (zeigt die Moderations-Bans des Bots). `BotQuestionBox` schickt Nutzerfragen an den **Self-Explainer-Endpoint** (grounded, Anti-Injection — siehe [chat.md](chat.md)) und zeigt die Antwort direkt. Der Streamer-Vergleich lädt ausschließlich aggregierte Daten aktiver Partner aus dem Public-Endpoint; private Dashboard-Felder gehören nicht zu dessen Vertrag.
 4. **Onboarding/FAQ:** `StreamerOnboardingPage`/`BotFaqPage` rendern aus `data/twitchKnowledgeBase.ts` (dieselbe Quelle, die der FAQ-Bot nutzt).
 5. **Affiliate:** `AffiliatePortal`/`AffiliateProgramPage` (+ `vertriebler`-Entry) bilden das öffentliche Affiliate-Onboarding ab; die eigentliche Abwicklung läuft im [Dashboard-Backend](dashboard.md).
 
@@ -63,7 +63,7 @@ Landing-Abschnitte als eigenständige Komponenten: `Hero`, `RaidDemo` (818 Z., i
 
 ## 6. Datenbank & externe Schnittstellen
 
-- **API (öffentlich):** Live-Ban-Feed (`useBanFeed`), Self-Explainer-Frage-Box (`BotQuestionBox` → Self-Explainer-Endpoint).
+- **API (öffentlich):** Live-Ban-Feed (`useBanFeed`), Self-Explainer-Frage-Box (`BotQuestionBox` → Self-Explainer-Endpoint), aggregierter Streamer-Vergleich.
 - **Externe Links:** Discord-Invite, EarlySalty-Website, Twitch-Onboarding/FAQ/Login (`data/externalLinks.ts`).
 - **Keine** eigene DB.
 
@@ -73,4 +73,5 @@ Landing-Abschnitte als eigenständige Komponenten: `Hero`, `RaidDemo` (818 Z., i
 - **Wissensbasis ist geteilt:** `twitchKnowledgeBase.ts` speist Website-FAQ **und** den FAQ-Bot — Änderungen wirken an beiden Stellen.
 - **BotQuestionBox antwortet direkt:** Anders als die Chat-Antworten (Shadow) antwortet die Website-Frage-Box live (grounded + Anti-Injection, siehe [chat.md](chat.md)).
 - **Ban-Feed ist öffentlich:** Der Live-Ban-Feed zeigt Moderations-Bans öffentlich — bei Wortwahl/Anzeige die Call-out-Regeln beachten (Hedge statt harter Vorwurf, siehe Memory).
+- **Vergleich ist bewusst aggregiert:** Öffentliche Kennzahlen beschränken sich auf Stream-Verlauf, Reichweite und bestätigte Netzwerk-Raids. Einnahmen, Abos, einzelne Zuschauer und Account-Verknüpfungen bleiben ausschließlich im geschützten Dashboard.
 - **Design pragmatisch-neutral:** Funktional/neutral halten (keine identitätspolitischen Tags) — siehe Memory zur Design-Tonalität.

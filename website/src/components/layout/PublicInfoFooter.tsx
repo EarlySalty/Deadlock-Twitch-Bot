@@ -11,6 +11,7 @@ import {
 } from "@/data/externalLinks";
 
 const FOOTER_LINKS = [
+  { label: "Streamer-Vergleich", href: "/streamer/vergleich/" },
   { label: "Onboarding", href: TWITCH_ONBOARDING_URL },
   { label: "FAQ", href: TWITCH_FAQ_URL },
   { label: "Login", href: buildTwitchDashboardLoginUrl() },
@@ -59,4 +60,3 @@ export function PublicInfoFooter() {
     </footer>
   );
 }
-
