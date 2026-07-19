@@ -24,6 +24,12 @@ use crate::poller::hooks::{
 };
 use crate::poller::source::SourceError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnouncementEditOutcome {
+    Updated,
+    Gone,
+}
+
 /// Send-/Edit-Port zum Master-Broker (Adapter über `tb-transport-discord`
 /// im Composition-Root; übernimmt auch den `view_resolver_unavailable`-
 /// Fallback auf einen einfachen Link-Button).
@@ -48,7 +54,7 @@ pub trait AnnouncementTransport: Send + Sync {
         embed: Value,
         components: Option<Value>,
         view_spec: Option<Value>,
-    ) -> Result<(), SourceError>;
+    ) -> Result<AnnouncementEditOutcome, SourceError>;
 }
 
 /// VOD-Vorschaubild fürs Offline-Embed (Helix-Adapter in `tb-bot`).
@@ -317,7 +323,7 @@ impl BrokerAnnouncementSink {
             )
             .await
         {
-            Ok(()) => {
+            Ok(AnnouncementEditOutcome::Updated) => {
                 self.live_sync.lock().expect("live sync lock").insert(
                     login,
                     LiveSyncState {
@@ -327,6 +333,7 @@ impl BrokerAnnouncementSink {
                 );
                 EndAnnouncementOutcome::Updated
             }
+            Ok(AnnouncementEditOutcome::Gone) => EndAnnouncementOutcome::Gone,
             Err(error) => {
                 tracing::warn!(%error, login, "Live-Sync via Broker fehlgeschlagen");
                 EndAnnouncementOutcome::Failed
@@ -368,6 +375,8 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             .await;
         match send_result {
             Ok(message_id) if !message_id.trim().is_empty() => {
+                let message_id = message_id.trim().to_string();
+                tracing::info!(login, discord_message_id = %message_id, "Go-Live-Posting via Broker gesendet");
                 self.retry.lock().expect("retry lock").remove(&login);
                 self.live_sync.lock().expect("live sync lock").insert(
                     login,
@@ -377,7 +386,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                     },
                 );
                 Some(AnnounceLiveResult {
-                    message_id: message_id.trim().to_string(),
+                    message_id,
                     tracking_token: payload.view_spec.is_some().then_some(tracking_token),
                     notification_text: payload.notification_text,
                 })
@@ -451,6 +460,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             "label": TWITCH_VOD_BUTTON_LABEL,
             "url": referral_url,
         });
+        let discord_message_id = request.message_id.clone();
         match self
             .transport
             .edit(
@@ -463,7 +473,8 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             )
             .await
         {
-            Ok(()) => {
+            Ok(AnnouncementEditOutcome::Updated) => {
+                tracing::info!(login, discord_message_id = %discord_message_id, "Announcement via Broker auf beendet editiert");
                 let bucket = Self::live_bucket(now);
                 let mut live_sync = self.live_sync.lock().expect("live sync lock");
                 let state = live_sync.entry(login).or_insert(LiveSyncState {
@@ -472,6 +483,10 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 });
                 state.shows_offline = true;
                 EndAnnouncementOutcome::Updated
+            }
+            Ok(AnnouncementEditOutcome::Gone) => {
+                tracing::info!(login, discord_message_id = %discord_message_id, "Announcement existiert nicht mehr");
+                EndAnnouncementOutcome::Gone
             }
             Err(error) => {
                 tracing::warn!(%error, login, "Offline-Edit via Broker fehlgeschlagen");

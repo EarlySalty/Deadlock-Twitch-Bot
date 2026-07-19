@@ -5,7 +5,7 @@ pub mod sink;
 pub mod template;
 
 pub use sink::{
-    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, ChannelProfileSource,
-    LivePingRoleProvider, NoChannelProfile, NoVodPreview, VodPreviewSource,
+    AnnouncementEditOutcome, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
+    ChannelProfileSource, LivePingRoleProvider, NoChannelProfile, NoVodPreview, VodPreviewSource,
 };
 pub use template::{AnnouncementConfig, RenderedAnnouncement};

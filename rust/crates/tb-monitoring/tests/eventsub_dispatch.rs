@@ -320,7 +320,7 @@ async fn stream_online_dispatch_dedup_und_verarbeitung() {
 }
 
 #[tokio::test]
-async fn stream_online_neuer_stream_leert_altes_announcement() {
+async fn stream_online_nach_abgelaufenem_reconnect_fenster_leert_altes_announcement() {
     let pool = pool_or_skip!("t4d_online_resets_old_announcement");
     sqlx::query(
         "INSERT INTO twitch_live_state
@@ -331,6 +331,15 @@ async fn stream_online_neuer_stream_leert_altes_announcement() {
     .execute(&pool)
     .await
     .unwrap();
+    GuardStore::new(pool.clone())
+        .claim(
+            GuardKind::BusinessEffect,
+            "announcement_reannounce:drag",
+            5.0 * 60.0,
+            epoch_clock() - 6.0 * 60.0,
+        )
+        .await
+        .unwrap();
 
     let hooks = Arc::new(RecordingHooks::default());
     let (dispatcher, runtime, store) = build_stack(&pool, hooks);
@@ -368,6 +377,116 @@ async fn stream_online_neuer_stream_leert_altes_announcement() {
     assert_eq!(state.last_stream_id.as_deref(), Some("new-stream"));
     assert_eq!(state.last_discord_message_id, None);
     assert_eq!(state.last_tracking_token, None);
+}
+
+#[tokio::test]
+async fn stream_online_ohne_bestaetigtes_ende_bewahrt_alte_referenz_fuer_poller() {
+    let pool = pool_or_skip!("t4d_online_preserves_unreconciled_announcement");
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_stream_id,
+             last_discord_message_id, last_tracking_token, last_started_at,
+             last_title, last_game)
+         VALUES ('42', 'drag', 1, 'old-stream', 'old-msg', 'old-token',
+                 '2026-06-09T12:00:00Z', 'Old title', 'Old game')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack_with(
+        &pool,
+        hooks,
+        Some(Arc::new(StaticChannelInfo) as Arc<dyn ChannelInfoSource>),
+    );
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "drag",
+            "id": "new-stream",
+            "started_at": "2026-06-09T17:00:00Z"
+        }
+    });
+
+    dispatcher
+        .dispatch("stream.online", Some("m-reconcile-1"), &body)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    #[derive(sqlx::FromRow)]
+    struct ReconcileState {
+        last_stream_id: Option<String>,
+        last_discord_message_id: Option<String>,
+        last_tracking_token: Option<String>,
+        last_started_at: Option<String>,
+        last_title: Option<String>,
+        last_game: Option<String>,
+    }
+    let state: ReconcileState = sqlx::query_as(
+        "SELECT last_stream_id, last_discord_message_id, last_tracking_token,
+                last_started_at, last_title, last_game
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.last_stream_id.as_deref(), Some("old-stream"));
+    assert_eq!(state.last_discord_message_id.as_deref(), Some("old-msg"));
+    assert_eq!(state.last_tracking_token.as_deref(), Some("old-token"));
+    assert_eq!(
+        state.last_started_at.as_deref(),
+        Some("2026-06-09T12:00:00Z")
+    );
+    assert_eq!(state.last_title.as_deref(), Some("Old title"));
+    assert_eq!(state.last_game.as_deref(), Some("Old game"));
+}
+
+#[tokio::test]
+async fn stream_online_clear_ueberschreibt_keine_parallel_erneuerte_referenz() {
+    let pool = pool_or_skip!("t4d_online_clear_is_compare_and_set");
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_stream_id,
+             last_discord_message_id, last_tracking_token)
+         VALUES ('42', 'live', 1, 'new-stream', 'old-msg', 'live-token'),
+                ('43', 'replaced', 0, 'old-stream', 'replacement-msg', 'replacement-token')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = LiveStateStore::new(pool.clone());
+    for (user_id, login) in [("42", "live"), ("43", "replaced")] {
+        store
+            .apply_stream_online(
+                user_id,
+                login,
+                Some("new-stream"),
+                Some("2026-06-09T17:00:00Z"),
+                "2026-06-09T17:00:01Z",
+                Some("old-msg"),
+            )
+            .await
+            .unwrap();
+    }
+
+    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT twitch_user_id, last_discord_message_id, last_tracking_token
+           FROM twitch_live_state
+          WHERE twitch_user_id IN ('42', '43')
+          ORDER BY twitch_user_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows[0].1.as_deref(), Some("old-msg"));
+    assert_eq!(rows[0].2.as_deref(), Some("live-token"));
+    assert_eq!(rows[1].1.as_deref(), Some("replacement-msg"));
+    assert_eq!(rows[1].2.as_deref(), Some("replacement-token"));
 }
 
 #[tokio::test]

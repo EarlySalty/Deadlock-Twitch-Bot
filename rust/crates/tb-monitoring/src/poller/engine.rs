@@ -208,13 +208,12 @@ impl PollEngine {
         }
     }
 
-    async fn announcement_reannounce_cooldown_expired(&self, login: &str) -> bool {
+    async fn announcement_reannounce_marker_exists(&self, login: &str) -> bool {
         let Some(key) = announcement_reannounce_cooldown_key(login) else {
             return false;
         };
         match self.guard.has_entry(GuardKind::BusinessEffect, &key).await {
-            Ok(true) => !self.announcement_reannounce_cooldown_active(login).await,
-            Ok(false) => false,
+            Ok(exists) => exists,
             Err(error) => {
                 tracing::debug!(%error, login = %login, "Announcement-Reannounce-Cooldown-Marker konnte nicht gelesen werden");
                 false
@@ -523,24 +522,26 @@ impl PollEngine {
                     .await;
             }
 
-            let stream_restarted = is_live
-                && !current_stream_id.is_empty()
-                && ((!previous_stream_id.is_empty() && previous_stream_id != current_stream_id)
-                    || (previous_stream_id.is_empty() && message_id_previous.is_some()));
-            let reannounce_cooldown_active =
-                if is_live && message_id_previous.is_some() && (!was_live || stream_restarted) {
-                    self.announcement_reannounce_cooldown_active(&login_lower)
-                        .await
-                } else {
-                    false
-                };
+            let stream_restarted =
+                is_live && stream_identity_changed(&previous_stream_id, &current_stream_id);
+            let should_check_reannounce_cooldown =
+                is_live && message_id_previous.is_some() && (!was_live || stream_restarted);
+            let reannounce_marker_exists = if should_check_reannounce_cooldown {
+                self.announcement_reannounce_marker_exists(&login_lower)
+                    .await
+            } else {
+                false
+            };
+            let reannounce_cooldown_active = reannounce_marker_exists
+                && self
+                    .announcement_reannounce_cooldown_active(&login_lower)
+                    .await;
             let same_stream_reconnect_after_cooldown = is_live
                 && !was_live
                 && message_id_previous.is_some()
                 && !stream_restarted
-                && self
-                    .announcement_reannounce_cooldown_expired(&login_lower)
-                    .await;
+                && reannounce_marker_exists
+                && !reannounce_cooldown_active;
             if !was_live {
                 had_deadlock_prev = false;
             } else if stream_restarted {
@@ -622,13 +623,69 @@ impl PollEngine {
                 None
             };
 
+            let replaces_existing_announcement = stream_restarted && !reannounce_cooldown_active;
+            let previous_announcement_needs_close = message_id_previous.is_some()
+                && replaces_existing_announcement
+                && (was_live || !reannounce_marker_exists)
+                && is_deadlock
+                && entry.is_partner_active;
+            let mut previous_announcement_closed = !previous_announcement_needs_close;
+            if previous_announcement_needs_close && self.sink.ready() {
+                if let Some(message_id) = message_id_previous.clone() {
+                    let display_name = prev_state
+                        .map(|s| s.streamer_login.clone())
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| entry.login.clone());
+                    let outcome = self
+                        .sink
+                        .end_announcement(EndAnnouncementRequest {
+                            login: login_lower.clone(),
+                            display_name,
+                            message_id,
+                            previous_tracking_token: tracking_token_previous.clone(),
+                            last_title: prev_state
+                                .and_then(|s| s.last_title.clone())
+                                .filter(|t| !t.trim().is_empty()),
+                            last_game: prev_state
+                                .and_then(|s| s.last_game.clone())
+                                .filter(|g| !g.trim().is_empty()),
+                            twitch_user_id: twitch_user_id
+                                .map(str::to_string)
+                                .or_else(|| prev_state.map(|s| s.twitch_user_id.clone())),
+                            started_at_iso: prev_state
+                                .and_then(|s| s.last_started_at.clone())
+                                .filter(|s| !s.trim().is_empty()),
+                        })
+                        .await;
+                    match outcome {
+                        EndAnnouncementOutcome::Updated | EndAnnouncementOutcome::Gone => {
+                            previous_announcement_closed = true;
+                            message_id_to_store = None;
+                            tracking_token_to_store = None;
+                            self.claim_announcement_reannounce_cooldown(&login_lower)
+                                .await;
+                        }
+                        EndAnnouncementOutcome::Failed => {
+                            tracing::warn!(
+                                login = %login_lower,
+                                previous_stream_id = %previous_stream_id,
+                                current_stream_id = %current_stream_id,
+                                "Stream-Neustart erkannt, aber altes Announcement konnte nicht beendet werden"
+                            );
+                        }
+                    }
+                }
+            }
+
             // Go-Live-Posting (Python `should_post`).
             let should_post = self.sink.ready()
                 && is_deadlock
                 && (message_id_previous.is_none()
-                    || (stream_restarted && !reannounce_cooldown_active)
+                    || (replaces_existing_announcement && previous_announcement_closed)
                     || same_stream_reconnect_after_cooldown)
                 && entry.is_partner_active;
+            let announcement_reconciliation_pending =
+                previous_announcement_needs_close && !previous_announcement_closed;
             if should_post {
                 if let Some(stream) = stream {
                     let suppress_role_pings = stream_restarted && reannounce_cooldown_active;
@@ -669,10 +726,11 @@ impl PollEngine {
                 && is_deadlock
                 && message_id_previous.is_some()
                 && !should_post
+                && !announcement_reconciliation_pending
                 && entry.is_partner_active
             {
                 if let Some(stream) = stream {
-                    let _ = self
+                    let outcome = self
                         .sink
                         .sync_live_announcement(AnnounceLiveRequest {
                             login: login_lower.clone(),
@@ -686,6 +744,10 @@ impl PollEngine {
                             suppress_role_pings: false,
                         })
                         .await;
+                    if outcome == EndAnnouncementOutcome::Gone {
+                        message_id_to_store = None;
+                        tracking_token_to_store = None;
+                    }
                 }
             }
 
@@ -716,7 +778,13 @@ impl PollEngine {
                     })
                     .await;
                 match outcome {
-                    EndAnnouncementOutcome::Updated | EndAnnouncementOutcome::Gone => {
+                    EndAnnouncementOutcome::Updated => {
+                        self.claim_announcement_reannounce_cooldown(&login_lower)
+                            .await;
+                    }
+                    EndAnnouncementOutcome::Gone => {
+                        message_id_to_store = None;
+                        tracking_token_to_store = None;
                         self.claim_announcement_reannounce_cooldown(&login_lower)
                             .await;
                     }
@@ -746,13 +814,29 @@ impl PollEngine {
                 streamer_login: login_lower.clone(),
                 is_live: i32::from(is_live),
                 last_seen_at: now_iso.clone(),
-                last_title: last_title_value,
-                last_game: last_game_value,
+                last_title: if announcement_reconciliation_pending {
+                    prev_state.and_then(|s| s.last_title.clone())
+                } else {
+                    last_title_value
+                },
+                last_game: if announcement_reconciliation_pending {
+                    prev_state.and_then(|s| s.last_game.clone())
+                } else {
+                    last_game_value
+                },
                 last_viewer_count: last_viewer_count_value,
                 last_discord_message_id: message_id_to_store,
                 last_tracking_token: tracking_token_to_store,
-                last_stream_id: stream_id_value,
-                last_started_at: started_at_iso,
+                last_stream_id: if announcement_reconciliation_pending {
+                    Some(previous_stream_id.clone()).filter(|id| !id.is_empty())
+                } else {
+                    stream_id_value
+                },
+                last_started_at: if announcement_reconciliation_pending {
+                    prev_state.and_then(|s| s.last_started_at.clone())
+                } else {
+                    started_at_iso
+                },
                 had_deadlock_in_session: i32::from(had_deadlock_to_store),
                 active_session_id,
                 last_deadlock_seen_at: last_deadlock_seen_at_value,
@@ -923,6 +1007,14 @@ fn epoch_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+fn stream_identity_changed(previous_stream_id: &str, current_stream_id: &str) -> bool {
+    let previous_stream_id = previous_stream_id.trim();
+    let current_stream_id = current_stream_id.trim();
+    !current_stream_id.is_empty()
+        && !previous_stream_id.is_empty()
+        && previous_stream_id != current_stream_id
 }
 
 #[cfg(test)]
