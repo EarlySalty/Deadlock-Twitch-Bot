@@ -25,8 +25,8 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, latest_vod_id, should_export, CommandRunner, ExportTargets,
-        TokioCommandRunner, VodExportError,
+        export_latest_vod, should_export, CommandRunner, ExportTargets, TokioCommandRunner,
+        VodExportError,
     },
 };
 use tb_monitoring::{
@@ -93,7 +93,6 @@ impl VodExportOfflineHandler {
         let temp_dir = self.temp_dir.clone();
         let twitch_user_id = twitch_user_id.to_string();
         tokio::spawn(async move {
-            let baseline_vod_id = latest_vod_id(api.as_ref(), &twitch_user_id).await;
             tokio::time::sleep(VOD_EXPORT_DELAY).await;
             let targets = ExportTargets {
                 yt_dlp_path: &yt_dlp_path,
@@ -106,7 +105,7 @@ impl VodExportOfflineHandler {
                 runner.as_ref(),
                 &targets,
                 &twitch_user_id,
-                baseline_vod_id.as_deref(),
+                Utc::now().timestamp(),
             )
             .await
             {

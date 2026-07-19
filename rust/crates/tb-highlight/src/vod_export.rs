@@ -3,10 +3,19 @@ use std::{path::Path, process::Stdio};
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::{config::FFMPEG_PATH, twitch_vod::TwitchVodApi};
+use crate::{
+    config::FFMPEG_PATH,
+    twitch_vod::{parse_twitch_datetime, TwitchVodApi},
+};
 
 pub const TARGET_LOGIN: &str = "dach_lock";
 pub const LINK_EXPIRY: &str = "7d";
+/// Ein Archiv-VOD gilt nur als "der gerade beendete Stream", wenn es nicht
+/// älter als das hier ist. Verhindert, dass ein VOD von einem früheren
+/// Stream verschickt wird, weil das neue VOD in der Twitch-API noch nicht
+/// sichtbar ist — unabhängig davon, wie schnell/langsam Twitch diesmal ist,
+/// also ohne Race gegen den Warte-Delay.
+const MAX_VOD_AGE_SECONDS: i64 = 24 * 60 * 60;
 
 pub fn should_export(login: Option<&str>) -> bool {
     login == Some(TARGET_LOGIN)
@@ -69,19 +78,6 @@ pub enum VodExportError {
     MissingLink,
 }
 
-/// Neueste Archiv-VOD-ID des Kanals, oder `None` ohne Archiv-VODs. Wird vor
-/// dem Warte-Delay als Baseline abgerufen, damit `export_latest_vod` danach
-/// erkennt, ob wirklich ein neues VOD erschienen ist.
-pub async fn latest_vod_id(api: &dyn TwitchVodApi, channel_id: &str) -> Option<String> {
-    let vods = api.get_archive_videos(channel_id, 1).await;
-    vods.first()
-        .and_then(|vod| vod.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-}
-
 /// Statische Ziele/Pfade für einen Export-Lauf (yt-dlp/rclone-Binaries,
 /// Storj-Bucket, lokales Zwischenverzeichnis) — gebündelt, damit
 /// `export_latest_vod` nicht auf eine unübersichtliche Parameterliste wächst.
@@ -97,16 +93,25 @@ pub async fn export_latest_vod(
     runner: &dyn CommandRunner,
     targets: &ExportTargets<'_>,
     channel_id: &str,
-    baseline_vod_id: Option<&str>,
+    now_unix: i64,
 ) -> Result<String, VodExportError> {
-    let vod_id = latest_vod_id(api, channel_id)
-        .await
+    let vods = api.get_archive_videos(channel_id, 1).await;
+    let vod = vods.first().ok_or(VodExportError::NoVod)?;
+    let vod_id = vod
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
         .ok_or(VodExportError::NoVod)?;
-    let vod_id = vod_id.as_str();
     if !vod_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(VodExportError::InvalidVodId(vod_id.to_string()));
     }
-    if baseline_vod_id == Some(vod_id) {
+    let created_at = vod
+        .get("created_at")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let started_at = parse_twitch_datetime(created_at).ok_or(VodExportError::NoNewVod)?;
+    if now_unix - started_at > MAX_VOD_AGE_SECONDS {
         return Err(VodExportError::NoNewVod);
     }
 
@@ -286,7 +291,18 @@ mod tests {
         );
     }
 
-    struct MockApi;
+    const FRESH_CREATED_AT: &str = "2024-01-01T12:00:00Z";
+    const FRESH_CREATED_AT_UNIX: i64 = 1_704_110_400;
+
+    struct MockApi {
+        created_at: &'static str,
+    }
+
+    impl Default for MockApi {
+        fn default() -> Self {
+            Self { created_at: FRESH_CREATED_AT }
+        }
+    }
 
     #[async_trait]
     impl TwitchVodApi for MockApi {
@@ -300,7 +316,7 @@ mod tests {
             first: u32,
         ) -> Vec<serde_json::Value> {
             assert_eq!(first, 1);
-            vec![json!({ "id": "987" })]
+            vec![json!({ "id": "987", "created_at": self.created_at })]
         }
     }
 
@@ -354,9 +370,15 @@ mod tests {
             bucket: "server-backup",
             temp_dir: &temp_dir,
         };
-        let link = export_latest_vod(&MockApi, runner.as_ref(), &targets, "channel-1", None)
-            .await
-            .expect("export succeeds");
+        let link = export_latest_vod(
+            &MockApi::default(),
+            runner.as_ref(),
+            &targets,
+            "channel-1",
+            FRESH_CREATED_AT_UNIX + 100,
+        )
+        .await
+        .expect("export succeeds");
 
         assert_eq!(link, "https://share.example/987");
         assert!(!temp_dir.join("987.mp4").exists());
@@ -389,7 +411,14 @@ mod tests {
             bucket: "server-backup",
             temp_dir: &temp_dir,
         };
-        let result = export_latest_vod(&MockApi, &runner, &targets, "channel-1", None).await;
+        let result = export_latest_vod(
+            &MockApi::default(),
+            &runner,
+            &targets,
+            "channel-1",
+            FRESH_CREATED_AT_UNIX + 100,
+        )
+        .await;
 
         assert!(matches!(result, Err(VodExportError::CommandFailed { .. })));
         assert!(!temp_dir.join("987.mp4.part").exists());
@@ -397,10 +426,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn baseline_vod_id_unveraendert_liefert_kein_neues_vod() {
+    async fn zu_altes_vod_liefert_kein_neues_vod_statt_altstream_zu_senden() {
         let runner = MockRunner::default();
         let temp_dir = std::env::temp_dir().join(format!(
-            "tb-vod-export-baseline-test-{}",
+            "tb-vod-export-too-old-test-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir");
@@ -411,11 +440,48 @@ mod tests {
             bucket: "server-backup",
             temp_dir: &temp_dir,
         };
-        let result =
-            export_latest_vod(&MockApi, &runner, &targets, "channel-1", Some("987")).await;
+        // now liegt 25h nach dem VOD-Start, also außerhalb des 24h-Fensters:
+        // das VOD stammt sicher von einem früheren Stream, nicht vom
+        // gerade beendeten (egal wie schnell/langsam Twitch diesmal war).
+        let result = export_latest_vod(
+            &MockApi::default(),
+            &runner,
+            &targets,
+            "channel-1",
+            FRESH_CREATED_AT_UNIX + 25 * 60 * 60,
+        )
+        .await;
 
         assert!(matches!(result, Err(VodExportError::NoNewVod)));
         assert!(runner.calls.lock().expect("call lock").is_empty());
+        std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
+    }
+
+    #[tokio::test]
+    async fn fehlendes_created_at_liefert_kein_neues_vod() {
+        let runner = MockRunner::default();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tb-vod-export-missing-created-at-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+
+        let targets = ExportTargets {
+            yt_dlp_path: Path::new("/opt/yt-dlp"),
+            rclone_path: Path::new("rclone"),
+            bucket: "server-backup",
+            temp_dir: &temp_dir,
+        };
+        let result = export_latest_vod(
+            &MockApi { created_at: "" },
+            &runner,
+            &targets,
+            "channel-1",
+            FRESH_CREATED_AT_UNIX,
+        )
+        .await;
+
+        assert!(matches!(result, Err(VodExportError::NoNewVod)));
         std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
     }
 }

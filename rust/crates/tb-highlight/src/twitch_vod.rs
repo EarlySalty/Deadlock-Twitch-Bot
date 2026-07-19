@@ -286,7 +286,7 @@ fn pick_downloaded_video(paths: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Parst einen Twitch-ISO-Zeitstempel zu Unix-Sekunden; leer/ungültig → None.
-fn parse_twitch_datetime(value: &str) -> Option<i64> {
+pub(crate) fn parse_twitch_datetime(value: &str) -> Option<i64> {
     let text = value.trim();
     if text.is_empty() {
         return None;
