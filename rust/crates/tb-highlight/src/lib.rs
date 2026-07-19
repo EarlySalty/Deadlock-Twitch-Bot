@@ -23,4 +23,5 @@ pub mod highlight_sender;
 pub mod partners;
 pub mod state;
 pub mod twitch_vod;
+pub mod vod_export;
 pub mod worker;
