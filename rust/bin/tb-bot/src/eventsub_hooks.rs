@@ -13,11 +13,21 @@
 //! Handvoll DB-Reads, und der Dispatcher verarbeitet Events sequenziell
 //! pro message_id-Guard.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_highlight::{
+    twitch_vod::TwitchVodApi,
+    vod_export::{
+        export_latest_vod, should_export, CommandRunner, TokioCommandRunner, VodExportError,
+    },
+};
 use tb_monitoring::{
     EventSubHooks, LiveStateStore, ModeratorProvisionOutcome, ModeratorProvisioner,
     SubscriptionManager,
@@ -29,6 +39,7 @@ use tb_raid::{
     PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime, RaidBlacklistStore,
     RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
 };
+use tb_transport_discord::{BrokerRelay, DiscordBackend, SendUserDm};
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
 use crate::auto_raid::OfflineRaidHandler;
@@ -38,6 +49,87 @@ use crate::partner_lookup::{
 };
 use crate::reauth_reminder::ReauthReminder;
 use crate::score_refresh::ScoreRefreshResolver;
+
+const VOD_EXPORT_DISCORD_USER_ID: u64 = 279_971_744_964_542_464;
+const VOD_EXPORT_DELAY: Duration = Duration::from_secs(180);
+
+pub struct VodExportOfflineHandler {
+    api: Arc<dyn TwitchVodApi>,
+    runner: Arc<dyn CommandRunner>,
+    relay: BrokerRelay,
+    yt_dlp_path: PathBuf,
+    bucket: String,
+    temp_dir: PathBuf,
+}
+
+impl VodExportOfflineHandler {
+    pub fn new(
+        api: Arc<dyn TwitchVodApi>,
+        relay: BrokerRelay,
+        yt_dlp_path: PathBuf,
+        bucket: String,
+    ) -> Self {
+        Self {
+            api,
+            runner: Arc::new(TokioCommandRunner),
+            relay,
+            yt_dlp_path,
+            bucket,
+            temp_dir: std::env::temp_dir().join("tb-vod-export"),
+        }
+    }
+
+    pub fn spawn_for_offline(&self, twitch_user_id: &str, login: Option<&str>) {
+        if !should_export(login) {
+            return;
+        }
+
+        let api = Arc::clone(&self.api);
+        let runner = Arc::clone(&self.runner);
+        let relay = self.relay.clone();
+        let yt_dlp_path = self.yt_dlp_path.clone();
+        let bucket = self.bucket.clone();
+        let temp_dir = self.temp_dir.clone();
+        let twitch_user_id = twitch_user_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(VOD_EXPORT_DELAY).await;
+            match export_latest_vod(
+                api.as_ref(),
+                runner.as_ref(),
+                &yt_dlp_path,
+                PathBuf::from("rclone").as_path(),
+                &bucket,
+                &temp_dir,
+                &twitch_user_id,
+            )
+            .await
+            {
+                Ok(link) => {
+                    let payload = SendUserDm {
+                        user_id: VOD_EXPORT_DISCORD_USER_ID,
+                        content: vod_export_dm_content(&link),
+                    };
+                    if let Err(error) = relay.send_user_dm(payload).await {
+                        tracing::error!(%error, "VOD-Export: Discord-DM fehlgeschlagen");
+                    }
+                }
+                Err(VodExportError::NoVod) => {
+                    tracing::warn!(
+                        twitch_user_id,
+                        "VOD-Export: nach Wartezeit kein Archiv-VOD gefunden"
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(%error, twitch_user_id, "VOD-Export fehlgeschlagen");
+                }
+            }
+        });
+    }
+}
+
+fn vod_export_dm_content(link: &str) -> String {
+    format!("PLATZHALTER: VOD-Freigabelink (7 Tage gültig): {link}")
+}
 
 fn event_str<'a>(event: &'a Value, key: &str) -> &'a str {
     event.get(key).and_then(Value::as_str).unwrap_or("").trim()
@@ -673,6 +765,7 @@ pub struct RaidEventSubHooks {
     /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
     /// gebootet ist (TB_CHAT_ENABLED≠1).
     pub reauth_reminder: Option<Arc<ReauthReminder>>,
+    pub vod_export: Option<Arc<VodExportOfflineHandler>>,
     /// Pool für die Post-Stream-Analyse (B11), die in `on_stream_offline`
     /// fire-and-forget getriggert wird.
     pub pool: PgPool,
@@ -766,6 +859,9 @@ impl EventSubHooks for RaidEventSubHooks {
         self.offline
             .handle_streamer_offline(twitch_user_id, login)
             .await;
+        if let Some(vod_export) = &self.vod_export {
+            vod_export.spawn_for_offline(twitch_user_id, login);
+        }
 
         // Post-Stream-Analyse (B11): fire-and-forget wie Python `create_task`,
         // damit der KI-schwere A/B-Trigger den sequenziellen EventSub-Dispatcher
@@ -810,6 +906,20 @@ impl EventSubHooks for RaidEventSubHooks {
         self.arrival
             .handle_chat_unraid_notification(event, message_id)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod vod_export_tests {
+    use super::vod_export_dm_content;
+
+    #[test]
+    fn dm_text_bleibt_platzhalter_und_enthaelt_link_und_gueltigkeit() {
+        let content = vod_export_dm_content("https://share.example/vod");
+
+        assert!(content.starts_with("PLATZHALTER:"));
+        assert!(content.contains("https://share.example/vod"));
+        assert!(content.contains("7 Tage"));
     }
 }
 
