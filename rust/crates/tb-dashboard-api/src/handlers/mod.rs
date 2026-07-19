@@ -90,6 +90,7 @@ pub mod silent_settings;
 pub mod social_media;
 pub mod spa;
 pub mod stream_report;
+pub mod streamer_comparison;
 pub mod streamers;
 pub mod system;
 pub mod tag_analysis;

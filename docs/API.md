@@ -34,6 +34,7 @@ Alle HTTP-Routes des Systems. Zugriffslevel: **A** = Admin only, **S** = Streame
 | GET | `/twitch/market` | A | routes_mixin.py | |
 | GET | `/twitch/demo` | P | analytics/api_overview.py | |
 | GET | `/twitch/demo/dashboard-v2/{path:.*}` | P | analytics/api_overview.py | |
+| GET | `/streamer/vergleich/` | P | website/vergleich/index.html | Öffentlicher, aggregierter Partner-Vergleich |
 | GET | `/twitch/dashboards` | P | routes_mixin.py | Redirect |
 | GET | `/twitch/dashboads` | P | routes_mixin.py | Redirect (Tippfehler-Compat) |
 
@@ -124,8 +125,14 @@ Hinweis: Das Human-Gate schützt aktuell `/twitch/impressum`, `/twitch/datenschu
 
 ## Analytics API (JSON)
 
-Alle Endpunkte unter `/twitch/api/v2/` erfordern Streamer-Authentifizierung.
-Registriert in `bot/analytics/api_overview.py`.
+Endpunkte unter `/twitch/api/v2/` erfordern Streamer-Authentifizierung, sofern sie nicht ausdrücklich unter `/public/` liegen.
+
+### Public
+| Methode | Pfad | Parameter | Inhalt |
+|---------|------|-----------|--------|
+| GET | `/twitch/api/v2/public/streamer-comparison` | `days=7|30|90` | Aggregierte Session-, Reichweiten-, Momentum- und Raid-Wirkungsdaten aktiver Partner |
+
+Der öffentliche Vergleich enthält keine Einnahmen, Abos, Discord-IDs oder einzelnen Zuschauer. Rankings setzen je Zeitraum eine Mindest-Streamzeit voraus; Raid-Wirkung wird als zeitlicher Vorher-/Nachher-Hinweis mit Stichprobengröße ausgegeben, nicht als Kausalitätsbeweis. Zeitlich überlappende Raid-Messfenster werden nicht für die Wirkungswerte verwendet.
 
 ### Uebersicht & Stats
 | Methode | Pfad | Datei |

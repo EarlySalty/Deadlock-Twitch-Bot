@@ -39,6 +39,7 @@ Jeder freigeschaltete Streamer-Partner bekommt ein eigenes Dashboard, in dem der
 - **Diagramme statt nackter Zahlen:** Die Werte werden als interaktive Charts, Heatmaps und Verlaufskurven dargestellt.
 - **Gesperrte Inhalte mit Vorschau:** In welchen Reitern und Karten Daten erscheinen, hängt vom Plan ab (siehe unten). Höhere Reiter/Karten sind sichtbar, aber als gesperrt markiert, mit einem Upgrade-Hinweis statt der Daten.
 - **Demo-Dashboard:** Eine öffentlich erreichbare Variante zeigt dieselbe Oberfläche mit erfundenen Beispieldaten. Die Demo greift nie auf echte Streamer-Daten zu — sie dient nur zum Anschauen.
+- **Öffentlicher Streamer-Vergleich:** Aktive Partner können auf einer gemeinsamen Seite anhand derselben aggregierten Stream- und Raid-Messung verglichen werden. Sichtbar sind Reichweite, Streamzeit, Momentum und der zeitliche Zuschauer-Effekt bestätigter Netzwerk-Raids; private Dashboard-Daten bleiben ausgeschlossen.
 
 ## Was Streamer einstellen können
 
@@ -53,6 +54,7 @@ Jeder freigeschaltete Streamer-Partner bekommt ein eigenes Dashboard, in dem der
 ## Grenzen & Sonderfälle
 
 - **Nur der eigene Account:** Ein Streamer sieht in seinen Bereichen ausschließlich die eigenen Daten und kann nur die eigene Konfiguration ändern. Zugriffe auf fremde Accounts werden blockiert. Admins können den Kontext wechseln, normale Streamer nicht.
+- **Öffentliche Aggregate sind eine getrennte Fläche:** Der Streamer-Vergleich veröffentlicht nur zusammengefasste Leistungswerte aktiver Partner. Einnahmen, Abos, Discord-Verknüpfungen, einzelne Zuschauer und Chat-Inhalte werden dort nicht ausgegeben. Kleine Stichproben bleiben sichtbar, erhalten aber noch keinen Rang.
 - **Plan-Grenzen werden serverseitig durchgesetzt:** Die Sperren im Dashboard sind nicht nur Optik — selbst wenn ein gesperrter Bereich in der Oberfläche sichtbar gemacht wird, liefert der Server ohne passenden Plan keine echten Daten dafür.
 - **Wenig Daten am Anfang:** Auswertungen, die auf Verlauf oder Vergleich beruhen, brauchen Streams zum Befüllen. „Noch keine Daten" bei einem frischen Account ist normal und kein Fehler.
 - **Einige Analysen sind bewusst ausgeblendet:** Bestimmte Auswertungen sind im Code vorhanden, werden im Streamer-Dashboard aber absichtlich nicht angezeigt, weil ihr Nutzen im Alltag zu gering oder zu erklärungsbedürftig ist (z. B. eine Chat-Netzwerk-/Beziehungsansicht und eine spezielle Chat-Reichweiten-Metrik). Das ist eine Produktentscheidung, kein Defekt; sie können später wieder aktiviert werden.
@@ -81,7 +83,7 @@ A: Der Bot fasst den abgeschlossenen Stream zusammen — die wichtigsten Kennzah
 A: Das Demo zeigt die Oberfläche mit reinen Beispieldaten. Es greift nie auf echte Streamer-Accounts zu — über die Demo sind also keine echten Daten von dir oder anderen einsehbar.
 
 **F: Kann ein anderer Streamer meine Statistiken sehen?**
-A: Nein. Jeder Streamer sieht in seinen Bereichen nur den eigenen Account; Zugriffe auf fremde Accounts werden blockiert. Lediglich Admins können den Kontext wechseln.
+A: Dein persönliches Dashboard bleibt privat. Öffentlich sichtbar sind nur die ausdrücklich ausgewiesenen Aggregate im Streamer-Vergleich: Streamzeit, Zuschauer-Kennzahlen, Momentum und zusammengefasste Raid-Wirkung. Einnahmen, Abos, einzelne Zuschauer, Chat-Inhalte und Account-Verknüpfungen werden nicht veröffentlicht.
 
 **F: Wo stelle ich meine Bot-Funktionen ein?**
 A: Im Dashboard. Die Go-Live-Ankündigung gestaltest du im entsprechenden Builder (mit Vorschau und Test-Senden), Plan und Abo regelst du im Abo-Bereich, Promo-Nachricht und Lurker-Steuer ebenfalls dort, und deine Twitch-/Discord-Verbindungen samt Berechtigungen prüfst du auf der Verwaltungsseite.

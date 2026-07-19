@@ -1,3 +1,11 @@
+## #391 — Streamer können das Netzwerk fair vergleichen
+
+**Problem:** Die gesammelten Stream- und Raid-Daten waren nur einzeln im Dashboard sichtbar; dadurch ließ sich schwer erkennen, welche Kanäle Momentum haben und wo Raids wirklich ankommen.
+
+**Änderung:** Eine öffentliche Vergleichsseite stellt aktive Partner mit gleicher Messung, Mindeststichprobe, Raid-Effekt und einem begründeten nächsten Test gegenüber. Private Daten wie Einnahmen, Abos, einzelne Zuschauer und Account-Verknüpfungen bleiben ausgeschlossen.
+
+**Aktuelles Verhalten:** Unter der Streamer-Seite lassen sich 7, 30 oder 90 Tage vergleichen, Kanäle suchen und Raid-Wirkung nach Datenqualität einordnen.
+
 ## #390 — Stream-Ankündigungen bleiben eindeutig
 
 **Problem:** Bei einem echten Stream-Neustart entstand manchmal ein zweiter Discord-Post, während der erste dauerhaft als LIVE stehen blieb.

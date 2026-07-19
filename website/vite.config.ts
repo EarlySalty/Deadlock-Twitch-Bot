@@ -28,6 +28,7 @@ export default defineConfig({
         affiliateProgram: path.resolve(__dirname, 'vertriebler/index.html'),
         affiliatePortal: path.resolve(__dirname, 'affiliate-portal/index.html'),
         onboarding: path.resolve(__dirname, 'onboarding/index.html'),
+        streamerComparison: path.resolve(__dirname, 'vergleich/index.html'),
         // Caddy serviert /twitch/faq* aus dist/faq — der Entry MUSS faq/index.html
         // heissen, sonst zeigt die Route weiter ins Leere (genau das war der 404).
         faq: path.resolve(__dirname, 'faq/index.html'),

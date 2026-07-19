@@ -18,6 +18,7 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Features', id: 'features' },
   { label: 'Community', id: 'community' },
   { label: 'Sicherheit', id: 'sicherheit' },
+  { label: 'Streamer-Zahlen', href: '/streamer/vergleich/' },
   { label: 'Vertriebler', href: AFFILIATE_PROGRAM_PATH },
 ];
 
