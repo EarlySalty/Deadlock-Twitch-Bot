@@ -34,6 +34,8 @@ pub use handlers::health_probe::{
     analytics_db_fingerprint_startup_check, AnalyticsDbFingerprintStartup,
 };
 
+pub use handlers::pause_loop::build_pause_loop_router;
+
 use axum::{
     http::{header::HeaderName, HeaderValue},
     routing::{get, post, put},
@@ -41,6 +43,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use tb_http_core::ExpectedToken;
+use tb_transport_twitch::HelixClient;
 use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
@@ -1470,6 +1473,11 @@ pub fn build_website_router() -> Router {
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
+    build_router_with_helix(pool, token, None)
+}
+
+/// Wie [`build_router`], aber mit optionalem Helix-Client fuer den OBS-Pause-Loop.
+pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixClient>) -> Router {
     // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
     // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
@@ -1477,8 +1485,13 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
     // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
+    let pause_loop_router = match helix {
+        Some(helix) => build_pause_loop_router(pool.clone(), helix),
+        None => handlers::pause_loop::build_unavailable_pause_loop_router(),
+    };
 
     let mut app = build_public_router(pool.clone())
+        .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
         .merge(build_partner_login_router(
             pool.clone(),
@@ -1713,6 +1726,50 @@ mod router_wiring_tests {
         assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
         assert_eq!(h.get("x-xss-protection").unwrap(), "0");
         assert_eq!(h.get(header::LOCATION).unwrap(), "/streamer/foo");
+    }
+
+    #[tokio::test]
+    async fn full_router_registriert_pause_loop_unavailable_vor_globalen_layern() {
+        let app = build_router(lazy_pool(), "smoke-token".into());
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/pause-loop")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let h = resp.headers();
+        assert_eq!(h.get("x-frame-options").unwrap(), "SAMEORIGIN");
+        assert!(h.get("content-security-policy").is_some());
+        assert_eq!(h.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(
+            h.get("referrer-policy").unwrap(),
+            "strict-origin-when-cross-origin"
+        );
+        assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/api/v2/public/pause-loop-clips")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "pause_loop_unavailable");
     }
 
     #[tokio::test]

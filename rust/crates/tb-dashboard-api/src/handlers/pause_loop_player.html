@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Deadlock Pause-Loop</title>
+<style>
+html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;color:#f8f8f8;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+#player{position:fixed;inset:0;width:100vw;height:100vh;background:#000;}
+#player iframe{display:block;width:100vw;height:100vh;border:0;background:#000;}
+#status{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(680px,80vw);padding:18px 22px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(0,0,0,.72);box-shadow:0 24px 80px rgba(0,0,0,.55);font-size:20px;line-height:1.35;text-align:center;}
+#clipLabel{position:fixed;left:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.64);color:#fff;font-size:14px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000;}
+#clipLabel:empty{display:none;}
+</style>
+</head>
+<body>
+<main id="player" aria-label="Twitch Pause-Loop Clip-Player"></main>
+<div id="status" role="status">Clip-Pool wird geladen...</div>
+<div id="clipLabel" aria-live="polite"></div>
+<script>
+(() => {
+  'use strict';
+
+  const CLIPS_ENDPOINT = '/twitch/api/v2/public/pause-loop-clips';
+  const NORMAL_REFRESH_MS = 10 * 60 * 1000;
+  const BACKOFF_START_MS = 15 * 1000;
+  const BACKOFF_MAX_MS = 60 * 1000;
+  const FETCH_TIMEOUT_MS = 12000;
+  const LOAD_FALLBACK_MS = 5000;
+  const PLAY_BUFFER_MS = 1500;
+  const parent = location.hostname || 'localhost';
+
+  const player = document.getElementById('player');
+  const status = document.getElementById('status');
+  const clipLabel = document.getElementById('clipLabel');
+
+  let pool = [];
+  let queue = [];
+  let playedThisCycle = new Set();
+  let fetchInFlight = false;
+  let fetchBackoffMs = BACKOFF_START_MS;
+  let refreshTimer = 0;
+  let playTimer = 0;
+  let loadFallbackTimer = 0;
+  let currentGeneration = 0;
+  let timerGeneration = 0;
+  let lastPlayedId = null;
+  let activeClip = null;
+
+  function setStatus(text) {
+    status.textContent = text;
+    status.hidden = text.length === 0;
+  }
+
+  function cleanText(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function sanitizeClip(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+    const id = cleanText(raw.id);
+    const duration = Number(raw.duration);
+    if (!id || !Number.isFinite(duration)) {
+      return null;
+    }
+    return {
+      id,
+      broadcaster_name: cleanText(raw.broadcaster_name),
+      title: cleanText(raw.title),
+      duration: Math.min(300, Math.max(5, duration))
+    };
+  }
+
+  function sanitizePool(rawItems) {
+    if (!Array.isArray(rawItems)) {
+      return [];
+    }
+    const seen = new Set();
+    const nextPool = [];
+    for (const raw of rawItems) {
+      const clip = sanitizeClip(raw);
+      if (!clip || seen.has(clip.id)) {
+        continue;
+      }
+      seen.add(clip.id);
+      nextPool.push(clip);
+    }
+    return nextPool;
+  }
+
+  function shuffleQueue(items) {
+    for (let i = items.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+  }
+
+  function avoidImmediateRepeat(items) {
+    if (items.length <= 1 || !lastPlayedId || items[0].id !== lastPlayedId) {
+      return;
+    }
+    const swapIndex = items.findIndex((clip, index) => index > 0 && clip.id !== lastPlayedId);
+    if (swapIndex > 0) {
+      [items[0], items[swapIndex]] = [items[swapIndex], items[0]];
+    }
+  }
+
+  function rebuildQueueForNewCycle() {
+    playedThisCycle.clear();
+    queue = pool.slice();
+    shuffleQueue(queue);
+    avoidImmediateRepeat(queue);
+  }
+
+  function reconcileQueue(nextPool) {
+    const nextById = new Map(nextPool.map((clip) => [clip.id, clip]));
+    const activeId = activeClip ? activeClip.id : null;
+    const queuedIds = new Set();
+    queue = queue
+      .filter((clip) => nextById.has(clip.id))
+      .map((clip) => nextById.get(clip.id))
+      .filter((clip) => {
+        if (playedThisCycle.has(clip.id) || clip.id === activeId || queuedIds.has(clip.id)) {
+          return false;
+        }
+        queuedIds.add(clip.id);
+        return true;
+      });
+
+    const additions = nextPool.filter((clip) => (
+      !playedThisCycle.has(clip.id) &&
+      clip.id !== activeId &&
+      !queuedIds.has(clip.id)
+    ));
+    shuffleQueue(additions);
+    queue.push(...additions);
+    if (!activeClip && playedThisCycle.size === 0) {
+      avoidImmediateRepeat(queue);
+    }
+  }
+
+  function takeNextClip() {
+    if (queue.length === 0) {
+      rebuildQueueForNewCycle();
+    }
+    return queue.shift() || null;
+  }
+
+  function describeClip(clip) {
+    const pieces = [];
+    if (clip.broadcaster_name) {
+      pieces.push(clip.broadcaster_name);
+    }
+    if (clip.title) {
+      pieces.push(clip.title);
+    }
+    return pieces.length > 0 ? pieces.join(' - ') : clip.id;
+  }
+
+  function clearPlaybackTimers() {
+    window.clearTimeout(playTimer);
+    window.clearTimeout(loadFallbackTimer);
+    playTimer = 0;
+    loadFallbackTimer = 0;
+  }
+
+  function showEmptyPool() {
+    currentGeneration += 1;
+    timerGeneration = 0;
+    activeClip = null;
+    queue = [];
+    playedThisCycle.clear();
+    clearPlaybackTimers();
+    player.replaceChildren();
+    clipLabel.textContent = '';
+    setStatus('Keine Pause-Loop-Clips verfuegbar. Ich pruefe automatisch weiter.');
+  }
+
+  function scheduleNextFromDuration(clip, generation) {
+    if (generation !== currentGeneration || timerGeneration === generation) {
+      return;
+    }
+    timerGeneration = generation;
+    window.clearTimeout(playTimer);
+    playTimer = window.setTimeout(() => {
+      if (generation !== currentGeneration) {
+        return;
+      }
+      activeClip = null;
+      playNextClip();
+    }, Math.round(clip.duration * 1000) + PLAY_BUFFER_MS);
+  }
+
+  function clipEmbedUrl(clip) {
+    return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clip.id)}&parent=${encodeURIComponent(parent)}&autoplay=true`;
+  }
+
+  function renderClip(clip, generation) {
+    const frame = document.createElement('iframe');
+    frame.title = `Twitch Clip: ${clip.title || clip.id}`;
+    frame.allow = 'autoplay; fullscreen';
+    frame.allowFullscreen = true;
+    frame.referrerPolicy = 'origin';
+    frame.src = clipEmbedUrl(clip);
+    frame.addEventListener('load', () => scheduleNextFromDuration(clip, generation), { once: true });
+
+    player.replaceChildren(frame);
+    window.clearTimeout(loadFallbackTimer);
+    loadFallbackTimer = window.setTimeout(
+      () => scheduleNextFromDuration(clip, generation),
+      LOAD_FALLBACK_MS
+    );
+  }
+
+  function playNextClip() {
+    const clip = takeNextClip();
+    if (!clip) {
+      showEmptyPool();
+      return;
+    }
+    activeClip = clip;
+    lastPlayedId = clip.id;
+    playedThisCycle.add(clip.id);
+    currentGeneration += 1;
+    timerGeneration = 0;
+    const generation = currentGeneration;
+    clipLabel.textContent = describeClip(clip);
+    setStatus('');
+    renderClip(clip, generation);
+  }
+
+  function applyPool(nextPool) {
+    if (nextPool.length === 0) {
+      pool = [];
+      queue = [];
+      if (!activeClip) {
+        showEmptyPool();
+      }
+      return;
+    }
+
+    pool = nextPool;
+    reconcileQueue(nextPool);
+    if (!activeClip && queue.length === 0 && playedThisCycle.size > 0) {
+      rebuildQueueForNewCycle();
+    }
+    if (!activeClip) {
+      playNextClip();
+    }
+  }
+
+  function scheduleRefresh(delayMs) {
+    window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(fetchPool, delayMs);
+  }
+
+  async function fetchPool() {
+    if (fetchInFlight) {
+      return;
+    }
+    fetchInFlight = true;
+    window.clearTimeout(refreshTimer);
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(CLIPS_ENDPOINT, { cache: 'no-store', signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`Pause-Loop HTTP ${res.status}`);
+      }
+      const stale = res.headers.get('x-pause-loop-stale') === '1';
+      const data = await res.json();
+      applyPool(sanitizePool(data));
+      if (stale) {
+        scheduleRefresh(fetchBackoffMs);
+        fetchBackoffMs = Math.min(fetchBackoffMs * 2, BACKOFF_MAX_MS);
+      } else {
+        fetchBackoffMs = BACKOFF_START_MS;
+        scheduleRefresh(NORMAL_REFRESH_MS);
+      }
+    } catch (error) {
+      console.warn('Pause-Loop Clip-Pool konnte nicht aktualisiert werden', error);
+      if (pool.length === 0 && queue.length === 0 && !activeClip) {
+        setStatus('Pause-Loop gerade nicht erreichbar. Ich versuche es automatisch erneut.');
+      }
+      scheduleRefresh(fetchBackoffMs);
+      fetchBackoffMs = Math.min(fetchBackoffMs * 2, BACKOFF_MAX_MS);
+    } finally {
+      window.clearTimeout(abortTimer);
+      fetchInFlight = false;
+    }
+  }
+
+  fetchPool();
+})();
+</script>
+</body>
+</html>

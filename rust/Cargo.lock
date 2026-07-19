@@ -2879,6 +2879,7 @@ dependencies = [
  "tb-config",
  "tb-dashboard-api",
  "tb-db",
+ "tb-transport-twitch",
  "tokio",
  "tracing",
  "tracing-subscriber",

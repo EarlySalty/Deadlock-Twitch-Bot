@@ -70,6 +70,7 @@ pub mod onboarding;
 pub mod overlay;
 pub mod overview;
 pub mod partner_login;
+pub mod pause_loop;
 pub mod performance;
 pub mod raid_analytics;
 pub mod raid_history;
