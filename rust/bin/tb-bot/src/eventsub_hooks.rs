@@ -92,6 +92,7 @@ impl VodExportOfflineHandler {
         let bucket = self.bucket.clone();
         let temp_dir = self.temp_dir.clone();
         let twitch_user_id = twitch_user_id.to_string();
+        let stream_offline_unix = Utc::now().timestamp();
         tokio::spawn(async move {
             tokio::time::sleep(VOD_EXPORT_DELAY).await;
             let targets = ExportTargets {
@@ -105,7 +106,7 @@ impl VodExportOfflineHandler {
                 runner.as_ref(),
                 &targets,
                 &twitch_user_id,
-                Utc::now().timestamp(),
+                stream_offline_unix,
             )
             .await
             {

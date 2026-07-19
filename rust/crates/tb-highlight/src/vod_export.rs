@@ -5,17 +5,19 @@ use thiserror::Error;
 
 use crate::{
     config::FFMPEG_PATH,
-    twitch_vod::{parse_twitch_datetime, TwitchVodApi},
+    twitch_vod::{parse_duration_seconds, parse_twitch_datetime, TwitchVodApi},
 };
 
 pub const TARGET_LOGIN: &str = "dach_lock";
 pub const LINK_EXPIRY: &str = "7d";
-/// Ein Archiv-VOD gilt nur als "der gerade beendete Stream", wenn es nicht
-/// älter als das hier ist. Verhindert, dass ein VOD von einem früheren
-/// Stream verschickt wird, weil das neue VOD in der Twitch-API noch nicht
-/// sichtbar ist — unabhängig davon, wie schnell/langsam Twitch diesmal ist,
-/// also ohne Race gegen den Warte-Delay.
-const MAX_VOD_AGE_SECONDS: i64 = 24 * 60 * 60;
+/// Ein Archiv-VOD gilt nur als "der gerade beendete Stream", wenn sein
+/// geschätztes Ende (`created_at` + `duration`) höchstens so weit vom
+/// `stream.offline`-Zeitpunkt abweicht. Deckt Twitchs eigene
+/// Verarbeitungsverzögerung ab, grenzt aber zuverlässig gegen ein älteres
+/// VOD desselben Kanals ab (z. B. ein zweiter Stream am selben Tag), das
+/// sonst als "das gerade beendete" durchgehen könnte, während das echte
+/// neue VOD in der API noch nicht sichtbar ist.
+const MAX_VOD_END_DRIFT_SECONDS: i64 = 30 * 60;
 
 pub fn should_export(login: Option<&str>) -> bool {
     login == Some(TARGET_LOGIN)
@@ -93,7 +95,7 @@ pub async fn export_latest_vod(
     runner: &dyn CommandRunner,
     targets: &ExportTargets<'_>,
     channel_id: &str,
-    now_unix: i64,
+    stream_offline_unix: i64,
 ) -> Result<String, VodExportError> {
     let vods = api.get_archive_videos(channel_id, 1).await;
     let vod = vods.first().ok_or(VodExportError::NoVod)?;
@@ -111,7 +113,16 @@ pub async fn export_latest_vod(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     let started_at = parse_twitch_datetime(created_at).ok_or(VodExportError::NoNewVod)?;
-    if now_unix - started_at > MAX_VOD_AGE_SECONDS {
+    let duration = vod
+        .get("duration")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let duration_seconds = parse_duration_seconds(duration);
+    if duration_seconds <= 0 {
+        return Err(VodExportError::NoNewVod);
+    }
+    let estimated_end = started_at + duration_seconds;
+    if (stream_offline_unix - estimated_end).abs() > MAX_VOD_END_DRIFT_SECONDS {
         return Err(VodExportError::NoNewVod);
     }
 
@@ -293,14 +304,21 @@ mod tests {
 
     const FRESH_CREATED_AT: &str = "2024-01-01T12:00:00Z";
     const FRESH_CREATED_AT_UNIX: i64 = 1_704_110_400;
+    const FRESH_DURATION: &str = "2h";
+    const FRESH_DURATION_SECONDS: i64 = 2 * 60 * 60;
+    const FRESH_VOD_END_UNIX: i64 = FRESH_CREATED_AT_UNIX + FRESH_DURATION_SECONDS;
 
     struct MockApi {
         created_at: &'static str,
+        duration: &'static str,
     }
 
     impl Default for MockApi {
         fn default() -> Self {
-            Self { created_at: FRESH_CREATED_AT }
+            Self {
+                created_at: FRESH_CREATED_AT,
+                duration: FRESH_DURATION,
+            }
         }
     }
 
@@ -316,7 +334,11 @@ mod tests {
             first: u32,
         ) -> Vec<serde_json::Value> {
             assert_eq!(first, 1);
-            vec![json!({ "id": "987", "created_at": self.created_at })]
+            vec![json!({
+                "id": "987",
+                "created_at": self.created_at,
+                "duration": self.duration,
+            })]
         }
     }
 
@@ -375,7 +397,7 @@ mod tests {
             runner.as_ref(),
             &targets,
             "channel-1",
-            FRESH_CREATED_AT_UNIX + 100,
+            FRESH_VOD_END_UNIX + 100,
         )
         .await
         .expect("export succeeds");
@@ -416,7 +438,7 @@ mod tests {
             &runner,
             &targets,
             "channel-1",
-            FRESH_CREATED_AT_UNIX + 100,
+            FRESH_VOD_END_UNIX + 100,
         )
         .await;
 
@@ -426,10 +448,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zu_altes_vod_liefert_kein_neues_vod_statt_altstream_zu_senden() {
+    async fn frueheres_vod_desselben_tages_liefert_kein_neues_vod() {
         let runner = MockRunner::default();
         let temp_dir = std::env::temp_dir().join(format!(
-            "tb-vod-export-too-old-test-{}",
+            "tb-vod-export-earlier-same-day-test-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir");
@@ -440,15 +462,16 @@ mod tests {
             bucket: "server-backup",
             temp_dir: &temp_dir,
         };
-        // now liegt 25h nach dem VOD-Start, also außerhalb des 24h-Fensters:
-        // das VOD stammt sicher von einem früheren Stream, nicht vom
-        // gerade beendeten (egal wie schnell/langsam Twitch diesmal war).
+        // stream.offline liegt 3h nach dem VOD-Ende — z. B. ein zweiter Stream
+        // desselben Tages ist gerade offline gegangen, aber sein VOD ist in
+        // der API noch nicht sichtbar; das ältere VOD (< 24h alt) darf hier
+        // NICHT als "der gerade beendete Stream" durchgehen.
         let result = export_latest_vod(
             &MockApi::default(),
             &runner,
             &targets,
             "channel-1",
-            FRESH_CREATED_AT_UNIX + 25 * 60 * 60,
+            FRESH_VOD_END_UNIX + 3 * 60 * 60,
         )
         .await;
 
@@ -473,7 +496,35 @@ mod tests {
             temp_dir: &temp_dir,
         };
         let result = export_latest_vod(
-            &MockApi { created_at: "" },
+            &MockApi { created_at: "", duration: FRESH_DURATION },
+            &runner,
+            &targets,
+            "channel-1",
+            FRESH_CREATED_AT_UNIX,
+        )
+        .await;
+
+        assert!(matches!(result, Err(VodExportError::NoNewVod)));
+        std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
+    }
+
+    #[tokio::test]
+    async fn fehlende_duration_liefert_kein_neues_vod() {
+        let runner = MockRunner::default();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tb-vod-export-missing-duration-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+
+        let targets = ExportTargets {
+            yt_dlp_path: Path::new("/opt/yt-dlp"),
+            rclone_path: Path::new("rclone"),
+            bucket: "server-backup",
+            temp_dir: &temp_dir,
+        };
+        let result = export_latest_vod(
+            &MockApi { created_at: FRESH_CREATED_AT, duration: "" },
             &runner,
             &targets,
             "channel-1",

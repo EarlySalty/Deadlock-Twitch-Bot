@@ -295,7 +295,7 @@ pub(crate) fn parse_twitch_datetime(value: &str) -> Option<i64> {
 }
 
 /// Parst eine Twitch-Dauer wie „1h2m3s" zu Sekunden; kein Match → 0.
-fn parse_duration_seconds(value: &str) -> i64 {
+pub(crate) fn parse_duration_seconds(value: &str) -> i64 {
     let text = value.trim();
     let re = Regex::new(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$").expect("static regex");
     let Some(caps) = re.captures(text) else {
