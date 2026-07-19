@@ -68,6 +68,9 @@ pub enum PauseLoopError {
     /// Fehler beim Laden der aktiven Partner aus der Datenbank.
     #[error("Datenbank-Fehler: {0}")]
     Database(String),
+    /// Pause-Loop ist ohne Helix-Credentials absichtlich nicht aktiv.
+    #[error("Pause-Loop-Helix nicht konfiguriert")]
+    NotConfigured,
     /// Ein begrenzter Refresh- oder Partnerabruf ist abgelaufen.
     #[error("Timeout bei {operation} nach {seconds}s")]
     Timeout {
@@ -136,6 +139,15 @@ struct HelixPauseLoopRefreshSource {
 impl PauseLoopRefreshSource for HelixPauseLoopRefreshSource {
     async fn refresh(&self) -> Result<PauseLoopRefreshReport, PauseLoopError> {
         refresh_pause_loop_pool(&self.pool, &self.helix).await
+    }
+}
+
+struct UnavailablePauseLoopRefreshSource;
+
+#[async_trait]
+impl PauseLoopRefreshSource for UnavailablePauseLoopRefreshSource {
+    async fn refresh(&self) -> Result<PauseLoopRefreshReport, PauseLoopError> {
+        Err(PauseLoopError::NotConfigured)
     }
 }
 
@@ -448,6 +460,15 @@ impl PauseLoopService {
 /// Baut den oeffentlichen Pause-Loop-Router mit routerlokalem Service/Cache.
 pub fn build_pause_loop_router(pool: PgPool, helix: HelixClient) -> Router {
     build_pause_loop_router_from_service(PauseLoopService::new(pool, helix))
+}
+
+pub(crate) fn build_unavailable_pause_loop_router() -> Router {
+    build_pause_loop_router_from_service(PauseLoopService::from_source(
+        Arc::new(UnavailablePauseLoopRefreshSource),
+        PAUSE_LOOP_CACHE_TTL,
+        PAUSE_LOOP_REFRESH_TIMEOUT,
+        PAUSE_LOOP_RETRY_DELAY,
+    ))
 }
 
 fn build_pause_loop_router_from_service(service: PauseLoopService) -> Router {
@@ -1724,6 +1745,32 @@ mod tests {
         let text = std::str::from_utf8(&body).unwrap();
         assert!(!text.contains("secret upstream detail"));
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({"error": "pause_loop_unavailable"}));
+    }
+
+    #[tokio::test]
+    async fn pause_loop_unavailable_router_serves_html_and_generic_json_503() {
+        let app = build_unavailable_pause_loop_router();
+
+        let (html_status, html_headers, html_body) =
+            route_bytes(app.clone(), Method::GET, "/twitch/pause-loop").await;
+        assert_eq!(html_status, StatusCode::OK);
+        assert_eq!(html_headers.get("x-frame-options").unwrap(), "SAMEORIGIN");
+        assert!(html_headers.get("content-security-policy").is_some());
+        assert!(std::str::from_utf8(&html_body)
+            .unwrap()
+            .contains("/twitch/api/v2/public/pause-loop-clips"));
+
+        let (api_status, api_headers, api_body) =
+            route_bytes(app, Method::GET, "/twitch/api/v2/public/pause-loop-clips").await;
+        assert_eq!(api_status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api_headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(api_headers.get(header::RETRY_AFTER).unwrap(), "30");
+        assert_eq!(api_headers.get("access-control-allow-origin").unwrap(), "*");
+        let text = std::str::from_utf8(&api_body).unwrap();
+        assert!(!text.contains("NotConfigured"));
+        assert!(!text.contains("nicht konfiguriert"));
+        let json: serde_json::Value = serde_json::from_slice(&api_body).unwrap();
         assert_eq!(json, serde_json::json!({"error": "pause_loop_unavailable"}));
     }
 

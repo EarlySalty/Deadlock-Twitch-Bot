@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use tb_config::Settings;
-use tb_dashboard_api::build_router;
+use tb_dashboard_api::build_router_with_helix;
+use tb_transport_twitch::{HelixClient, HelixConfig};
 
 const DASHBOARD_SERVICE_PORT: u16 = 8765;
 const MASTER_API_RESERVED_PORT: u16 = 8766;
@@ -86,6 +87,45 @@ fn split_runtime_enforced() -> bool {
         return optional_env_bool("TWITCH_RUNTIME_ENFORCE", true);
     }
     optional_env_bool("TWITCH_SPLIT_RUNTIME_ENFORCE", true)
+}
+
+fn pause_loop_helix_config_from_values(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> Option<HelixConfig> {
+    let client_id = client_id?.trim().to_string();
+    let client_secret = client_secret?.trim().to_string();
+    if client_id.is_empty() || client_secret.is_empty() {
+        return None;
+    }
+    Some(HelixConfig::new(client_id, client_secret))
+}
+
+fn pause_loop_helix_config_from_env() -> Option<HelixConfig> {
+    pause_loop_helix_config_from_values(
+        std::env::var("TWITCH_CLIENT_ID").ok(),
+        std::env::var("TWITCH_CLIENT_SECRET").ok(),
+    )
+}
+
+fn pause_loop_helix_client_from_env() -> Option<HelixClient> {
+    let Some(config) = pause_loop_helix_config_from_env() else {
+        tracing::warn!(
+            "TWITCH_CLIENT_ID/SECRET fehlen oder sind leer - Pause-Loop-Seite aktiv, Clip-API nicht verfuegbar"
+        );
+        return None;
+    };
+
+    match HelixClient::new(config) {
+        Ok(client) => {
+            tracing::info!("OBS-Pause-Loop Helix-Client aktiv");
+            Some(client)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "OBS-Pause-Loop Helix-Client nicht initialisierbar - Seite aktiv, Clip-API nicht verfuegbar");
+            None
+        }
+    }
 }
 
 fn resolve_runtime_role(raw: &str) -> String {
@@ -327,7 +367,8 @@ async fn main() {
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
-    let mut app = build_router(pool.clone(), token);
+    let pause_loop_helix = pause_loop_helix_client_from_env();
+    let mut app = build_router_with_helix(pool.clone(), token, pause_loop_helix);
     app = app.layer(axum::Extension(readiness_fingerprint));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));
@@ -518,5 +559,29 @@ mod tests {
             enforce_dashboard_runtime(Some("bot"), MASTER_API_RESERVED_PORT).as_deref(),
             Ok(ROLE_TWITCH_WORKER)
         );
+    }
+
+    #[test]
+    fn pause_loop_helix_config_from_values_trims_and_requires_both_values() {
+        assert!(pause_loop_helix_config_from_values(None, Some("secret".to_owned())).is_none());
+        assert!(pause_loop_helix_config_from_values(Some("client".to_owned()), None).is_none());
+        assert!(pause_loop_helix_config_from_values(
+            Some("  \t  ".to_owned()),
+            Some("secret".to_owned())
+        )
+        .is_none());
+        assert!(pause_loop_helix_config_from_values(
+            Some("client".to_owned()),
+            Some("  \n  ".to_owned())
+        )
+        .is_none());
+
+        let config = pause_loop_helix_config_from_values(
+            Some("  client-id  ".to_owned()),
+            Some("  client-secret  ".to_owned()),
+        )
+        .expect("trimmed config");
+        assert_eq!(config.client_id, "client-id");
+        assert_eq!(config.client_secret, "client-secret");
     }
 }
