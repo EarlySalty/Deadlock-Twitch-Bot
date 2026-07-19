@@ -5,6 +5,9 @@
 //! - [`select_fairest`]    → `select_fairest_candidate` (Z. 358–432)
 //! - [`is_retryable_raid_error`] → `raid_pipeline.py::is_retryable_raid_error` (Z. 23–38)
 //!
+//! Der live geschaltete Rust-Pfad ergänzt den Nicht-Partner-Fallback um eine
+//! Soft-Avoid-Liste; der Legacy-Python-Pfad bleibt unverändert.
+//!
 //! Alle Funktionen nehmen fertige Kandidaten-Listen + optionale Hilfs-Daten
 //! als Parameter — kein DB-Zugriff, voll unit-testbar.
 
@@ -32,6 +35,15 @@ pub const PARTNER_SCORE_THRESHOLD: f64 = 0.05;
 /// liefert nichts), landet der Kandidat hinter allen mit bekannten Zahlen —
 /// statt sie wie ein Default von `0` an die Spitze zu ziehen.
 pub const FOLLOWERS_UNKNOWN: i32 = 1_000_000_000;
+
+const SOFT_AVOIDED_FALLBACK_RAID_LOGINS: &[&str] = &["edoeasy"];
+
+/// Erkennt Logins, die nur als letzter Nicht-Partner-Fallback zulässig sind.
+pub fn is_soft_avoided_fallback_login(login: &str) -> bool {
+    SOFT_AVOIDED_FALLBACK_RAID_LOGINS
+        .iter()
+        .any(|avoided| login.trim().eq_ignore_ascii_case(avoided))
+}
 
 // ---------------------------------------------------------------------------
 // Kandidaten-Typen
@@ -156,7 +168,7 @@ pub fn is_retryable_raid_error(error: &str) -> bool {
 /// Port von `CandidateSelector.select_partner_candidate_by_score` in
 /// `bot/raid/services/candidate_selection.py` (Z. 210–356).
 ///
-/// **Auswahl-Algorithmus (exakt wie Python):**
+/// **Auswahl-Algorithmus:**
 /// 1. Kandidaten ohne `is_live == true` wurden vor diesem Aufruf gefiltert
 ///    (Aufgabe des Aufrufers).
 /// 2. Daily-Soft-Cap: Kandidaten mit `today_received_raids >= DAILY_RAID_SOFT_CAP`
@@ -268,12 +280,14 @@ pub fn select_by_score<'a>(candidates: &'a [ScoredCandidate]) -> Option<Selectio
 /// `bot/raid/services/candidate_selection.py` (Z. 358–432).
 ///
 /// **Auswahl-Algorithmus (exakt wie Python):**
-/// 1. Kandidaten, deren `user_id` in `recent_targets` enthalten ist, werden
-///    herausgefiltert. Wenn danach nichts übrig bleibt, wird die ungefilterte
+/// 1. Weich vermiedene Logins werden zurückgestellt, solange ein anderer
+///    Fallback-Kandidat verfügbar ist.
+/// 2. Kandidaten, deren `user_id` in `recent_targets` enthalten ist, werden
+///    herausgefiltert. Wenn danach nichts übrig bleibt, wird die bevorzugte
 ///    Liste genutzt.
-/// 2. Sortierung aufsteigend nach `(received_raids_total, viewer_count,
+/// 3. Sortierung aufsteigend nach `(received_raids_total, viewer_count,
 ///    followers_total, started_at)`.
-/// 3. Der erste Kandidat wird gewählt.
+/// 4. Der erste Kandidat wird gewählt.
 ///
 /// `received_raids_by_id`: Map von `user_id → received_successful_raids_total`
 /// aus `twitch_partner_raid_scores`. Fehlende Einträge defaulten auf 0
@@ -289,18 +303,29 @@ pub fn select_fairest<'a>(
         return None;
     }
 
-    // Schritt 1: recent-targets herausfiltern.
-    let filtered: Vec<&FairnessCandidate> = candidates
+    let non_avoided: Vec<&FairnessCandidate> = candidates
         .iter()
+        .filter(|candidate| !is_soft_avoided_fallback_login(&candidate.user_login))
+        .collect();
+    let preferred: Vec<&FairnessCandidate> = if non_avoided.is_empty() {
+        candidates.iter().collect()
+    } else {
+        non_avoided
+    };
+
+    // Schritt 2: recent-targets herausfiltern.
+    let filtered: Vec<&FairnessCandidate> = preferred
+        .iter()
+        .copied()
         .filter(|c| !recent_targets.contains(&c.user_id))
         .collect();
     let mut pool: Vec<&FairnessCandidate> = if filtered.is_empty() {
-        candidates.iter().collect()
+        preferred
     } else {
         filtered
     };
 
-    // Schritt 2: Sortierung.
+    // Schritt 3: Sortierung.
     pool.sort_by(|a, b| {
         let raids_a = received_raids_by_id.get(&a.user_id).copied().unwrap_or(0);
         let raids_b = received_raids_by_id.get(&b.user_id).copied().unwrap_or(0);
@@ -311,7 +336,7 @@ pub fn select_fairest<'a>(
             .then_with(|| a.started_at.cmp(&b.started_at))
     });
 
-    // Schritt 3: Erster nach Sortierung.
+    // Schritt 4: Erster nach Sortierung.
     pool.into_iter().next()
 }
 
@@ -570,6 +595,22 @@ mod tests {
         // Alle gefiltert → Fallback auf alle, niedrigste viewer_count gewinnt.
         let result = select_fairest(&candidates, &recent, &HashMap::new()).unwrap();
         assert_eq!(result.user_id, "uid_a"); // viewer 50 < 200
+    }
+
+    #[test]
+    fn fairest_nutzt_edoeasy_nur_als_letzten_nicht_partner_fallback() {
+        let mut edoeasy = make_fairness("uid_edoeasy", 1, 1);
+        edoeasy.user_login = "EdoEasy".to_string();
+        let alternative = make_fairness("uid_alternative", 25, 100);
+        let candidates = vec![edoeasy, alternative];
+        let recent = HashSet::from(["uid_alternative".to_string()]);
+
+        let with_alternative = select_fairest(&candidates, &recent, &HashMap::new()).unwrap();
+        let without_alternative =
+            select_fairest(&candidates[..1], &recent, &HashMap::new()).unwrap();
+
+        assert_eq!(with_alternative.user_id, "uid_alternative");
+        assert_eq!(without_alternative.user_id, "uid_edoeasy");
     }
 
     #[test]

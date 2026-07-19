@@ -28,7 +28,9 @@ use tb_observability::{
     AnalyticsDecision, AnalyticsObservabilityService, RaidObservabilityService,
 };
 
-use crate::candidate_selection::{is_retryable_raid_error, FairnessCandidate, FOLLOWERS_UNKNOWN};
+use crate::candidate_selection::{
+    is_retryable_raid_error, is_soft_avoided_fallback_login, FairnessCandidate, FOLLOWERS_UNKNOWN,
+};
 use crate::outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
 use crate::partner_roster::OnlineCandidate;
 use crate::pending_raids::{PendingRaid, PendingRaidStore};
@@ -747,6 +749,23 @@ impl AutoRaidPipeline {
         if !boost_logins.is_empty() {
             self.ensure_fallback_streams(req, cached_fallback, attempt)
                 .await;
+            let soft_avoided_boost_count = cached_fallback
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .filter(|candidate| {
+                    let login = candidate.user_login.trim().to_lowercase();
+                    boost_logins.contains(&login) && is_soft_avoided_fallback_login(&login)
+                })
+                .count();
+            if soft_avoided_boost_count > 0 {
+                tracing::info!(
+                    decision = "deferred",
+                    soft_avoided_boost_count,
+                    trigger_reason = "raid_soft_avoid",
+                    "Raid-Fallback: Soft-Avoid-Boost zurückgestellt"
+                );
+            }
             if let Some(target) = resolve_boost_target(
                 cached_fallback.as_deref().unwrap_or(&[]),
                 boost_logins,
@@ -831,7 +850,31 @@ impl AutoRaidPipeline {
                 enricher.enrich(&mut pool).await;
             }
         }
-        select_fallback_from_pool(&pool, &recent_targets, &received_raids_by_id)
+        let target = select_fallback_from_pool(&pool, &recent_targets, &received_raids_by_id);
+        let soft_avoided_count = pool
+            .iter()
+            .filter(|candidate| is_soft_avoided_fallback_login(&candidate.user_login))
+            .count();
+        if soft_avoided_count > 0 {
+            let selected_login = target
+                .as_ref()
+                .map(|selected| selected.user_login.as_str())
+                .unwrap_or("<none>");
+            let decision = if is_soft_avoided_fallback_login(selected_login) {
+                "last_fallback"
+            } else {
+                "deferred"
+            };
+            tracing::info!(
+                decision,
+                selected = selected_login,
+                soft_avoided_count,
+                alternatives = pool.len().saturating_sub(soft_avoided_count),
+                trigger_reason = "raid_soft_avoid",
+                "Raid-Fallback: Soft-Avoid-Entscheidung"
+            );
+        }
+        target
     }
 
     /// Holt die Kategorie-Streams einmalig (lazy, über Versuche gecacht —

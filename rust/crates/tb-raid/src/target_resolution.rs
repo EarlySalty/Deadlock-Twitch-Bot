@@ -21,8 +21,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Value};
 
 use crate::candidate_selection::{
-    select_by_score, select_fairest, FairnessCandidate, ScoredCandidate, SelectionReason,
-    FOLLOWERS_UNKNOWN,
+    is_soft_avoided_fallback_login, select_by_score, select_fairest, FairnessCandidate,
+    ScoredCandidate, SelectionReason, FOLLOWERS_UNKNOWN,
 };
 use crate::partner_roster::OnlineCandidate;
 use crate::score_store::PartnerRaidScoreRow;
@@ -310,6 +310,7 @@ pub fn resolve_boost_target(
         .filter(|s| {
             let login = s.user_login.trim().to_lowercase();
             boost_logins.contains(&login)
+                && !is_soft_avoided_fallback_login(&login)
                 && !is_filtered(
                     s.user_id.trim(),
                     &login,
@@ -606,6 +607,21 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn boost_stellt_edoeasy_fuer_spaetesten_fallback_zurueck() {
+        let streams = vec![fairness("1", "EdoEasy", 1)];
+        let boost: HashSet<String> = ["edoeasy".to_string()].into();
+
+        assert!(resolve_boost_target(
+            &streams,
+            &boost,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
         )
         .is_none());
     }
