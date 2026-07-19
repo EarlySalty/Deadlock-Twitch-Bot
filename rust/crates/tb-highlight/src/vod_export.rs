@@ -47,6 +47,8 @@ impl CommandRunner for TokioCommandRunner {
 pub enum VodExportError {
     #[error("kein Archiv-VOD gefunden")]
     NoVod,
+    #[error("kein neues Archiv-VOD seit Stream-Start gefunden")]
+    NoNewVod,
     #[error("ungueltige Twitch-VOD-ID: {0}")]
     InvalidVodId(String),
     #[error("lokales Export-Verzeichnis konnte nicht erstellt werden: {0}")]
@@ -67,32 +69,59 @@ pub enum VodExportError {
     MissingLink,
 }
 
-pub async fn export_latest_vod(
-    api: &dyn TwitchVodApi,
-    runner: &dyn CommandRunner,
-    yt_dlp_path: &Path,
-    rclone_path: &Path,
-    bucket: &str,
-    temp_dir: &Path,
-    channel_id: &str,
-) -> Result<String, VodExportError> {
+/// Neueste Archiv-VOD-ID des Kanals, oder `None` ohne Archiv-VODs. Wird vor
+/// dem Warte-Delay als Baseline abgerufen, damit `export_latest_vod` danach
+/// erkennt, ob wirklich ein neues VOD erschienen ist.
+pub async fn latest_vod_id(api: &dyn TwitchVodApi, channel_id: &str) -> Option<String> {
     let vods = api.get_archive_videos(channel_id, 1).await;
-    let vod_id = vods
-        .first()
+    vods.first()
         .and_then(|vod| vod.get("id"))
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// Statische Ziele/Pfade für einen Export-Lauf (yt-dlp/rclone-Binaries,
+/// Storj-Bucket, lokales Zwischenverzeichnis) — gebündelt, damit
+/// `export_latest_vod` nicht auf eine unübersichtliche Parameterliste wächst.
+pub struct ExportTargets<'a> {
+    pub yt_dlp_path: &'a Path,
+    pub rclone_path: &'a Path,
+    pub bucket: &'a str,
+    pub temp_dir: &'a Path,
+}
+
+pub async fn export_latest_vod(
+    api: &dyn TwitchVodApi,
+    runner: &dyn CommandRunner,
+    targets: &ExportTargets<'_>,
+    channel_id: &str,
+    baseline_vod_id: Option<&str>,
+) -> Result<String, VodExportError> {
+    let vod_id = latest_vod_id(api, channel_id)
+        .await
         .ok_or(VodExportError::NoVod)?;
+    let vod_id = vod_id.as_str();
     if !vod_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(VodExportError::InvalidVodId(vod_id.to_string()));
     }
+    if baseline_vod_id == Some(vod_id) {
+        return Err(VodExportError::NoNewVod);
+    }
 
+    let temp_dir = targets.temp_dir;
     std::fs::create_dir_all(temp_dir).map_err(VodExportError::CreateDirectory)?;
     let local_path = temp_dir.join(format!("{vod_id}.mp4"));
     cleanup_download_files(temp_dir, vod_id);
 
-    if let Err(error) = run_checked(runner, yt_dlp_path, &yt_dlp_args(vod_id, &local_path)).await {
+    if let Err(error) = run_checked(
+        runner,
+        targets.yt_dlp_path,
+        &yt_dlp_args(vod_id, &local_path),
+    )
+    .await
+    {
         cleanup_download_files(temp_dir, vod_id);
         return Err(error);
     }
@@ -103,8 +132,8 @@ pub async fn export_latest_vod(
 
     let upload_result = run_checked(
         runner,
-        rclone_path,
-        &rclone_copy_args(&local_path, bucket, vod_id),
+        targets.rclone_path,
+        &rclone_copy_args(&local_path, targets.bucket, vod_id),
     )
     .await;
     let cleanup_result = std::fs::remove_file(&local_path);
@@ -118,7 +147,12 @@ pub async fn export_latest_vod(
     upload_result?;
     cleanup_result.map_err(VodExportError::Cleanup)?;
 
-    let link_output = run_checked(runner, rclone_path, &rclone_link_args(bucket, vod_id)).await?;
+    let link_output = run_checked(
+        runner,
+        targets.rclone_path,
+        &rclone_link_args(targets.bucket, vod_id),
+    )
+    .await?;
     link_output
         .stdout
         .lines()
@@ -314,17 +348,15 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir");
 
-        let link = export_latest_vod(
-            &MockApi,
-            runner.as_ref(),
-            Path::new("/opt/yt-dlp"),
-            Path::new("rclone"),
-            "server-backup",
-            &temp_dir,
-            "channel-1",
-        )
-        .await
-        .expect("export succeeds");
+        let targets = ExportTargets {
+            yt_dlp_path: Path::new("/opt/yt-dlp"),
+            rclone_path: Path::new("rclone"),
+            bucket: "server-backup",
+            temp_dir: &temp_dir,
+        };
+        let link = export_latest_vod(&MockApi, runner.as_ref(), &targets, "channel-1", None)
+            .await
+            .expect("export succeeds");
 
         assert_eq!(link, "https://share.example/987");
         assert!(!temp_dir.join("987.mp4").exists());
@@ -351,19 +383,39 @@ mod tests {
             std::env::temp_dir().join(format!("tb-vod-export-failure-test-{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("temp dir");
 
-        let result = export_latest_vod(
-            &MockApi,
-            &runner,
-            Path::new("/opt/yt-dlp"),
-            Path::new("rclone"),
-            "server-backup",
-            &temp_dir,
-            "channel-1",
-        )
-        .await;
+        let targets = ExportTargets {
+            yt_dlp_path: Path::new("/opt/yt-dlp"),
+            rclone_path: Path::new("rclone"),
+            bucket: "server-backup",
+            temp_dir: &temp_dir,
+        };
+        let result = export_latest_vod(&MockApi, &runner, &targets, "channel-1", None).await;
 
         assert!(matches!(result, Err(VodExportError::CommandFailed { .. })));
         assert!(!temp_dir.join("987.mp4.part").exists());
+        std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
+    }
+
+    #[tokio::test]
+    async fn baseline_vod_id_unveraendert_liefert_kein_neues_vod() {
+        let runner = MockRunner::default();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tb-vod-export-baseline-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+
+        let targets = ExportTargets {
+            yt_dlp_path: Path::new("/opt/yt-dlp"),
+            rclone_path: Path::new("rclone"),
+            bucket: "server-backup",
+            temp_dir: &temp_dir,
+        };
+        let result =
+            export_latest_vod(&MockApi, &runner, &targets, "channel-1", Some("987")).await;
+
+        assert!(matches!(result, Err(VodExportError::NoNewVod)));
+        assert!(runner.calls.lock().expect("call lock").is_empty());
         std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
     }
 }

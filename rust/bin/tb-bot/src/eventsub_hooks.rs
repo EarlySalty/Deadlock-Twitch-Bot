@@ -14,7 +14,7 @@
 //! pro message_id-Guard.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -25,7 +25,8 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, should_export, CommandRunner, TokioCommandRunner, VodExportError,
+        export_latest_vod, latest_vod_id, should_export, CommandRunner, ExportTargets,
+        TokioCommandRunner, VodExportError,
     },
 };
 use tb_monitoring::{
@@ -92,15 +93,20 @@ impl VodExportOfflineHandler {
         let temp_dir = self.temp_dir.clone();
         let twitch_user_id = twitch_user_id.to_string();
         tokio::spawn(async move {
+            let baseline_vod_id = latest_vod_id(api.as_ref(), &twitch_user_id).await;
             tokio::time::sleep(VOD_EXPORT_DELAY).await;
+            let targets = ExportTargets {
+                yt_dlp_path: &yt_dlp_path,
+                rclone_path: Path::new("rclone"),
+                bucket: &bucket,
+                temp_dir: &temp_dir,
+            };
             match export_latest_vod(
                 api.as_ref(),
                 runner.as_ref(),
-                &yt_dlp_path,
-                PathBuf::from("rclone").as_path(),
-                &bucket,
-                &temp_dir,
+                &targets,
                 &twitch_user_id,
+                baseline_vod_id.as_deref(),
             )
             .await
             {
@@ -117,6 +123,12 @@ impl VodExportOfflineHandler {
                     tracing::warn!(
                         twitch_user_id,
                         "VOD-Export: nach Wartezeit kein Archiv-VOD gefunden"
+                    );
+                }
+                Err(VodExportError::NoNewVod) => {
+                    tracing::warn!(
+                        twitch_user_id,
+                        "VOD-Export: nach Wartezeit weiterhin nur das vorherige VOD sichtbar, kein Export"
                     );
                 }
                 Err(error) => {
