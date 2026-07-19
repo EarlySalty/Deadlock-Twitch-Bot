@@ -361,7 +361,7 @@ impl LiveStateStore {
         stream_id: Option<&str>,
         started_at: Option<&str>,
         now_iso: &str,
-        clear_announcement: bool,
+        clear_expected_message_id: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         if !login_lower.is_empty() {
@@ -390,11 +390,15 @@ impl LiveStateStore {
                     last_stream_id = COALESCE(EXCLUDED.last_stream_id, twitch_live_state.last_stream_id),
                     last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at),
                     last_discord_message_id = CASE
-                        WHEN $6 THEN NULL
+                        WHEN $6 IS NOT NULL
+                         AND twitch_live_state.last_discord_message_id = $6
+                         AND COALESCE(twitch_live_state.is_live, 0) = 0 THEN NULL
                         ELSE twitch_live_state.last_discord_message_id
                     END,
                     last_tracking_token = CASE
-                        WHEN $6 THEN NULL
+                        WHEN $6 IS NOT NULL
+                         AND twitch_live_state.last_discord_message_id = $6
+                         AND COALESCE(twitch_live_state.is_live, 0) = 0 THEN NULL
                         ELSE twitch_live_state.last_tracking_token
                     END
             "#,
@@ -408,7 +412,7 @@ impl LiveStateStore {
         .bind(now_iso)
         .bind(stream_id)
         .bind(started_at)
-        .bind(clear_announcement)
+        .bind(clear_expected_message_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
