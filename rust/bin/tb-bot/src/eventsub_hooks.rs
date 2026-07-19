@@ -128,7 +128,7 @@ impl VodExportOfflineHandler {
 }
 
 fn vod_export_dm_content(link: &str) -> String {
-    format!("PLATZHALTER: VOD-Freigabelink (7 Tage gültig): {link}")
+    format!("VOD von deinem letzten dach_lock-Stream ist hochgeladen: {link}\nLink ist 7 Tage gültig, danach weg.")
 }
 
 fn event_str<'a>(event: &'a Value, key: &str) -> &'a str {
@@ -914,10 +914,9 @@ mod vod_export_tests {
     use super::vod_export_dm_content;
 
     #[test]
-    fn dm_text_bleibt_platzhalter_und_enthaelt_link_und_gueltigkeit() {
+    fn dm_text_enthaelt_link_und_gueltigkeit() {
         let content = vod_export_dm_content("https://share.example/vod");
 
-        assert!(content.starts_with("PLATZHALTER:"));
         assert!(content.contains("https://share.example/vod"));
         assert!(content.contains("7 Tage"));
     }

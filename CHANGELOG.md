@@ -1,3 +1,11 @@
+## #392 — VOD-Export für dach_lock läuft automatisch
+
+**Problem:** VODs mussten von Hand heruntergeladen und manuell weitergegeben werden — Aufwand pro Stream, und ein öffentlicher Upload wäre datenschutzmäßig unnötig.
+
+**Änderung:** Nach jedem Stream-Ende von dach_lock lädt der Bot das komplette VOD herunter, legt es verschlüsselt in einem privaten Speicher ab und schickt eine befristete Freigabe direkt per Discord-DM.
+
+**Aktuelles Verhalten:** Der Link ist 7 Tage gültig, danach nicht mehr erreichbar. Kein manueller Schritt mehr nötig.
+
 ## #391 — Streamer können das Netzwerk fair vergleichen
 
 **Problem:** Die gesammelten Stream- und Raid-Daten waren nur einzeln im Dashboard sichtbar; dadurch ließ sich schwer erkennen, welche Kanäle Momentum haben und wo Raids wirklich ankommen.
