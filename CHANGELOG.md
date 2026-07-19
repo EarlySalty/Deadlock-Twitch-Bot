@@ -1,3 +1,11 @@
+## #392 — Deadlock-Clips laufen automatisch in OBS-Pausen
+
+**Problem:** Stream-Pausen mussten bisher manuell mit passenden Videos oder Clips bestückt werden; vorhandene Deadlock-Clips aktiver Partner ließen sich nicht als gemeinsamer, aktueller Loop nutzen.
+
+**Änderung:** Eine öffentliche OBS-Seite lädt ausschließlich bestehende Twitch-Clips aktiver, nicht ausgeschlossener Partner, filtert sie auf Deadlock und hält den Pool kurzzeitig im Speicher. Der Player mischt jeden Durchlauf und spielt jeden Clip genau einmal, bevor ein neuer Durchlauf beginnt.
+
+**Aktuelles Verhalten:** Die Pause-Loop-URL kann direkt als OBS-Browser-Quelle genutzt werden; der Clip-Pool aktualisiert sich automatisch, ohne neue Clips oder Videos zu erzeugen.
+
 ## #391 — Streamer können das Netzwerk fair vergleichen
 
 **Problem:** Die gesammelten Stream- und Raid-Daten waren nur einzeln im Dashboard sichtbar; dadurch ließ sich schwer erkennen, welche Kanäle Momentum haben und wo Raids wirklich ankommen.
