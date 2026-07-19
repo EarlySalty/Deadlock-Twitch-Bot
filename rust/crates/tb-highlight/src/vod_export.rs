@@ -149,7 +149,7 @@ fn storj_object_path(bucket: &str, vod_id: &str) -> String {
 
 fn rclone_copy_args(local_path: &Path, bucket: &str, vod_id: &str) -> Vec<String> {
     vec![
-        "copy".to_string(),
+        "copyto".to_string(),
         local_path.to_string_lossy().into_owned(),
         storj_object_path(bucket, vod_id),
     ]
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(
             rclone_copy_args(local, "server-backup", "987"),
             vec![
-                "copy",
+                "copyto",
                 "/tmp/987.mp4",
                 "storj:server-backup/vod-export/dach_lock/987.mp4",
             ]
