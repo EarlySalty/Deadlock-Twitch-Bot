@@ -2,7 +2,11 @@
 
 #[cfg(test)]
 use std::future::Future;
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -54,6 +58,46 @@ pub struct PauseLoopClip {
     pub title: String,
     /// Player-sichere Clip-Dauer in Sekunden, auf 5 bis 300 Sekunden begrenzt.
     pub duration: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PauseLoopCachedClip {
+    clip: PauseLoopClip,
+    partner_twitch_user_id: Option<String>,
+}
+
+impl PauseLoopCachedClip {
+    fn with_partner(clip: PauseLoopClip, partner_twitch_user_id: &str) -> Self {
+        let partner_twitch_user_id = trim_ascii_whitespace(partner_twitch_user_id);
+        Self {
+            clip,
+            partner_twitch_user_id: (!partner_twitch_user_id.is_empty())
+                .then(|| partner_twitch_user_id.to_owned()),
+        }
+    }
+
+    #[cfg(test)]
+    fn without_partner(clip: PauseLoopClip) -> Self {
+        Self {
+            clip,
+            partner_twitch_user_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PauseLoopServiceSnapshot {
+    clips: Vec<PauseLoopClip>,
+    stale: bool,
+}
+
+impl PauseLoopServiceSnapshot {
+    fn from_cached(clips: &[PauseLoopCachedClip], stale: bool) -> Self {
+        Self {
+            clips: clips.iter().map(|clip| clip.clip.clone()).collect(),
+            stale,
+        }
+    }
 }
 
 /// Fehler beim Aufbau oder Abruf des Pause-Loop-Clip-Pools.
@@ -112,20 +156,27 @@ trait PauseLoopRefreshSource: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq)]
 struct PauseLoopRefreshReport {
-    clips: Vec<PauseLoopClip>,
+    clips: Vec<PauseLoopCachedClip>,
     partners: usize,
     succeeded: usize,
     failed: usize,
+    active_partner_user_ids: Vec<String>,
+    successful_partner_user_ids: HashSet<String>,
 }
 
 impl PauseLoopRefreshReport {
     #[cfg(test)]
     fn from_test_clips(clips: Vec<PauseLoopClip>) -> Self {
         Self {
-            clips,
+            clips: clips
+                .into_iter()
+                .map(PauseLoopCachedClip::without_partner)
+                .collect(),
             partners: 0,
             succeeded: 0,
             failed: 0,
+            active_partner_user_ids: Vec::new(),
+            successful_partner_user_ids: HashSet::new(),
         }
     }
 }
@@ -170,12 +221,12 @@ struct PauseLoopCacheState {
 }
 
 struct PauseLoopCacheEntry {
-    clips: Vec<PauseLoopClip>,
+    clips: Vec<PauseLoopCachedClip>,
     expires_at: std::time::Instant,
 }
 
 struct PauseLoopInFlight {
-    result: watch::Sender<Option<Result<Vec<PauseLoopClip>, PauseLoopError>>>,
+    result: watch::Sender<Option<Result<PauseLoopServiceSnapshot, PauseLoopError>>>,
 }
 
 impl PauseLoopInFlight {
@@ -284,16 +335,85 @@ impl PauseLoopService {
         )
     }
 
+    #[cfg(test)]
+    async fn expire_cache_entry_for_tests(&self) {
+        let mut state = self.cache.lock().await;
+        let entry = state.entry.as_mut().expect("cache entry present");
+        entry.expires_at = std::time::Instant::now() - Duration::from_millis(1);
+    }
+
+    #[cfg(test)]
+    async fn release_retry_for_tests(&self) {
+        let mut state = self.cache.lock().await;
+        state.retry_not_before = Some(std::time::Instant::now() - Duration::from_millis(1));
+    }
+
+    #[cfg(test)]
+    async fn wait_for_in_flight_finished_for_tests(&self) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let done = {
+                    let state = self.cache.lock().await;
+                    state.in_flight.is_none()
+                };
+                if done {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pause-loop refresh should finish");
+    }
+
+    #[cfg(test)]
+    async fn wait_for_in_flight_waiters_for_tests(&self, min_waiters: usize) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let waiters = {
+                    let state = self.cache.lock().await;
+                    state
+                        .in_flight
+                        .as_ref()
+                        .map(|in_flight| in_flight.result.receiver_count())
+                        .unwrap_or_default()
+                };
+                if waiters >= min_waiters {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pause-loop refresh waiters should attach");
+    }
+
     /// Liefert den aktuellen Clip-Pool und refresh't kalte oder abgelaufene Eintraege singleflight.
     pub async fn clips(&self) -> Result<Vec<PauseLoopClip>, PauseLoopError> {
-        let mut start_refresh: Option<(Arc<PauseLoopInFlight>, Option<Vec<PauseLoopClip>>)> = None;
-        let wait_for = {
+        Ok(self.snapshot().await?.clips)
+    }
+
+    async fn snapshot(&self) -> Result<PauseLoopServiceSnapshot, PauseLoopError> {
+        enum CacheDecision {
+            Return(Result<PauseLoopServiceSnapshot, PauseLoopError>),
+            Wait(Arc<PauseLoopInFlight>),
+            StartAndWait {
+                in_flight: Arc<PauseLoopInFlight>,
+                stale: Option<Vec<PauseLoopCachedClip>>,
+            },
+            StartAndReturnStale {
+                in_flight: Arc<PauseLoopInFlight>,
+                stale: Vec<PauseLoopCachedClip>,
+            },
+        }
+
+        let decision = {
             let mut state = self.cache.lock().await;
             let now = std::time::Instant::now();
 
             if let Some(entry) = &state.entry {
                 if entry.expires_at > now {
-                    return Ok(entry.clips.clone());
+                    return Ok(PauseLoopServiceSnapshot::from_cached(&entry.clips, false));
                 }
             }
 
@@ -301,55 +421,59 @@ impl PauseLoopService {
 
             if let Some(in_flight) = state.in_flight.clone() {
                 if let Some(clips) = stale {
-                    return Ok(clips);
+                    CacheDecision::Return(Ok(PauseLoopServiceSnapshot::from_cached(&clips, true)))
+                } else {
+                    CacheDecision::Wait(in_flight)
                 }
-                in_flight
             } else if state
                 .retry_not_before
                 .is_some_and(|retry_not_before| now < retry_not_before)
             {
                 if let Some(clips) = stale {
-                    return Ok(clips);
+                    CacheDecision::Return(Ok(PauseLoopServiceSnapshot::from_cached(&clips, true)))
+                } else if let Some(err) = state.last_error.clone() {
+                    CacheDecision::Return(Err(err))
+                } else {
+                    let in_flight = Arc::new(PauseLoopInFlight::new());
+                    state.in_flight = Some(in_flight.clone());
+                    CacheDecision::StartAndWait {
+                        in_flight,
+                        stale: None,
+                    }
                 }
-                if let Some(err) = state.last_error.clone() {
-                    return Err(err);
-                }
-
-                let in_flight = Arc::new(PauseLoopInFlight::new());
-                state.in_flight = Some(in_flight.clone());
-                start_refresh = Some((in_flight.clone(), stale));
-                in_flight
             } else {
                 let in_flight = Arc::new(PauseLoopInFlight::new());
                 state.in_flight = Some(in_flight.clone());
-                start_refresh = Some((in_flight.clone(), stale));
-                in_flight
+                if let Some(stale) = stale {
+                    CacheDecision::StartAndReturnStale { in_flight, stale }
+                } else {
+                    CacheDecision::StartAndWait {
+                        in_flight,
+                        stale: None,
+                    }
+                }
             }
         };
 
-        if let Some((in_flight, stale)) = start_refresh {
-            self.spawn_refresh_worker(in_flight, stale);
+        match decision {
+            CacheDecision::Return(result) => result,
+            CacheDecision::Wait(in_flight) => wait_for_refresh(in_flight).await,
+            CacheDecision::StartAndWait { in_flight, stale } => {
+                self.spawn_refresh_worker(in_flight.clone(), stale);
+                wait_for_refresh(in_flight).await
+            }
+            CacheDecision::StartAndReturnStale { in_flight, stale } => {
+                let snapshot = PauseLoopServiceSnapshot::from_cached(&stale, true);
+                self.spawn_refresh_worker(in_flight, Some(stale));
+                Ok(snapshot)
+            }
         }
-
-        wait_for_refresh(wait_for).await
-    }
-
-    async fn is_degraded(&self) -> bool {
-        let state = self.cache.lock().await;
-        let now = std::time::Instant::now();
-        let expired_entry = state
-            .entry
-            .as_ref()
-            .is_some_and(|entry| entry.expires_at <= now);
-        let has_error = state.last_error.is_some();
-
-        has_error || (expired_entry && state.in_flight.is_some())
     }
 
     fn spawn_refresh_worker(
         &self,
         in_flight: Arc<PauseLoopInFlight>,
-        stale: Option<Vec<PauseLoopClip>>,
+        stale: Option<Vec<PauseLoopCachedClip>>,
     ) {
         let source = self.source.clone();
         let cache = self.cache.clone();
@@ -384,7 +508,7 @@ impl PauseLoopService {
                         "pause-loop pool refresh finished"
                     );
 
-                    let response = Ok(clips.clone());
+                    let response = Ok(PauseLoopServiceSnapshot::from_cached(&clips, false));
                     let mut state = cache.lock().await;
                     let now = std::time::Instant::now();
                     state.entry = Some(PauseLoopCacheEntry {
@@ -400,30 +524,32 @@ impl PauseLoopService {
                     let partners = report.partners;
                     let succeeded = report.succeeded;
                     let failed = report.failed;
-                    let partial_clips = report.clips;
-                    let partial_error = PauseLoopError::PartialRefresh {
-                        partners,
-                        succeeded,
-                        failed,
-                    };
+                    let merged_clips = merge_degraded_refresh_clips(&report, stale.as_deref());
+                    let partial_error = degraded_refresh_error(&report);
                     tracing::warn!(
                         urteil = "teilfehler",
                         partners,
                         succeeded,
                         failed,
-                        clip_count = partial_clips.len(),
+                        clip_count = merged_clips.len(),
                         stale_present,
                         "pause-loop pool refresh finished"
                     );
 
-                    let response = Ok(stale.clone().unwrap_or_else(|| partial_clips.clone()));
+                    let response = if succeeded == 0 && !stale_present {
+                        Err(partial_error.clone())
+                    } else {
+                        Ok(PauseLoopServiceSnapshot::from_cached(&merged_clips, true))
+                    };
                     let mut state = cache.lock().await;
                     let now = std::time::Instant::now();
-                    if !stale_present {
+                    if response.is_ok() {
                         state.entry = Some(PauseLoopCacheEntry {
-                            clips: partial_clips,
+                            clips: merged_clips,
                             expires_at: now,
                         });
+                    } else {
+                        state.entry = None;
                     }
                     state.retry_not_before = Some(now + retry_delay);
                     state.last_error = Some(partial_error);
@@ -438,12 +564,10 @@ impl PauseLoopService {
                         "pause-loop pool refresh finished"
                     );
 
-                    let response = match stale {
-                        Some(clips) => Ok(clips),
-                        None => Err(err.clone()),
-                    };
+                    let response = Err(err.clone());
                     let mut state = cache.lock().await;
                     let now = std::time::Instant::now();
+                    state.entry = None;
                     state.retry_not_before = Some(now + retry_delay);
                     state.last_error = Some(err);
                     clear_matching_inflight(&mut state, &in_flight);
@@ -488,13 +612,12 @@ fn build_pause_loop_router_with_service(service: PauseLoopService) -> Router {
 }
 
 async fn pause_loop_clips_handler(State(service): State<PauseLoopService>) -> Response {
-    match service.clips().await {
-        Ok(clips) => {
-            let degraded = service.is_degraded().await;
-            let mut response = Json(clips).into_response();
+    match service.snapshot().await {
+        Ok(snapshot) => {
+            let mut response = Json(snapshot.clips).into_response();
             let headers = response.headers_mut();
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            if degraded {
+            if snapshot.stale {
                 headers.insert(PAUSE_LOOP_STALE_HEADER, HeaderValue::from_static("1"));
             }
             response
@@ -625,6 +748,7 @@ fn apply_worker_failure_state(
     retry_delay: Duration,
     err: PauseLoopError,
 ) {
+    state.entry = None;
     state.retry_not_before = Some(std::time::Instant::now() + retry_delay);
     state.last_error = Some(err);
     clear_matching_inflight(state, in_flight);
@@ -642,7 +766,7 @@ fn clear_matching_inflight(state: &mut PauseLoopCacheState, in_flight: &Arc<Paus
 
 async fn wait_for_refresh(
     in_flight: Arc<PauseLoopInFlight>,
-) -> Result<Vec<PauseLoopClip>, PauseLoopError> {
+) -> Result<PauseLoopServiceSnapshot, PauseLoopError> {
     let mut receiver = in_flight.result.subscribe();
     loop {
         if let Some(result) = receiver.borrow().clone() {
@@ -656,6 +780,71 @@ async fn wait_for_refresh(
     }
 }
 
+fn degraded_refresh_error(report: &PauseLoopRefreshReport) -> PauseLoopError {
+    if report.succeeded == 0 && report.failed > 0 {
+        PauseLoopError::AllPartnersFailed {
+            partners: report.partners,
+            failures: report.failed,
+        }
+    } else {
+        PauseLoopError::PartialRefresh {
+            partners: report.partners,
+            succeeded: report.succeeded,
+            failed: report.failed,
+        }
+    }
+}
+
+fn merge_degraded_refresh_clips(
+    report: &PauseLoopRefreshReport,
+    stale: Option<&[PauseLoopCachedClip]>,
+) -> Vec<PauseLoopCachedClip> {
+    let active_partner_ids = report
+        .active_partner_user_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let successful_partner_ids = &report.successful_partner_user_ids;
+
+    let mut fresh_by_partner: HashMap<String, Vec<PauseLoopCachedClip>> = HashMap::new();
+    for clip in report.clips.iter().cloned() {
+        let Some(partner_id) = clip.partner_twitch_user_id.as_deref() else {
+            continue;
+        };
+        if successful_partner_ids.contains(partner_id) {
+            fresh_by_partner
+                .entry(partner_id.to_owned())
+                .or_default()
+                .push(clip);
+        }
+    }
+
+    let mut stale_by_partner: HashMap<String, Vec<PauseLoopCachedClip>> = HashMap::new();
+    for clip in stale.unwrap_or(&[]).iter().cloned() {
+        let Some(partner_id) = clip.partner_twitch_user_id.as_deref() else {
+            continue;
+        };
+        if active_partner_ids.contains(partner_id) && !successful_partner_ids.contains(partner_id) {
+            stale_by_partner
+                .entry(partner_id.to_owned())
+                .or_default()
+                .push(clip);
+        }
+    }
+
+    let mut merged = Vec::new();
+    for partner_id in &report.active_partner_user_ids {
+        if successful_partner_ids.contains(partner_id) {
+            if let Some(clips) = fresh_by_partner.remove(partner_id) {
+                merged.extend(clips);
+            }
+        } else if let Some(clips) = stale_by_partner.remove(partner_id) {
+            merged.extend(clips);
+        }
+    }
+    dedupe_cached_pause_loop_clips(merged)
+}
+
 #[derive(Debug, Error)]
 enum PartnerClipFetchError {
     #[error("Helix-Fehler: {0}")]
@@ -667,7 +856,8 @@ enum PartnerClipFetchError {
 struct PartnerClipFetchOutcome {
     index: usize,
     login: String,
-    result: Result<Vec<PauseLoopClip>, PartnerClipFetchError>,
+    user_id: String,
+    result: Result<Vec<PauseLoopCachedClip>, PartnerClipFetchError>,
 }
 
 async fn refresh_pause_loop_pool(
@@ -698,15 +888,22 @@ async fn fetch_partner_clip_pool(
             partners: 0,
             succeeded: 0,
             failed: 0,
+            active_partner_user_ids: Vec::new(),
+            successful_partner_user_ids: HashSet::new(),
         });
     }
 
+    let active_partner_user_ids = partners
+        .iter()
+        .map(|partner| partner.twitch_user_id.clone())
+        .collect::<Vec<_>>();
     let mut partner_iter = partners.into_iter().enumerate();
     let mut join_set = JoinSet::new();
     let mut in_flight = 0usize;
     let mut failures = 0usize;
     let mut successes = 0usize;
-    let mut successful_batches: Vec<(usize, Vec<PauseLoopClip>)> = Vec::new();
+    let mut successful_partner_user_ids = HashSet::new();
+    let mut successful_batches: Vec<(usize, Vec<PauseLoopCachedClip>)> = Vec::new();
 
     loop {
         while in_flight < MAX_PARALLEL_PARTNER_FETCHES {
@@ -739,6 +936,7 @@ async fn fetch_partner_clip_pool(
             Ok(outcome) => match outcome.result {
                 Ok(clips) => {
                     successes += 1;
+                    successful_partner_user_ids.insert(outcome.user_id);
                     successful_batches.push((outcome.index, clips));
                 }
                 Err(err) => {
@@ -763,15 +961,8 @@ async fn fetch_partner_clip_pool(
         }
     }
 
-    if successes == 0 && failures > 0 {
-        return Err(PauseLoopError::AllPartnersFailed {
-            partners: total_partners,
-            failures,
-        });
-    }
-
     successful_batches.sort_by_key(|(index, _)| *index);
-    let clips = dedupe_pause_loop_clips(
+    let clips = dedupe_cached_pause_loop_clips(
         successful_batches
             .into_iter()
             .flat_map(|(_, clips)| clips)
@@ -782,6 +973,8 @@ async fn fetch_partner_clip_pool(
         partners: total_partners,
         succeeded: successes,
         failed: failures,
+        active_partner_user_ids,
+        successful_partner_user_ids,
     })
 }
 
@@ -792,6 +985,7 @@ async fn fetch_partner_clips(
     game_id: String,
 ) -> PartnerClipFetchOutcome {
     let login = partner.twitch_login.clone();
+    let user_id = partner.twitch_user_id.clone();
     let result = match tokio::time::timeout(
         PARTNER_CLIP_TIMEOUT,
         helix.get_clips_by_broadcaster(&partner.twitch_user_id, PARTNER_CLIP_LIMIT),
@@ -800,6 +994,7 @@ async fn fetch_partner_clips(
     {
         Ok(Ok(raw_clips)) => Ok(filter_partner_deadlock_clips(
             &partner.twitch_login,
+            &partner.twitch_user_id,
             &game_id,
             raw_clips,
         )),
@@ -812,26 +1007,31 @@ async fn fetch_partner_clips(
     PartnerClipFetchOutcome {
         index,
         login,
+        user_id,
         result,
     }
 }
 
 fn filter_partner_deadlock_clips(
     partner_login: &str,
+    partner_twitch_user_id: &str,
     game_id: &str,
     raw_clips: Vec<HelixClip>,
-) -> Vec<PauseLoopClip> {
+) -> Vec<PauseLoopCachedClip> {
     raw_clips
         .into_iter()
-        .filter_map(|clip| filter_partner_deadlock_clip(partner_login, game_id, clip))
+        .filter_map(|clip| {
+            filter_partner_deadlock_clip(partner_login, partner_twitch_user_id, game_id, clip)
+        })
         .collect()
 }
 
 fn filter_partner_deadlock_clip(
     partner_login: &str,
+    partner_twitch_user_id: &str,
     game_id: &str,
     clip: HelixClip,
-) -> Option<PauseLoopClip> {
+) -> Option<PauseLoopCachedClip> {
     if clip.game_id != game_id {
         return None;
     }
@@ -844,25 +1044,32 @@ fn filter_partner_deadlock_clip(
         name => name,
     };
 
-    Some(PauseLoopClip {
-        id: id.to_owned(),
-        broadcaster_name: broadcaster_name.to_owned(),
-        title: clip.title.trim().to_owned(),
-        duration: clip
-            .duration
-            .clamp(MIN_PLAYER_SAFE_DURATION, MAX_PLAYER_SAFE_DURATION),
-    })
+    Some(PauseLoopCachedClip::with_partner(
+        PauseLoopClip {
+            id: id.to_owned(),
+            broadcaster_name: broadcaster_name.to_owned(),
+            title: clip.title.trim().to_owned(),
+            duration: clip
+                .duration
+                .clamp(MIN_PLAYER_SAFE_DURATION, MAX_PLAYER_SAFE_DURATION),
+        },
+        partner_twitch_user_id,
+    ))
 }
 
-fn dedupe_pause_loop_clips(clips: Vec<PauseLoopClip>) -> Vec<PauseLoopClip> {
+fn dedupe_cached_pause_loop_clips(clips: Vec<PauseLoopCachedClip>) -> Vec<PauseLoopCachedClip> {
     let mut seen = HashSet::new();
     let mut deduped = Vec::with_capacity(clips.len());
     for clip in clips {
-        if seen.insert(clip.id.clone()) {
+        if seen.insert(clip.clip.id.clone()) {
             deduped.push(clip);
         }
     }
     deduped
+}
+
+fn trim_ascii_whitespace(value: &str) -> &str {
+    value.trim_matches(|ch: char| ch.is_ascii_whitespace())
 }
 
 /// Aktiver Partner-Broadcaster, der fuer Pause-Loop-Clips beruecksichtigt wird.
@@ -891,7 +1098,7 @@ pub async fn load_active_partner_broadcasters(
           AND NOT EXISTS (
               SELECT 1
               FROM twitch_exclusions exclusion
-              WHERE exclusion.twitch_user_id = partner.twitch_user_id
+              WHERE BTRIM(exclusion.twitch_user_id, E' \t\n\r\f') = BTRIM(partner.twitch_user_id, E' \t\n\r\f')
                 AND exclusion.reactivated_at IS NULL
           )
         ORDER BY
@@ -1108,18 +1315,41 @@ mod tests {
         }
     }
 
+    fn cached_pause_clip(id: &str, partner_id: &str) -> PauseLoopCachedClip {
+        PauseLoopCachedClip::with_partner(pause_clip(id), partner_id)
+    }
+
+    fn public_clips(clips: &[PauseLoopCachedClip]) -> Vec<PauseLoopClip> {
+        PauseLoopServiceSnapshot::from_cached(clips, false).clips
+    }
+
     fn pause_report(
-        clips: Vec<PauseLoopClip>,
-        partners: usize,
-        succeeded: usize,
+        clips: Vec<PauseLoopCachedClip>,
+        active_partner_user_ids: &[&str],
+        successful_partner_user_ids: &[&str],
         failed: usize,
     ) -> PauseLoopRefreshReport {
         PauseLoopRefreshReport {
             clips,
-            partners,
-            succeeded,
+            partners: active_partner_user_ids.len(),
+            succeeded: successful_partner_user_ids.len(),
             failed,
+            active_partner_user_ids: active_partner_user_ids
+                .iter()
+                .map(|partner_id| (*partner_id).to_owned())
+                .collect(),
+            successful_partner_user_ids: successful_partner_user_ids
+                .iter()
+                .map(|partner_id| (*partner_id).to_owned())
+                .collect(),
         }
+    }
+
+    fn full_pause_report(
+        clips: Vec<PauseLoopCachedClip>,
+        active_partner_user_ids: &[&str],
+    ) -> PauseLoopRefreshReport {
+        pause_report(clips, active_partner_user_ids, active_partner_user_ids, 0)
     }
 
     async fn panic_refresh(
@@ -1133,6 +1363,7 @@ mod tests {
     fn pause_loop_filtering_rejects_invalid_clamps_and_fills_fallback_name() {
         let clips = filter_partner_deadlock_clips(
             " partner_login ",
+            " 42 ",
             "deadlock-game",
             vec![
                 raw_clip("foreign", "other-game", "Name", "Foreign", 20.0),
@@ -1146,7 +1377,7 @@ mod tests {
         );
 
         assert_eq!(
-            clips,
+            public_clips(&clips),
             vec![
                 PauseLoopClip {
                     id: "low".to_owned(),
@@ -1172,14 +1403,18 @@ mod tests {
 
     #[test]
     fn pause_loop_global_dedupe_keeps_first_clip_id() {
-        let mut first = pause_clip("dup");
-        first.title = "first".to_owned();
-        let mut second = pause_clip("dup");
-        second.title = "second".to_owned();
+        let mut first = cached_pause_clip("dup", "A");
+        first.clip.title = "first".to_owned();
+        let mut second = cached_pause_clip("dup", "B");
+        second.clip.title = "second".to_owned();
 
-        let clips = dedupe_pause_loop_clips(vec![first.clone(), pause_clip("unique"), second]);
+        let clips = dedupe_cached_pause_loop_clips(vec![
+            first.clone(),
+            cached_pause_clip("unique", "B"),
+            second,
+        ]);
 
-        assert_eq!(clips, vec![first, pause_clip("unique")]);
+        assert_eq!(clips, vec![first, cached_pause_clip("unique", "B")]);
     }
 
     #[tokio::test]
@@ -1226,7 +1461,7 @@ mod tests {
             async move { service.clips().await }
         });
 
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        service.wait_for_in_flight_waiters_for_tests(2).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         release_tx.send(()).expect("release refresh");
 
@@ -1323,38 +1558,49 @@ mod tests {
         });
 
         assert_eq!(service.clips().await.unwrap(), vec![pause_clip("clip-1")]);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        service.expire_cache_entry_for_tests().await;
+        assert_eq!(service.clips().await.unwrap(), vec![pause_clip("clip-1")]);
+        service.wait_for_in_flight_finished_for_tests().await;
         assert_eq!(service.clips().await.unwrap(), vec![pause_clip("clip-2")]);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
-    async fn pause_loop_cache_keeps_stale_on_refresh_error() {
+    async fn pause_loop_cache_clears_stale_after_unvalidated_refresh_error() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let service = PauseLoopService::for_tests(Duration::from_millis(10), {
-            let calls = calls.clone();
-            move || {
+        let service = PauseLoopService::for_tests_with_retry_delay(
+            Duration::from_millis(10),
+            Duration::from_secs(60),
+            {
                 let calls = calls.clone();
-                async move {
-                    let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
-                    if call == 1 {
-                        Ok(vec![pause_clip("stale")])
-                    } else {
-                        Err(PauseLoopError::Helix("boom".to_owned()))
+                move || {
+                    let calls = calls.clone();
+                    async move {
+                        let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                        if call == 1 {
+                            Ok(vec![pause_clip("stale")])
+                        } else {
+                            Err(PauseLoopError::Helix("boom".to_owned()))
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
 
         let stale = service.clips().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        service.expire_cache_entry_for_tests().await;
 
         assert_eq!(service.clips().await.unwrap(), stale);
+        service.wait_for_in_flight_finished_for_tests().await;
+        assert_eq!(
+            service.clips().await.unwrap_err(),
+            PauseLoopError::Helix("boom".to_owned())
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
-    async fn pause_loop_cache_stale_error_backoff_suppresses_retry_stampede() {
+    async fn pause_loop_cache_unvalidated_error_backoff_suppresses_retry_stampede() {
         let calls = Arc::new(AtomicUsize::new(0));
         let service = PauseLoopService::for_tests_with_retry_delay(
             Duration::from_millis(10),
@@ -1376,11 +1622,16 @@ mod tests {
         );
 
         assert_eq!(service.clips().await.unwrap(), vec![pause_clip("stale")]);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        service.expire_cache_entry_for_tests().await;
 
         assert_eq!(service.clips().await.unwrap(), vec![pause_clip("stale")]);
-        assert_eq!(service.clips().await.unwrap(), vec![pause_clip("stale")]);
-        assert_eq!(service.clips().await.unwrap(), vec![pause_clip("stale")]);
+        service.wait_for_in_flight_finished_for_tests().await;
+        let first = service.clips().await.unwrap_err();
+        let second = service.clips().await.unwrap_err();
+        let third = service.clips().await.unwrap_err();
+        assert_eq!(first, PauseLoopError::Helix("boom-2".to_owned()));
+        assert_eq!(second, first);
+        assert_eq!(third, first);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -1434,46 +1685,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_loop_cache_keeps_full_stale_pool_on_partial_refresh() {
+    async fn pause_loop_cache_partial_refresh_does_not_keep_full_stale_pool() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let full = vec![pause_clip("full-a"), pause_clip("full-b")];
-        let partial = vec![pause_clip("partial")];
+        let full = vec![
+            cached_pause_clip("old-a", "A"),
+            cached_pause_clip("old-b", "B"),
+            cached_pause_clip("old-c", "C"),
+        ];
+        let merged = vec![
+            cached_pause_clip("fresh-b", "B"),
+            cached_pause_clip("old-c", "C"),
+        ];
+        let full_public = public_clips(&full);
+        let merged_public = public_clips(&merged);
         let service = PauseLoopService::for_tests_reports_with_retry_delay(
             Duration::from_millis(10),
             Duration::from_secs(60),
             {
                 let calls = calls.clone();
                 let full = full.clone();
-                let partial = partial.clone();
+                let merged = merged.clone();
                 move || {
                     let calls = calls.clone();
                     let full = full.clone();
-                    let partial = partial.clone();
+                    let merged = merged.clone();
                     async move {
                         let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
                         if call == 1 {
-                            Ok(pause_report(full, 2, 2, 0))
+                            Ok(full_pause_report(full, &["A", "B", "C"]))
                         } else {
-                            Ok(pause_report(partial, 2, 1, 1))
+                            Ok(pause_report(
+                                vec![merged[0].clone()],
+                                &["B", "C"],
+                                &["B"],
+                                1,
+                            ))
                         }
                     }
                 }
             },
         );
 
-        assert_eq!(service.clips().await.unwrap(), full);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(service.clips().await.unwrap(), full_public);
+        service.expire_cache_entry_for_tests().await;
 
-        assert_eq!(service.clips().await.unwrap(), full);
-        assert_eq!(service.clips().await.unwrap(), full);
+        assert_eq!(service.clips().await.unwrap(), full_public);
+        service.wait_for_in_flight_finished_for_tests().await;
+        assert_eq!(service.clips().await.unwrap(), merged_public);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn pause_loop_cache_cold_partial_is_degraded_and_retries_after_backoff() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let partial = vec![pause_clip("partial")];
-        let fresh = vec![pause_clip("fresh")];
+        let partial = vec![cached_pause_clip("partial", "A")];
+        let fresh = vec![cached_pause_clip("fresh", "A")];
+        let partial_public = public_clips(&partial);
+        let fresh_public = public_clips(&fresh);
         let service = PauseLoopService::for_tests_reports_with_retry_delay(
             Duration::from_secs(60),
             Duration::from_millis(20),
@@ -1488,21 +1756,23 @@ mod tests {
                     async move {
                         let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
                         if call == 1 {
-                            Ok(pause_report(partial, 2, 1, 1))
+                            Ok(pause_report(partial, &["A", "B"], &["A"], 1))
                         } else {
-                            Ok(pause_report(fresh, 2, 2, 0))
+                            Ok(full_pause_report(fresh, &["A", "B"]))
                         }
                     }
                 }
             },
         );
 
-        assert_eq!(service.clips().await.unwrap(), partial);
-        assert_eq!(service.clips().await.unwrap(), partial);
+        assert_eq!(service.clips().await.unwrap(), partial_public);
+        assert_eq!(service.clips().await.unwrap(), partial_public);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(service.clips().await.unwrap(), fresh);
+        service.release_retry_for_tests().await;
+        assert_eq!(service.clips().await.unwrap(), partial_public);
+        service.wait_for_in_flight_finished_for_tests().await;
+        assert_eq!(service.clips().await.unwrap(), fresh_public);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -1544,22 +1814,18 @@ mod tests {
         });
 
         assert_eq!(service.clips().await.unwrap(), vec![pause_clip("stale")]);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let leader = tokio::spawn({
-            let service = service.clone();
-            async move { service.clips().await }
-        });
-        started_rx.await.expect("refresh started");
-
+        service.expire_cache_entry_for_tests().await;
         let stale = tokio::time::timeout(Duration::from_millis(25), service.clips())
             .await
-            .expect("stale response should not wait for refresh")
+            .expect("first stale response after TTL should not wait for refresh")
             .unwrap();
         assert_eq!(stale, vec![pause_clip("stale")]);
+        started_rx.await.expect("refresh started");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
 
         release_tx.send(()).expect("release refresh");
-        assert_eq!(leader.await.unwrap().unwrap(), vec![pause_clip("fresh")]);
+        service.wait_for_in_flight_finished_for_tests().await;
+        assert_eq!(service.clips().await.unwrap(), vec![pause_clip("fresh")]);
     }
 
     #[tokio::test]
@@ -1665,14 +1931,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_partner_query_exclusion_nutzt_rohe_id_und_output_trim() {
-        let Some(db) = TestDb::new("pause_loop_raw_exclusion").await else {
+    async fn active_partner_query_normalisiert_partner_und_exclusion_id_gleich() {
+        let Some(db) = TestDb::new("pause_loop_normalized_exclusion").await else {
             return;
         };
 
         insert_partner(&db.pool, Some("ExcludedRaw"), Some(" 400 "), Some(1)).await;
         insert_partner(&db.pool, Some(" VisibleRaw "), Some(" 401 "), Some(1)).await;
-        insert_exclusion(&db.pool, " 400 ", false).await;
+        insert_exclusion(&db.pool, "400", false).await;
 
         let rows = load_active_partner_broadcasters(&db.pool).await.unwrap();
         db.cleanup().await;
@@ -1858,23 +2124,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_loop_json_marks_stale_success_after_refresh_error() {
+    async fn pause_loop_json_marks_immediate_stale_then_503_after_unvalidated_error() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let service = PauseLoopService::for_tests(Duration::from_millis(10), {
-            let calls = calls.clone();
-            move || {
+        let service = PauseLoopService::for_tests_with_retry_delay(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            {
                 let calls = calls.clone();
-                async move {
-                    let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
-                    if call == 1 {
-                        Ok(vec![pause_clip("stale-ok")])
-                    } else {
-                        Err(PauseLoopError::Helix("upstream-secret-detail".to_owned()))
+                move || {
+                    let calls = calls.clone();
+                    async move {
+                        let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                        if call == 1 {
+                            Ok(vec![pause_clip("stale-ok")])
+                        } else {
+                            Err(PauseLoopError::Helix("upstream-secret-detail".to_owned()))
+                        }
                     }
                 }
-            }
-        });
-        let app = build_pause_loop_router_with_service(service);
+            },
+        );
+        let app = build_pause_loop_router_with_service(service.clone());
 
         let (first_status, first_headers, first_body) = route_bytes(
             app.clone(),
@@ -1894,10 +2164,14 @@ mod tests {
             }])
         );
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        service.expire_cache_entry_for_tests().await;
 
-        let (second_status, second_headers, second_body) =
-            route_bytes(app, Method::GET, "/twitch/api/v2/public/pause-loop-clips").await;
+        let (second_status, second_headers, second_body) = route_bytes(
+            app.clone(),
+            Method::GET,
+            "/twitch/api/v2/public/pause-loop-clips",
+        )
+        .await;
         assert_eq!(second_status, StatusCode::OK);
         assert_eq!(second_headers.get("x-pause-loop-stale").unwrap(), "1");
         let second_text = std::str::from_utf8(&second_body).unwrap();
@@ -1906,6 +2180,24 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&second_body).unwrap(),
             serde_json::from_slice::<serde_json::Value>(&first_body).unwrap()
         );
+
+        service.wait_for_in_flight_finished_for_tests().await;
+
+        let (third_status, third_headers, third_body) =
+            route_bytes(app, Method::GET, "/twitch/api/v2/public/pause-loop-clips").await;
+        assert_eq!(third_status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            third_headers.get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(third_headers.get(header::RETRY_AFTER).unwrap(), "30");
+        let third_text = std::str::from_utf8(&third_body).unwrap();
+        assert!(!third_text.contains("upstream-secret-detail"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&third_body).unwrap(),
+            serde_json::json!({"error": "pause_loop_unavailable"})
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

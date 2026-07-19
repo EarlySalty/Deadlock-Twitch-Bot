@@ -194,12 +194,11 @@ impl HelixClient {
         if let Some(cached) = self.category_cache.lock().await.get(&key) {
             return Ok(Some(cached.clone()));
         }
-        let resp = self
+        let request = self
             .get("/search/categories")
             .await?
-            .query(&[("query", query), ("first", "25")])
-            .send()
-            .await?;
+            .query(&[("query", query), ("first", "25")]);
+        let resp = self.send_with_retry(request).await?;
         let body: CategorySearchResponse = check_status_and_json(resp).await?;
         let mut best: Option<String> = None;
         for entry in body.data {
@@ -664,6 +663,36 @@ mod tests {
         // Zweiter Aufruf kommt aus dem Cache (expect(1) oben).
         let cached = client.search_category_id("Deadlock").await.unwrap();
         assert_eq!(cached.as_deref(), Some("222"));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn category_suche_retryt_transienten_503_dann_200() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/search/categories"))
+            .and(query_param("query", "Deadlock"))
+            .and(query_param("first", "25"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/search/categories"))
+            .and(query_param("query", "Deadlock"))
+            .and(query_param("first", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "222", "name": "Deadlock"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let id = client.search_category_id("Deadlock").await.unwrap();
+
+        assert_eq!(id.as_deref(), Some("222"));
         server.verify().await;
     }
 
