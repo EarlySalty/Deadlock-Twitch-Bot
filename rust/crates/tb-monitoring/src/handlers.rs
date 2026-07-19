@@ -22,6 +22,17 @@ use crate::sessions::SessionTracker;
 use crate::stream::{iso_seconds, StreamSnapshot};
 use crate::telemetry::TelemetryStore;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamOnlineAnnouncementAction {
+    Keep,
+    Clear {
+        expected_message_id: String,
+    },
+    /// Nachricht und alte Stream-ID behalten, damit der Poller sie vor einem
+    /// moeglichen Neu-Post zuerst sicher bearbeiten kann.
+    Reconcile,
+}
+
 /// Business-Effect-TTL (Python: 7 Tage).
 pub const BUSINESS_EFFECT_TTL_SECONDS: f64 = 7.0 * 24.0 * 3600.0;
 /// Offline-Drossel gegen Doppel-Trigger Polling/EventSub (Python: 120 s).
@@ -112,33 +123,33 @@ impl MonitoringEventHandler {
         (epoch, dt)
     }
 
-    async fn clear_announcement_on_stream_online(
+    async fn announcement_action_on_stream_online(
         &self,
         broadcaster_id: &str,
         login: &str,
         stream_id: Option<&str>,
         epoch: f64,
-    ) -> bool {
+    ) -> StreamOnlineAnnouncementAction {
         let state = match self
             .live_state
             .online_announcement_state(broadcaster_id)
             .await
         {
             Ok(Some(state)) => state,
-            Ok(None) => return false,
+            Ok(None) => return StreamOnlineAnnouncementAction::Keep,
             Err(error) => {
                 tracing::debug!(%error, broadcaster_id, "stream.online: Announcement-State nicht lesbar");
-                return false;
+                return StreamOnlineAnnouncementAction::Keep;
             }
         };
-        let has_message = state
+        let previous_message_id = state
             .last_discord_message_id
             .as_deref()
             .map(str::trim)
-            .is_some_and(|id| !id.is_empty());
-        if !has_message {
-            return false;
-        }
+            .filter(|id| !id.is_empty());
+        let Some(previous_message_id) = previous_message_id else {
+            return StreamOnlineAnnouncementAction::Keep;
+        };
 
         let previous_stream_id = state
             .last_stream_id
@@ -147,16 +158,25 @@ impl MonitoringEventHandler {
             .filter(|id| !id.is_empty());
         let current_stream_id = stream_id.map(str::trim).filter(|id| !id.is_empty());
         let stream_changed = current_stream_id.is_some() && previous_stream_id != current_stream_id;
+        let unresolved_action = if stream_changed {
+            StreamOnlineAnnouncementAction::Reconcile
+        } else {
+            StreamOnlineAnnouncementAction::Keep
+        };
+
+        if state.is_live.unwrap_or(0) != 0 {
+            return unresolved_action;
+        }
 
         let Some(key) = announcement_reannounce_cooldown_key(login) else {
-            return stream_changed;
+            return unresolved_action;
         };
         let has_reconnect_marker = match self.guard.has_entry(GuardKind::BusinessEffect, &key).await
         {
             Ok(has_entry) => has_entry,
             Err(error) => {
                 tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown-Marker nicht lesbar");
-                return stream_changed;
+                return unresolved_action;
             }
         };
         if has_reconnect_marker {
@@ -165,22 +185,18 @@ impl MonitoringEventHandler {
                 .is_active(GuardKind::BusinessEffect, &key, epoch)
                 .await
             {
-                Ok(active) => !active,
+                Ok(true) => StreamOnlineAnnouncementAction::Keep,
+                Ok(false) => StreamOnlineAnnouncementAction::Clear {
+                    expected_message_id: previous_message_id.to_string(),
+                },
                 Err(error) => {
                     tracing::debug!(%error, login, "stream.online: Reannounce-Cooldown nicht lesbar");
-                    stream_changed
+                    unresolved_action
                 }
             };
         }
 
-        if state.is_live.unwrap_or(0) != 0 {
-            stream_changed
-        } else {
-            match (previous_stream_id, current_stream_id) {
-                (Some(previous), Some(current)) => previous != current,
-                _ => false,
-            }
-        }
+        unresolved_action
     }
 
     /// stream.online (Python `_handle_stream_online` + Followups):
@@ -201,17 +217,36 @@ impl MonitoringEventHandler {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let login = work.login_lower();
-        let clear_announcement = self
-            .clear_announcement_on_stream_online(&work.broadcaster_id, &login, stream_id, epoch)
+        let announcement_action = self
+            .announcement_action_on_stream_online(&work.broadcaster_id, &login, stream_id, epoch)
             .await;
+        let stream_id_to_store = match &announcement_action {
+            StreamOnlineAnnouncementAction::Reconcile => None,
+            StreamOnlineAnnouncementAction::Keep => stream_id,
+            StreamOnlineAnnouncementAction::Clear { .. } => stream_id,
+        };
+        let started_at_to_store = match &announcement_action {
+            StreamOnlineAnnouncementAction::Reconcile => None,
+            StreamOnlineAnnouncementAction::Keep | StreamOnlineAnnouncementAction::Clear { .. } => {
+                started_at
+            }
+        };
+        let clear_expected_message_id = match &announcement_action {
+            StreamOnlineAnnouncementAction::Clear {
+                expected_message_id,
+            } => Some(expected_message_id.as_str()),
+            StreamOnlineAnnouncementAction::Keep | StreamOnlineAnnouncementAction::Reconcile => {
+                None
+            }
+        };
         self.live_state
             .apply_stream_online(
                 &work.broadcaster_id,
                 &login,
-                stream_id,
-                started_at,
+                stream_id_to_store,
+                started_at_to_store,
                 &iso_seconds(now),
-                clear_announcement,
+                clear_expected_message_id,
             )
             .await
             .map_err(|e| Box::new(e) as HandlerError)?;
@@ -269,44 +304,46 @@ impl MonitoringEventHandler {
         // /channels-Lookup setzen (sprachfilter-frei, kein Helix-Lag wie bei
         // /streams). Best-Effort: Fehler loggen statt failen, das Polling
         // füllt die Felder sonst beim nächsten Tick nach.
-        if let Some(source) = &self.channel_info {
-            run_business_effect_once(
-                &self.guard,
-                work.message_id.as_deref(),
-                "stream_online_channel_info",
-                epoch,
-                || async {
-                    match source.channel_info(&work.broadcaster_id).await {
-                        Ok(Some(info)) => {
-                            if let Err(error) = self
-                                .live_state
-                                .apply_channel_info(
-                                    &work.broadcaster_id,
-                                    info.title.as_deref(),
-                                    info.game_name.as_deref(),
-                                )
-                                .await
-                            {
+        if announcement_action != StreamOnlineAnnouncementAction::Reconcile {
+            if let Some(source) = &self.channel_info {
+                run_business_effect_once(
+                    &self.guard,
+                    work.message_id.as_deref(),
+                    "stream_online_channel_info",
+                    epoch,
+                    || async {
+                        match source.channel_info(&work.broadcaster_id).await {
+                            Ok(Some(info)) => {
+                                if let Err(error) = self
+                                    .live_state
+                                    .apply_channel_info(
+                                        &work.broadcaster_id,
+                                        info.title.as_deref(),
+                                        info.game_name.as_deref(),
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        %error,
+                                        broadcaster_id = %work.broadcaster_id,
+                                        "Go-Live-Enrichment: Live-State-Update fehlgeschlagen"
+                                    );
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
                                 tracing::warn!(
                                     %error,
                                     broadcaster_id = %work.broadcaster_id,
-                                    "Go-Live-Enrichment: Live-State-Update fehlgeschlagen"
+                                    "Go-Live-Enrichment: Kanal-Lookup fehlgeschlagen"
                                 );
                             }
                         }
-                        Ok(None) => {}
-                        Err(error) => {
-                            tracing::warn!(
-                                %error,
-                                broadcaster_id = %work.broadcaster_id,
-                                "Go-Live-Enrichment: Kanal-Lookup fehlgeschlagen"
-                            );
-                        }
-                    }
-                    Ok(())
-                },
-            )
-            .await?;
+                        Ok(())
+                    },
+                )
+                .await?;
+            }
         }
 
         self.run_stream_online_followups(

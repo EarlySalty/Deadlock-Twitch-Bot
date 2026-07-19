@@ -69,6 +69,7 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <li><strong>Beim Go-Live:</strong> Eine Discord-Nachricht im Ankündigungs-Kanal mit Embed (Titel, Kategorie, Zuschauerzahl, Vorschaubild) und Button zum Twitch-Kanal. Bei aktiver Live-Ping-Rolle steht darüber eine Erwähnung dieser Rolle.</li>
 <li><strong>Während des Streams:</strong> Die Ankündigung bleibt stehen; der Button führt zum laufenden Stream.</li>
 <li><strong>Nach dem Stream-Ende:</strong> Keine zweite Nachricht – die bestehende Go-Live-Nachricht wird inhaltlich ersetzt: Sie zeigt nun Offline-Status, letzten Titel und Kategorie, ein Vorschaubild des letzten Streams und einen Button zum Mitschnitt (VOD).</li>
+<li><strong>Nach einem echten Stream-Neustart:</strong> Der bisherige Post wird zuerst als beendet markiert. Erst danach kann ein neuer Live-Post erscheinen; zwei gleichzeitig aktive Live-Posts für denselben Streamer sind nicht vorgesehen.</li>
 </ul>
 </section>
 
@@ -127,6 +128,7 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <tr><td>Ankündigung zeigt veraltetes Bild</td><td>Twitch liefert Vorschaubilder verzögert; kurz nach Streamstart kann das Bild leicht hinterherhinken.</td></tr>
 <tr><td>Kanal aus der Übersicht verschwunden</td><td>Längere Inaktivität; der Bot hat den Kanal automatisch aus der Überwachung genommen.</td></tr>
 <tr><td>Keine zweite Nachricht nach Stream-Ende</td><td>Gewollt: Die Live-Nachricht wird in die Offline-/VOD-Ansicht umgewandelt statt ergänzt.</td></tr>
+<tr><td>Zwei Nachrichten nach einem Stream-Neustart</td><td>Das ist nur dann korrekt, wenn der ältere Post bereits als beendet markiert ist und der neuere den laufenden Stream zeigt. Bleiben beide LIVE, bitte Streamer und ungefähren Zeitpunkt an den Support geben.</td></tr>
 </tbody>
 </table>
 </section>
@@ -138,6 +140,7 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <li>Dass Ankündigungen nur bei Go-Live in der Deadlock-Kategorie und nur für betreute Kanäle erfolgen.</li>
 <li>Dass die Erkennung Twitch-Echtzeitmeldungen und eine eigene Nachprüfung kombiniert und meist in Sekunden greift.</li>
 <li>Dass die Go-Live-Nachricht am Stream-Ende in eine Offline-/VOD-Ansicht umgewandelt wird (keine zweite Nachricht).</li>
+<li>Dass bei einem echten Neustart zuerst der alte Post beendet wird und danach ein neuer Live-Post erscheinen kann.</li>
 <li>Dass Aussehen, Platzhalter und Live-Ping-Rolle im Dashboard einstellbar sind, inkl. Vorschau und Test-Senden.</li>
 <li>Dass längere Inaktivität zum automatischen Entfernen aus der Überwachung führt.</li>
 </ul>

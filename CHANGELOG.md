@@ -6,6 +6,14 @@
 
 **Aktuelles Verhalten:** Unter der Streamer-Seite lassen sich 7, 30 oder 90 Tage vergleichen, Kanäle suchen und Raid-Wirkung nach Datenqualität einordnen.
 
+## #390 — Stream-Ankündigungen bleiben eindeutig
+
+**Problem:** Bei einem echten Stream-Neustart entstand manchmal ein zweiter Discord-Post, während der erste dauerhaft als LIVE stehen blieb.
+
+**Änderung:** Vor einem frischen Go-Live-Post wird die bisherige Nachricht jetzt nachweislich beendet. Schlägt das vorübergehend fehl, wird kein paralleler Post erzeugt und der Abschluss erneut versucht.
+
+**Aktuelles Verhalten:** Kurze Aussetzer verwenden weiter den bestehenden Post. Erkennt Twitch einen echten neuen Stream, wird zuerst der alte Post beendet und erst danach der neue veröffentlicht.
+
 ## #389 — edoeasy nur noch als Raid-Fallback
 
 **Problem:** edoeasy konnte als externer Deadlock-Streamer wie jedes andere Fallback-Ziel gewählt werden, obwohl er nachrangig behandelt werden soll.

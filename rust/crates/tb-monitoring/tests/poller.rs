@@ -128,16 +128,22 @@ struct RecordingAnnouncementSink {
     sends: Mutex<Vec<AnnounceLiveRequest>>,
     syncs: Mutex<Vec<AnnounceLiveRequest>>,
     ends: Mutex<Vec<EndAnnouncementRequest>>,
+    events: Mutex<Vec<&'static str>>,
+    fail_end: AtomicBool,
+    gone_end: AtomicBool,
+    gone_sync: AtomicBool,
+    disabled: AtomicBool,
     not_live: AtomicU64,
 }
 
 #[async_trait::async_trait]
 impl AnnouncementSink for RecordingAnnouncementSink {
     fn ready(&self) -> bool {
-        true
+        !self.disabled.load(Ordering::SeqCst)
     }
 
     async fn announce_live(&self, request: AnnounceLiveRequest) -> Option<AnnounceLiveResult> {
+        self.events.lock().unwrap().push("announce");
         let mut sends = self.sends.lock().unwrap();
         let idx = sends.len() + 1;
         sends.push(request);
@@ -149,13 +155,25 @@ impl AnnouncementSink for RecordingAnnouncementSink {
     }
 
     async fn end_announcement(&self, request: EndAnnouncementRequest) -> EndAnnouncementOutcome {
+        self.events.lock().unwrap().push("end");
         self.ends.lock().unwrap().push(request);
-        EndAnnouncementOutcome::Updated
+        if self.fail_end.load(Ordering::SeqCst) {
+            EndAnnouncementOutcome::Failed
+        } else if self.gone_end.load(Ordering::SeqCst) {
+            EndAnnouncementOutcome::Gone
+        } else {
+            EndAnnouncementOutcome::Updated
+        }
     }
 
     async fn sync_live_announcement(&self, request: AnnounceLiveRequest) -> EndAnnouncementOutcome {
+        self.events.lock().unwrap().push("sync");
         self.syncs.lock().unwrap().push(request);
-        EndAnnouncementOutcome::Updated
+        if self.gone_sync.load(Ordering::SeqCst) {
+            EndAnnouncementOutcome::Gone
+        } else {
+            EndAnnouncementOutcome::Updated
+        }
     }
 
     async fn on_stream_not_live(&self, _login: &str) {
@@ -602,7 +620,7 @@ async fn reconnect_mit_gleicher_stream_id_nach_cooldown_postet_neu() {
 }
 
 #[tokio::test]
-async fn bestandszeile_ohne_stream_id_mit_message_id_postet_neuen_stream() {
+async fn bestandszeile_ohne_stream_id_fuehrt_bestehenden_post_sicher_weiter() {
     let pool = pool_or_skip!("t4c_announce_legacy_message_without_stream_id");
     insert_active_partner(&pool, "drag", "42").await;
     sqlx::query(
@@ -624,17 +642,208 @@ async fn bestandszeile_ohne_stream_id_mit_message_id_postet_neuen_stream() {
     source.set_streams(vec![live_stream("drag", "42", "s-new", 12)]);
     engine.tick().await;
 
-    let sends = sink.sends.lock().unwrap();
+    assert_eq!(sink.events.lock().unwrap().as_slice(), ["sync"]);
     assert_eq!(
-        sends.len(),
+        sink.sends.lock().unwrap().len(),
+        0,
+        "ohne bekannte alte Stream-ID darf kein potenziell doppelter Post entstehen"
+    );
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_discord_message_id, last_stream_id
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0.as_deref(), Some("legacy-msg"));
+    assert_eq!(state.1.as_deref(), Some("s-new"));
+}
+
+#[tokio::test]
+async fn live_stream_id_wechsel_beendet_altes_announcement_vor_neupost() {
+    let pool = pool_or_skip!("t4c_announce_live_restart_closes_old_first");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    sink.events.lock().unwrap().clear();
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+
+    assert_eq!(sink.events.lock().unwrap().as_slice(), ["end", "announce"]);
+    assert_eq!(sink.sends.lock().unwrap().len(), 2);
+    assert_eq!(
+        sink.ends.lock().unwrap()[0].message_id,
+        "msg-1",
+        "der bisher verfolgte Discord-Post muss zuerst beendet werden"
+    );
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_discord_message_id, last_stream_id
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0.as_deref(), Some("msg-2"));
+    assert_eq!(state.1.as_deref(), Some("s-2"));
+}
+
+#[tokio::test]
+async fn live_stream_id_wechsel_postet_nicht_wenn_altes_ende_scheitert() {
+    let pool = pool_or_skip!("t4c_announce_live_restart_failed_close");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    sink.events.lock().unwrap().clear();
+    sink.fail_end.store(true, Ordering::SeqCst);
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+
+    assert_eq!(sink.events.lock().unwrap().as_slice(), ["end"]);
+    assert_eq!(
+        sink.sends.lock().unwrap().len(),
         1,
-        "Legacy-Offline-Row mit Message-ID aber ohne last_stream_id muss neu posten"
+        "ohne bestaetigtes Ende darf kein zweiter Discord-Post entstehen"
     );
-    assert_eq!(sends[0].previous_message_id.as_deref(), Some("legacy-msg"));
-    assert!(
-        !sends[0].suppress_role_pings,
-        "ohne aktiven Reannounce-Cooldown pingt der neue Stream normal"
-    );
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_discord_message_id, last_stream_id
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0.as_deref(), Some("msg-1"));
+    assert_eq!(state.1.as_deref(), Some("s-1"));
+
+    sink.events.lock().unwrap().clear();
+    sink.fail_end.store(false, Ordering::SeqCst);
+    engine.tick().await;
+
+    assert_eq!(sink.events.lock().unwrap().as_slice(), ["end", "announce"]);
+    assert_eq!(sink.sends.lock().unwrap().len(), 2);
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_discord_message_id, last_stream_id
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0.as_deref(), Some("msg-2"));
+    assert_eq!(state.1.as_deref(), Some("s-2"));
+}
+
+#[tokio::test]
+async fn live_stream_id_wechsel_bleibt_bis_transport_wieder_bereit_ausstehend() {
+    let pool = pool_or_skip!("t4c_announce_live_restart_transport_unavailable");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    sink.events.lock().unwrap().clear();
+    sink.disabled.store(true, Ordering::SeqCst);
+
+    source.set_streams(vec![live_stream("drag", "42", "s-2", 12)]);
+    engine.tick().await;
+    assert!(sink.events.lock().unwrap().is_empty());
+    let stream_id: Option<String> = sqlx::query_scalar(
+        "SELECT last_stream_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stream_id.as_deref(), Some("s-1"));
+
+    sink.disabled.store(false, Ordering::SeqCst);
+    engine.tick().await;
+    assert_eq!(sink.events.lock().unwrap().as_slice(), ["end", "announce"]);
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_discord_message_id, last_stream_id
+           FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0.as_deref(), Some("msg-2"));
+    assert_eq!(state.1.as_deref(), Some("s-2"));
+}
+
+#[tokio::test]
+async fn geloeschtes_announcement_beim_live_sync_wird_im_naechsten_tick_ersetzt() {
+    let pool = pool_or_skip!("t4c_announce_live_sync_gone");
+    insert_active_partner(&pool, "drag", "42").await;
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_stream_id,
+             last_discord_message_id, last_seen_at, last_game)
+         VALUES ('42', 'drag', 1, 's-1', 'missing-msg', $1, 'Deadlock')",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    sink.gone_sync.store(true, Ordering::SeqCst);
+    let engine = engine_with_sink(&pool, source, hooks, sink.clone());
+
+    engine.tick().await;
+    let message_id: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(message_id, None);
+
+    sink.gone_sync.store(false, Ordering::SeqCst);
+    engine.tick().await;
+    assert_eq!(sink.sends.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn geloeschtes_announcement_beim_streamende_hinterlaesst_keinen_stale_verweis() {
+    let pool = pool_or_skip!("t4c_announce_offline_gone");
+    insert_active_partner(&pool, "drag", "42").await;
+
+    let source = Arc::new(StubSource::new());
+    let hooks = Arc::new(RecordingHooks::new());
+    let sink = Arc::new(RecordingAnnouncementSink::default());
+    let engine = engine_with_sink(&pool, source.clone(), hooks, sink.clone());
+
+    source.set_streams(vec![live_stream("drag", "42", "s-1", 10)]);
+    engine.tick().await;
+    sink.gone_end.store(true, Ordering::SeqCst);
+    source.set_streams(Vec::new());
+    engine.tick().await;
+
+    let message_id: Option<String> = sqlx::query_scalar(
+        "SELECT last_discord_message_id FROM twitch_live_state WHERE twitch_user_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(message_id, None);
 }
 
 #[tokio::test]

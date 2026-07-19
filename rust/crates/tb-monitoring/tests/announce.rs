@@ -11,8 +11,9 @@ use tb_monitoring::poller::hooks::{
 };
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
-    AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink, ChannelProfileSource,
-    LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry, VodPreviewSource,
+    AnnouncementEditOutcome, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
+    ChannelProfileSource, LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry,
+    VodPreviewSource,
 };
 
 mod support;
@@ -45,6 +46,7 @@ fn stable_cache_buster(seed: &str) -> String {
 #[derive(Default)]
 struct StubTransport {
     fail_next_send: AtomicBool,
+    gone_next_edit: AtomicBool,
     sends: Mutex<Vec<SentMessage>>,
     edits: Mutex<Vec<EditedMessage>>,
 }
@@ -81,12 +83,16 @@ impl AnnouncementTransport for StubTransport {
         embed: Value,
         components: Option<Value>,
         view_spec: Option<Value>,
-    ) -> Result<(), SourceError> {
+    ) -> Result<AnnouncementEditOutcome, SourceError> {
         self.edits
             .lock()
             .unwrap()
             .push((channel_id, message_id, embed, components, view_spec));
-        Ok(())
+        if self.gone_next_edit.swap(false, Ordering::SeqCst) {
+            Ok(AnnouncementEditOutcome::Gone)
+        } else {
+            Ok(AnnouncementEditOutcome::Updated)
+        }
     }
 }
 
@@ -509,6 +515,28 @@ async fn end_announcement_editiert_offline_embed() {
     let view = view_spec.as_ref().expect("Link-Button");
     assert_eq!(view["type"], "link_button");
     assert_eq!(view["url"], "https://www.twitch.tv/drag?ref=dc");
+}
+
+#[tokio::test]
+async fn end_announcement_akzeptiert_bereits_geloeschte_nachricht() {
+    let transport = Arc::new(StubTransport::default());
+    transport.gone_next_edit.store(true, Ordering::SeqCst);
+    let sink = sink_with(transport);
+
+    let outcome = sink
+        .end_announcement(EndAnnouncementRequest {
+            login: "drag".to_string(),
+            display_name: "Drag".to_string(),
+            message_id: "missing".to_string(),
+            previous_tracking_token: None,
+            last_title: None,
+            last_game: None,
+            twitch_user_id: Some("42".to_string()),
+            started_at_iso: None,
+        })
+        .await;
+
+    assert_eq!(outcome, EndAnnouncementOutcome::Gone);
 }
 
 #[tokio::test]

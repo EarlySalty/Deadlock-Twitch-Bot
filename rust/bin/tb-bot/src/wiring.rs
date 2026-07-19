@@ -9,9 +9,9 @@ use sqlx::PgPool;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 use tb_monitoring::sessions::tracker::{FollowerCountSource, FollowerFetch};
 use tb_monitoring::{
-    AnnouncementTransport, ChannelProfileSource, EventSubHooks, LivePingRoleProvider,
-    RemoteSubscription, StreamSnapshot, SubscriptionCreateError, SubscriptionManager,
-    SubscriptionTransport, VodPreviewSource,
+    AnnouncementEditOutcome, AnnouncementTransport, ChannelProfileSource, EventSubHooks,
+    LivePingRoleProvider, RemoteSubscription, StreamSnapshot, SubscriptionCreateError,
+    SubscriptionManager, SubscriptionTransport, VodPreviewSource,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, EditRichMessage, SendRichMessage};
 use tb_transport_twitch::eventsub::{CreateOutcome, EventSubCreateError};
@@ -550,8 +550,9 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
         embed: Value,
         components: Option<Value>,
         view_spec: Option<Value>,
-    ) -> Result<(), SourceError> {
-        self.relay
+    ) -> Result<AnnouncementEditOutcome, SourceError> {
+        match self
+            .relay
             .edit_rich_message(EditRichMessage {
                 channel_id,
                 message_id,
@@ -560,8 +561,14 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
                 components,
                 view_spec,
             })
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(()) => Ok(AnnouncementEditOutcome::Updated),
+            Err(tb_transport_discord::DiscordError::BrokerError { status: 404, .. }) => {
+                Ok(AnnouncementEditOutcome::Gone)
+            }
+            Err(error) => Err(Box::new(error)),
+        }
     }
 }
 
@@ -869,5 +876,37 @@ mod follower_fallback_tests {
         // Re-Arm: clear → warn_once meldet wieder `true`.
         warner.clear("followers", "42");
         assert!(warner.warn_once("followers", "42"));
+    }
+}
+
+#[cfg(test)]
+mod announcement_transport_tests {
+    use super::*;
+    use tb_config::BrokerConfig;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn edit_404_bedeutet_nachricht_ist_bereits_weg() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/edit-rich-message"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let transport = BrokerAnnouncementTransport {
+            relay: BrokerRelay::new(&BrokerConfig {
+                base_url: server.uri(),
+                token: "test".to_string(),
+            })
+            .unwrap(),
+        };
+
+        let outcome = transport
+            .edit(1, "missing".to_string(), None, Value::Null, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, AnnouncementEditOutcome::Gone);
     }
 }
