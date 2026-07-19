@@ -34,6 +34,8 @@ pub use handlers::health_probe::{
     analytics_db_fingerprint_startup_check, AnalyticsDbFingerprintStartup,
 };
 
+pub use handlers::pause_loop::build_pause_loop_router;
+
 use axum::{
     http::{header::HeaderName, HeaderValue},
     routing::{get, post, put},

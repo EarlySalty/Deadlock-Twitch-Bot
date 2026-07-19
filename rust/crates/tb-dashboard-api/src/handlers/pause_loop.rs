@@ -5,11 +5,20 @@ use std::future::Future;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use axum::{
+    extract::State,
+    http::{header, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
 use serde::Serialize;
+use serde_json::json;
 use sqlx::PgPool;
 use tb_transport_twitch::{HelixClient, HelixClip};
 use thiserror::Error;
 use tokio::{sync::watch, sync::Mutex, task::JoinSet};
+use tower_http::cors::CorsLayer;
 
 const DEADLOCK_CATEGORY_NAME: &str = "Deadlock";
 const PAUSE_LOOP_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -20,6 +29,19 @@ const PARTNER_CLIP_LIMIT: usize = 500;
 const MAX_PARALLEL_PARTNER_FETCHES: usize = 6;
 const MIN_PLAYER_SAFE_DURATION: f64 = 5.0;
 const MAX_PLAYER_SAFE_DURATION: f64 = 300.0;
+const PAUSE_LOOP_PLAYER_HTML: &str = include_str!("pause_loop_player.html");
+const PAUSE_LOOP_RETRY_AFTER_SECONDS: &str = "30";
+const PAUSE_LOOP_STALE_HEADER: &str = "x-pause-loop-stale";
+const PAUSE_LOOP_CSP: &str = concat!(
+    "default-src 'none'; ",
+    "script-src 'self' 'unsafe-inline'; ",
+    "style-src 'self' 'unsafe-inline'; ",
+    "connect-src 'self'; ",
+    "frame-src https://clips.twitch.tv; ",
+    "frame-ancestors 'self'; ",
+    "base-uri 'none'; ",
+    "form-action 'none'"
+);
 
 /// Clip-Daten fuer den OBS-Pause-Loop-Player.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -300,6 +322,18 @@ impl PauseLoopService {
         wait_for_refresh(wait_for).await
     }
 
+    async fn is_degraded(&self) -> bool {
+        let state = self.cache.lock().await;
+        let now = std::time::Instant::now();
+        let expired_entry = state
+            .entry
+            .as_ref()
+            .is_some_and(|entry| entry.expires_at <= now);
+        let has_error = state.last_error.is_some();
+
+        has_error || (expired_entry && state.in_flight.is_some())
+    }
+
     fn spawn_refresh_worker(
         &self,
         in_flight: Arc<PauseLoopInFlight>,
@@ -409,6 +443,77 @@ impl PauseLoopService {
             guard.disarm();
         });
     }
+}
+
+/// Baut den oeffentlichen Pause-Loop-Router mit routerlokalem Service/Cache.
+pub fn build_pause_loop_router(pool: PgPool, helix: HelixClient) -> Router {
+    build_pause_loop_router_from_service(PauseLoopService::new(pool, helix))
+}
+
+fn build_pause_loop_router_from_service(service: PauseLoopService) -> Router {
+    Router::new()
+        .route(
+            "/twitch/api/v2/public/pause-loop-clips",
+            get(pause_loop_clips_handler),
+        )
+        .route("/twitch/pause-loop", get(pause_loop_player_handler))
+        .with_state(service)
+        .layer(CorsLayer::permissive())
+}
+
+#[cfg(test)]
+fn build_pause_loop_router_with_service(service: PauseLoopService) -> Router {
+    build_pause_loop_router_from_service(service)
+}
+
+async fn pause_loop_clips_handler(State(service): State<PauseLoopService>) -> Response {
+    match service.clips().await {
+        Ok(clips) => {
+            let degraded = service.is_degraded().await;
+            let mut response = Json(clips).into_response();
+            let headers = response.headers_mut();
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            if degraded {
+                headers.insert(PAUSE_LOOP_STALE_HEADER, HeaderValue::from_static("1"));
+            }
+            response
+        }
+        Err(err) => {
+            tracing::warn!(
+                urteil = "fehler",
+                grund = %err,
+                "pause-loop public clip request failed"
+            );
+            let mut response = (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "pause_loop_unavailable" })),
+            )
+                .into_response();
+            let headers = response.headers_mut();
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(
+                header::RETRY_AFTER,
+                HeaderValue::from_static(PAUSE_LOOP_RETRY_AFTER_SECONDS),
+            );
+            response
+        }
+    }
+}
+
+async fn pause_loop_player_handler() -> Response {
+    let mut response = Html(PAUSE_LOOP_PLAYER_HTML).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        "x-robots-tag",
+        HeaderValue::from_static("noindex, nofollow"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(PAUSE_LOOP_CSP),
+    );
+    response
 }
 
 struct RefreshWorkerGuard {
@@ -781,6 +886,11 @@ pub async fn load_active_partner_broadcasters(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header, HeaderMap, Method, Request, StatusCode},
+        Router,
+    };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::{
         str::FromStr,
@@ -790,8 +900,46 @@ mod tests {
         },
         time::Duration,
     };
-    use tb_transport_twitch::HelixClip;
+    use tb_transport_twitch::{HelixClip, HelixConfig};
     use tokio::sync::{oneshot, Mutex as TokioMutex};
+    use tower::ServiceExt;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn route_bytes(
+        app: Router,
+        method: Method,
+        uri: &str,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::ORIGIN, "https://obs.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, headers, body)
+    }
+
+    fn helix_client(server: &MockServer) -> HelixClient {
+        HelixClient::new(HelixConfig {
+            client_id: "cid".to_owned(),
+            client_secret: "sec".to_owned(),
+            token_url: format!("{}/oauth2/token", server.uri()),
+            helix_base: format!("{}/helix", server.uri()),
+        })
+        .unwrap()
+    }
 
     fn db_dsn_or_skip() -> Option<String> {
         match std::env::var("TB_TEST_DATABASE_URL") {
@@ -1515,5 +1663,334 @@ mod tests {
                 twitch_user_id: "401".to_owned(),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn pause_loop_public_json_success_exact_array_no_store_and_cors() {
+        let clips = vec![PauseLoopClip {
+            id: "clip-one".to_owned(),
+            broadcaster_name: "Nani".to_owned(),
+            title: "Erster Clip".to_owned(),
+            duration: 12.5,
+        }];
+        let service = PauseLoopService::for_tests(Duration::from_secs(60), {
+            let clips = clips.clone();
+            move || {
+                let clips = clips.clone();
+                async move { Ok(clips) }
+            }
+        });
+
+        let (status, headers, body) = route_bytes(
+            build_pause_loop_router_with_service(service),
+            Method::GET,
+            "/twitch/api/v2/public/pause-loop-clips",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{
+                "id": "clip-one",
+                "broadcaster_name": "Nani",
+                "title": "Erster Clip",
+                "duration": 12.5
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_loop_public_json_error_is_generic_with_retry_after() {
+        let service = PauseLoopService::for_tests(Duration::from_secs(60), || async {
+            Err(PauseLoopError::Helix(
+                "secret upstream detail must stay server-side".to_owned(),
+            ))
+        });
+
+        let (status, headers, body) = route_bytes(
+            build_pause_loop_router_with_service(service),
+            Method::GET,
+            "/twitch/api/v2/public/pause-loop-clips",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(headers.get(header::RETRY_AFTER).unwrap(), "30");
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(!text.contains("secret upstream detail"));
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({"error": "pause_loop_unavailable"}));
+    }
+
+    #[tokio::test]
+    async fn pause_loop_html_contract_headers_and_static_player_guards() {
+        let service =
+            PauseLoopService::for_tests(Duration::from_secs(60), || async { Ok(Vec::new()) });
+
+        let (status, headers, body) = route_bytes(
+            build_pause_loop_router_with_service(service),
+            Method::GET,
+            "/twitch/pause-loop",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"));
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(headers.get("x-robots-tag").unwrap(), "noindex, nofollow");
+        assert_eq!(headers.get("x-frame-options").unwrap(), "SAMEORIGIN");
+        let csp = headers
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        for needle in [
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline'",
+            "connect-src 'self'",
+            "frame-src https://clips.twitch.tv",
+            "frame-ancestors 'self'",
+        ] {
+            assert!(csp.contains(needle), "CSP fehlt: {needle}");
+        }
+
+        let html = std::str::from_utf8(&body).unwrap();
+        for needle in [
+            "width:100vw",
+            "height:100vh",
+            "border:0",
+            "/twitch/api/v2/public/pause-loop-clips",
+            "location.hostname || 'localhost'",
+            "autoplay=true",
+            "function shuffleQueue",
+            "function avoidImmediateRepeat(items)",
+            "for (let i = items.length - 1; i > 0; i -= 1)",
+            "const FETCH_TIMEOUT_MS = 12000",
+            "new AbortController()",
+            "signal: controller.signal",
+            "controller.abort()",
+            "window.clearTimeout(abortTimer)",
+            "let playedThisCycle = new Set()",
+            "function reconcileQueue(nextPool)",
+            "nextById.has(clip.id)",
+            "nextById.get(clip.id)",
+            "playedThisCycle.has(clip.id)",
+            "clip.id === activeId",
+            "queuedIds.has(clip.id)",
+            "queue.push(...additions)",
+            "if (nextPool.length === 0)",
+            "playedThisCycle.clear()",
+            "playedThisCycle.add(clip.id)",
+            "res.ok",
+            "res.headers.get('x-pause-loop-stale') === '1'",
+            "Number.isFinite",
+            "LOAD_FALLBACK_MS = 5000",
+            "generation !== currentGeneration",
+            "textContent",
+            "encodeURIComponent",
+        ] {
+            assert!(html.contains(needle), "HTML/JS-Vertrag fehlt: {needle}");
+        }
+        assert_eq!(
+            html.matches("avoidImmediateRepeat(queue);").count(),
+            2,
+            "Grenzschutz muss sowohl beim normalen Zyklus als auch nach leerem Pool greifen"
+        );
+        assert!(!html.contains("innerHTML"));
+        assert!(!html.contains("ended"));
+    }
+
+    #[tokio::test]
+    async fn pause_loop_json_marks_stale_success_after_refresh_error() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = PauseLoopService::for_tests(Duration::from_millis(10), {
+            let calls = calls.clone();
+            move || {
+                let calls = calls.clone();
+                async move {
+                    let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    if call == 1 {
+                        Ok(vec![pause_clip("stale-ok")])
+                    } else {
+                        Err(PauseLoopError::Helix("upstream-secret-detail".to_owned()))
+                    }
+                }
+            }
+        });
+        let app = build_pause_loop_router_with_service(service);
+
+        let (first_status, first_headers, first_body) = route_bytes(
+            app.clone(),
+            Method::GET,
+            "/twitch/api/v2/public/pause-loop-clips",
+        )
+        .await;
+        assert_eq!(first_status, StatusCode::OK);
+        assert!(first_headers.get("x-pause-loop-stale").is_none());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&first_body).unwrap(),
+            serde_json::json!([{
+                "id": "stale-ok",
+                "broadcaster_name": "Nani",
+                "title": "Clip stale-ok",
+                "duration": 12.0
+            }])
+        );
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let (second_status, second_headers, second_body) =
+            route_bytes(app, Method::GET, "/twitch/api/v2/public/pause-loop-clips").await;
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(second_headers.get("x-pause-loop-stale").unwrap(), "1");
+        let second_text = std::str::from_utf8(&second_body).unwrap();
+        assert!(!second_text.contains("upstream-secret-detail"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&second_body).unwrap(),
+            serde_json::from_slice::<serde_json::Value>(&first_body).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_loop_routes_reject_non_get_with_405() {
+        let service =
+            PauseLoopService::for_tests(Duration::from_secs(60), || async { Ok(Vec::new()) });
+        let app = build_pause_loop_router_with_service(service);
+
+        for uri in [
+            "/twitch/api/v2/public/pause-loop-clips",
+            "/twitch/pause-loop",
+        ] {
+            let (status, _, _) = route_bytes(app.clone(), Method::POST, uri).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn pause_loop_pipeline_db_helix_filters_dedupes_and_normalizes() {
+        let Some(db) = TestDb::new("pause_loop_pipeline").await else {
+            return;
+        };
+        insert_partner(&db.pool, Some(" ActivePartner "), Some(" 111 "), Some(1)).await;
+        insert_partner(&db.pool, Some("InactivePartner"), Some("222"), Some(0)).await;
+        insert_partner(&db.pool, Some("ExcludedPartner"), Some("333"), Some(1)).await;
+        insert_exclusion(&db.pool, "333", false).await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/search/categories"))
+            .and(query_param("query", "Deadlock"))
+            .and(query_param("first", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "deadlock-game", "name": "Deadlock"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/clips"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("first", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {
+                        "id": " keep-a ",
+                        "broadcaster_name": " Active Name ",
+                        "title": " First ",
+                        "duration": 4.0,
+                        "game_id": "deadlock-game"
+                    },
+                    {
+                        "id": "foreign",
+                        "broadcaster_name": "Active Name",
+                        "title": "Wrong Game",
+                        "duration": 20.0,
+                        "game_id": "other-game"
+                    },
+                    {
+                        "id": "keep-a",
+                        "broadcaster_name": "Active Name",
+                        "title": "Duplicate",
+                        "duration": 20.0,
+                        "game_id": "deadlock-game"
+                    },
+                    {
+                        "id": "keep-b",
+                        "broadcaster_name": "   ",
+                        "title": " High ",
+                        "duration": 450.0,
+                        "game_id": "deadlock-game"
+                    }
+                ],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (status, _, body) = route_bytes(
+            build_pause_loop_router(db.pool.clone(), helix_client(&server)),
+            Method::GET,
+            "/twitch/api/v2/public/pause-loop-clips",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([
+                {
+                    "id": "keep-a",
+                    "broadcaster_name": "Active Name",
+                    "title": "First",
+                    "duration": 5.0
+                },
+                {
+                    "id": "keep-b",
+                    "broadcaster_name": "ActivePartner",
+                    "title": "High",
+                    "duration": 300.0
+                }
+            ])
+        );
+
+        server.verify().await;
+        let clip_broadcasters = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path() == "/helix/clips")
+            .filter_map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "broadcaster_id")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(clip_broadcasters, vec!["111".to_owned()]);
+
+        db.cleanup().await;
     }
 }
