@@ -106,7 +106,7 @@ Korreliert die unabhängigen Raid-Signale (channel.raid-Event, Chat-`/raid`-Noti
 - `load_prepared_partner_scores(twitch_user_ids) -> ScoreMap` — Score-Cache laden.
 - `refresh_partner_score_cache_if_available(twitch_user_id, *, reason)` — Cache bei Bedarf auffrischen.
 - `get_recent_raid_targets(from_broadcaster_id, days) -> set[str]` — kürzlich beraidete Ziele (Cooldown).
-- `select_partner_candidate_by_score(candidates, from_broadcaster_id)` / `select_fairest_candidate(...)` — Auswahl nach Score bzw. Fairness. `PreparedPartnerScore`.
+- `select_partner_candidate_by_score(candidates, from_broadcaster_id)` / `select_fairest_candidate(...)` — Auswahl nach Score bzw. Fairness. Im live geschalteten Rust-Pfad stellt `select_fairest` den Nicht-Partner `edoeasy` hinter alle anderen zulässigen Kandidaten, lässt ihn als einziges verbleibendes Ziel aber zu. `PreparedPartnerScore`.
 
 ### services/raid_data_sources.py — `RaidDataSourceService`
 - `evaluate_deadlock_raid_source(*, current_game, had_deadlock_session, last_deadlock_seen_at)` / `is_deadlock_raid_source_eligible(...)` / `is_deadlock_partner_candidate_eligible(...)` — Deadlock-Relevanz prüfen.

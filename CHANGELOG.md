@@ -1,3 +1,11 @@
+## #389 — edoeasy nur noch als Raid-Fallback
+
+**Problem:** edoeasy konnte als externer Deadlock-Streamer wie jedes andere Fallback-Ziel gewählt werden, obwohl er nachrangig behandelt werden soll.
+
+**Änderung:** Die Zielauswahl stellt edoeasy im Nicht-Partner-Fallback hinter alle anderen zulässigen Kandidaten; die harte Blacklist bleibt unberührt.
+
+**Aktuelles Verhalten:** Gibt es irgendein anderes zulässiges Raid-Ziel, wird dieses gewählt. Nur wenn edoeasy der einzige Kandidat ist, kann der Raid weiterhin zu ihm gehen.
+
 ## #388 — Ein Schutzfall bleibt intern vollständig prüfbar
 
 **Problem:** Hinweise zu einem auffälligen Account lagen bisher getrennt in Chat, Stream und Moderationskontext; Entwürfe ließen sich dadurch nicht zusammenhängend prüfen, und Discord-Kopien hatten keine eigene Löschfrist.
