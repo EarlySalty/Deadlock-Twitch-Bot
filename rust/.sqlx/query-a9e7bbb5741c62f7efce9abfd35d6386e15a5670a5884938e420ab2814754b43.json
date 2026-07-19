@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            BTRIM(partner.twitch_login, E' \\t\\n\\r\\f') AS \"twitch_login!\",\n            BTRIM(partner.twitch_user_id, E' \\t\\n\\r\\f') AS \"twitch_user_id!\"\n        FROM twitch_streamers_partner_state partner\n        WHERE COALESCE(partner.is_partner_active, 0) <> 0\n          AND NULLIF(BTRIM(partner.twitch_login, E' \\t\\n\\r\\f'), '') IS NOT NULL\n          AND NULLIF(BTRIM(partner.twitch_user_id, E' \\t\\n\\r\\f'), '') IS NOT NULL\n          AND NOT EXISTS (\n              SELECT 1\n              FROM twitch_exclusions exclusion\n              WHERE exclusion.twitch_user_id = partner.twitch_user_id\n                AND exclusion.reactivated_at IS NULL\n          )\n        ORDER BY\n            LOWER(BTRIM(partner.twitch_login, E' \\t\\n\\r\\f')),\n            BTRIM(partner.twitch_login, E' \\t\\n\\r\\f'),\n            BTRIM(partner.twitch_user_id, E' \\t\\n\\r\\f')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a9e7bbb5741c62f7efce9abfd35d6386e15a5670a5884938e420ab2814754b43"
+}
