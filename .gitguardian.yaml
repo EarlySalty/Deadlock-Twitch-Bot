@@ -5,8 +5,8 @@
 # (/twitch/sicherheit) und der Streamer-Landingpage. Sie wurden mit einem
 # Wegwerf-Schlüssel über Dummy-Klartext erzeugt und sind ohne den (nicht
 # existierenden) Master-Schlüssel wertlos. Sie tauchen identisch in
-# bot/dashboard/admin/legal_mixin.py, rust/crates/tb-dashboard-api/src/handlers/legal.rs
-# und website/src/components/sections/Security.tsx auf.
+# rust/crates/tb-dashboard-api/src/handlers/legal.rs und
+# website/src/components/sections/Security.tsx auf.
 version: 2
 secret:
   ignored_matches:

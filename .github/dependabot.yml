@@ -54,13 +54,3 @@ updates:
       - "javascript"
     commit-message:
       prefix: "deps"
-
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "daily"
-    labels:
-      - "dependencies"
-      - "python"
-    commit-message:
-      prefix: "deps"

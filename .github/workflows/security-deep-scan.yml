@@ -15,10 +15,7 @@ jobs:
     name: 🔍 Detect Project Structure
     runs-on: ubuntu-latest
     outputs:
-      has_python: ${{ steps.check.outputs.has_python }}
       has_javascript: ${{ steps.check.outputs.has_javascript }}
-      has_requirements: ${{ steps.check.outputs.has_requirements }}
-      has_pyproject: ${{ steps.check.outputs.has_pyproject }}
       has_package_json: ${{ steps.check.outputs.has_package_json }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -26,38 +23,11 @@ jobs:
       - name: Check project structure
         id: check
         run: |
-          if find . -type f -name "*.py" \
-            -not -path "*/.venv/*" \
-            -not -path "*/venv/*" \
-            -not -path "*/node_modules/*" | grep -q .; then
-            echo "has_python=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_python=false" >> $GITHUB_OUTPUT
-          fi
-
           if find . -type f \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
             -not -path "*/node_modules/*" | grep -q .; then
             echo "has_javascript=true" >> $GITHUB_OUTPUT
           else
             echo "has_javascript=false" >> $GITHUB_OUTPUT
-          fi
-
-          if find . -type f -name "requirements*.txt" \
-            -not -path "*/.venv/*" \
-            -not -path "*/venv/*" \
-            -not -path "*/node_modules/*" | grep -q .; then
-            echo "has_requirements=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_requirements=false" >> $GITHUB_OUTPUT
-          fi
-
-          if find . -type f -name "pyproject.toml" \
-            -not -path "*/.venv/*" \
-            -not -path "*/venv/*" \
-            -not -path "*/node_modules/*" | grep -q .; then
-            echo "has_pyproject=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_pyproject=false" >> $GITHUB_OUTPUT
           fi
 
           if find . -type f -name "package.json" \
@@ -151,10 +121,7 @@ jobs:
           echo "# 🔒 Security Analysis Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Project Detection" >> $GITHUB_STEP_SUMMARY
-          echo "- Python: ${{ needs.detect-languages.outputs.has_python == 'true' && '✅ Yes' || '❌ No' }}" >> $GITHUB_STEP_SUMMARY
           echo "- JavaScript: ${{ needs.detect-languages.outputs.has_javascript == 'true' && '✅ Yes' || '❌ No' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- requirements*.txt: ${{ needs.detect-languages.outputs.has_requirements == 'true' && '✅ Found' || '❌ Not found' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- pyproject.toml: ${{ needs.detect-languages.outputs.has_pyproject == 'true' && '✅ Found' || '❌ Not found' }}" >> $GITHUB_STEP_SUMMARY
           echo "- package.json: ${{ needs.detect-languages.outputs.has_package_json == 'true' && '✅ Found' || '❌ Not found' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Scan Results" >> $GITHUB_STEP_SUMMARY

@@ -4,8 +4,6 @@ queries:
   - uses: security-extended
 
 packs:
-  python:
-    - codeql/python-queries
   javascript-typescript:
     - codeql/javascript-queries
   go:
