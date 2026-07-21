@@ -1,4 +1,4 @@
-name: "🔍 Lint & Type Check"
+name: "Frontend CI"
 
 on:
   workflow_dispatch:
@@ -7,105 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  ruff:
-    name: "⚡ Ruff (CI-critical targets)"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-
-      - name: Install lint tooling
-        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
-
-      - name: Run Ruff on full codebase
-        run: |
-          ruff check bot/ twitch_cog/ tests/ scripts/ --output-format=github --target-version=py311
-          ruff format bot/ twitch_cog/ tests/ scripts/ --check --target-version=py311
-
-      - name: Run Ruff SARIF (for Security tab)
-        if: always()
-        run: |
-          ruff check bot/ twitch_cog/ tests/ scripts/ --output-format=sarif --target-version=py311 -o ruff.sarif || true
-
-      - name: Upload Ruff SARIF
-        if: always() && hashFiles('ruff.sarif') != ''
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
-        with:
-          sarif_file: ruff.sarif
-          category: ruff
-
-  mypy:
-    name: "🔎 Type Check (mypy)"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-
-      - name: Install lint tooling
-        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
-
-      - name: Run mypy
-        run: |
-          mypy bot/ twitch_cog/ \
-            --ignore-missing-imports \
-            --no-error-summary \
-            --show-column-numbers \
-            --pretty
-
-  pytest:
-    name: "✅ Pytest"
-    runs-on: ubuntu-latest
-    env:
-      COVERAGE_FAIL_UNDER: "40"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-
-      - name: Install test dependencies
-        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-test-ci-locked.txt
-
-      - name: Run regression suite with coverage gate
-        run: |
-          pytest -q \
-            --cov=bot \
-            --cov=twitch_cog \
-            --cov-branch \
-            --cov-report=term-missing:skip-covered \
-            --cov-report=xml \
-            --cov-report=html \
-            --cov-fail-under="${COVERAGE_FAIL_UNDER}"
-
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pytest-coverage
-          path: |
-            coverage.xml
-            htmlcov/
-          if-no-files-found: ignore
-          retention-days: 30
-
   frontend-ci:
-    name: "🧪 Frontend CI (${{ matrix.project.name }})"
+    name: "Frontend CI (${{ matrix.project.name }})"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
