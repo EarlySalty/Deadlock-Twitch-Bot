@@ -86,16 +86,15 @@ pub async fn queue_handler(
         Err(response) => return response,
     };
 
-    match sqlx::query_as!(
-        QueueRow,
-        "SELECT id, chatter_login, chatter_id, confidence::float8 AS \"confidence!\", \
+    match sqlx::query_as::<_, QueueRow>(
+        "SELECT id, chatter_login, chatter_id, confidence::float8 AS confidence, \
                 category, reasoning, action_taken, created_at \
            FROM twitch_scam_guard_verdicts \
-          WHERE channel_login = $1 AND action_taken IN ('suggested', 'banned', 'timed_out') \
+          WHERE channel_login = $1 AND action_taken IN ('watching', 'suggested', 'banned', 'timed_out') \
           ORDER BY created_at DESC, id DESC \
           LIMIT 100",
-        &login
     )
+    .bind(&login)
     .fetch_all(&pool)
     .await
     {
@@ -188,20 +187,18 @@ pub async fn ignore_handler(
         Err(response) => return response,
     };
 
-    let action_taken = match sqlx::query_scalar!(
+    let action_taken = match sqlx::query_scalar::<_, String>(
         "SELECT action_taken FROM twitch_scam_guard_verdicts \
           WHERE id = $1 AND channel_login = $2 \
-            AND action_taken IN ('suggested', 'banned', 'timed_out')",
-        id,
-        &login
+            AND action_taken IN ('watching', 'suggested', 'banned', 'timed_out')",
     )
+    .bind(id)
+    .bind(&login)
     .fetch_optional(&pool)
     .await
     {
         Ok(Some(action_taken)) => action_taken,
-        Ok(None) => {
-            return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found")
-        }
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "not_found", "verdict not found"),
         Err(error) => {
             tracing::error!(%error, "scam-guard queue ignore lookup database error");
             return error_response(
@@ -218,13 +215,13 @@ pub async fn ignore_handler(
         return proxy_owned_verdict_by_login(pool, &login, id, REVOKE_PATH).await;
     }
 
-    match sqlx::query!(
+    match sqlx::query(
         "UPDATE twitch_scam_guard_verdicts \
             SET action_taken = 'overturned' \
-          WHERE id = $1 AND channel_login = $2 AND action_taken = 'suggested'",
-        id,
-        &login
+          WHERE id = $1 AND channel_login = $2 AND action_taken IN ('watching', 'suggested')",
     )
+    .bind(id)
+    .bind(&login)
     .execute(&pool)
     .await
     {
@@ -381,6 +378,7 @@ mod tests {
         let suggested_id = insert_verdict(&pool, "nani", "queued", "suggested").await;
         let banned_id = insert_verdict(&pool, "nani", "already_banned", "banned").await;
         let timed_id = insert_verdict(&pool, "nani", "timed", "timed_out").await;
+        let watching_id = insert_verdict(&pool, "nani", "watching", "watching").await;
         insert_verdict(&pool, "nani", "overturned", "overturned").await;
         insert_verdict(&pool, "nani", "none", "none").await;
         insert_verdict(&pool, "other", "foreign", "suggested").await;
@@ -400,6 +398,15 @@ mod tests {
             body,
             json!({
                 "queue": [{
+                    "id": watching_id,
+                    "chatter_login": "watching",
+                    "chatter_id": "watching-id",
+                    "confidence": 0.8799999952316284_f64,
+                    "category": "impersonation",
+                    "reasoning": "reason",
+                    "action_taken": "watching",
+                    "created_at": "2026-06-19T10:00:00+00:00"
+                }, {
                     "id": timed_id,
                     "chatter_login": "timed",
                     "chatter_id": "timed-id",
@@ -492,6 +499,7 @@ mod tests {
             return;
         };
         let suggested_id = insert_verdict(&pool, "nani", "suggested", "suggested").await;
+        let watching_id = insert_verdict(&pool, "nani", "watching", "watching").await;
         let banned_id = insert_verdict(&pool, "nani", "banned", "banned").await;
         let timed_id = insert_verdict(&pool, "nani", "timed", "timed_out").await;
         let foreign_id = insert_verdict(&pool, "other", "foreign", "suggested").await;
@@ -514,25 +522,28 @@ mod tests {
                 .await;
         }
 
-        let (status, body) = body_of(
-            ignore_handler(
-                partner("nani"),
-                State(pool.clone()),
-                Query(ScamGuardQuery::default()),
-                Path(suggested_id),
+        for id in [suggested_id, watching_id] {
+            let (status, body) = body_of(
+                ignore_handler(
+                    partner("nani"),
+                    State(pool.clone()),
+                    Query(ScamGuardQuery::default()),
+                    Path(id),
+                )
+                .await,
             )
-            .await,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({ "ok": true }));
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, json!({ "ok": true }));
 
-        let row = sqlx::query("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
-            .bind(suggested_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(row.get::<String, _>("action_taken"), "overturned");
+            let row =
+                sqlx::query("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(row.get::<String, _>("action_taken"), "overturned");
+        }
 
         for id in [banned_id, timed_id] {
             let (status, body) = body_of(
