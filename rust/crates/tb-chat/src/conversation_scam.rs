@@ -1853,9 +1853,9 @@ async fn try_ban(api: &dyn ChatApi, target: &EnforceTarget) -> bool {
         return false;
     }
 
+    let reason = crate::moderation::twitch_moderation_reason(&target.reasoning);
     matches!(
-        api.ban_user(&broadcaster_id, &chatter_id, &target.reasoning)
-            .await,
+        api.ban_user(&broadcaster_id, &chatter_id, &reason).await,
         Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned)
     )
 }
@@ -2304,6 +2304,21 @@ mod tests {
 
         assert!(try_ban(&api, &target).await);
         assert_eq!(api.ban_reasons.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn try_ban_kuerzt_langen_twitch_ban_reason() {
+        let api = MockApi::resolving("999999999");
+        let mut target = enforce_target("irgendwer", Some("999999999"));
+        target.reasoning = "x".repeat(650);
+
+        assert!(try_ban(&api, &target).await);
+        let reasons = api.ban_reasons.lock().unwrap();
+        assert_eq!(reasons.len(), 1);
+        assert_eq!(
+            reasons[0].chars().count(),
+            crate::moderation::TWITCH_MODERATION_REASON_MAX_CHARS
+        );
     }
 
     struct MockApi {

@@ -318,7 +318,7 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
           setNote('Account wurde im Kanal gebannt.');
           break;
         case 'ban_failed_no_mod':
-          setNote('Bann fehlgeschlagen — der Bot ist in deinem Kanal kein Moderator.');
+          setNote('Bann fehlgeschlagen — Details stehen im Bot-Log.');
           break;
         case 'not_eligible':
           setNote('Dieser Vorschlag ist nicht mehr offen.');

@@ -86,6 +86,15 @@ pub const WERBEFREI_PITCH_MSG: &str =
      das alle Bot-Features ohne automatische Nachrichten bietet: \
      https://deutsche-deadlock-community.de/twitch/pricing";
 
+pub const TWITCH_MODERATION_REASON_MAX_CHARS: usize = 500;
+
+pub fn twitch_moderation_reason(reason: &str) -> String {
+    reason
+        .chars()
+        .take(TWITCH_MODERATION_REASON_MAX_CHARS)
+        .collect()
+}
+
 fn log_autoban_notice_send_result(
     channel_login: &str,
     broadcaster_id: &str,
@@ -639,9 +648,10 @@ impl ModerationEngine {
         }
 
         // Schritt 2: Ban (moderation.py Z. 1679–1816)
+        let twitch_reason = twitch_moderation_reason(reason_text);
         let outcome = match self
             .api
-            .ban_user(broadcaster_id, chatter_id, reason_text)
+            .ban_user(broadcaster_id, chatter_id, &twitch_reason)
             .await
         {
             Ok(o) => o,
@@ -767,9 +777,10 @@ impl ModerationEngine {
             warn!("Timeout-Cleanup Delete-Fehler: {error}");
         }
 
+        let twitch_reason = twitch_moderation_reason(reason_text);
         let enforced = match self
             .api
-            .timeout_user(broadcaster_id, chatter_id, duration_secs, reason_text)
+            .timeout_user(broadcaster_id, chatter_id, duration_secs, &twitch_reason)
             .await
         {
             Ok(BanOutcome::Banned | BanOutcome::AlreadyBanned) => true,
@@ -1413,6 +1424,7 @@ mod tests {
         delete_calls: AtomicUsize,
         send_calls: AtomicUsize,
         timeout_calls: AtomicUsize,
+        ban_reasons: Mutex<Vec<String>>,
         ban_result: Mutex<BanOutcome>,
         send_result: Mutex<Result<SendOutcome, String>>,
     }
@@ -1424,6 +1436,7 @@ mod tests {
                 delete_calls: AtomicUsize::new(0),
                 send_calls: AtomicUsize::new(0),
                 timeout_calls: AtomicUsize::new(0),
+                ban_reasons: Mutex::new(Vec::new()),
                 ban_result: Mutex::new(result),
                 send_result: Mutex::new(Ok(SendOutcome::Sent)),
             })
@@ -1463,8 +1476,9 @@ mod tests {
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
             Ok(true)
         }
-        async fn ban_user(&self, _b: &str, _u: &str, _r: &str) -> Result<BanOutcome, String> {
+        async fn ban_user(&self, _b: &str, _u: &str, r: &str) -> Result<BanOutcome, String> {
             self.ban_calls.fetch_add(1, Ordering::SeqCst);
+            self.ban_reasons.lock().unwrap().push(r.to_string());
             Ok(self.ban_result.lock().unwrap().clone())
         }
         async fn timeout_user(
@@ -1564,6 +1578,13 @@ mod tests {
             "Delete aufgerufen"
         );
         assert_eq!(api.ban_calls.load(Ordering::SeqCst), 1, "Ban aufgerufen");
+    }
+
+    #[test]
+    fn twitch_moderation_reason_kuerzt_langen_text() {
+        let long_reason = "x".repeat(650);
+        let reason = twitch_moderation_reason(&long_reason);
+        assert_eq!(reason.chars().count(), TWITCH_MODERATION_REASON_MAX_CHARS);
     }
 
     /// Safe-List: weder Ban noch Message-Delete, egal welcher Pfad ruft.
