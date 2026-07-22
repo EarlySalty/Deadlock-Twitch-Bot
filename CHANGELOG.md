@@ -1,3 +1,11 @@
+## #396 — Scam-Bans nutzen Twitch-kompatible Gründe
+
+**Problem:** Ein klares Scam-Urteil konnte beim AutoBan scheitern, wenn die AI-Begründung länger als Twitches Ban-Grund-Limit war. Der Logtext wirkte dann wie fehlende Mod-Rechte, obwohl Twitch den zu langen Grund abgelehnt hatte.
+
+**Änderung:** Moderationsgründe werden vor Ban und Timeout auf Twitches Limit gekürzt. Der direkte Scam-Enforce-Pfad nutzt dieselbe Begrenzung. Fehlgeschlagene Ban-Meldungen behaupten nicht mehr pauschal fehlende Mod-Rechte.
+
+**Aktuelles Verhalten:** Ein Fall wie ghostchambers83 wird nicht mehr durch eine zu lange AI-Begründung am Twitch-Ban gehindert; die ausführliche Begründung bleibt weiterhin im Urteil sichtbar.
+
 ## #395 — Unsichere Scam-Urteile bleiben im Monitor
 
 **Problem:** Ein unsicheres AI-Urteil sah im Log wie „keine Aktion“ aus, obwohl der Dialog intern weiter offen blieb. Bei klaren Scam-Fällen konnte ein fehlender Mod-Status außerdem verhindern, dass der Account global vorgemerkt wird.

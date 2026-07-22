@@ -38,7 +38,7 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
             (_, "timed_out") => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
             (_, "ban_failed_no_mod") => (
                 "🚨",
-                "Ban nicht möglich, der Bot ist in diesem Kanal kein Mod",
+                "Ban nicht durchgesetzt, Details stehen im Bot-Log",
                 COLOR_BAN,
             ),
             (_, "suggested") => (
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(p.embed["color"].as_u64(), Some(COLOR_BAN as u64));
         assert_eq!(
             p.embed["fields"][3]["value"],
-            "Ban nicht möglich, der Bot ist in diesem Kanal kein Mod"
+            "Ban nicht durchgesetzt, Details stehen im Bot-Log"
         );
         assert_eq!(p.embed["fields"][4]["value"], "Betrug");
         assert_eq!(p.view_spec.unwrap()["action_taken"], "ban_failed_no_mod");
