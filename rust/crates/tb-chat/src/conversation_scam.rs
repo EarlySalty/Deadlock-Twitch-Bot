@@ -39,6 +39,7 @@ DIE DREI ECHTEN MASCHEN (typischerweise englisch oder übersetzt):
 GEWICHTUNG:
 - Sprache ist das stärkste Signal: Englisch oder übersetztes Deutsch + Skript ohne Bezug = verdächtig. Flüssiges Umgangs-Deutsch = clean.
 - "unicode_obfuscation_detected": true (verfremdete Schrift, um Filter zu täuschen) ist ein echtes Warnsignal.
+- Ein junger Account ("account_age_days" unter 90) ist ein deutliches Warnsignal, wenn dazu englischer Script-Smalltalk, Druckaufbau oder ein Pivot kommt. Allein reicht das junge Alter nicht für "scam".
 - "is_first_global": true erhöht den Verdacht nur LEICHT und nur zusammen mit den Skript-Merkmalen — ein neuer oder Zweit-Account allein ist normal.
 
 NETZWERK-SIGNAL — DERSELBE ACCOUNT IN MEHREREN KANÄLEN:
@@ -62,6 +63,7 @@ const TIMEOUT_SECONDS: u32 = 600;
 const ACCOUNT_NEW_MAX_DAYS: i64 = 90;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
 const CROSS_CHANNEL_WINDOW_MINUTES: i64 = 60;
+const CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY: &str = "conversation_scam_ai";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerdictKind {
@@ -528,6 +530,17 @@ pub trait ScamGuardStore: Send + Sync {
     async fn load_learnings(&self) -> Result<Option<String>, String> {
         Ok(None)
     }
+
+    /// Klare frische AI-Scams zusätzlich global vormerken, damit fehlende
+    /// Mod-Rechte in einem einzelnen Kanal den Schutz nicht blockieren.
+    async fn add_global_ban(
+        &self,
+        _chatter_login: &str,
+        _chatter_id: Option<&str>,
+        _reason: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -741,6 +754,23 @@ impl ScamGuardStore for PgScamGuardStore {
 
     async fn load_learnings(&self) -> Result<Option<String>, String> {
         load_learnings(&self.pool).await
+    }
+
+    async fn add_global_ban(
+        &self,
+        chatter_login: &str,
+        chatter_id: Option<&str>,
+        reason: &str,
+    ) -> Result<(), String> {
+        tb_analytics::global_ban::add_ban(
+            &self.pool,
+            chatter_login,
+            chatter_id,
+            Some(reason),
+            Some(CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY),
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -974,6 +1004,9 @@ impl ConversationScamGuard {
     /// Postet jedes persistierte Urteil fire-and-forget in den
     /// Discord-Aufsichts-Feed. Ohne Notifier passiert nichts.
     fn notify_verdict(&self, verdict_id: i64, record: &VerdictRecord) {
+        if record.action_taken == "watching" {
+            return;
+        }
         let Some(notifier) = &self.notifier else {
             return;
         };
@@ -1011,7 +1044,7 @@ impl ConversationScamGuard {
     ) -> (String, bool) {
         match verdict.verdict {
             VerdictKind::Clean => ("none".to_string(), true),
-            VerdictKind::Unsure => ("none".to_string(), false),
+            VerdictKind::Unsure => ("watching".to_string(), false),
             VerdictKind::Scam if verdict.confidence < settings.suggestion_floor => {
                 ("none".to_string(), false)
             }
@@ -1066,6 +1099,27 @@ impl ConversationScamGuard {
                             return ("timed_out".to_string(), true);
                         }
                         return ("suggested".to_string(), true);
+                    }
+                    if !crate::safe_list::is_safe(
+                        Some(&event.chatter_user_id),
+                        &event.chatter_user_login,
+                    ) {
+                        if let Err(error) = self
+                            .store
+                            .add_global_ban(
+                                &event.chatter_user_login,
+                                Some(&event.chatter_user_id),
+                                &verdict.reasoning,
+                            )
+                            .await
+                        {
+                            warn!(
+                                channel = %event.broadcaster_user_login,
+                                chatter = %event.chatter_user_login,
+                                %error,
+                                "Conversation-Scam-Globalban-Vormerkung fehlgeschlagen"
+                            );
+                        }
                     }
                     let banned = self
                         .moderation
@@ -1512,6 +1566,34 @@ pub async fn mark_overturned_by_id(pool: &PgPool, verdict_id: i64) -> Result<boo
     .map_err(|error| error.to_string())
 }
 
+async fn remove_conversation_scam_global_ban(
+    pool: &PgPool,
+    chatter_login: &str,
+) -> Result<bool, String> {
+    let chatter_login = chatter_login.to_lowercase();
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let result = sqlx::query(
+        "DELETE FROM twitch_chatter_global_ban \
+         WHERE chatter_login = $1 AND added_by = $2",
+    )
+    .bind(&chatter_login)
+    .bind(CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    if result.rows_affected() > 0 {
+        sqlx::query("DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1")
+            .bind(&chatter_login)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Nimmt das Urteil `verdict_id` zurück: war es ein echter Ban/Timeout, wird auf
 /// Twitch entbannt; in jedem Fall wird der Fall als `overturned` markiert.
 /// Best-effort — ein fehlgeschlagener Unban verhindert die Markierung nicht
@@ -1532,6 +1614,17 @@ pub async fn revoke_verdict(pool: &PgPool, api: &dyn ChatApi, verdict_id: i64) -
     } else {
         false
     };
+    if matches!(
+        target.action_taken.as_str(),
+        "banned" | "timed_out" | "ban_failed_no_mod"
+    ) {
+        if let Err(error) = remove_conversation_scam_global_ban(pool, &target.chatter_login).await {
+            warn!(
+                chatter = %target.chatter_login,
+                "Scam-Revoke: AI-Globalban konnte nicht entfernt werden: {error}"
+            );
+        }
+    }
 
     if let Err(error) = mark_overturned_by_id(pool, verdict_id).await {
         warn!("Scam-Revoke: Markierung overturned fehlgeschlagen ({verdict_id}): {error}");
@@ -2029,6 +2122,7 @@ mod tests {
         context: StdMutex<Option<FirstTimeContext>>,
         cross_channel: StdMutex<Result<i64, String>>,
         records: StdMutex<Vec<VerdictRecord>>,
+        global_bans: StdMutex<Vec<(String, Option<String>, String)>>,
     }
 
     #[async_trait]
@@ -2058,6 +2152,20 @@ mod tests {
             let mut records = self.records.lock().unwrap();
             records.push(record.clone());
             Ok(records.len() as i64)
+        }
+
+        async fn add_global_ban(
+            &self,
+            chatter_login: &str,
+            chatter_id: Option<&str>,
+            reason: &str,
+        ) -> Result<(), String> {
+            self.global_bans.lock().unwrap().push((
+                chatter_login.to_lowercase(),
+                chatter_id.map(str::to_string),
+                reason.to_string(),
+            ));
+            Ok(())
         }
     }
 
@@ -2309,6 +2417,7 @@ mod tests {
             })),
             cross_channel: StdMutex::new(Ok(0)),
             records: StdMutex::new(Vec::new()),
+            global_bans: StdMutex::new(Vec::new()),
         });
         let judge = Arc::new(MockJudge::new(verdicts));
         let api = Arc::new(MockApi::new());
@@ -2424,7 +2533,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsure_ab_suggestion_floor_wird_ohne_moderationsaktion_gemeldet() {
+    async fn unsure_ab_suggestion_floor_bleibt_ohne_discord_post_im_monitor() {
         let (guard, store, _, api, moderation) = build_guard(
             GuardSettings::default(),
             [verdict(VerdictKind::Unsure, 0.75)],
@@ -2439,26 +2548,15 @@ mod tests {
         )
         .await;
 
-        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
-                    break notification;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("Unsure-Verdacht wurde nicht gemeldet");
-        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert_eq!(seen.action_taken, "none");
-        assert_eq!(seen.verdict, "unsure");
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "watching");
+        assert!(notifier.seen.lock().unwrap().is_empty());
         assert!(api.ban_reasons.lock().unwrap().is_empty());
         assert!(moderation.reasons.lock().unwrap().is_empty());
         assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn unsure_unter_suggestion_floor_wird_gemeldet() {
+    async fn unsure_unter_suggestion_floor_bleibt_ohne_discord_post_im_monitor() {
         let (guard, store, _, _, moderation) = build_guard(
             GuardSettings::default(),
             [verdict(VerdictKind::Unsure, 0.69)],
@@ -2473,21 +2571,40 @@ mod tests {
         )
         .await;
 
-        let seen = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if let Some(notification) = notifier.seen.lock().unwrap().first().cloned() {
-                    break notification;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("Unsure unter suggestion_floor wurde nicht gemeldet");
-        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert_eq!(seen.action_taken, "none");
-        assert_eq!(seen.verdict, "unsure");
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "watching");
+        assert!(notifier.seen.lock().unwrap().is_empty());
         assert!(moderation.reasons.lock().unwrap().is_empty());
         assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn junger_englischer_recon_burst_bleibt_als_watching_im_monitor() {
+        let (guard, store, _, api, moderation) = build_guard(
+            GuardSettings::default(),
+            [verdict(VerdictKind::Unsure, 0.40)],
+        );
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now() - chrono::Duration::days(50)));
+        let notifier = Arc::new(RecordingNotifier::default());
+        let guard = guard.with_notifier(Arc::clone(&notifier) as Arc<dyn ScamGuardNotifier>);
+
+        feed(
+            &guard,
+            "bunnyrae_7",
+            &[
+                "yeeeee",
+                "Deadlock xd",
+                "I really like deadlock is this your fvrt game?",
+                "Is your mic is muted or are u just not talking atm?",
+                "umm",
+                "did u read my messages?",
+            ],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "watching");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+        assert!(notifier.seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2683,6 +2800,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn klarer_ai_scam_wird_global_vorgemerkt_auch_wenn_channelban_scheitert() {
+        let (guard, store, _, _, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
+        *moderation.succeeds.lock().unwrap() = false;
+
+        feed(
+            &guard,
+            "ghostchambers83",
+            &["Working right now, but my crew and I won't miss your next stream. Looking forward to hanging out! Add me on D1sc0rd: remah7"],
+        )
+        .await;
+
+        assert_eq!(
+            store.records.lock().unwrap()[0].action_taken,
+            "ban_failed_no_mod"
+        );
+        assert_eq!(
+            store.global_bans.lock().unwrap().as_slice(),
+            [(
+                "ghostchambers83".to_string(),
+                Some("ghostchambers83-id".to_string()),
+                "test reasoning".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
     async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
         let (guard, store, _, api, moderation) =
             build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.97)]);
@@ -2779,7 +2923,7 @@ mod tests {
             &["This is a long suspicious Discord growth pitch with real viewers."],
         )
         .await;
-        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "watching");
         assert!(api.ban_reasons.lock().unwrap().is_empty());
         assert!(moderation.reasons.lock().unwrap().is_empty());
     }
