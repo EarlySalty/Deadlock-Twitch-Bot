@@ -24,9 +24,10 @@ export interface ScamGuardSettings {
 
 /**
  * Ein Eintrag der Fall-Queue. `action_taken` unterscheidet, ob der Fall nur
- * vorgeschlagen ('suggested') oder bereits automatisch durchgesetzt wurde
- * ('banned' / 'timed_out'). Bereits durchgesetzte Fälle lassen sich über die
- * Detail-/Revoke-Route wieder zurücknehmen (echter Twitch-Unban via Bot).
+ * weiter beobachtet ('watching'), vorgeschlagen ('suggested') oder bereits
+ * automatisch durchgesetzt wurde ('banned' / 'timed_out'). Bereits
+ * durchgesetzte Fälle lassen sich über die Detail-/Revoke-Route wieder
+ * zurücknehmen (echter Twitch-Unban via Bot).
  */
 export interface ScamQueueItem {
   id: number;

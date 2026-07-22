@@ -263,10 +263,11 @@ function SettingsBlock() {
 
 // ── Queue-Eintrag ────────────────────────────────────────────────────────────
 
-type ItemState = 'open' | 'banned' | 'timed_out' | 'ignored' | 'revoked';
+type ItemState = 'watching' | 'open' | 'banned' | 'timed_out' | 'ignored' | 'revoked';
 
 /** Karten-Anfangszustand aus dem bereits durchgeführten Aktionstyp ableiten. */
 function initialItemState(action: string): ItemState {
+  if (action === 'watching') return 'watching';
   if (action === 'banned') return 'banned';
   if (action === 'timed_out') return 'timed_out';
   return 'open';
@@ -274,6 +275,7 @@ function initialItemState(action: string): ItemState {
 
 /** Badge für bereits automatisch durchgesetzte Fälle (Vorschlag = kein Badge). */
 function actionBadge(action: string): { label: string; tone: string } | null {
+  if (action === 'watching') return { label: 'Wird beobachtet', tone: 'border-warning/40 bg-warning/10 text-warning' };
   if (action === 'banned') return { label: 'Auto-gebannt', tone: 'border-error/40 bg-error/10 text-error' };
   if (action === 'timed_out') return { label: 'Auto-Timeout', tone: 'border-warning/40 bg-warning/10 text-warning' };
   return null;
@@ -455,6 +457,16 @@ function QueueItemCard({ item }: { item: ScamQueueItem }) {
                 Harmlos
               </button>
             </>
+          ) : state === 'watching' ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void onIgnore()}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-background/40 px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:border-border-hover hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {busy === 'ignore' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldQuestion className="h-4 w-4" />}
+              Harmlos
+            </button>
           ) : (
             // state === 'banned' | 'timed_out' → Rücknahme anbieten (echter Twitch-Unban via Bot)
             <button
