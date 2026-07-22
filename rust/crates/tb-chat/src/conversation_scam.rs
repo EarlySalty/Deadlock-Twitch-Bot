@@ -1279,19 +1279,41 @@ impl ScamGuardCommands {
         if chatter_id.is_empty() {
             return false;
         }
-        sqlx::query!(
-            "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' \
-             WHERE id = ( \
-               SELECT id FROM twitch_scam_guard_verdicts \
-               WHERE channel_login = $1 AND chatter_id = $2 AND verdict = 'scam' \
-               ORDER BY created_at DESC, id DESC LIMIT 1 )",
-            channel_login.to_lowercase(),
-            chatter_id,
+        let target = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, chatter_login, action_taken \
+             FROM twitch_scam_guard_verdicts \
+             WHERE channel_login = $1 AND chatter_id = $2 AND verdict = 'scam' \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
         )
-        .execute(&self.pool)
+        .bind(channel_login.to_lowercase())
+        .bind(chatter_id)
+        .fetch_optional(&self.pool)
         .await
-        .map(|result| result.rows_affected() > 0)
-        .unwrap_or(false)
+        .ok()
+        .flatten();
+        let Some((verdict_id, chatter_login, action_taken)) = target else {
+            return false;
+        };
+
+        let marked = mark_overturned_by_id(&self.pool, verdict_id)
+            .await
+            .unwrap_or(false);
+        if marked
+            && matches!(
+                action_taken.as_str(),
+                "banned" | "timed_out" | "ban_failed_no_mod"
+            )
+        {
+            if let Err(error) =
+                remove_conversation_scam_global_ban(&self.pool, &chatter_login).await
+            {
+                warn!(
+                    chatter = %chatter_login,
+                    "Scam-Overturn: AI-Globalban konnte nicht entfernt werden: {error}"
+                );
+            }
+        }
+        marked
     }
 }
 

@@ -11,10 +11,11 @@ use tb_chat::conversation_scam::add_conversation_scam_global_ban;
 use tb_chat::conversation_scam::enforce_verdict;
 use tb_chat::conversation_scam::{
     fetch_learning_corpus, load_learnings, persist_learnings, revoke_verdict,
-    ConversationScamGuard, DialogState, ScamJudge, Verdict, VerdictKind,
+    ConversationScamGuard, DialogState, ScamGuardCommands, ScamJudge, Verdict, VerdictKind,
 };
 use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
+use tb_engagement::minimax_chat::EngagementMinimaxClient;
 
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
@@ -692,6 +693,102 @@ async fn self_learning_korpus_und_persistenz() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn chat_unban_overturn_entfernt_ai_globalban_aber_keinen_manuellen() {
+    let pool = pool_or_skip!("tb_conversation_scam_chat_unban_globalban");
+    let commands = ScamGuardCommands::new(
+        pool.clone(),
+        EngagementMinimaxClient::new(None, None, None, None),
+    );
+
+    let ai_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'aiscam', 'ai-uid', 'scam', 0.95, 'cat', \
+                 'grund', '[\"msg\"]', 'banned') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ('aiscam', 'ai-uid', 'grund', 'conversation_scam_ai')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ('aiscam')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert!(commands.overturn("testchannel", "ai-uid").await);
+    let action: String =
+        sqlx::query_scalar("SELECT action_taken FROM twitch_scam_guard_verdicts WHERE id = $1")
+            .bind(ai_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(action, "overturned");
+    let ai_global_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban WHERE chatter_login = 'aiscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ai_global_count, 0);
+    let ai_applied_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban_applied WHERE chatter_login = 'aiscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ai_applied_count, 0);
+
+    sqlx::query(
+        "INSERT INTO twitch_scam_guard_verdicts \
+         (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+          reasoning, transcript_snapshot, action_taken) \
+         VALUES ('testchannel', 'manualscam', 'manual-uid', 'scam', 0.95, 'cat', \
+                 'grund', '[\"msg\"]', 'banned')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ('manualscam', 'manual-uid', 'manual grund', 'manual')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ('manualscam')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(commands.overturn("testchannel", "manual-uid").await);
+    let manual_global_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban WHERE chatter_login = 'manualscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(manual_global_count, 1);
+    let manual_applied_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban_applied WHERE chatter_login = 'manualscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(manual_applied_count, 1);
 }
 
 #[tokio::test]
