@@ -99,6 +99,12 @@ async fn apply_ddl(pool: &PgPool) {
             source_count INTEGER NOT NULL DEFAULT 0, \
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
             CONSTRAINT learnings_singleton CHECK (id))",
+        "CREATE TABLE twitch_chatter_global_ban (\
+            chatter_login TEXT PRIMARY KEY, chatter_id TEXT, reason TEXT, added_by TEXT, \
+            added_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "CREATE TABLE twitch_chatter_global_ban_applied (\
+            id BIGSERIAL PRIMARY KEY, chatter_login TEXT NOT NULL, \
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
@@ -702,6 +708,18 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ('scammer', 'scammer-uid', 'grund', 'conversation_scam_ai')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ('scammer')")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let recorder = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
     let api: Arc<dyn ChatApi> = Arc::new(RecordingApi {
@@ -725,6 +743,23 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
             .await
             .unwrap();
     assert_eq!(action, "overturned");
+    let global_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban WHERE chatter_login = 'scammer'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(global_count, 0, "AI-Globalban wurde beim Revoke entfernt");
+    let applied_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban_applied WHERE chatter_login = 'scammer'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        applied_count, 0,
+        "AI-Sweep-Ledger wurde beim Revoke entfernt"
+    );
 
     // Vorschlag (kein Ban): KEIN Unban, trotzdem overturned.
     let suggested_id: i64 = sqlx::query_scalar(
@@ -767,6 +802,18 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ('timed', 'timed-uid', 'manuell', 'manual')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ('timed')")
+        .execute(&pool)
+        .await
+        .unwrap();
     let outcome = revoke_verdict(&pool, api.as_ref(), timed_id).await;
     assert!(outcome.was_banned, "timed_out zählt als Ban");
     assert!(outcome.unbanned);
@@ -781,6 +828,26 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
             .await
             .unwrap();
     assert_eq!(action, "overturned");
+    let manual_global_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban WHERE chatter_login = 'timed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        manual_global_count, 1,
+        "manuelle Globalbans darf Revoke nicht entfernen"
+    );
+    let manual_applied_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_chatter_global_ban_applied WHERE chatter_login = 'timed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        manual_applied_count, 1,
+        "manuelle Sweep-Ledger bleiben bestehen"
+    );
 
     // Unbekannte ID → not_found.
     let missing = revoke_verdict(&pool, api.as_ref(), 9_999_999).await;

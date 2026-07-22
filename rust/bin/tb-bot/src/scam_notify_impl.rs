@@ -30,6 +30,9 @@ struct ScamDiscordNotifier {
 #[async_trait]
 impl ScamGuardNotifier for ScamDiscordNotifier {
     async fn notify(&self, n: ScamNotification) {
+        if n.action_taken == "watching" {
+            return;
+        }
         let (icon, aktion, color) = match (n.verdict.as_str(), n.action_taken.as_str()) {
             (_, "banned") => ("🚨", "Gebannt", COLOR_BAN),
             (_, "timed_out") => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
@@ -68,7 +71,11 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
 
         // Die Discord-Seite (Master-Broker) interpretiert diesen Typ und rendert
         // den Revoke-Button; verdict_id adressiert exakt diesen Fall.
-        let view_spec = (n.action_taken != "none").then(|| {
+        let view_spec = matches!(
+            n.action_taken.as_str(),
+            "banned" | "timed_out" | "ban_failed_no_mod" | "suggested"
+        )
+        .then(|| {
             serde_json::json!({
                 "type": "scam_revoke",
                 "verdict_id": n.verdict_id,
@@ -257,6 +264,19 @@ mod tests {
         assert_eq!(p.embed["fields"][4]["value"], "Unklar");
         assert_eq!(p.embed["title"], "🔍 Scam-Wächter — sophiaa_star");
         assert!(p.view_spec.is_none());
+    }
+
+    #[tokio::test]
+    async fn watching_post_wird_nicht_an_discord_gesendet() {
+        let backend = Arc::new(CapturingBackend::default());
+        let notifier = ScamDiscordNotifier {
+            backend: backend.clone(),
+            channel_id: 1374364800817303632,
+        };
+
+        notifier.notify(notification("unsure", "watching")).await;
+
+        assert!(backend.last.lock().unwrap().is_none());
     }
 
     #[tokio::test]

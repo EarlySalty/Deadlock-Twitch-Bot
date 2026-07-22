@@ -1,3 +1,11 @@
+## #395 — Unsichere Scam-Urteile bleiben im Monitor
+
+**Problem:** Ein unsicheres AI-Urteil sah im Log wie „keine Aktion“ aus, obwohl der Dialog intern weiter offen blieb. Bei klaren Scam-Fällen konnte ein fehlender Mod-Status außerdem verhindern, dass der Account global vorgemerkt wird.
+
+**Änderung:** Unsichere Fälle werden als weiter beobachtet gespeichert und nicht nach Discord gepostet. Klare frische Scam-Fälle werden zusätzlich auf die globale Banliste gesetzt; ein Rückgängig entfernt nur diese AI-Vormerkung wieder.
+
+**Aktuelles Verhalten:** Ein Fall wie bunnyrae_7 bleibt ohne Ban und ohne Discord-Post im Monitor. Ein Fall wie ghostchambers83 wird trotz fehlender Kanal-Modrechte global vorgemerkt.
+
 ## #394 — Python-Altstand liegt nur noch im Archiv
 
 **Problem:** Nach dem Rust-Cutover lag der alte Python-Stand weiter im Hauptrepo. Dadurch war nicht klar, was noch produktiv ist und was nur noch als Referenz dient.
