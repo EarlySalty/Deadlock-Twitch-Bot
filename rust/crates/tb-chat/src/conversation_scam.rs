@@ -762,15 +762,7 @@ impl ScamGuardStore for PgScamGuardStore {
         chatter_id: Option<&str>,
         reason: &str,
     ) -> Result<(), String> {
-        tb_analytics::global_ban::add_ban(
-            &self.pool,
-            chatter_login,
-            chatter_id,
-            Some(reason),
-            Some(CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY),
-        )
-        .await
-        .map_err(|error| error.to_string())
+        add_conversation_scam_global_ban(&self.pool, chatter_login, chatter_id, reason).await
     }
 }
 
@@ -1563,6 +1555,33 @@ pub async fn mark_overturned_by_id(pool: &PgPool, verdict_id: i64) -> Result<boo
     .execute(pool)
     .await
     .map(|result| result.rows_affected() > 0)
+    .map_err(|error| error.to_string())
+}
+
+pub async fn add_conversation_scam_global_ban(
+    pool: &PgPool,
+    chatter_login: &str,
+    chatter_id: Option<&str>,
+    reason: &str,
+) -> Result<(), String> {
+    let chatter_login = chatter_login.to_lowercase();
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (chatter_login) DO UPDATE SET \
+             chatter_id = COALESCE(EXCLUDED.chatter_id, twitch_chatter_global_ban.chatter_id), \
+             reason = EXCLUDED.reason, \
+             added_at = NOW() \
+         WHERE twitch_chatter_global_ban.added_by = $4",
+    )
+    .bind(&chatter_login)
+    .bind(chatter_id)
+    .bind(reason)
+    .bind(CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY)
+    .execute(pool)
+    .await
+    .map(|_| ())
     .map_err(|error| error.to_string())
 }
 

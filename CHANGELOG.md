@@ -2,7 +2,7 @@
 
 **Problem:** Ein unsicheres AI-Urteil sah im Log wie „keine Aktion“ aus, obwohl der Dialog intern weiter offen blieb. Bei klaren Scam-Fällen konnte ein fehlender Mod-Status außerdem verhindern, dass der Account global vorgemerkt wird.
 
-**Änderung:** Unsichere Fälle werden als weiter beobachtet gespeichert und nicht nach Discord gepostet. Klare frische Scam-Fälle werden zusätzlich auf die globale Banliste gesetzt; ein Rückgängig entfernt nur diese AI-Vormerkung wieder.
+**Änderung:** Unsichere Fälle werden als weiter beobachtet gespeichert und nicht nach Discord gepostet. Klare frische Scam-Fälle werden zusätzlich auf die globale Banliste gesetzt, ohne vorhandene manuelle Einträge zu übernehmen; ein Rückgängig entfernt nur AI-Vormerkungen wieder.
 
 **Aktuelles Verhalten:** Ein Fall wie bunnyrae_7 bleibt ohne Ban und ohne Discord-Post im Monitor. Ein Fall wie ghostchambers83 wird trotz fehlender Kanal-Modrechte global vorgemerkt.
 

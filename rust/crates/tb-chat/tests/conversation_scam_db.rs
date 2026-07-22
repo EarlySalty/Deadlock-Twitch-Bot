@@ -7,6 +7,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
+use tb_chat::conversation_scam::add_conversation_scam_global_ban;
 use tb_chat::conversation_scam::enforce_verdict;
 use tb_chat::conversation_scam::{
     fetch_learning_corpus, load_learnings, persist_learnings, revoke_verdict,
@@ -691,6 +692,76 @@ async fn self_learning_korpus_und_persistenz() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn ai_globalban_ueberschreibt_keine_manuellen_eintraege() {
+    let pool = pool_or_skip!("tb_conversation_scam_globalban_owner");
+
+    add_conversation_scam_global_ban(&pool, "NewScam", Some("new-id"), "ai grund")
+        .await
+        .unwrap();
+    let added: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT chatter_id, reason, added_by FROM twitch_chatter_global_ban \
+         WHERE chatter_login = 'newscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        added,
+        (
+            Some("new-id".to_string()),
+            Some("ai grund".to_string()),
+            Some("conversation_scam_ai".to_string())
+        )
+    );
+
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban \
+         (chatter_login, chatter_id, reason, added_by) \
+         VALUES ('manualscam', 'manual-id', 'manual grund', 'manual')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    add_conversation_scam_global_ban(&pool, "manualscam", Some("ai-id"), "ai neu")
+        .await
+        .unwrap();
+    let manual: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT chatter_id, reason, added_by FROM twitch_chatter_global_ban \
+         WHERE chatter_login = 'manualscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        manual,
+        (
+            Some("manual-id".to_string()),
+            Some("manual grund".to_string()),
+            Some("manual".to_string())
+        )
+    );
+
+    add_conversation_scam_global_ban(&pool, "NewScam", Some("newer-id"), "ai neu")
+        .await
+        .unwrap();
+    let updated: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT chatter_id, reason, added_by FROM twitch_chatter_global_ban \
+         WHERE chatter_login = 'newscam'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        updated,
+        (
+            Some("newer-id".to_string()),
+            Some("ai neu".to_string()),
+            Some("conversation_scam_ai".to_string())
+        )
+    );
 }
 
 #[tokio::test]
