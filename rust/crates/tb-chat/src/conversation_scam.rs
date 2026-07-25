@@ -64,9 +64,10 @@ Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, ohne Markdown und ohne 
 const TIMEOUT_SECONDS: u32 = 600;
 /// Account gilt als "neu" unter dieser Tagesgrenze (konsistent mit scam_pitch::ACCOUNT_MAX_DAYS = 90).
 const ACCOUNT_NEW_MAX_DAYS: i64 = 90;
-/// Am Erstellungstag reicht ein positives Scam-Urteil ab der Vorschlagsschwelle
-/// für AutoBan. Das Alter allein löst weiterhin keinerlei Aktion aus.
-const ACCOUNT_BRAND_NEW_MAX_DAYS: i64 = 1;
+/// Bei sehr jungen Accounts steigt die AutoBan-Schwelle linear von 80 Prozent
+/// am Erstellungstag bis zur regulären Kanalschwelle nach 60 Tagen.
+const YOUNG_ACCOUNT_CURVE_DAYS: i64 = 60;
+const YOUNG_ACCOUNT_START_THRESHOLD: f32 = 0.80;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
 const CROSS_CHANNEL_WINDOW_MINUTES: i64 = 60;
 const CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY: &str = "conversation_scam_ai";
@@ -963,6 +964,14 @@ impl ConversationScamGuard {
         }
 
         let verdict = self.judge.judge(&mut dialog).await;
+        let enforcement_threshold =
+            effective_scam_enforcement_threshold(&settings, dialog.account_age_days);
+        let regular_threshold = settings.threshold.max(settings.suggestion_floor);
+        let threshold_source = if enforcement_threshold < regular_threshold {
+            "young_account_curve"
+        } else {
+            "channel_threshold"
+        };
         let (action_taken, completed) = self
             .apply_decision(event, &settings, &verdict, dialog.account_age_days)
             .await;
@@ -977,6 +986,8 @@ impl ConversationScamGuard {
             action_taken = %action_taken,
             cross_channel = dialog.other_channels_last_hour,
             account_age_days = ?dialog.account_age_days,
+            enforcement_threshold,
+            threshold_source,
             message = %message,
             reasoning = %reasoning,
             "Conversation-Scam-Judge-Entscheidung"
@@ -1040,20 +1051,17 @@ impl ConversationScamGuard {
         verdict: &Verdict,
         account_age_days: Option<i64>,
     ) -> (String, bool) {
-        let reaches_enforcement_threshold = verdict.confidence >= settings.threshold
-            || (settings.mode == GuardMode::AutoBan
-                && verdict.confidence >= settings.suggestion_floor
-                && matches!(
-                    account_age_days,
-                    Some(age_days) if (0..ACCOUNT_BRAND_NEW_MAX_DAYS).contains(&age_days)
-                ));
+        let enforcement_threshold =
+            effective_scam_enforcement_threshold(settings, account_age_days);
         match verdict.verdict {
             VerdictKind::Clean => ("none".to_string(), true),
             VerdictKind::Unsure => ("watching".to_string(), false),
             VerdictKind::Scam if verdict.confidence < settings.suggestion_floor => {
                 ("none".to_string(), false)
             }
-            VerdictKind::Scam if !reaches_enforcement_threshold => ("suggested".to_string(), false),
+            VerdictKind::Scam if verdict.confidence < enforcement_threshold => {
+                ("suggested".to_string(), false)
+            }
             VerdictKind::Scam => match settings.mode {
                 GuardMode::AlertOnly => ("suggested".to_string(), true),
                 GuardMode::Timeout => {
@@ -1149,6 +1157,28 @@ impl ConversationScamGuard {
             },
         }
     }
+}
+
+fn effective_scam_enforcement_threshold(
+    settings: &GuardSettings,
+    account_age_days: Option<i64>,
+) -> f32 {
+    let regular_threshold = settings.threshold.max(settings.suggestion_floor);
+    if settings.mode != GuardMode::AutoBan {
+        return regular_threshold;
+    }
+    let Some(age_days) = account_age_days else {
+        return regular_threshold;
+    };
+    if !(0..=YOUNG_ACCOUNT_CURVE_DAYS).contains(&age_days) {
+        return regular_threshold;
+    }
+
+    let start_threshold = YOUNG_ACCOUNT_START_THRESHOLD
+        .max(settings.suggestion_floor)
+        .min(regular_threshold);
+    let age_ratio = age_days as f32 / YOUNG_ACCOUNT_CURVE_DAYS as f32;
+    start_threshold + (regular_threshold - start_threshold) * age_ratio
 }
 
 /// Maximale Zeichen pro Twitch-Chat-Nachricht für gesplittete `!explain`-Antworten
@@ -2178,21 +2208,26 @@ mod tests {
         let judge: Arc<dyn ScamJudge> = Arc::new(MiniMaxScamJudge::new(
             EngagementMinimaxClient::new(None, None, None, None),
         ));
-        let (guard, store, api, moderation) =
-            build_guard_with_judge(GuardSettings::default(), judge);
+        let settings = GuardSettings::default();
+        let enforcement_threshold = effective_scam_enforcement_threshold(&settings, Some(0));
+        let (guard, store, api, moderation) = build_guard_with_judge(settings, judge);
         *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
 
         feed(&guard, "reported_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
 
         let record = store.records.lock().unwrap()[0].clone();
         eprintln!(
-            "Live-Scam-Guard-Urteil: verdict={:?}, confidence={}, category={}, action={}",
-            record.verdict, record.confidence, record.category, record.action_taken
+            "Live-Scam-Guard-Urteil: verdict={:?}, confidence={}, threshold={}, category={}, action={}",
+            record.verdict,
+            record.confidence,
+            enforcement_threshold,
+            record.category,
+            record.action_taken
         );
         assert_eq!(record.verdict, VerdictKind::Scam);
         assert!(
-            record.confidence >= GuardSettings::default().suggestion_floor,
-            "Befriending-Pivot muss mindestens die Vorschlagsschwelle erreichen: {record:?}"
+            record.confidence >= enforcement_threshold,
+            "Befriending-Pivot muss die altersabhängige Auto-Ban-Schwelle erreichen: {record:?}"
         );
         assert_eq!(record.action_taken, "banned");
         assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
@@ -2555,9 +2590,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gemeldeter_befriending_pivot_bannt_brandneuen_account_sofort() {
+    async fn gemeldeter_befriending_pivot_bannt_null_tage_account_ab_80_prozent() {
         let (guard, store, judge, api, moderation) =
-            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.80)]);
         *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
 
         feed(&guard, "reported_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
@@ -2574,23 +2609,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn brandneu_senkt_nur_fuer_positives_scam_urteil_die_autoban_schwelle() {
-        let (guard, store, _, api, moderation) =
-            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.69)]);
-        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
-        feed(&guard, "below_floor", &[REPORTED_BEFRIENDING_PIVOT]).await;
-        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
-        assert!(moderation.reasons.lock().unwrap().is_empty());
+    async fn alterskurve_steigt_von_80_auf_90_prozent() {
+        for (age_days, confidence, expected_action) in [
+            (0, 0.79, "suggested"),
+            (0, 0.80, "banned"),
+            (30, 0.84, "suggested"),
+            (30, 0.85, "banned"),
+            (60, 0.89, "suggested"),
+            (60, 0.90, "banned"),
+            (61, 0.89, "suggested"),
+        ] {
+            let (guard, store, _, api, moderation) = build_guard(
+                GuardSettings::default(),
+                [verdict(VerdictKind::Scam, confidence)],
+            );
+            *api.created_at.lock().unwrap() =
+                Ok(Some(Utc::now() - chrono::Duration::days(age_days)));
+            feed(
+                &guard,
+                &format!("age_{age_days}_confidence_{confidence}"),
+                &[REPORTED_BEFRIENDING_PIVOT],
+            )
+            .await;
 
-        let (guard, store, _, api, moderation) =
-            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
-        *api.created_at.lock().unwrap() = Ok(Some(Utc::now() - chrono::Duration::days(2)));
-        feed(&guard, "older_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
-        assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
-        assert!(moderation.reasons.lock().unwrap().is_empty());
+            assert_eq!(
+                store.records.lock().unwrap()[0].action_taken,
+                expected_action,
+                "Alter {age_days}, Confidence {confidence}"
+            );
+            assert_eq!(
+                moderation.reasons.lock().unwrap().len(),
+                usize::from(expected_action == "banned")
+            );
+        }
+    }
 
+    #[test]
+    fn alterskurve_interpoliert_und_respektiert_konfiguration() {
+        let settings = GuardSettings::default();
+        for (age_days, expected) in [(0, 0.80), (30, 0.85), (60, 0.90)] {
+            let actual = effective_scam_enforcement_threshold(&settings, Some(age_days));
+            assert!(
+                (actual - expected).abs() < f32::EPSILON,
+                "Alter {age_days}: {actual} statt {expected}"
+            );
+        }
+        assert_eq!(
+            effective_scam_enforcement_threshold(&settings, Some(61)),
+            0.90
+        );
+        assert_eq!(
+            effective_scam_enforcement_threshold(&settings, Some(-1)),
+            0.90
+        );
+
+        let stricter = GuardSettings {
+            threshold: 0.95,
+            ..GuardSettings::default()
+        };
+        assert!(
+            (effective_scam_enforcement_threshold(&stricter, Some(30)) - 0.875).abs()
+                < f32::EPSILON
+        );
+
+        let lower_channel_threshold = GuardSettings {
+            threshold: 0.75,
+            ..GuardSettings::default()
+        };
+        assert_eq!(
+            effective_scam_enforcement_threshold(&lower_channel_threshold, Some(0)),
+            0.75
+        );
+
+        let high_floor = GuardSettings {
+            suggestion_floor: 0.85,
+            ..GuardSettings::default()
+        };
+        assert_eq!(
+            effective_scam_enforcement_threshold(&high_floor, Some(0)),
+            0.85
+        );
+
+        let floor_above_threshold = GuardSettings {
+            threshold: 0.80,
+            suggestion_floor: 0.85,
+            ..GuardSettings::default()
+        };
+        assert_eq!(
+            effective_scam_enforcement_threshold(&floor_above_threshold, Some(0)),
+            0.85
+        );
+    }
+
+    #[tokio::test]
+    async fn alterskurve_greift_nur_im_autoban_mit_gueltigem_alter() {
         let (guard, store, _, api, moderation) =
-            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.89)]);
         *api.created_at.lock().unwrap() = Ok(Some(Utc::now() + chrono::Duration::days(2)));
         feed(&guard, "future_timestamp", &[REPORTED_BEFRIENDING_PIVOT]).await;
         assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
@@ -2602,7 +2716,7 @@ mod tests {
                 ..GuardSettings::default()
             };
             let (guard, store, _, api, moderation) =
-                build_guard(settings, [verdict(VerdictKind::Scam, 0.72)]);
+                build_guard(settings, [verdict(VerdictKind::Scam, 0.89)]);
             *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
             feed(&guard, "non_autoban", &[REPORTED_BEFRIENDING_PIVOT]).await;
             assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
@@ -2878,13 +2992,14 @@ mod tests {
 
     #[tokio::test]
     async fn decision_matrix_beachtet_schwellen_und_modi() {
-        let (guard, store, _, _, moderation) = build_guard(
+        let (guard, store, _, api, moderation) = build_guard(
             GuardSettings::default(),
             [
                 verdict(VerdictKind::Scam, 0.89),
                 verdict(VerdictKind::Scam, 0.90),
             ],
         );
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now() - chrono::Duration::days(61)));
         feed(
             &guard,
             "threshold_user",
