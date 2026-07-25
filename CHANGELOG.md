@@ -1,3 +1,11 @@
+## #397 — Brandneue Befriending-Scams werden sofort gestoppt
+
+**Problem:** Englische Erstnachrichten mit pauschalem Stream-Lob, vagem Zusammenspiel-Angebot und direktem Discord-Wechsel wurden zwar als Scam erkannt, lagen aber teils unter der bisherigen Auto-Ban-Schwelle.
+
+**Änderung:** Die Kombination wird bei Accounts vom Erstellungstag klarer bewertet. Im Auto-Ban-Modus reicht bei einem positiven Scam-Urteil die Vorschlagsschwelle; Discord allein, natürliches Deutsch, konkreter Spielbezug und unsichere Urteile bleiben davon ausgenommen.
+
+**Aktuelles Verhalten:** Der gemeldete 0-Tage-Fall wird als Befriending-Scam gebannt und seine Nachricht gelöscht. Lurker- und Nicht-Partner-Kanäle bleiben weiterhin reine Beobachtung ohne Eingriff.
+
 ## #396 — Scam-Bans nutzen Twitch-kompatible Gründe
 
 **Problem:** Ein klares Scam-Urteil konnte beim AutoBan scheitern, wenn die AI-Begründung länger als Twitches Ban-Grund-Limit war. Der Logtext wirkte dann wie fehlende Mod-Rechte, obwohl Twitch den zu langen Grund abgelehnt hatte.

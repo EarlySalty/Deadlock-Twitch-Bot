@@ -36,6 +36,9 @@ DIE DREI ECHTEN MASCHEN (typischerweise englisch oder übersetzt):
 2) Wachstums- und Clout-Pitch (oft eine einzige lange Nachricht): unaufgefordertes Angebot, deinen Kanal "wachsen" zu lassen oder dich mit einem "großen Streamer" zu verbinden, geködert mit "real viewers, active chat, supporters who donate and sub", und der Aufforderung "add him on Discord … tell him X sent you". Oft in verfremdeter Schrift.
 3) Ausreden- und Sofort-Pivot-Masche: ein Erstschreiber behauptet ohne Anlass ein technisches Problem ("my headphones aren't working", "can't hear the stream") und drängt sofort woandershin ("reply me on Discord", "dm me", "add me"). Verräterisch sind die gebrochene Scammer-Grammatik und der fehlende echte Stream- oder Spielbezug.
 
+KLARER BEFRIENDING-PIVOT IN EINER EINZIGEN NACHRICHT:
+Wenn ein am selben Tag erstellter Account ("account_age_days": 0) in seiner ersten Nachricht auf Englisch generisches Stream-Lob, ein vages Beziehungsangebot wie zusammen spielen oder Tipps teilen UND einen direkten Discord-Pivot kombiniert, ohne irgendein konkretes Detail zum Spiel oder laufenden Stream zu nennen, ist das die vollständige Beziehungs- und Vertrauens-Masche. Urteile dann "scam" mit hoher confidence; warte nicht auf einen Link oder weitere Nachrichten und stufe den Fall nicht nur wegen der kurzen Historie als "unsure" ein. Diese Regel gilt nur für die Kombination ALLER genannten Merkmale. Discord allein, natürliches Deutsch, ein konkreter Spiel-/Stream-Bezug oder ein nicht brandneuer Account reichen dafür ausdrücklich nicht.
+
 GEWICHTUNG:
 - Sprache ist das stärkste Signal: Englisch oder übersetztes Deutsch + Skript ohne Bezug = verdächtig. Flüssiges Umgangs-Deutsch = clean.
 - "unicode_obfuscation_detected": true (verfremdete Schrift, um Filter zu täuschen) ist ein echtes Warnsignal.
@@ -61,6 +64,9 @@ Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, ohne Markdown und ohne 
 const TIMEOUT_SECONDS: u32 = 600;
 /// Account gilt als "neu" unter dieser Tagesgrenze (konsistent mit scam_pitch::ACCOUNT_MAX_DAYS = 90).
 const ACCOUNT_NEW_MAX_DAYS: i64 = 90;
+/// Am Erstellungstag reicht ein positives Scam-Urteil ab der Vorschlagsschwelle
+/// für AutoBan. Das Alter allein löst weiterhin keinerlei Aktion aus.
+const ACCOUNT_BRAND_NEW_MAX_DAYS: i64 = 1;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
 const CROSS_CHANNEL_WINDOW_MINUTES: i64 = 60;
 const CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY: &str = "conversation_scam_ai";
@@ -1034,15 +1040,20 @@ impl ConversationScamGuard {
         verdict: &Verdict,
         account_age_days: Option<i64>,
     ) -> (String, bool) {
+        let reaches_enforcement_threshold = verdict.confidence >= settings.threshold
+            || (settings.mode == GuardMode::AutoBan
+                && verdict.confidence >= settings.suggestion_floor
+                && matches!(
+                    account_age_days,
+                    Some(age_days) if (0..ACCOUNT_BRAND_NEW_MAX_DAYS).contains(&age_days)
+                ));
         match verdict.verdict {
             VerdictKind::Clean => ("none".to_string(), true),
             VerdictKind::Unsure => ("watching".to_string(), false),
             VerdictKind::Scam if verdict.confidence < settings.suggestion_floor => {
                 ("none".to_string(), false)
             }
-            VerdictKind::Scam if verdict.confidence < settings.threshold => {
-                ("suggested".to_string(), false)
-            }
+            VerdictKind::Scam if !reaches_enforcement_threshold => ("suggested".to_string(), false),
             VerdictKind::Scam => match settings.mode {
                 GuardMode::AlertOnly => ("suggested".to_string(), true),
                 GuardMode::Timeout => {
@@ -1071,7 +1082,7 @@ impl ConversationScamGuard {
                     }
                     let is_known_new = matches!(
                         account_age_days,
-                        Some(age_days) if age_days < ACCOUNT_NEW_MAX_DAYS
+                        Some(age_days) if (0..ACCOUNT_NEW_MAX_DAYS).contains(&age_days)
                     );
                     if !is_known_new {
                         let timed_out = self
@@ -1873,6 +1884,8 @@ mod tests {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    const REPORTED_BEFRIENDING_PIVOT: &str = "Yo bruh, love ❤️ your stream Let's sometimes play together and share tips together. Let's connect on Discord";
+
     fn event(login: &str, text: &str) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: "channel-id".to_string(),
@@ -2156,6 +2169,34 @@ mod tests {
         dialog.push_user_message("second message continues the conversation");
         let second = judge.judge(&mut dialog).await;
         assert_eq!(second.verdict, VerdictKind::Scam);
+    }
+
+    #[tokio::test]
+    #[ignore = "benötigt produktive MiniMax-Zugangsdaten"]
+    async fn live_minimax_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let judge: Arc<dyn ScamJudge> = Arc::new(MiniMaxScamJudge::new(
+            EngagementMinimaxClient::new(None, None, None, None),
+        ));
+        let (guard, store, api, moderation) =
+            build_guard_with_judge(GuardSettings::default(), judge);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+
+        feed(&guard, "reported_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
+
+        let record = store.records.lock().unwrap()[0].clone();
+        eprintln!(
+            "Live-Scam-Guard-Urteil: verdict={:?}, confidence={}, category={}, action={}",
+            record.verdict, record.confidence, record.category, record.action_taken
+        );
+        assert_eq!(record.verdict, VerdictKind::Scam);
+        assert!(
+            record.confidence >= GuardSettings::default().suggestion_floor,
+            "Befriending-Pivot muss mindestens die Vorschlagsschwelle erreichen: {record:?}"
+        );
+        assert_eq!(record.action_taken, "banned");
+        assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
     }
 
     struct MockStore {
@@ -2455,13 +2496,12 @@ mod tests {
         }
     }
 
-    fn build_guard(
+    fn build_guard_with_judge(
         settings: GuardSettings,
-        verdicts: impl IntoIterator<Item = Verdict>,
+        judge: Arc<dyn ScamJudge>,
     ) -> (
         ConversationScamGuard,
         Arc<MockStore>,
-        Arc<MockJudge>,
         Arc<MockApi>,
         Arc<MockModeration>,
     ) {
@@ -2475,7 +2515,6 @@ mod tests {
             records: StdMutex::new(Vec::new()),
             global_bans: StdMutex::new(Vec::new()),
         });
-        let judge = Arc::new(MockJudge::new(verdicts));
         let api = Arc::new(MockApi::new());
         let moderation = Arc::new(MockModeration {
             succeeds: StdMutex::new(true),
@@ -2486,16 +2525,89 @@ mod tests {
         let guard = ConversationScamGuard::with_store(
             "bot-id".to_string(),
             Arc::clone(&store) as Arc<dyn ScamGuardStore>,
-            Arc::clone(&judge) as Arc<dyn ScamJudge>,
+            judge,
             Arc::clone(&api) as Arc<dyn ChatApi>,
             Arc::clone(&moderation) as Arc<dyn ScamModeration>,
         );
+        (guard, store, api, moderation)
+    }
+
+    fn build_guard(
+        settings: GuardSettings,
+        verdicts: impl IntoIterator<Item = Verdict>,
+    ) -> (
+        ConversationScamGuard,
+        Arc<MockStore>,
+        Arc<MockJudge>,
+        Arc<MockApi>,
+        Arc<MockModeration>,
+    ) {
+        let judge = Arc::new(MockJudge::new(verdicts));
+        let judge_port: Arc<dyn ScamJudge> = judge.clone();
+        let (guard, store, api, moderation) = build_guard_with_judge(settings, judge_port);
         (guard, store, judge, api, moderation)
     }
 
     async fn feed(guard: &ConversationScamGuard, login: &str, messages: &[&str]) {
         for text in messages {
             guard.process(&event(login, text)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn gemeldeter_befriending_pivot_bannt_brandneuen_account_sofort() {
+        let (guard, store, judge, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+
+        feed(&guard, "reported_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
+
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+        let records = store.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].verdict, VerdictKind::Scam);
+        assert_eq!(records[0].action_taken, "banned");
+        drop(records);
+        assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
+        assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+        assert_eq!(api.created_at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn brandneu_senkt_nur_fuer_positives_scam_urteil_die_autoban_schwelle() {
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.69)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+        feed(&guard, "below_floor", &[REPORTED_BEFRIENDING_PIVOT]).await;
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "none");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now() - chrono::Duration::days(2)));
+        feed(&guard, "older_account", &[REPORTED_BEFRIENDING_PIVOT]).await;
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+
+        let (guard, store, _, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.72)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now() + chrono::Duration::days(2)));
+        feed(&guard, "future_timestamp", &[REPORTED_BEFRIENDING_PIVOT]).await;
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
+        assert!(moderation.reasons.lock().unwrap().is_empty());
+
+        for mode in [GuardMode::AlertOnly, GuardMode::Timeout] {
+            let settings = GuardSettings {
+                mode,
+                ..GuardSettings::default()
+            };
+            let (guard, store, _, api, moderation) =
+                build_guard(settings, [verdict(VerdictKind::Scam, 0.72)]);
+            *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+            feed(&guard, "non_autoban", &[REPORTED_BEFRIENDING_PIVOT]).await;
+            assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
+            assert!(moderation.reasons.lock().unwrap().is_empty());
+            assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
         }
     }
 

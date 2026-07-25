@@ -126,6 +126,20 @@ impl ScamJudge for FixedJudge {
     }
 }
 
+struct SuggestionFloorJudge;
+
+#[async_trait]
+impl ScamJudge for SuggestionFloorJudge {
+    async fn judge(&self, _dialog: &mut DialogState) -> Verdict {
+        Verdict {
+            verdict: VerdictKind::Scam,
+            confidence: 0.72,
+            category: "befriending_pivot".to_string(),
+            reasoning: "generic English befriending followed by a Discord pivot".to_string(),
+        }
+    }
+}
+
 struct CrossChannelRecordingJudge {
     inputs: Arc<std::sync::Mutex<Vec<(String, i64)>>>,
 }
@@ -407,6 +421,23 @@ async fn run_action_guard(
     pool: &PgPool,
     created_at: Option<DateTime<Utc>>,
 ) -> Arc<std::sync::Mutex<ActionCalls>> {
+    run_action_guard_with_message(pool, created_at, None).await
+}
+
+async fn run_action_guard_with_message(
+    pool: &PgPool,
+    created_at: Option<DateTime<Utc>>,
+    message: Option<&str>,
+) -> Arc<std::sync::Mutex<ActionCalls>> {
+    run_action_guard_with_judge(pool, created_at, message, Arc::new(FixedJudge)).await
+}
+
+async fn run_action_guard_with_judge(
+    pool: &PgPool,
+    created_at: Option<DateTime<Utc>>,
+    message: Option<&str>,
+    judge: Arc<dyn ScamJudge>,
+) -> Arc<std::sync::Mutex<ActionCalls>> {
     let calls = Arc::new(std::sync::Mutex::new(ActionCalls::default()));
     let api: Arc<dyn ChatApi> = Arc::new(ActionRecordingApi {
         created_at,
@@ -416,11 +447,15 @@ async fn run_action_guard(
     let guard = Arc::new(ConversationScamGuard::new(
         pool.clone(),
         "bot-id".to_string(),
-        Arc::new(FixedJudge),
+        judge,
         api,
         moderation,
     ));
-    guard.observe(&scam_event());
+    let mut event = scam_event();
+    if let Some(message) = message {
+        event.message.text = message.to_string();
+    }
+    guard.observe(&event);
     calls
 }
 
@@ -508,6 +543,28 @@ async fn auto_ban_bannt_jungen_account() {
     let calls = calls.lock().unwrap();
     assert_eq!(calls.bans.len(), 1);
     assert!(calls.timeouts.is_empty());
+}
+
+#[tokio::test]
+async fn gemeldeter_befriending_pivot_bannt_null_tage_account_und_loescht_nachricht() {
+    let pool = pool_or_skip!("tb_conversation_scam_reported_befriending");
+    seed_first_time_guard(&pool, "auto_ban").await;
+
+    let calls = run_action_guard_with_judge(
+        &pool,
+        Some(Utc::now()),
+        Some(
+            "Yo bruh, love ❤️ your stream Let's sometimes play together and share tips together. Let's connect on Discord",
+        ),
+        Arc::new(SuggestionFloorJudge),
+    )
+    .await;
+    assert_eq!(wait_action_taken(&pool).await, "banned");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.bans.len(), 1);
+    assert!(calls.timeouts.is_empty());
+    assert_eq!(calls.deletes.len(), 1);
 }
 
 #[tokio::test]
