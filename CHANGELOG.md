@@ -1,3 +1,11 @@
+## #398 — Scam-Auto-Bans folgen jetzt einer Alterskurve
+
+**Problem:** Eine pauschal abgesenkte Schwelle für brandneue Accounts war zu grob und hätte Alter und Urteil nicht ausgewogen genug kombiniert.
+
+**Änderung:** Die zusätzliche Auto-Ban-Schwelle steigt nun linear mit dem Accountalter: am Erstellungstag 80 Prozent, nach 30 Tagen 85 Prozent und nach 60 Tagen die regulären 90 Prozent. Danach gilt ausschließlich die normale Kanalschwelle.
+
+**Aktuelles Verhalten:** 70 Prozent führen unabhängig vom Accountalter nie über diese Sonderregel zum Auto-Ban. Alter allein, unsichere Urteile sowie `timeout`- und `alert_only`-Kanäle lösen weiterhin keinen automatischen Ban aus.
+
 ## #397 — Brandneue Befriending-Scams werden sofort gestoppt
 
 **Problem:** Englische Erstnachrichten mit pauschalem Stream-Lob, vagem Zusammenspiel-Angebot und direktem Discord-Wechsel wurden zwar als Scam erkannt, lagen aber teils unter der bisherigen Auto-Ban-Schwelle.

@@ -126,14 +126,14 @@ impl ScamJudge for FixedJudge {
     }
 }
 
-struct SuggestionFloorJudge;
+struct ZeroDayRiskJudge;
 
 #[async_trait]
-impl ScamJudge for SuggestionFloorJudge {
+impl ScamJudge for ZeroDayRiskJudge {
     async fn judge(&self, _dialog: &mut DialogState) -> Verdict {
         Verdict {
             verdict: VerdictKind::Scam,
-            confidence: 0.72,
+            confidence: 0.80,
             category: "befriending_pivot".to_string(),
             reasoning: "generic English befriending followed by a Discord pivot".to_string(),
         }
@@ -556,7 +556,7 @@ async fn gemeldeter_befriending_pivot_bannt_null_tage_account_und_loescht_nachri
         Some(
             "Yo bruh, love ❤️ your stream Let's sometimes play together and share tips together. Let's connect on Discord",
         ),
-        Arc::new(SuggestionFloorJudge),
+        Arc::new(ZeroDayRiskJudge),
     )
     .await;
     assert_eq!(wait_action_taken(&pool).await, "banned");
