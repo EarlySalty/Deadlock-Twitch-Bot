@@ -58,7 +58,8 @@ channel.chat.message (EventSub, Partner-Kanal)
   Verdict { verdict, confidence, category, reasoning }
         ├─ unsure / scam<Schwelle → weiter sammeln
         ├─ clean → als erledigt markieren, Dialog beenden
-        └─ scam & confidence ≥ Schwelle (default 0.90)
+        └─ scam & confidence ≥ effektive Schwelle
+                 (default 0.90; AutoBan am Erstellungstag ab Floor 0.70)
                  ▼  Aktion je Modus (Dashboard, pro Kanal)
               auto_ban → ModerationEngine::auto_ban_and_cleanup (reason = reasoning)
                           └─ Forbidden (kein Mod) → alert_only + Dashboard-Flag
@@ -75,7 +76,7 @@ channel.chat.message (EventSub, Partner-Kanal)
 ## 4. Komponenten
 
 ### 4.1 Trigger / Gate (kein Keyword-Verdikt)
-Geprüft wird nur, wer **erstmals in diesem Partner-Kanal** schreibt (`is_first_time_streamer`). Ausgeschlossen: Mods, VIPs, Subs (badges), Known-Bots (`KNOWN_CHAT_BOTS`), der Bot selbst. `is_first_global` ist **kein** Trigger, wird aber als **Zusatz-Hinweis** an den Judge gegeben (brandneu im Netzwerk = verdächtiger). Account-Alter spielt **keine** Rolle. Kein Token-Spar-Gate — der Erstschreiber-Trigger ist scharf genug.
+Geprüft wird nur, wer **erstmals in diesem Partner-Kanal** schreibt (`is_first_time_streamer`). Ausgeschlossen: Mods, VIPs, Subs (badges), Known-Bots (`KNOWN_CHAT_BOTS`), der Bot selbst. `is_first_global` und das Account-Alter sind **keine Trigger**, werden aber als Zusatzsignale an den Judge gegeben. Ein nachweisliches Alter von 0 Tagen senkt ausschließlich im `auto_ban`-Modus bei einem positiven `scam`-Urteil die Aktionsschwelle auf den konfigurierten `suggestion_floor`; Alter allein, unbekanntes/negatives Alter, `clean` und `unsure` lösen keine Aktion aus. Kein Token-Spar-Gate — der Erstschreiber-Trigger ist scharf genug.
 
 ### 4.2 Dialog-State (pro Kanal+Chatter)
 In-Memory `HashMap<(channel, chatter), DialogState>` (Verlust bei Neustart unkritisch — Persistenz liegt in DB). `DialogState` hält das **wachsende MiniMax-`messages`-Array**: `[system(Judge-Prompt), user(msgs…), assistant(letztes JSON), user(neue msgs), …]`. Bewertung startet, sobald **genug Substanz** da ist: entweder mehrere (Default ~3) substanzielle Nachrichten **ODER eine bereits substanzielle/werbliche Erstnachricht** (langer Pitch, Link/Discord-Aufforderung — fängt den Single-Message-Pitch wie `sam_09995`). Danach bei **jeder** weiteren Nachricht erneut; der Judge gibt `unsure`, wenn es noch nicht reicht. `clean` → State auf „erledigt", keine weiteren Calls. Triviale Nachrichten (Emote-only, 1 Wort) zählen nicht als „substanziell".
@@ -95,7 +96,7 @@ Konfidenz-Bänder bei `verdict = scam`:
   - `mode = auto_ban` → `auto_ban_and_cleanup`, `reason_text = reasoning`. Bei `Forbidden`/Fehler → **kein** stiller Ausfall: zu `suggested` herabstufen + Verdict `action_taken='ban_failed_no_mod'`.
   - `mode = timeout` → `timeout_user`, gleiche Begründung.
   - `mode = alert_only` → kein Eingriff, als **Moderationsvorschlag** (`suggested`, „starker Vorschlag") ins Dashboard.
-- **`suggestion_floor ≤ confidence < threshold`** (default Floor 0.70) → **Moderationsvorschlag** (`suggested`), **unabhängig vom Modus**: Dashboard-Eintrag mit **Ban-Button + Begründung + Ignorieren**, **kein** Auto-Eingriff. Klick auf Ban → derselbe `auto_ban_and_cleanup`-Pfad (reason = reasoning); Klick auf Ignorieren → `dismissed`.
+- **`suggestion_floor ≤ confidence < threshold`** (default Floor 0.70) → normalerweise **Moderationsvorschlag** (`suggested`): Dashboard-Eintrag mit **Ban-Button + Begründung + Ignorieren**, **kein** Auto-Eingriff. Ausnahme: Im `auto_ban`-Modus wird ein nachweislich am selben Tag erstellter Account bei einem positiven `scam`-Urteil bereits ab dem Floor gebannt und bereinigt. `timeout` und `alert_only` behalten in diesem Band das Vorschlagsverhalten. Klick auf Ban → derselbe `auto_ban_and_cleanup`-Pfad (reason = reasoning); Klick auf Ignorieren → `dismissed`.
 - **`confidence < suggestion_floor`** oder `verdict = unsure` → kein Eingriff, **weiter sammeln**.
 - `verdict = clean` → erledigt, Dialog beenden.
 
@@ -287,16 +288,16 @@ Test zuerst (Red→Green→Refactor), MiniMax/ChatApi gemockt (wiremock-Muster w
 
 1. Scope: **nur Partner-Kanäle** (EventSub), `enabled` default AN, opt-out.
 2. Aktion: Auto-Ban + Begründung + Override; Modus pro Kanal im Dashboard (`auto_ban`\|`timeout`\|`alert_only`), default `auto_ban`.
-3. Blast Radius: **kanal-lokal** (wie Viewbots), **nicht** global ban list.
+3. Blast Radius: direkte Moderation bleibt kanal-lokal; klare Scams mit sicher bekanntem frischem Account werden zusätzlich für den bestehenden globalen Ban-Sweep vorgemerkt.
 4. Architektur: neues getrenntes Modul parallel zu `scam_pitch`; `SpamAiReviewer` unangetastet; nutzt `ModerationEngine` + MiniMax-Client + Pipeline-Andockpunkt.
-5. Trigger: **Erstschreiber im Kanal**; Mods/VIPs/Subs/Known-Bots aus; Account-Alter egal; `is_first_global` nur als Judge-Hinweis.
-6. Bewertung: sammeln → `{scam|clean|unsure, confidence, category, reasoning}` → unsure nachfassen, scam+≥0.90 → Ban, clean → erledigt.
+5. Trigger: **Erstschreiber im Kanal**; Mods/VIPs/Subs/Known-Bots aus; Account-Alter und `is_first_global` sind Judge-/Risikosignale, aber keine eigenständigen Trigger.
+6. Bewertung: sammeln → `{scam|clean|unsure, confidence, category, reasoning}` → unsure nachfassen, scam ab effektiver Schwelle → Modus-Aktion, clean → erledigt.
 7. Output: Dashboard-Detail + `twitch_ban_events`-Feed, **kein** Auto-Chat-Post; reasoning = Klartext für unerfahrene Streamer.
 8. LLM-Input: nur Messages des Verdächtigen, als **fortlaufender MiniMax-Dialog**.
 9. Judge = **MiniMax**, **kein** Token-Limit.
 10. Commands (Mod/Broadcaster): `!unban [@user]`, `!explain [@user]` (beliebig viele ≤500-Zeichen-Häppchen, kein Cap).
-11. Schwelle: **0.90**.
+11. Schwelle: regulär **0.90**; bei `auto_ban`, positivem `scam`-Urteil und sicherem Account-Alter 0 Tage gilt der konfigurierte Floor (default **0.70**).
 12. **Sprach-Prior:** Englisch = verdächtiger, Deutsch = entlastend (Indiz, kein Alleinkriterium).
 13. User-sichtbare Texte → **Claude** schreibt, Codex setzt Platzhalter.
-14. **Stufen-Modell:** ≥ 0.90 → Auto-Aktion je Modus; 0.70–<0.90 (Scam) → **Moderationsvorschlag** (Dashboard: Ban-Button + Begründung + Ignorieren, kein Auto-Eingriff); < 0.70 / unsure → weiter sammeln.
+14. **Stufen-Modell:** ≥ 0.90 → Auto-Aktion je Modus; 0.70–<0.90 (Scam) → grundsätzlich **Moderationsvorschlag**. Nur `auto_ban` + nachweislich 0 Tage alter Account nutzt in diesem Band Ban + Cleanup; < 0.70 / unsure → weiter sammeln.
 15. **Zwei Maschen + Evasion:** Judge erkennt sowohl Beziehungs-Konversation (multi-message) als auch Wachstums-/Clout-Pitch (oft Single-Message); fängt auch keyword-evadierende Pitches via **Unicode→ASCII-Normalisierung**, Obfuskation = Verdachtssignal. „Genug Daten" auch bei einer substanziellen Pitch-Erstnachricht erfüllt.
