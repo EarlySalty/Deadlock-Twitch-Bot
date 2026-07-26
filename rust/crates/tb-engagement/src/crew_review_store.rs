@@ -6,8 +6,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::crew_review::{
-    ClaimedModelInputs, ExpiredDiscordGroup, NewReviewEvent, ReviewCycle, ReviewEvent,
-    ReviewEventKind, ReviewSession, RickyChatInput, RICKY_TWITCH_USER_ID,
+    is_crew_own_channel, ClaimedModelInputs, ExpiredDiscordGroup, NewReviewEvent, ReviewCycle,
+    ReviewEvent, ReviewEventKind, ReviewSession, RickyChatInput, RICKY_TWITCH_USER_ID,
 };
 
 const MAX_CONTENT_CHARS: usize = 1_200;
@@ -78,6 +78,13 @@ impl CrewReviewStore {
 
     pub async fn record_trigger(&self, input: &RickyChatInput) -> Result<Option<Uuid>, StoreError> {
         if input.subject_twitch_user_id != RICKY_TWITCH_USER_ID {
+            return Ok(None);
+        }
+        if is_crew_own_channel(&input.channel_login) {
+            tracing::debug!(
+                channel = %input.channel_login,
+                "Ricky-Review: eigener Crew-Kanal, kein Review"
+            );
             return Ok(None);
         }
 

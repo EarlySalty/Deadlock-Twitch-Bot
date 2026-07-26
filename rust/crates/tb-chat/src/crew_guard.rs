@@ -1241,9 +1241,23 @@ mod tests {
     use super::*;
     use crate::style_score::{Centroid, StyleBreakdown, StyleScore};
     use crate::types::ChatMessageBody;
-    use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
+    use tb_engagement::crew_review::{
+        CrewReviewTrigger, RickyChatInput, CREW_OWN_CHANNELS, RICKY_TWITCH_USER_ID,
+    };
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Die Review-Kanalsperre lebt in tb-engagement (dort kann sie nicht auf
+    /// CREW_REGISTRY zugreifen). Driften beide Listen auseinander, wird ein
+    /// neuer Crew-Kanal wieder reviewt — dieser Test verhindert genau das.
+    #[test]
+    fn crew_registry_und_review_kanalsperre_bleiben_synchron() {
+        let mut registry: Vec<&str> = CREW_REGISTRY.iter().map(|acc| acc.login).collect();
+        registry.sort_unstable();
+        let mut blocked: Vec<&str> = CREW_OWN_CHANNELS.to_vec();
+        blocked.sort_unstable();
+        assert_eq!(registry, blocked);
+    }
 
     mod crew_review_trigger {
         use super::*;
