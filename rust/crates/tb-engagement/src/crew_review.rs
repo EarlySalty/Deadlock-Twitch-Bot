@@ -5,6 +5,26 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub const RICKY_TWITCH_USER_ID: &str = "147713656";
+
+/// Kanäle der Crew selbst. Das Shadow-Review betrifft nur fremde Streams — was
+/// Ricky und seine Leute in ihren eigenen Kanälen tun, wird nicht beobachtet.
+/// Muss synchron zu `CREW_REGISTRY` in `tb-chat/src/crew_guard.rs` bleiben
+/// (Test dort: `crew_registry_und_review_kanalsperre_bleiben_synchron`).
+pub const CREW_OWN_CHANNELS: [&str; 6] = [
+    "blackhusky45",
+    "h4teme666",
+    "helmbombenricky",
+    "mr_horizont",
+    "skifahrertv",
+    "wall_horizon",
+];
+
+pub fn is_crew_own_channel(login: &str) -> bool {
+    let login = login.trim();
+    CREW_OWN_CHANNELS
+        .iter()
+        .any(|channel| channel.eq_ignore_ascii_case(login))
+}
 pub const FIREWORKS_DEFAULT_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash";
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
@@ -712,6 +732,15 @@ mod tests {
             timeout,
         )
         .expect("Testclient muss baubar sein")
+    }
+
+    #[test]
+    fn review_laeuft_nur_in_fremden_kanaelen() {
+        assert!(is_crew_own_channel("helmbombenricky"));
+        assert!(is_crew_own_channel("HelmbombenRicky"));
+        assert!(is_crew_own_channel("  skifahrertv  "));
+        assert!(!is_crew_own_channel("irgendeinstreamer"));
+        assert!(!is_crew_own_channel(""));
     }
 
     #[test]

@@ -247,6 +247,38 @@ fn ricky_trigger_verwendet_die_stabile_twitch_id() {
 }
 
 #[tokio::test]
+async fn trigger_ignoriert_kanaele_der_crew_selbst() {
+    let Some(pool) = test_pool("crew_review_own_channel").await else {
+        return;
+    };
+    let store = CrewReviewStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
+
+    assert!(store
+        .record_trigger(&input("helmbombenricky", "msg-1", now))
+        .await
+        .expect("record trigger")
+        .is_none());
+    assert!(store
+        .record_trigger(&input("SkifahrerTV", "msg-2", now))
+        .await
+        .expect("record trigger")
+        .is_none());
+
+    let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_review_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 0, "eigene Crew-Kanäle erzeugen keine Review-Events");
+
+    assert!(store
+        .record_trigger(&input("fremderstreamer", "msg-3", now))
+        .await
+        .expect("record trigger")
+        .is_some());
+}
+
+#[tokio::test]
 async fn trigger_legt_session_und_nachricht_atomar_und_dedupliziert() {
     let Some(pool) = test_pool("crew_review_trigger").await else {
         return;
