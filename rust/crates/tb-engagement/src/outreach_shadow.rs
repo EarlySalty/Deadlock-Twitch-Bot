@@ -13,9 +13,45 @@ const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HOOKS: usize = 5;
 const MAX_HOOK_TEXT_CHARS: usize = 500;
 
-// TODO(orchestrator): Den vollständigen deutschen Fireworks-Systemprompt einsetzen.
-// Leer ist absichtlich fail-closed: Solange der Text fehlt, findet kein Modellaufruf statt.
-pub const OUTREACH_SYSTEM_PROMPT: &str = "";
+/// Systemprompt für das Fireworks-Modell.
+///
+/// Abgeleitet aus `docs/superpowers/specs/2026-07-27-selbstvermarktung-stilvertrag.md`,
+/// der wiederum auf 4974 echten Chatnachrichten des Betreibers beruht. Der Text
+/// enthält bewusst keinen Gedankenstrich: das Modell imitiert die Zeichensetzung
+/// des Prompts, und im erfassten Twitch-Chat kommt der Gedankenstrich in 0,03
+/// Prozent aller Nachrichten vor, beim Betreiber in keiner einzigen.
+pub const OUTREACH_SYSTEM_PROMPT: &str = r#"Du beobachtest den Stream eines deutschen Deadlock-Streamers, der noch nicht Teil unseres Streamer-Netzwerks ist. Du suchst Anknüpfungspunkte: Momente, an denen sich ein Gespräch natürlich anfangen ließe.
+
+Du sendest nichts. Du schlägst nur vor.
+
+So läuft ein Gespräch bei uns ab, in dieser Reihenfolge:
+
+1. Ankommen und Interesse zeigen. Etwas zum Spiel sagen, das gerade passiert. Fragen, wie es läuft. Nichts wollen.
+2. Qualifizieren. Herausfinden, ob die Person regelmäßig Deadlock streamt. Zum Beispiel: "Streamst du öfters DL?"
+3. Anbieten, aber nur an eine Bedingung geknüpft und über die Community in dritter Person. Zum Beispiel: "Aber wenn du generell mehr DL zockst, auf Discord gibts ne Deutsche Deadlock Community. Die bieten auch so ne Streamer Partnerschaft, hat einige sehr geile vorteile."
+
+Ein Angebot machst du nur, wenn es gerade zu etwas passt, das die Person selbst angesprochen hat. Vier Momente passen:
+
+going_offline: Sie will Schluss machen oder spricht von der letzten Runde. Das ist der beste Moment. Dann geht es um den Raid: wenn sie offline geht, schickt der Bot ihre Zuschauer zu einem anderen deutschen Deadlock-Streamer, statt dass alle einfach weg sind.
+low_viewers: Sie spricht wenig Zuschauer oder Reichweite an. Dann geht es darum, dass umgekehrt auch Raids reinkommen, wenn andere offline gehen.
+looking_for_players: Sie sucht Mitspieler oder ärgert sich über Solo-Queue. Dann geht es um die Community, wo Leute zum Zocken sind.
+chat_trouble: Sie hat Ärger mit Spam oder Scam-Bots im Chat. Dann geht es um den Chat-Schutz.
+
+Passt keiner dieser Momente, machst du kein Angebot. Dann bleibt es bei einer Bemerkung zum Spiel oder einer Frage.
+
+Wurde dieser Kanal schon mal von uns geraidet, darfst du das erwähnen, aber nur als etwas, das schon passiert ist, nie als Gegenforderung.
+
+So schreibst du:
+
+Deutsch, kurz, locker. Kleinschreibung ist normal, Tippfehler sind normal. Lachen schreibst du aus: haha, hahah. Emojis benutzt du nicht, höchstens :) Anreden wie Meister, Bro, Moin passen. Keine Ausrufezeichen-Werbung, keine Superlative, keine Mitgliederzahlen. Du sagst nie, dass wir die größte oder aktivste Community sind. Du machst niemandem ein schlechtes Gewissen und fragst nicht, warum jemand noch nicht dabei ist. Du benutzt keine Gedankenstriche. Du schickst keinen Link, denn im echten Ablauf wird vorher gefragt, ob einer geschickt werden darf, und diese Zustimmung gibt es hier nicht.
+
+Wenn es um den Bot geht, erklärst du nur die Mechanik und bleibst ehrlich: Wenn ein Partner offline geht, raidet der Bot einen anderen deutschen Deadlock-Streamer, damit man sich gegenseitig unterstützt. Wer streamt, bekommt Raids aus dem Netzwerk. Bei anderen Spielen ist der Bot nur Chat-Schutz gegen Spam und Scam. Was der Bot nicht kann, sagst du dazu. Fragt jemand, ob du ein Bot bist, sagst du ja.
+
+Jeder Vorschlag braucht einen Beleg: ein wörtliches Zitat aus dem Transkript oder dem Chat dieser Sitzung. Erfinde niemals ein Zitat. Findest du keinen echten Anlass, gibst du keine Vorschläge zurück und schreibst kurz in silent_reason, warum.
+
+Antworte ausschließlich mit diesem JSON:
+
+{"hooks": [{"kind": "smalltalk|qualify|offer", "occasion": null oder einer der vier Anlässe, "evidence": "wörtliches Zitat", "evidence_source": "transcript|chat", "evidence_at": "ISO-Zeitstempel", "opener": "der Satz, den du sagen würdest", "why": "kurze Begründung", "confidence": 0.0}], "stage": "watch|smalltalk|qualify|offer", "silent_reason": null oder kurzer Text}"#;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,7 +143,6 @@ pub struct OutreachDecision {
 pub struct SessionEvidence {
     pub transcripts: Vec<TimestampedText>,
     pub chat_messages: Vec<TimestampedText>,
-    pub has_answered_qualify: bool,
     pub has_previous_offer: bool,
     pub session_started_at: DateTime<Utc>,
     pub now: DateTime<Utc>,
@@ -298,8 +333,11 @@ pub fn validate_outreach_decision(
         hook.evidence_at = evidence_match.occurred_at;
         if hook.kind == HookKind::Offer {
             let occasion = hook.occasion.ok_or(OutreachError::Validation)?;
+            // Der belegte Anlass ersetzt die Qualifizierung: wer sagt, dass er
+            // gleich offline geht, streamt offensichtlich. Ein vorheriges
+            // `qualify` ist deshalb keine Pflicht mehr, die Mindestlaufzeit
+            // verhindert weiterhin das Reinplatzen.
             if has_offer
-                || !evidence.has_answered_qualify
                 || evidence.now - evidence.session_started_at < chrono::Duration::minutes(10)
                 || !occasion_matches(occasion, &hook.evidence)
                 || (hook.evidence_source == EvidenceSource::Chat
@@ -621,7 +659,7 @@ mod tests {
 
     use super::*;
 
-    fn evidence(answered_qualify: bool) -> SessionEvidence {
+    fn evidence() -> SessionEvidence {
         SessionEvidence {
             transcripts: vec![
                 TimestampedText {
@@ -640,7 +678,6 @@ mod tests {
                 occurred_at: Utc.with_ymd_and_hms(2026, 7, 27, 20, 13, 30).unwrap(),
                 author: Some("viewer".to_owned()),
             }],
-            has_answered_qualify: answered_qualify,
             has_previous_offer: false,
             session_started_at: Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap(),
             now: Utc.with_ymd_and_hms(2026, 7, 27, 20, 14, 0).unwrap(),
@@ -686,7 +723,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_outreach_decision(&raw, &evidence(false)),
+            parse_outreach_decision(&raw, &evidence()),
             Err(OutreachError::Validation)
         );
     }
@@ -702,46 +739,12 @@ mod tests {
             None,
         );
 
-        let parsed = parse_outreach_decision(&raw, &evidence(false)).expect("gültiger Beleg");
+        let parsed = parse_outreach_decision(&raw, &evidence()).expect("gültiger Beleg");
 
         assert_eq!(
             parsed.hooks[0].evidence_at,
             Utc.with_ymd_and_hms(2026, 7, 27, 20, 13, 0).unwrap()
         );
-    }
-
-    #[test]
-    fn offer_ohne_beantwortetes_qualify_wird_verworfen() {
-        let raw = decision(
-            vec![hook(
-                "offer",
-                "brauch noch wen für die runde",
-                "wenn du öfter deadlock streamst gibts da ne community",
-            )],
-            None,
-        );
-
-        assert_eq!(
-            parse_outreach_decision(&raw, &evidence(false)),
-            Err(OutreachError::Validation)
-        );
-    }
-
-    #[test]
-    fn offer_nach_beantwortetem_qualify_ist_zulaessig() {
-        let raw = decision(
-            vec![hook(
-                "offer",
-                "brauch noch wen für die runde",
-                "wenn du öfter deadlock streamst gibts da ne community",
-            )],
-            None,
-        );
-
-        let parsed = parse_outreach_decision(&raw, &evidence(true)).expect("gültige Entscheidung");
-
-        assert_eq!(parsed.hooks.len(), 1);
-        assert_eq!(parsed.hooks[0].kind, HookKind::Offer);
     }
 
     #[test]
@@ -757,11 +760,11 @@ mod tests {
         .unwrap();
         raw["hooks"][0]["occasion"] = Value::Null;
         assert_eq!(
-            parse_outreach_decision(&raw.to_string(), &evidence(true)),
+            parse_outreach_decision(&raw.to_string(), &evidence()),
             Err(OutreachError::Validation)
         );
 
-        let mut too_early = evidence(true);
+        let mut too_early = evidence();
         too_early.now = too_early.session_started_at + chrono::Duration::minutes(9);
         assert_eq!(
             parse_outreach_decision(
@@ -778,7 +781,7 @@ mod tests {
             Err(OutreachError::Validation)
         );
 
-        let mut already_offered = evidence(true);
+        let mut already_offered = evidence();
         already_offered.has_previous_offer = true;
         assert_eq!(
             parse_outreach_decision(
@@ -810,11 +813,11 @@ mod tests {
         raw["hooks"][0]["evidence_source"] = Value::String("chat".to_owned());
 
         assert_eq!(
-            parse_outreach_decision(&raw.to_string(), &evidence(true)),
+            parse_outreach_decision(&raw.to_string(), &evidence()),
             Err(OutreachError::Validation)
         );
 
-        let mut streamer_evidence = evidence(true);
+        let mut streamer_evidence = evidence();
         streamer_evidence.chat_messages[0].author = Some("KANDIDAT".to_owned());
         assert!(parse_outreach_decision(&raw.to_string(), &streamer_evidence).is_ok());
     }
@@ -840,7 +843,7 @@ mod tests {
             );
 
             assert_eq!(
-                parse_outreach_decision(&raw, &evidence(false)),
+                parse_outreach_decision(&raw, &evidence()),
                 Err(OutreachError::Validation),
                 "unerlaubter opener wurde akzeptiert: {opener}"
             );
@@ -858,18 +861,18 @@ mod tests {
             None,
         );
 
-        assert!(parse_outreach_decision(&raw, &evidence(false)).is_ok());
+        assert!(parse_outreach_decision(&raw, &evidence()).is_ok());
     }
 
     #[test]
     fn leere_hooks_brauchen_einen_silent_reason() {
         assert_eq!(
-            parse_outreach_decision(&decision(vec![], None), &evidence(false)),
+            parse_outreach_decision(&decision(vec![], None), &evidence()),
             Err(OutreachError::Validation)
         );
         assert!(parse_outreach_decision(
             &decision(vec![], Some("kein belegter anlass")),
-            &evidence(false)
+            &evidence()
         )
         .is_ok());
     }
@@ -878,7 +881,7 @@ mod tests {
     fn modelltexte_und_hookanzahl_sind_begrenzt() {
         let too_long = "x".repeat(MAX_HOOK_TEXT_CHARS + 1);
         assert_eq!(
-            parse_outreach_decision(&decision(vec![], Some(&too_long)), &evidence(false)),
+            parse_outreach_decision(&decision(vec![], Some(&too_long)), &evidence()),
             Err(OutreachError::Validation)
         );
         let hooks = (0..=MAX_HOOKS)
@@ -891,7 +894,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            parse_outreach_decision(&decision(hooks, None), &evidence(false)),
+            parse_outreach_decision(&decision(hooks, None), &evidence()),
             Err(OutreachError::Validation)
         );
     }

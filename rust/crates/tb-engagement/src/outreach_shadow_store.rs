@@ -511,16 +511,9 @@ impl OutreachShadowStore {
         .await?;
         let mut timestamped_transcripts = Vec::new();
         let mut previous_hooks = Vec::new();
-        let mut last_qualify_at = None;
-        let mut answered_qualify = false;
         let mut previous_offer = false;
         for (occurred_at, transcript, decision) in rows {
             if let Some(text) = transcript.filter(|text| !text.trim().is_empty()) {
-                if last_qualify_at.is_some_and(|qualify_at| occurred_at > qualify_at)
-                    && looks_like_qualify_answer(&text)
-                {
-                    answered_qualify = true;
-                }
                 timestamped_transcripts.push(TimestampedText {
                     text,
                     occurred_at,
@@ -530,13 +523,6 @@ impl OutreachShadowStore {
             if let Some(value) = decision {
                 let parsed = serde_json::from_value::<OutreachDecision>(value)
                     .map_err(|_| StoreError::InvalidData)?;
-                if parsed
-                    .hooks
-                    .iter()
-                    .any(|hook| hook.kind == crate::outreach_shadow::HookKind::Qualify)
-                {
-                    last_qualify_at = Some(occurred_at);
-                }
                 previous_offer |= parsed
                     .hooks
                     .iter()
@@ -546,9 +532,6 @@ impl OutreachShadowStore {
         }
         let current_transcript = current_transcript.trim();
         if !current_transcript.is_empty() {
-            if last_qualify_at.is_some() && looks_like_qualify_answer(current_transcript) {
-                answered_qualify = true;
-            }
             timestamped_transcripts.push(TimestampedText {
                 text: current_transcript.to_owned(),
                 occurred_at: now,
@@ -603,7 +586,6 @@ impl OutreachShadowStore {
             evidence: SessionEvidence {
                 transcripts: timestamped_transcripts.clone(),
                 chat_messages: timestamped_chat.clone(),
-                has_answered_qualify: answered_qualify,
                 has_previous_offer: previous_offer,
                 session_started_at: session.started_at,
                 now,
@@ -887,31 +869,6 @@ fn choose_candidate(
     candidates.into_iter().next()
 }
 
-fn looks_like_qualify_answer(text: &str) -> bool {
-    text.to_lowercase()
-        .split(|ch: char| !ch.is_alphanumeric())
-        .any(|word| {
-            matches!(
-                word,
-                "ja" | "jo"
-                    | "jap"
-                    | "ne"
-                    | "nee"
-                    | "nein"
-                    | "öfter"
-                    | "regelmäßig"
-                    | "regelmässig"
-                    | "täglich"
-                    | "manchmal"
-                    | "selten"
-                    | "wochenende"
-                    | "stream"
-                    | "streame"
-                    | "streamen"
-            )
-        })
-}
-
 #[derive(sqlx::FromRow)]
 struct EventRow {
     id: i64,
@@ -1091,15 +1048,6 @@ mod tests {
             choose_candidate(false, vec![recently_seen, never_seen], now).expect("Kandidat");
 
         assert_eq!(selected.channel_login, "nie");
-    }
-
-    #[test]
-    fn qualify_braucht_eine_erkennbare_streaming_antwort() {
-        assert!(looks_like_qualify_answer(
-            "ja ich stream eigentlich jeden tag deadlock"
-        ));
-        assert!(looks_like_qualify_answer("ne nur manchmal am wochenende"));
-        assert!(!looks_like_qualify_answer("das war ein guter fight"));
     }
 
     fn candidate(login: &str) -> OutreachCandidate {

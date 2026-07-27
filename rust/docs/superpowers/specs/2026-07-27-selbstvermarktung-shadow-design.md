@@ -64,6 +64,8 @@ Ausgabe ist validierbares JSON:
   "hooks": [
     {
       "kind": "smalltalk" | "qualify" | "offer",
+      "occasion": null | "going_offline" | "low_viewers"
+                       | "looking_for_players" | "chat_trouble",
       "evidence": "wörtliches Zitat aus Transkript oder Chat",
       "evidence_source": "transcript" | "chat",
       "evidence_at": "2026-07-27T20:14:03Z",
@@ -83,10 +85,14 @@ Regeln der Validierung:
 - Jeder Hook braucht ein `evidence`, das wörtlich in einem gespeicherten
   Transkript oder einer gespeicherten Chatnachricht der Sitzung vorkommt.
   Erfundene Belege verwerfen den ganzen Zyklus.
-- `kind: "offer"` ist nur zulässig, wenn in derselben Sitzung bereits ein
-  `qualify`-Hook mit einer erkennbaren Antwort des Streamers vorliegt. Das
-  bildet den belegten Trichter ab (erst reden, dann qualifizieren, dann
-  anbieten).
+- `kind: "offer"` ist nur zulässig, wenn **beide** Bedingungen erfüllt sind:
+  1. ein belegter Anlass (`occasion`, siehe unten) liegt vor, und
+  2. die Sitzung läuft mindestens zehn Minuten **und** enthält mindestens
+     einen vorherigen Austausch, auf den der Streamer erkennbar reagiert hat.
+
+  Ein `qualify`-Hook ist damit nicht mehr zwingende Vorbedingung — der Anlass
+  ersetzt ihn, wenn er die Frage ohnehin beantwortet (wer offline geht, streamt
+  offensichtlich).
 - `opener` unterliegt dem Stilvertrag: keine Emojis außer `:)`, keine
   Mitgliederzahlen, keine Superlative, kein Link. Verstöße verwerfen den Hook.
 - Ein Link darf nie in einem `opener` stehen — im belegten Ablauf folgt er
@@ -94,9 +100,46 @@ Regeln der Validierung:
 - Parserfehler, fehlende Pflichtfelder oder ein unzulässiger Text führen zu
   `provider_error` und niemals zu einem Hook.
 
+## Anlässe für ein Angebot
+
+Ein Angebot wirkt nur, wenn es ein Problem löst, das die Person **gerade
+selbst hat**. Genau vier solcher Momente sind im Stream hörbar, und für jeden
+gibt es einen anderen richtigen Inhalt. Das Feld `occasion` benennt ihn.
+
+| `occasion` | Woran erkennbar | Was angeboten wird |
+|---|---|---|
+| `going_offline` | „ich mach gleich Schluss", „letzte Runde", „gleich Feierabend" | Der Raid ins Netzwerk — die Antwort auf „wo schicke ich meine Leute hin?" |
+| `low_viewers` | Streamer spricht Zuschauerzahl, tote Zeit oder Reichweite an | Raids kommen umgekehrt auch rein, wenn Partner offline gehen |
+| `looking_for_players` | „brauch noch wen", „suche noch zwei", Solo-Queue-Frust | Die Community als Ort, wo Mitspieler sind |
+| `chat_trouble` | Spam, Scam-Bots, Follow-Bots, Moderationsärger | Der Chat-Schutz gegen Spam und Scam |
+
+`going_offline` ist der stärkste Anlass. Er ist der einzige, bei dem das
+Angebot in dem Moment eintritt, in dem der Nutzen anfällt — der Streamer
+braucht jetzt ein Ziel für seine Zuschauer, und genau das ist das Produkt.
+Alle anderen sind Angebote auf Vorrat.
+
+Belegt in den echten Daten: der Pitch in `#donnsotfd` fiel unmittelbar vor dem
+eigenen Abschied, und die Raid-Mechanik ist der mit Abstand häufigste
+Pitch-Inhalt über alle Kanäle hinweg.
+
+Zwei Regeln dazu:
+
+- **Erst geben, dann fragen.** Lag bereits ein Raid an diesen Kanal, wird das
+  im Angebot benannt, nie als Gegenforderung. Belegt in `#zclame`: „Ich stell
+  den Twitch Bot ein das du dann alle Raids bekommst von dem Tag."
+- **Kein Anlass, kein Angebot.** Ohne `occasion` bleibt es bei `smalltalk`
+  oder `qualify`. Ein Angebot ohne Anlass ist genau die Werbung, die der
+  Stilvertrag ausschließt.
+
 ## Discord-Review
 
-Zielkanal wie beim Ricky-Shadow, Components-V2 mit Gold-Akzent `0xC8A86B`.
+Zielkanal ist `1374364800817303632` im Guild `1289721245281292288` — derselbe
+interne Review-Kanal wie beim Ricky-Shadow. Der gesamte Output dieses Features
+geht dorthin, auch Fehler und `silent`-Zyklen.
+
+Versand und spätere Löschung laufen ausschließlich über den bestehenden
+`BrokerRelay` zum Master-Broker, damit die Discord-Berechtigung an einer
+Prozessgrenze bleibt. Components-V2 mit Gold-Akzent `0xC8A86B`.
 
 Jede Karte zeigt: Kanal, Sitzungs-ID, Laufzeit, Stufe, und pro Hook den Beleg
 mit Zeitstempel und Quelle, den Einstiegssatz, die Begründung und die

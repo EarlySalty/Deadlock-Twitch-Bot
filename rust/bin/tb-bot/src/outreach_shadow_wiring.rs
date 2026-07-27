@@ -34,13 +34,31 @@ const RETENTION_BATCH_LIMIT: i64 = 20;
 const DEFAULT_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const OUTREACH_GOLD: i64 = 0xC8A86B;
 
-// TODO(orchestrator): Alle nutzersichtbaren Discord-Texte als JSON einsetzen.
-// Pflichtfelder: title, channel, session, duration, stage, outcome, evidence,
-// occasion, evidence_source, evidence_at, opener, why, confidence, static_comparison,
-// silent_reason, error_class, source_transcript, source_chat.
-// retention_delete_reason wird als Discord-Audit-Grund beim späteren Löschen verwendet.
-// Leer oder unvollständig bleibt fail-closed und erzeugt keinen Discord-Post.
-const OUTREACH_DISCORD_COPY_JSON: &str = "";
+/// Beschriftungen der Discord-Review-Karte.
+///
+/// Fehlt ein Feld, bleibt der Post fail-closed aus. `retention_delete_reason`
+/// ist der Audit-Grund beim späteren Löschen.
+const OUTREACH_DISCORD_COPY_JSON: &str = r#"{
+  "title": "Selbstvermarktung im Schattenbetrieb",
+  "channel": "Kanal",
+  "session": "Sitzung",
+  "duration": "Laufzeit",
+  "stage": "Stufe",
+  "outcome": "Ergebnis",
+  "evidence": "Beleg",
+  "occasion": "Anlass",
+  "evidence_source": "Quelle des Belegs",
+  "evidence_at": "Zeitpunkt des Belegs",
+  "opener": "Das würde der Bot sagen",
+  "why": "Begründung",
+  "confidence": "Sicherheit",
+  "static_comparison": "Der bisherige Bot hätte gesendet",
+  "silent_reason": "Warum nichts vorgeschlagen wurde",
+  "error_class": "Fehlerart",
+  "source_transcript": "Gesagt im Stream",
+  "source_chat": "Aus dem Chat",
+  "retention_delete_reason": "Aufbewahrungsfrist abgelaufen"
+}"#;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
