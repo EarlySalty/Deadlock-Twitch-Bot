@@ -1,3 +1,11 @@
+## #400 — Der Bot grüßt zurück und beantwortet die Release-Frage
+
+**Problem:** Auf ein schlichtes "hallo" kam nichts, und auf "wann kommt das Spiel raus" antwortete der Bot mit dem allgemeinen Zugangs-Hinweis — richtig, aber am Thema vorbei.
+
+**Änderung:** Zwei feste Antworten ohne KI. Eine Nachricht, die nur aus einem Gruß besteht, wird kurz erwidert. Fragen nach dem Erscheinungsdatum bekommen die ehrliche Auskunft, dass es noch kein offizielles Datum gibt, zusammen mit dem Hinweis auf den Befehl für die Einladung.
+
+**Aktuelles Verhalten:** Der Gruß gilt in jedem betreuten Kanal, die Release-Antwort nur während eines Deadlock-Streams. Beide haben einen Kanal-Cooldown, damit daraus kein Bot-Monolog wird. Grüße mitten in einem Satz, Befehle und Nachrichten mit Links lösen nichts aus.
+
 ## #399 — Zugangsprobleme werden auch ohne Frage erkannt
 
 **Problem:** Wer im Chat nur festgestellt hat, dass er keinen Zugang zu Deadlock bekommt, wurde übergangen. Der Bot hat ausschließlich auf Formulierungen reagiert, die wie eine Frage aussehen.
