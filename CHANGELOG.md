@@ -2,9 +2,9 @@
 
 **Problem:** Wer im Chat nur festgestellt hat, dass er keinen Zugang zu Deadlock bekommt, wurde übergangen. Der Bot hat ausschließlich auf Formulierungen reagiert, die wie eine Frage aussehen.
 
-**Änderung:** Aussagen mit einem klaren Zugangswort und einem Mangel-Hinweis wie "kein", "nicht" oder "ohne" gelten jetzt ebenfalls als Kandidat und werden geprüft.
+**Änderung:** Aussagen mit einem klaren Zugangswort und einem Mangel-Hinweis wie "kein", "nicht" oder "ohne" werden jetzt ebenfalls geprüft. Begeisterung über das Spiel zählt außerdem zehn Minuten lang als Indiz: sie löst für sich nichts aus, lässt aber eine passende Folgenachricht desselben Chatters durch.
 
-**Aktuelles Verhalten:** "Man bekommt ja irgendwie keinen Zugang" führt bei neuen Chattern zur kurzen Rückfrage und nach einem Ja zum Weg über den Discord. Smalltalk, Gameplay-Themen und Stammgäste ohne klares Zugangswort bleiben unberührt.
+**Aktuelles Verhalten:** "Man bekommt ja irgendwie keinen Zugang" bekommt jetzt eine Antwort: bei eindeutigem Fall direkt den Weg über den Discord, bei unklarem Fall zuerst die kurze Rückfrage. Auf ein bloßes "Das Game sieht mega aus" antwortet der Bot weiterhin nicht. Smalltalk, Gameplay-Themen und Stammgäste ohne klares Zugangswort bleiben unberührt.
 
 ## #398 — Scam-Auto-Bans folgen jetzt einer Alterskurve
 

@@ -33,6 +33,9 @@ const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
 const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
+/// Wie lange ein Interesse-Opener ("das Game sieht mega aus") als Indiz
+/// nachwirkt. Innerhalb des Fensters reicht ein schwaches Folgesignal.
+const INTEREST_HINT_WINDOW: Duration = Duration::from_secs(600);
 
 const GO_REPLY: &str = "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}";
 const CONFIRM_REPLY: &str =
@@ -48,7 +51,7 @@ Antworte EXAKT mit einem JSON-Objekt ohne Markdown und ohne weiteren Text:
 Regeln:
 - "yes" nur, wenn der Chatter selbst Zugang zu Deadlock sucht oder keinen hat.
 - "no" bei normalem Gameplay, Meinung, Smalltalk, Discord ohne Zugangsbezug oder wenn der Chatter längst spielt.
-- "unsure" wenn die Absicht unklar ist."#;
+- "unsure" wenn die Absicht unklar ist — auch bei reiner Begeisterung ("das Game sieht mega aus"), solange nicht erkennbar ist, ob der Chatter schon spielt."#;
 
 trait InviteQuestionClock: Send + Sync {
     fn now(&self) -> Instant;
@@ -106,6 +109,26 @@ fn invite_lack_re() -> &'static Regex {
     })
 }
 
+/// Interesse-Opener ohne Zugangswort: "Das Game sieht echt mega aus". Bei
+/// Neulingen der häufigste Einstieg in eine Invite-Frage — Stammgäste filtert
+/// danach das Neuheits-Gate, den Rest der Judge.
+fn invite_interest_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(game|spiel|deadlock)\b").expect("valid invite interest regex")
+    })
+}
+
+fn invite_praise_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(sieht|schaut|aussehen|mega|geil|nice|cool|krass|interessant|hype|bock|lust|spa(?:ß|ss)\w*)\b",
+        )
+        .expect("valid invite praise regex")
+    })
+}
+
 fn invite_join_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -120,6 +143,12 @@ fn invite_join_re() -> &'static Regex {
 struct InviteQuestionSignal {
     is_candidate: bool,
     has_strong_access: bool,
+    /// Interesse am Spiel ohne Zugangswort: allein nur ein Indiz, das ein
+    /// Merkfenster öffnet, nie ein Auslöser.
+    has_interest: bool,
+    /// Irgendein Zugangs- oder Frage-Bezug — reicht erst innerhalb eines
+    /// offenen Interesse-Fensters als Kandidat.
+    has_weak_signal: bool,
 }
 
 fn classify_invite_question(content: &str) -> InviteQuestionSignal {
@@ -128,6 +157,8 @@ fn classify_invite_question(content: &str) -> InviteQuestionSignal {
         return InviteQuestionSignal {
             is_candidate: false,
             has_strong_access: false,
+            has_interest: false,
+            has_weak_signal: false,
         };
     }
 
@@ -138,10 +169,15 @@ fn classify_invite_question(content: &str) -> InviteQuestionSignal {
     // ponytail: Aussagen ohne Fragezeichen ("bekommt ja keinen Zugang") nur mit
     // starkem Zugangswort durchlassen, den Rest sortiert der Judge aus.
     let has_lack = has_strong_access && invite_lack_re().is_match(raw);
+    // ponytail: Begeisterung über das Spiel ist der typische Opener vor der
+    // Invite-Frage; ohne Zugangswort bleibt sie auf Neulinge beschränkt.
+    let has_interest = invite_interest_re().is_match(raw) && invite_praise_re().is_match(raw);
 
     InviteQuestionSignal {
         is_candidate: (has_access && has_question) || has_lack,
         has_strong_access,
+        has_interest,
+        has_weak_signal: has_access || has_question,
     }
 }
 
@@ -484,6 +520,8 @@ pub enum SilentReason {
     /// Echtes Modell-`unsure` bei einem Stammgast.
     JudgeUnsureRegular,
     JudgeYesLowConfidenceRegular,
+    /// Interesse-Opener gemerkt, aber allein kein Auslöser.
+    InterestNoted,
 }
 
 impl SilentReason {
@@ -504,6 +542,7 @@ impl SilentReason {
             Self::JudgeParseError => "judge_parse_error",
             Self::JudgeUnsureRegular => "judge_unsure_regular",
             Self::JudgeYesLowConfidenceRegular => "judge_yes_low_confidence_regular",
+            Self::InterestNoted => "interest_noted",
         }
     }
 }
@@ -619,6 +658,7 @@ pub struct InviteQuestionResponder {
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
     user_cooldowns: Mutex<HashMap<(String, String), (Instant, CooldownKind)>>,
     pending_confirmations: Mutex<HashMap<(String, String), Instant>>,
+    interest_hints: Mutex<HashMap<(String, String), Instant>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -667,6 +707,7 @@ impl InviteQuestionResponder {
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
             pending_confirmations: Mutex::new(HashMap::new()),
+            interest_hints: Mutex::new(HashMap::new()),
         }
     }
 
@@ -787,7 +828,23 @@ impl InviteQuestionResponder {
         }
 
         let signal = classify_invite_question(raw);
-        if !signal.is_candidate {
+        // Interesse allein löst nie aus: es öffnet nur ein Fenster, in dem ein
+        // schwaches Folgesignal desselben Chatters zum Kandidaten wird.
+        let hint_open = self.interest_hint_open(&channel_login, &chatter_login);
+        let is_candidate =
+            signal.is_candidate || (hint_open && (signal.has_weak_signal || signal.has_interest));
+        if !is_candidate {
+            if signal.has_interest {
+                self.remember_interest_hint(&channel_login, &chatter_login);
+                return InviteQuestionDecision::silent(
+                    SilentReason::InterestNoted,
+                    channel_login,
+                    chatter_login,
+                    raw.to_string(),
+                    false,
+                    signal.has_strong_access,
+                );
+            }
             return InviteQuestionDecision::silent(
                 SilentReason::NoRegexMatch,
                 channel_login,
@@ -1040,6 +1097,26 @@ impl InviteQuestionResponder {
             users.insert(
                 (channel_login.to_string(), chatter_login.to_string()),
                 (now, CooldownKind::Replied),
+            );
+        }
+    }
+
+    fn interest_hint_open(&self, channel_login: &str, chatter_login: &str) -> bool {
+        let key = (channel_login.to_string(), chatter_login.to_string());
+        let now = self.clock.now();
+        let Ok(hints) = self.interest_hints.lock() else {
+            return false;
+        };
+        hints
+            .get(&key)
+            .is_some_and(|last| now.duration_since(*last) <= INTEREST_HINT_WINDOW)
+    }
+
+    fn remember_interest_hint(&self, channel_login: &str, chatter_login: &str) {
+        if let Ok(mut hints) = self.interest_hints.lock() {
+            hints.insert(
+                (channel_login.to_string(), chatter_login.to_string()),
+                self.clock.now(),
             );
         }
     }
@@ -1565,6 +1642,68 @@ mod tests {
             !classify_invite_question("keine Ahnung ob ich den Build spielen soll").is_candidate
         );
         assert!(!classify_invite_question("der Invite ist raus, danke!").is_candidate);
+    }
+
+    #[test]
+    fn interesse_ist_indiz_aber_kein_kandidat() {
+        for raw in [
+            "Das Game sieht echt mega aus :D",
+            "das spiel schaut richtig geil aus",
+            "sieht interessant aus das Game",
+        ] {
+            let signal = classify_invite_question(raw);
+            assert!(signal.has_interest, "kein Indiz: {raw}");
+            assert!(!signal.is_candidate, "Indiz allein loest aus: {raw}");
+            assert!(!signal.has_strong_access, "faelschlich stark: {raw}");
+        }
+
+        assert!(!classify_invite_question("Lategame... das Rasiere ich richtig").has_interest);
+        assert!(!classify_invite_question("mega play von dem Lash").has_interest);
+    }
+
+    #[tokio::test]
+    async fn interesse_opener_merkt_sich_und_erst_die_folgenachricht_loest_aus() {
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
+        let invite = responder(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        let opener = decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
+        assert_eq!(
+            opener.action,
+            InviteQuestionAction::Silent(SilentReason::InterestNoted)
+        );
+        assert_eq!(judge.call_count(), 0, "Indiz darf keinen Judge kosten");
+
+        let folge = decide_action(&invite, "neuling", "kann man da irgendwie mitzocken").await;
+        assert_eq!(folge.action, InviteQuestionAction::AskConfirmation);
+        assert_eq!(judge.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn interesse_fenster_laeuft_nach_zehn_minuten_ab() {
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
+        let (invite, clock) = responder_with_clock(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
+        clock.advance(Duration::from_secs(601));
+
+        let folge = decide_action(&invite, "neuling", "sowas wuerde ich auch zocken").await;
+        assert_eq!(
+            folge.action,
+            InviteQuestionAction::Silent(SilentReason::NoRegexMatch)
+        );
+        assert_eq!(judge.call_count(), 0);
     }
 
     #[tokio::test]
