@@ -440,13 +440,13 @@ impl EngagementPipeline {
                 ),
             }
             return HandleResult {
-                decision: Decision::Shadowed,
+                decision: Decision::Tested,
                 shadow_text: Some(text),
                 model: Some(response.model),
                 prompt_tokens: response.prompt_tokens,
                 completion_tokens: response.completion_tokens,
                 latency_ms: Some(response.latency_ms),
-                ..HandleResult::new(Decision::Shadowed)
+                ..HandleResult::new(Decision::Tested)
             };
         }
 
@@ -724,7 +724,11 @@ mod tests {
             .await;
 
         let r = pipeline_with(pool.clone(), &server.uri()).handle(&msg()).await;
-        assert_eq!(r.decision, Decision::Shadowed);
+        // Bewusst NICHT `Shadowed`: der bestehende Shadow-Review forwardet
+        // jede Zeile mit `decision='shadowed'` nach Discord. Waere der
+        // Testmodus dort eingereiht, laege jede Smalltalk-Antwort zusaetzlich
+        // im Partner-Review und wuerde dort wie ein Partner-Vorschlag wirken.
+        assert_eq!(r.decision, Decision::Tested);
         assert!(r.response_text.is_none(), "Testmodus darf nie das Twitch-Sendesignal setzen");
         assert_eq!(r.shadow_text.as_deref(), Some("fremdkanal antwort"));
         let assistant_turns: i64 = sqlx::query_scalar(

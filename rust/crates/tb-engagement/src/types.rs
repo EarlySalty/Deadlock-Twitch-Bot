@@ -11,6 +11,11 @@ pub enum Decision {
     /// (für späteres Discord-Review). Kein Python-Pendant — neue Funktion aus
     /// dem Block-19-Grillme (Engagement-KI mit Shadow-Modus).
     Shadowed,
+    /// Wie [`Shadowed`](Self::Shadowed), aber aus dem Smalltalk-Testmodus in
+    /// einem fremden Kanal. Eigener Wert, weil der Shadow-Review jede
+    /// `shadowed`-Zeile nach Discord forwardet: Testantworten wuerden dort
+    /// zwischen den Partner-Vorschlaegen landen und wie welche aussehen.
+    Tested,
     /// Bewusst still (Pre-Filter, leere Modellantwort, Starter-Repeat).
     Silent,
     /// Anti-Burst-Sperre.
@@ -32,6 +37,7 @@ impl Decision {
         match self {
             Decision::Spoke => "spoke",
             Decision::Shadowed => "shadowed",
+            Decision::Tested => "tested",
             Decision::Silent => "silent",
             Decision::AntiBurst => "anti_burst",
             Decision::FloodGuard => "flood_guard",
@@ -153,6 +159,7 @@ mod tests {
     fn decision_strings() {
         assert_eq!(Decision::Spoke.as_str(), "spoke");
         assert_eq!(Decision::Shadowed.as_str(), "shadowed");
+        assert_eq!(Decision::Tested.as_str(), "tested");
         assert_eq!(Decision::AntiBurst.as_str(), "anti_burst");
         assert_eq!(Decision::ProviderError.as_str(), "provider_error");
     }
