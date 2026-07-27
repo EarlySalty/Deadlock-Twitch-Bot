@@ -1,3 +1,11 @@
+## #399 — Zugangsprobleme werden auch ohne Frage erkannt
+
+**Problem:** Wer im Chat nur festgestellt hat, dass er keinen Zugang zu Deadlock bekommt, wurde übergangen. Der Bot hat ausschließlich auf Formulierungen reagiert, die wie eine Frage aussehen.
+
+**Änderung:** Aussagen mit einem klaren Zugangswort und einem Mangel-Hinweis wie "kein", "nicht" oder "ohne" gelten jetzt ebenfalls als Kandidat und werden geprüft.
+
+**Aktuelles Verhalten:** "Man bekommt ja irgendwie keinen Zugang" führt bei neuen Chattern zur kurzen Rückfrage und nach einem Ja zum Weg über den Discord. Smalltalk, Gameplay-Themen und Stammgäste ohne klares Zugangswort bleiben unberührt.
+
 ## #398 — Scam-Auto-Bans folgen jetzt einer Alterskurve
 
 **Problem:** Eine pauschal abgesenkte Schwelle für brandneue Accounts war zu grob und hätte Alter und Urteil nicht ausgewogen genug kombiniert.

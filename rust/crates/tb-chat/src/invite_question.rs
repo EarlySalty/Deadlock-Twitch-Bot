@@ -40,14 +40,14 @@ const CONFIRM_REPLY: &str =
 
 const INVITE_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
-Beurteile, ob die Nachricht danach fragt, wie der Chatter Zugang zum Spiel Deadlock bekommt: Einladung, Invite, Beta-Key, Early Access oder wie man mitspielen kann.
+Beurteile, ob der Chatter Zugang zum Spiel Deadlock braucht: Einladung, Invite, Beta-Key, Early Access oder wie man mitspielen kann. Das zählt auch ohne Fragezeichen — eine Aussage wie "man bekommt ja keinen Zugang" oder "ohne Invite kommt man nicht rein" ist ebenso ein Zugangsbedarf wie eine direkte Frage.
 
 Antworte EXAKT mit einem JSON-Objekt ohne Markdown und ohne weiteren Text:
 {"verdict":"yes"|"no"|"unsure","confidence":0.0-1.0,"reasoning":"..."}
 
 Regeln:
-- "yes" nur, wenn die Nachricht wirklich nach Zugang zu Deadlock fragt.
-- "no" bei normalem Gameplay, Meinung, Smalltalk oder Discord ohne Zugangsfrage.
+- "yes" nur, wenn der Chatter selbst Zugang zu Deadlock sucht oder keinen hat.
+- "no" bei normalem Gameplay, Meinung, Smalltalk, Discord ohne Zugangsbezug oder wenn der Chatter längst spielt.
 - "unsure" wenn die Absicht unklar ist."#;
 
 trait InviteQuestionClock: Send + Sync {
@@ -95,6 +95,17 @@ fn invite_strong_access_re() -> &'static Regex {
     })
 }
 
+/// Klage-/Mangelform statt Frageform: "man bekommt ja keinen Zugang",
+/// "ohne Invite kommt man nicht rein". Nur zusammen mit einem starken
+/// Zugangswort ein Kandidat — der Judge entscheidet danach.
+fn invite_lack_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(kein\w*|nicht|nie|ohne|leider|schwer|unm(?:ö|oe)glich|warte\w*)\b")
+            .expect("valid invite lack regex")
+    })
+}
+
 fn invite_join_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -124,9 +135,12 @@ fn classify_invite_question(content: &str) -> InviteQuestionSignal {
     let has_access = invite_access_re().is_match(raw) || has_join;
     let has_strong_access = invite_strong_access_re().is_match(raw);
     let has_question = raw.contains('?') || invite_question_re().is_match(raw);
+    // ponytail: Aussagen ohne Fragezeichen ("bekommt ja keinen Zugang") nur mit
+    // starkem Zugangswort durchlassen, den Rest sortiert der Judge aus.
+    let has_lack = has_strong_access && invite_lack_re().is_match(raw);
 
     InviteQuestionSignal {
-        is_candidate: has_access && has_question,
+        is_candidate: (has_access && has_question) || has_lack,
         has_strong_access,
     }
 }
@@ -1533,6 +1547,24 @@ mod tests {
         assert!(!classify_invite_question("Lategame... das Rasiere ich richtig").is_candidate);
         assert!(!classify_invite_question("bleib bei Mo").is_candidate);
         assert!(!classify_invite_question("!dldc").is_candidate);
+    }
+
+    #[test]
+    fn regex_klassifikation_erkennt_zugangsmangel_als_aussage() {
+        for raw in [
+            "Ne man bekommt ja iwi keinen Zugang xD",
+            "schade, ohne Invite kommt man da nicht rein",
+            "hab leider keinen Key",
+        ] {
+            let signal = classify_invite_question(raw);
+            assert!(signal.is_candidate, "kein Kandidat: {raw}");
+            assert!(signal.has_strong_access, "kein starkes Zugangswort: {raw}");
+        }
+
+        assert!(
+            !classify_invite_question("keine Ahnung ob ich den Build spielen soll").is_candidate
+        );
+        assert!(!classify_invite_question("der Invite ist raus, danke!").is_candidate);
     }
 
     #[tokio::test]
