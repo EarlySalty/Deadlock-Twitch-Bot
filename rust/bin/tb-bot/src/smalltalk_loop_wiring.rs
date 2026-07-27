@@ -24,6 +24,12 @@ const RETENTION_BATCH_LIMIT: i64 = 20;
 const DEFAULT_REVIEW_GUILD_ID: i64 = 1_289_721_245_281_292_288;
 const DEFAULT_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const SMALLTALK_GOLD: i64 = 0xC8A86B;
+/// Discord begrenzt die Komponenten eines Components-V2-Containers. Der Rest
+/// des Repos rechnet mit 39 Text-Displays pro Karte (`ricky_review_wiring.rs`),
+/// hier gilt dasselbe: eine Stunde Testmodus kann deutlich mehr Nachrichten
+/// erzeugen, und ein zu grosser Post scheitert, laeuft nach drei Versuchen aus
+/// und der Report verschwindet genau dann, wenn es am meisten zu sehen gaebe.
+const MAX_TEXT_DISPLAYS_PER_CARD: usize = 39;
 
 /// Beschriftungen der Smalltalk-Auswertung. Fehlt ein Feld, bleibt die
 /// Discord-Auslieferung fail-closed aus.
@@ -51,6 +57,7 @@ const SMALLTALK_DISCORD_COPY_JSON: &str = r#"{
   "result": "Ergebnis",
   "result_would_send": "Würde senden",
   "result_rejected": "Verworfen",
+  "truncated_note": "Weitere Nachrichten dieser Sitzung stehen nur in der Datenbank",
   "reason_dash": "Gedankenstrich",
   "reason_quote": "Anführungszeichen",
   "reason_list": "Aufzählung",
@@ -123,6 +130,7 @@ struct DiscordCopy {
     result: String,
     result_would_send: String,
     result_rejected: String,
+    truncated_note: String,
     reason_dash: String,
     reason_quote: String,
     reason_list: String,
@@ -161,6 +169,7 @@ impl DiscordCopy {
             &copy.result,
             &copy.result_would_send,
             &copy.result_rejected,
+            &copy.truncated_note,
             &copy.reason_dash,
             &copy.reason_quote,
             &copy.reason_list,
@@ -541,6 +550,24 @@ fn build_discord_card(
             result
         ));
     }
+    // Lieber ein Report, der ankommt und sagt was fehlt, als ein
+    // vollstaendiger, den Discord ablehnt und der nach drei Versuchen
+    // verschwindet. Die Zusammenfassung steht in displays[0] und bleibt
+    // dadurch immer erhalten; gekuerzt werden nur die Einzelnachrichten, und
+    // die Kuerzung steht sichtbar in der Karte.
+    if displays.len() > MAX_TEXT_DISPLAYS_PER_CARD {
+        let gezeigt = MAX_TEXT_DISPLAYS_PER_CARD - 1;
+        let verborgen = displays.len() - gezeigt;
+        displays.truncate(gezeigt);
+        displays.push(format!(
+            "**{}**\n{} von {} Nachrichten sind hier nicht abgebildet.\n{}: `{}`",
+            copy.truncated_note,
+            verborgen,
+            report.messages.len(),
+            copy.session,
+            report.session.id
+        ));
+    }
     if displays
         .iter()
         .any(|display| display.chars().count() > 3_800)
@@ -634,6 +661,65 @@ mod tests {
                 SmalltalkDeliveryTarget::Database,
                 SmalltalkDeliveryTarget::Discord,
             ]
+        );
+    }
+
+    /// Eine Stunde Testmodus kann mehr Nachrichten erzeugen, als in einen
+    /// Components-V2-Container passen. Ein zu grosser Post scheitert bei
+    /// Discord, laeuft nach drei Versuchen aus und der Report verschwindet
+    /// genau dann, wenn es am meisten zu sehen gaebe. Also wird gekuerzt,
+    /// aber sichtbar: die Zusammenfassung bleibt, und die Karte sagt, wie
+    /// viele Nachrichten nur in der Datenbank stehen.
+    #[test]
+    fn viele_nachrichten_kuerzen_sichtbar_statt_die_karte_zu_sprengen() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+        let report = SmalltalkReport {
+            session: ReportSession {
+                id: Uuid::nil(),
+                channel_login: "kandidat".to_string(),
+                started_at: now,
+                ended_at: now + ChronoDuration::minutes(60),
+                end_reason: "time_limit".to_string(),
+                viewer_count: Some(30),
+                provider_error_count: 0,
+                last_provider_error: None,
+            },
+            messages: (0..120)
+                .map(|i| SmalltalkMessage {
+                    generated_at: now,
+                    generated_text: format!("antwort {i}"),
+                    trigger_text: format!("ausloeser {i}"),
+                    outcome: "would_send".to_string(),
+                    reject_reason: None,
+                })
+                .collect(),
+        };
+
+        let copy_text = DiscordCopy::test_copy();
+        let payload = build_discord_card(&report, 123, &copy_text).expect("Discord-Karte");
+        let components = payload.components.expect("Components");
+        let displays = components[0]["components"]
+            .as_array()
+            .expect("Displays")
+            .len();
+
+        assert!(
+            displays <= MAX_TEXT_DISPLAYS_PER_CARD,
+            "die Karte muss unter dem Discord-Limit bleiben, war {displays}"
+        );
+        let zusammenfassung = components[0]["components"][0]["content"]
+            .as_str()
+            .expect("Zusammenfassung");
+        assert!(
+            zusammenfassung.contains("120"),
+            "die Gesamtzahl bleibt sichtbar, auch wenn Einzelnachrichten fehlen"
+        );
+        let letzter = components[0]["components"][displays - 1]["content"]
+            .as_str()
+            .expect("Hinweis");
+        assert!(
+            letzter.contains(&copy_text.truncated_note) && letzter.contains("120"),
+            "die Karte muss ausweisen, wie viele Nachrichten fehlen: {letzter}"
         );
     }
 
