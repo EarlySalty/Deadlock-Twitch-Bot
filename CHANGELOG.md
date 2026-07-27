@@ -4,7 +4,7 @@
 
 **Änderung:** Alle KI-Aufrufe holen Anbieter, Adresse und Modell aus einer gemeinsamen Auswahl. Welches Modell eine einzelne Funktion bedient, entscheidet jetzt die Konfiguration — für alles zusammen oder pro Funktion getrennt.
 
-**Aktuelles Verhalten:** Titel-Vorschläge, Stream-Reports sowie Spam- und Scam-Urteile laufen auf DeepSeek, das bei der Spam-Prüfung schon vorher im Einsatz war. Fällt es dort aus, springt der bisherige Anbieter automatisch ein. Ein Anbieterwechsel braucht keinen neuen Build mehr, nur einen Neustart.
+**Aktuelles Verhalten:** Titel-Vorschläge sowie Spam- und Scam-Urteile laufen auf DeepSeek, das bei der Spam-Prüfung schon vorher im Einsatz war. Fällt es dort aus, springt der bisherige Anbieter automatisch ein. Die Stream-Reports bleiben bei Claude. Ein Anbieterwechsel braucht keinen neuen Build mehr, nur einen Neustart.
 
 ## #400 — Der Bot grüßt zurück und beantwortet die Release-Frage
 

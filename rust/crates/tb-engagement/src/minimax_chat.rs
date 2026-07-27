@@ -581,7 +581,11 @@ impl EngagementMinimaxClient {
             .unwrap_or(endpoint.base_url);
         let model = model
             .filter(|m| !m.is_empty())
-            .or_else(|| nonempty_env("ENGAGEMENT_MINIMAX_MODEL"))
+            .or_else(|| {
+                is_minimax
+                    .then(|| nonempty_env("ENGAGEMENT_MINIMAX_MODEL"))
+                    .flatten()
+            })
             .unwrap_or(endpoint.model);
         Self {
             api_key,
@@ -923,6 +927,31 @@ mod tests {
             "falsches Modell: {}",
             client.model
         );
+        clear_provider_env();
+    }
+
+    /// Die Legacy-Variable darf ein MiniMax-Modell nicht an die
+    /// Fireworks-Adresse haengen — sonst antwortet der Anbieter mit einem
+    /// Modellfehler und der Engagement-Pfad ist stumm.
+    #[test]
+    fn engagement_modell_variable_greift_nur_bei_minimax() {
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+        std::env::set_var("ENGAGEMENT_MINIMAX_MODEL", "MiniMax-M3");
+
+        let client = EngagementMinimaxClient::new(None, None, None, None);
+        assert!(
+            client.model.contains("deepseek"),
+            "MiniMax-Modell an der Fireworks-Adresse: {}",
+            client.model
+        );
+
+        // Auf MiniMax zurueckgeschaltet gilt die Variable weiterhin.
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+        std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
+        let client = EngagementMinimaxClient::new(None, None, None, None);
+        assert_eq!(client.model, "MiniMax-M3");
         clear_provider_env();
     }
 
