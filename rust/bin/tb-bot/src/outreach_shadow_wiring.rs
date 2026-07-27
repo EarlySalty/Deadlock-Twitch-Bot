@@ -194,11 +194,28 @@ pub fn start(
 ) -> OutreachShadowRuntime {
     let store = OutreachShadowStore::new(pool);
     let config = OutreachConfig::from_env();
+
+    // Die Aufbewahrungsfrist gilt unabhängig vom Kill-Switch: was einmal
+    // gepostet wurde, muss auch nach dem Abschalten wieder verschwinden.
+    // Deshalb startet die Retention vor jedem Abbruchpfad, sobald Broker und
+    // Beschriftungen verfügbar sind.
+    let configured_copy = DiscordCopy::configured();
+    let configured_discord: Option<Arc<dyn DiscordBackend>> = match BrokerRelay::new(broker) {
+        Ok(relay) => Some(Arc::new(relay)),
+        Err(error) => {
+            tracing::warn!(event = "outreach_shadow.discord_unavailable", %error);
+            None
+        }
+    };
+    if let (Some(copy), Some(discord)) = (configured_copy.clone(), configured_discord.clone()) {
+        spawn_retention(supervisor, store.clone(), discord, copy);
+    }
+
     if !config.enabled {
         tracing::info!(event = "outreach_shadow.disabled");
         return inactive_runtime(supervisor, store, "kill_switch");
     }
-    let Some(copy) = DiscordCopy::configured() else {
+    let Some(copy) = configured_copy else {
         tracing::warn!(event = "outreach_shadow.discord_copy_missing");
         return inactive_runtime(supervisor, store, "discord_copy_missing");
     };
@@ -216,12 +233,8 @@ pub fn start(
             return inactive_runtime(supervisor, store, "fireworks_unavailable");
         }
     };
-    let discord: Arc<dyn DiscordBackend> = match BrokerRelay::new(broker) {
-        Ok(relay) => Arc::new(relay),
-        Err(error) => {
-            tracing::warn!(event = "outreach_shadow.discord_unavailable", %error);
-            return inactive_runtime(supervisor, store, "discord_unavailable");
-        }
+    let Some(discord) = configured_discord else {
+        return inactive_runtime(supervisor, store, "discord_unavailable");
     };
     let capturer = MemoryAudioCapturer::new(
         nonempty_env("YTDLP_BIN").unwrap_or_else(|| "yt-dlp".to_owned()),
@@ -231,11 +244,10 @@ pub fn start(
     spawn_discord_forwarder(
         supervisor,
         store.clone(),
-        discord.clone(),
+        discord,
         DEFAULT_REVIEW_CHANNEL_ID,
-        copy.clone(),
+        copy,
     );
-    spawn_retention(supervisor, store.clone(), discord, copy);
     tracing::info!(
         event = "outreach_shadow.started",
         channel_id = DEFAULT_REVIEW_CHANNEL_ID,

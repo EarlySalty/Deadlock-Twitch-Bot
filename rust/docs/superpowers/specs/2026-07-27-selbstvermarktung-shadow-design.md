@@ -178,13 +178,17 @@ Jede Logzeile enthält Sitzungs-ID, Kanal, Stufe, Anzahl Hooks und Fehlerklasse
 
 - Sitzungsauswahl: nie mehr als eine aktive Sitzung, Partner werden nie
   ausgewählt, Cooldown wird eingehalten.
-- Validierung: erfundener Beleg wird verworfen; `offer` ohne vorheriges
-  `qualify` wird verworfen; Emoji, Mitgliederzahl, Superlativ und Link im
-  `opener` werden verworfen.
+- Validierung: erfundener Beleg wird verworfen; `offer` ohne `occasion`, vor
+  Ablauf der Mindestlaufzeit oder ein zweites Mal in derselben Sitzung wird
+  verworfen; Emoji, Mitgliederzahl, Superlativ und Link im `opener` werden
+  verworfen.
 - Leeres `hooks` ohne `silent_reason` ist ein Fehler.
-- Jeder Ausgang — Hook, silent, Parserfehler, Timeout — erzeugt genau ein
+- Jeder Ausgang, also Hook, silent, Parserfehler und Timeout, erzeugt genau ein
   persistiertes Ereignis.
 - Kein Codepfad ruft einen Twitch-Send auf.
+- Die Retention läuft auch bei gesetztem Kill-Switch weiter: ein abgelaufener
+  Discord-Post steht nach drei Fehlversuchen weiter zum Löschen an, und ein
+  bereits verschwundener Post gilt als erledigt.
 
 ## Betriebsnachweis
 
