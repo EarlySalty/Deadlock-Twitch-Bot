@@ -29,7 +29,9 @@ const GREETING_COOLDOWN: Duration = Duration::from_secs(600);
 /// Cooldown für Release-Antworten pro Kanal.
 const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
 
-const GREETING_REPLY: &str = "@{chatter} Hey, willkommen im Chat!";
+// Rückgruß, keine Begrüßung: der Bot weiß nicht, ob jemand neu ist — "willkommen
+// im Chat" an einen Stammgast liest sich falsch.
+const GREETING_REPLY: &str = "@{chatter} Hey!";
 const RELEASE_REPLY: &str = "@{chatter} Ein offizielles Release-Datum gibt es noch nicht. Wenn du reinschauen willst: tipp !invite, dann bekommst du den Weg zu einer Einladung.";
 
 /// Grußformeln — die Nachricht darf praktisch nur daraus bestehen.
@@ -290,6 +292,12 @@ mod tests {
         let messages = api.messages();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].starts_with("@neuling"));
+        // Zurückgrüßen, nicht begrüßen: der Bot kennt den Neu-Status nicht.
+        assert!(
+            !messages[0].to_lowercase().contains("willkommen"),
+            "Rückgruß darf keine Willkommensformel sein: {}",
+            messages[0]
+        );
     }
 
     #[tokio::test]
