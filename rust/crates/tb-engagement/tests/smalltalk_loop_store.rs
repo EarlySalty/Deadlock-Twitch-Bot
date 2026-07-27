@@ -9,6 +9,70 @@ use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
 
+/// `twitch_engagement_settings` wird laut Vertrag kleingeschrieben befuellt
+/// und exakt gelesen (`auto_off.rs`, `gate::load_settings`). Eine abweichend
+/// geschriebene Zeile ist ein Datenfehler, den der Loop nicht sauber
+/// behandeln kann: kleingeschrieben schreiben erzeugt eine zweite Zeile, die
+/// nach Sitzungsende aktiv zurueckbleibt; in der vorhandenen Schreibweise
+/// schreiben laesst die Pipeline den Kanal zur Laufzeit nicht finden, die
+/// Sitzung liefe leer und meldete "keine Nachrichten". Also wird der Kandidat
+/// uebersprungen, bekommt Cooldown und das steht im Log.
+#[tokio::test]
+async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
+    let Some(pool) = test_pool("smalltalk_loop_case").await else {
+        return;
+    };
+    seed_candidate(&pool, "MixedCase", "7", None).await;
+    sqlx::query(
+        "INSERT INTO twitch_engagement_settings
+            (channel_login, enabled, irc_read, output_mode)
+         VALUES ('MixedCase', TRUE, TRUE, 'live')",
+    )
+    .execute(&pool)
+    .await
+    .expect("alte Settings setzen");
+    let store = SmalltalkLoopStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+
+    let gestartet = store.start_next_session(now).await.expect("Start");
+
+    assert!(
+        gestartet.is_none(),
+        "ein Kanal, dessen Settings der Loop nicht sauber wiederherstellen kann, wird nicht belegt"
+    );
+    let zeilen: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_engagement_settings WHERE LOWER(channel_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("zaehlen");
+    assert_eq!(zeilen, 1, "es darf keine zweite Settings-Zeile entstehen");
+
+    let (login, enabled, irc_read, modus) = sqlx::query_as::<_, (String, bool, bool, String)>(
+        "SELECT channel_login, enabled, irc_read, output_mode
+         FROM twitch_engagement_settings
+         WHERE LOWER(channel_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Settings lesen");
+    assert_eq!(login, "MixedCase");
+    assert!(enabled && irc_read, "der Vorzustand bleibt unangetastet");
+    assert_eq!(modus, "live", "der Ausgabemodus wird nicht ueberschrieben");
+
+    let cooldown: Option<String> = sqlx::query_scalar(
+        "SELECT cooldown_until FROM twitch_partner_outreach
+         WHERE LOWER(streamer_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Cooldown lesen");
+    assert!(
+        cooldown.is_some(),
+        "der uebersprungene Kandidat bekommt Cooldown, sonst faellt er bei jedem Tick erneut an"
+    );
+}
+
 #[tokio::test]
 async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
     let Some(pool) = test_pool("smalltalk_loop_singleton").await else {
