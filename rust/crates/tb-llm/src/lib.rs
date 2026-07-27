@@ -27,9 +27,9 @@ pub mod keys;
 pub mod ledger;
 pub mod minimax;
 pub mod provider;
+pub mod selection;
 
 pub use anthropic::AnthropicClient;
 pub use minimax::MiniMaxClient;
-pub use provider::{
-    CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message,
-};
+pub use provider::{CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message};
+pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

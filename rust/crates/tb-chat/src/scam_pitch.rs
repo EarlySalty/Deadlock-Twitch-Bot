@@ -124,15 +124,6 @@ const STATE_PRUNE_INTERVAL_SEC: f64 = 60.0;
 
 // ── Spam-AI-Review-Konstanten ─────────────────────────────────────────────────
 
-/// MiniMax-API-Endpunkt (Fallback-Provider).
-const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
-/// MiniMax-Modell-ID (Fallback).
-const MINIMAX_MODEL: &str = "MiniMax-M3";
-/// Fireworks-API-Endpunkt (Primär-Provider, OpenAI-kompatibel).
-const FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
-/// DeepSeek auf Fireworks — Benchmark 11.07.2026: 56/56 auf echten
-/// Produktionsfällen (30 obfuskierter Spam, 26 harmlose Viewer-Sätze).
-const FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash";
 /// Ledger-Zweck dieses Calls (spam_ai_review.py Z. 175: `purpose="spam-review"`).
 const JUDGE_PURPOSE: &str = "spam-review";
 /// Token-Budget für den Judge. Reasoning-Modelle (DeepSeek, MiniMax-M3 mit
@@ -1596,7 +1587,7 @@ impl SpamAiReviewer {
             cds.insert(key, now_mono + REVIEW_COOLDOWN_SEC);
         }
 
-        let providers = judge_providers();
+        let providers = tb_llm::endpoint_chain("spam_judge");
         if providers.is_empty() {
             let detail = "kein Judge-API-Key gesetzt (FIREWORK_API_KEY / MINIMAX_*)".to_string();
             return self
@@ -1705,41 +1696,6 @@ impl SpamAiReviewer {
     }
 }
 
-/// Ein Judge-Provider (OpenAI-kompatible Chat-Completions-API).
-struct JudgeProvider {
-    base_url: String,
-    api_key: String,
-    model: &'static str,
-}
-
-/// Provider-Kette in Prioritätsreihenfolge. DeepSeek via Fireworks primär
-/// (Benchmark 11.07.: 56/56), MiniMax M3 als Fallback bei Fehlern/Limits.
-fn judge_providers() -> Vec<JudgeProvider> {
-    let mut providers = Vec::new();
-    if let Ok(key) = std::env::var("FIREWORK_API_KEY") {
-        if !key.trim().is_empty() {
-            providers.push(JudgeProvider {
-                base_url: FIREWORKS_BASE_URL.to_string(),
-                api_key: key,
-                model: FIREWORKS_MODEL,
-            });
-        }
-    }
-    if let Ok(key) = std::env::var("MINIMAX_TOKEN_PLAN_KEY")
-        .or_else(|_| std::env::var("MINIMAX_API_KEY"))
-        .or_else(|_| std::env::var("MINMAX"))
-    {
-        if !key.trim().is_empty() {
-            providers.push(JudgeProvider {
-                base_url: MINIMAX_BASE_URL.to_string(),
-                api_key: key,
-                model: MINIMAX_MODEL,
-            });
-        }
-    }
-    providers
-}
-
 // ── Judge-API-Call ────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -1828,10 +1784,15 @@ fn usage_tokens(resp: &serde_json::Value) -> (i64, i64) {
 /// nächsten Provider.
 async fn call_judge(
     http: &reqwest::Client,
-    provider: &JudgeProvider,
+    provider: &tb_llm::LlmEndpoint,
     record_usage: bool,
     content: &str,
 ) -> Result<Option<AiReview>, JudgeCallError> {
+    let Some(api_key) = provider.api_key.as_deref() else {
+        return Err(JudgeCallError::Provider(
+            "API-Key für Judge-Endpoint fehlt".to_string(),
+        ));
+    };
     let truncated: String = content.chars().take(500).collect();
     let body = serde_json::json!({
         "model": provider.model,
@@ -1848,7 +1809,7 @@ async fn call_judge(
             "{}/chat/completions",
             provider.base_url.trim_end_matches('/')
         ))
-        .header("Authorization", format!("Bearer {}", provider.api_key))
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .timeout(Duration::from_secs(20))
         .json(&body)
@@ -1876,7 +1837,7 @@ async fn call_judge(
     // zählt, wenn die JSON-Extraktion unten scheitert.
     let (tokens_in, tokens_out) = usage_tokens(&json);
     if record_usage {
-        tb_llm::ledger::record(JUDGE_PURPOSE, provider.model, tokens_in, tokens_out, true).await;
+        tb_llm::ledger::record(JUDGE_PURPOSE, &provider.model, tokens_in, tokens_out, true).await;
     }
 
     let message = &json["choices"][0]["message"];
@@ -2008,6 +1969,55 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static PROVIDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_provider_env() {
+        for name in [
+            "TB_LLM_PROVIDER_DEFAULT",
+            "TB_LLM_PROVIDER_SPAM_JUDGE",
+            "FIREWORK_API_KEY",
+            "FIREWORKS_API_KEY",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
+            "FIREWORK_MODEL",
+            "FIREWORKS_MODEL",
+            "MINIMAX_TOKEN_PLAN_KEY",
+            "MINIMAX_API_KEY",
+            "MINIMAX_BASE_URL",
+            "MINIMAX_MODEL",
+            "MINMAX",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+
+    #[test]
+    fn judge_provider_folgt_gemeinsamer_auswahl() {
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+
+        let providers = tb_llm::endpoint_chain("spam_judge");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
+        assert_eq!(providers[0].model, "MiniMax-M3");
+
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+        let providers = tb_llm::endpoint_chain("spam_judge");
+        assert!(providers[0].base_url.contains("fireworks.ai"));
+        assert!(providers[0].model.contains("deepseek"));
+        assert_eq!(providers[1].base_url, "https://api.minimax.io/v1");
+        assert_eq!(providers[1].model, "MiniMax-M3");
+
+        std::env::set_var("TB_LLM_PROVIDER_SPAM_JUDGE", "minimax");
+        let providers = tb_llm::endpoint_chain("spam_judge");
+        assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
+        assert_eq!(providers[0].model, "MiniMax-M3");
+        clear_provider_env();
+    }
 
     fn make_event(channel: &str, chatter: &str, text: &str) -> ChatMessageEvent {
         use crate::types::ChatMessageBody;
@@ -2755,10 +2765,11 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let provider = JudgeProvider {
+        let provider = tb_llm::LlmEndpoint {
+            provider: "test",
             base_url: server.uri(),
-            api_key: "test-key".to_string(),
-            model: "test-model",
+            api_key: Some("test-key".to_string()),
+            model: "test-model".to_string(),
         };
         let review = call_judge(&http, &provider, false, content)
             .await
