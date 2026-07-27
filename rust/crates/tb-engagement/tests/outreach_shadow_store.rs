@@ -311,7 +311,9 @@ async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Opt
 
 async fn test_pool(schema: &str) -> Option<PgPool> {
     let Ok(url) =
-        std::env::var("TEST_DATABASE_URL").or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
+        std::env::var("TB_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("TEST_DATABASE_URL"))
+            .or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
     else {
         return None;
     };

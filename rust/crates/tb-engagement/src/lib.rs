@@ -36,6 +36,7 @@ pub mod pipeline;
 pub mod rhythm;
 pub mod sender_auth;
 pub mod shadow_review;
+pub mod smalltalk_loop_store;
 pub mod soul_store;
 pub mod stealth_sender;
 pub mod stream_state;

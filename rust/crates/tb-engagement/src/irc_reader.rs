@@ -49,6 +49,31 @@ async fn ensure_schema(pool: &PgPool) {
     .await;
 }
 
+/// Lädt Kanäle, bis mindestens einer da ist. Ohne dieses Warten wäre ein
+/// Botstart ohne `irc_read`-Kanal endgültig: der Reader beendete sich, und ein
+/// später freigeschalteter Kanal (Smalltalk-Loop) würde nie gejoint.
+async fn wait_for_channels<F, Fut>(interval: Duration, mut load: F) -> HashSet<String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = HashSet<String>>,
+{
+    let mut logged = false;
+    loop {
+        let channels = load().await;
+        if !channels.is_empty() {
+            return channels;
+        }
+        if !logged {
+            tracing::info!(
+                event = "engagement_irc.waiting_for_channels",
+                "Engagement-IRC: noch keine irc_read-Kanäle, Reader wartet"
+            );
+            logged = true;
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
 /// Aktive Kanäle mit `irc_read = TRUE` (kleingeschrieben).
 async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
     ensure_schema(pool).await;
@@ -82,15 +107,17 @@ impl EngagementIrcReader {
         }
     }
 
-    /// Startet den Reader. No-op (kehrt sofort zurück), wenn keine
-    /// `irc_read`-Kanäle konfiguriert sind (Python: „Reader bleibt aus").
-    /// Reconnectet bei Verbindungsabbruch dauerhaft.
+    /// Startet den Reader. Sind noch keine `irc_read`-Kanäle konfiguriert,
+    /// wartet er darauf, statt sich zu beenden: der Smalltalk-Loop schaltet
+    /// seinen Kanal erst zur Laufzeit frei, und ein beendeter Reader würde ihn
+    /// nie joinen. Reconnectet bei Verbindungsabbruch dauerhaft.
     pub async fn run(self) {
-        let mut channels = load_irc_channels(&self.pool).await;
-        if channels.is_empty() {
-            tracing::info!("Engagement-IRC: keine irc_read-Kanäle konfiguriert, Reader bleibt aus");
-            return;
-        }
+        let pool = self.pool.clone();
+        let mut channels = wait_for_channels(Duration::from_secs(CHANNEL_REFRESH_SECONDS), || {
+            let pool = pool.clone();
+            async move { load_irc_channels(&pool).await }
+        })
+        .await;
         tracing::info!(channels = ?sorted(&channels), "Engagement-IRC-Reader gestartet");
         loop {
             match self.connect().await {
@@ -181,8 +208,12 @@ impl EngagementIrcReader {
                 }
                 _ = refresh.tick() => {
                     let latest = load_irc_channels(&self.pool).await;
-                    for ch in latest.difference(channels) {
+                    let (to_join, to_part) = channel_delta(channels, &latest);
+                    for ch in &to_join {
                         join(&mut writer, ch).await;
+                    }
+                    for ch in &to_part {
+                        part(&mut writer, ch).await;
                     }
                     *channels = latest;
                 }
@@ -232,6 +263,31 @@ async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
 }
 
 /// Joint einen Kanal (`JOIN #channel`).
+/// Welche Kanäle beim Refresh dazukommen und welche wegfallen.
+///
+/// Der Wegfall ist der wichtige Teil: der Smalltalk-Loop nimmt `irc_read` am
+/// Sitzungsende wieder zurueck. Ohne PART bliebe der Reader im fremden Kanal
+/// und laese dort weiter mit, obwohl keine Sitzung mehr laeuft, und bei
+/// stuendlicher Rotation summierten sich die Joins.
+fn channel_delta(current: &HashSet<String>, latest: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+    let to_join = latest.difference(current).cloned().collect();
+    let to_part = current.difference(latest).cloned().collect();
+    (to_join, to_part)
+}
+
+/// Verlässt einen Kanal (`PART #channel`).
+async fn part(writer: &mut OwnedWriteHalf, channel: &str) {
+    if let Err(error) = writer
+        .write_all(format!("PART #{channel}\r\n").as_bytes())
+        .await
+    {
+        tracing::warn!(%error, channel, "Engagement-IRC: PART-Write fehlgeschlagen");
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(%error, channel, "Engagement-IRC: PART-Flush fehlgeschlagen");
+    }
+}
+
 async fn join(writer: &mut OwnedWriteHalf, channel: &str) {
     if let Err(error) = writer
         .write_all(format!("JOIN #{channel}\r\n").as_bytes())
@@ -255,6 +311,64 @@ fn sorted(channels: &HashSet<String>) -> Vec<&String> {
 mod tests {
     use super::*;
     use crate::irc_message::parse_tags;
+
+    /// Der Smalltalk-Loop schaltet `irc_read` erst zur Laufzeit ein. Kehrte
+    /// der Reader bei anfangs leerer Kanalmenge zurueck, wuerde der Testkanal
+    /// nie gejoint: die Sitzung liefe ohne Chat-Input und meldete "keine
+    /// Nachrichten". Diese Stille saehe wie ein Ergebnis aus, waere aber
+    /// keins. Deshalb wartet der Reader, statt sich zu beenden.
+    #[tokio::test]
+    async fn wartet_auf_spaeter_aktivierte_kanaele_statt_sich_zu_beenden() {
+        let runde = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let zaehler = runde.clone();
+
+        let kanaele = wait_for_channels(Duration::from_millis(1), move || {
+            let zaehler = zaehler.clone();
+            async move {
+                // Erst ab der dritten Abfrage liefert die DB einen Kanal,
+                // so wie wenn der Loop ihn mitten im Betrieb aktiviert.
+                if zaehler.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    HashSet::new()
+                } else {
+                    HashSet::from(["fremder_kanal".to_owned()])
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(kanaele, HashSet::from(["fremder_kanal".to_owned()]));
+        assert!(
+            runde.load(std::sync::atomic::Ordering::SeqCst) >= 3,
+            "der Reader muss erneut nachsehen, statt beim ersten leeren Ergebnis aufzugeben"
+        );
+    }
+
+    /// Am Sitzungsende faellt der Testkanal aus `irc_read` heraus. Wird er
+    /// dann nicht verlassen, liest der Bot in einem fremden Kanal weiter mit,
+    /// ohne dass dort eine Sitzung laeuft.
+    #[test]
+    fn refresh_verlaesst_abgeschaltete_kanaele() {
+        let aktuell = HashSet::from(["partner".to_owned(), "testkanal".to_owned()]);
+        let danach = HashSet::from(["partner".to_owned(), "neuer_test".to_owned()]);
+
+        let (to_join, to_part) = channel_delta(&aktuell, &danach);
+
+        assert_eq!(to_join, vec!["neuer_test".to_owned()]);
+        assert_eq!(
+            to_part,
+            vec!["testkanal".to_owned()],
+            "der abgeschaltete Testkanal muss verlassen werden"
+        );
+    }
+
+    #[test]
+    fn refresh_ohne_aenderung_macht_nichts() {
+        let gleich = HashSet::from(["partner".to_owned()]);
+
+        let (to_join, to_part) = channel_delta(&gleich, &gleich);
+
+        assert!(to_join.is_empty() && to_part.is_empty());
+    }
 
     #[test]
     fn tags_parse() {
