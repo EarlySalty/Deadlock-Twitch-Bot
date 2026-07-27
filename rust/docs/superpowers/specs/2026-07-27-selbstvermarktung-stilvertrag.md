@@ -126,9 +126,13 @@ In 5439 Nachrichten kommt keine dieser Formen ein einziges Mal vor.
 2. Ein Anlass muss aus dem Gespräch oder dem Stream selbst kommen — der
    Streamer spielt Deadlock, sucht Mitspieler, spricht über Reichweite, Raids,
    Streaming-Frequenz oder Community.
-3. Vor dem Angebot qualifizieren: streamt die Person Deadlock regelmäßig?
+3. Wenn der Anlass die Frage nicht schon beantwortet, vorher qualifizieren:
+   streamt die Person Deadlock regelmäßig? Das ist eine Stilvorgabe an das
+   Modell, keine erzwungene Vorbedingung; der Validator prüft stattdessen den
+   belegten Anlass (siehe Design-Spec).
 4. Angebot konditional formulieren, Community in dritter Person.
-5. Link nur nach ausdrücklicher Zustimmung.
+5. Link nur nach ausdrücklicher Zustimmung. Im Schattenbetrieb heißt das:
+   gar kein Link, weil es dort keine Zustimmung geben kann.
 6. Höchstens ein Angebot pro Kanal und Stream. Kein Nachfassen.
 7. Auf Nachfrage die Mechanik erklären, inklusive dessen, was der Bot **nicht**
    kann.

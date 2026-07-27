@@ -73,7 +73,9 @@ Antworte ausschließlich mit dem vorgegebenen JSON.
 - `kind: "smalltalk"` — Anknüpfung ans Spielgeschehen, will nichts.
 - `kind: "qualify"` — Frage, die klärt, ob die Person regelmäßig Deadlock
   streamt.
-- `kind: "offer"` — konditionales Angebot, nur nach beantwortetem `qualify`.
+- `kind: "offer"` — konditionales Angebot. Setzt einen belegten `occasion`
+  voraus, mindestens zehn Minuten Sitzungslaufzeit und dass in derselben
+  Sitzung noch kein Angebot kam. Ein vorheriges `qualify` ist nicht nötig.
 - `evidence` — wörtliches Zitat, das die Validierung gegen die gespeicherten
   Transkripte und Chatnachrichten prüft.
 - `opener` — genau der Satz, den der Bot sagen würde, fertig formuliert.

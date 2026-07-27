@@ -85,14 +85,20 @@ Regeln der Validierung:
 - Jeder Hook braucht ein `evidence`, das wörtlich in einem gespeicherten
   Transkript oder einer gespeicherten Chatnachricht der Sitzung vorkommt.
   Erfundene Belege verwerfen den ganzen Zyklus.
-- `kind: "offer"` ist nur zulässig, wenn **beide** Bedingungen erfüllt sind:
-  1. ein belegter Anlass (`occasion`, siehe unten) liegt vor, und
-  2. die Sitzung läuft mindestens zehn Minuten **und** enthält mindestens
-     einen vorherigen Austausch, auf den der Streamer erkennbar reagiert hat.
+- `kind: "offer"` ist nur zulässig, wenn **alle** Bedingungen erfüllt sind:
+  1. ein belegter Anlass (`occasion`, siehe unten) liegt vor, und der Beleg
+     enthält tatsächlich ein Stichwort dieses Anlasses,
+  2. die Sitzung läuft mindestens zehn Minuten,
+  3. in derselben Sitzung gab es noch kein Angebot,
+  4. bei `evidence_source: "chat"` stammt der Beleg vom Streamer selbst, nicht
+     von einem Zuschauer.
 
-  Ein `qualify`-Hook ist damit nicht mehr zwingende Vorbedingung — der Anlass
-  ersetzt ihn, wenn er die Frage ohnehin beantwortet (wer offline geht, streamt
-  offensichtlich).
+  Ein `qualify`-Hook ist **keine** Vorbedingung. Der Anlass ersetzt ihn, wenn
+  er die Frage ohnehin beantwortet: wer sagt, dass er gleich offline geht,
+  streamt offensichtlich. Ein Kriterium „vorheriger Austausch" wäre im
+  Schattenbetrieb außerdem nie erfüllbar, weil der Bot nichts sendet und
+  deshalb nie eine Reaktion auslöst; die Mindestlaufzeit übernimmt den Schutz
+  vor dem Reinplatzen.
 - `opener` unterliegt dem Stilvertrag: keine Emojis außer `:)`, keine
   Mitgliederzahlen, keine Superlative, kein Link. Verstöße verwerfen den Hook.
 - Ein Link darf nie in einem `opener` stehen — im belegten Ablauf folgt er
