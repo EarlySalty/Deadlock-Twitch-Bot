@@ -1,3 +1,11 @@
+## #401 — KI-Funktionen teilen sich einen umschaltbaren Anbieter-Zugang
+
+**Problem:** Jede KI-Funktion hatte ihr Modell fest im Code. Der Titel-Generator und die Stream-Reports hingen an einem Anbieter, die Spam-Prüfung an einem anderen, und ein Wechsel war jedes Mal eine Codeänderung samt Deploy.
+
+**Änderung:** Alle KI-Aufrufe holen Anbieter, Adresse und Modell aus einer gemeinsamen Auswahl. Welches Modell eine einzelne Funktion bedient, entscheidet jetzt die Konfiguration — für alles zusammen oder pro Funktion getrennt.
+
+**Aktuelles Verhalten:** Titel-Vorschläge, Stream-Reports sowie Spam- und Scam-Urteile laufen auf DeepSeek, das bei der Spam-Prüfung schon vorher im Einsatz war. Fällt es dort aus, springt der bisherige Anbieter automatisch ein. Ein Anbieterwechsel braucht keinen neuen Build mehr, nur einen Neustart.
+
 ## #400 — Der Bot grüßt zurück und beantwortet die Release-Frage
 
 **Problem:** Auf ein schlichtes "hallo" kam nichts, und auf "wann kommt das Spiel raus" antwortete der Bot mit dem allgemeinen Zugangs-Hinweis — richtig, aber am Thema vorbei.
