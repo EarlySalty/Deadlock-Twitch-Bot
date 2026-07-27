@@ -240,8 +240,14 @@ impl SmalltalkLoopStore {
             return Ok(None);
         };
 
-        let previous = sqlx::query_as::<_, (bool, bool, String)>(
-            "SELECT enabled, irc_read, output_mode
+        // Den echten Primaerschluessel mitlesen, nicht nur die Werte: der
+        // Kandidat kommt kleingeschrieben aus der Query, eine vorhandene
+        // Settings-Zeile kann aber `MixedCase` heissen. Der Upsert unten
+        // trifft per `ON CONFLICT (channel_login)` case-sensitiv und legte
+        // sonst eine zweite Zeile an, die nach dem Sitzungsende als
+        // enabled/irc_read zurueckbliebe und einen fremden Kanal aktiv liesse.
+        let previous = sqlx::query_as::<_, (String, bool, bool, String)>(
+            "SELECT channel_login, enabled, irc_read, output_mode
              FROM twitch_engagement_settings
              WHERE LOWER(channel_login) = LOWER($1)
              FOR UPDATE",
@@ -249,10 +255,18 @@ impl SmalltalkLoopStore {
         .bind(&candidate.channel_login)
         .fetch_optional(&mut *tx)
         .await?;
-        let (settings_existed, previous_enabled, previous_irc_read, previous_output_mode) =
+        let (settings_key, settings_existed, previous_enabled, previous_irc_read, previous_output_mode) =
             match previous {
-                Some((enabled, irc_read, output_mode)) => (true, enabled, irc_read, output_mode),
-                None => (false, false, false, "off".to_string()),
+                Some((key, enabled, irc_read, output_mode)) => {
+                    (key, true, enabled, irc_read, output_mode)
+                }
+                None => (
+                    candidate.channel_login.clone(),
+                    false,
+                    false,
+                    false,
+                    "off".to_string(),
+                ),
             };
         let session = SmalltalkSession {
             id: Uuid::new_v4(),
@@ -286,7 +300,7 @@ impl SmalltalkLoopStore {
              ON CONFLICT (channel_login) DO UPDATE
              SET enabled = TRUE, irc_read = TRUE, output_mode = 'test'",
         )
-        .bind(&session.channel_login)
+        .bind(&settings_key)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

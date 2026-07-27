@@ -9,6 +9,60 @@ use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
 
+/// Settings werden im restlichen Code case-sensitiv gelesen (`gate.rs`), der
+/// Kandidat kommt hier aber kleingeschrieben aus der Query. Trifft der Upsert
+/// die vorhandene Zeile nicht exakt, entsteht eine zweite, und die bleibt nach
+/// dem Sitzungsende als enabled/irc_read stehen: ein fremder Kanal waere
+/// dauerhaft scharf, ohne dass eine Sitzung laeuft.
+#[tokio::test]
+async fn vorhandene_settings_mit_grossschreibung_werden_nicht_dupliziert() {
+    let Some(pool) = test_pool("smalltalk_loop_case").await else {
+        return;
+    };
+    seed_candidate(&pool, "MixedCase", "7", None).await;
+    sqlx::query(
+        "INSERT INTO twitch_engagement_settings
+            (channel_login, enabled, irc_read, output_mode)
+         VALUES ('MixedCase', TRUE, TRUE, 'live')",
+    )
+    .execute(&pool)
+    .await
+    .expect("alte Settings setzen");
+    let store = SmalltalkLoopStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+
+    store
+        .start_next_session(now)
+        .await
+        .expect("Start")
+        .expect("Sitzung");
+
+    let zeilen: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_engagement_settings WHERE LOWER(channel_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("zaehlen");
+    assert_eq!(zeilen, 1, "es darf keine zweite Settings-Zeile entstehen");
+
+    store
+        .close_active_session("test_ende", now + Duration::minutes(61))
+        .await
+        .expect("schliessen");
+
+    let (login, enabled, irc_read, modus) = sqlx::query_as::<_, (String, bool, bool, String)>(
+        "SELECT channel_login, enabled, irc_read, output_mode
+         FROM twitch_engagement_settings
+         WHERE LOWER(channel_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Settings lesen");
+    assert_eq!(login, "MixedCase", "der urspruengliche Schluessel bleibt");
+    assert!(enabled && irc_read, "Vorzustand wird exakt wiederhergestellt");
+    assert_eq!(modus, "live", "der vorherige Ausgabemodus kommt zurueck");
+}
+
 #[tokio::test]
 async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
     let Some(pool) = test_pool("smalltalk_loop_singleton").await else {
