@@ -191,6 +191,10 @@ impl SmalltalkLoopStore {
                         SELECT 1
                         FROM twitch_raid_blacklist b
                         WHERE LOWER(b.target_login) = LOWER(o.streamer_login)
+                           OR b.target_id = COALESCE(
+                                NULLIF(BTRIM(o.streamer_user_id), ''),
+                                ls.twitch_user_id
+                              )
                     ) AS blacklisted,
                     (
                         SELECT MAX(s.started_at)

@@ -107,6 +107,39 @@ async fn gebannte_und_geblacklistete_kanaele_werden_nie_ausgewaehlt() {
     );
 }
 
+/// Der Bot-Ban schreibt `target_id` in die Blacklist, und der Repo-Vertrag
+/// (`RaidBlacklistStore::is_blacklisted`) matcht per ID ODER Login. Benennt
+/// sich ein gebannter Kanal um, traegt nur noch die ID. Ein reiner
+/// Login-Abgleich haette ihn danach wieder als Kandidaten zugelassen.
+#[tokio::test]
+async fn gebannter_kanal_bleibt_nach_umbenennung_gesperrt() {
+    let Some(pool) = test_pool("smalltalk_loop_blacklist_id").await else {
+        return;
+    };
+    seed_candidate(&pool, "neuer_name", "42", None).await;
+    seed_candidate(&pool, "sauber", "43", None).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+         VALUES ('42', 'alter_name', 'bot_banned: channel_settings')",
+    )
+    .execute(&pool)
+    .await
+    .expect("Blacklist setzen");
+    let store = SmalltalkLoopStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+
+    let session = store
+        .start_next_session(now)
+        .await
+        .expect("Start")
+        .expect("Sitzung");
+
+    assert_eq!(
+        session.channel_login, "sauber",
+        "der Ban haengt an der twitch_user_id, nicht am Login"
+    );
+}
+
 #[tokio::test]
 async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
     let Some(pool) = test_pool("smalltalk_loop_singleton").await else {
