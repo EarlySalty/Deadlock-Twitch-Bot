@@ -1,3 +1,11 @@
+## #402 — Discord-Ankündigungen überstehen einen Neustart des Discord-Bots
+
+**Problem:** Läuft der Discord-Bot gerade neu hoch, ist für ein paar Sekunden niemand da, der Nachrichten entgegennimmt. Der Twitch-Bot hat solche Anfragen sofort verworfen, statt es kurz darauf noch einmal zu versuchen — Live-Ankündigungen zeigten dann bis zum nächsten Durchlauf einen alten Stand.
+
+**Änderung:** Eine Anfrage, die niemanden erreicht, wird nach zwei Sekunden wiederholt. Antwortet der Discord-Bot dagegen mit einer Absage — etwa weil die Nachricht gelöscht wurde —, bleibt es beim einen Versuch. Zusätzlich steht jetzt im Protokoll, wie viele Anläufe eine Aktualisierung gebraucht hat und wann sie endgültig eingestellt wurde.
+
+**Aktuelles Verhalten:** Ein kurzer Neustart des Discord-Bots kostet keine Aktualisierung mehr. Das gilt für Live-Ankündigungen ebenso wie für Rollen, Einladungen und alle anderen Aktionen, die über den Discord-Bot laufen.
+
 ## #401 — KI-Funktionen teilen sich einen umschaltbaren Anbieter-Zugang
 
 **Problem:** Jede KI-Funktion hatte ihr Modell fest im Code. Der Titel-Generator und die Stream-Reports hingen an einem Anbieter, die Spam-Prüfung an einem anderen, und ein Wechsel war jedes Mal eine Codeänderung samt Deploy.
