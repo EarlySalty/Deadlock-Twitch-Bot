@@ -106,9 +106,12 @@ impl StandardReplies {
         let Some(kind) = classify_standard_reply(event.text(), is_deadlock_live) else {
             return false;
         };
-        if !self.cooldown_ok(channel_login, kind) {
+        // Prüfen und Belegen in einem Zug: zwischen Prüfung und Senden liegt
+        // ein await, in dem sonst ein zweites Chat-Event durchrutschen und
+        // dieselbe Antwort ein zweites Mal schicken könnte.
+        let Some(previous) = self.reserve(channel_login, kind) else {
             return false;
-        }
+        };
 
         let template = match kind {
             StandardReply::Greeting => GREETING_REPLY,
@@ -124,11 +127,9 @@ impl StandardReplies {
             .send_message(&event.broadcaster_user_id, &message)
             .await
         {
-            Ok(SendOutcome::Sent) => {
-                self.mark_sent(channel_login, kind);
-                true
-            }
+            Ok(SendOutcome::Sent) => true,
             Ok(outcome) => {
+                self.release(channel_login, kind, previous);
                 warn!(
                     channel = channel_login,
                     ?outcome,
@@ -137,28 +138,38 @@ impl StandardReplies {
                 false
             }
             Err(error) => {
+                self.release(channel_login, kind, previous);
                 warn!(channel = channel_login, %error, "Standard-Antwort nicht gesendet");
                 false
             }
         }
     }
 
-    fn cooldown_ok(&self, channel_login: &str, kind: StandardReply) -> bool {
+    /// Belegt den Cooldown, wenn er frei ist. Rückgabe ist der vorherige
+    /// Eintrag für ein sauberes Zurückrollen; `None` heißt: gesperrt.
+    fn reserve(&self, channel_login: &str, kind: StandardReply) -> Option<Option<Instant>> {
         let window = match kind {
             StandardReply::Greeting => GREETING_COOLDOWN,
             StandardReply::ReleaseDate => RELEASE_COOLDOWN,
         };
-        let Ok(cooldowns) = self.cooldowns.lock() else {
-            return false;
-        };
-        cooldowns
-            .get(&(channel_login.to_string(), kind))
-            .is_none_or(|last| last.elapsed() >= window)
+        let mut cooldowns = self.cooldowns.lock().ok()?;
+        let key = (channel_login.to_string(), kind);
+        let previous = cooldowns.get(&key).copied();
+        if previous.is_some_and(|last| last.elapsed() < window) {
+            return None;
+        }
+        cooldowns.insert(key, Instant::now());
+        Some(previous)
     }
 
-    fn mark_sent(&self, channel_login: &str, kind: StandardReply) {
+    /// Gibt eine Reservierung zurück, wenn nichts im Chat gelandet ist.
+    fn release(&self, channel_login: &str, kind: StandardReply, previous: Option<Instant>) {
         if let Ok(mut cooldowns) = self.cooldowns.lock() {
-            cooldowns.insert((channel_login.to_string(), kind), Instant::now());
+            let key = (channel_login.to_string(), kind);
+            match previous {
+                Some(last) => cooldowns.insert(key, last),
+                None => cooldowns.remove(&key),
+            };
         }
     }
 }
@@ -315,6 +326,69 @@ mod tests {
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         // Kein Cooldown gesetzt: der naechste Versuch darf es erneut probieren.
         assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
+    }
+
+    #[tokio::test]
+    async fn zwei_gleichzeitige_gruesse_ergeben_eine_antwort() {
+        struct SlowApi {
+            sent: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl ChatApi for SlowApi {
+            async fn send_message(&self, _: &str, message: &str) -> Result<SendOutcome, String> {
+                // Fenster, in dem ein zweites Event die Pruefung passieren
+                // wuerde, waere der Cooldown erst danach gesetzt.
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.sent.lock().unwrap().push(message.to_string());
+                Ok(SendOutcome::Sent)
+            }
+            async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+                Ok(BanOutcome::Banned)
+            }
+            async fn timeout_user(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: &str,
+            ) -> Result<BanOutcome, String> {
+                Ok(BanOutcome::Banned)
+            }
+            async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+                Ok(None)
+            }
+            async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+            async fn bot_user_id(&self) -> String {
+                "bot123".to_string()
+            }
+        }
+
+        let api = Arc::new(SlowApi {
+            sent: Mutex::new(vec![]),
+        });
+        let replies = StandardReplies::new(api.clone());
+
+        let erstes = event("hallo");
+        let zweites = event("moin");
+        let (a, b) = tokio::join!(
+            replies.maybe_respond(&erstes, "ch1", false),
+            replies.maybe_respond(&zweites, "ch1", false)
+        );
+
+        assert!(a ^ b, "genau einer der beiden darf senden");
+        assert_eq!(api.sent.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
