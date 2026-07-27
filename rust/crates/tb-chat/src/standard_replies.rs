@@ -22,7 +22,7 @@ use regex::Regex;
 use tracing::warn;
 
 use crate::api::ChatApi;
-use crate::types::ChatMessageEvent;
+use crate::types::{ChatMessageEvent, SendOutcome};
 
 /// Cooldown für Grüße pro Kanal.
 const GREETING_COOLDOWN: Duration = Duration::from_secs(600);
@@ -116,14 +116,25 @@ impl StandardReplies {
         };
         let message = template.replace("{chatter}", &event.chatter_user_login);
 
+        // Nur eine wirklich zugestellte Nachricht zaehlt: sonst wuerde ein
+        // stiller Twitch-Drop (Timeout, Kanaleinstellung) den Cooldown setzen
+        // und die nachfolgenden Detektoren ueberspringen.
         match self
             .api
             .send_message(&event.broadcaster_user_id, &message)
             .await
         {
-            Ok(_) => {
+            Ok(SendOutcome::Sent) => {
                 self.mark_sent(channel_login, kind);
                 true
+            }
+            Ok(outcome) => {
+                warn!(
+                    channel = channel_login,
+                    ?outcome,
+                    "Standard-Antwort von Twitch verworfen"
+                );
+                false
             }
             Err(error) => {
                 warn!(channel = channel_login, %error, "Standard-Antwort nicht gesendet");
@@ -157,7 +168,7 @@ mod tests {
     use super::*;
 
     use crate::api::BanOutcome;
-    use crate::types::{ChatMessageBody, SendOutcome};
+    use crate::types::ChatMessageBody;
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
 
@@ -254,6 +265,56 @@ mod tests {
                 .await
         );
         assert!(api.messages()[0].contains("!invite"));
+    }
+
+    #[tokio::test]
+    async fn verworfene_nachricht_setzt_keinen_cooldown() {
+        struct DroppingApi;
+
+        #[async_trait]
+        impl ChatApi for DroppingApi {
+            async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+                Ok(SendOutcome::Dropped {
+                    code: "sender_timedout".to_string(),
+                    message: "getimeoutet".to_string(),
+                })
+            }
+            async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+                Ok(BanOutcome::Banned)
+            }
+            async fn timeout_user(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: &str,
+            ) -> Result<BanOutcome, String> {
+                Ok(BanOutcome::Banned)
+            }
+            async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+                Ok(true)
+            }
+            async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+                Ok(None)
+            }
+            async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+            async fn bot_user_id(&self) -> String {
+                "bot123".to_string()
+            }
+        }
+
+        let replies = StandardReplies::new(Arc::new(DroppingApi));
+        assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        // Kein Cooldown gesetzt: der naechste Versuch darf es erneut probieren.
+        assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
     }
 
     #[tokio::test]
