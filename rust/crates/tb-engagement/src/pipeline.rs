@@ -20,10 +20,12 @@ use crate::global_sentiment::{self, GlobalSentiment};
 use crate::lurker_signal::{lurker_hint_to_prompt_fragment, LurkerSignal};
 use crate::match_context::MatchContext;
 use crate::minimax_chat::{
-    build_baseline_system_prompt, ChatMessage, EngagementMinimaxClient, GenerateError,
+    build_baseline_system_prompt, sanitize_test_mode_text, ChatMessage, EngagementMinimaxClient,
+    GenerateError,
 };
 use crate::persona::Persona;
 use crate::rhythm::RhythmGuard;
+use crate::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 use crate::soul_store::SoulStore;
 use crate::stream_state::StreamState;
 use crate::stream_transcripts::{segments_to_prompt_fragment, StreamTranscripts};
@@ -189,7 +191,9 @@ impl EngagementPipeline {
         if settings.output_mode == OutputMode::Off {
             return HandleResult::new(Decision::Disabled);
         }
-        if !gate::is_operational_partner(&self.pool, &msg.channel_login).await {
+        if settings.output_mode != OutputMode::Test
+            && !gate::is_operational_partner(&self.pool, &msg.channel_login).await
+        {
             return HandleResult::new(Decision::Disabled);
         }
         if !self.stream_state.is_streaming_deadlock(&msg.channel_login).await {
@@ -243,7 +247,10 @@ impl EngagementPipeline {
             .collect();
 
         // --- System-Prompt aus Baseline + ~12 optionalen Fragmenten ---
-        let mut prompt = build_baseline_system_prompt(&msg.channel_login);
+        let mut prompt = build_baseline_system_prompt(
+            &msg.channel_login,
+            settings.output_mode == OutputMode::Test,
+        );
         append_fragment(&mut prompt, &self.soul.get_soul_extension_fragment().await);
         append_fragment(
             &mut prompt,
@@ -318,16 +325,56 @@ impl EngagementPipeline {
         let response = match self.minimax.generate(&prompt, &history, 500, 480).await {
             Ok(r) => r,
             Err(GenerateError::Unavailable(_)) => {
+                if settings.output_mode == OutputMode::Test {
+                    let store = SmalltalkLoopStore::new(self.pool.clone());
+                    if let Err(error) = store
+                        .record_provider_error(&msg.channel_login, "unavailable")
+                        .await
+                    {
+                        tracing::warn!(
+                            event = "smalltalk_loop.provider_error_persist_failed",
+                            channel = %msg.channel_login,
+                            reason = "unavailable",
+                            %error,
+                        );
+                    }
+                }
                 tracing::warn!("Engagement: MiniMax-Provider nicht verfügbar");
                 return HandleResult::new(Decision::ProviderError);
             }
             Err(e) => {
+                if settings.output_mode == OutputMode::Test {
+                    let store = SmalltalkLoopStore::new(self.pool.clone());
+                    if let Err(error) = store
+                        .record_provider_error(&msg.channel_login, "generate_error")
+                        .await
+                    {
+                        tracing::warn!(
+                            event = "smalltalk_loop.provider_error_persist_failed",
+                            channel = %msg.channel_login,
+                            reason = "generate_error",
+                            %error,
+                        );
+                    }
+                }
                 tracing::error!(error = %e, "Engagement: MiniMax-Call fehlgeschlagen");
                 return HandleResult::new(Decision::ProviderError);
             }
         };
 
-        let Some(text) = response.text.clone() else {
+        let test_generated_text = (settings.output_mode == OutputMode::Test)
+            .then(|| response.raw_text.clone())
+            .flatten();
+        let test_evaluation = test_generated_text.as_deref().map(|raw| {
+            sanitize_test_mode_text(raw)
+                .map(|text| (text, GeneratedOutcome::WouldSend))
+                .unwrap_or_else(|reason| (raw.to_string(), GeneratedOutcome::Rejected(reason)))
+        });
+        let text = test_evaluation
+            .as_ref()
+            .map(|(text, _)| text.clone())
+            .or_else(|| response.text.clone());
+        let Some(text) = text else {
             return HandleResult {
                 decision: Decision::Silent,
                 model: Some(response.model),
@@ -362,6 +409,47 @@ impl EngagementPipeline {
         // über das Decision-Log (response_text-Spalte) gestaged; das Discord-
         // Review-Ticket holt ihn dort ab. response_text (= Sendesignal für
         // tb-bot) bleibt bewusst None, shadow_text trägt den Text.
+        if settings.output_mode == OutputMode::Test {
+            let outcome = test_evaluation
+                .map(|(_, outcome)| outcome)
+                .unwrap_or(GeneratedOutcome::WouldSend);
+            let generated_text = test_generated_text.as_deref().unwrap_or(&text);
+            let store = SmalltalkLoopStore::new(self.pool.clone());
+            match store
+                .record_generated(
+                    &msg.channel_login,
+                    msg.message_id.as_deref(),
+                    generated_text,
+                    &msg.content,
+                    outcome,
+                    Utc::now(),
+                )
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => tracing::warn!(
+                    event = "smalltalk_loop.message_not_persisted",
+                    channel = %msg.channel_login,
+                    reason = "missing_session_or_duplicate",
+                ),
+                Err(error) => tracing::warn!(
+                    event = "smalltalk_loop.message_persist_failed",
+                    channel = %msg.channel_login,
+                    reason = "database",
+                    %error,
+                ),
+            }
+            return HandleResult {
+                decision: Decision::Tested,
+                shadow_text: Some(text),
+                model: Some(response.model),
+                prompt_tokens: response.prompt_tokens,
+                completion_tokens: response.completion_tokens,
+                latency_ms: Some(response.latency_ms),
+                ..HandleResult::new(Decision::Tested)
+            };
+        }
+
         if settings.output_mode == OutputMode::Shadow {
             return HandleResult {
                 decision: Decision::Shadowed,
@@ -458,6 +546,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
+        const SMALLTALK_MIGRATION: &str =
+            include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
@@ -466,7 +556,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], output_mode TEXT NOT NULL DEFAULT 'off')",
+            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], irc_read BOOLEAN NOT NULL DEFAULT FALSE, output_mode TEXT NOT NULL DEFAULT 'off')",
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, last_game TEXT)",
             "CREATE TABLE twitch_user_engagement_optout (twitch_user_id TEXT PRIMARY KEY, opted_out_at TIMESTAMPTZ DEFAULT NOW())",
@@ -475,6 +565,19 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_partner_outreach (
+                streamer_login TEXT PRIMARY KEY,
+                cooldown_until TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(SMALLTALK_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
@@ -588,6 +691,113 @@ mod tests {
             .fetch_one(&pool).await.unwrap();
         assert_eq!(row.0, "shadowed");
         assert_eq!(row.1.as_deref(), Some("shadow-antwort nur fuer review"));
+    }
+
+    /// `test` überspringt nur das Partner-Gate. Die Antwort bleibt strukturell
+    /// vom Twitch-Sendepfad getrennt: `response_text` ist immer leer.
+    #[tokio::test]
+    async fn testmodus_fremdkanal_erzeugt_aber_sendet_nicht() {
+        crate::minimax_chat::redirect_ledger_for_tests();
+        let Some(pool) = make_pool("t_eng_pipe_test").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'test')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_smalltalk_sessions
+                (id, channel_login, streamer_user_id, started_at, viewer_count,
+                 settings_existed, previous_enabled, previous_irc_read,
+                 previous_output_mode)
+             VALUES ($1, 'nani', '1', NOW(), 10, TRUE, FALSE, FALSE, 'off')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "fremdkanal antwort"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 8}
+            })))
+            .mount(&server)
+            .await;
+
+        let r = pipeline_with(pool.clone(), &server.uri()).handle(&msg()).await;
+        // Bewusst NICHT `Shadowed`: der bestehende Shadow-Review forwardet
+        // jede Zeile mit `decision='shadowed'` nach Discord. Waere der
+        // Testmodus dort eingereiht, laege jede Smalltalk-Antwort zusaetzlich
+        // im Partner-Review und wuerde dort wie ein Partner-Vorschlag wirken.
+        assert_eq!(r.decision, Decision::Tested);
+        assert!(r.response_text.is_none(), "Testmodus darf nie das Twitch-Sendesignal setzen");
+        assert_eq!(r.shadow_text.as_deref(), Some("fremdkanal antwort"));
+        let assistant_turns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_engagement_conversation WHERE role = 'assistant'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(assistant_turns, 0, "Testmodus führt keine Sende-Seiteneffekte aus");
+        let saved: (String, String, String) = sqlx::query_as(
+            "SELECT generated_text, trigger_text, outcome FROM twitch_smalltalk_messages",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            saved,
+            (
+                "fremdkanal antwort".to_string(),
+                "lohnt sich trophy collector auf haze".to_string(),
+                "would_send".to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn testmodus_speichert_verworfenen_text_mit_grund() {
+        crate::minimax_chat::redirect_ledger_for_tests();
+        let Some(pool) = make_pool("t_eng_pipe_test_rejected").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'test')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_smalltalk_sessions
+                (id, channel_login, streamer_user_id, started_at, viewer_count,
+                 settings_existed, previous_enabled, previous_irc_read,
+                 previous_output_mode)
+             VALUES ($1, 'nani', '1', NOW(), 10, TRUE, FALSE, FALSE, 'off')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "komm auf Discord"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 8}
+            })))
+            .mount(&server)
+            .await;
+
+        let r = pipeline_with(pool.clone(), &server.uri()).handle(&msg()).await;
+        assert!(r.response_text.is_none());
+        assert_eq!(r.shadow_text.as_deref(), Some("komm auf Discord"));
+        let saved: (String, String, Option<String>) = sqlx::query_as(
+            "SELECT generated_text, outcome, reject_reason FROM twitch_smalltalk_messages",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            saved,
+            (
+                "komm auf Discord".to_string(),
+                "rejected".to_string(),
+                Some("offer_or_link".to_string()),
+            )
+        );
     }
 
     /// output_mode='off' bei enabled=TRUE: no-op. Kein MiniMax-Call (Mock würde

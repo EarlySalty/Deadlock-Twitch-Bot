@@ -11,6 +11,11 @@ pub enum Decision {
     /// (für späteres Discord-Review). Kein Python-Pendant — neue Funktion aus
     /// dem Block-19-Grillme (Engagement-KI mit Shadow-Modus).
     Shadowed,
+    /// Wie [`Shadowed`](Self::Shadowed), aber aus dem Smalltalk-Testmodus in
+    /// einem fremden Kanal. Eigener Wert, weil der Shadow-Review jede
+    /// `shadowed`-Zeile nach Discord forwardet: Testantworten wuerden dort
+    /// zwischen den Partner-Vorschlaegen landen und wie welche aussehen.
+    Tested,
     /// Bewusst still (Pre-Filter, leere Modellantwort, Starter-Repeat).
     Silent,
     /// Anti-Burst-Sperre.
@@ -32,6 +37,7 @@ impl Decision {
         match self {
             Decision::Spoke => "spoke",
             Decision::Shadowed => "shadowed",
+            Decision::Tested => "tested",
             Decision::Silent => "silent",
             Decision::AntiBurst => "anti_burst",
             Decision::FloodGuard => "flood_guard",
@@ -42,7 +48,7 @@ impl Decision {
     }
 }
 
-/// Output-Modus der Engagement-KI eines Channels — drei klare Zustände.
+/// Output-Modus der Engagement-KI eines Channels.
 ///
 /// Neu aus dem Block-19-Grillme (Python kannte nur `enabled` als bool). Steuert,
 /// was mit einer erzeugten KI-Antwort passiert. **Default ist [`Off`](Self::Off)**
@@ -58,6 +64,9 @@ pub enum OutputMode {
     Shadow,
     /// Antwort wird normal in den Twitch-Chat gesendet.
     Live,
+    /// Antwort wird für fremde Kanäle erzeugt und ausschließlich ausgewertet.
+    /// Das Partner-Gate entfällt, der Twitch-Sendepfad bleibt gesperrt.
+    Test,
 }
 
 impl OutputMode {
@@ -67,6 +76,7 @@ impl OutputMode {
             OutputMode::Off => "off",
             OutputMode::Shadow => "shadow",
             OutputMode::Live => "live",
+            OutputMode::Test => "test",
         }
     }
 
@@ -76,6 +86,7 @@ impl OutputMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "live" => OutputMode::Live,
             "shadow" => OutputMode::Shadow,
+            "test" => OutputMode::Test,
             _ => OutputMode::Off,
         }
     }
@@ -148,6 +159,7 @@ mod tests {
     fn decision_strings() {
         assert_eq!(Decision::Spoke.as_str(), "spoke");
         assert_eq!(Decision::Shadowed.as_str(), "shadowed");
+        assert_eq!(Decision::Tested.as_str(), "tested");
         assert_eq!(Decision::AntiBurst.as_str(), "anti_burst");
         assert_eq!(Decision::ProviderError.as_str(), "provider_error");
     }
@@ -169,12 +181,18 @@ mod tests {
 
     #[test]
     fn output_mode_roundtrip_db_string() {
-        for m in [OutputMode::Off, OutputMode::Shadow, OutputMode::Live] {
+        for m in [
+            OutputMode::Off,
+            OutputMode::Shadow,
+            OutputMode::Live,
+            OutputMode::Test,
+        ] {
             assert_eq!(OutputMode::from_db(m.as_str()), m);
         }
         assert_eq!(OutputMode::Off.as_str(), "off");
         assert_eq!(OutputMode::Shadow.as_str(), "shadow");
         assert_eq!(OutputMode::Live.as_str(), "live");
+        assert_eq!(OutputMode::Test.as_str(), "test");
     }
 
     #[test]
@@ -185,5 +203,6 @@ mod tests {
         assert_eq!(OutputMode::from_db("bogus"), OutputMode::Off);
         assert_eq!(OutputMode::from_db("LIVE"), OutputMode::Live);
         assert_eq!(OutputMode::from_db("  Shadow "), OutputMode::Shadow);
+        assert_eq!(OutputMode::from_db(" Test "), OutputMode::Test);
     }
 }

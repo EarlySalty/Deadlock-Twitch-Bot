@@ -567,9 +567,9 @@ twitch_crew_review_events|expires_at|timestamp with time zone|NO|(now() + '6 mon
 twitch_crew_review_events|id|bigint|NO|nextval('twitch_crew_review_events_id_seq'::regclass)
 twitch_crew_review_events|last_delete_error|text|YES|
 twitch_crew_review_events|metadata|jsonb|NO|'{}'::jsonb
-twitch_crew_review_events|model|text|YES|
 twitch_crew_review_events|model_claim_id|uuid|YES|
 twitch_crew_review_events|model_claim_until|timestamp with time zone|YES|
+twitch_crew_review_events|model|text|YES|
 twitch_crew_review_events|occurred_at|timestamp with time zone|NO|
 twitch_crew_review_events|provider|text|YES|
 twitch_crew_review_events|review_session_id|uuid|NO|
@@ -790,6 +790,42 @@ twitch_outbound_chat_suppressions|suppressed_until|timestamp with time zone|NO|
 twitch_outbound_chat_suppressions|target_id|text|YES|
 twitch_outbound_chat_suppressions|target_login|text|NO|
 twitch_outbound_chat_suppressions|updated_at|timestamp with time zone|NO|now()
+twitch_outreach_shadow_events|channel_login|text|NO|
+twitch_outreach_shadow_events|content_tombstoned_at|timestamp with time zone|YES|
+twitch_outreach_shadow_events|created_at|timestamp with time zone|NO|now()
+twitch_outreach_shadow_events|cycle_id|uuid|NO|
+twitch_outreach_shadow_events|decision|jsonb|YES|
+twitch_outreach_shadow_events|discord_attempts|integer|NO|0
+twitch_outreach_shadow_events|discord_claim_id|uuid|YES|
+twitch_outreach_shadow_events|discord_claim_until|timestamp with time zone|YES|
+twitch_outreach_shadow_events|discord_delete_attempts|integer|NO|0
+twitch_outreach_shadow_events|discord_delete_next_attempt_at|timestamp with time zone|NO|now()
+twitch_outreach_shadow_events|discord_last_delete_error|text|YES|
+twitch_outreach_shadow_events|discord_last_error|text|YES|
+twitch_outreach_shadow_events|discord_message_id|text|YES|
+twitch_outreach_shadow_events|discord_next_attempt_at|timestamp with time zone|NO|now()
+twitch_outreach_shadow_events|error_class|text|YES|
+twitch_outreach_shadow_events|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
+twitch_outreach_shadow_events|id|bigint|NO|nextval('twitch_outreach_shadow_events_id_seq'::regclass)
+twitch_outreach_shadow_events|model|text|YES|
+twitch_outreach_shadow_events|occurred_at|timestamp with time zone|NO|
+twitch_outreach_shadow_events|outcome|text|NO|
+twitch_outreach_shadow_events|provider|text|YES|
+twitch_outreach_shadow_events|session_id|uuid|NO|
+twitch_outreach_shadow_events|stage|text|NO|
+twitch_outreach_shadow_events|static_recruitment_text|text|YES|
+twitch_outreach_shadow_events|transcript|text|YES|
+twitch_outreach_shadow_sessions|channel_login|text|NO|
+twitch_outreach_shadow_sessions|created_at|timestamp with time zone|NO|now()
+twitch_outreach_shadow_sessions|current_cycle_id|uuid|YES|
+twitch_outreach_shadow_sessions|end_reason|text|YES|
+twitch_outreach_shadow_sessions|ended_at|timestamp with time zone|YES|
+twitch_outreach_shadow_sessions|id|uuid|NO|
+twitch_outreach_shadow_sessions|processor_claim_id|uuid|YES|
+twitch_outreach_shadow_sessions|processor_claim_until|timestamp with time zone|YES|
+twitch_outreach_shadow_sessions|stage|text|NO|'watch'::text
+twitch_outreach_shadow_sessions|started_at|timestamp with time zone|NO|
+twitch_outreach_shadow_sessions|streamer_user_id|text|NO|
 twitch_partner_outreach_audit|correlation_id|uuid|YES|
 twitch_partner_outreach_audit|event_kind|text|NO|
 twitch_partner_outreach_audit|id|bigint|NO|nextval('twitch_partner_outreach_audit_id_seq'::regclass)
@@ -1081,6 +1117,40 @@ twitch_shoutout_events|other_broadcaster_login|text|YES|
 twitch_shoutout_events|received_at|timestamp with time zone|NO|now()
 twitch_shoutout_events|twitch_user_id|text|NO|
 twitch_shoutout_events|viewer_count|integer|YES|0
+twitch_smalltalk_messages|channel_login|text|NO|
+twitch_smalltalk_messages|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_messages|generated_at|timestamp with time zone|NO|
+twitch_smalltalk_messages|generated_text|text|NO|
+twitch_smalltalk_messages|id|bigint|NO|nextval('twitch_smalltalk_messages_id_seq'::regclass)
+twitch_smalltalk_messages|outcome|text|NO|
+twitch_smalltalk_messages|reject_reason|text|YES|
+twitch_smalltalk_messages|session_id|uuid|NO|
+twitch_smalltalk_messages|trigger_text|text|NO|
+twitch_smalltalk_messages|triggered_by_msg_id|text|YES|
+twitch_smalltalk_sessions|channel_login|text|NO|
+twitch_smalltalk_sessions|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|discord_attempts|integer|NO|0
+twitch_smalltalk_sessions|discord_claim_id|uuid|YES|
+twitch_smalltalk_sessions|discord_claim_until|timestamp with time zone|YES|
+twitch_smalltalk_sessions|discord_delete_attempts|integer|NO|0
+twitch_smalltalk_sessions|discord_delete_next_attempt_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|discord_last_delete_error|text|YES|
+twitch_smalltalk_sessions|discord_last_error|text|YES|
+twitch_smalltalk_sessions|discord_message_id|text|YES|
+twitch_smalltalk_sessions|discord_next_attempt_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|end_reason|text|YES|
+twitch_smalltalk_sessions|ended_at|timestamp with time zone|YES|
+twitch_smalltalk_sessions|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
+twitch_smalltalk_sessions|id|uuid|NO|
+twitch_smalltalk_sessions|last_provider_error|text|YES|
+twitch_smalltalk_sessions|previous_enabled|boolean|NO|
+twitch_smalltalk_sessions|previous_irc_read|boolean|NO|
+twitch_smalltalk_sessions|previous_output_mode|text|NO|
+twitch_smalltalk_sessions|provider_error_count|integer|NO|0
+twitch_smalltalk_sessions|settings_existed|boolean|NO|
+twitch_smalltalk_sessions|started_at|timestamp with time zone|NO|
+twitch_smalltalk_sessions|streamer_user_id|text|NO|
+twitch_smalltalk_sessions|viewer_count|integer|YES|
 twitch_spam_review_decisions|channel_login|text|NO|
 twitch_spam_review_decisions|chatter_id|text|YES|
 twitch_spam_review_decisions|chatter_login|text|NO|
