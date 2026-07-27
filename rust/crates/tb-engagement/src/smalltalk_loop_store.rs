@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -21,7 +23,13 @@ pub enum StoreError {
 #[derive(Clone)]
 pub struct SmalltalkLoopStore {
     pool: PgPool,
+    /// Nur Log-Drosselung, kein fachlicher Zustand: zuletzt gemeldete Lage und
+    /// wann. Der Loop teilt sich den Store per `clone`, deshalb `Arc`.
+    last_no_candidate: NoCandidateLogState,
 }
+
+/// Zuletzt gemeldete Lage und Zeitpunkt, geteilt über alle Klone des Stores.
+type NoCandidateLogState = Arc<Mutex<Option<(CandidateStats, DateTime<Utc>)>>>;
 
 #[derive(Clone, Debug)]
 pub struct SmalltalkSession {
@@ -129,7 +137,32 @@ struct SessionSettingsRow {
 
 impl SmalltalkLoopStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            last_no_candidate: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Meldet, dass diese Runde keinen Kanal gefunden hat, und warum nicht.
+    /// Ohne diese Zeile sieht "keine Kanaele uebrig" genauso aus wie "die
+    /// Auswahl-Query ist kaputt": in beiden Faellen steht nichts im Journal.
+    fn log_no_candidate(&self, stats: CandidateStats, now: DateTime<Utc>) {
+        let mut last = self.last_no_candidate.lock().expect("log-drossel");
+        if !should_log_no_candidate(*last, stats, now) {
+            return;
+        }
+        *last = Some((stats, now));
+        drop(last);
+        tracing::info!(
+            event = "smalltalk_loop.no_candidate",
+            checked = stats.checked,
+            offline = stats.offline,
+            other_game = stats.other_game,
+            partner = stats.partner,
+            blacklisted = stats.blacklisted,
+            cooldown = stats.cooldown,
+            eligible = stats.eligible,
+        );
     }
 
     pub async fn start_next_session(
@@ -213,46 +246,40 @@ impl SmalltalkLoopStore {
         )
         .fetch_all(&mut *tx)
         .await?;
-        let candidate = rows
-            .into_iter()
-            .filter_map(|row| {
-                let cooldown_until = row.cooldown_until.as_deref().and_then(|raw| {
-                    let parsed = parse_text_timestamp(raw);
-                    if parsed.is_none() {
-                        tracing::warn!(
-                            event = "smalltalk_loop.cooldown_unparsbar",
-                            channel = %row.channel_login,
-                        );
-                    }
-                    parsed
-                });
-                let eligible = row.is_live
-                    && row
-                        .game
-                        .as_deref()
-                        .is_some_and(|game| game.eq_ignore_ascii_case("deadlock"))
-                    && !row.partner_table
-                    && !row.partner_state
-                    // Wo der Bot gebannt ist, koennte er ohnehin nie senden.
-                    // Dort zu messen, ob er mitreden koennte, misst nichts.
-                    && !row.blacklisted
-                    && cooldown_until.is_none_or(|until| until <= now);
-                eligible.then_some(Candidate {
+        let mut stats = CandidateStats::default();
+        let mut eligible = Vec::new();
+        for row in rows {
+            let cooldown_until = row.cooldown_until.as_deref().and_then(|raw| {
+                let parsed = parse_text_timestamp(raw);
+                if parsed.is_none() {
+                    tracing::warn!(
+                        event = "smalltalk_loop.cooldown_unparsbar",
+                        channel = %row.channel_login,
+                    );
+                }
+                parsed
+            });
+            let reason = exclusion_reason(&row, cooldown_until, now);
+            stats.count(reason);
+            if reason.is_none() {
+                eligible.push(Candidate {
                     channel_login: row.channel_login,
                     streamer_user_id: row.streamer_user_id,
                     viewer_count: row.viewer_count,
                     last_observed_at: row.last_observed_at,
                     detected_at: row.detected_at,
-                })
-            })
-            .min_by(|left, right| {
-                left.last_observed_at
-                    .cmp(&right.last_observed_at)
-                    .then_with(|| left.detected_at.cmp(&right.detected_at))
-                    .then_with(|| left.channel_login.cmp(&right.channel_login))
-            });
+                });
+            }
+        }
+        let candidate = eligible.into_iter().min_by(|left, right| {
+            left.last_observed_at
+                .cmp(&right.last_observed_at)
+                .then_with(|| left.detected_at.cmp(&right.detected_at))
+                .then_with(|| left.channel_login.cmp(&right.channel_login))
+        });
         let Some(candidate) = candidate else {
             tx.commit().await?;
+            self.log_no_candidate(stats, now);
             return Ok(None);
         };
 
@@ -865,6 +892,86 @@ async fn set_cooldown(
     Ok(())
 }
 
+/// Warum ein Kandidat nicht in Frage kam, oder `None` für "geeignet".
+/// Die Reihenfolge ist die Prüfreihenfolge; gezählt wird der erste Grund, der
+/// greift. Ein Kanal kann mehrere gleichzeitig erfüllen — die Zahlen sind
+/// deshalb eine Aufteilung der geprüften Kanäle, keine Summe der Verstöße.
+fn exclusion_reason(
+    row: &CandidateRow,
+    cooldown_until: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<&'static str> {
+    if !row.is_live {
+        return Some("offline");
+    }
+    if !row
+        .game
+        .as_deref()
+        .is_some_and(|game| game.eq_ignore_ascii_case("deadlock"))
+    {
+        return Some("other_game");
+    }
+    if row.partner_table || row.partner_state {
+        return Some("partner");
+    }
+    // Wo der Bot gebannt ist, koennte er ohnehin nie senden. Dort zu messen,
+    // ob er mitreden koennte, misst nichts.
+    if row.blacklisted {
+        return Some("blacklisted");
+    }
+    if cooldown_until.is_some_and(|until| until > now) {
+        return Some("cooldown");
+    }
+    None
+}
+
+/// Aufteilung der geprüften Kanäle einer Loop-Runde.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CandidateStats {
+    checked: u32,
+    offline: u32,
+    other_game: u32,
+    partner: u32,
+    blacklisted: u32,
+    cooldown: u32,
+    eligible: u32,
+}
+
+impl CandidateStats {
+    fn count(&mut self, reason: Option<&str>) {
+        self.checked += 1;
+        match reason {
+            Some("offline") => self.offline += 1,
+            Some("other_game") => self.other_game += 1,
+            Some("partner") => self.partner += 1,
+            Some("blacklisted") => self.blacklisted += 1,
+            Some("cooldown") => self.cooldown += 1,
+            Some(_) => {}
+            None => self.eligible += 1,
+        }
+    }
+}
+
+/// Wiederholung derselben Lage, damit Stille nicht wieder mehrdeutig wird.
+const NO_CANDIDATE_LOG_REPEAT: Duration = Duration::minutes(15);
+
+/// Der Loop tickt alle 5 Sekunden. Jede Runde zu melden wären rund 17.000
+/// Zeilen pro Tag; die liest niemand, und dann fällt auch nicht auf, wenn eine
+/// davon wichtig ist. Gemeldet wird deshalb jede Änderung des Bildes, plus alle
+/// 15 Minuten eine Wiederholung.
+fn should_log_no_candidate(
+    last: Option<(CandidateStats, DateTime<Utc>)>,
+    stats: CandidateStats,
+    now: DateTime<Utc>,
+) -> bool {
+    match last {
+        None => true,
+        Some((previous, logged_at)) => {
+            previous != stats || now - logged_at >= NO_CANDIDATE_LOG_REPEAT
+        }
+    }
+}
+
 fn parse_text_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -901,6 +1008,161 @@ mod tests {
         assert_eq!(
             parse_text_timestamp("2026-07-27 12:34:56+02"),
             Some(expected)
+        );
+    }
+
+    fn row() -> CandidateRow {
+        CandidateRow {
+            channel_login: "kanal".to_string(),
+            streamer_user_id: "1".to_string(),
+            is_live: true,
+            game: Some("Deadlock".to_string()),
+            viewer_count: Some(12),
+            cooldown_until: None,
+            partner_table: false,
+            partner_state: false,
+            blacklisted: false,
+            last_observed_at: None,
+            detected_at: "2026-07-27".to_string(),
+        }
+    }
+
+    #[test]
+    fn geeigneter_kandidat_hat_keinen_ausschlussgrund() {
+        assert_eq!(exclusion_reason(&row(), None, Utc::now()), None);
+    }
+
+    #[test]
+    fn jeder_ausschluss_hat_einen_eigenen_grund() {
+        let now = Utc::now();
+        let offline = CandidateRow {
+            is_live: false,
+            ..row()
+        };
+        assert_eq!(exclusion_reason(&offline, None, now), Some("offline"));
+
+        let anderes_spiel = CandidateRow {
+            game: Some("Dota 2".to_string()),
+            ..row()
+        };
+        assert_eq!(
+            exclusion_reason(&anderes_spiel, None, now),
+            Some("other_game")
+        );
+
+        let partner = CandidateRow {
+            partner_table: true,
+            ..row()
+        };
+        assert_eq!(exclusion_reason(&partner, None, now), Some("partner"));
+
+        let partner_state = CandidateRow {
+            partner_state: true,
+            ..row()
+        };
+        assert_eq!(exclusion_reason(&partner_state, None, now), Some("partner"));
+
+        let blacklisted = CandidateRow {
+            blacklisted: true,
+            ..row()
+        };
+        assert_eq!(
+            exclusion_reason(&blacklisted, None, now),
+            Some("blacklisted")
+        );
+
+        assert_eq!(
+            exclusion_reason(&row(), Some(now + Duration::hours(1)), now),
+            Some("cooldown")
+        );
+        assert_eq!(
+            exclusion_reason(&row(), Some(now - Duration::seconds(1)), now),
+            None,
+            "abgelaufener Cooldown sperrt nicht mehr"
+        );
+    }
+
+    /// Der Loop tickt alle 5 Sekunden. Jede Runde zu melden waeren rund 17.000
+    /// Zeilen pro Tag — die liest niemand, und dann faellt auch nicht auf, wenn
+    /// eine davon wichtig ist.
+    #[test]
+    fn unveraendertes_bild_wird_nur_einmal_gemeldet() {
+        let now = Utc::now();
+        let stats = CandidateStats {
+            checked: 3,
+            cooldown: 3,
+            ..CandidateStats::default()
+        };
+        assert!(
+            should_log_no_candidate(None, stats, now),
+            "die erste Runde meldet immer"
+        );
+        assert!(!should_log_no_candidate(
+            Some((stats, now)),
+            stats,
+            now + Duration::seconds(5)
+        ));
+    }
+
+    #[test]
+    fn geaendertes_bild_wird_sofort_gemeldet() {
+        let now = Utc::now();
+        let vorher = CandidateStats {
+            checked: 3,
+            cooldown: 3,
+            ..CandidateStats::default()
+        };
+        let nachher = CandidateStats {
+            checked: 3,
+            cooldown: 2,
+            offline: 1,
+            ..CandidateStats::default()
+        };
+        assert!(should_log_no_candidate(
+            Some((vorher, now)),
+            nachher,
+            now + Duration::seconds(5)
+        ));
+    }
+
+    /// Ohne Wiederholung waere nach der ersten Meldung wieder Stille — und
+    /// Stille sieht aus wie "Prozess tot", nicht wie "Lage unveraendert".
+    #[test]
+    fn unveraendertes_bild_wird_nach_15_minuten_erneut_gemeldet() {
+        let now = Utc::now();
+        let stats = CandidateStats {
+            checked: 1,
+            partner: 1,
+            ..CandidateStats::default()
+        };
+        assert!(!should_log_no_candidate(
+            Some((stats, now)),
+            stats,
+            now + Duration::minutes(14)
+        ));
+        assert!(should_log_no_candidate(
+            Some((stats, now)),
+            stats,
+            now + Duration::minutes(15)
+        ));
+    }
+
+    #[test]
+    fn statistik_zaehlt_jeden_kandidaten_genau_einmal() {
+        let mut stats = CandidateStats::default();
+        stats.count(Some("offline"));
+        stats.count(Some("cooldown"));
+        stats.count(Some("cooldown"));
+        stats.count(None);
+        assert_eq!(
+            stats,
+            CandidateStats {
+                checked: 4,
+                offline: 1,
+                cooldown: 2,
+                eligible: 1,
+                ..CandidateStats::default()
+            }
         );
     }
 }
