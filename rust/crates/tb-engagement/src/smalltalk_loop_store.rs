@@ -240,12 +240,16 @@ impl SmalltalkLoopStore {
             return Ok(None);
         };
 
-        // Den echten Primaerschluessel mitlesen, nicht nur die Werte: der
-        // Kandidat kommt kleingeschrieben aus der Query, eine vorhandene
-        // Settings-Zeile kann aber `MixedCase` heissen. Der Upsert unten
-        // trifft per `ON CONFLICT (channel_login)` case-sensitiv und legte
-        // sonst eine zweite Zeile an, die nach dem Sitzungsende als
-        // enabled/irc_read zurueckbliebe und einen fremden Kanal aktiv liesse.
+        // Den vorhandenen Primaerschluessel mitlesen, nicht nur die Werte.
+        // `twitch_engagement_settings` wird laut Vertrag kleingeschrieben
+        // befuellt und exakt gelesen (siehe `auto_off.rs` und
+        // `gate::load_settings`). Eine abweichend geschriebene Zeile ist
+        // deshalb ein Datenfehler, den dieser Loop weder erben noch
+        // verschlimmern darf: schreibt er kleingeschrieben, entsteht eine
+        // zweite Zeile, die nach Sitzungsende aktiv zurueckbliebe; schreibt er
+        // in der vorhandenen Schreibweise, findet die Pipeline den Kanal zur
+        // Laufzeit nicht und die Sitzung liefe leer. Beides waere still falsch,
+        // also wird der Kandidat uebersprungen und bekommt Cooldown.
         let previous = sqlx::query_as::<_, (String, bool, bool, String)>(
             "SELECT channel_login, enabled, irc_read, output_mode
              FROM twitch_engagement_settings
@@ -255,18 +259,23 @@ impl SmalltalkLoopStore {
         .bind(&candidate.channel_login)
         .fetch_optional(&mut *tx)
         .await?;
-        let (settings_key, settings_existed, previous_enabled, previous_irc_read, previous_output_mode) =
+        if let Some((key, _, _, _)) = &previous {
+            if key != &candidate.channel_login {
+                set_cooldown(&mut tx, &candidate.channel_login, now).await?;
+                tx.commit().await?;
+                tracing::warn!(
+                    event = "smalltalk_loop.candidate_skipped",
+                    channel = %candidate.channel_login,
+                    reason = "settings_case_mismatch",
+                    "Settings-Zeile weicht in der Schreibweise ab, Kandidat uebersprungen"
+                );
+                return Ok(None);
+            }
+        }
+        let (settings_existed, previous_enabled, previous_irc_read, previous_output_mode) =
             match previous {
-                Some((key, enabled, irc_read, output_mode)) => {
-                    (key, true, enabled, irc_read, output_mode)
-                }
-                None => (
-                    candidate.channel_login.clone(),
-                    false,
-                    false,
-                    false,
-                    "off".to_string(),
-                ),
+                Some((_, enabled, irc_read, output_mode)) => (true, enabled, irc_read, output_mode),
+                None => (false, false, false, "off".to_string()),
             };
         let session = SmalltalkSession {
             id: Uuid::new_v4(),
@@ -300,7 +309,7 @@ impl SmalltalkLoopStore {
              ON CONFLICT (channel_login) DO UPDATE
              SET enabled = TRUE, irc_read = TRUE, output_mode = 'test'",
         )
-        .bind(&settings_key)
+        .bind(&session.channel_login)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -796,15 +805,7 @@ async fn close_locked(
         .execute(&mut **tx)
         .await?;
     }
-    sqlx::query(
-        "UPDATE twitch_partner_outreach
-         SET cooldown_until = $1
-         WHERE LOWER(streamer_login) = LOWER($2)",
-    )
-    .bind((now + CHANNEL_COOLDOWN).to_rfc3339())
-    .bind(&session.channel_login)
-    .execute(&mut **tx)
-    .await?;
+    set_cooldown(tx, &session.channel_login, now).await?;
     tracing::info!(
         event = "smalltalk_loop.session_closed",
         session_id = %session.id,
@@ -823,6 +824,26 @@ async fn lock_global(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Err
             hashtextextended('tb-engagement:smalltalk-loop-global', 0)
         )",
     )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Sperrt einen Kanal fuer [`CHANNEL_COOLDOWN`]. Wird sowohl nach einer
+/// beendeten Sitzung als auch beim Ueberspringen eines Kandidaten benutzt,
+/// damit ein uebersprungener Kanal nicht bei jedem Tick erneut auffaellt.
+async fn set_cooldown(
+    tx: &mut Transaction<'_, Postgres>,
+    channel_login: &str,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE twitch_partner_outreach
+         SET cooldown_until = $1
+         WHERE LOWER(streamer_login) = LOWER($2)",
+    )
+    .bind((now + CHANNEL_COOLDOWN).to_rfc3339())
+    .bind(channel_login)
     .execute(&mut **tx)
     .await?;
     Ok(())

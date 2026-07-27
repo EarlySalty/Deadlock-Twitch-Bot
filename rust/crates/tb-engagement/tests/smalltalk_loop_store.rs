@@ -9,13 +9,16 @@ use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
 
-/// Settings werden im restlichen Code case-sensitiv gelesen (`gate.rs`), der
-/// Kandidat kommt hier aber kleingeschrieben aus der Query. Trifft der Upsert
-/// die vorhandene Zeile nicht exakt, entsteht eine zweite, und die bleibt nach
-/// dem Sitzungsende als enabled/irc_read stehen: ein fremder Kanal waere
-/// dauerhaft scharf, ohne dass eine Sitzung laeuft.
+/// `twitch_engagement_settings` wird laut Vertrag kleingeschrieben befuellt
+/// und exakt gelesen (`auto_off.rs`, `gate::load_settings`). Eine abweichend
+/// geschriebene Zeile ist ein Datenfehler, den der Loop nicht sauber
+/// behandeln kann: kleingeschrieben schreiben erzeugt eine zweite Zeile, die
+/// nach Sitzungsende aktiv zurueckbleibt; in der vorhandenen Schreibweise
+/// schreiben laesst die Pipeline den Kanal zur Laufzeit nicht finden, die
+/// Sitzung liefe leer und meldete "keine Nachrichten". Also wird der Kandidat
+/// uebersprungen, bekommt Cooldown und das steht im Log.
 #[tokio::test]
-async fn vorhandene_settings_mit_grossschreibung_werden_nicht_dupliziert() {
+async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
     let Some(pool) = test_pool("smalltalk_loop_case").await else {
         return;
     };
@@ -31,12 +34,12 @@ async fn vorhandene_settings_mit_grossschreibung_werden_nicht_dupliziert() {
     let store = SmalltalkLoopStore::new(pool.clone());
     let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
 
-    store
-        .start_next_session(now)
-        .await
-        .expect("Start")
-        .expect("Sitzung");
+    let gestartet = store.start_next_session(now).await.expect("Start");
 
+    assert!(
+        gestartet.is_none(),
+        "ein Kanal, dessen Settings der Loop nicht sauber wiederherstellen kann, wird nicht belegt"
+    );
     let zeilen: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM twitch_engagement_settings WHERE LOWER(channel_login) = 'mixedcase'",
     )
@@ -44,11 +47,6 @@ async fn vorhandene_settings_mit_grossschreibung_werden_nicht_dupliziert() {
     .await
     .expect("zaehlen");
     assert_eq!(zeilen, 1, "es darf keine zweite Settings-Zeile entstehen");
-
-    store
-        .close_active_session("test_ende", now + Duration::minutes(61))
-        .await
-        .expect("schliessen");
 
     let (login, enabled, irc_read, modus) = sqlx::query_as::<_, (String, bool, bool, String)>(
         "SELECT channel_login, enabled, irc_read, output_mode
@@ -58,9 +56,21 @@ async fn vorhandene_settings_mit_grossschreibung_werden_nicht_dupliziert() {
     .fetch_one(&pool)
     .await
     .expect("Settings lesen");
-    assert_eq!(login, "MixedCase", "der urspruengliche Schluessel bleibt");
-    assert!(enabled && irc_read, "Vorzustand wird exakt wiederhergestellt");
-    assert_eq!(modus, "live", "der vorherige Ausgabemodus kommt zurueck");
+    assert_eq!(login, "MixedCase");
+    assert!(enabled && irc_read, "der Vorzustand bleibt unangetastet");
+    assert_eq!(modus, "live", "der Ausgabemodus wird nicht ueberschrieben");
+
+    let cooldown: Option<String> = sqlx::query_scalar(
+        "SELECT cooldown_until FROM twitch_partner_outreach
+         WHERE LOWER(streamer_login) = 'mixedcase'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Cooldown lesen");
+    assert!(
+        cooldown.is_some(),
+        "der uebersprungene Kandidat bekommt Cooldown, sonst faellt er bei jedem Tick erneut an"
+    );
 }
 
 #[tokio::test]
