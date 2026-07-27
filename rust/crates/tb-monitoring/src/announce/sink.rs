@@ -120,8 +120,15 @@ struct RetryState {
 }
 
 struct LiveSyncState {
-    bucket: u64,
+    /// Bucket des letzten *erfolgreichen* Live-Edits. `None` = es steht kein
+    /// aktueller Stand in Discord, der nächste Poll-Tick ist wieder fällig
+    /// (Wiedervorlage nach einem Broker-Ausfall).
+    bucket: Option<u64>,
     shows_offline: bool,
+    /// Seit dem letzten Erfolg gescheiterte Sync-Versuche — nur für die
+    /// Nachvollziehbarkeit im Log: eine WARN ohne Folgemeldung wäre sonst
+    /// nicht von „endgültig verloren" zu unterscheiden.
+    failed_syncs: u32,
 }
 
 struct LivePayload {
@@ -300,7 +307,7 @@ impl BrokerAnnouncementSink {
             let live_sync = self.live_sync.lock().expect("live sync lock");
             live_sync
                 .get(&login)
-                .map(|state| state.shows_offline || state.bucket != bucket)
+                .map(|state| state.shows_offline || state.bucket != Some(bucket))
                 .unwrap_or(true)
         };
         if !should_edit {
@@ -311,6 +318,7 @@ impl BrokerAnnouncementSink {
         let payload = self
             .render_live_payload(&login, &request, &tracking_token, render_now)
             .await;
+        let discord_message_id = message_id.clone();
         match self
             .transport
             .edit(
@@ -324,18 +332,59 @@ impl BrokerAnnouncementSink {
             .await
         {
             Ok(AnnouncementEditOutcome::Updated) => {
-                self.live_sync.lock().expect("live sync lock").insert(
-                    login,
-                    LiveSyncState {
-                        bucket,
-                        shows_offline: false,
-                    },
-                );
+                let recovered_after = {
+                    let mut live_sync = self.live_sync.lock().expect("live sync lock");
+                    let previous = live_sync.get(&login).map_or(0, |state| state.failed_syncs);
+                    live_sync.insert(
+                        login.clone(),
+                        LiveSyncState {
+                            bucket: Some(bucket),
+                            shows_offline: false,
+                            failed_syncs: 0,
+                        },
+                    );
+                    previous
+                };
+                if recovered_after > 0 {
+                    tracing::info!(
+                        login,
+                        discord_message_id = %discord_message_id,
+                        fehlversuche = recovered_after,
+                        "Live-Sync nach Broker-Ausfall nachgeholt"
+                    );
+                }
                 EndAnnouncementOutcome::Updated
             }
-            Ok(AnnouncementEditOutcome::Gone) => EndAnnouncementOutcome::Gone,
+            // Endgültig: Die Nachricht ist gelöscht, weitere Versuche sind
+            // sinnlos. Die Engine verwirft daraufhin die message_id.
+            Ok(AnnouncementEditOutcome::Gone) => {
+                tracing::info!(
+                    login,
+                    discord_message_id = %discord_message_id,
+                    "Ankündigung existiert nicht mehr, Live-Sync eingestellt"
+                );
+                EndAnnouncementOutcome::Gone
+            }
             Err(error) => {
-                tracing::warn!(%error, login, "Live-Sync via Broker fehlgeschlagen");
+                let failed_syncs = {
+                    let mut live_sync = self.live_sync.lock().expect("live sync lock");
+                    let state = live_sync.entry(login.clone()).or_insert(LiveSyncState {
+                        bucket: None,
+                        shows_offline: false,
+                        failed_syncs: 0,
+                    });
+                    // Kein aktueller Stand in Discord → nächster Tick ist fällig.
+                    state.bucket = None;
+                    state.failed_syncs = state.failed_syncs.saturating_add(1);
+                    state.failed_syncs
+                };
+                tracing::warn!(
+                    %error,
+                    login,
+                    discord_message_id = %discord_message_id,
+                    fehlversuche = failed_syncs,
+                    "Live-Sync via Broker fehlgeschlagen, nächster Poll-Tick holt nach"
+                );
                 EndAnnouncementOutcome::Failed
             }
         }
@@ -381,8 +430,9 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 self.live_sync.lock().expect("live sync lock").insert(
                     login,
                     LiveSyncState {
-                        bucket,
+                        bucket: Some(bucket),
                         shows_offline: false,
+                        failed_syncs: 0,
                     },
                 );
                 Some(AnnounceLiveResult {
@@ -478,8 +528,9 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 let bucket = Self::live_bucket(now);
                 let mut live_sync = self.live_sync.lock().expect("live sync lock");
                 let state = live_sync.entry(login).or_insert(LiveSyncState {
-                    bucket,
+                    bucket: Some(bucket),
                     shows_offline: false,
+                    failed_syncs: 0,
                 });
                 state.shows_offline = true;
                 EndAnnouncementOutcome::Updated
@@ -489,7 +540,12 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 EndAnnouncementOutcome::Gone
             }
             Err(error) => {
-                tracing::warn!(%error, login, "Offline-Edit via Broker fehlgeschlagen");
+                tracing::warn!(
+                    %error,
+                    login,
+                    discord_message_id = %discord_message_id,
+                    "Offline-Edit via Broker fehlgeschlagen, nächster Poll-Tick holt nach"
+                );
                 EndAnnouncementOutcome::Failed
             }
         }

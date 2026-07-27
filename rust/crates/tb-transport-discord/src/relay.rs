@@ -226,8 +226,14 @@ impl BrokerRelay {
 
     /// Sendet eine POST-Anfrage an den Broker mit Retry-Logik.
     ///
-    /// Retry: max. 2 Versuche; bei Timeout 2 s warten; HTTP ≥ 400 → kein Retry;
-    /// Netzwerkfehler → kein Retry.
+    /// Retry: max. 2 Versuche; bei Timeout und Verbindungsfehler 2 s warten;
+    /// HTTP ≥ 400 → kein Retry (der Broker hat geantwortet, ein zweiter
+    /// identischer Call ändert daran nichts); sonstige Netzwerkfehler → kein
+    /// Retry.
+    ///
+    /// Der Verbindungsfehler gehört dazu, weil der Master-Broker im
+    /// Discord-Bot lebt: Während dessen Neustart läuft jeder Call in
+    /// „connection refused", obwohl der Port Sekunden später wieder horcht.
     async fn post_with_retry<T: serde::Serialize>(
         &self,
         path: &str,
@@ -249,17 +255,25 @@ impl BrokerRelay {
 
             match result {
                 Ok(resp) => return Ok(resp),
-                Err(e) if e.is_timeout() => {
+                Err(e) if e.is_timeout() || e.is_connect() => {
                     last_err = Some(DiscordError::Http(e));
                     if attempt + 1 < MAX_ATTEMPTS {
                         tokio::time::sleep(RETRY_WAIT).await;
                     }
-                    // Timeout-Versuch → kein weiterer Retry nach dem letzten
+                    // Letzter Versuch → kein weiterer Retry
                 }
                 Err(e) => return Err(DiscordError::Http(e)),
             }
         }
-        Err(last_err.unwrap())
+        match last_err {
+            Some(err) => Err(err),
+            // Unerreichbar: MAX_ATTEMPTS > 0 und jeder Durchlauf kehrt zurück
+            // oder setzt last_err.
+            None => Err(DiscordError::BrokerError {
+                status: 502,
+                body: "Broker-Aufruf ohne Ergebnis".to_string(),
+            }),
+        }
     }
 
     /// Löst einen Discord-User über den Broker auf (read-only).
@@ -1154,6 +1168,78 @@ mod tests {
         DiscordBackend::remove_member_role(&noop, 1, 2, 3, "x")
             .await
             .unwrap();
+    }
+
+    /// Transienter Fall: Der Broker ist im ersten Versuch nicht erreichbar
+    /// (Discord-Bot startet neu → „connection refused"), horcht aber vor dem
+    /// zweiten Versuch wieder. Der Edit muss durchkommen, nicht verloren gehen.
+    #[tokio::test]
+    async fn edit_rich_message_wiederholt_nach_verbindungsfehler() {
+        // Port belegen und sofort freigeben: der erste POST läuft damit
+        // garantiert in „connection refused", der Mock horcht erst danach.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("Port")
+            .local_addr()
+            .expect("Adresse")
+            .port();
+        let base_url = format!("http://127.0.0.1:{port}");
+
+        let server_task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let listener = std::net::TcpListener::bind(("127.0.0.1", port)).expect("Listener");
+            let server = MockServer::builder().listener(listener).start().await;
+            Mock::given(method("POST"))
+                .and(path(EDIT_PATH))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        });
+
+        let relay = BrokerRelay::new(&test_config(&base_url)).unwrap();
+        let result = relay
+            .edit_rich_message(EditRichMessage {
+                channel_id: 555,
+                message_id: "msg-1".to_string(),
+                content: None,
+                embed: serde_json::json!({"title": "Live"}),
+                components: None,
+                view_spec: None,
+            })
+            .await;
+
+        let server = server_task.await.expect("Mock-Server");
+        assert!(result.is_ok(), "zweiter Versuch muss durchkommen: {result:?}");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    /// Endgültiger Fall: Der Broker antwortet 404 (Nachricht existiert nicht
+    /// mehr). Ein Retry wäre sinnlos — es darf bei genau einem POST bleiben.
+    #[tokio::test]
+    async fn edit_rich_message_wiederholt_nicht_bei_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(EDIT_PATH))
+            .respond_with(ResponseTemplate::new(404).set_body_string("unknown message"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let error = relay
+            .edit_rich_message(EditRichMessage {
+                channel_id: 555,
+                message_id: "msg-1".to_string(),
+                content: None,
+                embed: serde_json::json!({"title": "Live"}),
+                components: None,
+                view_spec: None,
+            })
+            .await
+            .expect_err("404 ist ein Fehler");
+        assert!(matches!(error, DiscordError::BrokerError { status: 404, .. }));
+        server.verify().await;
     }
 
     #[tokio::test]

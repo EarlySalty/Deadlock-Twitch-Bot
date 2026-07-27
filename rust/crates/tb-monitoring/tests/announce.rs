@@ -46,6 +46,7 @@ fn stable_cache_buster(seed: &str) -> String {
 #[derive(Default)]
 struct StubTransport {
     fail_next_send: AtomicBool,
+    fail_next_edit: AtomicBool,
     gone_next_edit: AtomicBool,
     sends: Mutex<Vec<SentMessage>>,
     edits: Mutex<Vec<EditedMessage>>,
@@ -84,6 +85,9 @@ impl AnnouncementTransport for StubTransport {
         components: Option<Value>,
         view_spec: Option<Value>,
     ) -> Result<AnnouncementEditOutcome, SourceError> {
+        if self.fail_next_edit.swap(false, Ordering::SeqCst) {
+            return Err("broker down".into());
+        }
         self.edits
             .lock()
             .unwrap()
@@ -632,6 +636,63 @@ async fn sync_live_announcement_resume_editiert_offline_message_ohne_send() {
         components.as_ref().expect("Live Components V2")[0]["accent_color"],
         0xC8A86B
     );
+}
+
+/// Transienter Broker-Ausfall (Discord-Bot startet neu): Der Edit schlägt fehl,
+/// der nächste Poll-Tick im selben 5-Minuten-Bucket muss ihn nachholen — sonst
+/// behielte die Ankündigung dauerhaft den veralteten Stand.
+#[tokio::test]
+async fn sync_live_announcement_holt_nach_broker_ausfall_nach() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+    let mut request = live_request("drag");
+    request.previous_message_id = Some("msg-1".to_string());
+
+    transport.fail_next_edit.store(true, Ordering::SeqCst);
+    assert_eq!(
+        sink.sync_live_announcement(request.clone()).await,
+        EndAnnouncementOutcome::Failed,
+        "Broker weg → dieser Tick scheitert"
+    );
+    assert!(
+        transport.edits.lock().unwrap().is_empty(),
+        "der gescheiterte Edit hat Discord nie erreicht"
+    );
+
+    assert_eq!(
+        sink.sync_live_announcement(request.clone()).await,
+        EndAnnouncementOutcome::Updated,
+        "nächster Tick holt den verlorenen Edit nach"
+    );
+    assert_eq!(
+        transport.edits.lock().unwrap().len(),
+        1,
+        "die Aktualisierung ist genau einmal angekommen"
+    );
+
+    assert_eq!(
+        sink.sync_live_announcement(request).await,
+        EndAnnouncementOutcome::Failed,
+        "nach dem Nachholen greift die Bucket-Drosselung wieder"
+    );
+    assert_eq!(transport.edits.lock().unwrap().len(), 1);
+}
+
+/// Endgültiger Fall: Die Nachricht existiert nicht mehr. Der Sink meldet `Gone`
+/// (die Engine verwirft daraufhin die message_id) statt endlos weiterzueditieren.
+#[tokio::test]
+async fn sync_live_announcement_meldet_geloeschte_nachricht_als_gone() {
+    let transport = Arc::new(StubTransport::default());
+    let sink = sink_with(transport.clone());
+    let mut request = live_request("drag");
+    request.previous_message_id = Some("msg-1".to_string());
+
+    transport.gone_next_edit.store(true, Ordering::SeqCst);
+    assert_eq!(
+        sink.sync_live_announcement(request).await,
+        EndAnnouncementOutcome::Gone
+    );
+    assert_eq!(transport.edits.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
