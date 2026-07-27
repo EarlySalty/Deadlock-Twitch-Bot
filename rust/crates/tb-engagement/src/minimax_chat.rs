@@ -301,27 +301,50 @@ pub struct EngagementMinimaxClient {
 }
 
 impl EngagementMinimaxClient {
-    /// Baut den Client; `None`-Parameter ziehen aus Env bzw. Defaults. Key:
-    /// `MINIMAX_TOKEN_PLAN_KEY` → `MINIMAX_API_KEY`. Base-URL: `MINIMAX_BASE_URL`
-    /// → [`DEFAULT_BASE_URL`]. Modell: `ENGAGEMENT_MINIMAX_MODEL` → [`DEFAULT_MODEL`].
+    /// Baut den Client. Explizite Parameter gewinnen immer; sonst entscheidet
+    /// die gemeinsame Provider-Auswahl ([`tb_llm::endpoint_for`]) über Anbieter,
+    /// Adresse, Modell und Key — heute Fireworks/DeepSeek, solange ein
+    /// Fireworks-Key gesetzt ist, sonst weiterhin MiniMax.
+    ///
+    /// Die alten MiniMax-Variablen bleiben wirksam: `MINIMAX_TOKEN_PLAN_KEY`,
+    /// `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` und `ENGAGEMENT_MINIMAX_MODEL`
+    /// überschreiben die Auswahl, damit ein Rückfall ohne Deploy möglich ist.
     pub fn new(
         api_key: Option<String>,
         base_url: Option<String>,
         model: Option<String>,
         timeout: Option<Duration>,
     ) -> Self {
+        let endpoint = tb_llm::endpoint_for("engagement");
+        // Key, Adresse und Modell gehören zusammen: die MiniMax-Variablen
+        // greifen nur, wenn die Auswahl auch MiniMax ergeben hat. Sonst
+        // entstünde ein MiniMax-Key an der Fireworks-Adresse.
+        let is_minimax = endpoint.provider == "minimax";
         let api_key = api_key
             .filter(|k| !k.is_empty())
-            .or_else(|| nonempty_env("MINIMAX_TOKEN_PLAN_KEY"))
-            .or_else(|| nonempty_env("MINIMAX_API_KEY"));
+            .or_else(|| {
+                is_minimax
+                    .then(|| nonempty_env("MINIMAX_TOKEN_PLAN_KEY"))
+                    .flatten()
+            })
+            .or_else(|| {
+                is_minimax
+                    .then(|| nonempty_env("MINIMAX_API_KEY"))
+                    .flatten()
+            })
+            .or(endpoint.api_key);
         let base_url = base_url
             .filter(|u| !u.is_empty())
-            .or_else(|| nonempty_env("MINIMAX_BASE_URL"))
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+            .or_else(|| {
+                is_minimax
+                    .then(|| nonempty_env("MINIMAX_BASE_URL"))
+                    .flatten()
+            })
+            .unwrap_or(endpoint.base_url);
         let model = model
             .filter(|m| !m.is_empty())
             .or_else(|| nonempty_env("ENGAGEMENT_MINIMAX_MODEL"))
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+            .unwrap_or(endpoint.model);
         Self {
             api_key,
             base_url,
@@ -617,6 +640,77 @@ mod tests {
             Some("MiniMax-M3".to_string()),
             None,
         )
+    }
+
+    /// Serialisiert die Env-Mutationen der Provider-Tests.
+    static PROVIDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_provider_env() {
+        for v in [
+            "TB_LLM_PROVIDER_DEFAULT",
+            "TB_LLM_PROVIDER_ENGAGEMENT",
+            "FIREWORK_API_KEY",
+            "FIREWORKS_API_KEY",
+            "FIREWORKS_MODEL",
+            "FIREWORK_MODEL",
+            "MINIMAX_API_KEY",
+            "MINIMAX_TOKEN_PLAN_KEY",
+            "MINIMAX_BASE_URL",
+            "ENGAGEMENT_MINIMAX_MODEL",
+        ] {
+            std::env::remove_var(v);
+        }
+    }
+
+    #[test]
+    fn fireworks_key_zieht_client_komplett_auf_deepseek() {
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+        // Beide Keys gesetzt: der MiniMax-Key darf NICHT an die
+        // Fireworks-Adresse geraten.
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+
+        let client = EngagementMinimaxClient::new(None, None, None, None);
+        assert_eq!(client.api_key.as_deref(), Some("fireworks-key"));
+        assert!(
+            client.base_url.contains("fireworks.ai"),
+            "falsche Adresse: {}",
+            client.base_url
+        );
+        assert!(
+            client.model.contains("deepseek"),
+            "falsches Modell: {}",
+            client.model
+        );
+        clear_provider_env();
+    }
+
+    #[test]
+    fn ohne_fireworks_key_bleibt_alles_bei_minimax() {
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+
+        let client = EngagementMinimaxClient::new(None, None, None, None);
+        assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
+        assert_eq!(client.base_url, DEFAULT_BASE_URL);
+        assert_eq!(client.model, DEFAULT_MODEL);
+        clear_provider_env();
+    }
+
+    #[test]
+    fn expliziter_provider_schaltet_zurueck_auf_minimax() {
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+        std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
+
+        let client = EngagementMinimaxClient::new(None, None, None, None);
+        assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
+        assert_eq!(client.base_url, DEFAULT_BASE_URL);
+        clear_provider_env();
     }
 
     #[test]

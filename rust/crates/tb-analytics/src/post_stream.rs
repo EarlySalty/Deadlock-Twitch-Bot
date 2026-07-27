@@ -317,9 +317,6 @@ pub fn normalize_word_groups(value: &serde_json::Value) -> Vec<WordGroup> {
 // KI-Aufruf + Modellwahl (Python `_call_minimax` / `_call_claude` / `_plan_ai_model`)
 // ---------------------------------------------------------------------------
 
-/// OpenAI-kompatibler MiniMax-Endpoint (Python `MINIMAX_BASE_URL`).
-const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
-const MINIMAX_MODEL: &str = "MiniMax-M3";
 /// Anthropic-Messages-API-Basis (der SDK-Default-Host).
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const CLAUDE_MODEL: &str = "claude-opus-4-6";
@@ -347,18 +344,6 @@ pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiMod
     } else {
         Ok(None)
     }
-}
-
-fn resolve_minimax_key() -> Option<String> {
-    for name in ["MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX"] {
-        if let Ok(value) = std::env::var(name) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn resolve_anthropic_key() -> Option<String> {
@@ -405,10 +390,15 @@ struct MinimaxUsage {
 /// Jeder Call wird — wie in Python via `_track_minimax_completion` — best-effort
 /// ins MiniMax-Usage-Ledger verbucht (`purpose=post-stream-report`), mit den
 /// echten Token-Zahlen aus dem `usage`-Block der Antwort.
-pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result<String, String> {
+pub async fn call_minimax(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+) -> Result<String, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
-        "model": MINIMAX_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
         "max_tokens": 16000,
@@ -431,14 +421,7 @@ pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result
     let (content, tokens_in, tokens_out) = split_minimax_response(parsed);
     // Best-effort-Verbuchung (Python `_track_minimax_completion`): wirft nie und
     // kippt den Call nicht — die echte Persistenz/Isolation testet `tb-llm`.
-    tb_llm::ledger::record(
-        MINIMAX_LEDGER_PURPOSE,
-        MINIMAX_MODEL,
-        tokens_in,
-        tokens_out,
-        true,
-    )
-    .await;
+    tb_llm::ledger::record(MINIMAX_LEDGER_PURPOSE, model, tokens_in, tokens_out, true).await;
     Ok(content)
 }
 
@@ -532,10 +515,11 @@ pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<Wo
     let prompt = build_word_group_prompt(messages.len(), messages);
     let raw = match model {
         AiModel::Minimax => {
-            let Some(key) = resolve_minimax_key() else {
+            let endpoint = tb_llm::endpoint_for("post_stream");
+            let Some(key) = endpoint.api_key.as_deref() else {
                 return Vec::new();
             };
-            call_minimax(MINIMAX_BASE_URL, &key, &prompt)
+            call_minimax(&endpoint.base_url, key, &endpoint.model, &prompt)
                 .await
                 .unwrap_or_default()
         }
@@ -1942,14 +1926,22 @@ pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) ->
     let prompt = build_report_v2_prompt(snapshot);
     let raw = match model {
         AiModel::Minimax => {
-            let Some(key) = resolve_minimax_key() else {
-                tracing::warn!("PostStream: MiniMax-Key fehlt, Fallback-Report aktiv");
+            let endpoint = tb_llm::endpoint_for("post_stream");
+            let Some(key) = endpoint.api_key.as_deref() else {
+                tracing::warn!(
+                    provider = endpoint.provider,
+                    "PostStream: LLM-Key fehlt, Fallback-Report aktiv"
+                );
                 return report_v2_fallback(snapshot);
             };
-            match call_minimax(MINIMAX_BASE_URL, &key, &prompt).await {
+            match call_minimax(&endpoint.base_url, key, &endpoint.model, &prompt).await {
                 Ok(r) => r,
                 Err(error) => {
-                    tracing::warn!(%error, "PostStream: MiniMax-Aufruf fehlgeschlagen");
+                    tracing::warn!(
+                        provider = endpoint.provider,
+                        %error,
+                        "PostStream: LLM-Aufruf fehlgeschlagen"
+                    );
                     return report_v2_fallback(snapshot);
                 }
             }
@@ -2480,6 +2472,79 @@ mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 
+    static PROVIDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_provider_env() {
+        for name in [
+            "TB_LLM_PROVIDER_DEFAULT",
+            "TB_LLM_PROVIDER_POST_STREAM",
+            "FIREWORK_API_KEY",
+            "FIREWORKS_API_KEY",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
+            "FIREWORK_MODEL",
+            "FIREWORKS_MODEL",
+            "MINIMAX_TOKEN_PLAN_KEY",
+            "MINIMAX_API_KEY",
+            "MINIMAX_BASE_URL",
+            "MINIMAX_MODEL",
+            "MINMAX",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+
+    // Die Env-Werte müssen bis nach dem HTTP-Call exklusiv bleiben; sonst
+    // können parallele Tests den ausgewählten Endpoint während des Calls ändern.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn post_stream_folgt_gemeinsamer_provider_auswahl() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+
+        let endpoint = tb_llm::endpoint_for("post_stream");
+        assert!(endpoint.base_url.contains("fireworks.ai"));
+        assert!(endpoint.model.contains("deepseek"));
+
+        let server = MockServer::start().await;
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content":
+                    "{\"snapshot\":{\"bewertung\":\"Provider-Test\"}}"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let snapshot = serde_json::json!({
+            "schema_version": "post_stream_report_v2",
+            "report_variant": "compact",
+        });
+        let report = generate_report_v2(AiModel::Minimax, &snapshot).await;
+        assert_eq!(report["snapshot"]["bewertung"], "Provider-Test");
+
+        clear_provider_env();
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+        let endpoint = tb_llm::endpoint_for("post_stream");
+        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
+        assert_eq!(endpoint.model, "MiniMax-M3");
+
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+        std::env::set_var("TB_LLM_PROVIDER_POST_STREAM", "minimax");
+        let endpoint = tb_llm::endpoint_for("post_stream");
+        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
+        assert_eq!(endpoint.model, "MiniMax-M3");
+        clear_provider_env();
+    }
+
     fn msg(content: &str, author: &str, minute: Option<i64>) -> ChatMessageRow {
         ChatMessageRow {
             content: content.to_string(),
@@ -2541,7 +2606,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let out = call_minimax(&server.uri(), "k", "prompt").await.unwrap();
+        let out = call_minimax(&server.uri(), "k", "MiniMax-M3", "prompt")
+            .await
+            .unwrap();
         assert_eq!(out, "ANTWORT");
     }
 

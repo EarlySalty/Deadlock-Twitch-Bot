@@ -7,11 +7,6 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 
-/// OpenAI-kompatibler MiniMax-Endpoint (Python `MINIMAX_BASE_URL`).
-pub const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
-/// MiniMax-Modell (Python `MINIMAX_MODEL`).
-pub const MINIMAX_MODEL: &str = "MiniMax-M3";
-
 /// Deadlock-Rangnamen (Python `_CANONICAL_RANK_NAMES`).
 const CANONICAL_RANK_NAMES: [&str; 11] = [
     "Obscurus",
@@ -67,7 +62,11 @@ impl TitleRateLimiter {
 
     /// Prüft + verbucht eine Anfrage. `Err` mit `retry_after`, wenn das Budget
     /// im Fenster erschöpft ist (Python `check_and_record`).
-    pub fn check_and_record(&self, streamer_id: &str, source: &str) -> Result<(), RateLimitExceeded> {
+    pub fn check_and_record(
+        &self,
+        streamer_id: &str,
+        source: &str,
+    ) -> Result<(), RateLimitExceeded> {
         let now = Instant::now();
         let key = format!("{streamer_id}:{source}");
         let limit = if source == "dashboard" {
@@ -122,7 +121,8 @@ pub struct TitleResult {
 fn emoji_regex() -> Regex {
     // Python EMOJI_PATTERN. \x{10000}-\x{10ffff} deckt die astralen Emoji
     // bereits ab; die zusätzlichen BMP-Bereiche fürs Symbol-Set.
-    Regex::new(r"[\x{10000}-\x{10ffff}\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]").unwrap()
+    Regex::new(r"[\x{10000}-\x{10ffff}\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]")
+        .unwrap()
 }
 
 /// Anteil der Titel mit mindestens einem Emoji (Python `_emoji_ratio`).
@@ -231,11 +231,7 @@ pub fn sanitize_generated_title(title: &str, keywords: &str, rank_display: Optio
         Regex::new(&pat).unwrap().replace_all(c, "").into_owned()
     };
     if let Some(rd) = rank_display {
-        let allowed = rd
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let allowed = rd.split_whitespace().next().unwrap_or("").to_lowercase();
         for name in CANONICAL_RANK_NAMES {
             if name.to_lowercase() != allowed {
                 cleaned = strip_rank(&cleaned, name);
@@ -261,9 +257,18 @@ pub fn sanitize_generated_title(title: &str, keywords: &str, rank_display: Optio
         .into_owned();
 
     // Whitespace + doppelte Trenner aufräumen.
-    cleaned = Regex::new(r"\s{2,}").unwrap().replace_all(&cleaned, " ").into_owned();
-    cleaned = Regex::new(r"\s+([|:,-])").unwrap().replace_all(&cleaned, "$1").into_owned();
-    cleaned = Regex::new(r"([|:,-]){2,}").unwrap().replace_all(&cleaned, "$1").into_owned();
+    cleaned = Regex::new(r"\s{2,}")
+        .unwrap()
+        .replace_all(&cleaned, " ")
+        .into_owned();
+    cleaned = Regex::new(r"\s+([|:,-])")
+        .unwrap()
+        .replace_all(&cleaned, "$1")
+        .into_owned();
+    cleaned = Regex::new(r"([|:,-]){2,}")
+        .unwrap()
+        .replace_all(&cleaned, "$1")
+        .into_owned();
     cleaned.trim_matches(|c| " -|:,".contains(c)).to_string()
 }
 
@@ -373,15 +378,20 @@ pub fn build_title_prompt(
 
     let mut sorted: Vec<&PromptHistoryItem> = title_history.iter().collect();
     sorted.sort_by(|a, b| {
-        let ka = (a.relative_perf.unwrap_or(0.0), a.engagement_rate.unwrap_or(0.0));
-        let kb = (b.relative_perf.unwrap_or(0.0), b.engagement_rate.unwrap_or(0.0));
+        let ka = (
+            a.relative_perf.unwrap_or(0.0),
+            a.engagement_rate.unwrap_or(0.0),
+        );
+        let kb = (
+            b.relative_perf.unwrap_or(0.0),
+            b.engagement_rate.unwrap_or(0.0),
+        );
         kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let top_reference_lines =
         lines_or_default(sorted.iter().take(8).map(|t| history_line(t)).collect());
-    let history_lines =
-        lines_or_default(title_history.iter().take(20).map(history_line).collect());
+    let history_lines = lines_or_default(title_history.iter().take(20).map(history_line).collect());
     let benchmark_lines = lines_or_default(
         knowledge_titles
             .iter()
@@ -514,38 +524,30 @@ fn usage_tokens(usage: Option<&serde_json::Value>) -> (i64, i64) {
     )
 }
 
-/// MiniMax-Key aus der Umgebung (Python `_load_secret`-Reihenfolge):
-/// MINIMAX_TOKEN_PLAN_KEY → MINIMAX_API_KEY → MINMAX, erster nicht-leerer.
-pub fn resolve_minimax_key() -> Option<String> {
-    for name in ["MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX"] {
-        if let Ok(value) = std::env::var(name) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
 /// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
 /// auf einen „wahren" Wert gesetzt ist.
 fn pentest_disable_rate_limits() -> bool {
     std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS")
-        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
+        .map(|v| {
+            !matches!(
+                v.trim().to_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            )
+        })
         .unwrap_or(false)
 }
 
 async fn minimax_chat_completion(
     base_url: &str,
     api_key: &str,
+    model: &str,
     prompt: &str,
     temperature: f64,
     max_tokens: u32,
 ) -> Result<MiniMaxCompletion, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
-        "model": MINIMAX_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -595,12 +597,13 @@ async fn minimax_chat_completion(
     })
 }
 
-/// Kern von `generate_title` mit injizierbarem `base_url` + `api_key` (für Tests).
-/// emoji_ratio → Prompt → MiniMax-POST → parse → sanitize.
+/// Kern von `generate_title` mit injizierbarem Endpoint (für Tests).
+/// emoji_ratio → Prompt → OpenAI-kompatibler POST → parse → sanitize.
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_title_with(
     base_url: &str,
     api_key: &str,
+    model: &str,
     keywords: &str,
     title_history: &[PromptHistoryItem],
     knowledge_titles: &[PromptKnowledgeItem],
@@ -617,12 +620,12 @@ pub async fn generate_title_with(
         ratio,
         live_state,
     );
-    let completion = minimax_chat_completion(base_url, api_key, &prompt, 0.35, 2000)
+    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.35, 2000)
         .await
         .map_err(GenerateTitleError::Http)?;
     tb_llm::ledger::record(
         "title",
-        MINIMAX_MODEL,
+        model,
         completion.tokens_in,
         completion.tokens_out,
         true,
@@ -659,10 +662,15 @@ pub async fn generate_title(
             .check_and_record(streamer_id, source)
             .map_err(GenerateTitleError::RateLimit)?;
     }
-    let api_key = resolve_minimax_key().ok_or(GenerateTitleError::NoApiKey)?;
+    let endpoint = tb_llm::endpoint_for("title_ai");
+    let api_key = endpoint
+        .api_key
+        .as_deref()
+        .ok_or(GenerateTitleError::NoApiKey)?;
     generate_title_with(
-        MINIMAX_BASE_URL,
-        &api_key,
+        &endpoint.base_url,
+        api_key,
+        &endpoint.model,
         keywords,
         title_history,
         knowledge_titles,
@@ -778,6 +786,7 @@ fn parse_insight_response(raw: &str) -> Option<InsightResult> {
 pub async fn generate_insight_with(
     base_url: &str,
     api_key: &str,
+    model: &str,
     history: &[InsightHistoryItem],
     period_label: &str,
 ) -> Option<InsightResult> {
@@ -785,12 +794,12 @@ pub async fn generate_insight_with(
         return None;
     }
     let prompt = build_insight_prompt(history, period_label);
-    let completion = minimax_chat_completion(base_url, api_key, &prompt, 0.5, 1500)
+    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.5, 1500)
         .await
         .ok()?;
     tb_llm::ledger::record(
         "title-insight",
-        MINIMAX_MODEL,
+        model,
         completion.tokens_in,
         completion.tokens_out,
         true,
@@ -808,13 +817,109 @@ pub async fn generate_insight(
     if history.is_empty() {
         return None;
     }
-    let key = resolve_minimax_key()?;
-    generate_insight_with(MINIMAX_BASE_URL, &key, history, period_label).await
+    let endpoint = tb_llm::endpoint_for("title_ai");
+    let key = endpoint.api_key.as_deref()?;
+    generate_insight_with(
+        &endpoint.base_url,
+        key,
+        &endpoint.model,
+        history,
+        period_label,
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static PROVIDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_provider_env() {
+        for name in [
+            "TB_LLM_PROVIDER_DEFAULT",
+            "TB_LLM_PROVIDER_TITLE_AI",
+            "FIREWORK_API_KEY",
+            "FIREWORKS_API_KEY",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
+            "FIREWORK_MODEL",
+            "FIREWORKS_MODEL",
+            "MINIMAX_TOKEN_PLAN_KEY",
+            "MINIMAX_API_KEY",
+            "MINIMAX_BASE_URL",
+            "MINIMAX_MODEL",
+            "MINMAX",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+
+    // Die Env-Werte müssen bis nach dem HTTP-Call exklusiv bleiben; sonst
+    // können parallele Tests den ausgewählten Endpoint während des Calls ändern.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn title_ai_folgt_gemeinsamer_provider_auswahl() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+
+        let endpoint = tb_llm::endpoint_for("title_ai");
+        assert!(endpoint.base_url.contains("fireworks.ai"));
+        assert!(endpoint.model.contains("deepseek"));
+
+        let server = MockServer::start().await;
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content":
+                    "{\"primary_title\":\"Provider-Test\",\"alternatives\":[],\"title_analysis\":[]}"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = generate_title(
+            &TitleRateLimiter::new(1, 60, 1),
+            "streamer",
+            "ranked",
+            &[],
+            &[],
+            None,
+            None,
+            "chat",
+        )
+        .await;
+        match result {
+            Ok(title) => assert_eq!(title.primary, "Provider-Test"),
+            Err(GenerateTitleError::NoApiKey) => {
+                panic!("Fireworks-Key wurde nicht für title_ai verwendet")
+            }
+            Err(GenerateTitleError::RateLimit(error)) => {
+                panic!("unerwartetes Rate-Limit: {}", error.retry_after)
+            }
+            Err(GenerateTitleError::Http(error)) => panic!("unerwarteter HTTP-Fehler: {error}"),
+        }
+
+        clear_provider_env();
+        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
+        let endpoint = tb_llm::endpoint_for("title_ai");
+        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
+        assert_eq!(endpoint.model, "MiniMax-M3");
+
+        std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
+        std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "minimax");
+        let endpoint = tb_llm::endpoint_for("title_ai");
+        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
+        assert_eq!(endpoint.model, "MiniMax-M3");
+        clear_provider_env();
+    }
 
     #[test]
     fn rate_limiter_blockt_nach_max_und_dashboard_2x() {
@@ -872,7 +977,10 @@ mod tests {
         let raw = "{\"primary_title\":\"Bester Titel\",\"alternatives\":[\"A1\",\"A2\",\"A3\"],\"title_analysis\":[]}";
         let parsed = parse_title_response(raw);
         assert_eq!(parsed.primary, "Bester Titel");
-        assert_eq!(parsed.alternatives, vec!["A1".to_string(), "A2".to_string()]);
+        assert_eq!(
+            parsed.alternatives,
+            vec!["A1".to_string(), "A2".to_string()]
+        );
     }
 
     #[test]
@@ -883,7 +991,8 @@ mod tests {
     #[test]
     fn sanitize_entfernt_nicht_erlaubte_raenge() {
         // rank_display = "Archon 3" → nur "archon" erlaubt; "Phantom" wird entfernt.
-        let out = sanitize_generated_title("Archon Grind als Phantom 2", "ranked", Some("Archon 3"));
+        let out =
+            sanitize_generated_title("Archon Grind als Phantom 2", "ranked", Some("Archon 3"));
         assert!(out.contains("Archon"));
         assert!(!out.to_lowercase().contains("phantom"));
     }
@@ -998,7 +1107,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let result = generate_title_with(&server.uri(), "fakekey", "ranked", &[], &[], None, None)
+        let result = generate_title_with(
+            &server.uri(),
+            "fakekey",
+            "MiniMax-M3",
+            "ranked",
+            &[],
+            &[],
+            None,
+            None,
+        )
             .await
             .unwrap();
         assert_eq!(result.primary, "Ranked Grind");
@@ -1015,7 +1133,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let err = generate_title_with(&server.uri(), "k", "x", &[], &[], None, None)
+        let err = generate_title_with(&server.uri(), "k", "MiniMax-M3", "x", &[], &[], None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
@@ -1048,7 +1166,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let result = generate_title_with(&server.uri(), "k", "ranked", &[], &[], None, None)
+        let result = generate_title_with(
+            &server.uri(),
+            "k",
+            "MiniMax-M3",
+            "ranked",
+            &[],
+            &[],
+            None,
+            None,
+        )
             .await
             .unwrap();
         assert_eq!(result.primary, "Ranked mit Plan");
@@ -1069,7 +1196,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = generate_title_with(&server.uri(), "k", "ranked", &[], &[], None, None)
+        let err = generate_title_with(
+            &server.uri(),
+            "k",
+            "MiniMax-M3",
+            "ranked",
+            &[],
+            &[],
+            None,
+            None,
+        )
             .await
             .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
@@ -1096,7 +1232,13 @@ mod tests {
             relative_perf: 1.2,
             engagement_rate: 0.05,
         }];
-        let r = generate_insight_with(&server.uri(), "k", &history, "01.06. – 28.06.2026")
+        let r = generate_insight_with(
+            &server.uri(),
+            "k",
+            "MiniMax-M3",
+            &history,
+            "01.06. – 28.06.2026",
+        )
             .await
             .unwrap();
         assert_eq!(r.strengths, "stark");
@@ -1112,7 +1254,11 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         // Leere History → None ohne HTTP-Call.
-        assert!(generate_insight_with("http://unused", "k", &[], "p").await.is_none());
+        assert!(
+            generate_insight_with("http://unused", "k", "MiniMax-M3", &[], "p")
+                .await
+                .is_none()
+        );
 
         // Kein JSON → None.
         let server = MockServer::start().await;
@@ -1126,6 +1272,10 @@ mod tests {
             relative_perf: 1.0,
             engagement_rate: 0.1,
         }];
-        assert!(generate_insight_with(&server.uri(), "k", &history, "p").await.is_none());
+        assert!(
+            generate_insight_with(&server.uri(), "k", "MiniMax-M3", &history, "p")
+                .await
+                .is_none()
+        );
     }
 }
