@@ -219,6 +219,22 @@ async fn jeder_ausgang_wird_je_zyklus_genau_einmal_persistiert() {
     assert!(transcript.is_none());
     assert!(decision.is_none());
     assert!(tombstoned_at.is_some());
+
+    // Der lokale Tombstone beendet die Löschpflicht nicht: solange der Post in
+    // Discord steht, muss er weiter zum Löschen anstehen. Mit einer
+    // Versuchsobergrenze bliebe er dort dauerhaft sichtbar und die
+    // Aufbewahrungsfrist wäre für den externen Post wirkungslos.
+    let faellig = store
+        .expired_discord_events(20, now + Duration::hours(2))
+        .await
+        .expect("abgelaufene Discord-Posts lesen");
+    assert_eq!(
+        faellig.len(),
+        1,
+        "Post muss nach drei Fehlversuchen weiter zum Loeschen anstehen"
+    );
+    assert_eq!(faellig[0].id, expired_id);
+    assert_eq!(faellig[0].message_id, "review-message");
 }
 
 async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Option<String>) {

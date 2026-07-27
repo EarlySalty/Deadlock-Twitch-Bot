@@ -488,7 +488,10 @@ async fn cleanup_once(
             })
             .await
         {
-            Ok(()) => store
+            // Ein bereits verschwundener Post ist das Ziel dieses Laufs, kein
+            // Fehler. Ohne diesen Zweig würde der unbegrenzte Retry ewig auf
+            // einer von Hand gelöschten Nachricht weiterlaufen.
+            Ok(()) | Err(DiscordError::BrokerError { status: 404, .. }) => store
                 .delete_expired_event(event.id, &event.message_id, now)
                 .await
                 .map_err(|error| error.to_string())?,

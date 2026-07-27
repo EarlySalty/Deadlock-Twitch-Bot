@@ -720,6 +720,13 @@ impl OutreachShadowStore {
         Ok(())
     }
 
+    /// Abgelaufene Ereignisse, deren Discord-Post noch zu löschen ist.
+    ///
+    /// Bewusst ohne Versuchsobergrenze: die lokalen Inhalte werden nach drei
+    /// Fehlversuchen getombstonet, der externe Post bliebe bei einem Limit
+    /// aber dauerhaft sichtbar und würde die Aufbewahrungsfrist aushebeln.
+    /// Der Abstand zwischen den Versuchen kommt aus
+    /// `discord_delete_next_attempt_at`.
     pub async fn expired_discord_events(
         &self,
         limit: i64,
@@ -730,7 +737,6 @@ impl OutreachShadowStore {
              FROM twitch_outreach_shadow_events
              WHERE expires_at <= $1
                AND discord_message_id IS NOT NULL
-               AND discord_delete_attempts < 3
                AND discord_delete_next_attempt_at <= $1
              ORDER BY expires_at, id
              LIMIT $2",
