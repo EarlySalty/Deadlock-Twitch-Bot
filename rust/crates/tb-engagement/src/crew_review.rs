@@ -151,6 +151,19 @@ pub struct FireworksReviewClient {
     model: String,
 }
 
+/// Gemeinsamer, fail-closed HTTP-Aufbau für Fireworks-Shadow-Clients.
+///
+/// Fachschema und Prompt bleiben in den jeweiligen Review-Modulen; geteilt
+/// wird nur die Transport-Härtung.
+pub fn build_fireworks_http_client(
+    timeout: Duration,
+) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
 impl FireworksReviewClient {
     pub fn from_env() -> Result<Self, ReviewError> {
         let api_key = first_nonempty_env(&["FIREWORKS_API_KEY", "FIREWORK_API_KEY"])
@@ -181,11 +194,8 @@ impl FireworksReviewClient {
         if api_key.trim().is_empty() || base_url.trim().is_empty() || model.trim().is_empty() {
             return Err(ReviewError::Unavailable);
         }
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| ReviewError::Unavailable)?;
+        let client =
+            build_fireworks_http_client(timeout).map_err(|_| ReviewError::Unavailable)?;
         Ok(Self {
             client,
             api_key,

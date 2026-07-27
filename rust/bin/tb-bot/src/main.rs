@@ -44,6 +44,7 @@ mod eventsub_stats_adapter;
 mod irc_lurker_wiring;
 mod oauth_followups;
 mod offline_side_effects;
+mod outreach_shadow_wiring;
 mod partner_lookup;
 mod partner_recruit;
 mod raid_adapters;
@@ -507,6 +508,8 @@ async fn main() {
     }
 
     let ricky_review = ricky_review_wiring::start(&supervisor, pool.clone(), &settings.broker);
+    let outreach_shadow =
+        outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let crew_review_trigger = ricky_review.trigger();
     let crew_review_store = ricky_review.store();
 
@@ -1846,6 +1849,7 @@ async fn main() {
 
     let shutdown_supervisor = supervisor.clone();
     let shutdown_ricky = ricky_review.clone();
+    let shutdown_outreach = outreach_shadow.clone();
     if let Err(error) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -1855,6 +1859,9 @@ async fn main() {
         shutdown_supervisor.shutdown().await;
         shutdown_ricky
             .close_all_open_sessions("process_shutdown")
+            .await;
+        shutdown_outreach
+            .close_open_session("process_shutdown")
             .await;
     })
     .await

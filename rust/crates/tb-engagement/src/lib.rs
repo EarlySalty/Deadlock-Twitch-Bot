@@ -29,6 +29,8 @@ pub mod irc_reader;
 pub mod lurker_signal;
 pub mod match_context;
 pub mod minimax_chat;
+pub mod outreach_shadow;
+pub mod outreach_shadow_store;
 pub mod persona;
 pub mod pipeline;
 pub mod rhythm;
