@@ -208,8 +208,12 @@ impl EngagementIrcReader {
                 }
                 _ = refresh.tick() => {
                     let latest = load_irc_channels(&self.pool).await;
-                    for ch in latest.difference(channels) {
+                    let (to_join, to_part) = channel_delta(channels, &latest);
+                    for ch in &to_join {
                         join(&mut writer, ch).await;
+                    }
+                    for ch in &to_part {
+                        part(&mut writer, ch).await;
                     }
                     *channels = latest;
                 }
@@ -259,6 +263,31 @@ async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
 }
 
 /// Joint einen Kanal (`JOIN #channel`).
+/// Welche Kanäle beim Refresh dazukommen und welche wegfallen.
+///
+/// Der Wegfall ist der wichtige Teil: der Smalltalk-Loop nimmt `irc_read` am
+/// Sitzungsende wieder zurueck. Ohne PART bliebe der Reader im fremden Kanal
+/// und laese dort weiter mit, obwohl keine Sitzung mehr laeuft, und bei
+/// stuendlicher Rotation summierten sich die Joins.
+fn channel_delta(current: &HashSet<String>, latest: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+    let to_join = latest.difference(current).cloned().collect();
+    let to_part = current.difference(latest).cloned().collect();
+    (to_join, to_part)
+}
+
+/// Verlässt einen Kanal (`PART #channel`).
+async fn part(writer: &mut OwnedWriteHalf, channel: &str) {
+    if let Err(error) = writer
+        .write_all(format!("PART #{channel}\r\n").as_bytes())
+        .await
+    {
+        tracing::warn!(%error, channel, "Engagement-IRC: PART-Write fehlgeschlagen");
+    }
+    if let Err(error) = writer.flush().await {
+        tracing::warn!(%error, channel, "Engagement-IRC: PART-Flush fehlgeschlagen");
+    }
+}
+
 async fn join(writer: &mut OwnedWriteHalf, channel: &str) {
     if let Err(error) = writer
         .write_all(format!("JOIN #{channel}\r\n").as_bytes())
@@ -312,6 +341,33 @@ mod tests {
             runde.load(std::sync::atomic::Ordering::SeqCst) >= 3,
             "der Reader muss erneut nachsehen, statt beim ersten leeren Ergebnis aufzugeben"
         );
+    }
+
+    /// Am Sitzungsende faellt der Testkanal aus `irc_read` heraus. Wird er
+    /// dann nicht verlassen, liest der Bot in einem fremden Kanal weiter mit,
+    /// ohne dass dort eine Sitzung laeuft.
+    #[test]
+    fn refresh_verlaesst_abgeschaltete_kanaele() {
+        let aktuell = HashSet::from(["partner".to_owned(), "testkanal".to_owned()]);
+        let danach = HashSet::from(["partner".to_owned(), "neuer_test".to_owned()]);
+
+        let (to_join, to_part) = channel_delta(&aktuell, &danach);
+
+        assert_eq!(to_join, vec!["neuer_test".to_owned()]);
+        assert_eq!(
+            to_part,
+            vec!["testkanal".to_owned()],
+            "der abgeschaltete Testkanal muss verlassen werden"
+        );
+    }
+
+    #[test]
+    fn refresh_ohne_aenderung_macht_nichts() {
+        let gleich = HashSet::from(["partner".to_owned()]);
+
+        let (to_join, to_part) = channel_delta(&gleich, &gleich);
+
+        assert!(to_join.is_empty() && to_part.is_empty());
     }
 
     #[test]
