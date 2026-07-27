@@ -51,11 +51,33 @@ fn release_question_re() -> &'static Regex {
     })
 }
 
+/// Eindeutige Release-Wörter: tragen die Frage allein.
 fn release_word_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(release\w*|erschein\w*|rauskomm\w*|raus|ver(?:ö|oe)ffentlich\w*|launch\w*|full\s*game)\b")
+        Regex::new(r"(?i)\b(release\w*|erschein\w*|rauskomm\w*|ver(?:ö|oe)ffentlich\w*|launch\w*|full\s*game)\b")
             .expect("valid release word regex")
+    })
+}
+
+/// "raus" allein sagt nichts — "wann kommt der Patch raus" ist keine Frage
+/// nach dem Erscheinen des Spiels. Nur mit ausdrücklichem Spielbezug.
+fn release_weak_word_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\braus\b").expect("valid weak release regex"))
+}
+
+fn game_word_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\b(game|spiel|deadlock)\b").expect("valid game word regex"))
+}
+
+/// Themen, die ihr eigenes Erscheinungsdatum haben — nie die Spiel-Antwort.
+fn other_subject_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(patch\w*|update\w*|hotfix\w*|season\w*|saison\w*|skin\w*|held|hero\w*|char(?:akter)?\w*|event\w*|turnier\w*|video|stream)\b")
+            .expect("valid other subject regex")
     })
 }
 
@@ -76,8 +98,13 @@ pub fn classify_standard_reply(content: &str, is_deadlock_live: bool) -> Option<
         return Some(StandardReply::Greeting);
     }
     // ponytail: Release-Antwort verweist auf !invite, das nur live existiert.
-    if is_deadlock_live && release_question_re().is_match(raw) && release_word_re().is_match(raw) {
-        return Some(StandardReply::ReleaseDate);
+    if is_deadlock_live && release_question_re().is_match(raw) && !other_subject_re().is_match(raw)
+    {
+        let eindeutig = release_word_re().is_match(raw);
+        let mit_spielbezug = release_weak_word_re().is_match(raw) && game_word_re().is_match(raw);
+        if eindeutig || mit_spielbezug {
+            return Some(StandardReply::ReleaseDate);
+        }
     }
     None
 }
@@ -449,6 +476,18 @@ mod tests {
                 "kein Treffer: {raw}"
             );
         }
+        // Andere Themen mit eigenem Datum bleiben unberuehrt.
+        for raw in [
+            "wann kommt der patch raus",
+            "wann kommt das update fuer das game raus",
+            "wann kommt die neue season raus",
+            "wann kommt der neue held raus?",
+        ] {
+            assert_eq!(classify_standard_reply(raw, true), None, "falsch: {raw}");
+        }
+        // "raus" allein ohne Spielbezug reicht nicht.
+        assert_eq!(classify_standard_reply("wann gehst du raus", true), None);
+
         // Kein Zeitwort, kein Release-Wort, Command, URL.
         assert_eq!(classify_standard_reply("das release war stark", true), None);
         assert_eq!(
