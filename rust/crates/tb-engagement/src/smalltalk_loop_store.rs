@@ -96,6 +96,10 @@ struct CandidateRow {
     cooldown_until: Option<String>,
     partner_table: bool,
     partner_state: bool,
+    /// Bot in diesem Kanal gebannt oder von Hand gesperrt
+    /// (`twitch_raid_blacklist`, gesetzt u.a. von
+    /// `token_lifecycle::mark_bot_banned_inner`).
+    blacklisted: bool,
     last_observed_at: Option<DateTime<Utc>>,
     detected_at: String,
 }
@@ -183,6 +187,11 @@ impl SmalltalkLoopStore {
                             OR LOWER(ps.twitch_login) = LOWER(o.streamer_login)
                           )
                     ) AS partner_state,
+                    EXISTS (
+                        SELECT 1
+                        FROM twitch_raid_blacklist b
+                        WHERE LOWER(b.target_login) = LOWER(o.streamer_login)
+                    ) AS blacklisted,
                     (
                         SELECT MAX(s.started_at)
                         FROM twitch_smalltalk_sessions s
@@ -220,6 +229,9 @@ impl SmalltalkLoopStore {
                         .is_some_and(|game| game.eq_ignore_ascii_case("deadlock"))
                     && !row.partner_table
                     && !row.partner_state
+                    // Wo der Bot gebannt ist, koennte er ohnehin nie senden.
+                    // Dort zu messen, ob er mitreden koennte, misst nichts.
+                    && !row.blacklisted
                     && cooldown_until.is_none_or(|until| until <= now);
                 eligible.then_some(Candidate {
                     channel_login: row.channel_login,

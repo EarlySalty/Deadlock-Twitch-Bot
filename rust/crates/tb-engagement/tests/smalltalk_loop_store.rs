@@ -73,6 +73,40 @@ async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
     );
 }
 
+/// Ein Kanal, in dem der Bot gebannt ist, landet als `bot_banned` in
+/// `twitch_raid_blacklist` (`token_lifecycle::mark_bot_banned_inner`). Dort
+/// zu messen, ob der Bot mitreden koennte, ist sinnlos: senden koennte er
+/// ohnehin nie. Die Blacklist gilt komplett, auch fuer von Hand gesetzte
+/// Eintraege, denn beides heisst "in diesem Kanal nicht auftreten".
+#[tokio::test]
+async fn gebannte_und_geblacklistete_kanaele_werden_nie_ausgewaehlt() {
+    let Some(pool) = test_pool("smalltalk_loop_blacklist").await else {
+        return;
+    };
+    seed_candidate(&pool, "gebannt", "1", None).await;
+    seed_candidate(&pool, "sauber", "2", None).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+         VALUES ('1', 'Gebannt', 'bot_banned: channel_settings')",
+    )
+    .execute(&pool)
+    .await
+    .expect("Blacklist setzen");
+    let store = SmalltalkLoopStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+
+    let session = store
+        .start_next_session(now)
+        .await
+        .expect("Start")
+        .expect("Sitzung");
+
+    assert_eq!(
+        session.channel_login, "sauber",
+        "der geblacklistete Kanal darf nie gewaehlt werden, auch nicht bei abweichender Schreibweise"
+    );
+}
+
 #[tokio::test]
 async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
     let Some(pool) = test_pool("smalltalk_loop_singleton").await else {
@@ -406,6 +440,11 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
             twitch_user_id TEXT,
             twitch_login TEXT NOT NULL,
             is_partner_active INTEGER NOT NULL
+        );
+        CREATE TABLE twitch_raid_blacklist (
+            target_id TEXT,
+            target_login TEXT PRIMARY KEY,
+            reason TEXT
         );
         CREATE TABLE twitch_engagement_settings (
             channel_login TEXT PRIMARY KEY,
