@@ -831,8 +831,7 @@ impl InviteQuestionResponder {
         // Interesse allein löst nie aus: es öffnet nur ein Fenster, in dem ein
         // schwaches Folgesignal desselben Chatters zum Kandidaten wird.
         let hint_open = self.interest_hint_open(&channel_login, &chatter_login);
-        let is_candidate =
-            signal.is_candidate || (hint_open && (signal.has_weak_signal || signal.has_interest));
+        let is_candidate = signal.is_candidate || (hint_open && signal.has_weak_signal);
         if !is_candidate {
             if signal.has_interest {
                 self.remember_interest_hint(&channel_login, &chatter_login);
@@ -1682,6 +1681,27 @@ mod tests {
         let folge = decide_action(&invite, "neuling", "kann man da irgendwie mitzocken").await;
         assert_eq!(folge.action, InviteQuestionAction::AskConfirmation);
         assert_eq!(judge.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn zweites_reines_interesse_loest_weiterhin_nichts_aus() {
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
+        let invite = responder(
+            MockApi::new(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+
+        decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
+        let zweiter = decide_action(&invite, "neuling", "das spiel schaut echt nice aus").await;
+
+        assert_eq!(
+            zweiter.action,
+            InviteQuestionAction::Silent(SilentReason::InterestNoted)
+        );
+        assert_eq!(judge.call_count(), 0);
     }
 
     #[tokio::test]
