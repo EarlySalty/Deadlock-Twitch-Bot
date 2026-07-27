@@ -109,6 +109,54 @@ async fn partner_und_cooldown_kandidaten_werden_nie_ausgewaehlt() {
 }
 
 #[tokio::test]
+async fn abgelaufener_cooldown_in_postgres_textform_wird_wieder_auswaehlbar() {
+    let Some(pool) = test_pool("outreach_shadow_cooldown_text").await else {
+        return;
+    };
+    seed_candidate(&pool, "gesperrt", "9", None).await;
+    // Postgres schreibt den Wert selbst, also genau die Form, die der
+    // bestehende Recruiting-Pfad erzeugt: Leerzeichen statt `T`, kurzer
+    // Offset. Geprueft wird der laufende Cooldown, nicht der abgelaufene:
+    // scheitert das Parsen, gilt der Wert als "kein Cooldown" und der Kanal
+    // wuerde faelschlich gewaehlt. Genau daran scheitert ein reiner
+    // RFC3339-Parser.
+    sqlx::query(
+        "UPDATE twitch_partner_outreach
+         SET cooldown_until = (NOW() + interval '6 hours')::text
+         WHERE streamer_login = 'gesperrt'",
+    )
+    .execute(&pool)
+    .await
+    .expect("laufenden Cooldown in Postgres-Textform setzen");
+
+    let store = OutreachShadowStore::new(pool.clone());
+    assert!(
+        store
+            .start_next_session(Utc::now())
+            .await
+            .expect("Kandidatensuche")
+            .is_none(),
+        "laufender Cooldown in Postgres-Textform muss den Kanal sperren"
+    );
+
+    // Und nach Ablauf ist derselbe Kanal wieder auswaehlbar.
+    sqlx::query(
+        "UPDATE twitch_partner_outreach
+         SET cooldown_until = (NOW() - interval '2 hours')::text
+         WHERE streamer_login = 'gesperrt'",
+    )
+    .execute(&pool)
+    .await
+    .expect("Cooldown ablaufen lassen");
+    let gewaehlt = store
+        .start_next_session(Utc::now())
+        .await
+        .expect("Kandidat waehlen")
+        .expect("abgelaufener Cooldown macht wieder auswaehlbar");
+    assert_eq!(gewaehlt.channel_login, "gesperrt");
+}
+
+#[tokio::test]
 async fn jeder_ausgang_wird_je_zyklus_genau_einmal_persistiert() {
     let Some(pool) = test_pool("outreach_shadow_cycle_once").await else {
         return;

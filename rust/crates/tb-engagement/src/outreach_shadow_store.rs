@@ -175,20 +175,36 @@ impl OutreachShadowStore {
 
         let candidates = rows
             .into_iter()
-            .map(|row| OutreachCandidate {
-                channel_login: row.channel_login,
-                streamer_user_id: row.streamer_user_id,
-                is_live: row.is_live,
-                game: row.game,
-                cooldown_until: row.cooldown_until.map(|value| {
-                    DateTime::parse_from_rfc3339(&value)
-                        .map(|parsed| parsed.with_timezone(&Utc))
-                        .unwrap_or(now + Duration::days(36_500))
-                }),
-                partner_table: row.partner_table,
-                partner_state: row.partner_state,
-                last_observed_at: row.last_observed_at,
-                detected_at: row.detected_at,
+            .map(|row| {
+                // `cooldown_until` ist eine TEXT-Spalte, in die der bestehende
+                // Recruiting-Pfad `NOW() + interval` schreibt. Postgres rendert
+                // das als `2026-07-27 12:34:56+02`, nicht als RFC3339. Ein
+                // reiner RFC3339-Parser scheitert daran bei jedem echten Wert.
+                let cooldown_until = row.cooldown_until.as_deref().and_then(|value| {
+                    let parsed = parse_text_timestamp(value);
+                    if parsed.is_none() {
+                        // Unlesbares wird gemeldet und ignoriert statt still zu
+                        // sperren. Im Schattenbetrieb wird nichts gesendet, ein
+                        // zu früh beobachteter Kanal ist also folgenlos; ein
+                        // dauerhaft unsichtbarer Kanal wäre es nicht.
+                        tracing::warn!(
+                            event = "outreach_shadow.cooldown_unparsbar",
+                            channel = %row.channel_login,
+                        );
+                    }
+                    parsed
+                });
+                OutreachCandidate {
+                    channel_login: row.channel_login,
+                    streamer_user_id: row.streamer_user_id,
+                    is_live: row.is_live,
+                    game: row.game,
+                    cooldown_until,
+                    partner_table: row.partner_table,
+                    partner_state: row.partner_state,
+                    last_observed_at: row.last_observed_at,
+                    detected_at: row.detected_at,
+                }
             })
             .collect();
         let Some(candidate) = choose_candidate(false, candidates, now) else {
@@ -846,6 +862,36 @@ async fn delete_orphan_sessions(tx: &mut Transaction<'_, Postgres>) -> Result<()
     Ok(())
 }
 
+/// Liest einen Zeitstempel aus einer TEXT-Spalte.
+///
+/// Deckt beide Formen ab, die in diesen Spalten real vorkommen: RFC3339 mit
+/// `T` und vollem Offset, sowie den Postgres-Render mit Leerzeichen als
+/// Trenner und verkürztem Offset (`2026-07-27 12:34:56+02`). Ein Wert ohne
+/// Zeitzone gilt als UTC.
+fn parse_text_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f%#z",
+        "%Y-%m-%dT%H:%M:%S%.f%#z",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+    ] {
+        if let Ok(parsed) = DateTime::parse_from_str(raw, format) {
+            return Some(parsed.with_timezone(&Utc));
+        }
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(raw, format) {
+            return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+        }
+    }
+    None
+}
+
 fn choose_candidate(
     active_session: bool,
     mut candidates: Vec<OutreachCandidate>,
@@ -1054,6 +1100,34 @@ mod tests {
             choose_candidate(false, vec![recently_seen, never_seen], now).expect("Kandidat");
 
         assert_eq!(selected.channel_login, "nie");
+    }
+
+    #[test]
+    fn cooldown_versteht_die_postgres_textform() {
+        // Genau das schreibt der bestehende Recruiting-Pfad in die TEXT-Spalte:
+        // `NOW() + interval`, von Postgres als Text gerendert. Ein reiner
+        // RFC3339-Parser scheitert daran und wuerde den Kanal aussperren.
+        let erwartet = Utc.with_ymd_and_hms(2026, 7, 27, 10, 34, 56).unwrap();
+        for roh in [
+            "2026-07-27 12:34:56+02",
+            "2026-07-27 12:34:56.000+02",
+            "2026-07-27T12:34:56+02:00",
+        ] {
+            assert_eq!(
+                parse_text_timestamp(roh),
+                Some(erwartet),
+                "nicht geparst: {roh}"
+            );
+        }
+        // Ohne Zonenangabe gilt UTC.
+        assert_eq!(
+            parse_text_timestamp("2026-07-27 10:34:56"),
+            Some(erwartet),
+            "naiver Zeitstempel"
+        );
+        // Unlesbares bleibt None und sperrt den Kanal damit nicht dauerhaft.
+        assert_eq!(parse_text_timestamp(""), None);
+        assert_eq!(parse_text_timestamp("irgendwas"), None);
     }
 
     fn candidate(login: &str) -> OutreachCandidate {
