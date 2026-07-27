@@ -49,6 +49,31 @@ async fn ensure_schema(pool: &PgPool) {
     .await;
 }
 
+/// Lädt Kanäle, bis mindestens einer da ist. Ohne dieses Warten wäre ein
+/// Botstart ohne `irc_read`-Kanal endgültig: der Reader beendete sich, und ein
+/// später freigeschalteter Kanal (Smalltalk-Loop) würde nie gejoint.
+async fn wait_for_channels<F, Fut>(interval: Duration, mut load: F) -> HashSet<String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = HashSet<String>>,
+{
+    let mut logged = false;
+    loop {
+        let channels = load().await;
+        if !channels.is_empty() {
+            return channels;
+        }
+        if !logged {
+            tracing::info!(
+                event = "engagement_irc.waiting_for_channels",
+                "Engagement-IRC: noch keine irc_read-Kanäle, Reader wartet"
+            );
+            logged = true;
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
 /// Aktive Kanäle mit `irc_read = TRUE` (kleingeschrieben).
 async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
     ensure_schema(pool).await;
@@ -82,15 +107,17 @@ impl EngagementIrcReader {
         }
     }
 
-    /// Startet den Reader. No-op (kehrt sofort zurück), wenn keine
-    /// `irc_read`-Kanäle konfiguriert sind (Python: „Reader bleibt aus").
-    /// Reconnectet bei Verbindungsabbruch dauerhaft.
+    /// Startet den Reader. Sind noch keine `irc_read`-Kanäle konfiguriert,
+    /// wartet er darauf, statt sich zu beenden: der Smalltalk-Loop schaltet
+    /// seinen Kanal erst zur Laufzeit frei, und ein beendeter Reader würde ihn
+    /// nie joinen. Reconnectet bei Verbindungsabbruch dauerhaft.
     pub async fn run(self) {
-        let mut channels = load_irc_channels(&self.pool).await;
-        if channels.is_empty() {
-            tracing::info!("Engagement-IRC: keine irc_read-Kanäle konfiguriert, Reader bleibt aus");
-            return;
-        }
+        let pool = self.pool.clone();
+        let mut channels = wait_for_channels(Duration::from_secs(CHANNEL_REFRESH_SECONDS), || {
+            let pool = pool.clone();
+            async move { load_irc_channels(&pool).await }
+        })
+        .await;
         tracing::info!(channels = ?sorted(&channels), "Engagement-IRC-Reader gestartet");
         loop {
             match self.connect().await {
@@ -255,6 +282,37 @@ fn sorted(channels: &HashSet<String>) -> Vec<&String> {
 mod tests {
     use super::*;
     use crate::irc_message::parse_tags;
+
+    /// Der Smalltalk-Loop schaltet `irc_read` erst zur Laufzeit ein. Kehrte
+    /// der Reader bei anfangs leerer Kanalmenge zurueck, wuerde der Testkanal
+    /// nie gejoint: die Sitzung liefe ohne Chat-Input und meldete "keine
+    /// Nachrichten". Diese Stille saehe wie ein Ergebnis aus, waere aber
+    /// keins. Deshalb wartet der Reader, statt sich zu beenden.
+    #[tokio::test]
+    async fn wartet_auf_spaeter_aktivierte_kanaele_statt_sich_zu_beenden() {
+        let runde = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let zaehler = runde.clone();
+
+        let kanaele = wait_for_channels(Duration::from_millis(1), move || {
+            let zaehler = zaehler.clone();
+            async move {
+                // Erst ab der dritten Abfrage liefert die DB einen Kanal,
+                // so wie wenn der Loop ihn mitten im Betrieb aktiviert.
+                if zaehler.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    HashSet::new()
+                } else {
+                    HashSet::from(["fremder_kanal".to_owned()])
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(kanaele, HashSet::from(["fremder_kanal".to_owned()]));
+        assert!(
+            runde.load(std::sync::atomic::Ordering::SeqCst) >= 3,
+            "der Reader muss erneut nachsehen, statt beim ersten leeren Ergebnis aufzugeben"
+        );
+    }
 
     #[test]
     fn tags_parse() {
