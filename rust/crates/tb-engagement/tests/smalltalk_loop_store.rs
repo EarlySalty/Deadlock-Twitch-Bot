@@ -1,6 +1,11 @@
 use std::str::FromStr;
 
-use chrono::{Duration, TimeZone, Utc};
+// Testuhr ist bewusst `Utc::now()` und kein fixes Datum: die Tabelle setzt
+// `discord_next_attempt_at`/`expires_at` per DB-`NOW()`, und `claim_reports`
+// vergleicht beide gegen die übergebene Zeit. Eine erfundene Uhr lief dieser
+// Vergleichsbasis davon — der Report-Test wurde am 2026-07-27 um 20:08 UTC
+// von selbst rot, ohne dass sich Code geändert hatte.
+use chrono::{Duration, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor, PgPool};
 use tb_engagement::minimax_chat::TestModeRejectReason;
@@ -32,7 +37,7 @@ async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
     .await
     .expect("alte Settings setzen");
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
 
     let gestartet = store.start_next_session(now).await.expect("Start");
 
@@ -93,7 +98,7 @@ async fn gebannte_und_geblacklistete_kanaele_werden_nie_ausgewaehlt() {
     .await
     .expect("Blacklist setzen");
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
 
     let session = store
         .start_next_session(now)
@@ -126,7 +131,7 @@ async fn gebannter_kanal_bleibt_nach_umbenennung_gesperrt() {
     .await
     .expect("Blacklist setzen");
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
 
     let session = store
         .start_next_session(now)
@@ -156,7 +161,7 @@ async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
     .await
     .expect("alte Settings setzen");
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
 
     let (left, right) = tokio::join!(store.start_next_session(now), store.start_next_session(now));
     let sessions = [left.expect("linker Start"), right.expect("rechter Start")]
@@ -239,7 +244,7 @@ async fn erzeugte_nachricht_wird_unabhaengig_vom_filter_genau_einmal_gespeichert
     };
     seed_candidate(&pool, "eins", "1", None).await;
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
     let session = store
         .start_next_session(now)
         .await
@@ -308,7 +313,7 @@ async fn jede_beendete_sitzung_wird_mit_nachrichten_oder_providerfehler_geclaimt
     };
     seed_candidate(&pool, "leer", "1", None).await;
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
     let empty = store
         .start_next_session(now)
         .await
@@ -363,7 +368,7 @@ async fn streamende_und_zeitlimit_beenden_die_aktive_sitzung() {
     };
     seed_candidate(&pool, "eins", "1", None).await;
     let store = SmalltalkLoopStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+    let now = Utc::now();
     store
         .start_next_session(now)
         .await

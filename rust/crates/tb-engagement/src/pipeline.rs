@@ -31,7 +31,7 @@ use crate::stream_state::StreamState;
 use crate::stream_transcripts::{segments_to_prompt_fragment, StreamTranscripts};
 use crate::style_examples::StyleExamples;
 use crate::threads::{threads_to_prompt_fragment, Threads};
-use crate::types::{Decision, HandleResult, IncomingMessage, OutputMode};
+use crate::types::{Decision, EngagementSettings, HandleResult, IncomingMessage, OutputMode};
 
 /// Billiger Pre-Filter ohne Modell-Call: Nachrichten, auf die ein Zuschauer nie
 /// antworten würde, fliegen sofort raus (Python `_should_skip_trigger`).
@@ -183,6 +183,27 @@ impl EngagementPipeline {
             Some(s) if s.enabled => s,
             _ => return HandleResult::new(Decision::Disabled),
         };
+        let test_mode = settings.output_mode == OutputMode::Test;
+        let result = self.handle_gated(msg, settings).await;
+        // Der Smalltalk-Testmodus misst, ob der Bot in einem fremden Kanal
+        // mitreden *könnte*. Bricht ein Gate vor der Generierung ab, entstand
+        // bisher keine einzige Zeile — Stille im Journal war dann nicht von
+        // einem kaputten Pfad zu unterscheiden. Darum bekommt hier JEDE
+        // Testmodus-Entscheidung eine Zeile, nicht nur die erfolgreiche
+        // (`smalltalk_loop.message_recorded`) oder die fehlgeschlagene.
+        // Nachrichtentexte gehören laut Spec in keine Logzeile dieses Features.
+        if test_mode {
+            tracing::info!(
+                event = "smalltalk_loop.decision",
+                channel = %msg.channel_login,
+                decision = result.decision.as_str(),
+                generated = result.shadow_text.is_some(),
+            );
+        }
+        result
+    }
+
+    async fn handle_gated(&self, msg: &IncomingMessage, settings: EngagementSettings) -> HandleResult {
         // Output-Modus-Gate (Block-19-Grillme): `off` = no-op, gar kein KI-Output
         // erzeugen — vor dem teuren Modell-Call abbrechen. Default ist `off`,
         // damit die Engagement-KI ohne expliziten Dashboard-Toggle stumm bleibt.
@@ -427,15 +448,20 @@ impl EngagementPipeline {
                 .await
             {
                 Ok(true) => {}
+                // `outcome` gehört auch in die Fehlerzeilen: geht der Datensatz
+                // verloren, steht die Bewertung sonst nirgends. Das Enum trägt
+                // nur would_send/rejected + Grund, nie den Text.
                 Ok(false) => tracing::warn!(
                     event = "smalltalk_loop.message_not_persisted",
                     channel = %msg.channel_login,
                     reason = "missing_session_or_duplicate",
+                    ?outcome,
                 ),
                 Err(error) => tracing::warn!(
                     event = "smalltalk_loop.message_persist_failed",
                     channel = %msg.channel_login,
                     reason = "database",
+                    ?outcome,
                     %error,
                 ),
             }
@@ -606,6 +632,82 @@ mod tests {
             content: "lohnt sich trophy collector auf haze".to_string(),
             message_id: Some("m1".to_string()),
         }
+    }
+
+    /// Führt `fut` mit einem eigenen tracing-Subscriber aus und gibt die
+    /// gesammelten Logzeilen zurück. `with_subscriber` statt `with_default`,
+    /// damit der Dispatcher auch über `await`-Punkte gilt.
+    async fn capture_logs<F: std::future::Future>(fut: F) -> (F::Output, String) {
+        use std::sync::{Arc, Mutex};
+        use tracing::instrument::WithSubscriber;
+
+        #[derive(Clone)]
+        struct LogBuf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for LogBuf {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = LogBuf(Arc::new(Mutex::new(Vec::new())));
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+        let out = fut.with_subscriber(subscriber).await;
+        let logs = String::from_utf8_lossy(&buf.0.lock().unwrap()).into_owned();
+        (out, logs)
+    }
+
+    /// Der Testmodus misst, ob der Bot mitreden *könnte*. Bricht ein Gate vor
+    /// der Generierung ab, gab es bisher keine einzige Zeile — Stille sah dann
+    /// aus wie "nichts los", war aber womöglich ein kaputter Pfad. Jede
+    /// Testmodus-Entscheidung loggt jetzt, ohne je den Nachrichtentext zu
+    /// zeigen.
+    #[tokio::test]
+    async fn testmodus_loggt_auch_ohne_generierung() {
+        let Some(pool) = make_pool("t_eng_pipe_test_log").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'test')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+
+        let pipe = pipeline_with(pool, "http://127.0.0.1:1");
+        let mut m = msg();
+        // Führendes @ → skip-Trigger → SILENT, lange vor jedem Modell-Call.
+        m.content = "@someone zwiebelkuchen".to_string();
+        let (r, logs) = capture_logs(pipe.handle(&m)).await;
+
+        assert_eq!(r.decision, Decision::Silent);
+        assert!(logs.contains("smalltalk_loop.decision"), "keine Entscheidungszeile: {logs}");
+        assert!(logs.contains("decision=\"silent\""), "Entscheidung fehlt: {logs}");
+        assert!(logs.contains("generated=false"), "Generierungsflag fehlt: {logs}");
+        assert!(
+            !logs.contains("zwiebelkuchen"),
+            "Nachrichtentext darf nie ins Log: {logs}"
+        );
+    }
+
+    /// Andere Output-Modi bleiben unberührt — die Zeile ist rein fürs Testmodus-
+    /// Messprotokoll und darf den Live-/Shadow-Betrieb nicht zuspammen.
+    #[tokio::test]
+    async fn andere_modi_loggen_keine_testmodus_zeile() {
+        let Some(pool) = make_pool("t_eng_pipe_live_nolog").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'live')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+
+        let pipe = pipeline_with(pool, "http://127.0.0.1:1");
+        let mut m = msg();
+        m.content = "@someone zwiebelkuchen".to_string();
+        let (r, logs) = capture_logs(pipe.handle(&m)).await;
+
+        assert_eq!(r.decision, Decision::Silent);
+        assert!(!logs.contains("smalltalk_loop.decision"), "live loggt keine Testzeile: {logs}");
     }
 
     #[tokio::test]
