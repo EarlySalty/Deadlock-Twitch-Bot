@@ -818,6 +818,7 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api))),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),

@@ -66,6 +66,7 @@ use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
 use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
+use crate::standard_replies::StandardReplies;
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
 
@@ -642,6 +643,7 @@ pub struct ChatPipelineParts {
     pub moderation: Arc<ModerationEngine>,
     pub sus_invite: Arc<SusInviteCheck>,
     pub fun: Arc<FunResponses>,
+    pub standard_replies: Arc<StandardReplies>,
     pub invite_question: Arc<InviteQuestionResponder>,
     pub lfg_pitch: Arc<LfgPitchResponder>,
     pub promos: Arc<PromoEngine>,
@@ -960,8 +962,31 @@ impl ChatPipeline {
         self.handle_sus_invite(event, &channel_login, &chatter_login)
             .await;
 
+        // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
+        // nur live). Trifft eine, entfallen die Deadlock-Detektoren.
+        let standard_replies = Arc::clone(&p.standard_replies);
+        let event_for_step = event.clone();
+        let standard_channel = channel_login.clone();
+        let deadlock_live_for_standard = class.is_deadlock_live;
+        let standard_sent = run_pipeline_step(
+            "standard_replies",
+            &channel_login,
+            &chatter_login,
+            async move {
+                standard_replies
+                    .maybe_respond(
+                        &event_for_step,
+                        &standard_channel,
+                        deadlock_live_for_standard,
+                    )
+                    .await
+            },
+        )
+        .await
+        .unwrap_or(false);
+
         // Schritt 9/10: Deadlock-live-Detektoren.
-        if class.is_deadlock_live {
+        if class.is_deadlock_live && !standard_sent {
             self.run_deadlock_chat_detectors(event, &channel_login, &chatter_login)
                 .await;
         }
@@ -2168,6 +2193,7 @@ mod tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait))),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -2357,6 +2383,7 @@ mod tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait))),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 invite_api_trait,
                 Arc::new(StaticInviteUrl),
