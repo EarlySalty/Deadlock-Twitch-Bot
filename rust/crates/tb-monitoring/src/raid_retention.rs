@@ -189,7 +189,7 @@ async fn count_known_from_raider(
         "SELECT COUNT(DISTINCT sc.chatter_login) \
          FROM twitch_session_chatters sc \
          JOIN twitch_chatter_rollup r \
-           ON LOWER(r.streamer_login) = $3 AND r.chatter_login = sc.chatter_login \
+           ON r.streamer_login = LOWER($3) AND r.chatter_login = sc.chatter_login \
           AND r.first_seen_at < $2 \
          WHERE sc.session_id = $1 \
            AND sc.last_seen_at >= $2 \
@@ -221,7 +221,7 @@ async fn count_new_to_target(
            AND sc.last_seen_at >= $2 \
            AND NOT EXISTS ( \
              SELECT 1 FROM twitch_chatter_rollup r \
-             WHERE LOWER(r.streamer_login) = $3 \
+             WHERE r.streamer_login = LOWER($3) \
                AND r.chatter_login = sc.chatter_login \
                AND r.first_seen_at < $2 \
            ) \
@@ -254,7 +254,7 @@ async fn count_new_chatters(
            AND sc.messages > 0 \
            AND NOT EXISTS ( \
              SELECT 1 FROM twitch_chatter_rollup r \
-             WHERE LOWER(r.streamer_login) = $3 \
+             WHERE r.streamer_login = LOWER($3) \
                AND r.chatter_login = sc.chatter_login \
                AND r.first_seen_at < $2 \
            ) \

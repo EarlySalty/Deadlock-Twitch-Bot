@@ -211,11 +211,11 @@ impl ScoutRepository {
         // dyn: mehrere feste Kaskaden-Deletes laufen über dieselbe Schleife.
         for sql in [
             "DELETE FROM twitch_clips_social_analytics WHERE clip_id IN \
-             (SELECT id FROM twitch_clips_social_media WHERE LOWER(streamer_login) = LOWER($1))",
+             (SELECT id FROM twitch_clips_social_media WHERE streamer_login = LOWER($1))",
             "DELETE FROM twitch_clips_upload_queue WHERE clip_id IN \
-             (SELECT id FROM twitch_clips_social_media WHERE LOWER(streamer_login) = LOWER($1))",
-            "DELETE FROM twitch_clips_social_media WHERE LOWER(streamer_login) = LOWER($1)",
-            "DELETE FROM clip_fetch_history WHERE LOWER(streamer_login) = LOWER($1)",
+             (SELECT id FROM twitch_clips_social_media WHERE streamer_login = LOWER($1))",
+            "DELETE FROM twitch_clips_social_media WHERE streamer_login = LOWER($1)",
+            "DELETE FROM clip_fetch_history WHERE streamer_login = LOWER($1)",
         ] {
             if let Err(e) = sqlx::query(sql).bind(login).execute(&self.pool).await {
                 tracing::debug!("scout: Kaskaden-Delete für {login} fehlgeschlagen: {e}");
