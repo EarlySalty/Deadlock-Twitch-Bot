@@ -60,7 +60,9 @@ async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
         .fetch_one(&pool)
         .await
         .expect("zurückgesetzte Settings lesen"),
-        (false, false, "off".to_string())
+        // Der Kanal stand vorher auf "shadow" — genau dahin muss er zurück,
+        // sonst schaltet eine Testsession ihn dauerhaft ab.
+        (false, false, "shadow".to_string())
     );
     let cooldown: String = sqlx::query_scalar(
         "SELECT cooldown_until FROM twitch_partner_outreach WHERE streamer_login = 'eins'",
@@ -289,7 +291,9 @@ async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Opt
 
 async fn test_pool(schema: &str) -> Option<PgPool> {
     let Ok(url) =
-        std::env::var("TEST_DATABASE_URL").or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
+        std::env::var("TB_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("TEST_DATABASE_URL"))
+            .or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
     else {
         return None;
     };

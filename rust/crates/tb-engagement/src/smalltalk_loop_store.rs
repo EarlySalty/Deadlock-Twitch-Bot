@@ -118,6 +118,9 @@ struct SessionSettingsRow {
     settings_existed: bool,
     previous_enabled: bool,
     previous_irc_read: bool,
+    /// Ausgabemodus vor der Testsession — wird beim Schließen wieder
+    /// gesetzt, sonst bliebe ein `shadow`/`live`-Kanal dauerhaft stumm.
+    previous_output_mode: Option<String>,
 }
 
 impl SmalltalkLoopStore {
@@ -374,7 +377,8 @@ impl SmalltalkLoopStore {
         lock_global(&mut tx).await?;
         let sessions = sqlx::query_as::<_, SessionSettingsRow>(
             "SELECT id, channel_login, streamer_user_id, started_at, viewer_count,
-                    settings_existed, previous_enabled, previous_irc_read
+                    settings_existed, previous_enabled, previous_irc_read,
+                    previous_output_mode
              FROM twitch_smalltalk_sessions
              WHERE ended_at IS NULL
              ORDER BY started_at
@@ -399,7 +403,8 @@ impl SmalltalkLoopStore {
         lock_global(&mut tx).await?;
         let session = sqlx::query_as::<_, SessionSettingsRow>(
             "SELECT id, channel_login, streamer_user_id, started_at, viewer_count,
-                    settings_existed, previous_enabled, previous_irc_read
+                    settings_existed, previous_enabled, previous_irc_read,
+                    previous_output_mode
              FROM twitch_smalltalk_sessions
              WHERE id = $1 AND ended_at IS NULL
              FOR UPDATE",
@@ -753,11 +758,18 @@ async fn close_locked(
     if session.settings_existed {
         sqlx::query(
             "UPDATE twitch_engagement_settings
-             SET enabled = $1, irc_read = $2, output_mode = 'off'
-             WHERE LOWER(channel_login) = LOWER($3)",
+             SET enabled = $1, irc_read = $2, output_mode = $3
+             WHERE LOWER(channel_login) = LOWER($4)",
         )
         .bind(session.previous_enabled)
         .bind(session.previous_irc_read)
+        .bind(
+            session
+                .previous_output_mode
+                .as_deref()
+                .filter(|mode| !mode.trim().is_empty())
+                .unwrap_or("off"),
+        )
         .bind(&session.channel_login)
         .execute(&mut **tx)
         .await?;

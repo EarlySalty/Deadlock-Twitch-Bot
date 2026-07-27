@@ -2668,6 +2668,7 @@ mod chat_notification_tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api_trait))),
             invite_question: Arc::new(InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
