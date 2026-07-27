@@ -1,3 +1,11 @@
+## #403 — Der Bot grüßt zurück, statt jeden willkommen zu heißen
+
+**Problem:** Auf einen Gruß kam "Hey, willkommen im Chat!" — auch bei Stammgästen, die seit Monaten dabei sind. Der Bot weiß gar nicht, wer neu ist, und die Willkommensformel las sich entsprechend schräg.
+
+**Änderung:** Die Antwort ist jetzt ein schlichter Rückgruß.
+
+**Aktuelles Verhalten:** Wer grüßt, bekommt einen Gruß zurück. Wann geantwortet wird, ändert sich nicht: weiterhin nur bei Nachrichten, die praktisch nur aus einem Gruß bestehen, und höchstens alle zehn Minuten pro Kanal.
+
 ## #402 — Discord-Ankündigungen überstehen einen Neustart des Discord-Bots
 
 **Problem:** Läuft der Discord-Bot gerade neu hoch, ist für ein paar Sekunden niemand da, der Nachrichten entgegennimmt. Der Twitch-Bot hat solche Anfragen sofort verworfen, statt es kurz darauf noch einmal zu versuchen — Live-Ankündigungen zeigten dann bis zum nächsten Durchlauf einen alten Stand.
