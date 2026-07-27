@@ -31,6 +31,8 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatResponse {
     pub text: Option<String>,
+    /// Modelltext nach Think-/Silent-Behandlung, aber vor dem Ausgabefilter.
+    pub raw_text: Option<String>,
     pub model: String,
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
@@ -74,12 +76,17 @@ fn process_text(
     max_answer_len: usize,
     sanitize: fn(&str, usize) -> Option<String>,
 ) -> Option<String> {
+    prepare_response_text(raw_text).and_then(|text| sanitize(&text, max_answer_len))
+}
+
+fn prepare_response_text(raw_text: &str) -> Option<String> {
     let without_think = strip_think(raw_text.trim());
     let without_think = without_think.trim();
     if without_think.is_empty() || without_think.to_lowercase().contains(SILENT_MARKER) {
-        return None;
+        None
+    } else {
+        Some(without_think.to_string())
     }
-    sanitize(without_think, max_answer_len)
 }
 
 /// Säubert Bot-Text vor dem Senden an Twitch. `None` verwirft leere oder mehr
@@ -98,14 +105,10 @@ fn sanitize_answer_text(text: &str, max_len: usize) -> Option<String> {
 }
 
 fn sanitize_text(text: &str, max_len: usize) -> Option<String> {
-    let without_emoji: Vec<char> = text.chars().filter(|c| !is_emoji_component(*c)).collect();
+    let without_emoji_and_bang = strip_emoji_and_bang(text);
     let mut transformed = String::with_capacity(text.len());
-    let mut chars = without_emoji.into_iter().peekable();
-    while let Some(c) = chars.next() {
+    for c in without_emoji_and_bang.chars() {
         match c {
-            // `!` fällt weg, außer als Command-Präfix direkt vor Alphanumerik
-            // (`!clip`); so verschwindet auch Hype-Spam wie `wow!!` komplett.
-            '!' if chars.peek().is_none_or(|next| !next.is_alphanumeric()) => {}
             '—' => {
                 while transformed.chars().last().is_some_and(char::is_whitespace) {
                     transformed.pop();
@@ -130,6 +133,122 @@ fn sanitize_text(text: &str, max_len: usize) -> Option<String> {
     } else {
         Some(cleaned.to_string())
     }
+}
+
+/// Grund, warum ein erzeugter Testmodus-Text nicht sendefähig wäre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestModeRejectReason {
+    Dash,
+    Quote,
+    List,
+    RepeatedPunctuation,
+    TooLong,
+    OfferOrLink,
+    Empty,
+}
+
+impl TestModeRejectReason {
+    /// Stabiler Wert für die Persistenz.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dash => "dash",
+            Self::Quote => "quote",
+            Self::List => "list",
+            Self::RepeatedPunctuation => "repeated_punctuation",
+            Self::TooLong => "too_long",
+            Self::OfferOrLink => "offer_or_link",
+            Self::Empty => "empty",
+        }
+    }
+}
+
+/// Prüft Testmodus-Output. Anders als der bestehende Sendefilter werden
+/// auffällige Texte nicht umgeschrieben, sondern mit einem stabilen Grund
+/// abgelehnt.
+pub fn sanitize_test_mode_text(text: &str) -> Result<String, TestModeRejectReason> {
+    let cleaned = strip_emoji_and_bang(text);
+
+    if cleaned.contains(['—', '–']) {
+        return Err(TestModeRejectReason::Dash);
+    }
+    if cleaned.chars().any(|c| {
+        matches!(
+            c,
+            '"' | '\'' | '„' | '“' | '”' | '»' | '«' | '‚' | '‘' | '’'
+        )
+    }) {
+        return Err(TestModeRejectReason::Quote);
+    }
+
+    static LIST_RE: OnceLock<Regex> = OnceLock::new();
+    let list_re = LIST_RE.get_or_init(|| {
+        Regex::new(r"(?m)^\s*(?:[-*•]|\d+\.)").expect("statische Listen-Regex ist gültig")
+    });
+    if list_re.is_match(&cleaned) {
+        return Err(TestModeRejectReason::List);
+    }
+
+    let lower = cleaned.to_lowercase();
+    let has_offer_word = [
+        "discord",
+        "community",
+        "partner",
+        "netzwerk",
+        "dashboard",
+        "website",
+    ]
+    .iter()
+    .any(|word| lower.contains(word));
+    static URL_RE: OnceLock<Regex> = OnceLock::new();
+    let url_re = URL_RE.get_or_init(|| {
+        Regex::new(r"(?i)(?:https?://|www\.|(?:[a-z0-9-]+\.)+(?:gg|com|de)\b)")
+            .expect("statische URL-Regex ist gültig")
+    });
+    if has_offer_word || url_re.is_match(&cleaned) {
+        return Err(TestModeRejectReason::OfferOrLink);
+    }
+
+    static PUNCTUATION_RE: OnceLock<Regex> = OnceLock::new();
+    let punctuation_re = PUNCTUATION_RE
+        .get_or_init(|| Regex::new(r"\p{P}{2,}").expect("statische Satzzeichen-Regex ist gültig"));
+    if punctuation_re
+        .find_iter(&cleaned)
+        .any(|run| run.as_str() != "...")
+    {
+        return Err(TestModeRejectReason::RepeatedPunctuation);
+    }
+    if cleaned.chars().count() > MAX_CHAT_TEXT_CHARS {
+        return Err(TestModeRejectReason::TooLong);
+    }
+
+    let cleaned = normalize_chat_text(&cleaned);
+    if cleaned.is_empty() {
+        Err(TestModeRejectReason::Empty)
+    } else {
+        Ok(cleaned)
+    }
+}
+
+fn strip_emoji_and_bang(text: &str) -> String {
+    let without_emoji: Vec<char> = text.chars().filter(|c| !is_emoji_component(*c)).collect();
+    let mut cleaned = String::with_capacity(text.len());
+    let mut chars = without_emoji.into_iter().peekable();
+    while let Some(c) = chars.next() {
+        // `!` fällt weg, außer als Command-Präfix direkt vor Alphanumerik
+        // (`!clip`); so verschwindet auch Hype-Spam wie `wow!!` komplett.
+        if c != '!' || chars.peek().is_some_and(|next| next.is_alphanumeric()) {
+            cleaned.push(c);
+        }
+    }
+    cleaned
+}
+
+fn normalize_chat_text(text: &str) -> String {
+    let mut cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    while cleaned.starts_with('/') || cleaned.starts_with('.') {
+        cleaned = cleaned[1..].trim_start().to_string();
+    }
+    cleaned.replace("@everyone", "everyone").trim().to_string()
 }
 
 fn is_emoji_component(c: char) -> bool {
@@ -165,7 +284,9 @@ klugscheisser aufzufliegen.";
 
 /// System-Prompt: Soul (Charakter) + Fakten-Guardrails + Stil/Format-Regeln
 /// (Python `build_baseline_system_prompt`).
-pub fn build_baseline_system_prompt(streamer_login: &str) -> String {
+pub fn build_baseline_system_prompt(streamer_login: &str, test_mode: bool) -> String {
+    let _ = test_mode;
+    // TODO(smalltalk-livetest): Testmodus-Prompttext folgt separat
     format!(
         "So tickst du — deine Persönlichkeit, in deinen eigenen Worten:\n\
 {SOUL}\n\n\
@@ -410,9 +531,11 @@ impl EngagementMinimaxClient {
         )
         .await;
 
+        let review_text = prepare_response_text(&raw_text);
         let text = process(&raw_text, max_answer_len);
         Ok(ChatResponse {
             text,
+            raw_text: review_text,
             model: self.model.clone(),
             prompt_tokens,
             completion_tokens,
@@ -670,6 +793,78 @@ mod tests {
     }
 
     #[test]
+    fn testmodus_filter_entfernt_emoji_und_ausrufezeichen_wie_bisher() {
+        assert_eq!(
+            sanitize_test_mode_text("wow 😭 stark! !clip"),
+            Ok("wow stark !clip".to_string())
+        );
+        assert_eq!(
+            sanitize_test_mode_text("was?!"),
+            Ok("was?".to_string()),
+            "Ausrufezeichen werden vor den Verwerfregeln entfernt"
+        );
+        assert_eq!(
+            sanitize_test_mode_text("😭⭐"),
+            Err(TestModeRejectReason::Empty)
+        );
+    }
+
+    #[test]
+    fn testmodus_filter_verwirft_bot_tells_mit_stabilem_grund() {
+        let cases = [
+            ("das — ist wild", TestModeRejectReason::Dash),
+            ("das – ist wild", TestModeRejectReason::Dash),
+            ("\"wild\"", TestModeRejectReason::Quote),
+            ("'wild'", TestModeRejectReason::Quote),
+            ("„wild“", TestModeRejectReason::Quote),
+            ("“wild”", TestModeRejectReason::Quote),
+            ("»wild«", TestModeRejectReason::Quote),
+            ("‚wild‘", TestModeRejectReason::Quote),
+            ("’wild’", TestModeRejectReason::Quote),
+            ("- erster punkt", TestModeRejectReason::List),
+            ("* erster punkt", TestModeRejectReason::List),
+            ("• erster punkt", TestModeRejectReason::List),
+            ("ok\n  1. zweiter punkt", TestModeRejectReason::List),
+            ("was??", TestModeRejectReason::RepeatedPunctuation),
+            ("zu....lang", TestModeRejectReason::RepeatedPunctuation),
+            (&"a".repeat(121), TestModeRejectReason::TooLong),
+            ("komm auf Discord", TestModeRejectReason::OfferOrLink),
+            ("unsere Community", TestModeRejectReason::OfferOrLink),
+            ("neuer Partner gesucht", TestModeRejectReason::OfferOrLink),
+            ("unser Netzwerk", TestModeRejectReason::OfferOrLink),
+            ("das Dashboard", TestModeRejectReason::OfferOrLink),
+            ("unsere Website", TestModeRejectReason::OfferOrLink),
+            ("www.example.org", TestModeRejectReason::OfferOrLink),
+            ("https://example.org", TestModeRejectReason::OfferOrLink),
+            ("deadlock-deutsch.gg", TestModeRejectReason::OfferOrLink),
+            ("example.com", TestModeRejectReason::OfferOrLink),
+            ("example.de", TestModeRejectReason::OfferOrLink),
+        ];
+
+        for (text, expected) in cases {
+            assert_eq!(sanitize_test_mode_text(text), Err(expected), "{text}");
+        }
+        assert_eq!(
+            sanitize_test_mode_text("warte... gleich"),
+            Ok("warte... gleich".to_string())
+        );
+    }
+
+    #[test]
+    fn testmodus_grundwerte_sind_db_stabil() {
+        assert_eq!(TestModeRejectReason::Dash.as_str(), "dash");
+        assert_eq!(TestModeRejectReason::Quote.as_str(), "quote");
+        assert_eq!(TestModeRejectReason::List.as_str(), "list");
+        assert_eq!(
+            TestModeRejectReason::RepeatedPunctuation.as_str(),
+            "repeated_punctuation"
+        );
+        assert_eq!(TestModeRejectReason::TooLong.as_str(), "too_long");
+        assert_eq!(TestModeRejectReason::OfferOrLink.as_str(), "offer_or_link");
+        assert_eq!(TestModeRejectReason::Empty.as_str(), "empty");
+    }
+
+    #[test]
     fn process_silent_und_think() {
         // <think> wird entfernt, danach bleibt <silent> → None.
         assert_eq!(
@@ -690,11 +885,19 @@ mod tests {
 
     #[test]
     fn baseline_prompt_enthaelt_soul_streamer_marker() {
-        let p = build_baseline_system_prompt("nani");
+        let p = build_baseline_system_prompt("nani", false);
         assert!(p.contains("ich bin einfach ständig da")); // SOUL drin
         assert!(p.contains("Twitch-Chat von nani")); // Streamer interpoliert
         assert!(p.contains(SILENT_MARKER)); // Silent-Marker
         assert!(p.contains("ü ö ä ß")); // echte Umlaute erhalten
+    }
+
+    #[test]
+    fn testmodus_prompt_hook_aendert_den_text_noch_nicht() {
+        assert_eq!(
+            build_baseline_system_prompt("nani", false),
+            build_baseline_system_prompt("nani", true)
+        );
     }
 
     fn history() -> Vec<ChatMessage> {

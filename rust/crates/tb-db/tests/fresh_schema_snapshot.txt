@@ -1081,6 +1081,40 @@ twitch_shoutout_events|other_broadcaster_login|text|YES|
 twitch_shoutout_events|received_at|timestamp with time zone|NO|now()
 twitch_shoutout_events|twitch_user_id|text|NO|
 twitch_shoutout_events|viewer_count|integer|YES|0
+twitch_smalltalk_messages|channel_login|text|NO|
+twitch_smalltalk_messages|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_messages|generated_at|timestamp with time zone|NO|
+twitch_smalltalk_messages|generated_text|text|NO|
+twitch_smalltalk_messages|id|bigint|NO|nextval('twitch_smalltalk_messages_id_seq'::regclass)
+twitch_smalltalk_messages|outcome|text|NO|
+twitch_smalltalk_messages|reject_reason|text|YES|
+twitch_smalltalk_messages|session_id|uuid|NO|
+twitch_smalltalk_messages|trigger_text|text|NO|
+twitch_smalltalk_messages|triggered_by_msg_id|text|YES|
+twitch_smalltalk_sessions|channel_login|text|NO|
+twitch_smalltalk_sessions|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|discord_attempts|integer|NO|0
+twitch_smalltalk_sessions|discord_claim_id|uuid|YES|
+twitch_smalltalk_sessions|discord_claim_until|timestamp with time zone|YES|
+twitch_smalltalk_sessions|discord_delete_attempts|integer|NO|0
+twitch_smalltalk_sessions|discord_delete_next_attempt_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|discord_last_delete_error|text|YES|
+twitch_smalltalk_sessions|discord_last_error|text|YES|
+twitch_smalltalk_sessions|discord_message_id|text|YES|
+twitch_smalltalk_sessions|discord_next_attempt_at|timestamp with time zone|NO|now()
+twitch_smalltalk_sessions|end_reason|text|YES|
+twitch_smalltalk_sessions|ended_at|timestamp with time zone|YES|
+twitch_smalltalk_sessions|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
+twitch_smalltalk_sessions|id|uuid|NO|
+twitch_smalltalk_sessions|last_provider_error|text|YES|
+twitch_smalltalk_sessions|previous_enabled|boolean|NO|
+twitch_smalltalk_sessions|previous_irc_read|boolean|NO|
+twitch_smalltalk_sessions|previous_output_mode|text|NO|
+twitch_smalltalk_sessions|provider_error_count|integer|NO|0
+twitch_smalltalk_sessions|settings_existed|boolean|NO|
+twitch_smalltalk_sessions|started_at|timestamp with time zone|NO|
+twitch_smalltalk_sessions|streamer_user_id|text|NO|
+twitch_smalltalk_sessions|viewer_count|integer|YES|
 twitch_spam_review_decisions|channel_login|text|NO|
 twitch_spam_review_decisions|chatter_id|text|YES|
 twitch_spam_review_decisions|chatter_login|text|NO|
