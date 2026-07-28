@@ -1,3 +1,11 @@
+## #404 — Pause-Loop-Clips laufen ohne Klick
+
+**Problem:** Der Pause-Loop hing am Twitch-Clip-Player, und der startet ohne Klick nicht. In OBS blieb bei jedem Clip ein Play-Button stehen — der Loop lief also gar nicht von allein.
+
+**Änderung:** Die Clips werden jetzt direkt abgespielt statt über den Twitch-Player eingebettet. Der nächste Clip wird schon während des laufenden geladen, damit dazwischen kein schwarzes Bild steht.
+
+**Aktuelles Verhalten:** Die Pause-Loop-URL als OBS-Browser-Quelle läuft ohne Zutun durch. Die Lautstärke lässt sich per `?volume=0.3` an die URL anhängen, Standard ist die Hälfte.
+
 ## #403 — Der Bot grüßt zurück, statt jeden willkommen zu heißen
 
 **Problem:** Auf einen Gruß kam "Hey, willkommen im Chat!" — auch bei Stammgästen, die seit Monaten dabei sind. Der Bot weiß gar nicht, wer neu ist, und die Willkommensformel las sich entsprechend schräg.
