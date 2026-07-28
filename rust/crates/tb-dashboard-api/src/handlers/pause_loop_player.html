@@ -11,17 +11,20 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
 #player video{display:block;width:100vw;height:100vh;object-fit:contain;background:#000;}
 #status{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(680px,80vw);padding:18px 22px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(0,0,0,.72);box-shadow:0 24px 80px rgba(0,0,0,.55);font-size:20px;line-height:1.35;text-align:center;}
 #status[hidden]{display:none;}
-#clipLabel{position:fixed;left:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.64);color:#fff;font-size:14px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000;}
+/* Groessen skalieren mit der Quellenhoehe: der Loop laeuft als OBS-Browser-Quelle
+   in 720p bis 4K, eine feste Pixelgroesse ist dort mal winzig, mal riesig. */
+#clipLabel{position:fixed;left:2vh;bottom:2vh;max-width:calc(100vw - 4vh);padding:.8vh 1.6vh;border-radius:999px;background:rgba(0,0,0,.7);color:#fff;font-size:clamp(16px,2.6vh,40px);font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 6px #000;}
 #clipLabel:empty{display:none;}
-#audioHint{position:fixed;right:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(140,20,20,.82);color:#fff;font-size:14px;line-height:1.25;text-shadow:0 1px 2px #000;}
-#audioHint:empty{display:none;}
+#hint{position:fixed;right:2vh;bottom:2vh;max-width:calc(100vw - 4vh);padding:.8vh 1.6vh;border-radius:999px;background:rgba(0,0,0,.7);color:#fff;font-size:clamp(15px,2.2vh,34px);line-height:1.25;text-shadow:0 2px 6px #000;}
+#hint.warn{background:rgba(150,24,24,.86);}
+#hint:empty{display:none;}
 </style>
 </head>
 <body>
 <main id="player" aria-label="Twitch Pause-Loop Clip-Player"></main>
 <div id="status" role="status">Clip-Pool wird geladen…</div>
 <div id="clipLabel" aria-live="polite"></div>
-<div id="audioHint" role="status"></div>
+<div id="hint" role="status"></div>
 <script>
 (() => {
   'use strict';
@@ -43,13 +46,19 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   const PLAY_OVERRUN_MS = 10 * 1000;
   const MAX_RESOLVE_FAILURES = 8;
 
+  const VOLUME_STORAGE_KEY = 'pause-loop-volume';
+  const VOLUME_STEP = 0.05;
+  const HINT_MS = 1800;
+
   const params = new URLSearchParams(location.search);
-  const volume = clampVolume(params.get('volume'));
 
   const player = document.getElementById('player');
   const status = document.getElementById('status');
   const clipLabel = document.getElementById('clipLabel');
-  const audioHint = document.getElementById('audioHint');
+  const hint = document.getElementById('hint');
+
+  let volume = initialVolume();
+  let hintTimer = 0;
 
   let pool = [];
   let queue = [];
@@ -61,9 +70,22 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   let activeClip = null;
   let preparing = null;
 
-  function clampVolume(raw) {
+  function clampVolume(raw, fallback) {
     const value = Number.parseFloat(raw ?? '');
-    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback;
+  }
+
+  // ?volume= schlaegt den gemerkten Wert, damit eine geteilte URL vorhersagbar bleibt.
+  function initialVolume() {
+    const fromUrl = params.get('volume');
+    if (fromUrl !== null) {
+      return clampVolume(fromUrl, 0.5);
+    }
+    try {
+      return clampVolume(window.localStorage.getItem(VOLUME_STORAGE_KEY), 0.5);
+    } catch (error) {
+      return 0.5;
+    }
   }
 
   function setStatus(text) {
@@ -298,8 +320,36 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
 
   // Der stumme Start ist ein Fallback, keine Einstellung: er muss sichtbar sein,
   // sonst ist "kein Ton" nicht von einer falschen OBS-Audioquelle zu unterscheiden.
-  function setAudioHint(text) {
-    audioHint.textContent = text;
+  // Die Warnung bleibt stehen, kurze Rueckmeldungen blenden sich selbst aus.
+  function setHint(text, warn, autoHideMs) {
+    hint.textContent = text;
+    hint.classList.toggle('warn', warn === true);
+    window.clearTimeout(hintTimer);
+    if (autoHideMs) {
+      hintTimer = window.setTimeout(() => { hint.textContent = ''; }, autoHideMs);
+    }
+  }
+
+  function setVolume(next) {
+    volume = Math.min(1, Math.max(0, Math.round(next * 100) / 100));
+    const video = player.firstElementChild;
+    if (video) {
+      video.volume = volume;
+      video.muted = false;
+    }
+    try {
+      window.localStorage.setItem(VOLUME_STORAGE_KEY, String(volume));
+    } catch (error) {
+      // Privater Modus ohne Speicher: die Lautstaerke gilt dann nur bis zum Reload.
+    }
+    setHint(`Lautstärke ${Math.round(volume * 100)} %`, false, HINT_MS);
+  }
+
+  // Nur die Warnung zuruecknehmen: eine laufende Lautstaerke-Anzeige soll bleiben.
+  function clearWarning() {
+    if (hint.classList.contains('warn')) {
+      setHint('', false, 0);
+    }
   }
 
   function unmuteActive() {
@@ -308,19 +358,19 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
       video.muted = false;
       video.volume = volume;
     }
-    setAudioHint('');
+    clearWarning();
   }
 
   async function startPlayback(video) {
     try {
       await video.play();
-      setAudioHint('');
+      clearWarning();
     } catch (error) {
       // Ohne Nutzergeste erlaubt der Browser nur stumme Wiedergabe. In OBS greift
       // das normalerweise nicht – tut es doch, hilft ein Klick per "Interagieren".
       console.warn('Pause-Loop: Ton blockiert, starte stumm', error);
       video.muted = true;
-      setAudioHint('Ton blockiert – in OBS „Interagieren" öffnen und einmal klicken');
+      setHint('Ton blockiert – in OBS „Interagieren" öffnen und einmal klicken', true, 0);
       await video.play();
     }
   }
@@ -445,9 +495,25 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     }
   }
 
-  // Eine Nutzergeste hebt die Autoplay-Sperre auf – in OBS per "Interagieren".
+  // Bedienung im OBS-Fenster "Interagieren": jede Geste hebt zugleich eine
+  // Autoplay-Stummschaltung auf. Pfeiltasten/Plus/Minus und Scrollrad regeln.
   document.addEventListener('click', unmuteActive);
-  document.addEventListener('keydown', unmuteActive);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowUp' || event.key === '+') {
+      setVolume(volume + VOLUME_STEP);
+    } else if (event.key === 'ArrowDown' || event.key === '-') {
+      setVolume(volume - VOLUME_STEP);
+    } else {
+      unmuteActive();
+      return;
+    }
+    event.preventDefault();
+  });
+
+  document.addEventListener('wheel', (event) => {
+    setVolume(volume + (event.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP));
+  }, { passive: true });
 
   // Erst den Pool holen, sonst meldet der Loop beim Start faelschlich "leer" und
   // wartet EMPTY_RETRY_MS, obwohl die Clips gleich da sind.

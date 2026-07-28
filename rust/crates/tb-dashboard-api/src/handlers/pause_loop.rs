@@ -2124,7 +2124,12 @@ mod tests {
             // Stummer Autoplay-Fallback muss sichtbar und per Klick behebbar sein.
             "video.muted = false",
             "addEventListener('click', unmuteActive)",
-            "id=\"audioHint\"",
+            "id=\"hint\"",
+            // Lautstaerke zur Laufzeit regelbar und ueber den Reload hinweg gemerkt.
+            "function setVolume(next)",
+            "addEventListener('wheel'",
+            "VOLUME_STORAGE_KEY",
+            "localStorage.setItem(VOLUME_STORAGE_KEY",
         ] {
             assert!(html.contains(needle), "HTML/JS-Vertrag fehlt: {needle}");
         }
@@ -2138,6 +2143,13 @@ mod tests {
         assert!(
             html.contains("preparing = null;\n    return pending;"),
             "takePrepared() muss die laufende Vorbereitung uebernehmen und freigeben"
+        );
+
+        // Eine Geste nimmt nur die Warnung zurueck. Wuerde sie den ganzen Hinweis
+        // leeren, ueberschriebe der Clipwechsel sofort die Lautstaerke-Anzeige.
+        assert!(
+            html.contains("function clearWarning()") && html.contains("hint.classList.contains('warn')"),
+            "Warnung und kurze Rueckmeldung duerfen sich nicht gegenseitig loeschen"
         );
         assert_eq!(
             html.matches("preparing = null").count(),

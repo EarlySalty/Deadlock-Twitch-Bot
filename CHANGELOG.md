@@ -4,7 +4,7 @@
 
 **Änderung:** Die Clips werden jetzt direkt abgespielt statt über den Twitch-Player eingebettet. Der nächste Clip wird schon während des laufenden geladen, damit dazwischen kein schwarzes Bild steht.
 
-**Aktuelles Verhalten:** Die Pause-Loop-URL als OBS-Browser-Quelle läuft ohne Zutun durch. Die Lautstärke lässt sich per `?volume=0.3` an die URL anhängen, Standard ist die Hälfte.
+**Aktuelles Verhalten:** Die Pause-Loop-URL als OBS-Browser-Quelle läuft ohne Zutun durch. Die Lautstärke regelst du im Fenster „Interagieren" mit Scrollrad oder Pfeiltasten; der Wert bleibt gespeichert. Der Name des laufenden Clips steht jetzt deutlich größer im Bild.
 
 ## #403 — Der Bot grüßt zurück, statt jeden willkommen zu heißen
 
