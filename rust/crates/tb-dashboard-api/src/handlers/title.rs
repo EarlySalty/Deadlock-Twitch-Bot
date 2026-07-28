@@ -545,6 +545,7 @@ mod tests {
                 discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
                 steam_id64 BIGINT NOT NULL,
                 verified BOOLEAN NOT NULL DEFAULT false,
+                primary_account BOOLEAN NOT NULL DEFAULT false,
                 linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (discord_id, steam_id64)
             )",

@@ -17,8 +17,9 @@ pub const STEAM64_BASE: i64 = 76561197960265728;
 pub const STEAMIDS_JSON_DEFAULT: &str = "data/highlight_clipper/steamids.json";
 
 /// Liest je Discord-User die bevorzugte Steam-account_id aus Central Postgres.
-/// Verifizierte Links gehen vor; danach entscheiden Aktualität und Steam-ID
-/// deterministisch. Nur positive account_ids werden übernommen.
+/// Das als primär markierte Konto gewinnt — `core.steam_links` laesst davon pro
+/// Discord-Konto genau eines zu. Erst danach entscheiden Verifikation,
+/// Aktualität und Steam-ID deterministisch. Nur positive account_ids zaehlen.
 pub async fn load_steam_account_ids(
     pool: &PgPool,
     discord_ids: &[i64],
@@ -31,7 +32,7 @@ pub async fn load_steam_account_ids(
         "SELECT DISTINCT ON (discord_id) discord_id, steam_id64
          FROM core.steam_links
          WHERE discord_id = ANY($1)
-         ORDER BY discord_id, verified DESC, linked_at DESC, steam_id64 ASC",
+         ORDER BY discord_id, primary_account DESC, verified DESC, linked_at DESC, steam_id64 ASC",
     )
     .bind(discord_ids)
     .fetch_all(pool)
@@ -275,6 +276,7 @@ mod db_tests {
                 discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
                 steam_id64 BIGINT NOT NULL,
                 verified BOOLEAN NOT NULL DEFAULT false,
+                primary_account BOOLEAN NOT NULL DEFAULT false,
                 linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (discord_id, steam_id64)
             )",
@@ -356,6 +358,49 @@ mod db_tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `core.steam_links` erlaubt pro Discord-Konto genau ein `primary_account`
+    /// (Migration `0015_steam_links_one_primary`). Das primäre Konto gewinnt
+    /// deshalb auch dann, wenn ein anderer Link verifiziert und neuer ist.
+    #[tokio::test]
+    async fn steam_account_ids_bevorzugt_das_primaere_konto() {
+        let Some(pool) = make_pool("t9bii_partner_primary").await else {
+            return;
+        };
+        // `core` ist schemaübergreifend, nur das Testschema wird frisch angelegt.
+        // Deshalb eigene Discord-ID, eigene Zeilen vorher raeumen, konfliktfrei
+        // einfuegen — sonst faerben Rueckstaende andere Tests ein.
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = 55555")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO core.users (discord_id) VALUES (55555)
+             ON CONFLICT (discord_id) DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links
+                (discord_id, steam_id64, verified, primary_account, linked_at)
+             VALUES
+                (55555, $1, false, true, '2026-07-28T10:00:00Z'),
+                (55555, $2, true, false, '2026-07-28T11:00:00Z')
+             ON CONFLICT (discord_id, steam_id64) DO UPDATE
+             SET verified = EXCLUDED.verified,
+                 primary_account = EXCLUDED.primary_account,
+                 linked_at = EXCLUDED.linked_at",
+        )
+        .bind(STEAM64_BASE + 7)
+        .bind(STEAM64_BASE + 99)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let map = load_steam_account_ids(&pool, &[55555]).await.unwrap();
+        assert_eq!(map.get(&55555).map(String::as_str), Some("7"));
     }
 
     #[tokio::test]

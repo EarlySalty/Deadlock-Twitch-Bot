@@ -120,7 +120,7 @@ pub async fn get_live_state_for_discord_user(
          FROM core.steam_links sl
          JOIN activity.live_player_state lps ON sl.steam_id64::text = lps.steam_id
          WHERE sl.discord_id = $1
-         ORDER BY sl.verified DESC, sl.linked_at DESC, sl.steam_id64 ASC
+         ORDER BY sl.primary_account DESC, sl.verified DESC, sl.linked_at DESC, sl.steam_id64 ASC
          LIMIT 1",
     )
     .bind(user_id)
@@ -222,6 +222,7 @@ mod tests {
                 discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
                 steam_id64 BIGINT NOT NULL,
                 verified BOOLEAN NOT NULL DEFAULT false,
+                primary_account BOOLEAN NOT NULL DEFAULT false,
                 linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (discord_id, steam_id64)
             )",
