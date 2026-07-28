@@ -132,8 +132,8 @@ async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<
 }
 
 /// Holt Rang (+ optional Live-State) für den Streamer — Parität zu
-/// `tb-chat/commands.rs` (P2.101/P2.102). Rang bleibt synchron auf SQLite;
-/// Live-State kommt async aus Central Postgres.
+/// `tb-chat/commands.rs` (P2.101/P2.102). Rang und Live-State kommen aus
+/// Central Postgres.
 async fn resolve_title_context(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -143,23 +143,9 @@ async fn resolve_title_context(
         return TitleContext::default();
     };
 
-    let db_path = steam_lookup::steam_db_path();
-    let rank_path = db_path.clone();
-    let rank_display = match tokio::task::spawn_blocking(move || {
-        steam_lookup::get_rank_for_discord_user(&rank_path, discord_id)
-    })
-    .await
-    {
-        Ok(rank) => rank.map(|r| r.rank_display),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                discord_id_tail = discord_id.rem_euclid(10_000),
-                "Title-Kontext: Steam-Rank-Task fehlgeschlagen; der Titel wird ohne Rang erzeugt"
-            );
-            None
-        }
-    };
+    let rank_display = steam_lookup::get_rank_for_discord_user(pool, discord_id)
+        .await
+        .map(|rank| rank.rank_display);
 
     let mut live_state = None;
     let mut live_context_used = false;
@@ -542,12 +528,17 @@ mod tests {
         .unwrap();
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS core.steam_links (
-                discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
-                steam_id64 BIGINT NOT NULL,
+                discord_id BIGINT NOT NULL,
+                steam_id TEXT NOT NULL,
+                steam_id64 BIGINT,
                 verified BOOLEAN NOT NULL DEFAULT false,
                 primary_account BOOLEAN NOT NULL DEFAULT false,
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                PRIMARY KEY (discord_id, steam_id64)
+                linked_at TIMESTAMPTZ,
+                deadlock_rank INTEGER,
+                deadlock_subrank INTEGER,
+                deadlock_rank_name TEXT,
+                deadlock_rank_updated_at TIMESTAMPTZ,
+                PRIMARY KEY (discord_id, steam_id)
             )",
         )
         .execute(&pool)
@@ -633,7 +624,17 @@ mod tests {
             return;
         };
         let discord_id = 9_223_372_036_854_775_000_i64;
-        let steam_id64 = 76_561_197_960_265_733_i64;
+        let steam_id64 = 76_561_197_960_265_933_i64;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
+            .bind(steam_id64.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id)
              VALUES ('pg-live-user', $1)",
@@ -651,9 +652,9 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO core.steam_links (discord_id, steam_id64, verified)
-             VALUES ($1, $2, true)
-             ON CONFLICT (discord_id, steam_id64) DO UPDATE SET verified = true",
+            "INSERT INTO core.steam_links (discord_id, steam_id, steam_id64, verified)
+             VALUES ($1, $2::text, $2, true)
+             ON CONFLICT (discord_id, steam_id) DO UPDATE SET verified = true",
         )
         .bind(discord_id)
         .bind(steam_id64)
@@ -687,5 +688,43 @@ mod tests {
             Some("Haze")
         );
         assert!(ctx.live_context_used);
+    }
+
+    #[tokio::test]
+    async fn rang_kommt_aus_postgres_und_folgt_primaerem_konto() {
+        let Some(pool) = make_pool("t_title_rank_postgres").await else {
+            return;
+        };
+        let discord_id = 8_300_000_000_000_001_i64;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id)
+             VALUES ('pg-rank-user', $1)",
+        )
+        .bind(discord_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links (
+                discord_id, steam_id, steam_id64, verified, primary_account,
+                linked_at, deadlock_rank, deadlock_subrank
+             )
+             VALUES
+                ($1, 'rank-primary', NULL, false, true, '2026-07-28T10:00:00Z', 6, 3),
+                ($1, 'rank-secondary', NULL, true, false, '2026-07-28T11:00:00Z', 9, 5)",
+        )
+        .bind(discord_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let context = resolve_title_context(&pool, "pg-rank-user", false).await;
+
+        assert_eq!(context.rank_display.as_deref(), Some("Archon 3"));
     }
 }

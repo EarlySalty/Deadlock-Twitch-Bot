@@ -17,9 +17,9 @@ pub const STEAM64_BASE: i64 = 76561197960265728;
 pub const STEAMIDS_JSON_DEFAULT: &str = "data/highlight_clipper/steamids.json";
 
 /// Liest je Discord-User die bevorzugte Steam-account_id aus Central Postgres.
-/// Das als primär markierte Konto gewinnt — `core.steam_links` laesst davon pro
+/// Das als primär markierte Konto gewinnt — `core.steam_links` lässt davon pro
 /// Discord-Konto genau eines zu. Erst danach entscheiden Verifikation,
-/// Aktualität und Steam-ID deterministisch. Nur positive account_ids zaehlen.
+/// Aktualität und Steam-ID deterministisch. Nur positive account_ids zählen.
 pub async fn load_steam_account_ids(
     pool: &PgPool,
     discord_ids: &[i64],
@@ -28,11 +28,11 @@ pub async fn load_steam_account_ids(
         return Ok(HashMap::new());
     }
 
-    let rows = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT DISTINCT ON (discord_id) discord_id, steam_id64
+    let rows = sqlx::query_as::<_, (i64, String)>(
+        "SELECT DISTINCT ON (discord_id) discord_id, steam_id
          FROM core.steam_links
          WHERE discord_id = ANY($1)
-         ORDER BY discord_id, primary_account DESC, verified DESC, linked_at DESC, steam_id64 ASC",
+         ORDER BY discord_id, primary_account DESC, verified DESC, linked_at DESC NULLS LAST, steam_id ASC",
     )
     .bind(discord_ids)
     .fetch_all(pool)
@@ -40,7 +40,8 @@ pub async fn load_steam_account_ids(
 
     Ok(rows
         .into_iter()
-        .filter_map(|(discord_id, steam_id64)| {
+        .filter_map(|(discord_id, steam_id)| {
+            let steam_id64 = steam_id.parse::<i64>().ok()?;
             let account_id = steam_id64.checked_sub(STEAM64_BASE)?;
             if account_id > 0 {
                 Some((discord_id, account_id.to_string()))
@@ -58,7 +59,8 @@ pub fn load_manual_steamids(path: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return result;
     };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    else {
         tracing::warn!("HighlightClipper: steamids.json konnte nicht gelesen werden");
         return result;
     };
@@ -130,7 +132,7 @@ pub async fn get_partner_streamers(
     combine_partners(&rows, &discord_to_account, manual)
 }
 
-/// Kombiniert Partner-Zeilen, SQLite-Auflösung und manuelle Overrides zu einer
+/// Kombiniert Partner-Zeilen, Postgres-Auflösung und manuelle Overrides zu einer
 /// Login→account_id-Liste (Python `_get_partner_streamers`-Ende). Manuelle
 /// Einträge überschreiben/ergänzen.
 pub fn combine_partners(
@@ -173,7 +175,13 @@ fn json_to_str(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         other => other.to_string(),
     }
 }
@@ -199,7 +207,7 @@ mod tests {
         assert_eq!(m.get("nani"), Some(&"12345".to_string()));
         assert_eq!(m.get("num"), Some(&"678".to_string())); // str(678)
         assert!(!m.contains_key("leer")); // falsy value
-        // Fehlende Datei → leer.
+                                          // Fehlende Datei → leer.
         assert!(load_manual_steamids(&dir.join("missing.json")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -208,7 +216,7 @@ mod tests {
     fn combine_db_und_manual_override() {
         let rows = vec![
             ("nani".to_string(), 10),
-            ("  ".to_string(), 11), // leerer Login → raus
+            ("  ".to_string(), 11),    // leerer Login → raus
             ("other".to_string(), 12), // ohne SQLite-Auflösung → raus
         ];
         let mut d2a = HashMap::new();
@@ -238,13 +246,29 @@ mod db_tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
         // dyn: format!-DDL im temporären Test-Schema, technisch kein sqlx-Makro.
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // dyn: DDL im temporären Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state \
@@ -273,12 +297,17 @@ mod db_tests {
         .unwrap();
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS core.steam_links (
-                discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
-                steam_id64 BIGINT NOT NULL,
+                discord_id BIGINT NOT NULL,
+                steam_id TEXT NOT NULL,
+                steam_id64 BIGINT,
                 verified BOOLEAN NOT NULL DEFAULT false,
                 primary_account BOOLEAN NOT NULL DEFAULT false,
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                PRIMARY KEY (discord_id, steam_id64)
+                linked_at TIMESTAMPTZ,
+                deadlock_rank INTEGER,
+                deadlock_subrank INTEGER,
+                deadlock_rank_name TEXT,
+                deadlock_rank_updated_at TIMESTAMPTZ,
+                PRIMARY KEY (discord_id, steam_id)
             )",
         )
         .execute(&pool)
@@ -296,7 +325,9 @@ mod db_tests {
 
     #[tokio::test]
     async fn query_partner_streamers_filtert_und_parst() {
-        let Some(pool) = make_pool("t9bii_partner_query").await else { return };
+        let Some(pool) = make_pool("t9bii_partner_query").await else {
+            return;
+        };
         // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state VALUES \
@@ -309,35 +340,52 @@ mod db_tests {
         .await
         .unwrap();
         // Nur 'nani': aktiv + parsebare Discord-ID. Andere fallen raus.
-        assert_eq!(query_partner_streamers(&pool).await, vec![("nani".to_string(), 12345)]);
+        assert_eq!(
+            query_partner_streamers(&pool).await,
+            vec![("nani".to_string(), 12345)]
+        );
     }
 
     #[tokio::test]
     async fn get_partner_streamers_voller_pfad() {
-        let Some(pool) = make_pool("t9bii_partner_full").await else { return };
+        let Some(pool) = make_pool("t9bii_partner_full").await else {
+            return;
+        };
+        let linked_discord_id = 8_100_000_000_000_101_i64;
+        let override_discord_id = 8_100_000_000_000_102_i64;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = ANY($1)")
+            .bind([linked_discord_id, override_discord_id])
+            .execute(&pool)
+            .await
+            .unwrap();
         // dyn: ad-hoc Test-Schema, kein Migrations-Bezug.
         sqlx::query(
-            "INSERT INTO twitch_streamers_partner_state VALUES \
-             ('nani', '12345', 1), ('zoe', '67890', 1)",
+            "INSERT INTO twitch_streamers_partner_state VALUES
+             ('nani', $1, 1), ('zoe', $2, 1)",
         )
+        .bind(linked_discord_id.to_string())
+        .bind(override_discord_id.to_string())
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO core.users (discord_id) VALUES (12345), (67890)
+            "INSERT INTO core.users (discord_id) VALUES ($1), ($2)
              ON CONFLICT (discord_id) DO NOTHING",
         )
+        .bind(linked_discord_id)
+        .bind(override_discord_id)
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO core.steam_links (discord_id, steam_id64, verified, linked_at)
+            "INSERT INTO core.steam_links (discord_id, steam_id, steam_id64, verified, linked_at)
              VALUES
-                (12345, $1, true, '2026-07-28T10:00:00Z'),
-                (12345, $2, false, '2026-07-28T11:00:00Z')
-             ON CONFLICT (discord_id, steam_id64) DO UPDATE
+                ($1, $2::text, $2, true, '2026-07-28T10:00:00Z'),
+                ($1, $3::text, $3, false, '2026-07-28T11:00:00Z')
+             ON CONFLICT (discord_id, steam_id) DO UPDATE
              SET verified = EXCLUDED.verified, linked_at = EXCLUDED.linked_at",
         )
+        .bind(linked_discord_id)
         .bind(STEAM64_BASE + 5)
         .bind(STEAM64_BASE + 99)
         .execute(&pool)
@@ -368,39 +416,91 @@ mod db_tests {
         let Some(pool) = make_pool("t9bii_partner_primary").await else {
             return;
         };
+        let discord_id = 8_100_000_000_000_201_i64;
         // `core` ist schemaübergreifend, nur das Testschema wird frisch angelegt.
-        // Deshalb eigene Discord-ID, eigene Zeilen vorher raeumen, konfliktfrei
-        // einfuegen — sonst faerben Rueckstaende andere Tests ein.
-        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = 55555")
+        // Deshalb eigene Discord-ID, eigene Zeilen vorher räumen, konfliktfrei
+        // einfügen — sonst färben Rückstände andere Tests ein.
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO core.users (discord_id) VALUES (55555)
+            "INSERT INTO core.users (discord_id) VALUES ($1)
              ON CONFLICT (discord_id) DO NOTHING",
         )
+        .bind(discord_id)
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
             "INSERT INTO core.steam_links
-                (discord_id, steam_id64, verified, primary_account, linked_at)
+                (discord_id, steam_id, steam_id64, verified, primary_account, linked_at)
              VALUES
-                (55555, $1, false, true, '2026-07-28T10:00:00Z'),
-                (55555, $2, true, false, '2026-07-28T11:00:00Z')
-             ON CONFLICT (discord_id, steam_id64) DO UPDATE
+                ($1, $2::text, $2, false, true, '2026-07-28T10:00:00Z'),
+                ($1, $3::text, $3, true, false, '2026-07-28T11:00:00Z')
+             ON CONFLICT (discord_id, steam_id) DO UPDATE
              SET verified = EXCLUDED.verified,
                  primary_account = EXCLUDED.primary_account,
                  linked_at = EXCLUDED.linked_at",
         )
+        .bind(discord_id)
         .bind(STEAM64_BASE + 7)
         .bind(STEAM64_BASE + 99)
         .execute(&pool)
         .await
         .unwrap();
 
-        let map = load_steam_account_ids(&pool, &[55555]).await.unwrap();
-        assert_eq!(map.get(&55555).map(String::as_str), Some("7"));
+        let map = load_steam_account_ids(&pool, &[discord_id]).await.unwrap();
+        assert_eq!(map.get(&discord_id).map(String::as_str), Some("7"));
+    }
+
+    #[tokio::test]
+    async fn steam_id64_null_kippt_andere_partner_nicht() {
+        let Some(pool) = make_pool("t9bii_partner_nullable_legacy").await else {
+            return;
+        };
+        let missing_legacy_discord_id = 8_100_000_000_000_001_i64;
+        let valid_discord_id = 8_100_000_000_000_002_i64;
+        let valid_steam_id64 = STEAM64_BASE + 23;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = ANY($1)")
+            .bind([missing_legacy_discord_id, valid_discord_id])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state VALUES
+                ('missinglegacy', $1, 1),
+                ('validpartner', $2, 1)",
+        )
+        .bind(missing_legacy_discord_id.to_string())
+        .bind(valid_discord_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links
+                (discord_id, steam_id, steam_id64, verified, linked_at)
+             VALUES
+                ($1, 'canonical-without-legacy', NULL, true, '2026-07-28T10:00:00Z'),
+                ($2, $3::text, $3, true, '2026-07-28T10:00:00Z')",
+        )
+        .bind(missing_legacy_discord_id)
+        .bind(valid_discord_id)
+        .bind(valid_steam_id64)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let dir = fresh_dir("tb_hl_partners_nullable_legacy");
+        let json = dir.join("steamids.json");
+        std::fs::write(&json, "{}").unwrap();
+
+        assert_eq!(
+            get_partner_streamers(&pool, &json).await,
+            vec![("validpartner".to_string(), "23".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

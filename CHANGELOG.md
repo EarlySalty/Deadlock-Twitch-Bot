@@ -1,10 +1,10 @@
-## #405 — Steam-Links und Live-Status sind wieder aktuell
+## #405 — Steam-Links, Rang und Live-Status sind wieder aktuell
 
-**Problem:** Partner-Clips und Titelvorschläge haben Steam-Links und Live-Status aus einer alten, nicht mehr gepflegten Datenbank gelesen. Dadurch fehlten aktuelle Verknüpfungen und laufende Matches, ohne dass ein Fehler sichtbar wurde.
+**Problem:** Partner-Clips und Titelvorschläge haben Steam-Links, Rang und Live-Status aus einer alten, nicht mehr gepflegten Datenbank gelesen. Dadurch fehlten aktuelle Verknüpfungen und laufende Matches, ohne dass ein Fehler sichtbar wurde.
 
-**Änderung:** Der Bot liest Steam-Links und Live-Status jetzt aus der zentralen Datenbank. Schlägt eine Abfrage fehl, steht die Ursache mit einer gekürzten Nutzerkennung im Protokoll.
+**Änderung:** Der Bot liest Steam-Links, Rang und Live-Status jetzt aus der zentralen Datenbank. Schlägt eine Abfrage fehl, steht die Ursache mit einer gekürzten Nutzerkennung im Protokoll.
 
-**Aktuelles Verhalten:** Partner werden mit ihren aktuellen Steam-Konten verarbeitet. Titelvorschläge können den aktuellen Helden und Match-Status wieder berücksichtigen; die Rangermittlung bleibt vorerst auf dem bisherigen Datenweg.
+**Aktuelles Verhalten:** Partner werden mit ihren aktuellen Steam-Konten verarbeitet. Titelvorschläge können den aktuellen Rang, Helden und Match-Status wieder berücksichtigen.
 
 ## #404 — Pause-Loop-Clips laufen ohne Klick
 
