@@ -664,10 +664,12 @@ mod tests {
         sqlx::query(
             "INSERT INTO activity.live_player_state (
                 steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_stage, deadlock_hero, deadlock_party_hint
+                deadlock_stage, deadlock_hero, deadlock_party_hint,
+                deadlock_updated_at
              )
-             VALUES ($1, true, true, 'laning', 'Haze', 'solo')
+             VALUES ($1, true, true, 'laning', 'Haze', 'solo', now())
              ON CONFLICT (steam_id) DO UPDATE SET
+                deadlock_updated_at = EXCLUDED.deadlock_updated_at,
                 in_deadlock_now = EXCLUDED.in_deadlock_now,
                 in_match_now_strict = EXCLUDED.in_match_now_strict,
                 deadlock_stage = EXCLUDED.deadlock_stage,

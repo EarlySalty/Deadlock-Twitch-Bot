@@ -4,6 +4,11 @@
 
 use sqlx::PgPool;
 
+/// Presence gilt als aktuell, solange sie hoechstens so alt ist. Gleicher Wert
+/// wie `LIVE_STATUS_FRESH_SECS` im Steam-Bot (`steam-web/src/routes/rank.rs`),
+/// der die Live-Antwort dort ebenfalls gegen veraltete Zustaende absichert.
+const LIVE_STATUS_FRESH_SECS: i64 = 600;
+
 /// Deadlock-Rangnamen 0..11 (Python `_RANK_NAMES`; 10 und 11 = Eternus).
 fn rank_name(rank_num: i64) -> &'static str {
     match rank_num {
@@ -97,15 +102,22 @@ pub async fn get_live_state_for_discord_user(
             Option<String>,
         ),
     >(
+        // Presence zaehlt nur frisch. Der Steam-Bot definiert das kanonisch als
+        // COALESCE(deadlock_updated_at, last_seen_at) hoechstens LIVE_STATUS_FRESH_SECS
+        // alt; ohne diese Schranke laendet ein Tage alter Zustand als aktueller
+        // Held im Titel-Prompt.
         "SELECT lps.in_deadlock_now, lps.in_match_now_strict, lps.deadlock_hero,
                 lps.deadlock_party_hint, lps.deadlock_stage
          FROM core.steam_links sl
          JOIN activity.live_player_state lps ON sl.steam_id = lps.steam_id
          WHERE sl.discord_id = $1
+           AND COALESCE(lps.deadlock_updated_at, lps.last_seen_at)
+               >= now() - make_interval(secs => $2::double precision)
          ORDER BY sl.primary_account DESC, sl.verified DESC, sl.linked_at DESC NULLS LAST, sl.steam_id ASC
          LIMIT 1",
     )
     .bind(user_id)
+    .bind(LIVE_STATUS_FRESH_SECS as f64)
     .fetch_optional(pool)
     .await?;
 
@@ -237,6 +249,67 @@ mod tests {
             .is_none());
     }
 
+    /// Ein alter Presence-Zustand darf nicht als aktueller Held im Titel-Prompt
+    /// landen. Freshness-Grenze wie im Steam-Bot: LIVE_STATUS_FRESH_SECS.
+    #[tokio::test]
+    async fn live_state_ignoriert_veraltete_presence() {
+        let Some(pool) = make_pg_pool().await else {
+            return;
+        };
+        let discord_id = 8_200_000_000_000_301_i64;
+        let steam_id = "76561197960265999";
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
+            .bind(steam_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links (discord_id, steam_id, primary_account)
+             VALUES ($1, $2, true)",
+        )
+        .bind(discord_id)
+        .bind(steam_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO activity.live_player_state (
+                steam_id, in_deadlock_now, in_match_now_strict, deadlock_hero,
+                deadlock_updated_at
+             )
+             VALUES ($1, true, true, 'Haze', now() - interval '2 hours')",
+        )
+        .bind(steam_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(get_live_state_for_discord_user(&pool, discord_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Frisch derselbe Zustand: jetzt zaehlt er.
+        sqlx::query(
+            "UPDATE activity.live_player_state SET deadlock_updated_at = now()
+             WHERE steam_id = $1",
+        )
+        .bind(steam_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let live = get_live_state_for_discord_user(&pool, discord_id)
+            .await
+            .unwrap()
+            .expect("frische Presence");
+        assert_eq!(live.hero.as_deref(), Some("Haze"));
+    }
+
     #[tokio::test]
     async fn live_state_nur_wenn_in_deadlock() {
         let Some(pool) = make_pg_pool().await else {
@@ -283,11 +356,12 @@ mod tests {
         sqlx::query(
             "INSERT INTO activity.live_player_state (
                 steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_hero, deadlock_party_hint, deadlock_stage
+                deadlock_hero, deadlock_party_hint, deadlock_stage,
+                deadlock_updated_at
              )
              VALUES
-                ($1, true, true, 'Haze', 'solo', 'laning'),
-                ($2, true, false, 'Seven', 'duo', 'mid')
+                ($1, true, true, 'Haze', 'solo', 'laning', now()),
+                ($2, true, false, 'Seven', 'duo', 'mid', now())
              ON CONFLICT (steam_id) DO UPDATE SET
                 in_deadlock_now = EXCLUDED.in_deadlock_now,
                 in_match_now_strict = EXCLUDED.in_match_now_strict,
@@ -359,11 +433,12 @@ mod tests {
         sqlx::query(
             "INSERT INTO activity.live_player_state (
                 steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_hero, deadlock_party_hint, deadlock_stage
+                deadlock_hero, deadlock_party_hint, deadlock_stage,
+                deadlock_updated_at
              )
              VALUES
-                ($1, true, true, 'Haze', 'solo', 'laning'),
-                ($2, true, true, 'Seven', 'duo', 'mid')
+                ($1, true, true, 'Haze', 'solo', 'laning', now()),
+                ($2, true, true, 'Seven', 'duo', 'mid', now())
              ON CONFLICT (steam_id) DO UPDATE SET
                 in_deadlock_now = EXCLUDED.in_deadlock_now,
                 in_match_now_strict = EXCLUDED.in_match_now_strict,
