@@ -198,6 +198,14 @@ const CREW_REGISTRY: &[CrewAccount] = &[
         login: "wall_horizon",
         has_behavioral_evidence: true,
     },
+    // Kontoname imitiert unsere Community. Verhaltensbeleg: jackauftwitch,
+    // 2026-07-28 — Ricky-Stil 75 %, Konto 60 Tage alt, bewarb den eigenen
+    // "community dc" im fremden Chat (Ansage nani).
+    CrewAccount {
+        twitch_user_id: "1505528697",
+        login: "deadlock_germany",
+        has_behavioral_evidence: true,
+    },
 ];
 
 /// Bekannte Rival-Invite-Codes (hart). Ein `discord.gg/<code>` mit einem dieser
@@ -283,6 +291,38 @@ fn trigger_hits(content: &str) -> Vec<&'static str> {
         .filter(|(_, re)| re.is_match(content))
         .map(|(label, _)| *label)
         .collect()
+}
+
+/// Ab diesem Ricky-Stil-Score fragt der Radar den Judge auch dann, wenn kein
+/// einziges Trigger-Wort fiel. Das Muster steckt im Verhalten, nicht im Vokabular
+/// — deadlock_germany fuhr am 2026-07-28 mit 75 % Stil und ohne Trigger-Wort
+/// durch die Vorfilterung und wurde nie geprueft.
+const BEHAVIOR_STYLE_THRESHOLD: u8 = 40;
+/// Schwaecherer Stil genuegt, wenn zwei weitere harte Fakten dazukommen:
+/// junges Konto UND Rickys Zeitfenster.
+const BEHAVIOR_STYLE_WEAK_THRESHOLD: u8 = 25;
+/// Bis zu diesem Kontoalter (Tage) gilt ein Konto als frisch.
+const BEHAVIOR_MAX_ACCOUNT_AGE_DAYS: i64 = 90;
+
+/// Verhaltens-Gate: reicht das Stil-/Faktenbild, um den Judge ohne Trigger-Wort
+/// zu fragen? Liefert das Label des Grundes (fuers Log), `None` = nicht fragen.
+///
+/// **Kein Urteil** — wie ein Trigger-Treffer heisst das nur „bitte pruefen".
+/// Gemessen am Radar-Ledger (30 Tage, 638 Logs) kostet das Gate genau einen
+/// zusaetzlichen Judge-Call, faengt aber exakt den Fall, der durchfiel.
+fn behavioral_trigger(
+    style_total: u8,
+    account_age_days: Option<i64>,
+    time_window_match: bool,
+) -> Option<&'static str> {
+    if style_total >= BEHAVIOR_STYLE_THRESHOLD {
+        return Some("stil-hoch");
+    }
+    let fresh_account = account_age_days.is_some_and(|days| days <= BEHAVIOR_MAX_ACCOUNT_AGE_DAYS);
+    if style_total >= BEHAVIOR_STYLE_WEAK_THRESHOLD && fresh_account && time_window_match {
+        return Some("stil-jung-zeitfenster");
+    }
+    None
 }
 
 /// Reine Vorfilterung. Liefert das höchstpriorisierte Signal, ohne je ein
@@ -763,8 +803,15 @@ fn format_radar_message(
                 "❓ Radar-Log: **{login}** in #{channel} — der Judge ist sich nicht sicher, kein klares Urteil."
             )
         }
-        RadarVerdict::Clean | RadarVerdict::Skipped => {
+        RadarVerdict::Clean => {
             format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster.")
+        }
+        // `skipped` heisst: kein Trigger-Wort, kein Verhaltenssignal — der Judge
+        // lief nie. Das ist kein Freispruch, also darf hier auch keiner stehen.
+        RadarVerdict::Skipped => {
+            format!(
+                "🔎 Radar-Log: **{login}** in #{channel} gesichtet, aber nicht inhaltlich geprüft (kein Trigger, kein Verhaltenssignal). Kein Urteil, guck bei Bedarf selbst drauf."
+            )
         }
     };
     let age = account_age_days
@@ -1146,6 +1193,29 @@ impl CrewGuard {
     }
 }
 
+/// Fragt den Judge und uebersetzt sein Urteil in einen [`RadarVerdict`].
+/// Ausfall/Timeout bleiben eigene Verdicts — nie ein Freispruch.
+async fn ask_judge(
+    judge: &dyn CrewJudge,
+    content: &str,
+    recent_context: &[String],
+    facts: &CrewJudgeFacts,
+    threshold: f32,
+) -> (RadarVerdict, Option<f32>, Option<String>) {
+    let verdict = judge.judge_with_facts(content, recent_context, facts).await;
+    let key = match verdict.status {
+        CrewVerdictStatus::Campaign if verdict.confidence >= threshold => RadarVerdict::Campaign,
+        CrewVerdictStatus::Campaign | CrewVerdictStatus::Unsure => RadarVerdict::Unsure,
+        CrewVerdictStatus::Clean => RadarVerdict::Clean,
+        CrewVerdictStatus::Error => RadarVerdict::Error,
+        CrewVerdictStatus::Timeout => RadarVerdict::Timeout,
+    };
+    let reasoning = (!verdict.reasoning.is_empty()
+        && verdict.reasoning != JUDGE_FAILURE_WARNING_SENTINEL)
+        .then_some(verdict.reasoning);
+    (key, Some(verdict.confidence), reasoning)
+}
+
 /// Entscheidet OHNE Seiteneffekt, ob (und mit welchem Text) gemeldet würde.
 /// Trennt die Erkennung von der Discord-Zustellung, damit der Backtest die
 /// Detektion messen kann, ohne echte Alerts zu senden. `None` = keine Meldung.
@@ -1178,28 +1248,25 @@ async fn decide(
     };
     let signal = screen(content, Some(chatter_id));
     let (verdict, llm_confidence, llm_reasoning) = match &signal {
-        CrewSignal::Trigger { hits } => {
-            let verdict = judge
-                .judge_with_facts(content, recent_context, &facts)
-                .await;
-            let key = match verdict.status {
-                CrewVerdictStatus::Campaign if verdict.confidence >= threshold => {
-                    RadarVerdict::Campaign
-                }
-                CrewVerdictStatus::Campaign | CrewVerdictStatus::Unsure => RadarVerdict::Unsure,
-                CrewVerdictStatus::Clean => RadarVerdict::Clean,
-                CrewVerdictStatus::Error => RadarVerdict::Error,
-                CrewVerdictStatus::Timeout => RadarVerdict::Timeout,
-            };
-            let reasoning = (!verdict.reasoning.is_empty()
-                && verdict.reasoning != JUDGE_FAILURE_WARNING_SENTINEL)
-                .then_some(verdict.reasoning);
-            let _ = hits;
-            (key, Some(verdict.confidence), reasoning)
+        CrewSignal::Trigger { .. } => {
+            ask_judge(judge, content, recent_context, &facts, threshold).await
         }
         CrewSignal::HardId { .. } => (RadarVerdict::HardId, Some(1.0), None),
         CrewSignal::HardInvite { .. } => (RadarVerdict::HardInvite, Some(1.0), None),
-        CrewSignal::None => (RadarVerdict::Skipped, None, None),
+        // Kein Trigger-Wort: das Verhalten selbst darf den Judge rufen, sonst
+        // bleibt ein Kampagnen-Konto ohne Stichwort komplett ungeprueft.
+        CrewSignal::None => {
+            match behavioral_trigger(style.total, account_age_days, time_window_match) {
+                Some(reason) => {
+                    debug!(
+                        channel,
+                        chatter = login, reason, "crew_guard: Verhaltens-Gate ruft Judge"
+                    );
+                    ask_judge(judge, content, recent_context, &facts, threshold).await
+                }
+                None => (RadarVerdict::Skipped, None, None),
+            }
+        }
     };
     let message = format_radar_message(
         login,
@@ -1572,7 +1639,7 @@ Ich hab nichts getan."
         );
         assert_eq!(
             skipped,
-            "🔎 Radar-Log: **viewer** in #kanal geprüft, kein Kampagnen-Muster.\n\
+            "🔎 Radar-Log: **viewer** in #kanal gesichtet, aber nicht inhaltlich geprüft (kein Trigger, kein Verhaltenssignal). Kein Urteil, guck bei Bedarf selbst drauf.\n\
 **Ricky-Stil:** 85 % (Pitch 40, Kampagne 30, Stil 8, Opener 5, Cosine 2)\n\
 **Account-Alter:** unbekannt Tage\n\
 **Rickys Zeitfenster:** nein\n\
@@ -1688,6 +1755,100 @@ Ich hab nichts getan."
         .expect("unprivilegierte Erstschreiber-Prüfung muss sichtbar bleiben");
         assert_eq!(decision.log.llm_verdict, "skipped");
         assert!(decision.message.starts_with("🔎 Radar-Log:"));
+    }
+
+    /// Die sechs echten Nachrichten von deadlock_germany in #jackauftwitch
+    /// (Radar-Log 2026-07-28, Ricky-Stil 75 %). Kein einziges Trigger-Wort —
+    /// genau deshalb wurde der Judge damals übersprungen.
+    fn deadlock_germany_nachrichten() -> Vec<String> {
+        [
+            "wazzup",
+            "Na community",
+            "Haben nen community dc und sozials usw.",
+            "war tatsächlich auch mien erster momba",
+            "Mein*",
+            "Bro was schreibe ich",
+        ]
+        .iter()
+        .map(|message| (*message).to_string())
+        .collect()
+    }
+
+    #[test]
+    fn deadlock_germany_ist_ein_bekanntes_crew_konto() {
+        assert_eq!(
+            screen("völlig harmloser satz", Some("1505528697")),
+            CrewSignal::HardId {
+                login: "deadlock_germany",
+                has_evidence: true,
+            }
+        );
+    }
+
+    /// Der Vorfall vom 2026-07-28: hoher Ricky-Stil, junges Konto, Ricky-Zeitfenster
+    /// — aber kein Trigger-Wort. Vorher fragte der Radar den Judge NICHT und meldete
+    /// „kein Kampagnen-Muster". Das Verhaltenssignal muss den Judge rufen.
+    #[tokio::test]
+    async fn hoher_ricky_stil_ohne_triggerwort_ruft_den_judge() {
+        let messages = deadlock_germany_nachrichten();
+        let (context, content) = messages.split_at(messages.len() - 1);
+
+        let decision = decide(
+            &content[0],
+            "1499999999",
+            "jackauftwitch",
+            "irgendwer",
+            JUDGE_CONFIDENCE_THRESHOLD,
+            &StubJudge(CrewVerdict {
+                is_crew: true,
+                confidence: 0.9,
+                patterns: Vec::new(),
+                reasoning: "Abwerbung in eigenen Discord".to_string(),
+                status: CrewVerdictStatus::Campaign,
+            }),
+            context,
+            &Centroid::default(),
+            Some(60),
+            true,
+        )
+        .await
+        .expect("Verhaltenssignal muss eine Meldung erzeugen");
+
+        assert_eq!(decision.log.llm_verdict, "campaign");
+        assert_eq!(decision.log.llm_confidence, Some(0.9));
+        assert!(!decision.message.contains("kein Kampagnen-Muster"));
+    }
+
+    /// Schwacher Stil allein darf den Judge weiter nicht rufen — sonst prüfen wir
+    /// jeden harmlosen Erstschreiber und verbrennen Judge-Calls.
+    #[test]
+    fn schwacher_stil_ohne_jung_und_zeitfenster_bleibt_ungeprueft() {
+        assert_eq!(behavioral_trigger(30, Some(400), false), None);
+        assert_eq!(behavioral_trigger(10, Some(3), true), None);
+        assert_eq!(
+            behavioral_trigger(30, Some(60), true),
+            Some("stil-jung-zeitfenster")
+        );
+        assert_eq!(behavioral_trigger(50, None, false), Some("stil-hoch"));
+    }
+
+    /// `skipped` heisst „nie inhaltlich geprüft", nicht „unauffällig". Der alte
+    /// Wortlaut behauptete einen Freispruch, den niemand ausgesprochen hat.
+    #[test]
+    fn skipped_wird_nie_als_freispruch_gemeldet() {
+        let skipped = format_radar_message(
+            "viewer",
+            "kanal",
+            &radar_score(),
+            None,
+            false,
+            RadarVerdict::Skipped,
+            None,
+            None,
+            &["harmlos".to_string()],
+        );
+        assert!(!skipped.contains("kein Kampagnen-Muster"));
+        assert!(skipped.contains("nicht inhaltlich geprüft"));
     }
 
     #[tokio::test]

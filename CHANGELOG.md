@@ -1,3 +1,11 @@
+## #405 — Der Radar prüft auch ohne Stichwort
+
+**Problem:** Der Crew-Radar fragte den Judge nur, wenn ein bekanntes Reizwort fiel („ricky", „nani", „Freund gebannt"). Ein Konto, das dasselbe Muster ohne diese Wörter fuhr, lief komplett durch — im Radar-Log stand dann „geprüft, kein Kampagnen-Muster", obwohl nie jemand geprüft hatte. Genau so kam ein Konto am 28.07. im Chat eines Partners durch, mit 75 % Stil-Treffer, 60 Tage altem Konto und Werbung für den eigenen Discord.
+
+**Änderung:** Jetzt löst auch das Verhalten allein die Prüfung aus: hoher Stil-Score, oder mittlerer Stil plus frisches Konto plus typisches Zeitfenster. Das betroffene Konto steht auf der Banliste und in der Crew-Registry. Meldungen ohne Prüfung sagen jetzt klar, dass kein Urteil vorliegt, statt einen Freispruch zu behaupten.
+
+**Aktuelles Verhalten:** Ein Konto, das das Muster fährt, wird geprüft und gemeldet, auch wenn kein einziges Stichwort fällt. „Nicht geprüft" ist im Radar-Log nicht mehr von „unauffällig" zu verwechseln.
+
 ## #404 — Pause-Loop-Clips laufen ohne Klick
 
 **Problem:** Der Pause-Loop hing am Twitch-Clip-Player, und der startet ohne Klick nicht. In OBS blieb bei jedem Clip ein Play-Button stehen — der Loop lief also gar nicht von allein.
