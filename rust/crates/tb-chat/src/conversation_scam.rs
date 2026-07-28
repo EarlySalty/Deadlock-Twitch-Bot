@@ -1916,6 +1916,19 @@ mod tests {
 
     const REPORTED_BEFRIENDING_PIVOT: &str = "Yo bruh, love ❤️ your stream Let's sometimes play together and share tips together. Let's connect on Discord";
 
+    /// Real gemeldeter Verlauf (2026-07-28, Nicht-Partner-Kanal, Account 0 Tage
+    /// alt): englischer Aufklärungs-Smalltalk ohne jeden Stream- oder Spielbezug.
+    /// Dort lief nur der Crew-Guard-Radar, der nie bannt. Diese Fixture prüft,
+    /// was in einem Partner-Kanal passiert wäre.
+    const REPORTED_RECON_SMALLTALK: &[&str] = &[
+        "hii",
+        "aww nice",
+        "how are you doing",
+        "naah i randomly join your stream",
+        "are you from germany",
+        "cool such a nice country",
+    ];
+
     fn event(login: &str, text: &str) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: "channel-id".to_string(),
@@ -2606,6 +2619,93 @@ mod tests {
         assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
         assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
         assert_eq!(api.created_at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Der gemeldete Verlauf besteht aus sehr kurzen Nachrichten. Erst die
+    /// sechste erreicht die Substanz-Schwelle — vorher wird der Judge gar nicht
+    /// gefragt. Bricht der Chatter früher ab, sieht der Guard nichts.
+    #[tokio::test]
+    async fn gemeldeter_recon_smalltalk_erreicht_den_judge_erst_bei_nachricht_sechs() {
+        let (guard, store, judge, api, moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.85)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+
+        feed(&guard, "recon_account", &REPORTED_RECON_SMALLTALK[..5]).await;
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+        assert!(store.records.lock().unwrap().is_empty());
+
+        feed(&guard, "recon_account", &REPORTED_RECON_SMALLTALK[5..]).await;
+
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+        let records = store.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_taken, "banned");
+        drop(records);
+        assert_eq!(moderation.reasons.lock().unwrap().len(), 1);
+    }
+
+    /// Mit Netzwerk-Signal (derselbe Account binnen einer Stunde in einem
+    /// weiteren Kanal) fällt die Substanz-Schwelle weg: der Judge urteilt schon
+    /// nach der ersten Nachricht.
+    #[tokio::test]
+    async fn recon_smalltalk_mit_netzwerksignal_urteilt_ab_der_ersten_nachricht() {
+        let (guard, store, judge, api, _moderation) =
+            build_guard(GuardSettings::default(), [verdict(VerdictKind::Scam, 0.85)]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+        *store.cross_channel.lock().unwrap() = Ok(1);
+
+        feed(&guard, "recon_account", &REPORTED_RECON_SMALLTALK[..1]).await;
+
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "banned");
+    }
+
+    /// Live-Baseline: schickt den gemeldeten Verlauf an das Modell, das auch
+    /// live urteilt. Ohne echten Call ist „hätte der Bot gebannt?" nicht
+    /// beantwortbar — der Mock-Judge misst nur die Verdrahtung.
+    #[tokio::test]
+    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
+    async fn live_judge_baseline_gemeldeter_recon_smalltalk() {
+        let judge = MiniMaxScamJudge::new(EngagementMinimaxClient::new(None, None, None, None));
+        let enforcement_threshold =
+            effective_scam_enforcement_threshold(&GuardSettings::default(), Some(0));
+        let mut would_ban = 0usize;
+
+        for other_channels in [0i64, 1] {
+            let mut dialog = DialogState::with_context(
+                true,
+                Some(0),
+                other_channels,
+                None,
+                "partnerkanal",
+                "recon_account",
+            );
+            for message in REPORTED_RECON_SMALLTALK {
+                dialog.push_user_message(message);
+            }
+            assert!(dialog.has_enough_substance(), "Judge würde nie gefragt");
+
+            let verdict = judge.judge(&mut dialog).await;
+            let bans = verdict.verdict == VerdictKind::Scam
+                && verdict.confidence >= enforcement_threshold;
+            would_ban += usize::from(bans);
+            eprintln!(
+                "LIVE_BASELINE other_channels={other_channels} verdict={} confidence={:.2} threshold={enforcement_threshold:.2} category={} ban={bans} reasoning={}",
+                verdict.verdict.as_str(),
+                verdict.confidence,
+                verdict.category,
+                verdict.reasoning
+            );
+            assert!(
+                !(verdict.verdict == VerdictKind::Unsure && verdict.confidence == 0.0),
+                "fail-safe unsure — LLM nicht erreichbar, Baseline nicht messbar"
+            );
+        }
+
+        assert!(
+            would_ban > 0,
+            "gemeldeter Verlauf löst in keiner Konstellation einen Ban aus"
+        );
     }
 
     #[tokio::test]
