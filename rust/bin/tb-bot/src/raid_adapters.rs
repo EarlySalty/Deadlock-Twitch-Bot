@@ -573,7 +573,7 @@ mod tests {
     #[cfg(feature = "integration")]
     async fn setup_sessions_db(schema: &str) -> sqlx::PgPool {
         let url = std::env::var("TB_TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
+            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
         let admin = sqlx::PgPool::connect(&url).await.unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)

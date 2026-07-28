@@ -1,7 +1,7 @@
 //! Hermetische DB-Tests für OutboundSuppressionStore.
 //!
 //! Schema-isoliert in eigenen Postgres-Schemata (prod-treue DDL).
-//! Voraussetzung: `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:5434/postgres`
+//! Voraussetzung: `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:<port>/postgres` (siehe `rust/scripts/test_db.sh up`)
 //! Prod-Schema: `twitch_outbound_chat_suppressions.suppressed_until = timestamp with time zone`.
 
 use std::str::FromStr;
