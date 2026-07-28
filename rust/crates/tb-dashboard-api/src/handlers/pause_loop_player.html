@@ -8,28 +8,40 @@
 <style>
 html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;color:#f8f8f8;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
 #player{position:fixed;inset:0;width:100vw;height:100vh;background:#000;}
-#player iframe{display:block;width:100vw;height:100vh;border:0;background:#000;}
+#player video{display:block;width:100vw;height:100vh;object-fit:contain;background:#000;}
 #status{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(680px,80vw);padding:18px 22px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(0,0,0,.72);box-shadow:0 24px 80px rgba(0,0,0,.55);font-size:20px;line-height:1.35;text-align:center;}
+#status[hidden]{display:none;}
 #clipLabel{position:fixed;left:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.64);color:#fff;font-size:14px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000;}
 #clipLabel:empty{display:none;}
 </style>
 </head>
 <body>
 <main id="player" aria-label="Twitch Pause-Loop Clip-Player"></main>
-<div id="status" role="status">Clip-Pool wird geladen...</div>
+<div id="status" role="status">Clip-Pool wird geladen…</div>
 <div id="clipLabel" aria-live="polite"></div>
 <script>
 (() => {
   'use strict';
 
   const CLIPS_ENDPOINT = '/twitch/api/v2/public/pause-loop-clips';
+  // Twitch-Embed startet ohne Klick nicht. Der Player loest darum die MP4-Quelle
+  // direkt ueber die oeffentliche Web-GQL-API auf und spielt sie in <video> ab.
+  const GQL_ENDPOINT = 'https://gql.twitch.tv/gql';
+  const GQL_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  const CLIP_QUERY = 'query($slug: ID!) { clip(slug: $slug) { videoQualities { quality sourceURL } playbackAccessToken(params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { signature value } } }';
+  const MAX_QUALITY_HEIGHT = 1080;
+
   const NORMAL_REFRESH_MS = 10 * 60 * 1000;
   const BACKOFF_START_MS = 15 * 1000;
   const BACKOFF_MAX_MS = 60 * 1000;
   const FETCH_TIMEOUT_MS = 12000;
-  const LOAD_FALLBACK_MS = 5000;
-  const PLAY_BUFFER_MS = 1500;
-  const parent = location.hostname || 'localhost';
+  const RESOLVE_TIMEOUT_MS = 12000;
+  const EMPTY_RETRY_MS = 15 * 1000;
+  const PLAY_OVERRUN_MS = 10 * 1000;
+  const MAX_RESOLVE_FAILURES = 8;
+
+  const params = new URLSearchParams(location.search);
+  const volume = clampVolume(params.get('volume'));
 
   const player = document.getElementById('player');
   const status = document.getElementById('status');
@@ -37,16 +49,19 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
 
   let pool = [];
   let queue = [];
-  let playedThisCycle = new Set();
+  const playedThisCycle = new Set();
   let fetchInFlight = false;
   let fetchBackoffMs = BACKOFF_START_MS;
   let refreshTimer = 0;
-  let playTimer = 0;
-  let loadFallbackTimer = 0;
-  let currentGeneration = 0;
-  let timerGeneration = 0;
   let lastPlayedId = null;
   let activeClip = null;
+  let prepared = null;
+  let prepareInFlight = false;
+
+  function clampVolume(raw) {
+    const value = Number.parseFloat(raw ?? '');
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
+  }
 
   function setStatus(text) {
     status.textContent = text;
@@ -56,6 +71,12 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   function cleanText(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
+
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  // --- Clip-Pool ------------------------------------------------------------
 
   function sanitizeClip(raw) {
     if (!raw || typeof raw !== 'object') {
@@ -143,6 +164,9 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   }
 
   function takeNextClip() {
+    if (pool.length === 0) {
+      return null;
+    }
     if (queue.length === 0) {
       rebuildQueueForNewCycle();
     }
@@ -157,99 +181,208 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     if (clip.title) {
       pieces.push(clip.title);
     }
-    return pieces.length > 0 ? pieces.join(' - ') : clip.id;
+    return pieces.length > 0 ? pieces.join(' – ') : clip.id;
   }
 
-  function clearPlaybackTimers() {
-    window.clearTimeout(playTimer);
-    window.clearTimeout(loadFallbackTimer);
-    playTimer = 0;
-    loadFallbackTimer = 0;
+  // --- Medienquelle ---------------------------------------------------------
+
+  function pickQuality(qualities) {
+    const usable = qualities
+      .map((entry) => ({
+        url: cleanText(entry && entry.sourceURL),
+        height: Number.parseInt(cleanText(entry && entry.quality), 10)
+      }))
+      .filter((entry) => entry.url.startsWith('https://') && Number.isFinite(entry.height))
+      .sort((a, b) => b.height - a.height);
+    if (usable.length === 0) {
+      return null;
+    }
+    return usable.find((entry) => entry.height <= MAX_QUALITY_HEIGHT) || usable[usable.length - 1];
+  }
+
+  async function resolveMediaUrl(clipId) {
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), RESOLVE_TIMEOUT_MS);
+    try {
+      const res = await fetch(GQL_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Client-ID': GQL_CLIENT_ID, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: CLIP_QUERY, variables: { slug: clipId } }),
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        throw new Error(`GQL HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const clip = payload && payload.data && payload.data.clip;
+      const token = clip && clip.playbackAccessToken;
+      const quality = pickQuality(Array.isArray(clip && clip.videoQualities) ? clip.videoQualities : []);
+      const signature = cleanText(token && token.signature);
+      const value = cleanText(token && token.value);
+      if (!quality || !signature || !value) {
+        throw new Error('GQL-Antwort ohne abspielbare Quelle');
+      }
+      const url = new URL(quality.url);
+      if (url.protocol !== 'https:') {
+        throw new Error('Nicht-HTTPS-Quelle abgelehnt');
+      }
+      url.searchParams.set('sig', signature);
+      url.searchParams.set('token', value);
+      return url.toString();
+    } finally {
+      window.clearTimeout(abortTimer);
+    }
+  }
+
+  function createVideo(src) {
+    const video = document.createElement('video');
+    video.src = src;
+    video.preload = 'auto';
+    video.playsInline = true;
+    video.controls = false;
+    video.volume = volume;
+    video.load();
+    return video;
+  }
+
+  // Bereitet den naechsten Clip inklusive Medienquelle vor, damit der Wechsel
+  // ohne schwarze Luecke passiert. Null, wenn der Pool nichts Abspielbares hat.
+  async function prepareNext() {
+    let failures = 0;
+    while (failures < MAX_RESOLVE_FAILURES) {
+      const clip = takeNextClip();
+      if (!clip) {
+        return null;
+      }
+      try {
+        return { clip, video: createVideo(await resolveMediaUrl(clip.id)) };
+      } catch (error) {
+        failures += 1;
+        console.warn('Pause-Loop: Clip nicht abspielbar', clip.id, error);
+      }
+    }
+    return null;
+  }
+
+  function prepareAhead() {
+    if (prepared || prepareInFlight) {
+      return;
+    }
+    prepareInFlight = true;
+    prepareNext()
+      .then((next) => { prepared = next; })
+      .catch((error) => { console.warn('Pause-Loop: Vorbereitung fehlgeschlagen', error); })
+      .finally(() => { prepareInFlight = false; });
+  }
+
+  async function takePrepared() {
+    if (prepared) {
+      const next = prepared;
+      prepared = null;
+      return next;
+    }
+    if (prepareInFlight) {
+      // ponytail: kurzes Pollen statt Promise-Handoff, laeuft nur beim Clipwechsel
+      for (let i = 0; i < 40 && prepareInFlight; i += 1) {
+        await sleep(250);
+      }
+      if (prepared) {
+        const next = prepared;
+        prepared = null;
+        return next;
+      }
+    }
+    return prepareNext();
+  }
+
+  // --- Wiedergabe -----------------------------------------------------------
+
+  async function startPlayback(video) {
+    try {
+      await video.play();
+    } catch (error) {
+      // Ohne Nutzergeste erlaubt der Browser nur stumme Wiedergabe. OBS braucht
+      // das nicht, ein normaler Tab schon – dort laeuft der Loop dann lautlos.
+      video.muted = true;
+      await video.play();
+    }
+  }
+
+  function playToEnd(video, clip) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (reason) => {
+        if (done) {
+          return;
+        }
+        done = true;
+        window.clearTimeout(overrunTimer);
+        video.removeEventListener('ended', onEnded);
+        video.removeEventListener('error', onError);
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        resolve(reason);
+      };
+      const onEnded = () => finish('ended');
+      const onError = () => {
+        console.warn('Pause-Loop: Wiedergabefehler', clip.id, video.error);
+        finish('error');
+      };
+      // Notbremse, falls "ended" nach einem Netzwerkabbruch nie kommt.
+      const overrunTimer = window.setTimeout(
+        () => finish('overrun'),
+        Math.round(clip.duration * 1000) + PLAY_OVERRUN_MS
+      );
+      video.addEventListener('ended', onEnded, { once: true });
+      video.addEventListener('error', onError, { once: true });
+      startPlayback(video).catch((error) => {
+        console.warn('Pause-Loop: Start fehlgeschlagen', clip.id, error);
+        finish('play-rejected');
+      });
+    });
   }
 
   function showEmptyPool() {
-    currentGeneration += 1;
-    timerGeneration = 0;
     activeClip = null;
-    queue = [];
-    playedThisCycle.clear();
-    clearPlaybackTimers();
     player.replaceChildren();
     clipLabel.textContent = '';
-    setStatus('Keine Pause-Loop-Clips verfuegbar. Ich pruefe automatisch weiter.');
+    setStatus('Keine Pause-Loop-Clips verfügbar. Ich prüfe automatisch weiter.');
   }
 
-  function scheduleNextFromDuration(clip, generation) {
-    if (generation !== currentGeneration || timerGeneration === generation) {
-      return;
-    }
-    timerGeneration = generation;
-    window.clearTimeout(playTimer);
-    playTimer = window.setTimeout(() => {
-      if (generation !== currentGeneration) {
-        return;
+  async function runLoop() {
+    for (;;) {
+      const next = await takePrepared();
+      if (!next) {
+        showEmptyPool();
+        await sleep(EMPTY_RETRY_MS);
+        continue;
       }
+      activeClip = next.clip;
+      lastPlayedId = next.clip.id;
+      playedThisCycle.add(next.clip.id);
+      clipLabel.textContent = describeClip(next.clip);
+      setStatus('');
+      player.replaceChildren(next.video);
+      prepareAhead();
+      await playToEnd(next.video, next.clip);
       activeClip = null;
-      playNextClip();
-    }, Math.round(clip.duration * 1000) + PLAY_BUFFER_MS);
-  }
-
-  function clipEmbedUrl(clip) {
-    return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clip.id)}&parent=${encodeURIComponent(parent)}&autoplay=true`;
-  }
-
-  function renderClip(clip, generation) {
-    const frame = document.createElement('iframe');
-    frame.title = `Twitch Clip: ${clip.title || clip.id}`;
-    frame.allow = 'autoplay; fullscreen';
-    frame.allowFullscreen = true;
-    frame.referrerPolicy = 'origin';
-    frame.src = clipEmbedUrl(clip);
-    frame.addEventListener('load', () => scheduleNextFromDuration(clip, generation), { once: true });
-
-    player.replaceChildren(frame);
-    window.clearTimeout(loadFallbackTimer);
-    loadFallbackTimer = window.setTimeout(
-      () => scheduleNextFromDuration(clip, generation),
-      LOAD_FALLBACK_MS
-    );
-  }
-
-  function playNextClip() {
-    const clip = takeNextClip();
-    if (!clip) {
-      showEmptyPool();
-      return;
     }
-    activeClip = clip;
-    lastPlayedId = clip.id;
-    playedThisCycle.add(clip.id);
-    currentGeneration += 1;
-    timerGeneration = 0;
-    const generation = currentGeneration;
-    clipLabel.textContent = describeClip(clip);
-    setStatus('');
-    renderClip(clip, generation);
   }
+
+  // --- Pool-Aktualisierung --------------------------------------------------
 
   function applyPool(nextPool) {
+    pool = nextPool;
     if (nextPool.length === 0) {
-      pool = [];
       queue = [];
-      if (!activeClip) {
-        showEmptyPool();
-      }
       return;
     }
-
-    pool = nextPool;
     reconcileQueue(nextPool);
     if (!activeClip && queue.length === 0 && playedThisCycle.size > 0) {
       rebuildQueueForNewCycle();
     }
-    if (!activeClip) {
-      playNextClip();
-    }
+    prepareAhead();
   }
 
   function scheduleRefresh(delayMs) {
@@ -271,8 +404,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
         throw new Error(`Pause-Loop HTTP ${res.status}`);
       }
       const stale = res.headers.get('x-pause-loop-stale') === '1';
-      const data = await res.json();
-      applyPool(sanitizePool(data));
+      applyPool(sanitizePool(await res.json()));
       if (stale) {
         scheduleRefresh(fetchBackoffMs);
         fetchBackoffMs = Math.min(fetchBackoffMs * 2, BACKOFF_MAX_MS);
@@ -282,7 +414,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
       }
     } catch (error) {
       console.warn('Pause-Loop Clip-Pool konnte nicht aktualisiert werden', error);
-      if (pool.length === 0 && queue.length === 0 && !activeClip) {
+      if (pool.length === 0 && !activeClip) {
         setStatus('Pause-Loop gerade nicht erreichbar. Ich versuche es automatisch erneut.');
       }
       scheduleRefresh(fetchBackoffMs);
@@ -294,6 +426,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   }
 
   fetchPool();
+  runLoop();
 })();
 </script>
 </body>
