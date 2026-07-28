@@ -36,12 +36,15 @@ const MAX_PLAYER_SAFE_DURATION: f64 = 300.0;
 const PAUSE_LOOP_PLAYER_HTML: &str = include_str!("pause_loop_player.html");
 const PAUSE_LOOP_RETRY_AFTER_SECONDS: &str = "30";
 const PAUSE_LOOP_STALE_HEADER: &str = "x-pause-loop-stale";
+/// CSP des Players. `connect-src` braucht die Twitch-Web-GQL-API, weil der Player
+/// die MP4-Quelle jedes Clips dort aufloest; `media-src https:` deckt die
+/// wechselnden, signierten Twitch-CDN-Hosts ab, die diese Aufloesung liefert.
 const PAUSE_LOOP_CSP: &str = concat!(
     "default-src 'none'; ",
     "script-src 'self' 'unsafe-inline'; ",
     "style-src 'self' 'unsafe-inline'; ",
-    "connect-src 'self'; ",
-    "frame-src https://clips.twitch.tv; ",
+    "connect-src 'self' https://gql.twitch.tv; ",
+    "media-src https:; ",
     "frame-ancestors 'self'; ",
     "base-uri 'none'; ",
     "form-action 'none'"
@@ -2070,8 +2073,8 @@ mod tests {
         for needle in [
             "script-src 'self' 'unsafe-inline'",
             "style-src 'self' 'unsafe-inline'",
-            "connect-src 'self'",
-            "frame-src https://clips.twitch.tv",
+            "connect-src 'self' https://gql.twitch.tv",
+            "media-src https:",
             "frame-ancestors 'self'",
         ] {
             assert!(csp.contains(needle), "CSP fehlt: {needle}");
@@ -2081,19 +2084,25 @@ mod tests {
         for needle in [
             "width:100vw",
             "height:100vh",
-            "border:0",
             "/twitch/api/v2/public/pause-loop-clips",
-            "location.hostname || 'localhost'",
-            "autoplay=true",
+            // MP4-Direktwiedergabe: das Twitch-Embed startet ohne Klick nicht.
+            "https://gql.twitch.tv/gql",
+            "playbackAccessToken",
+            "createElement('video')",
+            "video.play()",
+            "addEventListener('ended'",
+            "url.searchParams.set('sig'",
+            "url.protocol !== 'https:'",
             "function shuffleQueue",
             "function avoidImmediateRepeat(items)",
             "for (let i = items.length - 1; i > 0; i -= 1)",
             "const FETCH_TIMEOUT_MS = 12000",
+            "const RESOLVE_TIMEOUT_MS = 12000",
             "new AbortController()",
             "signal: controller.signal",
             "controller.abort()",
             "window.clearTimeout(abortTimer)",
-            "let playedThisCycle = new Set()",
+            "const playedThisCycle = new Set()",
             "function reconcileQueue(nextPool)",
             "nextById.has(clip.id)",
             "nextById.get(clip.id)",
@@ -2103,14 +2112,12 @@ mod tests {
             "queue.push(...additions)",
             "if (nextPool.length === 0)",
             "playedThisCycle.clear()",
-            "playedThisCycle.add(clip.id)",
+            "playedThisCycle.add(next.clip.id)",
             "res.ok",
             "res.headers.get('x-pause-loop-stale') === '1'",
             "Number.isFinite",
-            "LOAD_FALLBACK_MS = 5000",
-            "generation !== currentGeneration",
+            "MAX_RESOLVE_FAILURES",
             "textContent",
-            "encodeURIComponent",
         ] {
             assert!(html.contains(needle), "HTML/JS-Vertrag fehlt: {needle}");
         }
@@ -2120,7 +2127,9 @@ mod tests {
             "Grenzschutz muss sowohl beim normalen Zyklus als auch nach leerem Pool greifen"
         );
         assert!(!html.contains("innerHTML"));
-        assert!(!html.contains("ended"));
+        // Das klickpflichtige Twitch-Embed darf nicht zurueckkehren.
+        assert!(!html.contains("clips.twitch.tv/embed"));
+        assert!(!html.contains("<iframe"));
     }
 
     #[tokio::test]
