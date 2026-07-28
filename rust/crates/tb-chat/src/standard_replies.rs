@@ -31,8 +31,8 @@ const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
 
 // Rückgruß, keine Begrüßung: der Bot weiß nicht, ob jemand neu ist — "willkommen
 // im Chat" an einen Stammgast liest sich falsch.
-const GREETING_REPLY: &str = "@{chatter} Hey!";
-const RELEASE_REPLY: &str = "@{chatter} Ein offizielles Release-Datum gibt es noch nicht. Wenn du reinschauen willst: tipp !invite, dann bekommst du den Weg zu einer Einladung.";
+const GREETING_REPLY: &str = "@{chatter} Hey, schön dass du da bist! 💜";
+const RELEASE_REPLY: &str = "@{chatter} Ein offizielles Release-Datum gibt es leider noch nicht, das Warten nervt uns auch. Wenn du trotzdem schon reinschauen magst: tipp !invite, dann zeige ich dir den Weg zu einer Einladung.";
 
 /// Grußformeln — die Nachricht darf praktisch nur daraus bestehen.
 fn greeting_re() -> &'static Regex {

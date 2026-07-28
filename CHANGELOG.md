@@ -2,7 +2,7 @@
 
 **Problem:** Auf einen Gruß kam "Hey, willkommen im Chat!" — auch bei Stammgästen, die seit Monaten dabei sind. Der Bot weiß gar nicht, wer neu ist, und die Willkommensformel las sich entsprechend schräg.
 
-**Änderung:** Die Antwort ist jetzt ein schlichter Rückgruß.
+**Änderung:** Die Antwort ist jetzt ein warmer Rückgruß statt einer Willkommensformel. Auch die Antwort auf die Release-Frage klingt weniger nach Ansage und mehr nach Mitgefühl mit dem Warten.
 
 **Aktuelles Verhalten:** Wer grüßt, bekommt einen Gruß zurück. Wann geantwortet wird, ändert sich nicht: weiterhin nur bei Nachrichten, die praktisch nur aus einem Gruß bestehen, und höchstens alle zehn Minuten pro Kanal.
 
