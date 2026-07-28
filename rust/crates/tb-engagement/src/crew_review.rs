@@ -10,8 +10,9 @@ pub const RICKY_TWITCH_USER_ID: &str = "147713656";
 /// Ricky und seine Leute in ihren eigenen Kanälen tun, wird nicht beobachtet.
 /// Muss synchron zu `CREW_REGISTRY` in `tb-chat/src/crew_guard.rs` bleiben
 /// (Test dort: `crew_registry_und_review_kanalsperre_bleiben_synchron`).
-pub const CREW_OWN_CHANNELS: [&str; 6] = [
+pub const CREW_OWN_CHANNELS: [&str; 7] = [
     "blackhusky45",
+    "deadlock_germany",
     "h4teme666",
     "helmbombenricky",
     "mr_horizont",
