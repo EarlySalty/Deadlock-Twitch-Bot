@@ -2117,9 +2117,29 @@ mod tests {
             "Number.isFinite",
             "MAX_RESOLVE_FAILURES",
             "textContent",
+            // Kaltstart: erst Pool holen, sonst meldet der Loop faelschlich "leer".
+            "fetchPool().finally(runLoop)",
+            // Vorbereiteter Clip, der zwischenzeitlich aus dem Pool flog, wird verworfen.
+            "!pool.some((clip) => clip.id === next.clip.id)",
         ] {
             assert!(html.contains(needle), "HTML/JS-Vertrag fehlt: {needle}");
         }
+
+        // Handoff per Promise statt per fertigem Ergebnis: ein Poll auf eine laufende
+        // Vorbereitung koennte sie doppelt starten und denselben Clip zweimal liefern.
+        assert!(
+            !html.contains("prepareInFlight"),
+            "Vorbereitung darf nicht ueber ein Poll-Flag laufen"
+        );
+        assert!(
+            html.contains("preparing = null;\n    return pending;"),
+            "takePrepared() muss die laufende Vorbereitung uebernehmen und freigeben"
+        );
+        assert_eq!(
+            html.matches("preparing = null").count(),
+            2,
+            "nur Deklaration und Uebernahme in takePrepared() duerfen preparing leeren"
+        );
         assert_eq!(
             html.matches("avoidImmediateRepeat(queue);").count(),
             2,

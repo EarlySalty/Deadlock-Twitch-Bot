@@ -55,8 +55,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   let refreshTimer = 0;
   let lastPlayedId = null;
   let activeClip = null;
-  let prepared = null;
-  let prepareInFlight = false;
+  let preparing = null;
 
   function clampVolume(raw) {
     const value = Number.parseFloat(raw ?? '');
@@ -271,35 +270,23 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     return null;
   }
 
+  // Handoff laeuft ueber das Promise selbst, nicht ueber ein fertiges Ergebnis:
+  // sonst muesste der Clipwechsel auf eine noch laufende Vorbereitung pollen und
+  // koennte sie doppelt starten.
   function prepareAhead() {
-    if (prepared || prepareInFlight) {
-      return;
+    if (!preparing) {
+      preparing = prepareNext().catch((error) => {
+        console.warn('Pause-Loop: Vorbereitung fehlgeschlagen', error);
+        return null;
+      });
     }
-    prepareInFlight = true;
-    prepareNext()
-      .then((next) => { prepared = next; })
-      .catch((error) => { console.warn('Pause-Loop: Vorbereitung fehlgeschlagen', error); })
-      .finally(() => { prepareInFlight = false; });
+    return preparing;
   }
 
-  async function takePrepared() {
-    if (prepared) {
-      const next = prepared;
-      prepared = null;
-      return next;
-    }
-    if (prepareInFlight) {
-      // ponytail: kurzes Pollen statt Promise-Handoff, laeuft nur beim Clipwechsel
-      for (let i = 0; i < 40 && prepareInFlight; i += 1) {
-        await sleep(250);
-      }
-      if (prepared) {
-        const next = prepared;
-        prepared = null;
-        return next;
-      }
-    }
-    return prepareNext();
+  function takePrepared() {
+    const pending = prepareAhead();
+    preparing = null;
+    return pending;
   }
 
   // --- Wiedergabe -----------------------------------------------------------
@@ -363,6 +350,10 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
       if (!next) {
         showEmptyPool();
         await sleep(EMPTY_RETRY_MS);
+        continue;
+      }
+      // Waehrend des Vorladens kann der Clip aus dem Pool geflogen sein.
+      if (!pool.some((clip) => clip.id === next.clip.id)) {
         continue;
       }
       activeClip = next.clip;
@@ -431,8 +422,9 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     }
   }
 
-  fetchPool();
-  runLoop();
+  // Erst den Pool holen, sonst meldet der Loop beim Start faelschlich "leer" und
+  // wartet EMPTY_RETRY_MS, obwohl die Clips gleich da sind.
+  fetchPool().finally(runLoop);
 })();
 </script>
 </body>
