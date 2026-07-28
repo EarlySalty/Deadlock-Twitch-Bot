@@ -1000,7 +1000,7 @@ mod tests {
     async fn setup_test_db(schema: &str) -> PgPool {
         use std::str::FromStr;
         let url = std::env::var("TB_TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:tbtest@127.0.0.1:5434/postgres".to_string());
+            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
         // Schema anlegen über eine Admin-Verbindung …
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
