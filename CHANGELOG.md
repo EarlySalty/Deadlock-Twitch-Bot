@@ -1,3 +1,11 @@
+## #406 — Steam-Links, Rang und Live-Status sind wieder aktuell
+
+**Problem:** Partner-Clips und Titelvorschläge haben Steam-Links, Rang und Live-Status aus einer alten, nicht mehr gepflegten Datenbank gelesen. Dadurch fehlten aktuelle Verknüpfungen und laufende Matches, ohne dass ein Fehler sichtbar wurde.
+
+**Änderung:** Der Bot liest Steam-Links, Rang und Live-Status jetzt aus der zentralen Datenbank. Schlägt eine Abfrage fehl, steht die Ursache mit einer gekürzten Nutzerkennung im Protokoll.
+
+**Aktuelles Verhalten:** Partner werden mit ihren aktuellen Steam-Konten verarbeitet. Titelvorschläge können den aktuellen Rang, Helden und Match-Status wieder berücksichtigen.
+
 ## #405 — Der Radar prüft auch ohne Stichwort
 
 **Problem:** Der Crew-Radar fragte den Judge nur, wenn ein bekanntes Reizwort fiel („ricky", „nani", „Freund gebannt"). Ein Konto, das dasselbe Muster ohne diese Wörter fuhr, lief komplett durch — im Radar-Log stand dann „geprüft, kein Kampagnen-Muster", obwohl nie jemand geprüft hatte. Genau so kam ein Konto am 28.07. im Chat eines Partners durch, mit 75 % Stil-Treffer, 60 Tage altem Konto und Werbung für den eigenen Discord.

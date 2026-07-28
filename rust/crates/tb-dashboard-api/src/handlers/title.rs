@@ -117,16 +117,23 @@ async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<
         twitch_user_id
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.flatten().and_then(|s| s.trim().parse::<i64>().ok())
+    .await;
+    match row {
+        Ok(row) => row.flatten().and_then(|s| s.trim().parse::<i64>().ok()),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                twitch_user_id = %twitch_user_id.chars().take(16).collect::<String>(),
+                "Title-Kontext: Discord-ID-Abfrage fehlgeschlagen; der Titel wird ohne Rang und Live-Daten erzeugt"
+            );
+            None
+        }
+    }
 }
 
 /// Holt Rang (+ optional Live-State) für den Streamer — Parität zu
-/// `tb-chat/commands.rs` (P2.101/P2.102). Rang/Live liegen in der SQLite-Steam-DB,
-/// daher die Lookups off-Thread via `spawn_blocking`. Fehlt die Discord-Verknüpfung
-/// oder die Steam-DB, bleibt der Kontext leer (Titel wird trotzdem erzeugt).
+/// `tb-chat/commands.rs` (P2.101/P2.102). Rang und Live-State kommen aus
+/// Central Postgres.
 async fn resolve_title_context(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -136,29 +143,27 @@ async fn resolve_title_context(
         return TitleContext::default();
     };
 
-    let db_path = steam_lookup::steam_db_path();
-    let rank_path = db_path.clone();
-    let rank_display = tokio::task::spawn_blocking(move || {
-        steam_lookup::get_rank_for_discord_user(&rank_path, discord_id)
-    })
-    .await
-    .ok()
-    .flatten()
-    .map(|r| r.rank_display);
+    let rank_display = steam_lookup::get_rank_for_discord_user(pool, discord_id)
+        .await
+        .map(|rank| rank.rank_display);
 
     let mut live_state = None;
     let mut live_context_used = false;
     if include_live {
-        live_state = tokio::task::spawn_blocking(move || {
-            steam_lookup::get_live_state_for_discord_user(&db_path, discord_id)
-        })
-        .await
-        .ok()
-        .flatten()
-        .map(|l| PromptLiveState {
-            hero: l.hero,
-            party_hint: l.party_hint,
-        });
+        live_state = match steam_lookup::get_live_state_for_discord_user(pool, discord_id).await {
+            Ok(live) => live.map(|l| PromptLiveState {
+                hero: l.hero,
+                party_hint: l.party_hint,
+            }),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    discord_id_tail = discord_id.rem_euclid(10_000),
+                    "Title-Kontext: Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
+                );
+                None
+            }
+        };
         // Live-Kontext wurde nur dann genutzt, wenn auch ein State vorlag.
         live_context_used = live_state.is_some();
     }
@@ -499,6 +504,62 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS core")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS activity")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS core.users (
+                discord_id BIGINT PRIMARY KEY,
+                username TEXT,
+                global_name TEXT,
+                avatar TEXT,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                raw JSONB
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS core.steam_links (
+                discord_id BIGINT NOT NULL,
+                steam_id TEXT NOT NULL,
+                steam_id64 BIGINT,
+                verified BOOLEAN NOT NULL DEFAULT false,
+                primary_account BOOLEAN NOT NULL DEFAULT false,
+                linked_at TIMESTAMPTZ,
+                deadlock_rank INTEGER,
+                deadlock_subrank INTEGER,
+                deadlock_rank_name TEXT,
+                deadlock_rank_updated_at TIMESTAMPTZ,
+                PRIMARY KEY (discord_id, steam_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS activity.live_player_state (
+                steam_id TEXT PRIMARY KEY,
+                in_deadlock_now BOOLEAN,
+                in_match_now_strict BOOLEAN,
+                deadlock_stage TEXT,
+                deadlock_hero TEXT,
+                deadlock_party_hint TEXT,
+                deadlock_minutes INTEGER,
+                deadlock_updated_at TIMESTAMPTZ,
+                last_seen_at TIMESTAMPTZ
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -520,14 +581,14 @@ mod tests {
     }
 
     /// P2.102: `include_live=true` allein macht `live_context_used` NICHT true,
-    /// wenn kein Live-State geladen werden kann (Steam-DB fehlt). Der Flag-Echo-Bug
+    /// wenn kein Live-State geladen werden kann. Der Flag-Echo-Bug
     /// (Rust gab vorher body.include_live unverändert zurück) ist damit weg.
     #[tokio::test]
     async fn include_live_ohne_live_state_kein_kontext() {
         let Some(pool) = make_pool("t_title_live_noop").await else {
             return;
         };
-        // Discord-Link vorhanden, aber Steam-DB-Pfad existiert nicht → Lookups None.
+        // Discord-Link vorhanden, aber kein Live-State → Live-Kontext bleibt leer.
         sqlx::query(
             "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id) \
              VALUES ('1', '123456789')",
@@ -555,5 +616,117 @@ mod tests {
             !ctx.live_context_used,
             "include_live=true ohne geladenen State => live_context_used=false"
         );
+    }
+
+    #[tokio::test]
+    async fn live_kontext_kommt_aus_postgres() {
+        let Some(pool) = make_pool("t_title_live_postgres").await else {
+            return;
+        };
+        let discord_id = 9_223_372_036_854_775_000_i64;
+        let steam_id64 = 76_561_197_960_265_933_i64;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
+            .bind(steam_id64.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id)
+             VALUES ('pg-live-user', $1)",
+        )
+        .bind(discord_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.users (discord_id) VALUES ($1)
+             ON CONFLICT (discord_id) DO NOTHING",
+        )
+        .bind(discord_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links (discord_id, steam_id, steam_id64, verified)
+             VALUES ($1, $2::text, $2, true)
+             ON CONFLICT (discord_id, steam_id) DO UPDATE SET verified = true",
+        )
+        .bind(discord_id)
+        .bind(steam_id64)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO activity.live_player_state (
+                steam_id, in_deadlock_now, in_match_now_strict,
+                deadlock_stage, deadlock_hero, deadlock_party_hint,
+                deadlock_updated_at
+             )
+             VALUES ($1, true, true, 'laning', 'Haze', 'solo', now())
+             ON CONFLICT (steam_id) DO UPDATE SET
+                deadlock_updated_at = EXCLUDED.deadlock_updated_at,
+                in_deadlock_now = EXCLUDED.in_deadlock_now,
+                in_match_now_strict = EXCLUDED.in_match_now_strict,
+                deadlock_stage = EXCLUDED.deadlock_stage,
+                deadlock_hero = EXCLUDED.deadlock_hero,
+                deadlock_party_hint = EXCLUDED.deadlock_party_hint",
+        )
+        .bind(steam_id64.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let ctx = resolve_title_context(&pool, "pg-live-user", true).await;
+
+        assert_eq!(
+            ctx.live_state
+                .as_ref()
+                .and_then(|state| state.hero.as_deref()),
+            Some("Haze")
+        );
+        assert!(ctx.live_context_used);
+    }
+
+    #[tokio::test]
+    async fn rang_kommt_aus_postgres_und_folgt_primaerem_konto() {
+        let Some(pool) = make_pool("t_title_rank_postgres").await else {
+            return;
+        };
+        let discord_id = 8_300_000_000_000_001_i64;
+        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
+            .bind(discord_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, discord_user_id)
+             VALUES ('pg-rank-user', $1)",
+        )
+        .bind(discord_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links (
+                discord_id, steam_id, steam_id64, verified, primary_account,
+                linked_at, deadlock_rank, deadlock_subrank
+             )
+             VALUES
+                ($1, 'rank-primary', NULL, false, true, '2026-07-28T10:00:00Z', 6, 3),
+                ($1, 'rank-secondary', NULL, true, false, '2026-07-28T11:00:00Z', 9, 5)",
+        )
+        .bind(discord_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let context = resolve_title_context(&pool, "pg-rank-user", false).await;
+
+        assert_eq!(context.rank_display.as_deref(), Some("Archon 3"));
     }
 }
