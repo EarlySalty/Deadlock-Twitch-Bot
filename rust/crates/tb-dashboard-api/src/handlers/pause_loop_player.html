@@ -13,12 +13,15 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
 #status[hidden]{display:none;}
 #clipLabel{position:fixed;left:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.64);color:#fff;font-size:14px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000;}
 #clipLabel:empty{display:none;}
+#audioHint{position:fixed;right:18px;bottom:16px;max-width:calc(100vw - 36px);padding:8px 12px;border-radius:999px;background:rgba(140,20,20,.82);color:#fff;font-size:14px;line-height:1.25;text-shadow:0 1px 2px #000;}
+#audioHint:empty{display:none;}
 </style>
 </head>
 <body>
 <main id="player" aria-label="Twitch Pause-Loop Clip-Player"></main>
 <div id="status" role="status">Clip-Pool wird geladen…</div>
 <div id="clipLabel" aria-live="polite"></div>
+<div id="audioHint" role="status"></div>
 <script>
 (() => {
   'use strict';
@@ -46,6 +49,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
   const player = document.getElementById('player');
   const status = document.getElementById('status');
   const clipLabel = document.getElementById('clipLabel');
+  const audioHint = document.getElementById('audioHint');
 
   let pool = [];
   let queue = [];
@@ -246,6 +250,7 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     video.preload = 'auto';
     video.playsInline = true;
     video.controls = false;
+    video.muted = false;
     video.volume = volume;
     video.load();
     return video;
@@ -291,13 +296,31 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
 
   // --- Wiedergabe -----------------------------------------------------------
 
+  // Der stumme Start ist ein Fallback, keine Einstellung: er muss sichtbar sein,
+  // sonst ist "kein Ton" nicht von einer falschen OBS-Audioquelle zu unterscheiden.
+  function setAudioHint(text) {
+    audioHint.textContent = text;
+  }
+
+  function unmuteActive() {
+    const video = player.firstElementChild;
+    if (video && video.muted) {
+      video.muted = false;
+      video.volume = volume;
+    }
+    setAudioHint('');
+  }
+
   async function startPlayback(video) {
     try {
       await video.play();
+      setAudioHint('');
     } catch (error) {
-      // Ohne Nutzergeste erlaubt der Browser nur stumme Wiedergabe. OBS braucht
-      // das nicht, ein normaler Tab schon – dort laeuft der Loop dann lautlos.
+      // Ohne Nutzergeste erlaubt der Browser nur stumme Wiedergabe. In OBS greift
+      // das normalerweise nicht – tut es doch, hilft ein Klick per "Interagieren".
+      console.warn('Pause-Loop: Ton blockiert, starte stumm', error);
       video.muted = true;
+      setAudioHint('Ton blockiert – in OBS „Interagieren" öffnen und einmal klicken');
       await video.play();
     }
   }
@@ -421,6 +444,10 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
       fetchInFlight = false;
     }
   }
+
+  // Eine Nutzergeste hebt die Autoplay-Sperre auf – in OBS per "Interagieren".
+  document.addEventListener('click', unmuteActive);
+  document.addEventListener('keydown', unmuteActive);
 
   // Erst den Pool holen, sonst meldet der Loop beim Start faelschlich "leer" und
   // wartet EMPTY_RETRY_MS, obwohl die Clips gleich da sind.

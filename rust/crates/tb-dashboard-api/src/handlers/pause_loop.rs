@@ -2121,6 +2121,10 @@ mod tests {
             "fetchPool().finally(runLoop)",
             // Vorbereiteter Clip, der zwischenzeitlich aus dem Pool flog, wird verworfen.
             "!pool.some((clip) => clip.id === next.clip.id)",
+            // Stummer Autoplay-Fallback muss sichtbar und per Klick behebbar sein.
+            "video.muted = false",
+            "addEventListener('click', unmuteActive)",
+            "id=\"audioHint\"",
         ] {
             assert!(html.contains(needle), "HTML/JS-Vertrag fehlt: {needle}");
         }
