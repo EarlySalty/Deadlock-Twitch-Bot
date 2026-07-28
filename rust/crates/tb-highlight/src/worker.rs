@@ -105,7 +105,6 @@ fn as_int(value: Option<&serde_json::Value>) -> Option<i64> {
 pub struct HighlightClipperConfig {
     pub boon_path: PathBuf,
     pub yt_dlp_path: PathBuf,
-    pub steam_db_path: PathBuf,
     pub steamids_json_path: PathBuf,
     pub clips_dir: PathBuf,
     pub demo_cache_dir: PathBuf,
@@ -121,7 +120,6 @@ impl HighlightClipperConfig {
         Self {
             boon_path,
             yt_dlp_path,
-            steam_db_path: PathBuf::from(partners::STEAM_DB_DEFAULT),
             steamids_json_path: PathBuf::from(partners::STEAMIDS_JSON_DEFAULT),
             clips_dir: PathBuf::from(CLIPS_DIR),
             demo_cache_dir: PathBuf::from(demo_downloader::DEMO_CACHE_DIR),
@@ -150,7 +148,6 @@ impl HighlightClipperWorker {
     pub async fn run_once(&self) {
         let streamers = partners::get_partner_streamers(
             &self.pool,
-            &self.config.steam_db_path,
             &self.config.steamids_json_path,
         )
         .await;

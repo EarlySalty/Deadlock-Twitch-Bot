@@ -3,80 +3,51 @@
 //! Port der Datenschicht aus `bot/highlight_clipper/worker.py`
 //! (`_get_partner_streamers` & Helfer). Drei Quellen werden kombiniert:
 //! 1. Postgres `twitch_streamers_partner_state` → (login, discord_user_id),
-//! 2. Steam-Bot-SQLite `steam_links` → discord_user_id ⇒ Steam-account_id,
+//! 2. Postgres `core.steam_links` → discord_user_id ⇒ Steam-account_id,
 //! 3. manuelle Overrides aus `data/highlight_clipper/steamids.json`.
-//!
-//! Slice 9b-i (hier): SQLite-Reader + manuelle Overrides + reine Kombinierung.
-//! Die Postgres-Query und der async Orchestrator folgen in 9b-ii.
-//!
-//! SQLite wird read-only geöffnet — gleiches Muster wie
-//! `tb_chat::steam_lookup` (dieselbe Datei `Deadlock-Bots/data/deadlock.sqlite3`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use rusqlite::OpenFlags;
 use sqlx::PgPool;
 
 /// Steam64-Basis-Offset (account_id = steam64 − BASE).
 pub const STEAM64_BASE: i64 = 76561197960265728;
-/// Standardpfad der Steam-Bot-SQLite (cross-repo, read-only).
-pub const STEAM_DB_DEFAULT: &str = "/home/naniadm/Documents/Deadlock-Bots/data/deadlock.sqlite3";
 /// Standardpfad der manuellen Steam-ID-Zuordnungen.
 pub const STEAMIDS_JSON_DEFAULT: &str = "data/highlight_clipper/steamids.json";
 
-/// Liest primäre Steam-account_ids aus `steam_links` für die gegebenen
-/// Discord-User-IDs. Fehlende DB/Query-Fehler → leere Map (Python
-/// `_load_steam_account_ids`). steam_id wird (wie Pythons `int()`) tolerant
-/// geparst; nur positive account_ids werden übernommen.
-pub fn load_steam_account_ids(db_path: &Path, discord_ids: &[i64]) -> HashMap<i64, String> {
-    let mut result = HashMap::new();
+/// Liest je Discord-User die bevorzugte Steam-account_id aus Central Postgres.
+/// Verifizierte Links gehen vor; danach entscheiden Aktualität und Steam-ID
+/// deterministisch. Nur positive account_ids werden übernommen.
+pub async fn load_steam_account_ids(
+    pool: &PgPool,
+    discord_ids: &[i64],
+) -> Result<HashMap<i64, String>, sqlx::Error> {
     if discord_ids.is_empty() {
-        return result;
+        return Ok(HashMap::new());
     }
-    if !db_path.exists() {
-        tracing::warn!(path = %db_path.display(), "HighlightClipper: Steam-Links-DB nicht gefunden");
-        return result;
-    }
-    let conn = match rusqlite::Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "HighlightClipper: Steam-Links-DB nicht öffenbar");
-            return result;
-        }
-    };
 
-    let placeholders = vec!["?"; discord_ids.len()].join(",");
-    let sql = format!(
-        "SELECT user_id, steam_id FROM steam_links \
-         WHERE user_id IN ({placeholders}) AND primary_account = 1"
-    );
+    let rows = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT DISTINCT ON (discord_id) discord_id, steam_id64
+         FROM core.steam_links
+         WHERE discord_id = ANY($1)
+         ORDER BY discord_id, verified DESC, linked_at DESC, steam_id64 ASC",
+    )
+    .bind(discord_ids)
+    .fetch_all(pool)
+    .await?;
 
-    let query = (|| -> rusqlite::Result<()> {
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(discord_ids.iter()), |row| {
-            let user_id: i64 = row.get(0)?;
-            // steam_id ist TEXT; falls doch INTEGER, tolerant umwandeln.
-            let steam_id: String = row
-                .get::<_, String>(1)
-                .or_else(|_| row.get::<_, i64>(1).map(|i| i.to_string()))?;
-            Ok((user_id, steam_id))
-        })?;
-        for r in rows {
-            let (user_id, steam_id) = r?;
-            if let Ok(sid) = steam_id.trim().parse::<i64>() {
-                let account_id = sid - STEAM64_BASE;
-                if account_id > 0 {
-                    result.insert(user_id, account_id.to_string());
-                }
+    Ok(rows
+        .into_iter()
+        .filter_map(|(discord_id, steam_id64)| {
+            let account_id = steam_id64.checked_sub(STEAM64_BASE)?;
+            if account_id > 0 {
+                Some((discord_id, account_id.to_string()))
+            } else {
+                None
             }
-        }
-        Ok(())
-    })();
-    if let Err(e) = query {
-        tracing::error!(error = %e, "HighlightClipper: Steam-Links-Abfrage fehlgeschlagen");
-    }
-    result
+        })
+        .collect())
 }
 
 /// Lädt manuelle Login→account_id-Overrides aus der JSON-Datei. Fehlt/kaputt →
@@ -121,19 +92,19 @@ pub async fn query_partner_streamers(pool: &PgPool) -> Vec<(String, i64)> {
             })
             .collect(),
         Err(e) => {
-            tracing::error!(error = %e, "HighlightClipper: Partner-Query fehlgeschlagen");
+            tracing::error!(
+                error = %e,
+                "HighlightClipper: Partner-Abfrage fehlgeschlagen; dieser Durchlauf verarbeitet keine Datenbank-Partner"
+            );
             Vec::new()
         }
     }
 }
 
-/// Voller Orchestrator: Partner aus Postgres holen, Discord-IDs über die
-/// Steam-SQLite zu account_ids auflösen, manuelle Overrides anwenden (Python
-/// `_get_partner_streamers`). Die blockierende SQLite-Abfrage läuft in
-/// `spawn_blocking`, um den async-Runtime nicht zu blockieren.
+/// Voller Orchestrator: Partner und Steam-Links aus Postgres holen und manuelle
+/// Overrides anwenden (Python `_get_partner_streamers`).
 pub async fn get_partner_streamers(
     pool: &PgPool,
-    steam_db_path: &Path,
     steamids_json_path: &Path,
 ) -> Vec<(String, String)> {
     let rows = query_partner_streamers(pool).await;
@@ -141,10 +112,18 @@ pub async fn get_partner_streamers(
     let discord_to_account = if discord_ids.is_empty() {
         HashMap::new()
     } else {
-        let db = steam_db_path.to_path_buf();
-        tokio::task::spawn_blocking(move || load_steam_account_ids(&db, &discord_ids))
-            .await
-            .unwrap_or_default()
+        match load_steam_account_ids(pool, &discord_ids).await {
+            Ok(ids) => ids,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    requested = discord_ids.len(),
+                    discord_ids_preview = ?discord_ids.iter().take(5).collect::<Vec<_>>(),
+                    "HighlightClipper: Steam-Links-Abfrage fehlgeschlagen; nur manuelle Steam-Zuordnungen werden verarbeitet"
+                );
+                HashMap::new()
+            }
+        }
     };
     let manual = load_manual_steamids(steamids_json_path);
     combine_partners(&rows, &discord_to_account, manual)
@@ -211,47 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn steam_account_ids_aus_sqlite() {
-        let dir = fresh_dir("tb_hl_partners_sqlite");
-        let db = dir.join("deadlock.sqlite3");
-        {
-            let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE steam_links (user_id INTEGER, steam_id TEXT, primary_account INTEGER);",
-            )
-            .unwrap();
-            // user 10: gültig (account_id 5), primary.
-            // user 20: account_id 0 (steam_id == BASE) → übersprungen.
-            // user 30: primary_account=0 → von Query ausgeschlossen.
-            let base = STEAM64_BASE;
-            conn.execute(
-                "INSERT INTO steam_links VALUES (10, ?1, 1)",
-                [(base + 5).to_string()],
-            )
-            .unwrap();
-            conn.execute("INSERT INTO steam_links VALUES (20, ?1, 1)", [base.to_string()])
-                .unwrap();
-            conn.execute(
-                "INSERT INTO steam_links VALUES (30, ?1, 0)",
-                [(base + 99).to_string()],
-            )
-            .unwrap();
-        }
-        let map = load_steam_account_ids(&db, &[10, 20, 30]);
-        assert_eq!(map.get(&10), Some(&"5".to_string()));
-        assert!(!map.contains_key(&20)); // account_id 0
-        assert!(!map.contains_key(&30)); // nicht primary
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn steam_account_ids_fehlende_db_leer() {
-        assert!(load_steam_account_ids(Path::new("/nope/x.sqlite3"), &[1]).is_empty());
-        // Leere ID-Liste → leer ohne DB-Zugriff.
-        assert!(load_steam_account_ids(Path::new("/nope/x.sqlite3"), &[]).is_empty());
-    }
-
-    #[test]
     fn manual_steamids_filtert_leere() {
         let dir = fresh_dir("tb_hl_partners_manual");
         let f = dir.join("steamids.json");
@@ -314,6 +252,36 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS core")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS core.users (
+                discord_id BIGINT PRIMARY KEY,
+                username TEXT,
+                global_name TEXT,
+                avatar TEXT,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                raw JSONB
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS core.steam_links (
+                discord_id BIGINT NOT NULL REFERENCES core.users(discord_id) ON DELETE CASCADE,
+                steam_id64 BIGINT NOT NULL,
+                verified BOOLEAN NOT NULL DEFAULT false,
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (discord_id, steam_id64)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -353,27 +321,33 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO core.users (discord_id) VALUES (12345), (67890)
+             ON CONFLICT (discord_id) DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO core.steam_links (discord_id, steam_id64, verified, linked_at)
+             VALUES
+                (12345, $1, true, '2026-07-28T10:00:00Z'),
+                (12345, $2, false, '2026-07-28T11:00:00Z')
+             ON CONFLICT (discord_id, steam_id64) DO UPDATE
+             SET verified = EXCLUDED.verified, linked_at = EXCLUDED.linked_at",
+        )
+        .bind(STEAM64_BASE + 5)
+        .bind(STEAM64_BASE + 99)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let dir = fresh_dir("tb_hl_partners_full");
-        // SQLite: nani (12345) → account_id 5; zoe nicht hinterlegt.
-        let db = dir.join("deadlock.sqlite3");
-        {
-            let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE steam_links (user_id INTEGER, steam_id TEXT, primary_account INTEGER);",
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO steam_links VALUES (12345, ?1, 1)",
-                [(STEAM64_BASE + 5).to_string()],
-            )
-            .unwrap();
-        }
         // Manueller Override ergänzt zoe.
         let json = dir.join("steamids.json");
         std::fs::write(&json, r#"{"zoe": "4242"}"#).unwrap();
 
-        let out = get_partner_streamers(&pool, &db, &json).await;
+        let out = get_partner_streamers(&pool, &json).await;
         assert_eq!(
             out,
             vec![
@@ -382,5 +356,15 @@ mod db_tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn steam_account_ids_queryfehler_ist_fehler() {
+        let Some(pool) = make_pool("t9bii_partner_query_error").await else {
+            return;
+        };
+        pool.close().await;
+
+        assert!(load_steam_account_ids(&pool, &[12345]).await.is_err());
     }
 }

@@ -915,12 +915,11 @@ impl CommandEngine {
                 })
                 .collect();
 
-            // steam_lookup (Rang + optional Live) — sync, daher off-Thread.
+            // Rang bleibt synchron auf SQLite; Live-State kommt async aus Postgres.
             let mut rank_display: Option<String> = None;
             let mut live: Option<crate::title_ai::PromptLiveState> = None;
             if let Some(did) = discord_id {
                 let db_path = crate::steam_lookup::steam_db_path();
-                let db_path2 = db_path.clone();
                 let rank = match tokio::task::spawn_blocking(move || {
                     crate::steam_lookup::get_rank_for_discord_user(&db_path, did)
                 })
@@ -931,16 +930,17 @@ impl CommandEngine {
                         tracing::warn!(
                             %error,
                             channel = %channel,
-                            "!title Steam-Rank-Task fehlgeschlagen"
+                            discord_id_tail = did.rem_euclid(10_000),
+                            "!title Steam-Rank-Task fehlgeschlagen; der Titel wird ohne Rang erzeugt"
                         );
                         None
                     }
                 };
                 rank_display = rank.map(|r| r.rank_display);
                 if include_live {
-                    let live_res = match tokio::task::spawn_blocking(move || {
-                        crate::steam_lookup::get_live_state_for_discord_user(&db_path2, did)
-                    })
+                    let live_res = match crate::steam_lookup::get_live_state_for_discord_user(
+                        &pool, did,
+                    )
                     .await
                     {
                         Ok(live) => live,
@@ -948,7 +948,8 @@ impl CommandEngine {
                             tracing::warn!(
                                 %error,
                                 channel = %channel,
-                                "!title Steam-Live-Task fehlgeschlagen"
+                                discord_id_tail = did.rem_euclid(10_000),
+                                "!title Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
                             );
                             None
                         }

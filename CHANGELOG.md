@@ -1,3 +1,11 @@
+## #405 — Steam-Links und Live-Status sind wieder aktuell
+
+**Problem:** Partner-Clips und Titelvorschläge haben Steam-Links und Live-Status aus einer alten, nicht mehr gepflegten Datenbank gelesen. Dadurch fehlten aktuelle Verknüpfungen und laufende Matches, ohne dass ein Fehler sichtbar wurde.
+
+**Änderung:** Der Bot liest Steam-Links und Live-Status jetzt aus der zentralen Datenbank. Schlägt eine Abfrage fehl, steht die Ursache mit einer gekürzten Nutzerkennung im Protokoll.
+
+**Aktuelles Verhalten:** Partner werden mit ihren aktuellen Steam-Konten verarbeitet. Titelvorschläge können den aktuellen Helden und Match-Status wieder berücksichtigen; die Rangermittlung bleibt vorerst auf dem bisherigen Datenweg.
+
 ## #404 — Pause-Loop-Clips laufen ohne Klick
 
 **Problem:** Der Pause-Loop hing am Twitch-Clip-Player, und der startet ohne Klick nicht. In OBS blieb bei jedem Clip ein Play-Button stehen — der Loop lief also gar nicht von allein.

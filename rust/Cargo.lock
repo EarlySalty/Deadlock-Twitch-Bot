@@ -2989,7 +2989,6 @@ dependencies = [
  "chrono",
  "regex",
  "reqwest",
- "rusqlite",
  "serde_json",
  "sqlx",
  "thiserror 1.0.69",
