@@ -170,7 +170,14 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
     if (queue.length === 0) {
       rebuildQueueForNewCycle();
     }
-    return queue.shift() || null;
+    const clip = queue.shift() || null;
+    if (clip) {
+      // Sofort als verbraucht markieren. Zwischen Entnahme und Wiedergabe liegt
+      // das Vorladen – ohne die Markierung wuerde ein Pool-Refresh in genau
+      // diesem Fenster den Clip erneut einreihen und doppelt abspielen.
+      playedThisCycle.add(clip.id);
+    }
+    return clip;
   }
 
   function describeClip(clip) {
@@ -360,7 +367,6 @@ html,body{width:100vw;height:100vh;margin:0;overflow:hidden;background:#000;colo
       }
       activeClip = next.clip;
       lastPlayedId = next.clip.id;
-      playedThisCycle.add(next.clip.id);
       clipLabel.textContent = describeClip(next.clip);
       setStatus('');
       player.replaceChildren(next.video);

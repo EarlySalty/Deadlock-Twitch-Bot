@@ -2112,7 +2112,6 @@ mod tests {
             "queue.push(...additions)",
             "if (nextPool.length === 0)",
             "playedThisCycle.clear()",
-            "playedThisCycle.add(next.clip.id)",
             "res.ok",
             "res.headers.get('x-pause-loop-stale') === '1'",
             "Number.isFinite",
@@ -2125,6 +2124,22 @@ mod tests {
             html.matches("avoidImmediateRepeat(queue);").count(),
             2,
             "Grenzschutz muss sowohl beim normalen Zyklus als auch nach leerem Pool greifen"
+        );
+
+        // Ein entnommener Clip wird vorgeladen, bevor er laeuft: in diesem Fenster ist
+        // er weder in der Queue noch aktiv. Wird er erst beim Abspielen als verbraucht
+        // markiert, reiht ein Pool-Refresh ihn erneut ein und er laeuft doppelt.
+        assert_eq!(
+            html.matches("playedThisCycle.add(").count(),
+            1,
+            "Clip darf nur an einer Stelle als verbraucht markiert werden"
+        );
+        let mark = html.find("playedThisCycle.add(").unwrap();
+        let take_next = html.find("function takeNextClip()").unwrap();
+        let after_take_next = html.find("function describeClip(clip)").unwrap();
+        assert!(
+            mark > take_next && mark < after_take_next,
+            "Markierung muss beim Entnehmen in takeNextClip passieren, nicht erst beim Abspielen"
         );
         assert!(!html.contains("innerHTML"));
         // Das klickpflichtige Twitch-Embed darf nicht zurueckkehren.
