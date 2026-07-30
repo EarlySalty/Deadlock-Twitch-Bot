@@ -1,3 +1,11 @@
+## #407 — Kein Begrüßungs-Hinweis nach einem abgebrochenen Raid
+
+**Problem:** Wurde ein gestarteter Raid direkt wieder zurückgezogen, lief die Erinnerung im Hintergrund trotzdem weiter. Zwanzig Minuten später kam die Nachricht „denk nach dem Raid dran…" per Flüsterpost — für einen Raid, den es nie gab.
+
+**Änderung:** Zieht ein Streamer seinen eigenen Raid zurück, wird die zugehörige Erinnerung sofort verworfen. Jeder Abbruch steht mit Grund im Protokoll, auch wenn gar keine Erinnerung offen war.
+
+**Aktuelles Verhalten:** Nur ein wirklich durchgeführter Raid kann noch eine Erinnerung auslösen. Der Hinweis im eigenen Chat geht weiterhin beim Start raus und lässt sich nachträglich nicht zurückholen.
+
 ## #406 — Steam-Links, Rang und Live-Status sind wieder aktuell
 
 **Problem:** Partner-Clips und Titelvorschläge haben Steam-Links, Rang und Live-Status aus einer alten, nicht mehr gepflegten Datenbank gelesen. Dadurch fehlten aktuelle Verknüpfungen und laufende Matches, ohne dass ein Fehler sichtbar wurde.

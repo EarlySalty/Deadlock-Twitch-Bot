@@ -100,6 +100,63 @@ impl RaidGreetingMonitor {
         }
     }
 
+    /// Zieht der Quell-Streamer den Raid per `/unraid` zurück, gab es nie einen
+    /// Raid — dann darf auch keine Begrüßungs-Erinnerung mehr kommen. Matcht
+    /// per ID oder Login, leere Angaben matchen nie.
+    pub fn raid_canceled(&self, from_broadcaster_id: &str, from_broadcaster_login: &str) {
+        let from_id = from_broadcaster_id.trim();
+        let from_login = clean_login(from_broadcaster_login);
+        if from_id.is_empty() && from_login.is_empty() {
+            return;
+        }
+
+        let removed: Vec<PendingGreeting> = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let keys: Vec<String> = pending
+                .iter()
+                .filter(|(_, item)| {
+                    (!from_id.is_empty() && item.from_broadcaster_id == from_id)
+                        || (!from_login.is_empty() && item.from_broadcaster_login == from_login)
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.iter().filter_map(|key| pending.remove(key)).collect()
+        };
+
+        if removed.is_empty() {
+            let source = if from_login.is_empty() {
+                from_id.to_string()
+            } else {
+                from_login
+            };
+            tracing::info!(
+                from = %source,
+                whisper = false,
+                reason = "unraid_ohne_pending_greeting",
+                "Unraid ohne offene Raid-Begrüßungs-Erinnerung"
+            );
+            return;
+        }
+
+        for item in removed {
+            if item.probe_watched {
+                if let Some(probe) = &self.probe {
+                    probe.unwatch(&item.to_broadcaster_login);
+                }
+            }
+            tracing::info!(
+                from = %item.from_broadcaster_login,
+                to = %item.to_broadcaster_login,
+                whisper = false,
+                reason = "raid_canceled_unraid",
+                "Raid zurückgezogen, Begrüßungs-Erinnerung verworfen"
+            );
+        }
+    }
+
     fn register(&self, registration: RaidGreetingRegistration) -> Option<PendingGreeting> {
         let from_broadcaster_id = registration.from_broadcaster_id.trim().to_string();
         let to_broadcaster_id = registration.to_broadcaster_id.trim().to_string();
@@ -511,6 +568,66 @@ mod tests {
         assert!(whispers[0].1.to_lowercase().contains("hallo"));
         assert_eq!(probe.watched.lock().unwrap().as_slice(), ["ziel"]);
         assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unraid_verhindert_whisper() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_canceled("from1", "Raider");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unraid_matcht_auch_nur_per_login() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_canceled("", "@Raider");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unraid_fremder_quelle_laesst_pending_stehen() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_canceled("other1", "fremder");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        let whispers = fake.whispers.lock().unwrap();
+        assert_eq!(whispers.len(), 1);
+        assert_eq!(whispers[0].0, "from1");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unraid_mit_leeren_argumenten_ist_no_op() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_canceled("  ", " @ ");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]

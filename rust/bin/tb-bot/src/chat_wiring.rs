@@ -1257,6 +1257,32 @@ struct ChatHooks {
     raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
 
+/// Source-Self-Unraid: der Kanal-Inhaber zieht seinen eigenen Raid zurück.
+/// Gleiche Erkennung wie [`RaidArrivalCoordinator::handle_chat_unraid_notification`]
+/// (eventsub_hooks.rs) — Login gleich und ID unbekannt oder gleich. Liefert
+/// `(broadcaster_user_id, broadcaster_user_login)` des Quellkanals.
+fn source_self_unraid(event: &Value) -> Option<(String, String)> {
+    let field = |key: &str| {
+        event
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase()
+    };
+    let broadcaster_id = field("broadcaster_user_id");
+    let broadcaster_login = field("broadcaster_user_login");
+    if broadcaster_id.is_empty() || broadcaster_login.is_empty() {
+        return None;
+    }
+    let chatter_login = field("chatter_user_login");
+    let chatter_id = field("chatter_user_id");
+    let same_user = !chatter_login.is_empty()
+        && chatter_login == broadcaster_login
+        && (chatter_id.is_empty() || chatter_id == broadcaster_id);
+    same_user.then_some((broadcaster_id, broadcaster_login))
+}
+
 impl ChatHooks {
     /// Spawnt die Engagement-Verarbeitung für autorisierte EventSub-Partner.
     fn spawn_engagement(&self, event: &ChatMessageEvent) {
@@ -1508,6 +1534,14 @@ impl EventSubHooks for ChatHooks {
             .await;
     }
     async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
+        // Zieht der Quell-Streamer seinen eigenen Raid zurück, ist auch die
+        // Begrüßungs-Erinnerung hinfällig — sonst whispert der Bot 20 Min
+        // später wegen eines Raids, den es nie gab.
+        if let Some(monitor) = &self.raid_greeting {
+            if let Some((source_id, source_login)) = source_self_unraid(event) {
+                monitor.raid_canceled(&source_id, &source_login);
+            }
+        }
         self.inner
             .on_chat_unraid_notification(event, message_id)
             .await;
@@ -2395,6 +2429,63 @@ impl PartnerRoster for DbPartnerRoster {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+mod source_self_unraid_tests {
+    use super::source_self_unraid;
+    use serde_json::json;
+
+    #[test]
+    fn kanal_inhaber_zieht_eigenen_raid_zurueck() {
+        let event = json!({
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "Quelle",
+            "chatter_user_id": "42",
+            "chatter_user_login": "quelle",
+        });
+        assert_eq!(
+            source_self_unraid(&event),
+            Some(("42".to_string(), "quelle".to_string()))
+        );
+    }
+
+    #[test]
+    fn fehlende_chatter_id_gilt_weiter_als_self_unraid() {
+        let event = json!({
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "quelle",
+            "chatter_user_login": "quelle",
+        });
+        assert!(source_self_unraid(&event).is_some());
+    }
+
+    #[test]
+    fn ziel_seitiges_unraid_ist_kein_self_unraid() {
+        let event = json!({
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "ziel",
+            "chatter_user_id": "7",
+            "chatter_user_login": "raider",
+        });
+        assert_eq!(source_self_unraid(&event), None);
+    }
+
+    #[test]
+    fn gleicher_login_aber_fremde_id_ist_kein_self_unraid() {
+        let event = json!({
+            "broadcaster_user_id": "42",
+            "broadcaster_user_login": "quelle",
+            "chatter_user_id": "7",
+            "chatter_user_login": "quelle",
+        });
+        assert_eq!(source_self_unraid(&event), None);
+    }
+
+    #[test]
+    fn leeres_event_liefert_nichts() {
+        assert_eq!(source_self_unraid(&json!({})), None);
+    }
+}
 
 #[cfg(test)]
 mod chat_notification_tests {
