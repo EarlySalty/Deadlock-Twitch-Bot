@@ -262,8 +262,8 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use auto_raid::OfflineRaidHandler;
 use eventsub_hooks::{
-    BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks, RaidTrackingResolverAdapter,
-    VodExportOfflineHandler,
+    BlacklistRaidGuard, OutgoingRaidObserver, RaidArrivalCoordinator, RaidEventSubHooks,
+    RaidTrackingResolverAdapter, VodExportOfflineHandler,
 };
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManualRaidAdapter};
@@ -1156,6 +1156,13 @@ async fn main() {
                 side_effects: OfflineSideEffects::new(pool.clone()),
                 arrival,
                 guard: blacklist_guard,
+                outgoing_raid: OutgoingRaidObserver::new(
+                    suppression.clone(),
+                    raid_greeting_monitor.as_ref().map(|monitor| {
+                        let sink: Arc<dyn raid_greeting::OutgoingRaidSink> = monitor.clone();
+                        sink
+                    }),
+                ),
                 reauth_reminder,
                 vod_export: vod_export.clone(),
                 pool: pool.clone(),

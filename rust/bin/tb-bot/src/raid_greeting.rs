@@ -16,6 +16,17 @@ pub trait RaidTargetChatProbe: Send + Sync {
     fn has_written(&self, channel: &str, nick: &str, since: Instant) -> Option<bool>;
 }
 
+/// Senke für das Raid-Ziel, das Twitch im Quellkanal meldet (`channel.moderate`).
+pub trait OutgoingRaidSink: Send + Sync {
+    fn raid_retargeted(&self, registration: RaidGreetingRegistration);
+}
+
+impl OutgoingRaidSink for RaidGreetingMonitor {
+    fn raid_retargeted(&self, registration: RaidGreetingRegistration) {
+        RaidGreetingMonitor::raid_retargeted(self, registration);
+    }
+}
+
 /// Läuft der Stream des Raid-Ziels noch? `None` = unbekannt (fremder Kanal,
 /// DB-Fehler) — dann bleibt es beim bisherigen Verhalten.
 #[async_trait::async_trait]
@@ -115,6 +126,69 @@ impl RaidGreetingMonitor {
                     "Raider hat im Zielchat geschrieben"
                 );
             }
+        }
+    }
+
+    /// Twitch meldet über `channel.moderate` das Ziel, das der Raid **wirklich**
+    /// erreicht. Weicht es vom geplanten Ziel ab (manueller Raid überschreibt den
+    /// Auto-Raid), wird die offene Erinnerung auf den echten Kanal umgezogen.
+    /// Ohne offene Erinnerung passiert nichts — rein manuelle Raids bekommen
+    /// bewusst keine.
+    pub fn raid_retargeted(&self, registration: RaidGreetingRegistration) {
+        let from_id = registration.from_broadcaster_id.trim().to_string();
+        let from_login = clean_login(&registration.from_broadcaster_login);
+        let to_id = registration.to_broadcaster_id.trim().to_string();
+        let to_login = clean_login(&registration.to_broadcaster_login);
+        if to_id.is_empty() && to_login.is_empty() {
+            return;
+        }
+
+        let stale: Vec<PendingGreeting> = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let keys: Vec<String> = pending
+                .iter()
+                .filter(|(_, item)| {
+                    let same_source = (!from_id.is_empty() && item.from_broadcaster_id == from_id)
+                        || (!from_login.is_empty() && item.from_broadcaster_login == from_login);
+                    let same_target = (!to_id.is_empty() && item.to_broadcaster_id == to_id)
+                        || (!to_login.is_empty() && item.to_broadcaster_login == to_login);
+                    same_source && !same_target
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.iter().filter_map(|key| pending.remove(key)).collect()
+        };
+
+        if stale.is_empty() {
+            return;
+        }
+
+        for item in &stale {
+            if item.probe_watched {
+                if let Some(probe) = &self.probe {
+                    probe.unwatch(&item.to_broadcaster_login);
+                }
+            }
+            tracing::info!(
+                from = %item.from_broadcaster_login,
+                geplant = %item.to_broadcaster_login,
+                echt = %to_login,
+                reason = "raid_target_changed",
+                "Raid ging an einen anderen Kanal als geplant, Erinnerung umgezogen"
+            );
+        }
+
+        // Quellchat-Hinweis bewusst nicht erneut senden — er ist beim Start schon raus.
+        if let Some(pending) = self.register(RaidGreetingRegistration {
+            from_broadcaster_id: from_id,
+            from_broadcaster_login: from_login,
+            to_broadcaster_id: to_id,
+            to_broadcaster_login: to_login,
+        }) {
+            self.spawn_deadline(pending.key);
         }
     }
 
@@ -719,6 +793,72 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
 
         assert_eq!(fake.whispers.lock().unwrap().len(), 1);
+    }
+
+    fn registration_to(login: &str, id: &str) -> RaidGreetingRegistration {
+        RaidGreetingRegistration {
+            from_broadcaster_id: "from1".into(),
+            from_broadcaster_login: "Raider".into(),
+            to_broadcaster_id: id.into(),
+            to_broadcaster_login: login.into(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retarget_zieht_erinnerung_auf_das_echte_ziel() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_retargeted(registration_to("Echtes_Ziel", "to2"));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(
+            probe.watched.lock().unwrap().as_slice(),
+            ["ziel", "echtes_ziel"]
+        );
+        // Das alte Ziel wird beim Umzug freigegeben, das neue nach dem Fenster.
+        assert_eq!(
+            probe.unwatched.lock().unwrap().as_slice(),
+            ["ziel", "echtes_ziel"]
+        );
+        // Der Quellchat-Hinweis darf kein zweites Mal rausgehen.
+        assert_eq!(fake.messages.lock().unwrap().len(), 1);
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retarget_auf_dasselbe_ziel_ist_no_op() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_started(registration()).await;
+        monitor.raid_retargeted(registration_to("Ziel", "to1"));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(probe.watched.lock().unwrap().as_slice(), ["ziel"]);
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retarget_ohne_offene_erinnerung_legt_keine_an() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5));
+
+        monitor.raid_retargeted(registration_to("Echtes_Ziel", "to2"));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+        assert!(probe.watched.lock().unwrap().is_empty());
     }
 
     #[tokio::test(start_paused = true)]
