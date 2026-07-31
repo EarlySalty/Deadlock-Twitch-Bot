@@ -1,3 +1,11 @@
+## #410 — Schluss mit Doppel-Raids, und im Protokoll steht jetzt alles
+
+**Problem:** Wer selbst raidete und danach offline ging, bekam kurz darauf noch einen zweiten Raid vom Bot hinterhergeschickt — Twitch nimmt einen Raid auch nach Stream-Ende noch an. Die Zuschauerreste landeten in einem anderen Kanal als die eigentliche Community. Nachvollziehen ließ sich das kaum: Moderations-Ereignisse eines Kanals standen nirgends im Protokoll.
+
+**Änderung:** Der Bot wartet nach dem Stream-Ende einige Sekunden und prüft direkt vor dem Raid noch einmal, ob der Streamer inzwischen selbst geraidet hat — dann bricht er ab. Außerdem wird jedes Moderations-Ereignis eines Kanals mitgeschrieben, mit Aktion, betroffenem Nutzer und ausführender Person, und jedes eingehende Ereignis bekommt eine Abschlusszeile mit dem Ergebnis.
+
+**Aktuelles Verhalten:** Ein selbst gestarteter Raid bleibt der einzige. Was in einem Kanal passiert ist, lässt sich hinterher Zeile für Zeile nachlesen, statt es aus Zeitstempeln zu rekonstruieren.
+
 ## #409 — Der Bot merkt jetzt, wohin ein Raid wirklich geht
 
 **Problem:** Startete ein Streamer selbst einen Raid, bekam der Bot davon nur etwas mit, wenn das Ziel ein Partnerkanal war. Bei allen anderen Zielen lief kurz darauf noch der automatische Raid los und schickte die Zuschauer woanders hin — und die Begrüßungs-Erinnerung bezog sich auf den falschen Kanal.

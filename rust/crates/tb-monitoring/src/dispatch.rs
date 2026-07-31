@@ -686,7 +686,12 @@ impl EventSubDispatcher {
                 )
                 .await?;
             if !claimed {
-                tracing::debug!(message_id, "EventSub: Duplikat-Nachricht ignoriert");
+                tracing::info!(
+                    sub_type = %effective_type,
+                    broadcaster = %context.broadcaster_login,
+                    message_id,
+                    "EventSub: Duplikat-Nachricht ignoriert"
+                );
                 let mut outcome = DispatchOutcome::new(&effective_type);
                 outcome.duplicate = true;
                 return Ok(outcome);
@@ -702,7 +707,19 @@ impl EventSubDispatcher {
 
         let result = self.route(&effective_type, message_id, &context).await;
         match result {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) => {
+                // Abschlusszeile je Event: ohne sie ist "kein Handler getroffen"
+                // von "Handler lief durch" nicht zu unterscheiden.
+                tracing::info!(
+                    sub_type = %effective_type,
+                    broadcaster = %context.broadcaster_login,
+                    message_id = message_id.unwrap_or("n/a"),
+                    processed = outcome.processed,
+                    queued = outcome.queued,
+                    "EventSub: Notification abgeschlossen"
+                );
+                Ok(outcome)
+            }
             Err(error) => {
                 // Annahme fehlgeschlagen → Guard freigeben, Bridge retryt.
                 if let Some(message_id) = message_id {

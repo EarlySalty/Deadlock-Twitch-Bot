@@ -511,6 +511,61 @@ fn parse_outgoing_raid(event: &Value) -> Option<(String, String)> {
     Some((target_id, target_login))
 }
 
+/// Feld im `channel.moderate`-Payload, das den betroffenen Nutzer trägt — je
+/// nach Action heißt das Unter-Objekt anders. Ohne Treffer bleibt das Ziel leer,
+/// die Zeile wird trotzdem geschrieben.
+const MODERATE_TARGET_KEYS: [&str; 12] = [
+    "raid",
+    "unraid",
+    "ban",
+    "unban",
+    "timeout",
+    "untimeout",
+    "mod",
+    "unmod",
+    "vip",
+    "unvip",
+    "warn",
+    "delete",
+];
+
+/// Betroffener Nutzer einer `channel.moderate`-Action, soweit im Payload.
+fn moderate_target(event: &Value) -> Option<String> {
+    MODERATE_TARGET_KEYS.iter().find_map(|key| {
+        let target = event.get(*key)?;
+        let login = event_str(target, "user_login").trim().to_lowercase();
+        if login.is_empty() {
+            None
+        } else {
+            Some(login)
+        }
+    })
+}
+
+/// Protokolliert jede Moderations-Action eines Kanals — auch die, für die es
+/// keinen Handler gibt. Ohne diese Zeile ist im Nachhinein nicht feststellbar,
+/// was in einem Kanal passiert ist; genau daran scheiterte die Aufklärung des
+/// Doppel-Raids am 2026-07-31.
+fn log_moderate_action(broadcaster_id: &str, login: &str, event: &Value) {
+    let action = event_str(event, "action").trim().to_lowercase();
+    if action.is_empty() {
+        tracing::warn!(
+            streamer = login,
+            broadcaster_id,
+            "channel.moderate ohne action-Feld"
+        );
+        return;
+    }
+    tracing::info!(
+        streamer = login,
+        broadcaster_id,
+        action = %action,
+        target = moderate_target(event).unwrap_or_default(),
+        moderator = event_str(event, "moderator_user_login"),
+        "channel.moderate"
+    );
+}
+
 /// Lernt aus `channel.moderate` im Quellkanal, wohin ein Raid wirklich geht.
 ///
 /// Zwei Wirkungen, beide unabhängig davon, ob das Ziel ein Partner ist:
@@ -534,6 +589,8 @@ impl OutgoingRaidObserver {
     }
 
     pub fn handle(&self, broadcaster_id: &str, login: &str, event: &Value) {
+        log_moderate_action(broadcaster_id, login, event);
+
         let Some((target_id, target_login)) = parse_outgoing_raid(event) else {
             return;
         };
@@ -1037,6 +1094,25 @@ mod outgoing_raid_tests {
             parse_outgoing_raid(&raid_event("Dead_Eye_Nika", "224208315")),
             Some(("224208315".to_string(), "dead_eye_nika".to_string()))
         );
+    }
+
+    #[test]
+    fn betroffener_nutzer_wird_je_action_gefunden() {
+        assert_eq!(
+            moderate_target(&raid_event("Dead_Eye_Nika", "224208315")).as_deref(),
+            Some("dead_eye_nika")
+        );
+        assert_eq!(
+            moderate_target(&json!({"action": "ban", "ban": {"user_login": "Spammer"}})).as_deref(),
+            Some("spammer")
+        );
+        assert_eq!(
+            moderate_target(&json!({"action": "timeout", "timeout": {"user_login": "x"}})).as_deref(),
+            Some("x")
+        );
+        // Actions ohne Nutzer-Bezug (z. B. emoteonly) liefern nichts — die
+        // Log-Zeile entsteht trotzdem.
+        assert_eq!(moderate_target(&json!({"action": "emoteonly"})), None);
     }
 
     #[test]
