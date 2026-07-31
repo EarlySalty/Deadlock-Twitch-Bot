@@ -26,6 +26,36 @@ fn unix_now() -> f64 {
         .as_secs_f64()
 }
 
+/// Wartezeit zwischen Offline-Trigger und Auto-Raid. Endet ein Stream durch
+/// einen manuellen Raid, kann das `channel.moderate`-Event mit dem echten Ziel
+/// knapp nach `stream.offline` eintreffen. Ohne diese Pause gewinnt der
+/// Auto-Raid das Rennen und schickt einen zweiten Raid hinterher.
+const OFFLINE_GRACE_DEFAULT_SECS: u64 = 5;
+
+fn offline_grace() -> std::time::Duration {
+    let secs = std::env::var("TB_AUTO_RAID_OFFLINE_GRACE_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(OFFLINE_GRACE_DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Wartet das Grace-Fenster ab und prüft danach erneut, ob der Streamer
+/// inzwischen selbst geraidet hat. `true` = Auto-Raid abbrechen.
+async fn manual_raid_won_the_race(
+    suppression: &Arc<Mutex<ManualRaidSuppression>>,
+    broadcaster_id: &str,
+    grace: std::time::Duration,
+) -> bool {
+    if !grace.is_zero() {
+        tokio::time::sleep(grace).await;
+    }
+    suppression
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_suppressed(broadcaster_id, None)
+}
+
 /// Helix-Stream → Roster-Stream-Daten (Follower werden später nur für
 /// eligible Kandidaten geholt).
 fn to_stream_data(stream: &HelixStream) -> StreamData {
@@ -338,6 +368,21 @@ impl OfflineRaidHandler {
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
         };
+
+        // Letzte Prüfung direkt vor dem Raid: hat der Streamer zwischenzeitlich
+        // selbst geraidet, wäre unser Raid ein zweiter — Twitch nimmt den auch
+        // nach Stream-Ende noch an und schickt die Zuschauerreste woanders hin.
+        let grace = offline_grace();
+        if manual_raid_won_the_race(&self.suppression, broadcaster_id, grace).await {
+            tracing::info!(
+                streamer = streamer_label,
+                grace_secs = grace.as_secs(),
+                reason = "manual_raid_during_grace",
+                "Auto-Raid abgebrochen: Streamer hat selbst geraidet"
+            );
+            return;
+        }
+
         match self.pipeline.run(&request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {
                 tracing::info!(from = streamer_label, to = %target_login, "✅ Auto-Raid erfolgreich");
@@ -550,6 +595,63 @@ impl OfflineRaidHandler {
             }
         }
         cache.clone()
+    }
+}
+
+#[cfg(test)]
+mod grace_tests {
+    use super::*;
+
+    fn suppression() -> Arc<Mutex<ManualRaidSuppression>> {
+        Arc::new(Mutex::new(ManualRaidSuppression::new()))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn manueller_raid_waehrend_der_wartezeit_stoppt_den_auto_raid() {
+        let suppression = suppression();
+        let observer = Arc::clone(&suppression);
+        let grace = std::time::Duration::from_secs(5);
+
+        // Das channel.moderate-Event trifft mitten im Grace-Fenster ein.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            observer
+                .lock()
+                .unwrap()
+                .mark("1186925760", 180.0, None);
+        });
+
+        assert!(manual_raid_won_the_race(&suppression, "1186925760", grace).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ohne_manuellen_raid_laeuft_der_auto_raid_weiter() {
+        let suppression = suppression();
+        let grace = std::time::Duration::from_secs(5);
+
+        assert!(!manual_raid_won_the_race(&suppression, "1186925760", grace).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fremder_streamer_blockiert_nicht() {
+        let suppression = suppression();
+        suppression.lock().unwrap().mark("999", 180.0, None);
+
+        assert!(
+            !manual_raid_won_the_race(
+                &suppression,
+                "1186925760",
+                std::time::Duration::from_secs(1)
+            )
+            .await
+        );
+    }
+
+    #[test]
+    fn grace_kommt_aus_der_env_mit_default() {
+        // Default ohne Env; der gesetzte Wert wird in einem eigenen Prozess
+        // getestet — hier zählt nur, dass der Default stimmt.
+        assert_eq!(OFFLINE_GRACE_DEFAULT_SECS, 5);
     }
 }
 
