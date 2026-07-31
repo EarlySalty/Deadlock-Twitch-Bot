@@ -1,3 +1,11 @@
+## #409 — Der Bot merkt jetzt, wohin ein Raid wirklich geht
+
+**Problem:** Startete ein Streamer selbst einen Raid, bekam der Bot davon nur etwas mit, wenn das Ziel ein Partnerkanal war. Bei allen anderen Zielen lief kurz darauf noch der automatische Raid los und schickte die Zuschauer woanders hin — und die Begrüßungs-Erinnerung bezog sich auf den falschen Kanal.
+
+**Änderung:** Der Bot liest den Raid-Start jetzt direkt im Quellkanal mit. Damit kennt er das echte Ziel unabhängig davon, ob es ein Partner ist: Ein selbst gestarteter Raid sperrt den Auto-Raid für drei Minuten, und eine offene Erinnerung zieht auf den Kanal um, in dem der Raid tatsächlich gelandet ist.
+
+**Aktuelles Verhalten:** Wer selbst raidet, wird nicht mehr vom Auto-Raid überstimmt. Die Erinnerung prüft den Chat, in dem die Zuschauer wirklich angekommen sind.
+
 ## #408 — Keine Erinnerung, wenn der Zielstream schon vorbei ist
 
 **Problem:** Endete der Stream des Raid-Ziels innerhalb der zwanzig Minuten — etwa weil er selbst weitergeraidet hat — kam die Erinnerung trotzdem. Der Raider war da längst in einem ganz anderen Chat und hatte dort auch hallo gesagt.

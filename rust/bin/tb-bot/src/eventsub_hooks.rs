@@ -37,14 +37,16 @@ use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
     classify_partner_raid_arrival, ArrivalTrackingStore, BotBanStatus, BotBanStatusProbe,
-    PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime, RaidBlacklistStore,
-    RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
+    ManualRaidSuppression, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
+    RaidBlacklistStore, RaidGreetingRegistration, RaidSignalCorrelationService, RaidSignalOutcome,
+    TokenProvider,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendUserDm};
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
+use crate::raid_greeting::OutgoingRaidSink;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
 };
@@ -486,6 +488,83 @@ impl RaidArrivalCoordinator {
     }
 }
 
+// ─── channel.moderate → ausgehende Raids beobachten ─────────────────────────
+
+/// Auto-Raid-Sperre nach einem manuellen Raid (Python `mark_manual_raid_started`,
+/// 180 s). Gleicher Wert wie im Arrival-Pfad.
+const MANUAL_RAID_SUPPRESSION_SECS: f64 = 180.0;
+
+/// Ziel eines ausgehenden Raids aus einem `channel.moderate`-Event
+/// (`action = "raid"`). Das ist die einzige Quelle, die das echte Ziel auch
+/// dann meldet, wenn es kein Partner ist — `channel.raid` und
+/// `chat.notification` sieht der Bot nur bei Partner-Zielen.
+fn parse_outgoing_raid(event: &Value) -> Option<(String, String)> {
+    if !event_str(event, "action").eq_ignore_ascii_case("raid") {
+        return None;
+    }
+    let raid = event.get("raid").filter(|value| value.is_object())?;
+    let target_id = event_str(raid, "user_id").trim().to_string();
+    let target_login = event_str(raid, "user_login").trim().to_lowercase();
+    if target_id.is_empty() && target_login.is_empty() {
+        return None;
+    }
+    Some((target_id, target_login))
+}
+
+/// Lernt aus `channel.moderate` im Quellkanal, wohin ein Raid wirklich geht.
+///
+/// Zwei Wirkungen, beide unabhängig davon, ob das Ziel ein Partner ist:
+/// 1. Auto-Raid-Sperre setzen, damit ein manuell gestarteter Raid nicht vom
+///    Auto-Raid beim Offline-Gehen überschrieben wird.
+/// 2. Eine offene Begrüßungs-Erinnerung auf das echte Ziel umziehen.
+pub struct OutgoingRaidObserver {
+    suppression: Arc<Mutex<ManualRaidSuppression>>,
+    greeting: Option<Arc<dyn OutgoingRaidSink>>,
+}
+
+impl OutgoingRaidObserver {
+    pub fn new(
+        suppression: Arc<Mutex<ManualRaidSuppression>>,
+        greeting: Option<Arc<dyn OutgoingRaidSink>>,
+    ) -> Self {
+        Self {
+            suppression,
+            greeting,
+        }
+    }
+
+    pub fn handle(&self, broadcaster_id: &str, login: &str, event: &Value) {
+        let Some((target_id, target_login)) = parse_outgoing_raid(event) else {
+            return;
+        };
+        let broadcaster_id = broadcaster_id.trim();
+        if broadcaster_id.is_empty() {
+            return;
+        }
+
+        self.suppression
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark(broadcaster_id, MANUAL_RAID_SUPPRESSION_SECS, None);
+
+        tracing::info!(
+            streamer = login,
+            target = %target_login,
+            suppression_secs = MANUAL_RAID_SUPPRESSION_SECS,
+            "Ausgehender Raid im Quellkanal erkannt"
+        );
+
+        if let Some(greeting) = &self.greeting {
+            greeting.raid_retargeted(RaidGreetingRegistration {
+                from_broadcaster_id: broadcaster_id.to_string(),
+                from_broadcaster_login: login.trim().to_lowercase(),
+                to_broadcaster_id: target_id,
+                to_broadcaster_login: target_login,
+            });
+        }
+    }
+}
+
 // ─── channel.moderate → Blacklist-Raid-Guard ────────────────────────────────
 
 /// Bricht manuell gestartete Raids auf hart global gebannte Ziele ab. Port von
@@ -774,6 +853,8 @@ pub struct RaidEventSubHooks {
     pub side_effects: OfflineSideEffects,
     pub arrival: RaidArrivalCoordinator,
     pub guard: BlacklistRaidGuard,
+    /// Lernt aus `channel.moderate`, wohin ein Raid wirklich geht.
+    pub outgoing_raid: OutgoingRaidObserver,
     /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
     /// gebootet ist (TB_CHAT_ENABLED≠1).
     pub reauth_reminder: Option<Arc<ReauthReminder>>,
@@ -905,6 +986,9 @@ impl EventSubHooks for RaidEventSubHooks {
     }
 
     async fn on_channel_moderate(&self, broadcaster_id: &str, login: &str, event: &Value) {
+        // Zuerst das echte Raid-Ziel lernen (auch bei Nicht-Partner-Zielen), dann
+        // der Blacklist-Guard, der den Raid ggf. abbricht.
+        self.outgoing_raid.handle(broadcaster_id, login, event);
         self.guard.handle(broadcaster_id, login, event).await;
     }
 
@@ -918,6 +1002,104 @@ impl EventSubHooks for RaidEventSubHooks {
         self.arrival
             .handle_chat_unraid_notification(event, message_id)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod outgoing_raid_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[derive(Default)]
+    struct FakeSink {
+        retargeted: Mutex<Vec<(String, String)>>,
+    }
+
+    impl OutgoingRaidSink for FakeSink {
+        fn raid_retargeted(&self, registration: RaidGreetingRegistration) {
+            self.retargeted.lock().unwrap().push((
+                registration.from_broadcaster_login,
+                registration.to_broadcaster_login,
+            ));
+        }
+    }
+
+    fn raid_event(target_login: &str, target_id: &str) -> Value {
+        json!({
+            "action": "raid",
+            "raid": { "user_login": target_login, "user_id": target_id, "viewer_count": 7 },
+        })
+    }
+
+    #[test]
+    fn raid_action_liefert_das_echte_ziel() {
+        assert_eq!(
+            parse_outgoing_raid(&raid_event("Dead_Eye_Nika", "224208315")),
+            Some(("224208315".to_string(), "dead_eye_nika".to_string()))
+        );
+    }
+
+    #[test]
+    fn andere_moderate_actions_liefern_nichts() {
+        assert_eq!(parse_outgoing_raid(&json!({"action": "unraid"})), None);
+        assert_eq!(
+            parse_outgoing_raid(&json!({"action": "ban", "ban": {"user_login": "x"}})),
+            None
+        );
+        assert_eq!(parse_outgoing_raid(&json!({"action": "raid"})), None);
+    }
+
+    #[test]
+    fn manueller_raid_sperrt_den_auto_raid_und_zieht_die_erinnerung_um() {
+        let suppression = Arc::new(Mutex::new(ManualRaidSuppression::new()));
+        let sink = Arc::new(FakeSink::default());
+        let observer = OutgoingRaidObserver::new(
+            suppression.clone(),
+            Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
+        );
+
+        observer.handle("1186925760", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+
+        assert!(suppression
+            .lock()
+            .unwrap()
+            .is_suppressed("1186925760", None));
+        assert_eq!(
+            sink.retargeted.lock().unwrap().as_slice(),
+            [("earlysalty".to_string(), "dead_eye_nika".to_string())]
+        );
+    }
+
+    #[test]
+    fn nicht_raid_actions_sperren_nichts() {
+        let suppression = Arc::new(Mutex::new(ManualRaidSuppression::new()));
+        let sink = Arc::new(FakeSink::default());
+        let observer = OutgoingRaidObserver::new(
+            suppression.clone(),
+            Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
+        );
+
+        observer.handle("1186925760", "earlysalty", &json!({"action": "unraid"}));
+
+        assert!(!suppression
+            .lock()
+            .unwrap()
+            .is_suppressed("1186925760", None));
+        assert!(sink.retargeted.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ohne_broadcaster_id_passiert_nichts() {
+        let suppression = Arc::new(Mutex::new(ManualRaidSuppression::new()));
+        let sink = Arc::new(FakeSink::default());
+        let observer = OutgoingRaidObserver::new(
+            suppression.clone(),
+            Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
+        );
+
+        observer.handle("  ", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+
+        assert!(sink.retargeted.lock().unwrap().is_empty());
     }
 }
 
