@@ -749,10 +749,16 @@ async fn main() {
                 let probe: Arc<dyn raid_greeting::RaidTargetChatProbe> = tracker.clone();
                 probe
             });
-            Arc::new(raid_greeting::RaidGreetingMonitor::new(
-                h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
-                probe,
-            ))
+            let live_probe: Arc<dyn raid_greeting::RaidTargetLiveProbe> = Arc::new(
+                raid_greeting::LiveStateTargetProbe::new(live_state.clone()),
+            );
+            Arc::new(
+                raid_greeting::RaidGreetingMonitor::new(
+                    h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
+                    probe,
+                )
+                .with_live_probe(live_probe),
+            )
         });
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier

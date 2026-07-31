@@ -1,3 +1,11 @@
+## #408 — Keine Erinnerung, wenn der Zielstream schon vorbei ist
+
+**Problem:** Endete der Stream des Raid-Ziels innerhalb der zwanzig Minuten — etwa weil er selbst weitergeraidet hat — kam die Erinnerung trotzdem. Der Raider war da längst in einem ganz anderen Chat und hatte dort auch hallo gesagt.
+
+**Änderung:** Kurz vor dem Versand prüft der Bot, ob der Zielstream überhaupt noch läuft. Ist er beendet, entfällt die Erinnerung. Ist der Status unbekannt, geht sie wie bisher raus und der Grund steht im Protokoll.
+
+**Aktuelles Verhalten:** Die Erinnerung kommt nur noch, wenn der Zielkanal zu diesem Zeitpunkt tatsächlich live ist.
+
 ## #407 — Kein Begrüßungs-Hinweis nach einem abgebrochenen Raid
 
 **Problem:** Wurde ein gestarteter Raid direkt wieder zurückgezogen, lief die Erinnerung im Hintergrund trotzdem weiter. Zwanzig Minuten später kam die Nachricht „denk nach dem Raid dran…" per Flüsterpost — für einen Raid, den es nie gab.

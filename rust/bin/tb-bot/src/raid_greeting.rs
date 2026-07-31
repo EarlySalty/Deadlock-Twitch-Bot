@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use tb_chat::types::{ChatMessageEvent, SendOutcome};
 use tb_chat::ChatApi;
+use tb_monitoring::LiveStateStore;
 use tb_raid::{RaidGreetingMonitorPort, RaidGreetingRegistration};
 
 // ponytail: 20 Min Kulanz; Pending ist prozess-lokal, Neustart verwirft es konservativ: lieber kein Whisper als ein falscher Vorwurf.
@@ -13,6 +14,13 @@ pub trait RaidTargetChatProbe: Send + Sync {
     fn watch(&self, channel: &str);
     fn unwatch(&self, channel: &str);
     fn has_written(&self, channel: &str, nick: &str, since: Instant) -> Option<bool>;
+}
+
+/// Läuft der Stream des Raid-Ziels noch? `None` = unbekannt (fremder Kanal,
+/// DB-Fehler) — dann bleibt es beim bisherigen Verhalten.
+#[async_trait::async_trait]
+pub trait RaidTargetLiveProbe: Send + Sync {
+    async fn is_live(&self, login: &str) -> Option<bool>;
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +37,7 @@ struct PendingGreeting {
 pub struct RaidGreetingMonitor {
     chat: Arc<dyn ChatApi>,
     probe: Option<Arc<dyn RaidTargetChatProbe>>,
+    live: Option<Arc<dyn RaidTargetLiveProbe>>,
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
@@ -38,9 +47,17 @@ impl RaidGreetingMonitor {
         Self {
             chat,
             probe,
+            live: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
+    }
+
+    /// Endet der Zielstream innerhalb des Fensters (Stream-Ende oder Weiter-Raid),
+    /// kann dort niemand mehr begrüßt werden — dann entfällt die Erinnerung.
+    pub fn with_live_probe(mut self, live: Arc<dyn RaidTargetLiveProbe>) -> Self {
+        self.live = Some(live);
+        self
     }
 
     #[cfg(test)]
@@ -52,6 +69,7 @@ impl RaidGreetingMonitor {
         Self {
             chat,
             probe,
+            live: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window,
         }
@@ -222,6 +240,7 @@ impl RaidGreetingMonitor {
         let pending = Arc::clone(&self.pending);
         let chat = Arc::clone(&self.chat);
         let probe = self.probe.clone();
+        let live = self.live.clone();
         let greeting_window = self.greeting_window;
         tokio::spawn(async move {
             tokio::time::sleep(greeting_window).await;
@@ -280,6 +299,31 @@ impl RaidGreetingMonitor {
                 }
             }
 
+            // Der Zielstream kann im Fenster enden oder weiterraiden — dann ist der
+            // Raider längst woanders und die Erinnerung wäre ein falscher Vorwurf.
+            if let Some(live) = &live {
+                let target_live = live.is_live(&item.to_broadcaster_login).await;
+                if target_live == Some(false) {
+                    tracing::info!(
+                        from = %item.from_broadcaster_login,
+                        to = %item.to_broadcaster_login,
+                        whisper = false,
+                        reason = "target_stream_ended",
+                        "Raid-Begrüßungs-Erinnerung nicht gesendet"
+                    );
+                    return;
+                }
+                if target_live.is_none() {
+                    tracing::info!(
+                        from = %item.from_broadcaster_login,
+                        to = %item.to_broadcaster_login,
+                        whisper = true,
+                        reason = "target_live_state_unbekannt",
+                        "Live-Status des Raid-Ziels unbekannt, Erinnerung geht raus"
+                    );
+                }
+            }
+
             match chat
                 .send_whisper(&item.from_broadcaster_id, WHISPER_REMINDER)
                 .await
@@ -335,6 +379,43 @@ fn source_hint_message(to_login: &str) -> String {
     }
 }
 
+/// Live-Status aus `twitch_live_state` (vom Scout und den stream.online/offline-
+/// Events gepflegt). Unbekannter Kanal oder DB-Fehler → `None`, damit ein
+/// Ausfall die Erinnerung nicht stillschweigend abschaltet.
+pub struct LiveStateTargetProbe {
+    live_state: LiveStateStore,
+}
+
+impl LiveStateTargetProbe {
+    pub fn new(live_state: LiveStateStore) -> Self {
+        Self { live_state }
+    }
+}
+
+#[async_trait::async_trait]
+impl RaidTargetLiveProbe for LiveStateTargetProbe {
+    async fn is_live(&self, login: &str) -> Option<bool> {
+        let login = clean_login(login);
+        if login.is_empty() {
+            return None;
+        }
+        match self
+            .live_state
+            .source_states_by_logins(std::slice::from_ref(&login))
+            .await
+        {
+            Ok(states) => states
+                .get(&login)
+                .and_then(|state| state.is_live)
+                .map(|flag| flag != 0),
+            Err(error) => {
+                tracing::warn!(%error, %login, "Live-Status des Raid-Ziels nicht abrufbar");
+                None
+            }
+        }
+    }
+}
+
 /// Der Whisper geht als DM direkt an den Raider, ein @-Mention wäre doppelt gemoppelt.
 const WHISPER_REMINDER: &str = "Hey, denk nach dem Raid dran: Ein kurzes Hallo und Tschüss im Chat gehört zum guten Ton :) Das macht den Raid viel persönlicher, so bleibt man am besten im Kopf und stärkt die Connection!";
 
@@ -365,6 +446,28 @@ mod tests {
                 watched: Mutex::new(Vec::new()),
                 unwatched: Mutex::new(Vec::new()),
             }
+        }
+    }
+
+    struct FakeLiveProbe {
+        live: Option<bool>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl FakeLiveProbe {
+        fn new(live: Option<bool>) -> Self {
+            Self {
+                live,
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RaidTargetLiveProbe for FakeLiveProbe {
+        async fn is_live(&self, login: &str) -> Option<bool> {
+            self.asked.lock().unwrap().push(login.to_string());
+            self.live
         }
     }
 
@@ -568,6 +671,54 @@ mod tests {
         assert!(whispers[0].1.to_lowercase().contains("hallo"));
         assert_eq!(probe.watched.lock().unwrap().as_slice(), ["ziel"]);
         assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn beendeter_zielstream_verhindert_whisper() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let live = Arc::new(FakeLiveProbe::new(Some(false)));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5))
+                .with_live_probe(live.clone());
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(fake.whispers.lock().unwrap().is_empty());
+        assert_eq!(live.asked.lock().unwrap().as_slice(), ["ziel"]);
+        assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn laufender_zielstream_sendet_whisper() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let live = Arc::new(FakeLiveProbe::new(Some(true)));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5))
+            .with_live_probe(live);
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unbekannter_live_status_sendet_whisper_weiter() {
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let live = Arc::new(FakeLiveProbe::new(None));
+        let monitor = RaidGreetingMonitor::with_window(chat, Some(probe), Duration::from_millis(5))
+            .with_live_probe(live);
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]
