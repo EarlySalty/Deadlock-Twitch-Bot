@@ -40,15 +40,30 @@ fn offline_grace() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-/// Wartet das Grace-Fenster ab und prüft danach erneut, ob der Streamer
-/// inzwischen selbst geraidet hat. `true` = Auto-Raid abbrechen.
+/// Restzeit bis das Grace-Fenster seit dem Offline-Trigger voll ist. Die
+/// Vorarbeit (Helix-Abfragen, Partner-Auswahl) zählt mit — meist bleibt nichts
+/// zu warten. Negative/kaputte Zeitstempel ergeben das volle Fenster.
+fn remaining_grace(
+    offline_trigger_ts: f64,
+    now_ts: f64,
+    grace: std::time::Duration,
+) -> std::time::Duration {
+    let elapsed = now_ts - offline_trigger_ts;
+    if !elapsed.is_finite() || elapsed < 0.0 {
+        return grace;
+    }
+    grace.saturating_sub(std::time::Duration::from_secs_f64(elapsed))
+}
+
+/// Wartet die Restzeit des Grace-Fensters ab und prüft danach erneut, ob der
+/// Streamer inzwischen selbst geraidet hat. `true` = Auto-Raid abbrechen.
 async fn manual_raid_won_the_race(
     suppression: &Arc<Mutex<ManualRaidSuppression>>,
     broadcaster_id: &str,
-    grace: std::time::Duration,
+    remaining: std::time::Duration,
 ) -> bool {
-    if !grace.is_zero() {
-        tokio::time::sleep(grace).await;
+    if !remaining.is_zero() {
+        tokio::time::sleep(remaining).await;
     }
     suppression
         .lock()
@@ -372,11 +387,11 @@ impl OfflineRaidHandler {
         // Letzte Prüfung direkt vor dem Raid: hat der Streamer zwischenzeitlich
         // selbst geraidet, wäre unser Raid ein zweiter — Twitch nimmt den auch
         // nach Stream-Ende noch an und schickt die Zuschauerreste woanders hin.
-        let grace = offline_grace();
-        if manual_raid_won_the_race(&self.suppression, broadcaster_id, grace).await {
+        let remaining = remaining_grace(offline_trigger_ts, unix_now(), offline_grace());
+        if manual_raid_won_the_race(&self.suppression, broadcaster_id, remaining).await {
             tracing::info!(
                 streamer = streamer_label,
-                grace_secs = grace.as_secs(),
+                wartezeit_ms = remaining.as_millis(),
                 reason = "manual_raid_during_grace",
                 "Auto-Raid abgebrochen: Streamer hat selbst geraidet"
             );
@@ -645,6 +660,22 @@ mod grace_tests {
             )
             .await
         );
+    }
+
+    #[test]
+    fn vorarbeit_zaehlt_auf_das_grace_fenster_an() {
+        let grace = std::time::Duration::from_secs(5);
+        // Die Helix-Runde hat schon 3,2 s gebraucht → nur der Rest wird gewartet.
+        assert_eq!(
+            remaining_grace(1000.0, 1003.2, grace).as_millis(),
+            1800,
+            "Restzeit muss 1,8 s sein"
+        );
+        // Vorarbeit länger als das Fenster → gar keine Wartezeit.
+        assert!(remaining_grace(1000.0, 1009.0, grace).is_zero());
+        // Uhr springt rückwärts → volles Fenster statt Unsinn.
+        assert_eq!(remaining_grace(1000.0, 990.0, grace), grace);
+        assert_eq!(remaining_grace(f64::NAN, 1000.0, grace), grace);
     }
 
     #[test]
