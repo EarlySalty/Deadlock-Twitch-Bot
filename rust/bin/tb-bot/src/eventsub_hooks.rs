@@ -16,7 +16,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
@@ -25,8 +25,8 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, should_export, CommandRunner, ExportTargets, TokioCommandRunner,
-        VodExportError,
+        export_latest_vod, export_log_description, export_log_title, should_export, CommandRunner,
+        ExportTargets, TokioCommandRunner, VodExportError, VodExportReport,
     },
 };
 use tb_monitoring::{
@@ -41,7 +41,7 @@ use tb_raid::{
     RaidBlacklistStore, RaidGreetingRegistration, RaidSignalCorrelationService, RaidSignalOutcome,
     TokenProvider,
 };
-use tb_transport_discord::{BrokerRelay, DiscordBackend, SendUserDm};
+use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
 use crate::auto_raid::OfflineRaidHandler;
@@ -54,6 +54,9 @@ use crate::reauth_reminder::ReauthReminder;
 use crate::score_refresh::ScoreRefreshResolver;
 
 const VOD_EXPORT_DISCORD_USER_ID: u64 = 279_971_744_964_542_464;
+/// Admin-/Log-Channel, identisch mit `TOKEN_ERROR_CHANNEL_ID` — jeder
+/// Export-Lauf meldet sich dort, Erfolg wie Abbruch.
+const VOD_EXPORT_LOG_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const VOD_EXPORT_DELAY: Duration = Duration::from_secs(180);
 
 pub struct VodExportOfflineHandler {
@@ -103,23 +106,40 @@ impl VodExportOfflineHandler {
                 bucket: &bucket,
                 temp_dir: &temp_dir,
             };
-            match export_latest_vod(
+            let started = Instant::now();
+            let result = export_latest_vod(
                 api.as_ref(),
                 runner.as_ref(),
                 &targets,
                 &twitch_user_id,
                 stream_offline_unix,
             )
-            .await
-            {
-                Ok(link) => {
+            .await;
+
+            // DM nur im Erfolgsfall; ihr Zustellstatus wandert mit in den
+            // Log-Channel, sonst bliebe ein fehlgeschlagener Versand unsichtbar.
+            let mut dm_delivered = false;
+            match &result {
+                Ok(report) => {
                     let payload = SendUserDm {
                         user_id: VOD_EXPORT_DISCORD_USER_ID,
-                        content: vod_export_dm_content(&link),
+                        content: vod_export_dm_content(&report.link),
                     };
-                    if let Err(error) = relay.send_user_dm(payload).await {
-                        tracing::error!(%error, "VOD-Export: Discord-DM fehlgeschlagen");
+                    match relay.send_user_dm(payload).await {
+                        Ok(_) => dm_delivered = true,
+                        Err(error) => {
+                            tracing::error!(%error, "VOD-Export: Discord-DM fehlgeschlagen")
+                        }
                     }
+                    tracing::info!(
+                        twitch_user_id,
+                        vod_id = %report.vod_id,
+                        size_bytes = report.size_bytes,
+                        duration_seconds = report.duration_seconds,
+                        elapsed_seconds = started.elapsed().as_secs(),
+                        dm_delivered,
+                        "VOD-Export abgeschlossen"
+                    );
                 }
                 Err(VodExportError::NoVod) => {
                     tracing::warn!(
@@ -137,8 +157,36 @@ impl VodExportOfflineHandler {
                     tracing::error!(%error, twitch_user_id, "VOD-Export fehlgeschlagen");
                 }
             }
+
+            let elapsed_seconds = started.elapsed().as_secs() as i64;
+            let embed = vod_export_log_embed(&result, elapsed_seconds, dm_delivered);
+            if let Err(error) = relay
+                .send_alert_embed(SendAlertEmbed {
+                    channel_id: VOD_EXPORT_LOG_CHANNEL_ID,
+                    content: None,
+                    embed,
+                    allowed_role_ids: Vec::new(),
+                })
+                .await
+            {
+                tracing::error!(%error, "VOD-Export: Discord-Log fehlgeschlagen");
+            }
         });
     }
+}
+
+/// Log-Embed fuer den Admin-Channel — gruen bei Erfolg, rot bei Abbruch.
+fn vod_export_log_embed(
+    result: &Result<VodExportReport, VodExportError>,
+    elapsed_seconds: i64,
+    dm_delivered: bool,
+) -> Value {
+    let success = result.is_ok();
+    serde_json::json!({
+        "title": export_log_title(success),
+        "description": export_log_description(result, elapsed_seconds, dm_delivered),
+        "color": if success { 0x2E_CC71 } else { 0xE7_4C3C },
+    })
 }
 
 fn vod_export_dm_content(link: &str) -> String {

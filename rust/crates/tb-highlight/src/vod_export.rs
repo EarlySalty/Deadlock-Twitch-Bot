@@ -23,6 +23,88 @@ pub fn should_export(login: Option<&str>) -> bool {
     login == Some(TARGET_LOGIN)
 }
 
+/// Ergebnis eines erfolgreichen Exports. Traegt neben dem Freigabelink die
+/// Kennzahlen, die der Log-Channel braucht — die lokale Datei ist zum
+/// Meldezeitpunkt schon geloescht, `size_bytes` wird deshalb vor dem Aufraeumen
+/// gemessen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VodExportReport {
+    pub vod_id: String,
+    pub link: String,
+    pub duration_seconds: i64,
+    pub size_bytes: u64,
+}
+
+pub fn export_log_title(success: bool) -> &'static str {
+    if success {
+        "VOD-Export erfolgreich"
+    } else {
+        "VOD-Export fehlgeschlagen"
+    }
+}
+
+/// Beschreibungstext fuer den Discord-Log-Channel — **jeder** Ausgang wird
+/// gemeldet, Erfolg wie Abbruch. Der Freigabelink bleibt bewusst draussen: er
+/// oeffnet 7 Tage lang ein privates VOD und gehoert nur in die DM.
+pub fn export_log_description(
+    result: &Result<VodExportReport, VodExportError>,
+    elapsed_seconds: i64,
+    dm_delivered: bool,
+) -> String {
+    match result {
+        Ok(report) => {
+            let dm_status = if dm_delivered {
+                "DM zugestellt"
+            } else {
+                "DM fehlgeschlagen"
+            };
+            format!(
+                "Kanal: {TARGET_LOGIN}\nVOD: {vod_id}\nStreamlaenge: {stream}\nGroesse: {size}\nExportdauer: {elapsed}\nFreigabe: {LINK_EXPIRY} gueltig, {dm_status}",
+                vod_id = report.vod_id,
+                stream = format_duration(report.duration_seconds),
+                size = format_bytes(report.size_bytes),
+                elapsed = format_duration(elapsed_seconds),
+            )
+        }
+        Err(error) => format!(
+            "Kanal: {TARGET_LOGIN}\nGrund: {error}\nAbbruch nach: {elapsed}",
+            elapsed = format_duration(elapsed_seconds),
+        ),
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    for (limit, unit) in [
+        (KB * KB, "KB"),
+        (KB * KB * KB, "MB"),
+        (KB * KB * KB * KB, "GB"),
+    ] {
+        if bytes_f < limit {
+            return format!("{:.2} {unit}", bytes_f / (limit / KB));
+        }
+    }
+    format!("{:.2} TB", bytes_f / (KB * KB * KB * KB))
+}
+
+fn format_duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let rest = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {rest}s")
+    } else {
+        format!("{rest}s")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub success: bool,
@@ -96,7 +178,7 @@ pub async fn export_latest_vod(
     targets: &ExportTargets<'_>,
     channel_id: &str,
     stream_offline_unix: i64,
-) -> Result<String, VodExportError> {
+) -> Result<VodExportReport, VodExportError> {
     let vods = api.get_archive_videos(channel_id, 1).await;
     let vod = vods.first().ok_or(VodExportError::NoVod)?;
     let vod_id = vod
@@ -146,6 +228,10 @@ pub async fn export_latest_vod(
         return Err(VodExportError::MissingDownload);
     }
 
+    // Groesse vor dem Upload messen — danach ist die lokale Datei geloescht und
+    // die Kennzahl fuer den Log-Channel waere nicht mehr zu bekommen.
+    let size_bytes = std::fs::metadata(&local_path).map(|meta| meta.len()).unwrap_or(0);
+
     let upload_result = run_checked(
         runner,
         targets.rclone_path,
@@ -169,14 +255,21 @@ pub async fn export_latest_vod(
         &rclone_link_args(targets.bucket, vod_id),
     )
     .await?;
-    link_output
+    let link = link_output
         .stdout
         .lines()
         .rev()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(str::to_string)
-        .ok_or(VodExportError::MissingLink)
+        .ok_or(VodExportError::MissingLink)?;
+
+    Ok(VodExportReport {
+        vod_id: vod_id.to_string(),
+        link,
+        duration_seconds,
+        size_bytes,
+    })
 }
 
 fn yt_dlp_args(vod_id: &str, output_path: &Path) -> Vec<String> {
@@ -266,6 +359,80 @@ mod tests {
 
     use super::*;
     use crate::twitch_vod::TwitchVodApi;
+
+    fn beispiel_report() -> VodExportReport {
+        VodExportReport {
+            vod_id: "987".to_string(),
+            link: "https://share.example/987".to_string(),
+            duration_seconds: 3 * 60 * 60 + 25 * 60,
+            size_bytes: 9_942_383_597,
+        }
+    }
+
+    #[test]
+    fn erfolgs_log_nennt_kennzahlen_aber_nie_den_link() {
+        let text = export_log_description(&Ok(beispiel_report()), 780, true);
+
+        assert!(text.contains("987"), "VOD-ID fehlt: {text}");
+        assert!(text.contains("3h 25m"), "Streamdauer fehlt: {text}");
+        assert!(text.contains("9.26 GB"), "Groesse fehlt: {text}");
+        assert!(text.contains("13m 0s"), "Exportdauer fehlt: {text}");
+        assert!(text.contains("DM zugestellt"), "DM-Status fehlt: {text}");
+        // Der Freigabelink ist eine private, 7 Tage gueltige Freigabe auf ein
+        // nicht-oeffentliches VOD — er darf nie im Log-Channel landen.
+        assert!(
+            !text.contains("share.example"),
+            "Freigabelink im Log-Channel: {text}"
+        );
+    }
+
+    #[test]
+    fn erfolgs_log_meldet_auch_fehlgeschlagene_dm() {
+        let text = export_log_description(&Ok(beispiel_report()), 780, false);
+
+        assert!(text.contains("DM fehlgeschlagen"), "DM-Status fehlt: {text}");
+    }
+
+    #[test]
+    fn jeder_fehlerausgang_wird_gemeldet() {
+        for error in [
+            VodExportError::NoVod,
+            VodExportError::NoNewVod,
+            VodExportError::MissingDownload,
+            VodExportError::MissingLink,
+            VodExportError::InvalidVodId("abc".to_string()),
+            VodExportError::CommandFailed {
+                program: "rclone".to_string(),
+                stderr: "quota exceeded".to_string(),
+            },
+        ] {
+            let erwartet = error.to_string();
+            let text = export_log_description(&Err(error), 42, false);
+            assert!(
+                text.contains(&erwartet),
+                "Fehlergrund fehlt im Log: {text} (erwartet: {erwartet})"
+            );
+            assert!(text.contains("42s"), "Laufzeit fehlt im Log: {text}");
+        }
+    }
+
+    #[test]
+    fn log_titel_trennt_erfolg_und_fehlschlag() {
+        assert_eq!(export_log_title(true), "VOD-Export erfolgreich");
+        assert_eq!(export_log_title(false), "VOD-Export fehlgeschlagen");
+    }
+
+    #[test]
+    fn groessen_und_dauerformat_bleiben_lesbar() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(2048), "2.00 KB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.00 MB");
+        assert_eq!(format_duration(0), "0s");
+        assert_eq!(format_duration(59), "59s");
+        assert_eq!(format_duration(600), "10m 0s");
+        assert_eq!(format_duration(3661), "1h 1m");
+    }
 
     #[test]
     fn trigger_nur_fuer_dach_lock() {
@@ -392,7 +559,7 @@ mod tests {
             bucket: "server-backup",
             temp_dir: &temp_dir,
         };
-        let link = export_latest_vod(
+        let report = export_latest_vod(
             &MockApi::default(),
             runner.as_ref(),
             &targets,
@@ -402,7 +569,12 @@ mod tests {
         .await
         .expect("export succeeds");
 
-        assert_eq!(link, "https://share.example/987");
+        assert_eq!(report.link, "https://share.example/987");
+        assert_eq!(report.vod_id, "987");
+        assert_eq!(report.duration_seconds, FRESH_DURATION_SECONDS);
+        // Groesse wird vor dem Loeschen der lokalen Datei gemessen (MockRunner
+        // schreibt b"vod"); nach dem Upload ist sie sonst nicht mehr ermittelbar.
+        assert_eq!(report.size_bytes, 3);
         assert!(!temp_dir.join("987.mp4").exists());
         let calls = runner.calls.lock().expect("call lock");
         assert_eq!(calls.len(), 3);
