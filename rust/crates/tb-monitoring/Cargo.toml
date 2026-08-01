@@ -21,3 +21,6 @@ tb-transport-twitch = { workspace = true }
 # Passive-Lurker-Prädikate (B8-07): is_passive_lurker_channel + State-Konstanten.
 # Re-Export aus tb-chat; tb-chat hängt nicht an tb-monitoring (kein Zyklus).
 tb-chat             = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }

@@ -200,6 +200,16 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             last_raw_chat_error TEXT,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE twitch_login_aliases (
+            twitch_user_id TEXT NOT NULL,
+            login TEXT NOT NULL,
+            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_current BOOLEAN NOT NULL DEFAULT FALSE,
+            PRIMARY KEY (twitch_user_id, login)
+        )",
+        "CREATE UNIQUE INDEX twitch_login_aliases_current_user_idx
+            ON twitch_login_aliases(twitch_user_id) WHERE is_current",
         "CREATE TABLE twitch_global_settings (
             setting_key TEXT PRIMARY KEY,
             setting_value TEXT NOT NULL,

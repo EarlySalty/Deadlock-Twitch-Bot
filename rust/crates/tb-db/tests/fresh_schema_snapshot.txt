@@ -752,6 +752,11 @@ twitch_link_clicks|ref_code|text|YES|
 twitch_link_clicks|source_hint|text|YES|
 twitch_link_clicks|streamer_login|text|NO|
 twitch_link_clicks|tracking_token|text|YES|
+twitch_login_aliases|first_seen_at|timestamp with time zone|NO|now()
+twitch_login_aliases|is_current|boolean|NO|false
+twitch_login_aliases|last_seen_at|timestamp with time zone|NO|now()
+twitch_login_aliases|login|text|NO|
+twitch_login_aliases|twitch_user_id|text|NO|
 twitch_live_announcement_configs|allowed_editor_role_ids|text|YES|
 twitch_live_announcement_configs|config_json|text|NO|
 twitch_live_announcement_configs|streamer_login|text|NO|

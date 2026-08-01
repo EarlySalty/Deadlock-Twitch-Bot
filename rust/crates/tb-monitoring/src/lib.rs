@@ -90,7 +90,7 @@ pub use sessions::{
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
 pub use streamer_login::{
-    rename_streamer_login, RenameCounts, RenameReport, StreamerLoginStore,
+    rename_streamer_login, RenameCounts, RenameReport, RenameTableCounts, StreamerLoginStore,
 };
 pub use subscriptions::{
     eventsub_webhook_capacity_values, BroadcasterEventSubTokenProvider, CapacitySnapshotStore,
