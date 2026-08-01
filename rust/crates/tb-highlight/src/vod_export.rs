@@ -66,11 +66,29 @@ pub fn export_log_description(
                 elapsed = format_duration(elapsed_seconds),
             )
         }
+        // Ein fehlgeschlagener yt-dlp-Lauf ueber ein mehrstuendiges VOD kann
+        // zehntausende Zeichen stderr liefern. Ungekuerzt lehnt Discord das
+        // Embed ab (description-Limit) — der Log-Channel schwiege dann
+        // ausgerechnet im lautesten Fehlerfall.
         Err(error) => format!(
-            "Kanal: {TARGET_LOGIN}\nGrund: {error}\nAbbruch nach: {elapsed}",
+            "Kanal: {TARGET_LOGIN}\nGrund: {grund}\nAbbruch nach: {elapsed}",
+            grund = truncate_chars(&error.to_string(), MAX_REASON_CHARS),
             elapsed = format_duration(elapsed_seconds),
         ),
     }
+}
+
+/// Obergrenze fuer den Fehlergrund im Embed. Deutlich unter Discords
+/// description-Limit (4096), damit Rahmenzeilen und Mehrbyte-Zeichen nicht
+/// darueber hinauslaufen.
+const MAX_REASON_CHARS: usize = 1500;
+
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let gekuerzt: String = text.chars().take(limit).collect();
+    format!("{gekuerzt}… [gekuerzt]")
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -230,7 +248,9 @@ pub async fn export_latest_vod(
 
     // Groesse vor dem Upload messen — danach ist die lokale Datei geloescht und
     // die Kennzahl fuer den Log-Channel waere nicht mehr zu bekommen.
-    let size_bytes = std::fs::metadata(&local_path).map(|meta| meta.len()).unwrap_or(0);
+    let size_bytes = std::fs::metadata(&local_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
 
     let upload_result = run_checked(
         runner,
@@ -390,7 +410,10 @@ mod tests {
     fn erfolgs_log_meldet_auch_fehlgeschlagene_dm() {
         let text = export_log_description(&Ok(beispiel_report()), 780, false);
 
-        assert!(text.contains("DM fehlgeschlagen"), "DM-Status fehlt: {text}");
+        assert!(
+            text.contains("DM fehlgeschlagen"),
+            "DM-Status fehlt: {text}"
+        );
     }
 
     #[test]
@@ -414,6 +437,42 @@ mod tests {
             );
             assert!(text.contains("42s"), "Laufzeit fehlt im Log: {text}");
         }
+    }
+
+    #[test]
+    fn langer_subprozess_stderr_wird_gekuerzt() {
+        // yt-dlp haengt bei einem mehrstuendigen VOD pro Fragment-Retry eine
+        // Zeile an — 20k Zeichen sind realistisch, Discord nimmt aber nur
+        // 4096 Zeichen Description. Ungekuerzt bliebe der Log-Channel im
+        // Fehlerfall stumm.
+        let stderr = "ERROR: fragment 1 retry\n".repeat(1000);
+        assert!(stderr.chars().count() > 20_000);
+
+        let text = export_log_description(
+            &Err(VodExportError::CommandFailed {
+                program: "/opt/yt-dlp".to_string(),
+                stderr,
+            }),
+            42,
+            false,
+        );
+
+        assert!(
+            text.chars().count() < 4096,
+            "Description ueber Discord-Limit: {} Zeichen",
+            text.chars().count()
+        );
+        assert!(text.contains("[gekuerzt]"), "Kuerzungsmarke fehlt: {text}");
+        assert!(text.contains("/opt/yt-dlp"), "Programm fehlt: {text}");
+        assert!(text.contains("42s"), "Laufzeit fehlt: {text}");
+    }
+
+    #[test]
+    fn kurzer_grund_bleibt_unveraendert() {
+        assert_eq!(truncate_chars("kurz", 1500), "kurz");
+        // Mehrbyte-Zeichen zaehlen als ein Zeichen, nicht als Bytes — sonst
+        // schnitte die Kuerzung mitten in ein UTF-8-Zeichen.
+        assert_eq!(truncate_chars("äöü", 2), "äö… [gekuerzt]");
     }
 
     #[test]
