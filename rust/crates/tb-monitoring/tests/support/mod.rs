@@ -52,6 +52,32 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         .expect("connect");
 
     for ddl in [
+        // Betriebstabellen, die der Rename per stabiler ID mitzieht.
+        "CREATE TABLE twitch_engagement_log (
+            id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, channel_user_id TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW())",
+        "CREATE TABLE twitch_engagement_stream_transcripts (
+            id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, channel_user_id TEXT)",
+        "CREATE TABLE twitch_outreach_shadow_events (
+            id BIGSERIAL PRIMARY KEY, cycle_id TEXT UNIQUE, channel_login TEXT NOT NULL,
+            channel_user_id TEXT)",
+        "CREATE TABLE twitch_scam_guard_settings (
+            channel_login TEXT PRIMARY KEY, channel_user_id TEXT, enabled BOOLEAN DEFAULT FALSE)",
+        "CREATE TABLE twitch_smalltalk_messages (
+            id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, channel_user_id TEXT,
+            session_id BIGINT, triggered_by_msg_id TEXT)",
+        "CREATE TABLE twitch_channel_match_state (
+            channel_login TEXT PRIMARY KEY, channel_user_id TEXT)",
+        "CREATE TABLE twitch_chat_word_groups (
+            id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, twitch_user_id TEXT)",
+        "CREATE TABLE twitch_scout_pitch_blacklist (
+            streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
+        "CREATE TABLE twitch_scout_pitch_ledger (
+            id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, twitch_user_id TEXT)",
+        "CREATE TABLE twitch_promo_cooldowns (
+            login TEXT NOT NULL, cooldown_type TEXT NOT NULL, twitch_user_id TEXT,
+            PRIMARY KEY (login, cooldown_type))",
+
         "CREATE TABLE twitch_live_state (
             twitch_user_id TEXT PRIMARY KEY,
             streamer_login TEXT NOT NULL,
@@ -318,6 +344,9 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             listeners_at_limit INTEGER, utilization_pct DOUBLE PRECISION,
             listeners_json TEXT
         )",
+        "ALTER TABLE twitch_engagement_settings ADD COLUMN IF NOT EXISTS channel_user_id TEXT",
+        "ALTER TABLE twitch_engagement_channel_profile ADD COLUMN IF NOT EXISTS channel_user_id TEXT",
+        "ALTER TABLE twitch_live_announcement_configs ADD COLUMN IF NOT EXISTS twitch_user_id TEXT",
     ] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
     }

@@ -141,27 +141,48 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
     .fetch_all(&pool)
     .await
     .unwrap();
+    // Unsere Einstellungen (enabled=false) folgen dem Kanal; die verwaiste
+    // Fremdzeile bleibt inhaltlich erhalten, gibt aber den Login frei.
     assert_eq!(
         settings,
         vec![
-            ("new_login".to_string(), true),
-            ("old_login".to_string(), false),
+            ("new_login".to_string(), false),
+            ("stale:unbekannt:new_login".to_string(), true),
         ]
     );
 
-    let old_login_keyed_rows: (String, String, String) = sqlx::query_as(
-        "SELECT profile.profile_text, invites.invite_code, health.last_raw_chat_error
-           FROM twitch_engagement_channel_profile profile
-           JOIN twitch_streamer_invites invites ON invites.streamer_login = profile.channel_login
-           JOIN twitch_raw_chat_ingest_health health ON health.streamer_login = profile.channel_login
-          WHERE profile.channel_login = 'old_login'",
+    // Tabellen ohne ID-Spalte finden den Kanal nur über den Namen — bei
+    // besetztem neuen Login bleibt ihre Zeile deshalb stehen.
+    let ohne_id_spalte: (String, String) = sqlx::query_as(
+        "SELECT invites.invite_code, health.last_raw_chat_error
+           FROM twitch_streamer_invites invites
+           JOIN twitch_raw_chat_ingest_health health
+             ON health.streamer_login = invites.streamer_login
+          WHERE invites.streamer_login = 'old_login'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(
-        old_login_keyed_rows,
-        ("alt".to_string(), "old-code".to_string(), "alt".to_string())
+        ohne_id_spalte,
+        ("old-code".to_string(), "alt".to_string())
+    );
+
+    // Das Kanal-Profil trägt eine ID und folgt dem Kanal; die verwaiste
+    // Fremdzeile behält ihren Inhalt unter einem Platzhalter-Login.
+    let profile: Vec<(String, String)> = sqlx::query_as(
+        "SELECT channel_login, profile_text
+           FROM twitch_engagement_channel_profile ORDER BY channel_login",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        profile,
+        vec![
+            ("new_login".to_string(), "alt".to_string()),
+            ("stale:unbekannt:new_login".to_string(), "neu gewinnt".to_string()),
+        ]
     );
 
     let preserved: (String, f64, String, String, bool, String) = sqlx::query_as(
@@ -189,6 +210,9 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
             "520300019".to_string(),
         )
     );
+    // Unter dem neuen Login stehen jetzt: die aktive Partnerzeile dieses
+    // Kanals und die login-gebundenen Zeilen, die dort schon lagen. Das Profil
+    // kommt aus der ID-Zuordnung und trägt deshalb unseren Inhalt.
     let winning_rows: (i32, String, String, String) = sqlx::query_as(
         "SELECT partners.raid_bot_enabled, profile.profile_text,
                 invites.invite_code, health.last_raw_chat_error
@@ -206,7 +230,7 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         winning_rows,
         (
             1,
-            "neu gewinnt".to_string(),
+            "alt".to_string(),
             "new-code".to_string(),
             "neu gewinnt".to_string(),
         )
@@ -231,8 +255,8 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
     let pool = pool_or_skip!("t_rename_login_keyed_conflict");
     seed_operational_login_rows(&pool).await;
     sqlx::query(
-        "INSERT INTO twitch_engagement_settings (channel_login, enabled)
-         VALUES ('new_login', TRUE)",
+        "INSERT INTO twitch_streamer_invites (streamer_login, invite_code, invite_url)
+         VALUES ('new_login', 'new-code', 'https://example.invalid/new')",
     )
     .execute(&pool)
     .await
@@ -247,10 +271,10 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
     .await;
     let report = report.unwrap();
 
-    let rows: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT channel_login, enabled
-           FROM twitch_engagement_settings
-          ORDER BY channel_login",
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT streamer_login, invite_code
+           FROM twitch_streamer_invites
+          ORDER BY streamer_login",
     )
     .fetch_all(&pool)
     .await
@@ -261,17 +285,17 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
             rows,
             warnings.len(),
             warnings.first().is_some_and(|line| {
-                line.contains("table=twitch_engagement_settings")
+                line.contains("table=twitch_streamer_invites")
                     && line.contains("twitch_user_id=520300019")
                     && line.contains("old_login=old_login")
                     && line.contains("new_login=new_login")
             }),
-            report.counts.twitch_engagement_settings,
+            report.counts.for_table("twitch_streamer_invites"),
         ),
         (
             vec![
-                ("new_login".to_string(), true),
-                ("old_login".to_string(), false),
+                ("new_login".to_string(), "new-code".to_string()),
+                ("old_login".to_string(), "old-code".to_string()),
             ],
             1,
             true,
@@ -368,8 +392,8 @@ async fn rename_behaelt_eigene_zeile_und_raeumt_veraltete_fremdzeile() {
         (
             eigener_login.as_str(),
             fremder_login.as_str(),
-            report.counts.twitch_streamers.clone(),
-            report.counts.twitch_engagement_settings.clone(),
+            report.counts.for_table("twitch_streamers"),
+            report.counts.for_table("twitch_engagement_settings"),
             logs.lines().any(|line| {
                 line.contains("table=twitch_streamers")
                     && line.contains("renamed=1")
@@ -378,9 +402,9 @@ async fn rename_behaelt_eigene_zeile_und_raeumt_veraltete_fremdzeile() {
             }),
             logs.lines().any(|line| {
                 line.contains("table=twitch_engagement_settings")
-                    && line.contains("renamed=0")
-                    && line.contains("stale_cleared=0")
-                    && line.contains("skipped=1")
+                    && line.contains("renamed=1")
+                    && line.contains("stale_cleared=1")
+                    && line.contains("skipped=0")
             }),
         ),
         (
@@ -392,9 +416,9 @@ async fn rename_behaelt_eigene_zeile_und_raeumt_veraltete_fremdzeile() {
                 skipped: 0,
             },
             tb_monitoring::RenameTableCounts {
-                renamed: 0,
-                stale_cleared: 0,
-                skipped: 1,
+                renamed: 1,
+                stale_cleared: 1,
+                skipped: 0,
             },
             true,
             true,
