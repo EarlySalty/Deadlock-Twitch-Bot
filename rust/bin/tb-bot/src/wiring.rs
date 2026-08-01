@@ -153,6 +153,18 @@ fn to_snapshot(stream: HelixStream) -> StreamSnapshot {
 
 #[async_trait::async_trait]
 impl StreamSource for HelixStreamSource {
+    async fn streams_by_user_ids(
+        &self,
+        user_ids: &[String],
+        language: Option<&str>,
+    ) -> Result<Vec<StreamSnapshot>, SourceError> {
+        let streams = self
+            .helix
+            .get_streams_by_user_ids(user_ids, language)
+            .await?;
+        Ok(streams.into_iter().map(to_snapshot).collect())
+    }
+
     async fn streams_by_logins(
         &self,
         logins: &[String],

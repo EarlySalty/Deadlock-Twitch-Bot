@@ -148,7 +148,8 @@ mod tests {
         let dispatcher = Arc::new(EventSubDispatcher::new(
             GuardStore::new(pool.clone()),
             runtime.enqueuer(),
-            TelemetryStore::new(pool),
+            TelemetryStore::new(pool.clone()),
+            tb_monitoring::StreamerLoginStore::new(pool),
             Arc::new(NoopEventSubHooks),
             Arc::new(epoch_clock),
         ));

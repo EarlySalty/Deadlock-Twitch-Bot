@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use crate::guard::{GuardKind, GuardStore};
 use crate::inbox_runtime::{ClockFn, InboxEnqueuer};
+use crate::streamer_login::StreamerLoginStore;
 use crate::telemetry::{HypeTrainPhase, ShoutoutDirection, TelemetryStore};
 
 /// Message-Dedup-TTL (Python `_MAX_MESSAGE_AGE_SECONDS`).
@@ -599,6 +600,7 @@ pub struct EventSubDispatcher {
     guard: GuardStore,
     enqueuer: InboxEnqueuer,
     telemetry: TelemetryStore,
+    streamer_logins: StreamerLoginStore,
     hooks: Arc<dyn EventSubHooks>,
     clock: ClockFn,
     /// Notification-Dispatch-Schalter (Python `_notification_dispatch_active`).
@@ -614,6 +616,7 @@ impl EventSubDispatcher {
         guard: GuardStore,
         enqueuer: InboxEnqueuer,
         telemetry: TelemetryStore,
+        streamer_logins: StreamerLoginStore,
         hooks: Arc<dyn EventSubHooks>,
         clock: ClockFn,
     ) -> Self {
@@ -621,6 +624,7 @@ impl EventSubDispatcher {
             guard,
             enqueuer,
             telemetry,
+            streamer_logins,
             hooks,
             clock,
             dispatch_active: AtomicBool::new(true),
@@ -745,6 +749,12 @@ impl EventSubDispatcher {
         context: &NotificationContext,
     ) -> Result<DispatchOutcome, sqlx::Error> {
         let mut outcome = DispatchOutcome::new(sub_type);
+
+        if !context.broadcaster_id.is_empty() && !context.broadcaster_login.is_empty() {
+            self.streamer_logins
+                .reconcile(&context.broadcaster_id, &context.broadcaster_login)
+                .await?;
+        }
 
         if CORE_DELIVERY_TYPES.contains(&sub_type) {
             if context.broadcaster_id.trim().is_empty() {

@@ -1274,6 +1274,7 @@ async fn main() {
         guard.clone(),
         inbox.enqueuer(),
         telemetry,
+        tb_monitoring::StreamerLoginStore::new(pool.clone()),
         eventsub_hooks,
         Arc::new(tb_monitoring::epoch_clock),
     ));
@@ -1629,6 +1630,7 @@ async fn main() {
                     sink,
                     poll_hooks,
                     PollIntervalStore::new(pool.clone()),
+                    tb_monitoring::StreamerLoginStore::new(pool.clone()),
                     PollConfig {
                         target_game,
                         language_filters,

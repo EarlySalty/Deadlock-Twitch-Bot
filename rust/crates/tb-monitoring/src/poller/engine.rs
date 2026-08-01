@@ -27,6 +27,7 @@ use crate::poller::tracked::{TrackedEntry, TrackedStore};
 use crate::sessions::{SessionStore, SessionTracker};
 use crate::stats::{StatsSample, StatsStore};
 use crate::stream::{extract_stream_start, iso_seconds, StreamSnapshot};
+use crate::streamer_login::StreamerLoginStore;
 
 /// Alle wievielten Tick Orphan-Cleanup + Guard-Sweep laufen.
 const CLEANUP_EVERY_N_TICKS: u64 = 10;
@@ -81,6 +82,7 @@ pub struct PollEngine {
     sink: Arc<dyn AnnouncementSink>,
     hooks: Arc<dyn PollHooks>,
     interval: PollIntervalStore,
+    streamer_logins: StreamerLoginStore,
     config: PollConfig,
     target_game_lower: String,
     languages: Vec<Option<String>>,
@@ -100,6 +102,7 @@ impl PollEngine {
         sink: Arc<dyn AnnouncementSink>,
         hooks: Arc<dyn PollHooks>,
         interval: PollIntervalStore,
+        streamer_logins: StreamerLoginStore,
         config: PollConfig,
     ) -> Self {
         let target_game_lower = config.target_game.trim().to_lowercase();
@@ -127,6 +130,7 @@ impl PollEngine {
             sink,
             hooks,
             interval,
+            streamer_logins,
             config,
             target_game_lower,
             languages,
@@ -259,7 +263,7 @@ impl PollEngine {
 
         let category_id = self.ensure_category_id().await;
 
-        let (tracked, partner_logins) = match self.tracked.load().await {
+        let (mut tracked, partner_logins) = match self.tracked.load().await {
             Ok(loaded) => loaded,
             Err(error) => {
                 tracing::error!(%error, "Konnte tracked Streamer nicht aus DB lesen");
@@ -267,33 +271,101 @@ impl PollEngine {
             }
         };
 
-        let logins: Vec<String> = tracked
+        let user_ids: Vec<String> = tracked
             .iter()
-            .map(|e| e.login.clone())
-            .filter(|l| !l.is_empty())
+            .filter_map(|entry| entry.twitch_user_id.clone())
+            .filter(|user_id| !user_id.trim().is_empty())
+            .collect();
+        let fallback_logins: Vec<String> = tracked
+            .iter()
+            .filter(|entry| {
+                entry
+                    .twitch_user_id
+                    .as_deref()
+                    .is_none_or(|user_id| user_id.trim().is_empty())
+            })
+            .map(|entry| entry.login.clone())
+            .filter(|login| !login.is_empty())
             .collect();
 
-        // Streams der getrackten Logins — bewusst OHNE Sprachfilter: die Liste
+        // Streams der getrackten IDs — bewusst OHNE Sprachfilter: die Liste
         // ist kuratiert, Partner mit nicht-deutscher Kanal-Sprache fielen sonst
         // komplett aus Sessions/last_game/Postings raus. Der Sprachfilter gilt
         // nur fürs Kategorie-Sampling (Discovery) unten.
         let mut streams_by_login: HashMap<String, StreamSnapshot> = HashMap::new();
         let mut tracked_streams_loaded = true;
-        if !logins.is_empty() {
-            match self.source.streams_by_logins(&logins, None).await {
-                Ok(streams) => {
-                    for stream in streams {
-                        let login = stream.user_login.to_lowercase();
-                        if !login.is_empty() {
-                            streams_by_login.insert(login, stream);
-                        }
-                    }
-                }
+        let mut tracked_streams = Vec::new();
+        if !user_ids.is_empty() {
+            match self.source.streams_by_user_ids(&user_ids, None).await {
+                Ok(mut streams) => tracked_streams.append(&mut streams),
                 Err(error) => {
                     tracked_streams_loaded = false;
-                    tracing::error!(%error, "Konnte Streams für tracked Logins nicht abrufen");
+                    tracing::error!(%error, "Konnte Streams für tracked User-IDs nicht abrufen");
                 }
             }
+        }
+        if !fallback_logins.is_empty() {
+            match self.source.streams_by_logins(&fallback_logins, None).await {
+                Ok(mut streams) => tracked_streams.append(&mut streams),
+                Err(error) => {
+                    tracked_streams_loaded = false;
+                    tracing::error!(%error, "Konnte Streams für tracked Logins ohne User-ID nicht abrufen");
+                }
+            }
+        }
+        // Kanäle, deren Rename in diesem Tick fehlschlug: ihr DB-Login ist
+        // veraltet, ein Abgleich gegen die Streamliste würde sie fälschlich für
+        // offline halten. Sie fallen einzeln aus dem Tick — die übrigen Kanäle
+        // laufen normal weiter, sonst legt ein einziger kaputter Kanal die
+        // Offline-Transitions der ganzen Flotte still.
+        let mut rename_failed_user_ids: HashSet<String> = HashSet::new();
+        for stream in tracked_streams {
+            let login = stream.user_login.to_lowercase();
+            if !login.is_empty() {
+                if let Some(entry) = tracked.iter_mut().find(|entry| {
+                    entry
+                        .twitch_user_id
+                        .as_deref()
+                        .is_some_and(|id| id == stream.user_id.trim())
+                }) {
+                    if !entry.login.eq_ignore_ascii_case(&login) {
+                        match self
+                            .streamer_logins
+                            .reconcile(&stream.user_id, &login)
+                            .await
+                        {
+                            Ok(_) => entry.login.clone_from(&login),
+                            Err(error) => {
+                                rename_failed_user_ids.insert(stream.user_id.trim().to_string());
+                                tracing::warn!(
+                                    %error,
+                                    twitch_user_id = %stream.user_id,
+                                    old_login = %entry.login,
+                                    new_login = %login,
+                                    "Poller-Rename fehlgeschlagen; dieser Kanal wird für diesen Durchlauf übersprungen"
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            twitch_user_id = %stream.user_id,
+                            old_login = %entry.login,
+                            new_login = %login,
+                            "Poller-Rename-Prüfung: Login unverändert"
+                        );
+                    }
+                }
+                streams_by_login.insert(login, stream);
+            }
+        }
+        if !rename_failed_user_ids.is_empty() {
+            tracked.retain(|entry| {
+                !entry
+                    .twitch_user_id
+                    .as_deref()
+                    .is_some_and(|id| rename_failed_user_ids.contains(id))
+            });
         }
 
         // Kategorie-Sample (Discovery), dedupliziert über Sprachfilter.
@@ -1038,6 +1110,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StreamSource for BlockableSource {
+        async fn streams_by_user_ids(
+            &self,
+            _user_ids: &[String],
+            _language: Option<&str>,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            self.helix_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+
         async fn streams_by_logins(
             &self,
             _logins: &[String],
@@ -1071,6 +1152,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StreamSource for FailingTrackedSource {
+        async fn streams_by_user_ids(
+            &self,
+            _user_ids: &[String],
+            _language: Option<&str>,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            Err(Box::new(std::io::Error::other("tracked streams failed")))
+        }
+
         async fn streams_by_logins(
             &self,
             _logins: &[String],
@@ -1168,6 +1257,7 @@ mod tests {
             sink,
             Arc::new(NoopPollHooks),
             PollIntervalStore::new(pool.clone()),
+            StreamerLoginStore::new(pool.clone()),
             PollConfig::default(),
         )
     }

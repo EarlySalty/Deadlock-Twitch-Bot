@@ -15,7 +15,7 @@ use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
     ExpSessionStore, ExpSessionTracker, GuardKind, GuardStore, LiveStateStore, NoFollowerSource,
     PollConfig, PollEngine, PollIntervalStore, SessionTracker, StatsStore, StreamSnapshot,
-    StreamSource, TelemetryStore, TrackedStore,
+    StreamSource, StreamerLoginStore, TelemetryStore, TrackedStore,
 };
 
 mod support;
@@ -55,15 +55,44 @@ impl StubSource {
 
 #[async_trait::async_trait]
 impl StreamSource for StubSource {
-    async fn streams_by_logins(
+    async fn streams_by_user_ids(
         &self,
-        _logins: &[String],
+        user_ids: &[String],
         _language: Option<&str>,
     ) -> Result<Vec<StreamSnapshot>, tb_monitoring::poller::SourceError> {
         if self.fail_streams.load(Ordering::SeqCst) {
             return Err("stream api down".into());
         }
-        Ok(self.streams.lock().unwrap().clone())
+        Ok(self
+            .streams
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|stream| user_ids.iter().any(|user_id| user_id == &stream.user_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn streams_by_logins(
+        &self,
+        logins: &[String],
+        _language: Option<&str>,
+    ) -> Result<Vec<StreamSnapshot>, tb_monitoring::poller::SourceError> {
+        if self.fail_streams.load(Ordering::SeqCst) {
+            return Err("stream api down".into());
+        }
+        Ok(self
+            .streams
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|stream| {
+                logins
+                    .iter()
+                    .any(|login| login.eq_ignore_ascii_case(&stream.user_login))
+            })
+            .cloned()
+            .collect())
     }
     async fn streams_by_category(
         &self,
@@ -214,6 +243,7 @@ fn engine_with_sink(
         sink,
         hooks,
         PollIntervalStore::new(pool.clone()),
+        StreamerLoginStore::new(pool.clone()),
         PollConfig::default(),
     )
 }
@@ -275,7 +305,7 @@ fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> Str
     StreamSnapshot {
         id: Some(stream_id.to_string()),
         user_login: login.to_string(),
-        user_id: "0".to_string(),
+        user_id: user_id.to_string(),
         user_name: login.to_uppercase(),
         title: "Ranked".to_string(),
         game_name: "Deadlock".to_string(),
@@ -287,6 +317,112 @@ fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> Str
         thumbnail_url: None,
         profile_image_url: None,
     }
+}
+
+#[tokio::test]
+async fn tick_ordnen_rename_snapshot_per_user_id_zu_und_schreibt_live_state() {
+    let pool = pool_or_skip!("t4c_login_rename_by_user_id");
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner)
+         VALUES ('old_login', '520300019', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
+         VALUES ('520300019', 'old_login', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('old_login', '520300019')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let engine = engine_with(&pool, source.clone(), Arc::new(RecordingHooks::new()));
+    source.set_streams(vec![live_stream(
+        "new_login",
+        "520300019",
+        "stream-rename",
+        42,
+    )]);
+
+    engine.tick().await;
+
+    let state: (String, Option<i32>, Option<String>) = sqlx::query_as(
+        "SELECT streamer_login, is_live, last_game
+           FROM twitch_live_state WHERE twitch_user_id = '520300019'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        state,
+        ("new_login".to_string(), Some(1), Some("Deadlock".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn tick_verarbeitet_andere_kanaele_trotz_fehlgeschlagenem_rename() {
+    let pool = pool_or_skip!("t4c_rename_fehler_isoliert");
+    // Kanal A: benennt sich um, der Rename scheitert deterministisch.
+    // Kanal B: ganz normaler Kanal, der im selben Tick live geht.
+    for statement in [
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner)
+         VALUES ('old_login', '520300019', 1, 1)",
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
+         VALUES ('520300019', 'old_login', 'active')",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('old_login', '520300019')",
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner)
+         VALUES ('drag', '42', 1, 1)",
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
+         VALUES ('42', 'drag', 'active')",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('drag', '42')",
+        // Veraltete Fremdzeile blockiert den neuen Login …
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('new_login', '999')",
+        // … und der Platzhalter, auf den sie ausweichen würde, ist ebenfalls belegt.
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('stale:999:new_login', '998')",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    let source = Arc::new(StubSource::new());
+    let engine = engine_with(&pool, source.clone(), Arc::new(RecordingHooks::new()));
+    source.set_streams(vec![
+        live_stream("new_login", "520300019", "stream-rename", 42),
+        live_stream("drag", "42", "stream-drag", 7),
+    ]);
+
+    engine.tick().await;
+
+    // Der gescheiterte Rename darf den anderen Kanal nicht mitreißen.
+    let drag_live: Option<i32> =
+        sqlx::query_scalar("SELECT is_live FROM twitch_live_state WHERE twitch_user_id = '42'")
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+            .flatten();
+    // Kanal A bleibt unangetastet, statt fälschlich als offline zu gelten.
+    let a_login: String =
+        sqlx::query_scalar("SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '520300019'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!((drag_live, a_login.as_str()), (Some(1), "old_login"));
 }
 
 #[tokio::test]

@@ -94,6 +94,7 @@ pub struct MonitoringEventHandler {
 }
 
 impl MonitoringEventHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         guard: GuardStore,
         live_state: LiveStateStore,

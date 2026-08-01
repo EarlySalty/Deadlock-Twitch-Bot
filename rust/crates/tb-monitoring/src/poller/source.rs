@@ -7,7 +7,15 @@ pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
 
 #[async_trait::async_trait]
 pub trait StreamSource: Send + Sync {
+    /// Live-Streams für die gegebenen stabilen Twitch-User-IDs.
+    async fn streams_by_user_ids(
+        &self,
+        user_ids: &[String],
+        language: Option<&str>,
+    ) -> Result<Vec<StreamSnapshot>, SourceError>;
+
     /// Live-Streams für die gegebenen Logins (Helix `/streams`, gebatcht).
+    /// Nur als Fallback für getrackte Datensätze ohne Twitch-User-ID.
     async fn streams_by_logins(
         &self,
         logins: &[String],
