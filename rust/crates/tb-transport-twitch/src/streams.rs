@@ -111,17 +111,40 @@ struct ChannelsResponse {
 const CATEGORY_HARD_CAP: usize = 1200;
 
 impl HelixClient {
+    /// Live-Streams für die gegebenen stabilen Twitch-User-IDs (gebatcht à 100).
+    pub async fn get_streams_by_user_ids(
+        &self,
+        user_ids: &[String],
+        language: Option<&str>,
+    ) -> Result<Vec<HelixStream>, HelixError> {
+        self.get_streams_by_filter("user_id", user_ids, language)
+            .await
+    }
+
     /// Live-Streams für die gegebenen Logins (gebatcht à 100, wie Python).
     pub async fn get_streams_by_logins(
         &self,
         logins: &[String],
         language: Option<&str>,
     ) -> Result<Vec<HelixStream>, HelixError> {
+        self.get_streams_by_filter("user_login", logins, language)
+            .await
+    }
+
+    async fn get_streams_by_filter(
+        &self,
+        filter: &'static str,
+        values: &[String],
+        language: Option<&str>,
+    ) -> Result<Vec<HelixStream>, HelixError> {
         let mut out = Vec::new();
-        let clean: Vec<&String> = logins.iter().filter(|l| !l.trim().is_empty()).collect();
+        let clean: Vec<&String> = values
+            .iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect();
         for chunk in clean.chunks(100) {
             let mut params: Vec<(&str, &str)> =
-                chunk.iter().map(|l| ("user_login", l.as_str())).collect();
+                chunk.iter().map(|value| (filter, value.as_str())).collect();
             if let Some(language) = language {
                 params.push(("language", language));
             }
@@ -613,6 +636,34 @@ mod tests {
         assert_eq!(streams[0].user_login, "drag");
         assert_eq!(streams[0].viewer_count, 12);
         assert_eq!(streams[0].tags.as_deref(), Some(&["DE".to_string()][..]));
+    }
+
+    #[tokio::test]
+    async fn streams_by_user_ids_verwendet_stabile_helix_identitaet() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "520300019"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "991", "user_id": "520300019", "user_login": "coolysdl",
+                    "user_name": "Coolys", "game_name": "Deadlock",
+                    "viewer_count": 12, "started_at": "2026-08-01T18:00:00Z"
+                }],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let streams = client
+            .get_streams_by_user_ids(&["520300019".to_string()], None)
+            .await
+            .unwrap();
+
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].user_login, "coolysdl");
     }
 
     #[tokio::test]

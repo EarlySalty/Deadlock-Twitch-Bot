@@ -38,6 +38,7 @@ pub mod scout;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
+pub mod streamer_login;
 pub mod subscriptions;
 pub mod telemetry;
 pub mod webhook_receiver;
@@ -88,6 +89,9 @@ pub use sessions::{
 };
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
+pub use streamer_login::{
+    rename_streamer_login, RenameCounts, RenameReport, StreamerLoginStore,
+};
 pub use subscriptions::{
     eventsub_webhook_capacity_values, BroadcasterEventSubTokenProvider, CapacitySnapshotStore,
     EventSubCapacityValues, EventSubUserToken, ModeratorProvisionOutcome, ModeratorProvisioner,

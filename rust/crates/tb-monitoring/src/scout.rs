@@ -38,6 +38,7 @@ use tb_transport_twitch::{HelixClient, HelixStream};
 
 use crate::sessions::SessionTracker;
 use crate::stream::StreamSnapshot;
+use crate::streamer_login::rename_streamer_login;
 
 // ── Konstanten ─────────────────────────────────────────────────────────────────
 
@@ -140,26 +141,37 @@ impl ScoutRepository {
     /// Trägt einen neuen Monitoring-only-Streamer ein. Gibt `true` zurück wenn
     /// er tatsächlich neu war (nicht nur ein Konflikt-Update).
     pub async fn upsert_monitored(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
-        let existing: Option<i32> = sqlx::query_scalar!(
-            "SELECT 1 AS \"one!\" FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
-            login,
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
         )
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        if existing.is_some() {
+        if let Some(old_login) = existing {
+            if !old_login.eq_ignore_ascii_case(login) {
+                rename_streamer_login(&self.pool, user_id, &old_login, login).await?;
+            } else {
+                tracing::debug!(
+                    twitch_user_id = %user_id,
+                    old_login = %old_login,
+                    new_login = %login,
+                    "Scout-Rename-Prüfung: Login unverändert"
+                );
+            }
             return Ok(false);
         }
 
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
             VALUES ($1, $2)
-            ON CONFLICT (twitch_login) DO NOTHING
+            ON CONFLICT (twitch_user_id) DO UPDATE
+            SET twitch_login = EXCLUDED.twitch_login
             "#,
-            login,
-            user_id,
         )
+        .bind(login)
+        .bind(user_id)
         .execute(&self.pool)
         .await?;
 

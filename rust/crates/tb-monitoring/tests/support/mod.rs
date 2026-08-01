@@ -147,10 +147,11 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             twitch_login TEXT PRIMARY KEY,
             twitch_user_id TEXT
         )",
+        "CREATE UNIQUE INDEX idx_twitch_streamers_user_id ON twitch_streamers(twitch_user_id)",
         // Discord-Identitäts-Join der Tracking-Query (poller/tracked.rs) — muss
         // im Fixture existieren, sonst schlägt der LEFT JOIN mit 42P01 fehl.
         "CREATE TABLE twitch_streamer_identities (
-            twitch_user_id TEXT NOT NULL,
+            twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT NOT NULL,
             discord_user_id TEXT,
             discord_display_name TEXT,
@@ -158,6 +159,8 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE UNIQUE INDEX idx_twitch_streamer_identities_login_lower
+            ON twitch_streamer_identities(LOWER(twitch_login))",
         "CREATE TABLE twitch_exclusions (
             twitch_user_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL CHECK (kind IN ('opt_out', 'banned')),
@@ -170,6 +173,32 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login   TEXT,
             needs_reauth   BOOLEAN NOT NULL DEFAULT FALSE
+        )",
+        "CREATE UNIQUE INDEX idx_twitch_raid_auth_login
+            ON twitch_raid_auth(LOWER(twitch_login))",
+        "CREATE TABLE twitch_partner_raid_scores (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login TEXT NOT NULL,
+            final_score DOUBLE PRECISION NOT NULL DEFAULT 0.5
+        )",
+        "CREATE TABLE twitch_engagement_settings (
+            channel_login TEXT PRIMARY KEY,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE
+        )",
+        "CREATE TABLE twitch_engagement_channel_profile (
+            channel_login TEXT PRIMARY KEY,
+            profile_text TEXT NOT NULL,
+            msg_count INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE twitch_streamer_invites (
+            streamer_login TEXT PRIMARY KEY,
+            invite_code TEXT NOT NULL UNIQUE,
+            invite_url TEXT NOT NULL
+        )",
+        "CREATE TABLE twitch_raw_chat_ingest_health (
+            streamer_login TEXT PRIMARY KEY,
+            last_raw_chat_error TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
         "CREATE TABLE twitch_global_settings (
             setting_key TEXT PRIMARY KEY,

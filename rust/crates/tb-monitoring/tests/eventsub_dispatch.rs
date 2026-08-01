@@ -15,7 +15,7 @@ use tb_monitoring::{
     epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
     ExpSessionTracker, GuardKind, GuardStore, HandlerError, HypeTrainPhase, InboxHandler,
     InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
-    ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
+    ProcessingInboxStore, SessionTracker, StreamerLoginStore, StreamSnapshot, TelemetryStore,
 };
 
 mod support;
@@ -140,6 +140,7 @@ fn build_stack_with(
         live_state,
         tracker,
         telemetry.clone(),
+        StreamerLoginStore::new(pool.clone()),
         hooks.clone(),
         channel_info,
         Arc::new(epoch_clock),
@@ -150,6 +151,7 @@ fn build_stack_with(
         guard,
         runtime.enqueuer(),
         telemetry,
+        StreamerLoginStore::new(pool.clone()),
         hooks,
         Arc::new(epoch_clock),
     );
@@ -317,6 +319,44 @@ async fn stream_online_dispatch_dedup_und_verarbeitung() {
     );
     assert_eq!(hooks.went_live.load(Ordering::SeqCst), 1);
     assert_eq!(hooks.score_refresh.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn eventsub_dispatch_erkennt_rename_vor_den_folgeeffekten() {
+    let pool = pool_or_skip!("t4d_eventsub_login_rename");
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('old_login', '520300019')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks);
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "520300019",
+            "broadcaster_user_login": "new_login",
+            "id": "stream-rename",
+            "started_at": "2026-08-01T10:00:00Z"
+        }
+    });
+
+    dispatcher
+        .dispatch("stream.online", Some("rename-event-1"), &body)
+        .await
+        .unwrap();
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    let login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '520300019'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(login, "new_login");
 }
 
 #[tokio::test]
@@ -999,7 +1039,8 @@ async fn monitoring_handler_gibt_unknown_work_type_als_fehler_zurueck() {
         guard,
         live_state,
         tracker,
-        TelemetryStore::new(pool),
+        TelemetryStore::new(pool.clone()),
+        StreamerLoginStore::new(pool),
         Arc::new(RecordingHooks::default()),
         None,
         Arc::new(epoch_clock),
@@ -1031,7 +1072,8 @@ async fn monitoring_handler_verarbeitet_stream_online_followups_work_type() {
         guard,
         live_state,
         tracker,
-        TelemetryStore::new(pool),
+        TelemetryStore::new(pool.clone()),
+        StreamerLoginStore::new(pool),
         hooks.clone(),
         None,
         Arc::new(epoch_clock),
