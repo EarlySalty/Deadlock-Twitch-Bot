@@ -313,6 +313,12 @@ impl PollEngine {
                 }
             }
         }
+        // Kanäle, deren Rename in diesem Tick fehlschlug: ihr DB-Login ist
+        // veraltet, ein Abgleich gegen die Streamliste würde sie fälschlich für
+        // offline halten. Sie fallen einzeln aus dem Tick — die übrigen Kanäle
+        // laufen normal weiter, sonst legt ein einziger kaputter Kanal die
+        // Offline-Transitions der ganzen Flotte still.
+        let mut rename_failed_user_ids: HashSet<String> = HashSet::new();
         for stream in tracked_streams {
             let login = stream.user_login.to_lowercase();
             if !login.is_empty() {
@@ -330,14 +336,15 @@ impl PollEngine {
                         {
                             Ok(_) => entry.login.clone_from(&login),
                             Err(error) => {
-                                tracked_streams_loaded = false;
+                                rename_failed_user_ids.insert(stream.user_id.trim().to_string());
                                 tracing::warn!(
                                     %error,
                                     twitch_user_id = %stream.user_id,
                                     old_login = %entry.login,
                                     new_login = %login,
-                                    "Poller-Rename fehlgeschlagen; Offline-Transitions werden übersprungen"
+                                    "Poller-Rename fehlgeschlagen; dieser Kanal wird für diesen Durchlauf übersprungen"
                                 );
+                                continue;
                             }
                         }
                     } else {
@@ -351,6 +358,14 @@ impl PollEngine {
                 }
                 streams_by_login.insert(login, stream);
             }
+        }
+        if !rename_failed_user_ids.is_empty() {
+            tracked.retain(|entry| {
+                !entry
+                    .twitch_user_id
+                    .as_deref()
+                    .is_some_and(|id| rename_failed_user_ids.contains(id))
+            });
         }
 
         // Kategorie-Sample (Discovery), dedupliziert über Sprachfilter.

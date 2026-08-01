@@ -277,7 +277,7 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
             true,
             tb_monitoring::RenameTableCounts {
                 renamed: 0,
-                deleted: 0,
+                stale_cleared: 0,
                 skipped: 1,
             },
         )
@@ -323,7 +323,7 @@ async fn rename_schreibt_alias_historie_ohne_fruehere_logins_zu_verlieren() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rename_log_trennt_umbenannte_geloeschte_und_uebersprungene_zeilen() {
+async fn rename_behaelt_eigene_zeile_und_raeumt_veraltete_fremdzeile() {
     let pool = pool_or_skip!("t_rename_separate_counts");
     seed_operational_login_rows(&pool).await;
     sqlx::query(
@@ -350,38 +350,97 @@ async fn rename_log_trennt_umbenannte_geloeschte_und_uebersprungene_zeilen() {
     .await;
     let report = report.unwrap();
 
+    // Die eigene Zeile gewinnt: Twitch hat den Login gerade für 520300019
+    // bestätigt, die Fremdzeile mit demselben Login ist der veraltete Stand.
+    let eigener_login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '520300019'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let fremder_login: String =
+        sqlx::query_scalar("SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '999'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
     assert_eq!(
         (
-            report.counts.twitch_streamers,
-            report.counts.twitch_engagement_settings,
+            eigener_login.as_str(),
+            fremder_login.as_str(),
+            report.counts.twitch_streamers.clone(),
+            report.counts.twitch_engagement_settings.clone(),
             logs.lines().any(|line| {
                 line.contains("table=twitch_streamers")
-                    && line.contains("renamed=0")
-                    && line.contains("deleted=1")
+                    && line.contains("renamed=1")
+                    && line.contains("stale_cleared=1")
                     && line.contains("skipped=0")
             }),
             logs.lines().any(|line| {
                 line.contains("table=twitch_engagement_settings")
                     && line.contains("renamed=0")
-                    && line.contains("deleted=0")
+                    && line.contains("stale_cleared=0")
                     && line.contains("skipped=1")
             }),
         ),
         (
+            "new_login",
+            "stale:999:new_login",
             tb_monitoring::RenameTableCounts {
-                renamed: 0,
-                deleted: 1,
+                renamed: 1,
+                stale_cleared: 1,
                 skipped: 0,
             },
             tb_monitoring::RenameTableCounts {
                 renamed: 0,
-                deleted: 0,
+                stale_cleared: 0,
                 skipped: 1,
             },
             true,
             true,
         )
     );
+}
+
+#[tokio::test]
+async fn rename_behaelt_raid_token_und_partner_konfiguration_bei_login_kollision() {
+    let pool = pool_or_skip!("t_rename_keeps_tokens");
+    seed_operational_login_rows(&pool).await;
+    // Veraltete Fremdzeilen, die den neuen Login blockieren.
+    for statement in [
+        "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, needs_reauth) VALUES ('999', 'new_login', FALSE)",
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, raid_bot_enabled) VALUES ('999', 'new_login', 'active', 0)",
+        "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_display_name) VALUES ('999', 'new_login', 'fremd')",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    rename_streamer_login(&pool, "520300019", "old_login", "new_login")
+        .await
+        .unwrap();
+
+    // Weder unser Raid-Token noch unsere Partner-Konfiguration darf verschwinden.
+    let eigene_zeilen: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM twitch_raid_auth WHERE twitch_user_id = '520300019' AND twitch_login = 'new_login'),
+             (SELECT COUNT(*) FROM twitch_partners WHERE twitch_user_id = '520300019' AND twitch_login = 'new_login' AND status = 'active'),
+             (SELECT COUNT(*) FROM twitch_streamer_identities WHERE twitch_user_id = '520300019' AND twitch_login = 'new_login')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Die Fremdzeilen bleiben inhaltlich erhalten, nur ihr Login gibt den Index frei.
+    let fremde_zeilen: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM twitch_raid_auth WHERE twitch_user_id = '999'),
+             (SELECT COUNT(*) FROM twitch_partners WHERE twitch_user_id = '999'),
+             (SELECT COUNT(*) FROM twitch_streamer_identities WHERE twitch_user_id = '999')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!((eigene_zeilen, fremde_zeilen), ((1, 1, 1), (1, 1, 1)));
 }
 
 #[tokio::test]

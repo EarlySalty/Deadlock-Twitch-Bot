@@ -20,7 +20,6 @@ use crate::poller::hooks::announcement_reannounce_cooldown_key;
 use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
 use crate::stream::{iso_seconds, StreamSnapshot};
-use crate::streamer_login::StreamerLoginStore;
 use crate::telemetry::TelemetryStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +88,6 @@ pub struct MonitoringEventHandler {
     live_state: LiveStateStore,
     tracker: Arc<SessionTracker>,
     telemetry: TelemetryStore,
-    streamer_logins: StreamerLoginStore,
     hooks: Arc<dyn EventSubHooks>,
     channel_info: Option<Arc<dyn ChannelInfoSource>>,
     clock: ClockFn,
@@ -102,7 +100,6 @@ impl MonitoringEventHandler {
         live_state: LiveStateStore,
         tracker: Arc<SessionTracker>,
         telemetry: TelemetryStore,
-        streamer_logins: StreamerLoginStore,
         hooks: Arc<dyn EventSubHooks>,
         channel_info: Option<Arc<dyn ChannelInfoSource>>,
         clock: ClockFn,
@@ -112,7 +109,6 @@ impl MonitoringEventHandler {
             live_state,
             tracker,
             telemetry,
-            streamer_logins,
             hooks,
             channel_info,
             clock,
@@ -614,13 +610,6 @@ impl MonitoringEventHandler {
 impl InboxHandler for MonitoringEventHandler {
     async fn handle(&self, work_type: &str, payload: &Value) -> Result<(), HandlerError> {
         let work = WorkPayload::from(payload);
-        let login = work.login_lower();
-        if !work.broadcaster_id.is_empty() && !login.is_empty() {
-            self.streamer_logins
-                .reconcile(&work.broadcaster_id, &login)
-                .await
-                .map_err(|error| Box::new(error) as HandlerError)?;
-        }
         match work_type.trim().to_lowercase().as_str() {
             "stream.online" => self.handle_stream_online(&work).await,
             "stream.online.followups" => self.handle_stream_online_followups(payload).await,

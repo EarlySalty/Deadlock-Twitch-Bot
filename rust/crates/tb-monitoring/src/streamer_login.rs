@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use sqlx::{PgPool, Postgres, Transaction};
 
 const KNOWN_LOGIN_SQL: &str = r#"
@@ -29,14 +32,17 @@ const KNOWN_LOGIN_SQL: &str = r#"
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenameTableCounts {
     pub renamed: u64,
-    pub deleted: u64,
+    /// Veraltete Fremdzeilen, deren Login den Unique-Index blockierte und
+    /// deshalb auf einen Platzhalter umgeschrieben wurde. Die Zeile bleibt
+    /// inhaltlich erhalten — Tokens und Konfiguration werden nie gelöscht.
+    pub stale_cleared: u64,
     pub skipped: u64,
 }
 
 impl RenameTableCounts {
     fn add(&mut self, other: &Self) {
         self.renamed += other.renamed;
-        self.deleted += other.deleted;
+        self.stale_cleared += other.stale_cleared;
         self.skipped += other.skipped;
     }
 }
@@ -105,14 +111,42 @@ pub struct RenameReport {
     pub counts: RenameCounts,
 }
 
+/// Obergrenze des Login-Caches. Das Roster liegt bei einigen hundert Kanälen;
+/// wird es unerwartet größer, ist ein Neuaufbau billiger als unbegrenztes
+/// Wachstum.
+const LOGIN_CACHE_LIMIT: usize = 10_000;
+
 #[derive(Clone)]
 pub struct StreamerLoginStore {
     pool: PgPool,
+    /// Zuletzt bestätigter Login je `twitch_user_id`. `reconcile` läuft an
+    /// jeder Chatnachricht — ohne diesen Cache wäre das pro Nachricht eine
+    /// Abfrage über sechs Tabellen.
+    bekannte_logins: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl StreamerLoginStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            bekannte_logins: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn cache_treffer(&self, user_id: &str, login: &str) -> bool {
+        self.bekannte_logins
+            .lock()
+            .map(|cache| cache.get(user_id).is_some_and(|bekannt| bekannt == login))
+            .unwrap_or(false)
+    }
+
+    fn cache_setzen(&self, user_id: &str, login: &str) {
+        if let Ok(mut cache) = self.bekannte_logins.lock() {
+            if cache.len() >= LOGIN_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache.insert(user_id.to_string(), login.to_string());
+        }
     }
 
     pub async fn reconcile(
@@ -128,6 +162,9 @@ impl StreamerLoginStore {
                 new_login = %new_login,
                 "Twitch-Rename-Prüfung übersprungen: user_id oder Login fehlt"
             );
+            return Ok(None);
+        }
+        if self.cache_treffer(user_id, &new_login) {
             return Ok(None);
         }
 
@@ -151,12 +188,13 @@ impl StreamerLoginStore {
                 new_login = %new_login,
                 "Twitch-Rename-Prüfung: Login unverändert"
             );
+            self.cache_setzen(user_id, &new_login);
             return Ok(None);
         }
 
-        rename_streamer_login(&self.pool, user_id, &old_login, &new_login)
-            .await
-            .map(Some)
+        let report = rename_streamer_login(&self.pool, user_id, &old_login, &new_login).await?;
+        self.cache_setzen(user_id, &new_login);
+        Ok(Some(report))
     }
 }
 
@@ -206,13 +244,27 @@ pub async fn rename_streamer_login(
             counts: RenameCounts::default(),
         });
     }
+    // twitch_streamer_identities zuerst: der Trigger
+    // `trg_twitch_streamers_sync_identity` spiegelt jedes Update auf
+    // twitch_streamers dorthin. Läge dort noch eine veraltete Fremdzeile mit
+    // dem neuen Login, liefe die Umbenennung von twitch_streamers in die
+    // Unique-Verletzung des Triggers statt in unsere Konfliktbehandlung.
+    let twitch_streamer_identities = rewrite_user_scoped(
+        &mut tx,
+        "twitch_streamer_identities",
+        "twitch_login",
+        user_id,
+        &new_login,
+        true,
+    )
+    .await?;
     let counts = RenameCounts {
+        twitch_streamer_identities,
         twitch_streamers: rewrite_user_scoped(
             &mut tx,
             "twitch_streamers",
             "twitch_login",
             user_id,
-            &old_login,
             &new_login,
             true,
         )
@@ -222,18 +274,16 @@ pub async fn rename_streamer_login(
             "twitch_live_state",
             "streamer_login",
             user_id,
-            &old_login,
             &new_login,
             false,
         )
         .await?,
-        twitch_partners: rewrite_partners(&mut tx, user_id, &old_login, &new_login).await?,
+        twitch_partners: rewrite_partners(&mut tx, user_id, &new_login).await?,
         twitch_raid_auth: rewrite_user_scoped(
             &mut tx,
             "twitch_raid_auth",
             "twitch_login",
             user_id,
-            &old_login,
             &new_login,
             true,
         )
@@ -243,19 +293,8 @@ pub async fn rename_streamer_login(
             "twitch_partner_raid_scores",
             "twitch_login",
             user_id,
-            &old_login,
             &new_login,
             false,
-        )
-        .await?,
-        twitch_streamer_identities: rewrite_user_scoped(
-            &mut tx,
-            "twitch_streamer_identities",
-            "twitch_login",
-            user_id,
-            &old_login,
-            &new_login,
-            true,
         )
         .await?,
         twitch_engagement_settings: rewrite_login_keyed(
@@ -317,7 +356,7 @@ pub async fn rename_streamer_login(
             new_login = %new_login,
             table = %table,
             renamed = table_counts.renamed,
-            deleted = table_counts.deleted,
+            stale_cleared = table_counts.stale_cleared,
             skipped = table_counts.skipped,
             "Twitch-Login-Tabelle aktualisiert"
         );
@@ -328,7 +367,7 @@ pub async fn rename_streamer_login(
         old_login = %old_login,
         new_login = %new_login,
         renamed = total.renamed,
-        deleted = total.deleted,
+        stale_cleared = total.stale_cleared,
         skipped = total.skipped,
         "Twitch-Login umbenannt"
     );
@@ -340,93 +379,117 @@ pub async fn rename_streamer_login(
     })
 }
 
+/// Umbenennung einer Tabelle, die eine `twitch_user_id` führt.
+///
+/// Die eigene Zeile bleibt in jedem Fall erhalten: Twitch hat den neuen Login
+/// gerade für diese `user_id` bestätigt, eine fremde Zeile mit demselben Login
+/// ist also der veraltete Stand. Blockiert eine solche Fremdzeile den
+/// Unique-Index, bekommt sie einen Platzhalter-Login — gelöscht wird nichts,
+/// sonst gingen Raid-Tokens, Partner-Konfiguration oder die Discord-Verknüpfung
+/// stillschweigend verloren.
+///
+/// Geschrieben wird über die `user_id`, nicht über den alten Login: Tabellen,
+/// die einen abweichenden Stale-Login tragen, konvergieren nur so.
 async fn rewrite_user_scoped(
     tx: &mut Transaction<'_, Postgres>,
     table: &str,
     login_column: &str,
     user_id: &str,
-    old_login: &str,
     new_login: &str,
     login_is_unique: bool,
 ) -> Result<RenameTableCounts, sqlx::Error> {
-    let deleted = if login_is_unique {
-        let delete = format!(
-            "DELETE FROM {table} target
-             WHERE target.twitch_user_id = $1
-               AND LOWER(target.{login_column}) = LOWER($2)
-               AND EXISTS (
-                   SELECT 1 FROM {table} current
-                    WHERE LOWER(current.{login_column}) = LOWER($3)
-                      AND current.twitch_user_id IS DISTINCT FROM $1
-               )"
-        );
-        sqlx::query(&delete)
-            .bind(user_id)
-            .bind(old_login)
-            .bind(new_login)
-            .execute(&mut **tx)
-            .await?
-            .rows_affected()
-    } else {
-        0
-    };
+    let mut counts = RenameTableCounts::default();
+    if login_is_unique {
+        counts.stale_cleared =
+            clear_stale_foreign_login(tx, table, login_column, user_id, new_login, None).await?;
+    }
     let update = format!(
-        "UPDATE {table} SET {login_column} = $3
-         WHERE twitch_user_id = $1 AND LOWER({login_column}) = LOWER($2)"
+        "UPDATE {table} SET {login_column} = $2
+         WHERE twitch_user_id = $1 AND LOWER({login_column}) <> LOWER($2)"
     );
-    let renamed = sqlx::query(&update)
+    counts.renamed = sqlx::query(&update)
         .bind(user_id)
-        .bind(old_login)
         .bind(new_login)
         .execute(&mut **tx)
         .await?
         .rows_affected();
+    Ok(counts)
+}
+
+/// Wie [`rewrite_user_scoped`], aber der Unique-Index von `twitch_partners`
+/// greift nur für aktive Partner — die Kollisionsprüfung muss das mitführen.
+async fn rewrite_partners(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: &str,
+    new_login: &str,
+) -> Result<RenameTableCounts, sqlx::Error> {
+    let stale_cleared = clear_stale_foreign_login(
+        tx,
+        "twitch_partners",
+        "twitch_login",
+        user_id,
+        new_login,
+        Some("status = 'active'"),
+    )
+    .await?;
+    let renamed = sqlx::query(
+        "UPDATE twitch_partners SET twitch_login = $2
+         WHERE twitch_user_id = $1 AND LOWER(twitch_login) <> LOWER($2)",
+    )
+    .bind(user_id)
+    .bind(new_login)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
     Ok(RenameTableCounts {
         renamed,
-        deleted,
+        stale_cleared,
         skipped: 0,
     })
 }
 
-async fn rewrite_partners(
+/// Gibt den Unique-Index frei, den eine veraltete Fremdzeile mit dem neuen
+/// Login belegt — durch einen Platzhalter, der die `user_id` der Fremdzeile
+/// enthält und deshalb selbst nicht kollidieren kann.
+async fn clear_stale_foreign_login(
     tx: &mut Transaction<'_, Postgres>,
+    table: &str,
+    login_column: &str,
     user_id: &str,
-    old_login: &str,
     new_login: &str,
-) -> Result<RenameTableCounts, sqlx::Error> {
-    let deleted = sqlx::query(
-        "DELETE FROM twitch_partners target
-         WHERE target.twitch_user_id = $1
-           AND LOWER(target.twitch_login) = LOWER($2)
-           AND target.status = 'active'
-           AND EXISTS (
-               SELECT 1 FROM twitch_partners current
-                WHERE LOWER(current.twitch_login) = LOWER($3)
-                  AND current.status = 'active'
-                  AND current.id <> target.id
-           )",
-    )
-    .bind(user_id)
-    .bind(old_login)
-    .bind(new_login)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    let updated = sqlx::query(
-        "UPDATE twitch_partners SET twitch_login = $3
-         WHERE twitch_user_id = $1 AND LOWER(twitch_login) = LOWER($2)",
-    )
-    .bind(user_id)
-    .bind(old_login)
-    .bind(new_login)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    Ok(RenameTableCounts {
-        renamed: updated,
-        deleted,
-        skipped: 0,
-    })
+    extra_condition: Option<&str>,
+) -> Result<u64, sqlx::Error> {
+    let extra = extra_condition
+        .map(|condition| format!(" AND target.{condition}"))
+        .unwrap_or_default();
+    let placeholder = "'stale:' || COALESCE(target.twitch_user_id, 'unbekannt') || ':' || $2";
+    let neutralize = format!(
+        "UPDATE {table} target
+            SET {login_column} = {placeholder}
+          WHERE LOWER(target.{login_column}) = LOWER($2)
+            AND target.twitch_user_id IS DISTINCT FROM $1{extra}
+            AND NOT EXISTS (
+                SELECT 1 FROM {table} belegt
+                 WHERE belegt.{login_column} = {placeholder}
+            )
+        RETURNING COALESCE(target.twitch_user_id, 'unbekannt')"
+    );
+    let fremde_ids: Vec<String> = sqlx::query_scalar(&neutralize)
+        .bind(user_id)
+        .bind(new_login)
+        .fetch_all(&mut **tx)
+        .await?;
+    for fremde_id in &fremde_ids {
+        tracing::warn!(
+            table = %table,
+            twitch_user_id = %user_id,
+            fremde_user_id = %fremde_id,
+            login = %new_login,
+            "Twitch-Login war noch auf einer veralteten Fremdzeile eingetragen; \
+             deren Login wurde auf einen Platzhalter gesetzt, Daten blieben erhalten"
+        );
+    }
+    Ok(fremde_ids.len() as u64)
 }
 
 async fn rewrite_login_keyed(
@@ -477,7 +540,7 @@ async fn rewrite_login_keyed(
     }
     Ok(RenameTableCounts {
         renamed: updated,
-        deleted: 0,
+        stale_cleared: 0,
         skipped,
     })
 }

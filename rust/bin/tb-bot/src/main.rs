@@ -1261,7 +1261,6 @@ async fn main() {
         live_state.clone(),
         tracker.clone(),
         telemetry.clone(),
-        tb_monitoring::StreamerLoginStore::new(pool.clone()),
         eventsub_hooks.clone(),
         channel_info_source,
         Arc::new(tb_monitoring::epoch_clock),

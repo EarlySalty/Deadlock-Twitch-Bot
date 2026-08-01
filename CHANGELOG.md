@@ -2,9 +2,9 @@
 
 **Problem:** Wer seinen Twitch-Namen änderte, verschwand für den Bot. Das Monitoring erkannte den Kanal nicht wieder, der Live-Zustand blieb leer, und am Streamende fiel der automatische Raid aus, weil der Bot nicht wusste, was gespielt wurde. Betroffen war zuletzt ein Partnerkanal, dessen Zuschauer dadurch am Ende nirgendwo landeten.
 
-**Änderung:** Der Bot merkt sich Kanäle jetzt an ihrer Twitch-ID, die sich nie ändert. Fällt eine Namensänderung auf, zieht er den neuen Namen in einem Rutsch durch alle betroffenen Stellen nach und hält die früheren Namen in einer Historie fest, damit alte Auswertungen zuordenbar bleiben.
+**Änderung:** Der Bot merkt sich Kanäle jetzt an ihrer Twitch-ID, die sich nie ändert. Fällt eine Namensänderung auf, zieht er den neuen Namen durch alle Stellen nach, die den laufenden Betrieb steuern — Monitoring, Live-Zustand, Partner-Einstellungen, Raid-Zugang — und schreibt den alten Namen in eine Namenshistorie.
 
-**Aktuelles Verhalten:** Ein Namenswechsel unterbricht weder Monitoring noch Raids. Statistiken aus der Zeit davor bleiben demselben Kanal zugeordnet.
+**Aktuelles Verhalten:** Ein Namenswechsel unterbricht weder Monitoring noch Raids. Aufgezeichnete Chat- und Zuschauerdaten aus der Zeit davor hängen vorerst noch am alten Namen; die Auswertungen darauf umzustellen kommt in einem späteren Schritt.
 
 ## #410 — Schluss mit Doppel-Raids, und im Protokoll steht jetzt alles
 
