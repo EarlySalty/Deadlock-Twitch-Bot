@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT enabled AS \"enabled!\", mode AS \"mode!\", threshold AS \"threshold!\", suggestion_floor AS \"suggestion_floor!\" FROM twitch_scam_guard_settings WHERE channel_login = $1",
+  "query": "SELECT enabled AS \"enabled!\", mode AS \"mode!\", threshold AS \"threshold!\", suggestion_floor AS \"suggestion_floor!\" FROM twitch_scam_guard_settings WHERE channel_user_id = $2 OR (channel_login = $1 AND (channel_user_id IS NULL OR $2::text IS NULL)) ORDER BY (channel_user_id = $2) DESC NULLS LAST LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -26,6 +26,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
@@ -36,5 +37,5 @@
       false
     ]
   },
-  "hash": "c56c7548a3845ec352de6e7716c93a976c16783a53debe4bb872637f1bca94a6"
+  "hash": "71480a471269f4aceb80c4cfa4624cbb86ce6dd30d154a5a9ae5ddd61da23bda"
 }

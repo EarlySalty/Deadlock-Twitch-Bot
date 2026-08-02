@@ -158,6 +158,75 @@ async fn backfill_loest_kanaele_auf_und_laesst_mehrdeutiges_offen() {
     );
 }
 
+/// Der Fehler, der den Bot-Start auf Prod abgebrochen hat.
+///
+/// `twitch_raid_retention` enthält Zeilen ohne passende Zeile in
+/// `twitch_raid_history`, die den Fremdschlüssel
+/// `twitch_raid_retention_raid_history_ref_fkey` schon vorher verletzen — er
+/// wurde seinerzeit `NOT VALID` angelegt, also nie gegen den Altbestand
+/// geprüft. Solange niemand diese Zeilen anfasst, fällt das nicht auf. Ein
+/// Backfill per Namensauflösung fasst sie an, löst die Prüfung aus und
+/// scheitert; sqlx rollt die ganze Migration zurück und der Start bricht ab.
+///
+/// Deshalb übernimmt der Backfill die Broadcaster-IDs über den Join auf die
+/// Raid-Historie. Das ist auch fachlich genauer — und lässt genau die
+/// verwaisten Zeilen unberührt.
+#[tokio::test]
+async fn backfill_stolpert_nicht_ueber_verwaiste_raid_retention_zeilen() {
+    let Some(pool) = migrated_pool("tb_test_raid_retention_fk").await else {
+        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+        return;
+    };
+
+    // Prod-Zustand nachstellen: der FK weicht kurz, damit eine verwaiste Zeile
+    // entstehen kann, und kommt als NOT VALID zurück — genau so sieht Prod aus.
+    sqlx::query("ALTER TABLE twitch_raid_retention DROP CONSTRAINT twitch_raid_retention_raid_history_ref_fkey")
+        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_history
+            (id, executed_at, from_broadcaster_login, from_broadcaster_id,
+             to_broadcaster_login, to_broadcaster_id)
+         VALUES (9001, NOW(), 'derechtecoolys', '520300019', 'ziel', '777')",
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_retention
+            (raid_id, executed_at, from_broadcaster_login, to_broadcaster_login, viewer_count_sent)
+         SELECT 9001, executed_at, 'derechtecoolys', 'ziel', 5
+           FROM twitch_raid_history WHERE id = 9001",
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_retention
+            (raid_id, executed_at, from_broadcaster_login, to_broadcaster_login, viewer_count_sent)
+         VALUES (9999, NOW(), 'verwaist', 'auchverwaist', 3)",
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE twitch_raid_retention ADD CONSTRAINT twitch_raid_retention_raid_history_ref_fkey
+           FOREIGN KEY (raid_id, executed_at) REFERENCES twitch_raid_history(id, executed_at)
+           ON DELETE CASCADE NOT VALID",
+    ).execute(&pool).await.unwrap();
+
+    sqlx::raw_sql(BACKFILL)
+        .execute(&pool)
+        .await
+        .expect("Backfill darf an der verwaisten Zeile nicht scheitern");
+
+    let zeilen: Vec<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT raid_id, from_broadcaster_id, to_broadcaster_id
+           FROM twitch_raid_retention ORDER BY raid_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        zeilen,
+        vec![
+            (9001, Some("520300019".to_string()), Some("777".to_string())),
+            (9999, None, None),
+        ],
+        "die Zeile mit History erbt beide IDs, die verwaiste bleibt unberührt"
+    );
+}
+
 #[tokio::test]
 async fn backfill_fasst_akteur_rollen_nicht_an() {
     let Some(pool) = migrated_pool("tb_test_historien_akteure").await else {

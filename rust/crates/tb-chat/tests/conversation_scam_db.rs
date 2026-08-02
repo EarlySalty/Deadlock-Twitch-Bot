@@ -76,7 +76,8 @@ async fn drop_schema(pool: &PgPool, schema: &str) {
 async fn apply_ddl(pool: &PgPool) {
     for ddl in [
         "CREATE TABLE twitch_scam_guard_settings (\
-            channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT TRUE, \
+            channel_login TEXT PRIMARY KEY, channel_user_id TEXT, \
+            enabled BOOLEAN NOT NULL DEFAULT TRUE, \
             mode TEXT NOT NULL DEFAULT 'auto_ban', threshold REAL NOT NULL DEFAULT 0.90, \
             suggestion_floor REAL NOT NULL DEFAULT 0.70)",
         "CREATE TABLE twitch_scam_guard_verdicts (\
