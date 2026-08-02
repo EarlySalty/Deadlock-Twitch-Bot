@@ -147,6 +147,30 @@ BEGIN
         RAISE NOTICE '%: % Zeilen über session_id', ziel.tabelle, gefuellt;
     END LOOP;
 
+    -- 2b'. twitch_raid_retention hängt über (raid_id, executed_at) an
+    --      twitch_raid_history, und die trägt beide Broadcaster-IDs bereits.
+    --      Sie von dort zu übernehmen ist genauer als jede Namensauflösung.
+    --
+    --      Der Join ist zugleich notwendig: retention enthält Zeilen ohne
+    --      passende History-Zeile, die den Fremdschlüssel
+    --      twitch_raid_retention_raid_history_ref_fkey schon heute verletzen.
+    --      Solange niemand sie anfasst, fällt das nicht auf — ein UPDATE
+    --      löst die Prüfung aus und scheitert. Über den Join bleiben genau
+    --      diese Zeilen unberührt.
+    UPDATE twitch_raid_retention ret
+       SET from_broadcaster_id = COALESCE(ret.from_broadcaster_id, hist.from_broadcaster_id),
+           to_broadcaster_id   = COALESCE(ret.to_broadcaster_id, hist.to_broadcaster_id)
+      FROM twitch_raid_history hist
+     WHERE ret.raid_id = hist.id
+       AND ret.executed_at = hist.executed_at
+       AND (ret.from_broadcaster_id IS NULL OR ret.to_broadcaster_id IS NULL)
+       AND (hist.from_broadcaster_id IS NOT NULL OR hist.to_broadcaster_id IS NOT NULL);
+    GET DIAGNOSTICS gefuellt = ROW_COUNT;
+    SELECT COUNT(*) FROM twitch_raid_retention
+     WHERE from_broadcaster_id IS NULL OR to_broadcaster_id IS NULL INTO offen;
+    RAISE NOTICE 'twitch_raid_retention: % Zeilen aus der Raid-Historie, % bleiben offen (keine passende History-Zeile)',
+        gefuellt, offen;
+
     -- 2c. Der Rest über Namensauflösung. Die drei Millionen-Tabellen fehlen
     --     hier bewusst und werden per Batch-Skript nachgezogen.
     FOR ziel IN
@@ -171,8 +195,6 @@ BEGIN
             ('twitch_partner_outreach', 'streamer_login', 'twitch_user_id'),
             ('twitch_partner_outreach_audit', 'streamer_login', 'twitch_user_id'),
             ('twitch_partner_outreach_conversations', 'streamer_login', 'twitch_user_id'),
-            ('twitch_raid_retention', 'from_broadcaster_login', 'from_broadcaster_id'),
-            ('twitch_raid_retention', 'to_broadcaster_login', 'to_broadcaster_id'),
             ('twitch_raw_chat_backfill_runs', 'streamer_login', 'twitch_user_id'),
             ('twitch_smalltalk_sessions', 'channel_login', 'channel_user_id'),
             ('twitch_stream_ai_reports', 'streamer_login', 'twitch_user_id'),

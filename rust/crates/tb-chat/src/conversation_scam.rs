@@ -515,7 +515,15 @@ pub struct VerdictRecord {
 
 #[async_trait]
 pub trait ScamGuardStore: Send + Sync {
-    async fn load_settings(&self, channel_login: &str) -> Result<GuardSettings, String>;
+    /// `channel_user_id` ist die stabile Kanal-ID aus dem EventSub-Payload.
+    /// Ohne sie fiele der Scam-Schutz aus, sobald ein Kanal umbenannt wird und
+    /// seine Settings-Zeile noch den alten Namen trägt — und ein stummer
+    /// Schutz sieht von außen aus wie ein Kanal ohne Vorfälle.
+    async fn load_settings(
+        &self,
+        channel_login: &str,
+        channel_user_id: Option<&str>,
+    ) -> Result<GuardSettings, String>;
     async fn first_time_context(
         &self,
         channel_login: &str,
@@ -634,14 +642,25 @@ impl PgScamGuardStore {
 
 #[async_trait]
 impl ScamGuardStore for PgScamGuardStore {
-    async fn load_settings(&self, channel_login: &str) -> Result<GuardSettings, String> {
+    async fn load_settings(
+        &self,
+        channel_login: &str,
+        channel_user_id: Option<&str>,
+    ) -> Result<GuardSettings, String> {
+        // Wie in tb-engagement::gate: ID trifft und überlebt die Umbenennung,
+        // ohne Aufrufer-ID oder bei einer Zeile ohne ID greift der Login.
         let row = sqlx::query!(
             "SELECT enabled AS \"enabled!\", \
                     mode AS \"mode!\", \
                     threshold AS \"threshold!\", \
                     suggestion_floor AS \"suggestion_floor!\" \
-             FROM twitch_scam_guard_settings WHERE channel_login = $1",
+             FROM twitch_scam_guard_settings \
+              WHERE channel_user_id = $2 \
+                 OR (channel_login = $1 AND (channel_user_id IS NULL OR $2::text IS NULL)) \
+              ORDER BY (channel_user_id = $2) DESC NULLS LAST \
+              LIMIT 1",
             channel_login,
+            channel_user_id,
         )
         .fetch_optional(&self.pool)
         .await
@@ -852,7 +871,11 @@ impl ConversationScamGuard {
             return;
         }
 
-        let settings = match self.store.load_settings(&channel_login).await {
+        let settings = match self
+            .store
+            .load_settings(&channel_login, Some(&event.broadcaster_user_id))
+            .await
+        {
             Ok(settings) => settings,
             Err(error) => {
                 warn!("Conversation-Scam-Settings nicht ladbar, Defaults aktiv: {error}");
@@ -2257,7 +2280,11 @@ mod tests {
 
     #[async_trait]
     impl ScamGuardStore for MockStore {
-        async fn load_settings(&self, _channel_login: &str) -> Result<GuardSettings, String> {
+        async fn load_settings(
+            &self,
+            _channel_login: &str,
+            _channel_user_id: Option<&str>,
+        ) -> Result<GuardSettings, String> {
             Ok(self.settings.lock().unwrap().clone())
         }
 
