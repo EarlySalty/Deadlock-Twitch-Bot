@@ -1,3 +1,11 @@
+## #412 — Nach einer Namensänderung stimmen auch die Zahlen wieder
+
+**Problem:** Die Namensänderung selbst hat der Bot seit #411 überstanden — die Auswertung darunter noch nicht. Wer sich mitten im Stream umbenannte, bekam eine zweite, parallel laufende Aufzeichnung desselben Streams, weil die erste unter dem alten Namen nicht mehr gefunden wurde. Am Streamende fehlten dann Spielstand und Follower-Differenz, und ein eingehender Raid wurde stillschweigend als "keine passende Aufzeichnung" verworfen.
+
+**Änderung:** Aufzeichnungsstart, Streamende und die Raid-Auswertung suchen den Kanal jetzt über die Twitch-ID statt über den Namen. Die ID liegt an jeder Stelle ohnehin an — sie kommt mit jeder Chatnachricht und mit jedem Raid mit und wurde bisher weggeworfen. Für alte Einträge ohne ID bleibt der Weg über den Namen bestehen.
+
+**Aktuelles Verhalten:** Eine Umbenennung mitten im Stream spaltet die Aufzeichnung nicht mehr, und Raids auf umbenannte Kanäle werden weiter ausgewertet. Die Zuschauer- und Kategoriehistorie der letzten Jahre trägt die ID jetzt ebenfalls; die Auswertungen im Dashboard folgen in einem weiteren Schritt.
+
 ## #411 — Namensänderungen werfen den Bot nicht mehr aus der Spur
 
 **Problem:** Wer seinen Twitch-Namen änderte, verschwand für den Bot. Das Monitoring erkannte den Kanal nicht wieder, der Live-Zustand blieb leer, und am Streamende fiel der automatische Raid aus, weil der Bot nicht wusste, was gespielt wurde. Betroffen war zuletzt ein Partnerkanal, dessen Zuschauer dadurch am Ende nirgendwo landeten.
