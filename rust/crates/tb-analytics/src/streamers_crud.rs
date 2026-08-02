@@ -386,14 +386,19 @@ pub struct DepartnerOutcome {
 /// 1. Aktiven Partner laden — `None` wenn keiner aktiv ist (Handler: "nicht gespeichert").
 /// 2. Identity-Upsert (Discord-Daten erhalten).
 /// 3. `twitch_partners`: `status='departnered'`, `departnered_at=now`,
-///    `admin_archived_at=NULL`.
+///    `admin_archived_at=NULL`, bei `clear_verification` zusätzlich
+///    `manual_partner_opt_out=1`.
 /// 4. Raid-Auth deaktivieren (`raid_enabled=FALSE`).
 /// 5. Engagement-Settings deaktivieren (best-effort wie Python — Tabelle kann fehlen).
+///
+/// `clear_verification` trennt die beiden Aufrufer: `verify mode=clear|failed`
+/// ist der Opt-out („will nicht mehr"), die Remove-Route departnert nur.
 ///
 /// Gibt `Ok(None)` zurück, wenn kein aktiver Partner existiert.
 pub async fn departner_streamer(
     pool: &PgPool,
     login: &str,
+    clear_verification: bool,
 ) -> Result<Option<DepartnerOutcome>, sqlx::Error> {
     // p.id ist in Prod `bigint`; das Test-DDL nutzt `SERIAL` (INT4). ::BIGINT
     // hält das i64-Decode in beiden Welten konsistent (Repo-Typ-Drift-Konvention).
@@ -466,7 +471,9 @@ pub async fn departner_streamer(
         .await?;
     }
 
-    // Schritt 3: Partner departnern.
+    // Schritt 3: Partner departnern. GREATEST: ein bestehendes Opt-out darf die
+    // Remove-Route (clear_verification=false) nicht wieder aufheben.
+    let opt_out = i32::from(clear_verification);
     sqlx::query!(
         r#"
         UPDATE twitch_partners
@@ -474,14 +481,16 @@ pub async fn departner_streamer(
             departnered_at = $2,
             admin_archived_at = NULL,
             twitch_login = $3,
-            twitch_user_id = $4
+            twitch_user_id = $4,
+            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6)
         WHERE id = $5
         "#,
         STATUS_DEPARTNERED,
         &departnered_at,
         &normalized_login,
         normalized_user_id.as_deref(),
-        row.id
+        row.id,
+        opt_out
     )
     .execute(pool)
     .await?;
@@ -1645,7 +1654,7 @@ mod tests {
         .await
         .unwrap();
 
-        let outcome = departner_streamer(&pool, "DepartnerMe")
+        let outcome = departner_streamer(&pool, "DepartnerMe", true)
             .await
             .unwrap()
             .expect("aktiver Partner muss departnert werden");
@@ -1654,9 +1663,9 @@ mod tests {
         assert_eq!(outcome.discord_user_id.as_deref(), Some("999"));
         assert_eq!(outcome.discord_display_name.as_deref(), Some("Drag"));
 
-        // twitch_partners: departnered, admin_archived_at genullt.
-        let p: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT status, departnered_at, admin_archived_at
+        // twitch_partners: departnered, admin_archived_at genullt, Opt-out gesetzt.
+        let p: (Option<String>, Option<String>, Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, departnered_at, admin_archived_at, manual_partner_opt_out
                    FROM twitch_partners WHERE twitch_login = 'departnerme'",
         )
         .fetch_one(&pool)
@@ -1665,6 +1674,9 @@ mod tests {
         assert_eq!(p.0.as_deref(), Some("departnered"));
         assert!(p.1.is_some(), "departnered_at gesetzt");
         assert!(p.2.is_none(), "admin_archived_at genullt");
+        // clear/failed heißt „will nicht mehr" — sonst holt der OAuth-Self-Heal
+        // in tb-raid/src/auth_writer.rs den Kanal beim nächsten Login zurück.
+        assert_eq!(p.3, Some(1), "Opt-out gesetzt");
 
         // Raid-Auth disabled.
         let raid: Option<bool> = sqlx::query_scalar(
@@ -1689,8 +1701,37 @@ mod tests {
     async fn departner_streamer_gibt_none_ohne_aktiven_partner() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_departner_none").await;
-        let res = departner_streamer(&pool, "niemand").await.unwrap();
+        let res = departner_streamer(&pool, "niemand", true).await.unwrap();
         assert!(res.is_none(), "kein aktiver Partner → None");
+    }
+
+    // Die Remove-Route departnert ohne Opt-out: der Kanal ist raus, darf aber
+    // später ohne Admin-Eingriff wiederkommen.
+    #[tokio::test]
+    async fn departner_streamer_ohne_clear_laesst_opt_out_unberuehrt() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_departner_plain").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('plainremove', '43', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        departner_streamer(&pool, "plainremove", false)
+            .await
+            .unwrap()
+            .expect("aktiver Partner muss departnert werden");
+
+        let p: (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE twitch_login = 'plainremove'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(p.0.as_deref(), Some("departnered"));
+        assert_eq!(p.1, Some(0), "Opt-out unberührt");
     }
 
     // Python: unbekannte Modi → "Unbekannter Modus" OHNE Mutation — der alte
