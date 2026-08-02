@@ -130,3 +130,53 @@ async fn trigger_ueberschreibt_eine_bereits_gesetzte_id_nicht() {
             .unwrap();
     assert_eq!(id.as_deref(), Some("520300019"));
 }
+
+#[tokio::test]
+async fn lookup_loest_login_zur_stabilen_id_auf() {
+    let Some(pool) = migrated_pool("tb_test_id_lookup").await else {
+        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+         VALUES ('520300019', 'coolysdl')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Ein früherer Name desselben Kanals bleibt auflösbar …
+    sqlx::query(
+        "INSERT INTO twitch_login_aliases (twitch_user_id, login, is_current)
+         VALUES ('520300019', 'derechtecoolys', FALSE)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // … ein von Twitch neu vergebener dagegen nicht: zwei IDs, keine Wahl.
+    for statement in [
+        "INSERT INTO twitch_login_aliases (twitch_user_id, login, is_current)
+         VALUES ('111', 'recycelt', FALSE)",
+        "INSERT INTO twitch_login_aliases (twitch_user_id, login, is_current)
+         VALUES ('222', 'recycelt', FALSE)",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    let treffer: (Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT tb_twitch_user_id('CoolysDL'), tb_twitch_user_id('derechtecoolys'),
+                tb_twitch_user_id('recycelt'), tb_twitch_user_id('  ')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        treffer,
+        (
+            Some("520300019".to_string()),
+            Some("520300019".to_string()),
+            None,
+            None
+        )
+    );
+}

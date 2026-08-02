@@ -836,10 +836,13 @@ impl ModerationEngine {
         .ok()
         .flatten()
         .and_then(|row| {
+            // chatter_id/chatter_login sind in der Tabelle nullable — die
+            // Zeile hält fest, dass gebannt wurde, auch wenn der Akteur nicht
+            // mehr auflösbar war.
             self.cache_autoban_record(
                 key,
                 Some(row.chatter_id),
-                Some(row.chatter_login),
+                row.chatter_login,
                 row.content,
                 row.banned_at,
             )
