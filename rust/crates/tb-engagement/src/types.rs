@@ -108,6 +108,15 @@ pub struct EngagementSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingMessage {
     pub channel_login: String,
+    /// Stabile Twitch-ID des **Kanals** (IRC-Tag `room-id`, EventSub
+    /// `broadcaster_user_id`). Nicht mit [`twitch_user_id`](Self::twitch_user_id)
+    /// verwechseln — das ist der Chatter.
+    ///
+    /// Sie liegt an jeder Nachricht an und ist deshalb der billige Weg zur
+    /// Identität eines Kanals: den Kanal später aus seinem Namen
+    /// zurückzurechnen kostet eine Auflösung pro Query und überlebt eine
+    /// Umbenennung nur, solange die Alias-Historie eindeutig ist.
+    pub channel_user_id: String,
     pub twitch_user_id: String,
     pub twitch_login: String,
     pub content: String,

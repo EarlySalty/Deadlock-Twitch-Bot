@@ -120,6 +120,18 @@ const ID_TABELLEN: &[(&str, &str, &str, bool)] = &[
     ),
     // Unique ist (login, cooldown_type), nicht der Login allein.
     ("twitch_promo_cooldowns", "login", "twitch_user_id", false),
+    (
+        "twitch_streamer_invites",
+        "streamer_login",
+        "twitch_user_id",
+        true,
+    ),
+    (
+        "twitch_raw_chat_ingest_health",
+        "streamer_login",
+        "twitch_user_id",
+        true,
+    ),
 ];
 
 /// Aufzeichnungen: Zeilen halten fest, was zu einem Zeitpunkt geschah, und
@@ -144,13 +156,6 @@ const HISTORIE_TABELLEN: &[(&str, &str, &str)] = &[
         "channel_user_id",
     ),
     ("twitch_scout_pitch_ledger", "streamer_login", "twitch_user_id"),
-];
-
-/// Tabellen, die (noch) keine ID-Spalte tragen und deshalb allein über den
-/// Login gefunden werden können.
-const LOGIN_TABELLEN: &[(&str, &str)] = &[
-    ("twitch_streamer_invites", "streamer_login"),
-    ("twitch_raw_chat_ingest_health", "streamer_login"),
 ];
 
 /// Zähler pro Tabelle. Bewusst eine Liste statt fester Felder: welche Tabellen
@@ -382,12 +387,6 @@ pub async fn rename_streamer_login(
             },
         );
     }
-    for (tabelle, login_spalte) in LOGIN_TABELLEN {
-        let table_counts =
-            rewrite_login_keyed(&mut tx, tabelle, login_spalte, user_id, &old_login, &new_login)
-                .await?;
-        counts.push(tabelle, table_counts);
-    }
     record_login_aliases(&mut tx, user_id, &old_login, &new_login).await?;
     tx.commit().await?;
 
@@ -613,59 +612,6 @@ async fn clear_stale_foreign_login(
         );
     }
     Ok(fremde_ids.len() as u64)
-}
-
-async fn rewrite_login_keyed(
-    tx: &mut Transaction<'_, Postgres>,
-    table: &str,
-    login_column: &str,
-    user_id: &str,
-    old_login: &str,
-    new_login: &str,
-) -> Result<RenameTableCounts, sqlx::Error> {
-    let update = format!(
-        "UPDATE {table} target SET {login_column} = $2
-         WHERE LOWER(target.{login_column}) = LOWER($1)
-           AND NOT EXISTS (
-               SELECT 1 FROM {table} current
-                WHERE LOWER(current.{login_column}) = LOWER($2)
-           )"
-    );
-    let updated = sqlx::query(&update)
-        .bind(old_login)
-        .bind(new_login)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
-    let conflict = format!(
-        "SELECT COUNT(*) FROM {table} target
-         WHERE LOWER(target.{login_column}) = LOWER($1)
-           AND EXISTS (
-               SELECT 1 FROM {table} current
-                WHERE LOWER(current.{login_column}) = LOWER($2)
-           )"
-    );
-    let skipped = sqlx::query_scalar::<_, i64>(&conflict)
-        .bind(old_login)
-        .bind(new_login)
-        .fetch_one(&mut **tx)
-        .await?
-        .unsigned_abs();
-    if skipped > 0 {
-        tracing::warn!(
-            table = %table,
-            twitch_user_id = %user_id,
-            old_login = %old_login,
-            new_login = %new_login,
-            skipped,
-            "Twitch-Login-Konflikt: login-gebundene Zeile bleibt unverändert"
-        );
-    }
-    Ok(RenameTableCounts {
-        renamed: updated,
-        stale_cleared: 0,
-        skipped,
-    })
 }
 
 async fn record_login_aliases(

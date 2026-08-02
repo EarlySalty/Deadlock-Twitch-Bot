@@ -151,21 +151,51 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         ]
     );
 
-    // Tabellen ohne ID-Spalte finden den Kanal nur über den Namen — bei
-    // besetztem neuen Login bleibt ihre Zeile deshalb stehen.
-    let ohne_id_spalte: (String, String) = sqlx::query_as(
-        "SELECT invites.invite_code, health.last_raw_chat_error
+    // Einladungen und Ingest-Gesundheit tragen jetzt selbst die ID und folgen
+    // dem Kanal wie die übrigen Betriebstabellen; die Fremdzeile, die den neuen
+    // Login belegte, behält ihren Inhalt unter einem Platzhalter.
+    let invites: Vec<(String, String)> = sqlx::query_as(
+        "SELECT streamer_login, invite_code
+           FROM twitch_streamer_invites ORDER BY streamer_login",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        invites,
+        vec![
+            ("new_login".to_string(), "old-code".to_string()),
+            ("stale:unbekannt:new_login".to_string(), "new-code".to_string()),
+        ]
+    );
+    let health: Vec<(String, String)> = sqlx::query_as(
+        "SELECT streamer_login, last_raw_chat_error
+           FROM twitch_raw_chat_ingest_health ORDER BY streamer_login",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        health,
+        vec![
+            ("new_login".to_string(), "alt".to_string()),
+            ("stale:unbekannt:new_login".to_string(), "neu gewinnt".to_string()),
+        ]
+    );
+    // Und die ID steht wirklich in der Zeile, nicht nur der neue Name.
+    let nachgetragene_ids: (String, String) = sqlx::query_as(
+        "SELECT invites.twitch_user_id, health.twitch_user_id
            FROM twitch_streamer_invites invites
            JOIN twitch_raw_chat_ingest_health health
              ON health.streamer_login = invites.streamer_login
-          WHERE invites.streamer_login = 'old_login'",
+          WHERE invites.streamer_login = 'new_login'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(
-        ohne_id_spalte,
-        ("old-code".to_string(), "alt".to_string())
+        nachgetragene_ids,
+        ("520300019".to_string(), "520300019".to_string())
     );
 
     // Das Kanal-Profil trägt eine ID und folgt dem Kanal; die verwaiste
@@ -210,9 +240,9 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
             "520300019".to_string(),
         )
     );
-    // Unter dem neuen Login stehen jetzt: die aktive Partnerzeile dieses
-    // Kanals und die login-gebundenen Zeilen, die dort schon lagen. Das Profil
-    // kommt aus der ID-Zuordnung und trägt deshalb unseren Inhalt.
+    // Unter dem neuen Login steht jetzt durchgehend der Bestand dieses Kanals:
+    // Partnerzeile, Profil, Einladung und Ingest-Gesundheit kommen alle aus der
+    // ID-Zuordnung und tragen deshalb unseren Inhalt.
     let winning_rows: (i32, String, String, String) = sqlx::query_as(
         "SELECT partners.raid_bot_enabled, profile.profile_text,
                 invites.invite_code, health.last_raw_chat_error
@@ -231,8 +261,8 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         (
             1,
             "alt".to_string(),
-            "new-code".to_string(),
-            "neu gewinnt".to_string(),
+            "old-code".to_string(),
+            "alt".to_string(),
         )
     );
 
@@ -251,9 +281,11 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
+async fn veraltete_fremde_einladung_gibt_den_login_frei_und_warnt() {
     let pool = pool_or_skip!("t_rename_login_keyed_conflict");
     seed_operational_login_rows(&pool).await;
+    // Eine Einladung, die den neuen Login noch belegt und keinem bekannten
+    // Kanal zugeordnet ist — der typische Fall nach einer Freigabe des Namens.
     sqlx::query(
         "INSERT INTO twitch_streamer_invites (streamer_login, invite_code, invite_url)
          VALUES ('new_login', 'new-code', 'https://example.invalid/new')",
@@ -271,8 +303,8 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
     .await;
     let report = report.unwrap();
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT streamer_login, invite_code
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT streamer_login, twitch_user_id, invite_code
            FROM twitch_streamer_invites
           ORDER BY streamer_login",
     )
@@ -287,22 +319,32 @@ async fn login_keyed_konflikt_bewahrt_alte_zeile_und_warnt() {
             warnings.first().is_some_and(|line| {
                 line.contains("table=twitch_streamer_invites")
                     && line.contains("twitch_user_id=520300019")
-                    && line.contains("old_login=old_login")
-                    && line.contains("new_login=new_login")
+                    && line.contains("fremde_user_id=unbekannt")
+                    && line.contains("login=new_login")
             }),
             report.counts.for_table("twitch_streamer_invites"),
         ),
         (
             vec![
-                ("new_login".to_string(), "new-code".to_string()),
-                ("old_login".to_string(), "old-code".to_string()),
+                // Unsere Einladung folgt dem Kanal und trägt jetzt die ID.
+                (
+                    "new_login".to_string(),
+                    Some("520300019".to_string()),
+                    "old-code".to_string(),
+                ),
+                // Die fremde bleibt inhaltlich erhalten, gibt aber den Login frei.
+                (
+                    "stale:unbekannt:new_login".to_string(),
+                    None,
+                    "new-code".to_string(),
+                ),
             ],
             1,
             true,
             tb_monitoring::RenameTableCounts {
-                renamed: 0,
-                stale_cleared: 0,
-                skipped: 1,
+                renamed: 1,
+                stale_cleared: 1,
+                skipped: 0,
             },
         )
     );

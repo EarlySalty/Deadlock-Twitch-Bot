@@ -59,6 +59,7 @@ pub fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<Incomi
     }
     Some(IncomingMessage {
         channel_login: channel,
+        channel_user_id: room_id.to_string(),
         twitch_user_id: user_id.to_string(),
         twitch_login: login,
         content: text,
@@ -109,5 +110,32 @@ mod tests {
             parsed.tags.get("tmi-sent-ts").map(String::as_str),
             Some("1784138400123")
         );
+    }
+
+    /// Twitch schickt die Kanal-ID als `room-id` an jeder Nachricht mit. Sie
+    /// hier zu behalten ist der billigste Weg zur stabilen Identität: der
+    /// Alternativweg wäre, den Kanal später aus seinem Namen zurückzurechnen —
+    /// teurer und nur so gut wie die Namensauflösung.
+    #[test]
+    fn behaelt_die_kanal_id_aus_der_room_id() {
+        let parsed = parse_privmsg(
+            "@room-id=520300019;user-id=42;id=m1 \
+             :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #coolysdl :hallo welt",
+        )
+        .expect("PRIVMSG muss geparst werden");
+        let msg = build_incoming(&parsed, "botname").expect("Nachricht muss gebaut werden");
+
+        assert_eq!(msg.channel_login, "coolysdl");
+        assert_eq!(msg.channel_user_id, "520300019", "Kanal-ID aus room-id");
+        assert_eq!(msg.twitch_user_id, "42", "user-id bleibt der Chatter");
+    }
+
+    /// Ohne Kanal-ID ist die Nachricht unbrauchbar — das war schon vorher so,
+    /// bleibt aber wichtig: sonst käme eine leere ID in die Lesepfade.
+    #[test]
+    fn verwirft_nachricht_ohne_room_id() {
+        let parsed =
+            parse_privmsg("@user-id=42;id=m1 :viewer!v@v PRIVMSG #coolysdl :hallo").expect("parse");
+        assert!(build_incoming(&parsed, "botname").is_none());
     }
 }

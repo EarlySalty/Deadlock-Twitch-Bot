@@ -179,7 +179,13 @@ impl EngagementPipeline {
 
     async fn handle_inner(&self, msg: &IncomingMessage) -> HandleResult {
         // --- Gate-Kaskade ---
-        let settings = match gate::load_settings(&self.pool, &msg.channel_login).await {
+        let settings = match gate::load_settings(
+            &self.pool,
+            &msg.channel_login,
+            Some(&msg.channel_user_id),
+        )
+        .await
+        {
             Some(s) if s.enabled => s,
             _ => return HandleResult::new(Decision::Disabled),
         };
@@ -582,7 +588,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], irc_read BOOLEAN NOT NULL DEFAULT FALSE, output_mode TEXT NOT NULL DEFAULT 'off')",
+            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, channel_user_id TEXT, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], irc_read BOOLEAN NOT NULL DEFAULT FALSE, output_mode TEXT NOT NULL DEFAULT 'off')",
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, last_game TEXT)",
             "CREATE TABLE twitch_user_engagement_optout (twitch_user_id TEXT PRIMARY KEY, opted_out_at TIMESTAMPTZ DEFAULT NOW())",
@@ -627,6 +633,7 @@ mod tests {
     fn msg() -> IncomingMessage {
         IncomingMessage {
             channel_login: "nani".to_string(),
+            channel_user_id: "c1".to_string(),
             twitch_user_id: "u1".to_string(),
             twitch_login: "chatter".to_string(),
             content: "lohnt sich trophy collector auf haze".to_string(),
