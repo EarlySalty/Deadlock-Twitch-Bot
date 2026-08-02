@@ -17,20 +17,47 @@
 -- Wiederaufnehmbar: jeder Batch greift nur Zeilen mit NULL. Abbrechen und
 -- später erneut starten ist unschädlich.
 --
--- Komprimierte Chunks von twitch_viewer_presence_ticks lassen kein UPDATE zu.
--- Sie werden NICHT still übersprungen, sondern am Ende namentlich gemeldet.
--- Erst danach entscheidet ein Mensch, ob dekomprimiert wird:
+-- Zu den komprimierten Chunks von twitch_viewer_presence_ticks: TimescaleDB
+-- 2.17.2 (die Version auf Prod) nimmt das UPDATE an und dekomprimiert dafür
+-- implizit — gemessen an drei zuvor komprimierten Chunks, danach 0 offene
+-- Zeilen. Es bricht also nichts ab. Der Lauf ist auf diesen Chunks aber
+-- deutlich teurer; wer den Aufwand steuern will, dekomprimiert vorher gezielt:
 --   SELECT decompress_chunk(c) FROM show_chunks('twitch_viewer_presence_ticks') c;
 
-CREATE OR REPLACE PROCEDURE tb_backfill_grosse_tabellen(batch_groesse INT DEFAULT 50000)
+-- Die Auflösung Login -> ID, in der Reihenfolge ihrer Verlässlichkeit:
+-- kanonische Identität, Monitoring-Roster, dann eindeutige Alias-Historie.
+-- Ein von Twitch wiedervergebener Name ist mehrdeutig und fehlt hier bewusst.
+CREATE OR REPLACE VIEW tb_backfill_aufloesung AS
+WITH quellen AS (
+    SELECT LOWER(twitch_login) AS login, twitch_user_id, 1 AS rang
+      FROM twitch_streamer_identities
+     WHERE COALESCE(TRIM(twitch_user_id), '') <> ''
+    UNION ALL
+    SELECT LOWER(twitch_login), twitch_user_id, 2
+      FROM twitch_streamers
+     WHERE COALESCE(TRIM(twitch_user_id), '') <> ''
+    UNION ALL
+    SELECT login, twitch_user_id, 3 FROM (
+        SELECT LOWER(login) AS login, MIN(twitch_user_id) AS twitch_user_id
+          FROM twitch_login_aliases
+         GROUP BY LOWER(login)
+        HAVING COUNT(DISTINCT twitch_user_id) = 1
+    ) eindeutig
+)
+SELECT DISTINCT ON (login) login, twitch_user_id
+  FROM quellen ORDER BY login, rang;
+
+CREATE OR REPLACE PROCEDURE tb_backfill_grosse_tabellen()
 LANGUAGE plpgsql
 AS $$
 DECLARE
     ziel record;
+    logins text[];
+    ids text[];
+    i int;
     geaendert bigint;
     gesamt_tabelle bigint;
     offen bigint;
-    runden int;
 BEGIN
     FOR ziel IN
         SELECT * FROM (VALUES
@@ -39,63 +66,48 @@ BEGIN
             ('twitch_viewer_presence_ticks', 'streamer_login', 'twitch_user_id')
         ) AS t(tabelle, login_spalte, id_spalte)
     LOOP
+        -- Ein Stapel ist ein Login, nicht ein Zeilenfenster.
+        --
+        -- Zeilenfenster über ctid scheiden aus zwei Gründen aus: auf einem
+        -- komprimierten Hypertable lehnt TimescaleDB ctid ab ("transparent
+        -- decompression only supports tableoid system column"), und ein
+        -- Fenster, das nur auf "ID noch NULL" filtert, bleibt bei
+        -- unauflösbaren Zeilen stehen — twitch_stats_category enthält
+        -- Scraper-Daten beliebiger fremder Streamer, die zu Millionen nicht
+        -- auflösbar sind, und der Lauf hielte sich danach für fertig.
+        --
+        -- Die Login-Liste wird vorher in ein Array geholt statt in einem
+        -- Cursor gehalten: der COMMIT pro Login würde ein offenes Portal
+        -- ungültig machen.
+        EXECUTE format(
+            'SELECT COALESCE(array_agg(a.login ORDER BY a.login), ARRAY[]::text[]),
+                    COALESCE(array_agg(a.twitch_user_id ORDER BY a.login), ARRAY[]::text[])
+               FROM tb_backfill_aufloesung a
+              WHERE EXISTS (SELECT 1 FROM %I z
+                             WHERE LOWER(z.%I) = a.login AND z.%I IS NULL)',
+            ziel.tabelle, ziel.login_spalte, ziel.id_spalte
+        ) INTO logins, ids;
+
         gesamt_tabelle := 0;
-        runden := 0;
-        LOOP
-            -- Auflösung in der Reihenfolge ihrer Verlässlichkeit: kanonische
-            -- Identität, Monitoring-Roster, dann eindeutige Alias-Historie.
-            -- Ein wiedervergebener Name ist mehrdeutig und bleibt NULL.
+        RAISE NOTICE '%: % auflösbare Logins zu füllen', ziel.tabelle, COALESCE(array_length(logins, 1), 0);
+
+        FOR i IN 1 .. COALESCE(array_length(logins, 1), 0) LOOP
             EXECUTE format(
-                'WITH aufloesung AS (
-                     SELECT LOWER(twitch_login) AS login, twitch_user_id, 1 AS rang
-                       FROM twitch_streamer_identities
-                      WHERE COALESCE(TRIM(twitch_user_id), '''') <> ''''
-                     UNION ALL
-                     SELECT LOWER(twitch_login), twitch_user_id, 2
-                       FROM twitch_streamers
-                      WHERE COALESCE(TRIM(twitch_user_id), '''') <> ''''
-                     UNION ALL
-                     SELECT login, twitch_user_id, 3 FROM (
-                         SELECT LOWER(login) AS login,
-                                MIN(twitch_user_id) AS twitch_user_id
-                           FROM twitch_login_aliases
-                          GROUP BY LOWER(login)
-                         HAVING COUNT(DISTINCT twitch_user_id) = 1
-                     ) eindeutig
-                 ),
-                 beste AS (
-                     SELECT DISTINCT ON (login) login, twitch_user_id
-                       FROM aufloesung ORDER BY login, rang
-                 ),
-                 stapel AS (
-                     SELECT ctid FROM %I
-                      WHERE %I IS NULL
-                        AND COALESCE(TRIM(%I), '''') <> ''''
-                      LIMIT %s
-                 )
-                 UPDATE %I ziel
-                    SET %I = beste.twitch_user_id
-                   FROM stapel, beste
-                  WHERE ziel.ctid = stapel.ctid
-                    AND LOWER(ziel.%I) = beste.login',
-                ziel.tabelle, ziel.id_spalte, ziel.login_spalte, batch_groesse,
-                ziel.tabelle, ziel.id_spalte, ziel.login_spalte
-            );
+                'UPDATE %I SET %I = $1 WHERE %I IS NULL AND LOWER(%I) = $2',
+                ziel.tabelle, ziel.id_spalte, ziel.id_spalte, ziel.login_spalte
+            ) USING ids[i], logins[i];
             GET DIAGNOSTICS geaendert = ROW_COUNT;
             gesamt_tabelle := gesamt_tabelle + geaendert;
-            runden := runden + 1;
             COMMIT;
-            -- Abbruch, wenn ein Stapel nichts mehr ändert: die restlichen
-            -- Zeilen sind nicht auflösbar, nicht "noch nicht dran".
-            EXIT WHEN geaendert = 0;
-            IF runden % 20 = 0 THEN
-                RAISE NOTICE '%: % Zeilen gefüllt ...', ziel.tabelle, gesamt_tabelle;
+            IF i % 200 = 0 THEN
+                RAISE NOTICE '%: % von % Logins, % Zeilen gefüllt ...',
+                    ziel.tabelle, i, array_length(logins, 1), gesamt_tabelle;
             END IF;
         END LOOP;
 
         EXECUTE format('SELECT COUNT(*) FROM %I WHERE %I IS NULL', ziel.tabelle, ziel.id_spalte)
            INTO offen;
-        RAISE NOTICE '%: % Zeilen gefüllt, % bleiben ohne ID',
+        RAISE NOTICE '%: % Zeilen gefüllt, % bleiben ohne ID (nicht auflösbarer Login)',
             ziel.tabelle, gesamt_tabelle, offen;
     END LOOP;
 END
@@ -103,9 +115,11 @@ $$;
 
 CALL tb_backfill_grosse_tabellen();
 
--- Komprimierte Chunks melden. Sie haben das UPDATE oben nicht angenommen und
--- tragen deshalb weiter NULL — das ist kein stiller Rest, sondern eine
--- Arbeitsliste.
+-- Welche Chunks nach dem Lauf komprimiert sind. Das ist eine reine
+-- Zustandsmeldung und kein Rest: der Lauf oben füllt auch komprimierte
+-- Chunks (2.17.2 dekomprimiert dafür implizit) — verifiziert mit einem
+-- Testlauf über drei zuvor komprimierte Chunks, danach 0 offene Zeilen.
+-- Die Zahl der offenen Zeilen steht in der NOTICE der jeweiligen Tabelle.
 DO $melde$
 DECLARE
     chunk record;
@@ -122,12 +136,13 @@ BEGIN
          ORDER BY chunk_name
     LOOP
         anzahl := anzahl + 1;
-        RAISE NOTICE 'komprimiert, nicht gefüllt: %.%', chunk.chunk_schema, chunk.chunk_name;
+        RAISE NOTICE 'komprimiert: %.%', chunk.chunk_schema, chunk.chunk_name;
     END LOOP;
     IF anzahl > 0 THEN
-        RAISE NOTICE '% komprimierte Chunks übrig. Zum Nachziehen erst dekomprimieren, dann dieses Skript erneut starten.', anzahl;
+        RAISE NOTICE '% Chunks sind komprimiert. Das ist der Normalzustand und sagt nichts über offene Zeilen — die stehen in der NOTICE oben.', anzahl;
     END IF;
 END
 $melde$;
 
-DROP PROCEDURE tb_backfill_grosse_tabellen(INT);
+DROP PROCEDURE tb_backfill_grosse_tabellen();
+DROP VIEW tb_backfill_aufloesung;
