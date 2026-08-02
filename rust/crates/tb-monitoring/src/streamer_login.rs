@@ -89,34 +89,10 @@ const ID_TABELLEN: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     (
-        "twitch_engagement_log",
-        "channel_login",
-        "channel_user_id",
-        false,
-    ),
-    (
-        "twitch_engagement_stream_transcripts",
-        "channel_login",
-        "channel_user_id",
-        false,
-    ),
-    (
-        "twitch_outreach_shadow_events",
-        "channel_login",
-        "channel_user_id",
-        false,
-    ),
-    (
         "twitch_scam_guard_settings",
         "channel_login",
         "channel_user_id",
         true,
-    ),
-    (
-        "twitch_smalltalk_messages",
-        "channel_login",
-        "channel_user_id",
-        false,
     ),
     (
         "twitch_channel_match_state",
@@ -142,14 +118,32 @@ const ID_TABELLEN: &[(&str, &str, &str, bool)] = &[
         "twitch_user_id",
         true,
     ),
-    (
-        "twitch_scout_pitch_ledger",
-        "streamer_login",
-        "twitch_user_id",
-        false,
-    ),
     // Unique ist (login, cooldown_type), nicht der Login allein.
     ("twitch_promo_cooldowns", "login", "twitch_user_id", false),
+];
+
+/// Aufzeichnungen: Zeilen halten fest, was zu einem Zeitpunkt geschah, und
+/// tragen deshalb weiter den damals gültigen Namen — genau wie beendete
+/// Sessions. Der Rename trägt hier nur die stabile ID nach, damit die Zeilen
+/// trotzdem dem Kanal zuordenbar bleiben.
+const HISTORIE_TABELLEN: &[(&str, &str, &str)] = &[
+    ("twitch_engagement_log", "channel_login", "channel_user_id"),
+    (
+        "twitch_engagement_stream_transcripts",
+        "channel_login",
+        "channel_user_id",
+    ),
+    (
+        "twitch_outreach_shadow_events",
+        "channel_login",
+        "channel_user_id",
+    ),
+    (
+        "twitch_smalltalk_messages",
+        "channel_login",
+        "channel_user_id",
+    ),
+    ("twitch_scout_pitch_ledger", "streamer_login", "twitch_user_id"),
 ];
 
 /// Tabellen, die (noch) keine ID-Spalte tragen und deshalb allein über den
@@ -370,6 +364,24 @@ pub async fn rename_streamer_login(
             ..RenameTableCounts::default()
         },
     );
+    for (tabelle, login_spalte, id_spalte) in HISTORIE_TABELLEN {
+        let nachgetragen = sqlx::query(&format!(
+            "UPDATE {tabelle} SET {id_spalte} = $1
+              WHERE {id_spalte} IS NULL AND LOWER({login_spalte}) = LOWER($2)"
+        ))
+        .bind(user_id)
+        .bind(&old_login)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        counts.push(
+            tabelle,
+            RenameTableCounts {
+                renamed: nachgetragen,
+                ..RenameTableCounts::default()
+            },
+        );
+    }
     for (tabelle, login_spalte) in LOGIN_TABELLEN {
         let table_counts =
             rewrite_login_keyed(&mut tx, tabelle, login_spalte, user_id, &old_login, &new_login)
@@ -450,14 +462,73 @@ async fn rewrite_user_scoped(
                 OR ({id_column} IS NULL AND LOWER({login_column}) = LOWER($3)))
            AND (LOWER({login_column}) <> LOWER($2) OR {id_column} IS DISTINCT FROM $1)"
     );
-    counts.renamed = sqlx::query(&update)
-        .bind(user_id)
-        .bind(new_login)
-        .bind(old_login)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
+    let (renamed, skipped) =
+        update_mit_konflikt_ruecksprung(tx, table, &update, user_id, new_login, Some(old_login))
+            .await?;
+    counts.renamed = renamed;
+    counts.skipped = skipped;
     Ok(counts)
+}
+
+/// Führt ein Rename-Update hinter einem Savepoint aus.
+///
+/// Trägt die Tabelle schon eine Zeile unter dem neuen Login, die diesem Kanal
+/// selbst gehört — etwa weil ein Schreibpfad nach der Umbenennung bereits den
+/// neuen Namen benutzt hat —, läuft das Update in eine Unique-Verletzung.
+/// Zusammenführen kann der Rename nicht entscheiden, abbrechen darf er nicht:
+/// die Transaktion würde jede EventSub-Zustellung dieses Kanals mitreißen und
+/// bei jedem Retry erneut scheitern. Also Rücksprung auf den Savepoint, Zeile
+/// stehen lassen, Konflikt melden.
+async fn update_mit_konflikt_ruecksprung(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &str,
+    update: &str,
+    user_id: &str,
+    new_login: &str,
+    old_login: Option<&str>,
+) -> Result<(u64, u64), sqlx::Error> {
+    sqlx::query("SAVEPOINT tb_rename_tabelle")
+        .execute(&mut **tx)
+        .await?;
+    let mut query = sqlx::query(update).bind(user_id).bind(new_login);
+    if let Some(old_login) = old_login {
+        query = query.bind(old_login);
+    }
+    match query.execute(&mut **tx).await {
+        Ok(result) => {
+            sqlx::query("RELEASE SAVEPOINT tb_rename_tabelle")
+                .execute(&mut **tx)
+                .await?;
+            Ok((result.rows_affected(), 0))
+        }
+        Err(error) if ist_unique_verletzung(&error) => {
+            sqlx::query("ROLLBACK TO SAVEPOINT tb_rename_tabelle")
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("RELEASE SAVEPOINT tb_rename_tabelle")
+                .execute(&mut **tx)
+                .await?;
+            tracing::warn!(
+                table = %table,
+                twitch_user_id = %user_id,
+                new_login = %new_login,
+                "Twitch-Rename übersprungen: unter dem neuen Login liegt bereits \
+                 eine Zeile dieses Kanals, Zusammenführen entscheidet der Rename nicht"
+            );
+            Ok((0, 1))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn ist_unique_verletzung(error: &sqlx::Error) -> bool {
+    matches!(
+        error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .as_deref(),
+        Some("23505") | Some("23P01")
+    )
 }
 
 /// Wie [`rewrite_user_scoped`], aber der Unique-Index von `twitch_partners`
@@ -478,22 +549,22 @@ async fn rewrite_partners(
         Some("status = 'active'"),
     )
     .await?;
-    let renamed = sqlx::query(
+    let (renamed, skipped) = update_mit_konflikt_ruecksprung(
+        tx,
+        "twitch_partners",
         "UPDATE twitch_partners SET twitch_login = $2, twitch_user_id = $1
          WHERE (twitch_user_id = $1
                 OR (twitch_user_id IS NULL AND LOWER(twitch_login) = LOWER($3)))
            AND (LOWER(twitch_login) <> LOWER($2) OR twitch_user_id IS DISTINCT FROM $1)",
+        user_id,
+        new_login,
+        Some(old_login),
     )
-    .bind(user_id)
-    .bind(new_login)
-    .bind(old_login)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
+    .await?;
     Ok(RenameTableCounts {
         renamed,
         stale_cleared,
-        skipped: 0,
+        skipped,
     })
 }
 

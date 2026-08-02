@@ -577,3 +577,85 @@ async fn rename_streamer_login_rollt_bei_spaetem_db_fehler_alles_zurueck() {
         assert_eq!(login, "old_login", "{table}.{column} wurde nicht zurückgerollt");
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn eigene_zeile_unter_dem_neuen_login_bricht_den_rename_nicht_ab() {
+    let pool = pool_or_skip!("t_rename_eigene_kollision");
+    seed_operational_login_rows(&pool).await;
+    // Ein Schreibpfad hat nach der Umbenennung bereits den neuen Namen benutzt;
+    // der Trigger hat dabei unsere eigene ID eingetragen.
+    for statement in [
+        "INSERT INTO twitch_engagement_settings (channel_login, channel_user_id, enabled)
+         VALUES ('new_login', '520300019', TRUE)",
+        "INSERT INTO twitch_promo_cooldowns (login, cooldown_type, twitch_user_id)
+         VALUES ('old_login', 'promo', '520300019')",
+        "INSERT INTO twitch_promo_cooldowns (login, cooldown_type, twitch_user_id)
+         VALUES ('new_login', 'promo', '520300019')",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    let (report, logs) = capture_logs(rename_streamer_login(
+        &pool,
+        "520300019",
+        "old_login",
+        "new_login",
+    ))
+    .await;
+    let report = report.expect("Kollision in einer Tabelle darf den Rename nicht abbrechen");
+
+    // Der Kernbetrieb ist trotzdem umbenannt.
+    let live_login: String = sqlx::query_scalar(
+        "SELECT streamer_login FROM twitch_live_state WHERE twitch_user_id = '520300019'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Beide Kollisionszeilen stehen unverändert da, keine wurde verworfen.
+    let settings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_settings")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let cooldowns: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_promo_cooldowns")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            live_login.as_str(),
+            settings,
+            cooldowns,
+            report.counts.for_table("twitch_engagement_settings").skipped,
+            report.counts.for_table("twitch_promo_cooldowns").skipped,
+            logs.contains("Twitch-Rename übersprungen"),
+        ),
+        ("new_login", 2, 2, 1, 1, true)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn aufzeichnungen_behalten_den_damaligen_namen_und_bekommen_die_id() {
+    let pool = pool_or_skip!("t_rename_historie");
+    seed_operational_login_rows(&pool).await;
+    sqlx::query("INSERT INTO twitch_engagement_log (channel_login) VALUES ('old_login')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    rename_streamer_login(&pool, "520300019", "old_login", "new_login")
+        .await
+        .unwrap();
+
+    let zeile: (String, Option<String>) =
+        sqlx::query_as("SELECT channel_login, channel_user_id FROM twitch_engagement_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // Der Eintrag hält fest, was damals geschah — unter dem Namen von damals,
+    // aber ab jetzt dem Kanal zuordenbar.
+    assert_eq!(
+        zeile,
+        ("old_login".to_string(), Some("520300019".to_string()))
+    );
+}

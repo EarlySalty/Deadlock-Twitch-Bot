@@ -71,18 +71,29 @@ BEGIN
                 ('twitch_login_aliases', 'login', 'twitch_user_id')
             ) AS q(tabelle, login_spalte, id_spalte)
         LOOP
+            -- Nur eindeutige Zuordnungen. Twitch gibt aufgegebene Namen wieder
+            -- frei; steht ein Login in der Alias-Historie unter mehreren IDs,
+            -- wäre jede Wahl geraten. Solche Zeilen bleiben offen.
             EXECUTE format(
                 'UPDATE public.%I AS ziel
-                    SET %I = quelle.%I
-                   FROM public.%I AS quelle
+                    SET %I = eindeutig.id
+                   FROM (
+                          SELECT LOWER(%I) AS login, MIN(%I) AS id
+                            FROM public.%I
+                           WHERE COALESCE(TRIM(%I), '''') <> ''''
+                           GROUP BY LOWER(%I)
+                          HAVING COUNT(DISTINCT %I) = 1
+                        ) AS eindeutig
                   WHERE ziel.%I IS NULL
-                    AND LOWER(ziel.%I) = LOWER(quelle.%I)
-                    AND COALESCE(TRIM(quelle.%I), '''') <> ''''',
-                ziel.tabelle, ziel.id_spalte, quelle.id_spalte,
+                    AND LOWER(ziel.%I) = eindeutig.login',
+                ziel.tabelle, ziel.id_spalte,
+                quelle.login_spalte, quelle.id_spalte,
                 quelle.tabelle,
+                quelle.id_spalte,
+                quelle.login_spalte,
+                quelle.id_spalte,
                 ziel.id_spalte,
-                ziel.login_spalte, quelle.login_spalte,
-                quelle.id_spalte
+                ziel.login_spalte
             );
         END LOOP;
 
