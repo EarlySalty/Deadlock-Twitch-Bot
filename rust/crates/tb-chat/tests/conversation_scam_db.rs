@@ -460,6 +460,67 @@ async fn run_action_guard_with_judge(
     calls
 }
 
+/// Nach einer Umbenennung trägt die Settings-Zeile noch den alten Namen. Ohne
+/// die Kanal-ID fände der Guard sie nicht und würde stillschweigend nichts tun
+/// — ein abgeschalteter Scam-Schutz sieht von außen aus wie ein Kanal ohne
+/// Vorfälle. Die ID kommt als `broadcaster_user_id` an jedem Event mit.
+#[tokio::test]
+async fn guard_findet_settings_nach_umbenennung_ueber_die_kanal_id() {
+    let pool = pool_or_skip!("tb_conversation_scam_rename");
+    // Settings unter dem alten Login, aber mit der stabilen ID.
+    sqlx::query(
+        "INSERT INTO twitch_scam_guard_settings (channel_login, channel_user_id, mode) \
+         VALUES ('derechtecoolys', 'channel-id', 'alert_only')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Session und Chatter laufen bereits unter dem neuen Namen.
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) \
+         VALUES (1, 'coolysdl', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_session_chatters \
+         (session_id, streamer_login, chatter_login, is_first_time_streamer) \
+         VALUES (1, 'coolysdl', 'sam_09995', TRUE)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let api: Arc<dyn ChatApi> = Arc::new(NoopApi);
+    let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    let guard = Arc::new(ConversationScamGuard::new(
+        pool.clone(),
+        "bot-id".to_string(),
+        Arc::new(FixedJudge),
+        api,
+        moderation,
+    ));
+    let mut event = scam_event();
+    event.broadcaster_user_login = "coolysdl".to_string();
+    // Gleiche ID wie in der Settings-Zeile — nur der Name hat sich geändert.
+    event.broadcaster_user_id = "channel-id".to_string();
+
+    guard.observe(&event);
+    // Geprüft wird `action_taken`, nicht `verdict`: ein Verdict entsteht auch
+    // ohne gefundene Settings, weil `load_settings` dann auf
+    // `GuardSettings::default()` fällt — und die stehen auf `auto_ban`. Nur
+    // `suggested` kann aus der `alert_only`-Zeile stammen, die es allein über
+    // `channel_user_id` zu finden gab.
+    let action = wait_action_taken(&pool).await;
+    assert_eq!(
+        action, "suggested",
+        "Settings wurden nicht über die Kanal-ID gefunden — der Guard lief auf \
+         den auto_ban-Defaults statt auf der alert_only-Zeile des Kanals"
+    );
+    drop_schema(&pool, "tb_conversation_scam_rename").await;
+}
+
 #[tokio::test]
 async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
     let pool = pool_or_skip!("tb_conversation_scam_guard");
