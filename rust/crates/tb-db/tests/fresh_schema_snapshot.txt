@@ -1058,6 +1058,7 @@ twitch_raw_chat_ingest_health|last_raw_chat_insert_ok_at|text|YES|
 twitch_raw_chat_ingest_health|last_raw_chat_message_at|text|YES|
 twitch_raw_chat_ingest_health|raw_chat_lag_seconds|integer|YES|
 twitch_raw_chat_ingest_health|streamer_login|text|NO|
+twitch_raw_chat_ingest_health|twitch_user_id|text|YES|
 twitch_raw_chat_ingest_health|updated_at|text|NO|
 twitch_roadmap_items|created_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_roadmap_items|description|text|YES|
@@ -1273,6 +1274,7 @@ twitch_streamer_invites|invite_code|text|NO|
 twitch_streamer_invites|invite_url|text|NO|
 twitch_streamer_invites|last_sent_at|text|YES|
 twitch_streamer_invites|streamer_login|text|NO|
+twitch_streamer_invites|twitch_user_id|text|YES|
 twitch_streamers_partner_state|archived_at|text|YES|
 twitch_streamers_partner_state|created_at|text|YES|
 twitch_streamers_partner_state|discord_display_name|text|YES|

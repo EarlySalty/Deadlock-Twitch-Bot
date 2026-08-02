@@ -218,11 +218,13 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_streamer_invites (
             streamer_login TEXT PRIMARY KEY,
+            twitch_user_id TEXT,
             invite_code TEXT NOT NULL UNIQUE,
             invite_url TEXT NOT NULL
         )",
         "CREATE TABLE twitch_raw_chat_ingest_health (
             streamer_login TEXT PRIMARY KEY,
+            twitch_user_id TEXT,
             last_raw_chat_error TEXT,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
