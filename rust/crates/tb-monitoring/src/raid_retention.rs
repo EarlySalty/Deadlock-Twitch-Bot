@@ -18,6 +18,10 @@ struct RaidRow {
     id: i64,
     from_login: String,
     to_login: String,
+    /// Ziel-ID aus `twitch_raid_history` — Helix liefert sie an jedem Raid mit.
+    /// Sie löst die Ziel-Session auch dann auf, wenn das Ziel sich seit dem
+    /// Raid umbenannt hat.
+    to_broadcaster_id: Option<String>,
     viewer_count: i32,
     executed_at: DateTime<Utc>,
 }
@@ -39,6 +43,7 @@ pub async fn compute_raid_retention(pool: &PgPool) -> Result<RetentionStats, sql
     let raids = sqlx::query!(
         r#"
         SELECT id, from_broadcaster_login, to_broadcaster_login,
+               to_broadcaster_id AS "to_broadcaster_id?",
                COALESCE(viewer_count, 0) AS "viewer_count!", executed_at
          FROM twitch_raid_history
          WHERE executed_at >= NOW() - INTERVAL '7 days'
@@ -54,6 +59,12 @@ pub async fn compute_raid_retention(pool: &PgPool) -> Result<RetentionStats, sql
             id: row.id,
             from_login: row.from_broadcaster_login.trim().to_lowercase(),
             to_login: row.to_broadcaster_login.trim().to_lowercase(),
+            to_broadcaster_id: row
+                .to_broadcaster_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             viewer_count: row.viewer_count,
             executed_at: row.executed_at,
         };
@@ -95,12 +106,15 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     // 2) Ziel-Session auflösen (timestamptz ↔ timestamptz, kein Cast gg. Prod).
     let target_session: Option<i64> = sqlx::query_scalar!(
         "SELECT id FROM twitch_stream_sessions \
-         WHERE LOWER(streamer_login) = $1 \
+         WHERE (twitch_user_id = $3 \
+                OR (LOWER(streamer_login) = $1 \
+                    AND (twitch_user_id IS NULL OR $3::text IS NULL))) \
            AND started_at <= $2 \
            AND (ended_at IS NULL OR ended_at >= $2) \
-         ORDER BY started_at DESC LIMIT 1",
+         ORDER BY (twitch_user_id = $3) DESC NULLS LAST, started_at DESC LIMIT 1",
         &raid.to_login,
         raid.executed_at,
+        raid.to_broadcaster_id.as_deref(),
     )
     .fetch_optional(pool)
     .await?;

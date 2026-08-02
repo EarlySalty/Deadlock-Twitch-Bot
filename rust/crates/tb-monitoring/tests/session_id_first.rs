@@ -269,3 +269,50 @@ async fn orphan_candidates_liefern_die_id_mit() {
         "der Kandidat muss die ID aus der Zeile tragen"
     );
 }
+
+/// Die Raid-Retention löste die Ziel-Session über `to_broadcaster_login` auf,
+/// obwohl `twitch_raid_history` die Ziel-ID mitliefert (Helix schickt sie an
+/// jedem Raid; auf Prod ist sie sogar der Kompressions-Segmentschlüssel).
+/// Nach einer Umbenennung des Ziels fand der Login-Weg keine Session — der
+/// Raid fiel still als `SkippedNoSession` heraus.
+#[tokio::test]
+async fn raid_retention_findet_die_zielsession_ueber_die_id() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_retention_id").await else {
+        return;
+    };
+    let executed = chrono::Utc::now() - chrono::Duration::hours(2);
+    // Session des Ziels läuft noch unter dem alten Login, trägt aber die ID.
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, twitch_user_id, started_at, samples)
+         VALUES (9001, $1, $2, $3, 5)",
+    )
+    .bind(ALT)
+    .bind(UID)
+    .bind(executed - chrono::Duration::hours(1))
+    .execute(&pool)
+    .await
+    .expect("Ziel-Session anlegen");
+    // Der Raid kennt das Ziel bereits unter dem neuen Namen — plus ID.
+    sqlx::query(
+        "INSERT INTO twitch_raid_history
+             (id, from_broadcaster_login, to_broadcaster_login, to_broadcaster_id,
+              viewer_count, executed_at)
+         VALUES (7001, 'quelle', $1, $2, 12, $3)",
+    )
+    .bind(NEU)
+    .bind(UID)
+    .bind(executed)
+    .execute(&pool)
+    .await
+    .expect("Raid anlegen");
+
+    let stats = tb_monitoring::raid_retention::compute_raid_retention(&pool)
+        .await
+        .expect("Retention-Lauf darf nicht fehlschlagen");
+
+    assert_eq!(
+        stats.raids_skipped_no_session, 0,
+        "die Ziel-Session muss über die ID gefunden werden, nicht über den Namen"
+    );
+    assert_eq!(stats.raids_computed, 1, "der Raid muss berechnet werden");
+}
