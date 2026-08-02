@@ -1,3 +1,11 @@
+## #413 — „Ich will nicht mehr" hält jetzt wirklich
+
+**Problem:** Wer als Streamer rausgenommen wurde, weil er kein Partner mehr sein wollte, war zwar sofort raus — aber der Vermerk „will nicht mehr" wurde gar nicht erst gesetzt. Ein späteres Zurückholen hätte den Kanal wortlos wieder eingeschaltet.
+
+**Änderung:** Beim Zurücksetzen der Verifizierung wird der Wunsch jetzt fest hinterlegt und bleibt stehen.
+
+**Aktuelles Verhalten:** Wer so rausgenommen wird, bleibt draußen, bis er selbst wieder aktiv zustimmt. Alle anderen Wege, einen Kanal zu pausieren, bleiben unverändert.
+
 ## #412 — VOD-Link läuft nicht mehr nach einer Woche ab
 
 **Problem:** Der Link zum exportierten Stream-VOD war sieben Tage gültig, danach war die Aufnahme weg. Der Speicher dahinter wurde auf Dauer außerdem teuer.
