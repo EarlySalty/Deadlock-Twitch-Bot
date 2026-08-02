@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT channel_login AS \"channel_login!\", enabled AS \"enabled!\",\n                  steam_id, persona_override, tabu_topics, output_mode AS \"output_mode?\"\n             FROM twitch_engagement_settings WHERE channel_login = $1",
+  "query": "SELECT channel_login AS \"channel_login!\", enabled AS \"enabled!\",\n                  steam_id, persona_override, tabu_topics, output_mode AS \"output_mode?\"\n             FROM twitch_engagement_settings\n            WHERE channel_user_id = $2\n               OR (channel_login = $1 AND (channel_user_id IS NULL OR $2::text IS NULL))\n            ORDER BY (channel_user_id = $2) DESC NULLS LAST\n            LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -36,6 +36,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
@@ -48,5 +49,5 @@
       false
     ]
   },
-  "hash": "03533df6a81ad630d7c68194d99dec210b83db3eb6ea6e6f91cac3633e025ca0"
+  "hash": "58ee68cb2df2d170803345d4f48b135363aeacde28d26b294667b8720a9d985f"
 }

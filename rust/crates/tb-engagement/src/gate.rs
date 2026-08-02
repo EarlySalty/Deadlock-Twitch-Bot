@@ -15,15 +15,44 @@ use crate::types::{Decision, EngagementSettings, HandleResult, OutputMode};
 /// `output_mode` kommt aus der Migration mit `NOT NULL DEFAULT 'off'`; ein
 /// fehlender/unbekannter Wert fällt über [`OutputMode::from_db`] fail-safe auf
 /// `off` zurück (kein Output im Zweifel).
-pub async fn load_settings(pool: &PgPool, channel_login: &str) -> Option<EngagementSettings> {
+///
+/// `channel_user_id` ist die stabile Kanal-ID (IRC-Tag `room-id`, EventSub
+/// `broadcaster_user_id`). Ist sie bekannt, findet die Zeile auch nach einer
+/// Umbenennung noch — der Login in der Zeile darf veraltet sein. `None` ist
+/// erlaubt und schaltet auf den reinen Login-Vergleich zurück; das brauchen
+/// Aufrufer, die nur einen Namen haben (etwa Dashboard-Routen).
+pub async fn load_settings(
+    pool: &PgPool,
+    channel_login: &str,
+    channel_user_id: Option<&str>,
+) -> Option<EngagementSettings> {
+    // Drei Fälle in einem Prädikat: ID trifft (überlebt die Umbenennung);
+    // kein Aufrufer-ID vorhanden → Login; Zeile ohne ID (Altbestand) → Login.
+    // `ORDER BY` bevorzugt den ID-Treffer, falls beides zugleich passt.
     let row = sqlx::query!(
         r#"SELECT channel_login AS "channel_login!", enabled AS "enabled!",
                   steam_id, persona_override, tabu_topics, output_mode AS "output_mode?"
-             FROM twitch_engagement_settings WHERE channel_login = $1"#,
-        channel_login
+             FROM twitch_engagement_settings
+            WHERE channel_user_id = $2
+               OR (channel_login = $1 AND (channel_user_id IS NULL OR $2::text IS NULL))
+            ORDER BY (channel_user_id = $2) DESC NULLS LAST
+            LIMIT 1"#,
+        channel_login,
+        channel_user_id
     )
     .fetch_optional(pool)
     .await
+    // Ein DB-Fehler sieht von außen aus wie "Kanal hat kein Engagement" — der
+    // Bot schweigt einfach. Ohne Logzeile ist das von einem bewusst
+    // abgeschalteten Kanal nicht zu unterscheiden.
+    .inspect_err(|e| {
+        tracing::warn!(
+            error = %e,
+            channel_login,
+            channel_user_id,
+            "Engagement: Settings nicht ladbar - Kanal wird wie abgeschaltet behandelt"
+        )
+    })
     .ok()
     .flatten();
     row.map(|r| EngagementSettings {
@@ -149,7 +178,8 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (\
-             channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, \
+             channel_login TEXT PRIMARY KEY, channel_user_id TEXT, \
+             enabled BOOLEAN NOT NULL DEFAULT FALSE, \
              steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], \
              output_mode TEXT NOT NULL DEFAULT 'off')",
         )
@@ -178,19 +208,19 @@ mod tests {
         sqlx::query("INSERT INTO twitch_user_engagement_optout (twitch_user_id) VALUES ('u_out')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('Nani', 1), ('passiv', 0)").execute(&pool).await.unwrap();
 
-        let s = load_settings(&pool, "nani").await.unwrap();
+        let s = load_settings(&pool, "nani", None).await.unwrap();
         assert!(s.enabled);
         assert_eq!(s.steam_id.as_deref(), Some("123"));
         assert_eq!(s.tabu_topics, vec!["politik".to_string(), "religion".to_string()]);
         // output_mode kommt aus dem Spalten-Default → off (kein Output ohne Toggle).
         assert_eq!(s.output_mode, OutputMode::Off);
-        assert!(load_settings(&pool, "unbekannt").await.is_none());
+        assert!(load_settings(&pool, "unbekannt", None).await.is_none());
 
         // Explizit gesetzter Modus wird gelesen.
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('livech', TRUE, 'live'), ('shadowch', TRUE, 'shadow')")
             .execute(&pool).await.unwrap();
-        assert_eq!(load_settings(&pool, "livech").await.unwrap().output_mode, OutputMode::Live);
-        assert_eq!(load_settings(&pool, "shadowch").await.unwrap().output_mode, OutputMode::Shadow);
+        assert_eq!(load_settings(&pool, "livech", None).await.unwrap().output_mode, OutputMode::Live);
+        assert_eq!(load_settings(&pool, "shadowch", None).await.unwrap().output_mode, OutputMode::Shadow);
 
         assert!(is_opted_out(&pool, "u_out").await);
         assert!(!is_opted_out(&pool, "u_in").await);
@@ -199,6 +229,60 @@ mod tests {
         assert!(is_operational_partner(&pool, "#Nani").await);
         assert!(!is_operational_partner(&pool, "passiv").await);
         assert!(!is_operational_partner(&pool, "unbekannt").await);
+    }
+
+    /// Der Ausfall vom 2026-08-01: `derechtecoolys` hieß plötzlich `coolysdl`,
+    /// die Settings-Zeile trug noch den alten Namen — und der Kanal fiel aus
+    /// dem Engagement. Mit der Kanal-ID aus `room-id` findet ihn die Query
+    /// trotzdem.
+    #[tokio::test]
+    async fn findet_den_kanal_nach_der_umbenennung_ueber_die_id() {
+        let Some(pool) = make_pool("t_eng_gate_rename").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, channel_user_id, enabled)
+             VALUES ('derechtecoolys', '520300019', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let per_id = load_settings(&pool, "coolysdl", Some("520300019")).await;
+        assert!(
+            per_id.as_ref().is_some_and(|s| s.enabled),
+            "neuer Login + bekannte ID muss die Zeile finden"
+        );
+
+        assert!(
+            load_settings(&pool, "coolysdl", None).await.is_none(),
+            "ohne ID bleibt der Kanal unauffindbar — genau der gemeldete Ausfall"
+        );
+        assert!(
+            load_settings(&pool, "derechtecoolys", None).await.is_some(),
+            "der alte Login trifft weiter, solange er in der Zeile steht"
+        );
+
+        // Eine Zeile ohne ID (Altbestand) muss über den Login erreichbar
+        // bleiben, auch wenn der Aufrufer eine ID mitbringt.
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled)
+             VALUES ('ohne_id', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            load_settings(&pool, "ohne_id", Some("999")).await.is_some(),
+            "Altbestand ohne ID-Spalte darf nicht unsichtbar werden"
+        );
+        // Fremde ID darf keinen anderen Kanal aufziehen.
+        assert!(
+            load_settings(&pool, "fremd", Some("520300019"))
+                .await
+                .is_some_and(|s| s.channel_login == "derechtecoolys"),
+            "die ID gewinnt gegen einen unbekannten Namen"
+        );
     }
 
     #[tokio::test]

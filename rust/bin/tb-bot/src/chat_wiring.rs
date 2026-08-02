@@ -1295,6 +1295,7 @@ impl ChatHooks {
         let broadcaster_id = event.broadcaster_user_id.clone();
         let msg = IncomingMessage {
             channel_login: event.broadcaster_user_login.to_lowercase(),
+            channel_user_id: broadcaster_id.clone(),
             twitch_user_id: event.chatter_user_id.clone(),
             twitch_login: event.chatter_user_login.clone(),
             content: event.message.text.clone(),
