@@ -1,9 +1,9 @@
 -- Backfill der Kanal-ID für die drei Tabellen, die zu groß für eine Migration
 -- sind. Ergänzt 20260802140000, die dort nur Spalte und Index angelegt hat.
 --
---   twitch_stats_category         8,6 Mio
---   twitch_stats_tracked          3,6 Mio
---   twitch_viewer_presence_ticks  3,1 Mio, komprimiertes Hypertable
+--   twitch_stats_category         8,6 Mio, komprimiertes Hypertable (41/43 Chunks)
+--   twitch_stats_tracked          3,6 Mio, komprimiertes Hypertable (41/43 Chunks)
+--   twitch_viewer_presence_ticks  3,1 Mio, komprimiertes Hypertable (16/18 Chunks)
 --
 -- ACHTUNG — dieses Skript schreibt durch. Es committet nach jedem Batch, damit
 -- kein Lock über Millionen Zeilen stehen bleibt. Ein umschließendes
@@ -17,12 +17,26 @@
 -- Wiederaufnehmbar: jeder Batch greift nur Zeilen mit NULL. Abbrechen und
 -- später erneut starten ist unschädlich.
 --
--- Zu den komprimierten Chunks von twitch_viewer_presence_ticks: TimescaleDB
--- 2.17.2 (die Version auf Prod) nimmt das UPDATE an und dekomprimiert dafür
--- implizit — gemessen an drei zuvor komprimierten Chunks, danach 0 offene
--- Zeilen. Es bricht also nichts ab. Der Lauf ist auf diesen Chunks aber
--- deutlich teurer; wer den Aufwand steuern will, dekomprimiert vorher gezielt:
---   SELECT decompress_chunk(c) FROM show_chunks('twitch_viewer_presence_ticks') c;
+-- VORAUSSETZUNG — vorher dekomprimieren, sonst bricht der Lauf ab:
+--   SELECT decompress_chunk(c, if_compressed => true) FROM show_chunks('twitch_stats_category') c;
+--   SELECT decompress_chunk(c, if_compressed => true) FROM show_chunks('twitch_stats_tracked') c;
+--   SELECT decompress_chunk(c, if_compressed => true) FROM show_chunks('twitch_viewer_presence_ticks') c;
+--
+-- Der frühere Kommentar hier behauptete, die implizite Dekompression von
+-- TimescaleDB 2.17.2 trage den Lauf durch. Am 2026-08-02 auf Prod widerlegt: der
+-- erste Lauf brach beim ersten Login von twitch_stats_category mit
+-- "tuple decompression limit exceeded by operation" ab. Die Grenze ist
+-- timescaledb.max_tuples_decompressed_per_dml_transaction (auf Prod 100000) und
+-- gilt pro Transaktion — hier also pro Login. Ein Login mit mehr als 100k Zeilen
+-- reißt sie. Der frühere Testlauf über drei Chunks war zu klein, um das zu sehen.
+-- Alle drei Tabellen sind komprimiert, nicht nur presence_ticks.
+--
+-- Das Limit per SET auf 0 zu heben wäre die kürzere Variante, verlagert die
+-- Dekompression aber unsichtbar in eine einzelne DML-Transaktion. Explizit
+-- dekomprimieren ist steuerbar und lässt den Fortschritt sehen.
+--
+-- Danach nichts von Hand rekomprimieren: die Compression-Policies (Jobs 1001,
+-- 1002, 1021, alle 12 h) holen das selbst nach.
 
 -- Die Auflösung Login -> ID, in der Reihenfolge ihrer Verlässlichkeit:
 -- kanonische Identität, Monitoring-Roster, dann eindeutige Alias-Historie.
