@@ -138,11 +138,26 @@ impl SessionTracker {
 
     /// Aktive Session-ID: Cache zuerst, sonst DB-Lookup (füllt den Cache).
     pub async fn active_session_id(&self, login: &str) -> Option<i64> {
+        self.active_session_id_for(login, None).await
+    }
+
+    /// Wie [`Self::active_session_id`], aber mit der stabilen Kanal-ID — die
+    /// findet die offene Session auch dann, wenn die Zeile noch den Login von
+    /// vor der Umbenennung trägt.
+    ///
+    /// Der Cache bleibt login-geschlüsselt: nach einem Rename ist der Eintrag
+    /// unter dem alten Namen ein Rest, der auf dieselbe Session-ID zeigt und
+    /// mit ihr abläuft — falsch antworten kann er nicht.
+    pub async fn active_session_id_for(
+        &self,
+        login: &str,
+        twitch_user_id: Option<&str>,
+    ) -> Option<i64> {
         let login = login.to_lowercase();
         if let Some(id) = self.cache.lock().expect("cache lock").get(&login).copied() {
             return Some(id);
         }
-        match self.store.find_open_id(&login).await {
+        match self.store.find_open_id(&login, twitch_user_id).await {
             Ok(Some(id)) => {
                 self.cache.lock().expect("cache lock").insert(login, id);
                 Some(id)
@@ -173,7 +188,7 @@ impl SessionTracker {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let mut session_id = self.active_session_id(&login).await;
+        let mut session_id = self.active_session_id_for(&login, twitch_user_id).await;
         if let Some(id) = session_id {
             let current = match self.store.stream_id_of(id).await {
                 Ok(current) => current,
@@ -220,6 +235,10 @@ impl SessionTracker {
 
         let new = NewSession {
             streamer_login: login.clone(),
+            twitch_user_id: twitch_user_id
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             stream_id: stream_id.map(str::to_string),
             started_at,
             viewer_count: stream.viewer_count,

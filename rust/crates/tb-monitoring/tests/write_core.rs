@@ -201,6 +201,7 @@ async fn session_start_schreibt_boolean_session_flags() {
 
     let new = NewSession {
         streamer_login: "drag".to_string(),
+        twitch_user_id: None,
         stream_id: Some("s-bool".to_string()),
         started_at: Utc::now(),
         viewer_count: 7,
@@ -401,6 +402,7 @@ async fn session_doppel_start_wird_db_seitig_verhindert() {
 
     let new = NewSession {
         streamer_login: "drag".to_string(),
+        twitch_user_id: None,
         stream_id: Some("s-1".to_string()),
         started_at: Utc::now(),
         viewer_count: 5,

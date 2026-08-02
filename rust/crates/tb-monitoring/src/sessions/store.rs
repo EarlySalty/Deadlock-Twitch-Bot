@@ -25,6 +25,11 @@ use crate::stream::{iso_seconds, parse_dt_utc};
 #[derive(Debug, Clone)]
 pub struct NewSession {
     pub streamer_login: String,
+    /// Stabile Kanal-ID. `None` nur, wo der Aufrufer sie wirklich nicht hat —
+    /// aus Poller und EventSub liegt sie immer an. Ist sie gesetzt, schreibt
+    /// der Insert sie selbst und der Übergangstrigger aus 20260801200000 muss
+    /// sie nicht über den Namen auflösen.
+    pub twitch_user_id: Option<String>,
     pub stream_id: Option<String>,
     pub started_at: DateTime<Utc>,
     pub viewer_count: i32,
@@ -126,13 +131,29 @@ impl SessionStore {
         .await
     }
 
-    /// Jüngste offene Session eines Logins.
-    pub async fn find_open_id(&self, login: &str) -> Result<Option<i64>, sqlx::Error> {
+    /// Jüngste offene Session eines Kanals — ID zuerst, Login als Rückfall.
+    ///
+    /// Die ID trägt über eine Umbenennung hinweg: die Zeile behält bis zum
+    /// Nachzug in `streamer_login::rename_streamer_login` den alten Login, und
+    /// genau in diesem Fenster legte der reine Login-Lookup eine zweite Session
+    /// an. Der Login-Zweig bleibt, solange der Backfill eine Restmenge ohne ID
+    /// lässt (Prod 2026-08-02: 8393 von 9325 Zeilen).
+    pub async fn find_open_id(
+        &self,
+        login: &str,
+        twitch_user_id: Option<&str>,
+    ) -> Result<Option<i64>, sqlx::Error> {
+        let user_id = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
         sqlx::query_scalar!(
             "SELECT id FROM twitch_stream_sessions
-              WHERE streamer_login = $1 AND ended_at IS NULL
-              ORDER BY started_at DESC LIMIT 1",
+              WHERE ended_at IS NULL
+                AND (twitch_user_id = $2
+                     OR (streamer_login = $1
+                         AND (twitch_user_id IS NULL OR $2::text IS NULL)))
+              ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
+              LIMIT 1",
             login,
+            user_id,
         )
         .fetch_optional(&self.pool)
         .await
@@ -148,10 +169,22 @@ impl SessionStore {
         Ok(row.flatten())
     }
 
-    /// Legt eine Session an — race-sicher über einen Advisory-Lock pro Login:
-    /// existiert im selben Moment schon eine offene Session, wird deren ID
-    /// zurückgegeben statt eine zweite anzulegen.
+    /// Legt eine Session an — race-sicher über Advisory-Locks: existiert im
+    /// selben Moment schon eine offene Session, wird deren ID zurückgegeben
+    /// statt eine zweite anzulegen.
+    ///
+    /// Gesperrt wird über **beide** Schlüssel, sobald eine ID vorliegt, immer in
+    /// derselben Reihenfolge (erst Login, dann ID — feste Ordnung, damit sich
+    /// zwei Transaktionen nicht gegenseitig blockieren). Beide sind für sich
+    /// allein lückenhaft: nur der Login-Lock lässt alten und neuen Namen
+    /// desselben Kanals aneinander vorbeilaufen, nur der ID-Lock lässt einen
+    /// Aufrufer ohne ID vorbei. Erst zusammen decken sie die Übergangszeit ab.
     pub async fn start_session(&self, new: &NewSession) -> Result<StartOutcome, sqlx::Error> {
+        let user_id = new
+            .twitch_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let mut tx = self.pool.begin().await?;
         sqlx::query!(
             "WITH _lock AS (
@@ -162,11 +195,27 @@ impl SessionStore {
         )
         .fetch_one(&mut *tx)
         .await?;
+        if let Some(uid) = user_id {
+            sqlx::query!(
+                "WITH _lock AS (
+                     SELECT pg_advisory_xact_lock(hashtextextended('twitch_stream_session_id:' || $1, 0))
+                 )
+                 SELECT 1 AS \"one!\"",
+                uid,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        }
         let existing: Option<i64> = sqlx::query_scalar!(
             "SELECT id FROM twitch_stream_sessions
-              WHERE streamer_login = $1 AND ended_at IS NULL
-              ORDER BY started_at DESC LIMIT 1",
+              WHERE ended_at IS NULL
+                AND (twitch_user_id = $2
+                     OR (streamer_login = $1
+                         AND (twitch_user_id IS NULL OR $2::text IS NULL)))
+              ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
+              LIMIT 1",
             &new.streamer_login,
+            user_id,
         )
         .fetch_optional(&mut *tx)
         .await?;
@@ -179,8 +228,9 @@ impl SessionStore {
             INSERT INTO twitch_stream_sessions (
                 streamer_login, stream_id, started_at, start_viewers, peak_viewers,
                 end_viewers, avg_viewers, samples, followers_start, stream_title,
-                language, is_mature, tags, game_name, had_deadlock_in_session
-            ) VALUES ($1, $2, $3::text::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12)
+                language, is_mature, tags, game_name, had_deadlock_in_session,
+                twitch_user_id
+            ) VALUES ($1, $2, $3::text::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             "#,
             &new.streamer_login,
@@ -195,13 +245,20 @@ impl SessionStore {
             &new.tags,
             new.game_name.as_deref(),
             new.had_deadlock,
+            user_id,
         )
         .fetch_one(&mut *tx)
         .await?;
+        // twitch_live_state ist über twitch_user_id geschlüsselt (PK); der
+        // Login-Zweig bleibt nur für Zeilen ohne ID.
         sqlx::query!(
-            "UPDATE twitch_live_state SET active_session_id = $1 WHERE streamer_login = $2",
+            "UPDATE twitch_live_state SET active_session_id = $1
+              WHERE twitch_user_id = $3
+                 OR (streamer_login = $2
+                     AND (twitch_user_id IS NULL OR $3::text IS NULL))",
             session_id,
             &new.streamer_login,
+            user_id,
         )
         .execute(&mut *tx)
         .await?;

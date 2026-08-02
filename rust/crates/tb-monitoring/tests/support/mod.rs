@@ -98,6 +98,9 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         "CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY,
             streamer_login TEXT NOT NULL,
+            -- 20260802140000: stabile Kanal-ID, nullable solange der Backfill
+            -- eine Restmenge lässt (Prod 2026-08-02: 8393 von 9325 Zeilen).
+            twitch_user_id TEXT,
             stream_id TEXT,
             -- P2.38: Prod-Spalten sind TEXT (ISO), nicht TIMESTAMPTZ —
             -- Fixture spiegelt das, sonst lügt sie gegen die Baseline.

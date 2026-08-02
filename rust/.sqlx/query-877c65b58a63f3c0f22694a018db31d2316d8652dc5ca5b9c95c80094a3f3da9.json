@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_stream_sessions (\n                streamer_login, stream_id, started_at, start_viewers, peak_viewers,\n                end_viewers, avg_viewers, samples, followers_start, stream_title,\n                language, is_mature, tags, game_name, had_deadlock_in_session,\n                twitch_user_id\n            ) VALUES ($1, $2, $3::text::timestamptz, $4, $4, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12, $13)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Float8",
+        "Int4",
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "877c65b58a63f3c0f22694a018db31d2316d8652dc5ca5b9c95c80094a3f3da9"
+}
