@@ -102,6 +102,9 @@ pub struct FinalizeUpdate {
 pub struct OrphanCandidate {
     pub id: i64,
     pub streamer_login: String,
+    /// Stabile Kanal-ID aus der Session-Zeile — spart dem Cleanup die
+    /// Rückrechnung über den Namen.
+    pub twitch_user_id: Option<String>,
     pub finalized_at: DateTime<Utc>,
 }
 
@@ -554,7 +557,7 @@ impl SessionStore {
         let zero_sample: Vec<OrphanCandidate> = sqlx::query_as!(
             OrphanCandidate,
             r#"
-            SELECT id, streamer_login,
+            SELECT id, streamer_login, twitch_user_id AS "twitch_user_id?",
                    COALESCE(started_at::timestamptz, NOW()) AS "finalized_at!"
             FROM twitch_stream_sessions
             WHERE ended_at IS NULL
@@ -567,12 +570,13 @@ impl SessionStore {
         let stale: Vec<OrphanCandidate> = sqlx::query_as!(
             OrphanCandidate,
             r#"
-            SELECT ss.id, ss.streamer_login, MAX(sv.ts_utc) AS "finalized_at!"
+            SELECT ss.id, ss.streamer_login, ss.twitch_user_id AS "twitch_user_id?",
+                   MAX(sv.ts_utc) AS "finalized_at!"
             FROM twitch_session_viewers sv
             JOIN twitch_stream_sessions ss ON ss.id = sv.session_id
             WHERE ss.ended_at IS NULL
               AND ss.samples > 0
-            GROUP BY ss.id, ss.streamer_login
+            GROUP BY ss.id, ss.streamer_login, ss.twitch_user_id
             HAVING MAX(sv.ts_utc) < NOW() - INTERVAL '1 hour'
             "#,
         )

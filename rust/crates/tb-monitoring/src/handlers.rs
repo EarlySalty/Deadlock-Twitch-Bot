@@ -500,7 +500,7 @@ impl MonitoringEventHandler {
             || async {
                 if !login.is_empty() {
                     self.tracker
-                        .finalize(&login, "offline", None, Some(now))
+                        .finalize(&login, Some(&work.broadcaster_id), "offline", None, Some(now))
                         .await;
                 }
                 self.live_state

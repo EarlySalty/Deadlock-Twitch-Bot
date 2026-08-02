@@ -586,11 +586,11 @@ impl PollEngine {
                     .await;
             } else if was_live {
                 self.tracker
-                    .finalize(&login_lower, "offline", None, None)
+                    .finalize(&login_lower, twitch_user_id, "offline", None, None)
                     .await;
             } else if prev_state.is_some_and(|s| s.active_session_id.is_some()) {
                 self.tracker
-                    .finalize(&login_lower, "stale", None, None)
+                    .finalize(&login_lower, twitch_user_id, "stale", None, None)
                     .await;
             }
 

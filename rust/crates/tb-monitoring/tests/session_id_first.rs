@@ -9,7 +9,7 @@
 
 use sqlx::PgPool;
 use tb_monitoring::sessions::store::SessionStore;
-use tb_monitoring::{NewSession, StartOutcome};
+use tb_monitoring::{LiveStateStore, NewSession, StartOutcome};
 
 mod support;
 
@@ -181,5 +181,91 @@ async fn start_session_schreibt_die_id_in_die_neue_zeile() {
         geschrieben.as_deref(),
         Some(UID),
         "die neue Session muss die ID tragen, ohne dass ein Trigger sie nachträgt"
+    );
+}
+
+/// `twitch_live_state` ist über `twitch_user_id` geschlüsselt (Primärschlüssel).
+/// Ein Lookup über den Login trifft nach einer Umbenennung nichts — und ohne
+/// diesen Zustand schließt `finalize` die Session ohne Spielstand und ohne
+/// Follower-Differenz ab.
+#[tokio::test]
+async fn finalize_state_findet_die_zeile_ueber_die_id_trotz_altem_login() {
+    let pool = pool_or_skip!("t_live_state_id_first");
+    sqlx::query(
+        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_game, had_deadlock_in_session)
+         VALUES ($1, $2, 'Deadlock', 1)",
+    )
+    .bind(UID)
+    .bind(ALT)
+    .execute(&pool)
+    .await
+    .expect("Live-State anlegen");
+    let store = LiveStateStore::new(pool);
+
+    let state = store
+        .finalize_state(NEU, Some(UID))
+        .await
+        .expect("Lookup darf nicht fehlschlagen");
+
+    let state = state.expect("Zeile muss über die ID gefunden werden");
+    assert_eq!(state.twitch_user_id.as_deref(), Some(UID));
+    assert_eq!(state.last_game.as_deref(), Some("Deadlock"));
+}
+
+/// Gegenprobe: ohne ID trifft der neue Login die Zeile nicht.
+#[tokio::test]
+async fn finalize_state_ohne_id_findet_die_umbenannte_zeile_nicht() {
+    let pool = pool_or_skip!("t_live_state_gegenprobe");
+    sqlx::query(
+        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_game)
+         VALUES ($1, $2, 'Deadlock')",
+    )
+    .bind(UID)
+    .bind(ALT)
+    .execute(&pool)
+    .await
+    .expect("Live-State anlegen");
+    let store = LiveStateStore::new(pool);
+
+    let state = store
+        .finalize_state(NEU, None)
+        .await
+        .expect("Lookup darf nicht fehlschlagen");
+
+    assert!(
+        state.is_none(),
+        "ohne ID darf der neue Login die alte Zeile nicht treffen"
+    );
+}
+
+/// Der Orphan-Cleanup muss die ID aus der Session-Zeile mitnehmen, statt sie
+/// später über den Login zurückzurechnen.
+#[tokio::test]
+async fn orphan_candidates_liefern_die_id_mit() {
+    let pool = pool_or_skip!("t_orphan_id");
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, started_at, samples)
+         VALUES ($1, $2, (NOW() - INTERVAL '48 hours')::text, 0)",
+    )
+    .bind(ALT)
+    .bind(UID)
+    .execute(&pool)
+    .await
+    .expect("verwaiste Session anlegen");
+    let store = SessionStore::new(pool);
+
+    let (ohne_samples, _stale) = store
+        .orphan_candidates()
+        .await
+        .expect("Kandidaten laden darf nicht fehlschlagen");
+
+    let kandidat = ohne_samples
+        .iter()
+        .find(|c| c.streamer_login == ALT)
+        .expect("die verwaiste Session muss auftauchen");
+    assert_eq!(
+        kandidat.twitch_user_id.as_deref(),
+        Some(UID),
+        "der Kandidat muss die ID aus der Zeile tragen"
     );
 }

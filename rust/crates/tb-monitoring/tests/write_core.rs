@@ -286,7 +286,7 @@ async fn session_lifecycle_start_sample_finalize() {
     }
 
     let ended_at = Utc::now() + Duration::seconds(2);
-    assert!(tracker.finalize("drag", "done", None, Some(ended_at)).await);
+    assert!(tracker.finalize("drag", None, "done", None, Some(ended_at)).await);
 
     #[derive(sqlx::FromRow)]
     struct FinalizedRow {
