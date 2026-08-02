@@ -158,19 +158,17 @@ async fn backfill_loest_kanaele_auf_und_laesst_mehrdeutiges_offen() {
     );
 }
 
-/// Der Fehler, der den Bot-Start auf Prod abgebrochen hat.
+/// Der Backfill von `twitch_raid_retention` übernimmt die Broadcaster-IDs
+/// über den Join auf `twitch_raid_history` statt über die Namensauflösung —
+/// nachdem der Namensweg auf Prod den Fremdschlüssel
+/// `twitch_raid_retention_raid_history_ref_fkey` auslöste und den Bot-Startup
+/// abbrach. (Die genaue Ursache dort ist nicht abschließend geklärt, siehe
+/// Migrationskopf; die Prod-Daten widerlegen die naheliegende Erklärung
+/// "verwaiste Zeilen" — davon gibt es null.)
 ///
-/// `twitch_raid_retention` enthält Zeilen ohne passende Zeile in
-/// `twitch_raid_history`, die den Fremdschlüssel
-/// `twitch_raid_retention_raid_history_ref_fkey` schon vorher verletzen — er
-/// wurde seinerzeit `NOT VALID` angelegt, also nie gegen den Altbestand
-/// geprüft. Solange niemand diese Zeilen anfasst, fällt das nicht auf. Ein
-/// Backfill per Namensauflösung fasst sie an, löst die Prüfung aus und
-/// scheitert; sqlx rollt die ganze Migration zurück und der Start bricht ab.
-///
-/// Deshalb übernimmt der Backfill die Broadcaster-IDs über den Join auf die
-/// Raid-Historie. Das ist auch fachlich genauer — und lässt genau die
-/// verwaisten Zeilen unberührt.
+/// Dieser Test hält fest, was der Join leisten muss: Zeilen mit History-Zeile
+/// erben deren IDs, und eine Zeile ohne History-Partner bringt den Backfill
+/// weder zum Absturz noch zu einer geratenen ID.
 #[tokio::test]
 async fn backfill_stolpert_nicht_ueber_verwaiste_raid_retention_zeilen() {
     let Some(pool) = migrated_pool("tb_test_raid_retention_fk").await else {

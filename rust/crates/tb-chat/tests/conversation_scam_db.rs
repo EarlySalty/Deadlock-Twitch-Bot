@@ -460,6 +460,73 @@ async fn run_action_guard_with_judge(
     calls
 }
 
+/// Nach einer Umbenennung trägt die Settings-Zeile noch den alten Namen. Ohne
+/// die Kanal-ID fände der Guard sie nicht und würde stillschweigend nichts tun
+/// — ein abgeschalteter Scam-Schutz sieht von außen aus wie ein Kanal ohne
+/// Vorfälle. Die ID kommt als `broadcaster_user_id` an jedem Event mit.
+#[tokio::test]
+async fn guard_findet_settings_nach_umbenennung_ueber_die_kanal_id() {
+    let pool = pool_or_skip!("tb_conversation_scam_rename");
+    // Settings unter dem alten Login, aber mit der stabilen ID.
+    sqlx::query(
+        "INSERT INTO twitch_scam_guard_settings (channel_login, channel_user_id, mode) \
+         VALUES ('derechtecoolys', 'channel-id', 'alert_only')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Session und Chatter laufen bereits unter dem neuen Namen.
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) \
+         VALUES (1, 'coolysdl', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_session_chatters \
+         (session_id, streamer_login, chatter_login, is_first_time_streamer) \
+         VALUES (1, 'coolysdl', 'sam_09995', TRUE)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let api: Arc<dyn ChatApi> = Arc::new(NoopApi);
+    let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
+    let guard = Arc::new(ConversationScamGuard::new(
+        pool.clone(),
+        "bot-id".to_string(),
+        Arc::new(FixedJudge),
+        api,
+        moderation,
+    ));
+    let mut event = scam_event();
+    event.broadcaster_user_login = "coolysdl".to_string();
+    // Gleiche ID wie in der Settings-Zeile — nur der Name hat sich geändert.
+    event.broadcaster_user_id = "channel-id".to_string();
+
+    guard.observe(&event);
+    let verdict = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(row) = sqlx::query_scalar::<_, String>(
+                "SELECT verdict FROM twitch_scam_guard_verdicts LIMIT 1",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+            {
+                break row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Guard blieb stumm — Settings wurden über die ID nicht gefunden");
+    assert_eq!(verdict, "scam");
+    drop_schema(&pool, "tb_conversation_scam_rename").await;
+}
+
 #[tokio::test]
 async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
     let pool = pool_or_skip!("tb_conversation_scam_guard");
