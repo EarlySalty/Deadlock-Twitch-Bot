@@ -507,23 +507,17 @@ async fn guard_findet_settings_nach_umbenennung_ueber_die_kanal_id() {
     event.broadcaster_user_id = "channel-id".to_string();
 
     guard.observe(&event);
-    let verdict = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Some(row) = sqlx::query_scalar::<_, String>(
-                "SELECT verdict FROM twitch_scam_guard_verdicts LIMIT 1",
-            )
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-            {
-                break row;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("Guard blieb stumm — Settings wurden über die ID nicht gefunden");
-    assert_eq!(verdict, "scam");
+    // Geprüft wird `action_taken`, nicht `verdict`: ein Verdict entsteht auch
+    // ohne gefundene Settings, weil `load_settings` dann auf
+    // `GuardSettings::default()` fällt — und die stehen auf `auto_ban`. Nur
+    // `suggested` kann aus der `alert_only`-Zeile stammen, die es allein über
+    // `channel_user_id` zu finden gab.
+    let action = wait_action_taken(&pool).await;
+    assert_eq!(
+        action, "suggested",
+        "Settings wurden nicht über die Kanal-ID gefunden — der Guard lief auf \
+         den auto_ban-Defaults statt auf der alert_only-Zeile des Kanals"
+    );
     drop_schema(&pool, "tb_conversation_scam_rename").await;
 }
 

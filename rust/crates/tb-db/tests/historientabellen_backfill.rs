@@ -176,8 +176,10 @@ async fn backfill_stolpert_nicht_ueber_verwaiste_raid_retention_zeilen() {
         return;
     };
 
-    // Prod-Zustand nachstellen: der FK weicht kurz, damit eine verwaiste Zeile
-    // entstehen kann, und kommt als NOT VALID zurück — genau so sieht Prod aus.
+    // Der FK weicht kurz, damit überhaupt eine verwaiste Zeile entstehen kann,
+    // und kommt als NOT VALID zurück. Das ist ein konstruierter Fall, kein
+    // Abbild von Prod — dort gibt es null verwaiste Zeilen (siehe Doc-Kommentar
+    // oben). Geprüft wird hier, dass der Join auch damit umgehen kann.
     sqlx::query("ALTER TABLE twitch_raid_retention DROP CONSTRAINT twitch_raid_retention_raid_history_ref_fkey")
         .execute(&pool).await.unwrap();
     sqlx::query(
