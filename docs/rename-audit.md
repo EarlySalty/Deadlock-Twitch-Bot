@@ -10,6 +10,30 @@
 - **57 Tabellen** brauchen für mindestens eine Login-Rolle eine stabile Twitch-ID-Spalte; betroffen sind **62 Tabelle/Spalte-Rollen**.
 - Der reale Rename-Fall `520300019` (`derechtecoolys` → `coolysdl`) ist der Kontrollfall: Ein Login-Fallback bleibt auch neben einer ID inventarisiert, weil er bei fehlender ID weiter rename-abhängig ist.
 
+## Fortschritt (Nachtrag 2026-08-02)
+
+Zwei Korrekturen am Bild oben, beide gemessen statt geschätzt:
+
+- **519, nicht 1774, sind der echte Umbau-Umfang.** Die 1774 sind Textanker inklusive Variablennamen und Anzeigefeldern. SQL-Prädikate, die im Prod-Code tatsächlich auf einen Login-Wert filtern, gibt es 519: `tb-analytics` 146, `tb-dashboard-api` 137, `tb-chat` 61, `tb-monitoring` 34, `tb-internal-api` 34, `tb-engagement` 30, `tb-bot` 22, `tb-raid` 20, `tb-social-media` 18.
+- **Die IDs fehlen uns nicht — wir haben sie weggeworfen.** Twitch liefert die Kanal-ID an jeder Chatnachricht mit (IRC-Tag `room-id`, EventSub `broadcaster_user_id`). `irc_message.rs` las sie nur als Vollständigkeitsprüfung und ließ den Wert fallen. Deshalb musste der Kanal aus dem Namen zurückgerechnet werden — und genau das scheitert nach einer Umbenennung.
+
+**Erledigt seit Etappe 1:**
+
+- `tb_twitch_user_id` war fest auf `public` verdrahtet und gab in jedem Testschema `NULL` zurück. Jede auf sie umgestellte Query wäre im Test still leer gelaufen. Korrigiert in `20260802120000`; die Funktion löst ihre Quellen jetzt über den `search_path` auf.
+- `twitch_streamer_invites` und `twitch_raw_chat_ingest_health` tragen die ID (`20260802130000`). Damit hat der login-gebundene Sonderpfad im Rename keine Tabelle mehr und ist entfallen.
+- 31 ID-Spalten für die Historien- und Nebentabellen (`20260802140000`), Backfill in Verlässlichkeitsstufen mit Restmengen-Meldung. `twitch_stream_sessions` wird als Quelle zuerst aufgelöst, ihre Abnehmer erben über `session_id`.
+- `IncomingMessage.channel_user_id` trägt die Kanal-ID durch; `gate::load_settings` liest darüber und findet den Kanal auch mit veraltetem Login in der Zeile.
+- `scripts/sqlx-prepare.sh` erzeugt den Offline-Cache reproduzierbar gegen ein prod-gleiches Schema und bricht ab, wenn der Schema-Vertrag nicht hält.
+
+**Musterentscheidung für die restlichen Prädikate.** Gemessen an 400 Kanälen / 2000 Lookups: `tb_twitch_user_id($1)` im Prädikat 449 ms, gebundene ID 7 ms, reiner Login 6 ms. Also ID binden, wo sie anliegt (Chat, EventSub, Poller, Raid — dort liegt sie überall an); die SQL-Funktion nur für Pfade, in die wirklich nur ein Name hineinkommt, etwa Dashboard-Routen mit Login in der URL.
+
+**Offen:**
+
+1. Die 519 Prädikate paketweise nach P1–P6. 55 der 87 Tabellen mit Login-Spalte haben die ID-Spalte jetzt — dort ist es mechanisch.
+2. Akteur-Rollen (`chatter_login`, `viewer_login`, `moderator_login`, `donor_login`, `gifter_login`, `user_login`, `affiliate_twitch_login`). Brauchen die ID aus dem Event-Payload; eine Namensauflösung träfe bei einem freigegebenen Namen die falsche Person. Eigene Runde.
+3. Backfill der drei Millionen-Tabellen über `scripts/20260802_backfill_grosse_tabellen.sql`. `twitch_viewer_presence_ticks` ist komprimiert — vorher `decompress_chunk` einplanen.
+4. Schreibpfade sollen die ID selbst setzen, dann können die Trigger aus `20260801200000`/`20260802130000` weg.
+
 ## Umfang und Methode
 
 - Erfasst wurden produktiver Rust-Code unter `rust/bin/*/src` und `rust/crates/*/src`, ausführbare SQL-Dateien und Schema-Migrationen. `tests/`, `#[cfg(test)]`, `target/`, `docs/`, `graphify-out/` und die vorhandene Rename-/Cutover-Datei wurden ausgeschlossen.
