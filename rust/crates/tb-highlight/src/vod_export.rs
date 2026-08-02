@@ -9,7 +9,9 @@ use crate::{
 };
 
 pub const TARGET_LOGIN: &str = "dach_lock";
-pub const LINK_EXPIRY: &str = "7d";
+/// Standardziel im Google Drive. Storj war auf Dauer zu teuer; der rclone-Remote
+/// `gdrive:` traegt das OAuth-Token, hier steht nur der Ordner darunter.
+pub const DEFAULT_REMOTE_BASE: &str = "gdrive:Deadlock/Twitch-VODs";
 /// Ein Archiv-VOD gilt nur als "der gerade beendete Stream", wenn sein
 /// geschätztes Ende (`created_at` + `duration`) höchstens so weit vom
 /// `stream.offline`-Zeitpunkt abweicht. Deckt Twitchs eigene
@@ -45,7 +47,7 @@ pub fn export_log_title(success: bool) -> &'static str {
 
 /// Beschreibungstext fuer den Discord-Log-Channel — **jeder** Ausgang wird
 /// gemeldet, Erfolg wie Abbruch. Der Freigabelink bleibt bewusst draussen: er
-/// oeffnet 7 Tage lang ein privates VOD und gehoert nur in die DM.
+/// oeffnet dauerhaft ein privates VOD und gehoert nur in die DM.
 pub fn export_log_description(
     result: &Result<VodExportReport, VodExportError>,
     elapsed_seconds: i64,
@@ -59,7 +61,7 @@ pub fn export_log_description(
                 "DM fehlgeschlagen"
             };
             format!(
-                "Kanal: {TARGET_LOGIN}\nVOD: {vod_id}\nStreamlaenge: {stream}\nGroesse: {size}\nExportdauer: {elapsed}\nFreigabe: {LINK_EXPIRY} gueltig, {dm_status}",
+                "Kanal: {TARGET_LOGIN}\nVOD: {vod_id}\nStreamlaenge: {stream}\nGroesse: {size}\nExportdauer: {elapsed}\nFreigabe: Drive-Link, {dm_status}",
                 vod_id = report.vod_id,
                 stream = format_duration(report.duration_seconds),
                 size = format_bytes(report.size_bytes),
@@ -181,12 +183,13 @@ pub enum VodExportError {
 }
 
 /// Statische Ziele/Pfade für einen Export-Lauf (yt-dlp/rclone-Binaries,
-/// Storj-Bucket, lokales Zwischenverzeichnis) — gebündelt, damit
+/// Archiv-Ordner, lokales Zwischenverzeichnis) — gebündelt, damit
 /// `export_latest_vod` nicht auf eine unübersichtliche Parameterliste wächst.
 pub struct ExportTargets<'a> {
     pub yt_dlp_path: &'a Path,
     pub rclone_path: &'a Path,
-    pub bucket: &'a str,
+    /// rclone-Ziel inklusive Remote, z. B. `gdrive:Deadlock/Twitch-VODs`.
+    pub remote_base: &'a str,
     pub temp_dir: &'a Path,
 }
 
@@ -255,7 +258,7 @@ pub async fn export_latest_vod(
     let upload_result = run_checked(
         runner,
         targets.rclone_path,
-        &rclone_copy_args(&local_path, targets.bucket, vod_id),
+        &rclone_copy_args(&local_path, targets.remote_base, vod_id),
     )
     .await;
     let cleanup_result = std::fs::remove_file(&local_path);
@@ -272,7 +275,7 @@ pub async fn export_latest_vod(
     let link_output = run_checked(
         runner,
         targets.rclone_path,
-        &rclone_link_args(targets.bucket, vod_id),
+        &rclone_link_args(targets.remote_base, vod_id),
     )
     .await?;
     let link = link_output
@@ -306,24 +309,27 @@ fn yt_dlp_args(vod_id: &str, output_path: &Path) -> Vec<String> {
     ]
 }
 
-fn storj_object_path(bucket: &str, vod_id: &str) -> String {
-    format!("storj:{bucket}/vod-export/{TARGET_LOGIN}/{vod_id}.mp4")
+fn remote_object_path(remote_base: &str, vod_id: &str) -> String {
+    format!(
+        "{}/{TARGET_LOGIN}/{vod_id}.mp4",
+        remote_base.trim_end_matches('/')
+    )
 }
 
-fn rclone_copy_args(local_path: &Path, bucket: &str, vod_id: &str) -> Vec<String> {
+fn rclone_copy_args(local_path: &Path, remote_base: &str, vod_id: &str) -> Vec<String> {
     vec![
         "copyto".to_string(),
         local_path.to_string_lossy().into_owned(),
-        storj_object_path(bucket, vod_id),
+        remote_object_path(remote_base, vod_id),
     ]
 }
 
-fn rclone_link_args(bucket: &str, vod_id: &str) -> Vec<String> {
+/// Kein `--expire`: Google Drive kennt keine ablaufenden Freigabelinks. Der Link bleibt
+/// gueltig, bis die Datei geloescht oder die Freigabe entzogen wird.
+fn rclone_link_args(remote_base: &str, vod_id: &str) -> Vec<String> {
     vec![
         "link".to_string(),
-        "--expire".to_string(),
-        LINK_EXPIRY.to_string(),
-        storj_object_path(bucket, vod_id),
+        remote_object_path(remote_base, vod_id),
     ]
 }
 
@@ -398,7 +404,7 @@ mod tests {
         assert!(text.contains("9.26 GB"), "Groesse fehlt: {text}");
         assert!(text.contains("13m 0s"), "Exportdauer fehlt: {text}");
         assert!(text.contains("DM zugestellt"), "DM-Status fehlt: {text}");
-        // Der Freigabelink ist eine private, 7 Tage gueltige Freigabe auf ein
+        // Der Freigabelink ist eine private Drive-Freigabe auf ein
         // nicht-oeffentliches VOD — er darf nie im Log-Channel landen.
         assert!(
             !text.contains("share.example"),
@@ -502,29 +508,30 @@ mod tests {
     }
 
     #[test]
-    fn storj_pfad_und_rclone_befehle_sind_korrekt() {
+    fn drive_pfad_und_rclone_befehle_sind_korrekt() {
         let local = Path::new("/tmp/987.mp4");
 
         assert_eq!(
-            storj_object_path("server-backup", "987"),
-            "storj:server-backup/vod-export/dach_lock/987.mp4"
+            remote_object_path(DEFAULT_REMOTE_BASE, "987"),
+            "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"
+        );
+        // Ein abschliessender Schraegstrich in der Konfiguration darf den Pfad nicht doppeln.
+        assert_eq!(
+            remote_object_path("gdrive:Deadlock/Twitch-VODs/", "987"),
+            "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"
         );
         assert_eq!(
-            rclone_copy_args(local, "server-backup", "987"),
+            rclone_copy_args(local, DEFAULT_REMOTE_BASE, "987"),
             vec![
                 "copyto",
                 "/tmp/987.mp4",
-                "storj:server-backup/vod-export/dach_lock/987.mp4",
+                "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4",
             ]
         );
+        // Drive kennt kein Ablaufdatum — mit --expire bricht rclone den Aufruf ab.
         assert_eq!(
-            rclone_link_args("server-backup", "987"),
-            vec![
-                "link",
-                "--expire",
-                "7d",
-                "storj:server-backup/vod-export/dach_lock/987.mp4",
-            ]
+            rclone_link_args(DEFAULT_REMOTE_BASE, "987"),
+            vec!["link", "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"]
         );
     }
 
@@ -615,7 +622,7 @@ mod tests {
         let targets = ExportTargets {
             yt_dlp_path: Path::new("/opt/yt-dlp"),
             rclone_path: Path::new("rclone"),
-            bucket: "server-backup",
+            remote_base: "gdrive:Deadlock/Twitch-VODs",
             temp_dir: &temp_dir,
         };
         let report = export_latest_vod(
@@ -641,9 +648,9 @@ mod tests {
         assert!(!calls[0].1.iter().any(|arg| arg == "--download-sections"));
         assert_eq!(
             calls[1].1,
-            rclone_copy_args(&temp_dir.join("987.mp4"), "server-backup", "987")
+            rclone_copy_args(&temp_dir.join("987.mp4"), DEFAULT_REMOTE_BASE, "987")
         );
-        assert_eq!(calls[2].1, rclone_link_args("server-backup", "987"));
+        assert_eq!(calls[2].1, rclone_link_args(DEFAULT_REMOTE_BASE, "987"));
 
         std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
     }
@@ -661,7 +668,7 @@ mod tests {
         let targets = ExportTargets {
             yt_dlp_path: Path::new("/opt/yt-dlp"),
             rclone_path: Path::new("rclone"),
-            bucket: "server-backup",
+            remote_base: "gdrive:Deadlock/Twitch-VODs",
             temp_dir: &temp_dir,
         };
         let result = export_latest_vod(
@@ -690,7 +697,7 @@ mod tests {
         let targets = ExportTargets {
             yt_dlp_path: Path::new("/opt/yt-dlp"),
             rclone_path: Path::new("rclone"),
-            bucket: "server-backup",
+            remote_base: "gdrive:Deadlock/Twitch-VODs",
             temp_dir: &temp_dir,
         };
         // stream.offline liegt 3h nach dem VOD-Ende — z. B. ein zweiter Stream
@@ -723,7 +730,7 @@ mod tests {
         let targets = ExportTargets {
             yt_dlp_path: Path::new("/opt/yt-dlp"),
             rclone_path: Path::new("rclone"),
-            bucket: "server-backup",
+            remote_base: "gdrive:Deadlock/Twitch-VODs",
             temp_dir: &temp_dir,
         };
         let result = export_latest_vod(
@@ -751,7 +758,7 @@ mod tests {
         let targets = ExportTargets {
             yt_dlp_path: Path::new("/opt/yt-dlp"),
             rclone_path: Path::new("rclone"),
-            bucket: "server-backup",
+            remote_base: "gdrive:Deadlock/Twitch-VODs",
             temp_dir: &temp_dir,
         };
         let result = export_latest_vod(

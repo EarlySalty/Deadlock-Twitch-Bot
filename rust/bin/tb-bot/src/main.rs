@@ -776,11 +776,12 @@ async fn main() {
                 return None;
             }
         };
-        let bucket = std::env::var("VOD_EXPORT_STORJ_BUCKET")
+        // Ziel ist der Google-Drive-Ordner hinter dem rclone-Remote `gdrive:`.
+        let remote_base = std::env::var("VOD_EXPORT_REMOTE_BASE")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "server-backup".to_string());
+            .unwrap_or_else(|| tb_highlight::vod_export::DEFAULT_REMOTE_BASE.to_string());
         let yt_dlp_path = std::env::current_dir()
             .unwrap_or_default()
             .join(".venv/bin/yt-dlp");
@@ -791,7 +792,7 @@ async fn main() {
             api,
             relay,
             yt_dlp_path,
-            bucket,
+            remote_base,
         )))
     });
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (

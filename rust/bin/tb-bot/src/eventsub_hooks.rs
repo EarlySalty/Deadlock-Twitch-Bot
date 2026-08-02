@@ -64,7 +64,7 @@ pub struct VodExportOfflineHandler {
     runner: Arc<dyn CommandRunner>,
     relay: BrokerRelay,
     yt_dlp_path: PathBuf,
-    bucket: String,
+    remote_base: String,
     temp_dir: PathBuf,
 }
 
@@ -73,14 +73,14 @@ impl VodExportOfflineHandler {
         api: Arc<dyn TwitchVodApi>,
         relay: BrokerRelay,
         yt_dlp_path: PathBuf,
-        bucket: String,
+        remote_base: String,
     ) -> Self {
         Self {
             api,
             runner: Arc::new(TokioCommandRunner),
             relay,
             yt_dlp_path,
-            bucket,
+            remote_base,
             temp_dir: std::env::temp_dir().join("tb-vod-export"),
         }
     }
@@ -94,7 +94,7 @@ impl VodExportOfflineHandler {
         let runner = Arc::clone(&self.runner);
         let relay = self.relay.clone();
         let yt_dlp_path = self.yt_dlp_path.clone();
-        let bucket = self.bucket.clone();
+        let remote_base = self.remote_base.clone();
         let temp_dir = self.temp_dir.clone();
         let twitch_user_id = twitch_user_id.to_string();
         let stream_offline_unix = Utc::now().timestamp();
@@ -103,7 +103,7 @@ impl VodExportOfflineHandler {
             let targets = ExportTargets {
                 yt_dlp_path: &yt_dlp_path,
                 rclone_path: Path::new("rclone"),
-                bucket: &bucket,
+                remote_base: &remote_base,
                 temp_dir: &temp_dir,
             };
             let started = Instant::now();
@@ -190,7 +190,7 @@ fn vod_export_log_embed(
 }
 
 fn vod_export_dm_content(link: &str) -> String {
-    format!("VOD von deinem letzten dach_lock-Stream ist hochgeladen: {link}\nLink ist 7 Tage gültig, danach weg.")
+    format!("VOD von deinem letzten dach_lock-Stream liegt im Drive: {link}\nDer Link bleibt gültig, solange die Datei dort liegt.")
 }
 
 fn event_str<'a>(event: &'a Value, key: &str) -> &'a str {
@@ -1236,7 +1236,7 @@ mod vod_export_tests {
         let content = vod_export_dm_content("https://share.example/vod");
 
         assert!(content.contains("https://share.example/vod"));
-        assert!(content.contains("7 Tage"));
+        assert!(content.contains("Drive"));
     }
 }
 
