@@ -1,3 +1,11 @@
+## #412 — VOD-Link läuft nicht mehr nach einer Woche ab
+
+**Problem:** Der Link zum exportierten Stream-VOD war sieben Tage gültig, danach war die Aufnahme weg. Der Speicher dahinter wurde auf Dauer außerdem teuer.
+
+**Änderung:** Die VODs liegen jetzt in einem Google-Drive-Ordner. Die DM nach dem Stream enthält weiterhin genau einen Link — der bleibt aber gültig, solange die Datei dort liegt. Die bisherigen VODs sind schon umgezogen.
+
+**Aktuelles Verhalten:** Nach dem Stream kommt wie gehabt die DM mit dem Link; kein Ablaufdatum mehr.
+
 ## #411 — Namensänderungen werfen den Bot nicht mehr aus der Spur
 
 **Problem:** Wer seinen Twitch-Namen änderte, verschwand für den Bot. Das Monitoring erkannte den Kanal nicht wieder, der Live-Zustand blieb leer, und am Streamende fiel der automatische Raid aus, weil der Bot nicht wusste, was gespielt wurde. Betroffen war zuletzt ein Partnerkanal, dessen Zuschauer dadurch am Ende nirgendwo landeten.
