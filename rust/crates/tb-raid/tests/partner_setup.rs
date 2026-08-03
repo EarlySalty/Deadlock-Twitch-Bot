@@ -558,6 +558,133 @@ async fn inaktive_admin_archivierung_blockiert_reauth_nicht() {
     assert_eq!(pause, None);
 }
 
+#[tokio::test]
+async fn selfservice_disconnect_wird_per_reauth_reaktiviert() {
+    // Selbst getrennter Streamer: status='departnered', manual_partner_opt_out=1,
+    // technical_pause_reason LEER. Ein Re-Auth muss ihn zurückholen — und dabei
+    // seine Zeile reaktivieren statt eine zweite anzulegen, sonst verliert er
+    // seine gesamte Kanal-Konfiguration.
+    let pool = pool_or_skip!("ps_selfservice_disconnect");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, departnered_at,
+            require_discord_link, silent_ban, silent_raid, live_ping_role_id,
+            live_ping_enabled, last_description, added_by, partnered_at)
+         VALUES ('1005', 'getrennt', 'departnered', 1, 0, '2026-08-03T15:36:21+00:00',
+                 1, 1, 1, 4242, 0, 'mein Kanal', 'admin:nani', '2025-10-10T13:05:44+00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("getrennt", "1005"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(result.reactivated, "Opt-out ist kein Hard-Kill");
+    assert_eq!(result.hard_pause_reason, None);
+
+    let zeilen: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE twitch_user_id = '1005'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(zeilen, 1, "keine zweite Zeile — die alte wird reaktiviert");
+
+    let (status, opt_out, raid, departnered): (String, i32, i32, Option<String>) = sqlx::query_as(
+        "SELECT status, manual_partner_opt_out, raid_bot_enabled, departnered_at
+         FROM twitch_partners WHERE twitch_user_id = '1005'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "active");
+    assert_eq!((opt_out, raid), (0, 1), "voll reaktiviert");
+    assert_eq!(departnered, None, "Trenn-Zeitpunkt geräumt");
+
+    // Konfiguration überlebt den Reconnect.
+    let flags: (i32, i32, i32, Option<i64>, i32) = sqlx::query_as(
+        "SELECT require_discord_link, silent_ban, silent_raid, live_ping_role_id,
+                live_ping_enabled
+         FROM twitch_partners WHERE twitch_user_id = '1005'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        flags,
+        (1, 1, 1, Some(4242), 0),
+        "Kanal-Konfiguration bleibt erhalten"
+    );
+
+    let texte: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT last_description, added_by, partnered_at
+         FROM twitch_partners WHERE twitch_user_id = '1005'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        texte,
+        (
+            Some("mein Kanal".to_string()),
+            Some("admin:nani".to_string()),
+            Some("2025-10-10T13:05:44+00:00".to_string()),
+        ),
+        "Beschreibung, Herkunft und ursprünglicher Partner-Beginn bleiben stehen"
+    );
+}
+
+#[tokio::test]
+async fn departnerte_hard_kill_zeile_bleibt_unangetastet() {
+    // Hard-Kill auf einer inaktiven Zeile: der Fallback auf die inaktive Zeile
+    // darf den bestehenden Guard nicht aushebeln.
+    let pool = pool_or_skip!("ps_departnered_hardkill");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, technical_pause_reason, silent_ban)
+         VALUES ('1006', 'gebannt', 'departnered', 1, 0, 'bot_banned', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("gebannt", "1006"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(!result.reactivated, "bot_banned bleibt gesperrt");
+    assert_eq!(result.hard_pause_reason.as_deref(), Some("bot_banned"));
+
+    let (zeilen, status, opt_out, pause): (i64, String, i32, Option<String>) = sqlx::query_as(
+        "SELECT COUNT(*) OVER (), status, manual_partner_opt_out, technical_pause_reason
+         FROM twitch_partners WHERE twitch_user_id = '1006'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(zeilen, 1, "kein Insert trotz Re-Auth");
+    assert_eq!(status, "departnered");
+    assert_eq!(opt_out, 1);
+    assert_eq!(pause.as_deref(), Some("bot_banned"));
+}
+
 // ---------------------------------------------------------------------------
 // record_first_login
 // ---------------------------------------------------------------------------

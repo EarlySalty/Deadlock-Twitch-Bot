@@ -1370,6 +1370,17 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        // Re-Auth-Followup: bisher nur mit Discord-ID im State. Zusätzlich jetzt
+        // immer dann, wenn der Partner inaktiv ist und reaktiviert werden darf —
+        // sonst bliebe der Web-Weg über `/twitch/raid/auth` folgenlos.
+        // Async, deshalb vor dem `match` (Match-Guards dürfen nicht awaiten).
+        let sync_existing_auth = match (&self.partner_setup, had_existing_auth) {
+            (Some(_), true) => {
+                should_sync_existing_auth_followup(state_discord_user_id.as_deref())
+                    || partner_needs_reactivation(&self.pool, &twitch_user_id, &twitch_login).await
+            }
+            _ => false,
+        };
         match (&self.partner_setup, had_existing_auth) {
             (Some(setup), false) => {
                 let setup = setup.clone();
@@ -1397,9 +1408,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                     tb_analytics::trial::grant_trial_at_onboarding(&trial_pool, &uid, &login).await;
                 });
             }
-            (Some(setup), true)
-                if should_sync_existing_auth_followup(state_discord_user_id.as_deref()) =>
-            {
+            (Some(setup), true) if sync_existing_auth => {
                 let setup = setup.clone();
                 let uid = twitch_user_id.clone();
                 let login = twitch_login.clone();
@@ -1503,6 +1512,51 @@ impl TbRaidOAuthImpl {
         .fetch_optional(&self.pool)
         .await;
         matches!(row, Ok(Some(_)))
+    }
+
+}
+
+/// Muss ein Re-Auth den Partner reaktivieren?
+///
+/// Wahr, wenn es Partner-Zeilen gibt, aber keine davon aktiv ist und keine
+/// einen Hard-Kill (`technical_pause_reason` ∈ {blocked, bot_banned}) trägt.
+/// Das ist der Fall nach einem Selfservice-Disconnect (`status='departnered'`,
+/// `manual_partner_opt_out=1`), nach Archivierung und bei `token_error`.
+///
+/// Ohne diese Prüfung lief der Followup nur mit Discord-ID im OAuth-State
+/// (Discord-Button-Weg). Der Web-Weg über `/twitch/raid/auth` — genau der
+/// Button, den das Dashboard bei inaktivem Partner anbietet — führte zu einem
+/// No-op: Der Streamer autorisierte erfolgreich neu und blieb trotzdem passiv.
+///
+/// DB-Fehler → `false`: dann bleibt es beim bisherigen Verhalten, statt eine
+/// Reaktivierung auf unbekannter Datenlage zu erzwingen.
+async fn partner_needs_reactivation(pool: &PgPool, twitch_user_id: &str, twitch_login: &str) -> bool {
+    let row: Result<Option<Option<bool>>, _> = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) > 0
+           AND COUNT(*) FILTER (WHERE COALESCE(status, '') = 'active') = 0
+           AND COUNT(*) FILTER (
+                 WHERE LOWER(TRIM(COALESCE(technical_pause_reason, '')))
+                       IN ('blocked', 'bot_banned')
+               ) = 0
+        FROM twitch_partners
+        WHERE ($1 <> '' AND twitch_user_id = $1)
+           OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
+        "#,
+    )
+    .bind(twitch_user_id.trim())
+    .bind(twitch_login.trim())
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(value) => value.flatten().unwrap_or(false),
+        Err(e) => {
+            tracing::warn!(
+                login = %twitch_login,
+                "partner_needs_reactivation: DB-Fehler, Followup-Routing unverändert: {e}"
+            );
+            false
+        }
     }
 }
 
@@ -1788,6 +1842,7 @@ mod db_tests {
                 -- BOOLEAN hier hätte den Typ-Drift-Bug im Test versteckt.
                 manual_partner_opt_out  INTEGER DEFAULT 0,
                 status                  TEXT DEFAULT 'active',
+                technical_pause_reason  TEXT,
                 created_at              TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -2269,6 +2324,96 @@ mod db_tests {
         assert!(!result.blocked);
         assert!(!result.token_blacklisted);
         assert!(!result.raid_blacklisted);
+    }
+
+    // ── partner_needs_reactivation ───────────────────────────────────────────
+    // Steuert, ob ein Re-Auth ohne Discord-ID im State den Partner-Sync
+    // auslöst. Ohne diese Prüfung blieb der Web-Weg über /twitch/raid/auth
+    // folgenlos und ein selbst getrennter Streamer kam nie zurück.
+
+    async fn insert_partner(pool: &PgPool, login: &str, uid: &str, status: &str, pause: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(login)
+        .bind(uid)
+        .bind(status)
+        .bind(pause)
+        .execute(pool)
+        .await
+        .expect("partner insert");
+    }
+
+    #[tokio::test]
+    async fn reaktivierung_noetig_bei_selfservice_disconnect() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_needs_react_departnered").await;
+        insert_partner(&pool, "getrennt", "uid_dep", "departnered", None).await;
+
+        assert!(
+            partner_needs_reactivation(&pool, "uid_dep", "getrennt").await,
+            "departnered ohne Hard-Kill → Followup muss laufen"
+        );
+        assert!(
+            partner_needs_reactivation(&pool, "", "GeTrEnNt").await,
+            "Login-Treffer ist case-insensitiv"
+        );
+    }
+
+    #[tokio::test]
+    async fn reaktivierung_noetig_bei_archiviert_und_token_error() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_needs_react_soft").await;
+        insert_partner(&pool, "archiviert", "uid_arch", "archived", None).await;
+        insert_partner(
+            &pool,
+            "tokenweg",
+            "uid_tok",
+            "token_error",
+            Some("token_error"),
+        )
+        .await;
+
+        assert!(partner_needs_reactivation(&pool, "uid_arch", "archiviert").await);
+        assert!(partner_needs_reactivation(&pool, "uid_tok", "tokenweg").await);
+    }
+
+    #[tokio::test]
+    async fn keine_reaktivierung_bei_aktivem_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_needs_react_active").await;
+        insert_partner(&pool, "aktiv", "uid_akt", "active", None).await;
+
+        assert!(
+            !partner_needs_reactivation(&pool, "uid_akt", "aktiv").await,
+            "aktiver Partner → bisheriges No-op bleibt"
+        );
+    }
+
+    #[tokio::test]
+    async fn keine_reaktivierung_bei_hard_kill() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_needs_react_hardkill").await;
+        insert_partner(&pool, "gebannt", "uid_ban", "departnered", Some("bot_banned")).await;
+        insert_partner(&pool, "gesperrt", "uid_blk", "departnered", Some(" BLOCKED ")).await;
+
+        assert!(!partner_needs_reactivation(&pool, "uid_ban", "gebannt").await);
+        assert!(
+            !partner_needs_reactivation(&pool, "uid_blk", "gesperrt").await,
+            "Hard-Kill-Vergleich trimmt und ignoriert Groß-/Kleinschreibung"
+        );
+    }
+
+    #[tokio::test]
+    async fn keine_reaktivierung_ohne_partner_zeile() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_ro_needs_react_leer").await;
+
+        assert!(
+            !partner_needs_reactivation(&pool, "uid_unbekannt", "unbekannt").await,
+            "ohne Partner-Zeile gibt es nichts zu reaktivieren"
+        );
     }
 
     #[tokio::test]
@@ -2833,6 +2978,65 @@ mod callback_tests {
         .await
         .unwrap();
         panic!("Partner-Sync nach Reauth ohne Discord-ID blieb aus: {state:?}");
+    }
+
+    #[tokio::test]
+    async fn reauth_ohne_discord_state_holt_getrennten_partner_zurueck() {
+        // Der Weg, den das Dashboard bei inaktivem Partner anbietet:
+        // „Jetzt neu autorisieren" → /twitch/raid/auth → Callback, ohne
+        // Discord-ID im State. Vorher ein No-op — der Streamer blieb passiv.
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_reauth_departnered").await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled)
+             VALUES ('333', 'getrennt', FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+                manual_partner_opt_out, raid_bot_enabled, departnered_at, silent_ban)
+             VALUES ('333', 'getrennt', 'departnered', 1, 0, '2026-08-03T15:36:21+00:00', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = seed_state(&pool, "getrennt", None, None).await;
+        let imp = make_impl_with_partner_setup(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "333", "getrennt"),
+            Some(partner_setup_service(&pool)),
+        )
+        .await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+
+        for _ in 0..50 {
+            let row: (i64, Option<String>, Option<i32>, Option<i32>) = sqlx::query_as(
+                "SELECT COUNT(*) OVER (), status, manual_partner_opt_out, silent_ban
+                 FROM twitch_partners WHERE twitch_user_id = '333' ORDER BY status LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if row.1.as_deref() == Some("active") && row.2 == Some(0) {
+                assert_eq!(row.0, 1, "keine zweite Partner-Zeile");
+                assert_eq!(row.3, Some(1), "Kanal-Konfiguration überlebt");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let state: (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE twitch_user_id = '333'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        panic!("Re-Auth hat den getrennten Partner nicht reaktiviert: {state:?}");
     }
 
     #[tokio::test]

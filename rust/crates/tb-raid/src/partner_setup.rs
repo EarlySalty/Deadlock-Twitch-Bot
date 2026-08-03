@@ -298,6 +298,55 @@ async fn load_active_partner_row(
     .await
 }
 
+/// Lädt die jüngste **nicht-aktive** Partner-Zeile als Reaktivierungs-Basis.
+///
+/// Ohne sie liefe ein Re-OAuth eines ausgeschiedenen Partners in den
+/// INSERT-Zweig von [`promote_streamer_to_partner`]: Die partiellen
+/// Unique-Indizes greifen nur `WHERE status = 'active'`, der INSERT gelingt
+/// also — die alte Zeile bleibt als Leiche liegen und der Streamer verliert
+/// beim Reconnect seine gesamte Kanal-Konfiguration (`silent_ban`,
+/// `live_ping_role_id`, `require_discord_link`, …), weil alle Zeilen-Fallbacks
+/// auf Defaults zurückfallen.
+///
+/// Darf erst NACH beiden Hard-Kill-Guards benutzt werden — `blocked` und
+/// `bot_banned` sind vorher schon abgewiesen.
+async fn load_reactivatable_partner_row(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<Option<ActivePartnerRow>, sqlx::Error> {
+    sqlx::query_as!(
+        ActivePartnerRow,
+        r#"
+        SELECT
+            p.id AS "id!",
+            p.require_discord_link AS "require_discord_link?",
+            p.last_description AS "last_description?",
+            p.last_link_ok AS "last_link_ok?",
+            p.added_by AS "added_by?",
+            p.last_link_checked_at AS "last_link_checked_at?",
+            p.manual_partner_opt_out AS "manual_partner_opt_out?",
+            p.raid_bot_enabled AS "raid_bot_enabled?",
+            p.silent_ban AS "silent_ban?",
+            p.silent_raid AS "silent_raid?",
+            p.live_ping_role_id AS "live_ping_role_id?",
+            COALESCE(p.live_ping_enabled, 1) AS "live_ping_enabled?",
+            p.partnered_at AS "partnered_at?",
+            p.technical_pause_reason AS "technical_pause_reason?"
+        FROM twitch_partners p
+        WHERE (($1 <> '' AND p.twitch_user_id = $1)
+            OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
+          AND p.status <> 'active'
+        ORDER BY p.id DESC
+        LIMIT 1
+        "#,
+        twitch_user_id,
+        twitch_login
+    )
+    .fetch_optional(&mut **tx)
+    .await
+}
+
 /// Prüft, ob eine **nicht-aktive** Partner-Zeile den OAuth-Followup dauerhaft
 /// blockiert: `technical_pause_reason` ∈ {blocked, bot_banned}.
 ///
@@ -621,6 +670,17 @@ pub async fn promote_streamer_to_partner(
             hard_pause_reason: Some(reason),
         });
     }
+
+    // Beide Hard-Kill-Guards sind passiert: {blocked, bot_banned} ist raus.
+    // Fehlt eine aktive Zeile, ist der Streamer ausgeschieden/archiviert/
+    // token_error — dann wird die jüngste inaktive Zeile reaktiviert (UPDATE
+    // unten) statt eine zweite Zeile anzulegen. Das erhält seine Konfiguration
+    // und hinterlässt keine Karteileiche.
+    let active_row = match active_row {
+        Some(row) => Some(row),
+        None => load_reactivatable_partner_row(tx, &normalized_user_id, &normalized_login).await?,
+    };
+    let active = active_row.as_ref();
 
     // Partner-Werte: explizite Parameter des Followup-Pfads + Zeilen-Fallbacks.
     // Für require_discord_link/silent_ban/silent_raid/live_ping_* gilt der im
