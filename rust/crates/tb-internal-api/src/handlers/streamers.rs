@@ -959,6 +959,33 @@ async fn resolve_broadcaster_id(pool: &PgPool, login: &str) -> Option<String> {
     row.flatten().filter(|id| !id.trim().is_empty())
 }
 
+/// Verknüpfte Discord-ID zu einem Login, unabhängig vom Partner-Status.
+///
+/// Die Discord-Felder liegen auf `twitch_streamer_identities`, verbunden über
+/// die Twitch-User-ID — die wiederum in `twitch_partners` oder in der
+/// Auth-Tabelle stehen kann (siehe [`resolve_broadcaster_id`]).
+async fn resolve_discord_user_id(pool: &PgPool, login: &str) -> Option<String> {
+    let row: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT NULLIF(TRIM(i.discord_user_id), '') \
+           FROM twitch_streamer_identities i \
+          WHERE LOWER(i.twitch_login) = LOWER($1) \
+             OR i.twitch_user_id IN ( \
+                  SELECT twitch_user_id FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1) \
+                  UNION \
+                  SELECT twitch_user_id FROM twitch_raid_auth WHERE LOWER(twitch_login) = LOWER($1) \
+                ) \
+          LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, login, "disconnect-bot: Discord-ID nicht ladbar");
+        None
+    });
+    row.flatten()
+}
+
 async fn disconnect_bot_handler_inner(
     pool: &PgPool,
     role_ext: &DiscordRoleExt,
@@ -1016,7 +1043,14 @@ async fn disconnect_bot_handler_inner(
     // Gemeldet wird, was wirklich passiert ist. Früher stand hier unabhängig vom
     // Ausgang "revoked" — der Report sah sauber aus, während die Rolle in
     // Discord liegen blieb (kein Guild-Kandidat auflösbar).
-    let discord_user_id = outcome.as_ref().and_then(|o| o.discord_user_id.clone());
+    // Die Discord-ID kommt aus dem Departner-Outcome — den gibt es aber nur,
+    // wenn der Streamer noch aktiver Partner war. Ein zweiter Trenn-Lauf (oder
+    // einer nach einem halb gelaufenen ersten) hätte sonst nie eine ID und die
+    // Rolle bliebe für immer stehen. Deshalb Fallback auf die Identity-Tabelle.
+    let discord_user_id = match outcome.as_ref().and_then(|o| o.discord_user_id.clone()) {
+        Some(did) => Some(did),
+        None => resolve_discord_user_id(pool, &login).await,
+    };
     let discord_role = match (discord_user_id.as_deref(), role_ext.0.as_ref()) {
         (Some(did), Some(port)) => {
             match port
@@ -2662,6 +2696,48 @@ mod tests {
             role.calls.lock().expect("calls").clone(),
             vec!["987654321".to_string()],
             "Der Entzug muss mit der verknüpften Discord-ID versucht worden sein"
+        );
+    }
+
+    /// Zweiter Trenn-Lauf nach einem ersten, bei dem die Rolle liegenblieb:
+    /// der Streamer ist kein aktiver Partner mehr, also liefert das Departnern
+    /// keine Discord-ID. Ohne Fallback wäre die Rolle nie wieder einzusammeln.
+    #[tokio::test]
+    async fn disconnect_bot_entzieht_rolle_auch_ohne_aktiven_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_role_departnered").await;
+        seed_partner_mit_discord(&pool, "umiwaver", "563673818", "987654321").await;
+        sqlx::query("UPDATE twitch_partners SET status = 'departnered' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .expect("departnern");
+        let role = FakeRole::new(RoleRevokeOutcome::Revoked);
+        let app = make_router_full(
+            pool.clone(),
+            "secret",
+            Some(FakeRemoval::new(ModeratorRemovalResult::NotModerator)),
+            Some(role.clone()),
+        );
+        let base = INTERNAL_API_BASE_PATH;
+
+        let resp = app
+            .oneshot(loopback_req(
+                "POST",
+                &format!("{base}/streamers/umiwaver/disconnect-bot"),
+                "{}",
+                Some("secret"),
+            ))
+            .await
+            .unwrap();
+        let body = json_body(resp).await;
+        assert_eq!(body["departnered"], false, "war schon departnert");
+        assert_eq!(
+            body["discord_role"], "revoked",
+            "die Rolle muss trotzdem eingesammelt werden"
+        );
+        assert_eq!(
+            role.calls.lock().expect("calls").clone(),
+            vec!["987654321".to_string()]
         );
     }
 
