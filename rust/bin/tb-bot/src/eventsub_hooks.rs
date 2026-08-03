@@ -42,7 +42,7 @@ use tb_raid::{
     TokenProvider,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
-use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
+use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome};
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
@@ -887,6 +887,103 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                     "ensure_bot_is_mod: Remod-Request fehlgeschlagen"
                 );
                 ModeratorProvisionOutcome::RetryLater
+            }
+        }
+    }
+}
+
+/// Gegenstück zum [`HelixModeratorProvisioner`]: gibt die Mod-Rechte des Bots in
+/// einem Streamer-Kanal ab. Wird ausschließlich vom bewussten Trennen benutzt —
+/// hier moddet niemand automatisch etwas zurück.
+pub struct HelixModeratorRemover {
+    token_provider: Arc<TokenProvider>,
+    helix: HelixClient,
+    bot_user_id: String,
+}
+
+impl HelixModeratorRemover {
+    pub fn new(
+        token_provider: Arc<TokenProvider>,
+        helix: HelixClient,
+        bot_user_id: String,
+    ) -> Self {
+        Self {
+            token_provider,
+            helix,
+            bot_user_id,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl tb_internal_api::ModeratorRemovalPort for HelixModeratorRemover {
+    async fn remove_bot_moderator(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> tb_internal_api::ModeratorRemovalResult {
+        use tb_internal_api::ModeratorRemovalResult as Result_;
+
+        if self.bot_user_id.trim().is_empty() {
+            return Result_::Failed {
+                detail: "Bot-User-ID nicht verfügbar".to_string(),
+            };
+        }
+        // Unrestricted wie beim Remod: der Token ist auch dann gültig, wenn
+        // Raids für diesen Kanal aus sind — und genau dann trennen wir.
+        let token = match self
+            .token_provider
+            .get_valid_token_unrestricted(broadcaster_id, Utc::now())
+            .await
+        {
+            Ok(Some(token)) => token,
+            Ok(None) => {
+                tracing::warn!(
+                    channel = login,
+                    "Bot-Trennung: keine gültige Streamer-Autorisierung — Mod-Rechte bleiben"
+                );
+                return Result_::NoToken;
+            }
+            Err(error) => {
+                tracing::error!(%error, channel = login, "Bot-Trennung: Token-Lookup fehlgeschlagen");
+                return Result_::Failed {
+                    detail: "Streamer-Token nicht ladbar".to_string(),
+                };
+            }
+        };
+        match self
+            .helix
+            .remove_channel_moderator(broadcaster_id, &self.bot_user_id, &token)
+            .await
+        {
+            Ok(RemoveModeratorOutcome::Removed) => {
+                tracing::info!(
+                    channel = login,
+                    bot_user_id = %self.bot_user_id,
+                    "Bot-Trennung: Moderator-Rechte entzogen"
+                );
+                Result_::Removed
+            }
+            Ok(RemoveModeratorOutcome::NotModerator) => {
+                tracing::info!(channel = login, "Bot-Trennung: Bot war kein Moderator");
+                Result_::NotModerator
+            }
+            Ok(RemoveModeratorOutcome::Failed { status, body }) => {
+                tracing::warn!(
+                    channel = login,
+                    status,
+                    body = %body,
+                    "Bot-Trennung: Mod-Entzug fehlgeschlagen"
+                );
+                Result_::Failed {
+                    detail: format!("Twitch antwortete {status}"),
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, channel = login, "Bot-Trennung: Mod-Entzug-Request fehlgeschlagen");
+                Result_::Failed {
+                    detail: "Twitch nicht erreichbar".to_string(),
+                }
             }
         }
     }

@@ -7,6 +7,7 @@ import {
   blockStreamer,
   clearManualPlanOverride,
   createChangelogEntry,
+  disconnectBotFromChannel,
   fetchMarketShare,
   fetchScopeStatus,
   fetchAnnouncements,
@@ -309,6 +310,17 @@ export function useRemoveStreamer() {
     mutationFn: removeStreamer,
     onSuccess: (_result, login) => {
       invalidateStreamerQueries(queryClient, login);
+    },
+  });
+}
+
+export function useDisconnectBot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, confirmLogin }: { login: string; confirmLogin: string }) =>
+      disconnectBotFromChannel(login, confirmLogin),
+    onSuccess: (_result, variables) => {
+      invalidateStreamerQueries(queryClient, variables.login);
     },
   });
 }
