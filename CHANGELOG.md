@@ -1,3 +1,11 @@
+## #418 — Nach dem Trennen wieder zurückkommen
+
+**Problem:** Wer den Bot selbst über die Verwaltung getrennt hatte, kam nicht mehr zurück. Die Seite bot zwar „Jetzt neu autorisieren" an und versprach, dass eine erfolgreiche Twitch-Anmeldung den Status wieder auf aktiv setzt — passiert ist dabei nichts. Der Kanal blieb inaktiv, Analyse und Social Media blieben gesperrt, egal wie oft man den Knopf drückte.
+
+**Änderung:** Eine erfolgreiche Twitch-Autorisierung holt einen getrennten, archivierten oder wegen abgelaufener Token pausierten Kanal jetzt tatsächlich zurück. Dabei wird der bestehende Eintrag wiederbelebt statt ein zweiter angelegt, sodass die Kanal-Einstellungen den Wiedereinstieg überleben.
+
+**Aktuelles Verhalten:** Trennen und Wiederkommen sind beides Ein-Klick-Wege. Ein Bot-Bann oder eine dauerhafte Sperre bleibt davon unberührt — die lassen sich weiterhin nicht durch eine neue Anmeldung aufheben.
+
 ## #417 — Verwaltung in Bereiche geteilt, !clip abschaltbar
 
 **Problem:** Die Verwaltung war eine einzige lange Seite. Verbindungen, Chat-Befehle, Schutzfunktionen und Overlay standen ungeordnet untereinander, und wer eine bestimmte Einstellung suchte, scrollte an allem anderen vorbei. Für !clip gab es außerdem keinen Schalter — wer Clips im Chat nicht wollte, konnte den Befehl nicht loswerden.
