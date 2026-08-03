@@ -93,6 +93,7 @@ pub mod social_media;
 pub mod spa;
 pub mod stream_report;
 pub mod streamer_comparison;
+pub mod streamer_disconnect;
 pub mod streamers;
 pub mod system;
 pub mod tag_analysis;

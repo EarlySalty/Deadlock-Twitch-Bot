@@ -674,9 +674,18 @@ pub async fn disconnect_bot_handler(
         )
         .into_response();
     }
+    call_internal_disconnect(&login).await
+}
 
+/// Ruft die Trenn-Kette in der internen Bot-API auf und reicht deren
+/// Teilschritt-Report unverändert durch.
+///
+/// Geteilt zwischen Admin-Route und Streamer-Selbstbedienung: beide trennen
+/// exakt gleich, sie unterscheiden sich nur darin, wer den Login bestimmen
+/// darf. Ein zweiter Aufrufpfad darf keine zweite Reihenfolge bekommen.
+pub(crate) async fn call_internal_disconnect(login: &str) -> axum::response::Response {
     // 503 mit deutschem Klartext statt der generischen Upstream-Meldung: der
-    // Admin muss unterscheiden können zwischen "nicht konfiguriert" und
+    // Aufrufer muss unterscheiden können zwischen "nicht konfiguriert" und
     // "Bot gerade weg" — beides heißt, dass NICHTS getrennt wurde.
     let unavailable = |message: &str| {
         (
@@ -694,7 +703,7 @@ pub async fn disconnect_bot_handler(
         "{}{}/streamers/{}/disconnect-bot",
         worker_internal_base_url(),
         INTERNAL_API_BASE_PATH,
-        urlencoding_login(&login),
+        urlencoding_login(login),
     );
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
@@ -742,7 +751,7 @@ pub async fn disconnect_bot_handler(
 
 /// Zweite Bestätigungsstufe. Leere Eingabe zählt nie als Bestätigung — sonst
 /// würde ein Client, der das Feld schlicht weglässt, die Trennung auslösen.
-fn confirmation_matches(confirm: &str, login: &str) -> bool {
+pub(crate) fn confirmation_matches(confirm: &str, login: &str) -> bool {
     let confirm = confirm.trim();
     let login = login.trim();
     !confirm.is_empty() && !login.is_empty() && confirm.eq_ignore_ascii_case(login)
