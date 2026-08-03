@@ -85,6 +85,13 @@ test('übersprungener Rollen-Entzug gilt nicht als erledigt', () => {
   }
 });
 
+// Ein fehlendes Feld ist ein ungeklärter Ausgang, kein Erfolg — sonst sieht
+// eine alte Server-Version wie ein sauberer Lauf aus.
+test('fehlender Rollen-Ausgang gilt als offen', () => {
+  assert.equal(roleNeedsAttention(undefined), true);
+  assert.match(roleLabel(undefined), /ACHTUNG/);
+});
+
 test('Rollen-Klartext nennt den Grund statt ihn zu schlucken', () => {
   assert.match(roleLabel('skipped:no_guild'), /ACHTUNG.*no_guild/);
   assert.match(roleLabel('failed:502'), /ACHTUNG.*502/);

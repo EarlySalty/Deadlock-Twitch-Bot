@@ -57,13 +57,15 @@ export function unmodNeedsAttention(outcome: UnmodOutcome): boolean {
  * Broker-Fehler, Port fehlt — bleibt offen und muss sichtbar sein.
  */
 export function roleNeedsAttention(discordRole: string | undefined): boolean {
-  if (!discordRole) return false;
   return discordRole !== 'revoked' && discordRole !== 'skipped:no_discord_link';
 }
 
 /** Kurzer deutscher Klartext für den Rollen-Ausgang. */
 export function roleLabel(discordRole: string | undefined): string {
-  if (!discordRole || discordRole === 'skipped:no_discord_link') {
+  // Fehlendes Feld heißt nicht „nichts zu tun": eine ältere Server-Version
+  // hat den Ausgang schlicht nicht gemeldet — das ist ungeklärt, nicht okay.
+  if (!discordRole) return 'ACHTUNG — Ausgang unbekannt (keine Angabe vom Server)';
+  if (discordRole === 'skipped:no_discord_link') {
     return 'kein Discord-Account verknüpft';
   }
   if (discordRole === 'revoked') return 'entzogen';

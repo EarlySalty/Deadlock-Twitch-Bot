@@ -877,16 +877,26 @@ async fn verify_handler_inner(
 }
 
 /// Entfernt best-effort die Streamer-Rolle und gibt die Python-Notiz zurück.
+///
+/// Die Notiz nennt den echten Ausgang: „entfernt" nur, wenn die Rolle wirklich
+/// weg ist. Ein übersprungener oder gescheiterter Entzug erscheint als
+/// Hinweis — sonst behauptet die Meldung eine Wirkung, die es nicht gab.
 async fn revoke_role_note(
     role_ext: &DiscordRoleExt,
     discord_user_id: Option<&str>,
     reason: &str,
 ) -> String {
-    if let (Some(did), Some(port)) = (discord_user_id, role_ext.0.as_ref()) {
-        port.revoke_streamer_role(did, reason).await;
-        "(Streamer-Rolle entfernt)".to_string()
-    } else {
-        String::new()
+    let (Some(did), Some(port)) = (discord_user_id, role_ext.0.as_ref()) else {
+        return String::new();
+    };
+    match port.revoke_streamer_role(did, reason).await {
+        RoleRevokeOutcome::Revoked => "(Streamer-Rolle entfernt)".to_string(),
+        RoleRevokeOutcome::Skipped { reason } => {
+            format!("(ACHTUNG: Streamer-Rolle bleibt bestehen — {reason})")
+        }
+        RoleRevokeOutcome::Failed { detail } => {
+            format!("(ACHTUNG: Streamer-Rolle konnte nicht entfernt werden — {detail})")
+        }
     }
 }
 
