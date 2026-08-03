@@ -29,7 +29,7 @@ pub use handlers::scam_guard::{ScamEnforceExt, ScamEnforcePort, ScamRevokeExt, S
 pub use handlers::stats_native::{EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource};
 pub use handlers::streamers::{
     ChatActionExt, ChatActionPort, ChatActionResult, DiscordRoleExt, DiscordRolePort,
-    ModeratorRemovalExt, ModeratorRemovalPort, ModeratorRemovalResult,
+    ModeratorRemovalExt, ModeratorRemovalPort, ModeratorRemovalResult, RoleRevokeOutcome,
 };
 pub use idempotency::IdempotencyState;
 pub use security::{

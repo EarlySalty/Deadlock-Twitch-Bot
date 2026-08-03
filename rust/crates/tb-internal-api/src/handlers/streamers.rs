@@ -82,18 +82,40 @@ use tb_transport_twitch::HelixClient;
 
 // ── Discord-Rollen-Port ───────────────────────────────────────────────────────
 
+/// Ausgang eines Rollen-Entzugs. Der Aufrufer soll „entzogen" nicht behaupten
+/// können, ohne dass es passiert ist: ein übersprungener Entzug (keine Guild,
+/// kein Relay, kaputte ID) ist ein eigener Zustand, kein Erfolg.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoleRevokeOutcome {
+    /// In mindestens einer Guild tatsächlich entfernt.
+    Revoked,
+    /// Gar nicht versucht — `reason` nennt, woran es lag (maschinenlesbar,
+    /// z. B. `no_guild`, `no_relay`, `invalid_user_id`).
+    Skipped { reason: String },
+    /// Versucht, aber Discord/Broker hat abgelehnt.
+    Failed { detail: String },
+}
+
 /// Port für den Discord-Streamer-Rollen-Sync (Python `sync_streamer_role`).
-/// Echte Impl in tb-bot über den Master-Broker; Fehler werden dort geloggt,
-/// nie propagiert (Python-Parität: best-effort, kein Abbruch).
+/// Echte Impl in tb-bot über den Master-Broker; Fehler brechen nichts ab
+/// (Python-Parität: best-effort), werden aber gemeldet statt verschluckt.
 #[async_trait::async_trait]
 pub trait DiscordRolePort: Send + Sync {
     /// Vergibt die Streamer-Rolle (Python `sync_streamer_role(should_have_role=True)`).
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str);
 
     /// Entfernt die Streamer-Rolle (Python `sync_streamer_role(should_have_role=False)`).
-    /// Default-Impl no-op, damit bestehende Test-Doubles nicht brechen; die
-    /// echte tb-bot-Impl entzieht die Rolle über den Master-Broker.
-    async fn revoke_streamer_role(&self, _discord_user_id: &str, _reason: &str) {}
+    /// Default-Impl meldet „nicht implementiert" statt Erfolg — ein Test-Double
+    /// ohne eigene Impl darf keinen Entzug vortäuschen.
+    async fn revoke_streamer_role(
+        &self,
+        _discord_user_id: &str,
+        _reason: &str,
+    ) -> RoleRevokeOutcome {
+        RoleRevokeOutcome::Skipped {
+            reason: "not_implemented".to_string(),
+        }
+    }
 }
 
 /// Router-Extension-Wrapper für [`DiscordRolePort`] (`None` = kein Sync).
@@ -980,17 +1002,24 @@ async fn disconnect_bot_handler_inner(
     };
 
     // Schritt 4: Discord-Streamer-Rolle entziehen (best-effort wie verify=clear).
+    //
+    // Gemeldet wird, was wirklich passiert ist. Früher stand hier unabhängig vom
+    // Ausgang "revoked" — der Report sah sauber aus, während die Rolle in
+    // Discord liegen blieb (kein Guild-Kandidat auflösbar).
     let discord_user_id = outcome.as_ref().and_then(|o| o.discord_user_id.clone());
-    let discord_role = if discord_user_id.is_some() && role_ext.0.is_some() {
-        revoke_role_note(
-            role_ext,
-            discord_user_id.as_deref(),
-            "Bot bewusst vom Kanal getrennt (Admin-Aktion)",
-        )
-        .await;
-        "revoked"
-    } else {
-        "skipped"
+    let discord_role = match (discord_user_id.as_deref(), role_ext.0.as_ref()) {
+        (Some(did), Some(port)) => {
+            match port
+                .revoke_streamer_role(did, "Bot bewusst vom Kanal getrennt")
+                .await
+            {
+                RoleRevokeOutcome::Revoked => "revoked".to_string(),
+                RoleRevokeOutcome::Skipped { reason } => format!("skipped:{reason}"),
+                RoleRevokeOutcome::Failed { detail } => format!("failed:{detail}"),
+            }
+        }
+        (None, _) => "skipped:no_discord_link".to_string(),
+        (_, None) => "skipped:no_role_port".to_string(),
     };
 
     // Jede Entscheidung ins Log, nicht nur die Treffer.
@@ -1004,7 +1033,7 @@ async fn disconnect_bot_handler_inner(
         "Bot bewusst getrennt"
     );
 
-    let message = disconnect_message(&login, unmod, departnered, opt_out);
+    let message = disconnect_message(&login, unmod, departnered, opt_out, &discord_role);
     Ok((
         StatusCode::OK,
         json!({
@@ -1022,7 +1051,13 @@ async fn disconnect_bot_handler_inner(
 
 /// Deutscher Ergebnissatz. Nennt zuerst, was NICHT geklappt hat — ein halb
 /// erledigter Trenn-Lauf soll sich auch so lesen.
-fn disconnect_message(login: &str, unmod: &str, departnered: bool, opt_out: bool) -> String {
+fn disconnect_message(
+    login: &str,
+    unmod: &str,
+    departnered: bool,
+    opt_out: bool,
+    discord_role: &str,
+) -> String {
     let partner_teil = match (departnered, opt_out) {
         (true, true) => "Partnerschaft beendet und Opt-out gesetzt",
         (false, true) => "war kein aktiver Partner mehr, Opt-out gesetzt",
@@ -1037,7 +1072,14 @@ fn disconnect_message(login: &str, unmod: &str, departnered: bool, opt_out: bool
         "unavailable" => "ACHTUNG: Bot nicht erreichbar, Moderator-Rechte bleiben",
         _ => "ACHTUNG: Entzug der Moderator-Rechte fehlgeschlagen",
     };
-    format!("{login}: {mod_teil}; {partner_teil}.")
+    // Rolle nur erwähnen, wenn sie eine Handlung nötig macht: entzogen ist der
+    // Normalfall, „kein Discord verknüpft" gibt es nichts zu entziehen. Alles
+    // andere heißt, die Rolle liegt noch beim Streamer.
+    let rollen_teil = match discord_role {
+        "revoked" | "skipped:no_discord_link" => String::new(),
+        other => format!("; ACHTUNG: Discord-Streamer-Rolle bleibt bestehen ({other})"),
+    };
+    format!("{login}: {mod_teil}; {partner_teil}{rollen_teil}.")
 }
 
 /// `POST /internal/twitch/v1/streamers/:login/archive`
@@ -1724,6 +1766,15 @@ mod tests {
         token: &str,
         removal: Option<Arc<dyn ModeratorRemovalPort>>,
     ) -> Router {
+        make_router_full(pool, token, removal, None)
+    }
+
+    fn make_router_full(
+        pool: PgPool,
+        token: &str,
+        removal: Option<Arc<dyn ModeratorRemovalPort>>,
+        role: Option<Arc<dyn DiscordRolePort>>,
+    ) -> Router {
         let base = INTERNAL_API_BASE_PATH;
         let helix: Arc<Option<HelixClient>> = Arc::new(None);
         Router::new()
@@ -1765,7 +1816,7 @@ mod tests {
             )
             .with_state(pool)
             .layer(Extension(helix))
-            .layer(Extension(DiscordRoleExt(None)))
+            .layer(Extension(DiscordRoleExt(role)))
             .layer(Extension(ModeratorRemovalExt(removal)))
             .layer(Extension(IdempotencyState::new()))
             .layer(Extension(ExpectedToken(token.to_string())))
@@ -2508,6 +2559,185 @@ mod tests {
         .await
         .map(|(status, opt_out)| (status, opt_out.unwrap_or(0)))
         .expect("Partner-Zustand")
+    }
+
+    /// Rollen-Port mit vorgegebenem Ausgang. Zählt die Aufrufe mit, damit ein
+    /// Test auch belegen kann, dass gar nicht erst versucht wurde.
+    struct FakeRole {
+        outcome: RoleRevokeOutcome,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeRole {
+        fn new(outcome: RoleRevokeOutcome) -> Arc<Self> {
+            Arc::new(Self {
+                outcome,
+                calls: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DiscordRolePort for FakeRole {
+        async fn grant_streamer_role(&self, _discord_user_id: &str, _reason: &str) {}
+
+        async fn revoke_streamer_role(
+            &self,
+            discord_user_id: &str,
+            _reason: &str,
+        ) -> RoleRevokeOutcome {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(discord_user_id.to_string());
+            }
+            self.outcome.clone()
+        }
+    }
+
+    /// Aktiver Partner mit verknüpftem Discord-Account. Die Discord-Felder
+    /// liegen wie in Prod auf `twitch_streamer_identities`, nicht auf
+    /// `twitch_partners`.
+    async fn seed_partner_mit_discord(pool: &PgPool, login: &str, user_id: &str, discord: &str) {
+        seed_aktiver_partner(pool, login, user_id).await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (twitch_user_id) DO UPDATE SET discord_user_id = EXCLUDED.discord_user_id",
+        )
+        .bind(user_id)
+        .bind(login)
+        .bind(discord)
+        .execute(pool)
+        .await
+        .expect("Discord-Identity anlegen");
+    }
+
+    /// Der Bug vom 2026-08-03: der Report meldete „revoked", während der Entzug
+    /// mangels Guild-Kandidat übersprungen wurde — die Rolle blieb in Discord
+    /// stehen und niemand sah es. Ein übersprungener Entzug muss als solcher
+    /// in Feld UND Klartext auftauchen.
+    #[tokio::test]
+    async fn disconnect_bot_meldet_uebersprungenen_rollen_entzug_statt_erfolg() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_role_skip").await;
+        seed_partner_mit_discord(&pool, "umiwaver", "563673818", "987654321").await;
+        let role = FakeRole::new(RoleRevokeOutcome::Skipped {
+            reason: "no_guild".to_string(),
+        });
+        let app = make_router_full(
+            pool.clone(),
+            "secret",
+            Some(FakeRemoval::new(ModeratorRemovalResult::Removed)),
+            Some(role.clone()),
+        );
+        let base = INTERNAL_API_BASE_PATH;
+
+        let resp = app
+            .oneshot(loopback_req(
+                "POST",
+                &format!("{base}/streamers/umiwaver/disconnect-bot"),
+                "{}",
+                Some("secret"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["discord_role"], "skipped:no_guild");
+        let message = body["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Discord-Streamer-Rolle bleibt bestehen"),
+            "Klartext verschweigt die liegengebliebene Rolle: {message}"
+        );
+        assert_eq!(
+            role.calls.lock().expect("calls").clone(),
+            vec!["987654321".to_string()],
+            "Der Entzug muss mit der verknüpften Discord-ID versucht worden sein"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_meldet_echten_rollen_entzug() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_role_ok").await;
+        seed_partner_mit_discord(&pool, "umiwaver", "563673818", "987654321").await;
+        let app = make_router_full(
+            pool.clone(),
+            "secret",
+            Some(FakeRemoval::new(ModeratorRemovalResult::Removed)),
+            Some(FakeRole::new(RoleRevokeOutcome::Revoked)),
+        );
+        let base = INTERNAL_API_BASE_PATH;
+
+        let resp = app
+            .oneshot(loopback_req(
+                "POST",
+                &format!("{base}/streamers/umiwaver/disconnect-bot"),
+                "{}",
+                Some("secret"),
+            ))
+            .await
+            .unwrap();
+        let body = json_body(resp).await;
+        assert_eq!(body["discord_role"], "revoked");
+        assert!(!body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Rolle bleibt bestehen"));
+    }
+
+    /// Ohne verknüpften Discord-Account gibt es nichts zu entziehen — das ist
+    /// kein Problem und darf den Klartext nicht mit einer Warnung fluten.
+    #[tokio::test]
+    async fn disconnect_bot_ohne_discord_verknuepfung_warnt_nicht() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_role_none").await;
+        seed_aktiver_partner(&pool, "umiwaver", "563673818").await;
+        let role = FakeRole::new(RoleRevokeOutcome::Revoked);
+        let app = make_router_full(
+            pool.clone(),
+            "secret",
+            Some(FakeRemoval::new(ModeratorRemovalResult::Removed)),
+            Some(role.clone()),
+        );
+        let base = INTERNAL_API_BASE_PATH;
+
+        let resp = app
+            .oneshot(loopback_req(
+                "POST",
+                &format!("{base}/streamers/umiwaver/disconnect-bot"),
+                "{}",
+                Some("secret"),
+            ))
+            .await
+            .unwrap();
+        let body = json_body(resp).await;
+        assert_eq!(body["discord_role"], "skipped:no_discord_link");
+        assert!(!body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ACHTUNG: Discord"));
+        assert!(
+            role.calls.lock().expect("calls").is_empty(),
+            "ohne Discord-ID darf kein Entzug versucht werden"
+        );
+    }
+
+    /// Ein Test-Double, das `revoke_streamer_role` nicht überschreibt, darf
+    /// keinen Erfolg vortäuschen — sonst wandert der alte Bug in die Fakes.
+    #[tokio::test]
+    async fn default_impl_meldet_keinen_erfolg() {
+        struct Stumm;
+        #[async_trait::async_trait]
+        impl DiscordRolePort for Stumm {
+            async fn grant_streamer_role(&self, _d: &str, _r: &str) {}
+        }
+        let outcome = Stumm.revoke_streamer_role("1", "test").await;
+        assert_eq!(
+            outcome,
+            RoleRevokeOutcome::Skipped {
+                reason: "not_implemented".to_string()
+            }
+        );
     }
 
     #[tokio::test]

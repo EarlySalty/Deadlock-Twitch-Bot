@@ -467,7 +467,12 @@ export interface DisconnectBotResult {
   unmodDetail?: string | null;
   departnered: boolean;
   optOut: boolean;
-  discordRole: 'revoked' | 'skipped' | 'failed';
+  /**
+   * Roher Ausgang des Rollen-Entzugs: `revoked`, `skipped:<grund>` oder
+   * `failed:<detail>`. Bewusst kein enger Union-Typ — ein unbekannter Grund
+   * darf nicht stillschweigend als „nichts zu tun" durchgehen.
+   */
+  discordRole: string;
   message: string;
 }
 

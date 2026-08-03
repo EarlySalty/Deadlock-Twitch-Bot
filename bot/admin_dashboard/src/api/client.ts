@@ -1206,7 +1206,7 @@ export async function disconnectBotFromChannel(
     unmodDetail: readString(record, 'unmodDetail', 'unmod_detail') || null,
     departnered: readBoolean(record, 'departnered') ?? false,
     optOut: readBoolean(record, 'optOut', 'opt_out') ?? false,
-    discordRole: discordRole === 'revoked' || discordRole === 'failed' ? discordRole : 'skipped',
+    discordRole: discordRole || 'skipped:unknown',
     message: readString(record, 'message') || 'Trennung ausgeführt.',
   };
 }

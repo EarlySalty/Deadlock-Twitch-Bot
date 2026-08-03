@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { AlertTriangle, Loader2, PlugZap } from 'lucide-react';
 import {
   disconnectBot,
+  roleLabel,
+  roleNeedsAttention,
   unmodNeedsAttention,
   type DisconnectBotResponse,
 } from '@/api/disconnectBot';
@@ -72,7 +74,7 @@ export function DisconnectBotSection({ login }: Props) {
       {report && (
         <div
           className={`mb-4 rounded-lg border px-3 py-3 text-sm ${
-            unmodNeedsAttention(report.unmod)
+            unmodNeedsAttention(report.unmod) || roleNeedsAttention(report.discord_role)
               ? 'border-warning/40 bg-warning/10 text-warning'
               : 'border-success/40 bg-success/10 text-success'
           }`}
@@ -89,7 +91,7 @@ export function DisconnectBotSection({ login }: Props) {
             </li>
             <li>Partnerschaft: {report.departnered ? 'beendet' : 'war nicht mehr aktiv'}</li>
             <li>Opt-out: {report.opt_out ? 'gesetzt' : 'ACHTUNG — nicht gesetzt'}</li>
-            {report.discord_role && <li>Discord-Rolle: {report.discord_role}</li>}
+            <li>Discord-Streamer-Rolle: {roleLabel(report.discord_role)}</li>
           </ul>
         </div>
       )}
