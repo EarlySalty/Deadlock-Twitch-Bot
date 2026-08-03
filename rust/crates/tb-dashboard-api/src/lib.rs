@@ -751,6 +751,10 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
             post(admin_streamers::block_handler),
         )
         .route(
+            "/twitch/api/admin/streamers/:login/disconnect-bot",
+            post(admin_streamers::disconnect_bot_handler),
+        )
+        .route(
             "/twitch/api/admin/streamers/:login/discord-flag",
             post(admin_streamers::discord_flag_handler),
         )

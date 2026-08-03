@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Ban, BarChart3, CctvOff, Clock3, Radio, Save, Send, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
+import { ArrowLeft, Ban, BarChart3, CctvOff, Clock3, PlugZap, Radio, Save, Send, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
+import { ConfirmTypedDialog } from '@/components/shared/ConfirmTypedDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -13,6 +14,7 @@ import {
   useArchiveStreamer,
   useBlockStreamer,
   useClearManualPlanOverride,
+  useDisconnectBot,
   useEngagementSettings,
   useEngagementToggle,
   useManualPlanOverride,
@@ -23,7 +25,13 @@ import {
   useUpdateStreamerDiscordProfile,
   useVerifyStreamer,
 } from '@/hooks/useAdmin';
-import type { LegacyVerifyMode, PartnerChatAnnouncementColor, PartnerChatActionMode, SessionSummary } from '@/api/types';
+import type {
+  DisconnectBotResult,
+  LegacyVerifyMode,
+  PartnerChatAnnouncementColor,
+  PartnerChatActionMode,
+  SessionSummary,
+} from '@/api/types';
 import { coerceRecord, formatDateTime, formatNumber, formatRelativeTime } from '@/utils/formatters';
 
 const PLAN_OPTIONS = [
@@ -49,6 +57,22 @@ const CHAT_MODES: Array<{ value: PartnerChatActionMode; label: string }> = [
   { value: 'action', label: '/me Action' },
   { value: 'announcement', label: 'Announcement' },
 ];
+
+/** Klartext für jeden Ausgang des Unmod-Schritts — auch die, die nichts bewirkt haben. */
+const UNMOD_LABELS: Record<DisconnectBotResult['unmod'], string> = {
+  removed: 'Moderator-Rechte entzogen',
+  not_moderator: 'war ohnehin kein Moderator',
+  no_token: 'keine gültige Twitch-Autorisierung — Moderator-Rechte bleiben bestehen',
+  unknown_channel: 'Kanal-ID nicht auflösbar — Moderator-Rechte bleiben bestehen',
+  unavailable: 'Bot nicht erreichbar — Moderator-Rechte bleiben bestehen',
+  failed: 'Entzug fehlgeschlagen — Moderator-Rechte bleiben bestehen',
+};
+
+const DISCORD_ROLE_LABELS: Record<DisconnectBotResult['discordRole'], string> = {
+  revoked: 'Streamer-Rolle entzogen',
+  skipped: 'keine Discord-Verknüpfung — nichts zu entziehen',
+  failed: 'Streamer-Rolle konnte nicht entzogen werden',
+};
 
 const CHAT_COLORS: Array<{ value: PartnerChatAnnouncementColor; label: string }> = [
   { value: 'purple', label: 'Purple' },
@@ -131,6 +155,7 @@ export function StreamerDetailPage() {
   const manualPlanMutation = useManualPlanOverride();
   const clearManualPlanMutation = useClearManualPlanOverride();
   const partnerChatMutation = usePartnerChatAction();
+  const disconnectMutation = useDisconnectBot();
   const engagementQuery = useEngagementSettings(login);
   const engagementToggle = useEngagementToggle();
 
@@ -145,6 +170,8 @@ export function StreamerDetailPage() {
   const [chatColor, setChatColor] = useState<PartnerChatAnnouncementColor>('purple');
   const [chatMessage, setChatMessage] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [disconnectStage, setDisconnectStage] = useState<'idle' | 'warn' | 'type'>('idle');
+  const [disconnectReport, setDisconnectReport] = useState<DisconnectBotResult | null>(null);
   const [toast, setToast] = useState<{ open: boolean; tone: 'success' | 'error'; message: string }>({
     open: false,
     tone: 'success',
@@ -554,6 +581,47 @@ export function StreamerDetailPage() {
       </section>
 
       <article className="panel-card rounded-[1.8rem] p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Bot vom Kanal trennen</p>
+        <p className="mt-3 text-sm leading-6 text-text-secondary">
+          Für Streamer, die den Bot nicht mehr wollen: entzieht die Moderator-Rechte auf Twitch, beendet die
+          Partnerschaft und setzt den Opt-out, damit kein automatischer Sweep den Kanal zurückholt. Die
+          Twitch-Autorisierung bleibt liegen — verbindet sich der Streamer später erneut, moddet sich der Bot wieder
+          selbst.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            className="admin-button admin-button-danger"
+            disabled={disconnectMutation.isPending}
+            onClick={() => {
+              setDisconnectReport(null);
+              setDisconnectStage('warn');
+            }}
+          >
+            <PlugZap className="h-4 w-4" />
+            Bot bewusst trennen
+          </button>
+          <span className="text-xs text-text-secondary">Zwei Bestätigungen, die zweite mit Login-Eingabe.</span>
+        </div>
+        {disconnectReport ? (
+          <ul className="mt-5 space-y-2 rounded-2xl border border-white/10 bg-bg/55 p-4 text-sm leading-6">
+            <li className={disconnectReport.unmod === 'removed' ? 'text-success' : 'text-warning'}>
+              Twitch: {UNMOD_LABELS[disconnectReport.unmod]}
+              {disconnectReport.unmodDetail ? ` (${disconnectReport.unmodDetail})` : ''}
+            </li>
+            <li className={disconnectReport.departnered ? 'text-success' : 'text-warning'}>
+              Partnerschaft: {disconnectReport.departnered ? 'beendet' : 'war kein aktiver Partner'}
+            </li>
+            <li className={disconnectReport.optOut ? 'text-success' : 'text-warning'}>
+              Opt-out: {disconnectReport.optOut ? 'gesetzt' : 'nicht gesetzt'}
+            </li>
+            <li className={disconnectReport.discordRole === 'revoked' ? 'text-success' : 'text-text-secondary'}>
+              Discord: {DISCORD_ROLE_LABELS[disconnectReport.discordRole]}
+            </li>
+          </ul>
+        ) : null}
+      </article>
+
+      <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">AI-Engagement (Chatter)</p>
         <div className="mt-4 flex items-center justify-between gap-4">
           <div>
@@ -701,6 +769,50 @@ export function StreamerDetailPage() {
             }
           } catch (error) {
             setToast({ open: true, tone: 'error', message: error instanceof Error ? error.message : 'Streamer konnte nicht entfernt werden' });
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={disconnectStage === 'warn'}
+        title={`Bot von ${detail.login} trennen?`}
+        description={`Der Bot verlässt ${detail.login} operativ: Moderator-Rechte weg, Partnerschaft beendet, Opt-out gesetzt. Im nächsten Schritt musst du den Login abtippen.`}
+        confirmLabel="Weiter"
+        tone="danger"
+        onCancel={() => setDisconnectStage('idle')}
+        onConfirm={() => setDisconnectStage('type')}
+      />
+
+      <ConfirmTypedDialog
+        open={disconnectStage === 'type'}
+        title={`${detail.login} wirklich trennen?`}
+        description="Das passiert der Reihe nach, sobald du bestätigst:"
+        expected={detail.login}
+        steps={[
+          'Der Bot verliert seine Moderator-Rechte im Twitch-Kanal.',
+          'Die Partnerschaft wird beendet: kein Auto-Raid, kein Raid-Ziel, keine Chat-Funktionen.',
+          'Der Opt-out wird gesetzt, damit kein automatischer Sweep den Kanal zurückholt.',
+          'Die Discord-Streamer-Rolle wird entzogen, falls verknüpft.',
+          'Die Twitch-Autorisierung bleibt bestehen — eine erneute Freigabe holt den Bot zurück.',
+        ]}
+        confirmLabel="Jetzt trennen"
+        busy={disconnectMutation.isPending}
+        onCancel={() => setDisconnectStage('idle')}
+        onConfirm={async () => {
+          try {
+            const result = await disconnectMutation.mutateAsync({
+              login: detail.login,
+              confirmLogin: detail.login,
+            });
+            setDisconnectReport(result);
+            setDisconnectStage('idle');
+            setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
+          } catch (error) {
+            setToast({
+              open: true,
+              tone: 'error',
+              message: error instanceof Error ? error.message : 'Trennung fehlgeschlagen',
+            });
           }
         }}
       />

@@ -451,6 +451,26 @@ export interface AdminActionResult {
   redirectUrl?: string;
 }
 
+/// Ausgang des Unmod-Schritts beim bewussten Trennen.
+export type DisconnectBotUnmodOutcome =
+  | 'removed'
+  | 'not_moderator'
+  | 'no_token'
+  | 'unknown_channel'
+  | 'unavailable'
+  | 'failed';
+
+export interface DisconnectBotResult {
+  ok: boolean;
+  login: string;
+  unmod: DisconnectBotUnmodOutcome;
+  unmodDetail?: string | null;
+  departnered: boolean;
+  optOut: boolean;
+  discordRole: 'revoked' | 'skipped' | 'failed';
+  message: string;
+}
+
 export interface EngagementSettings {
   channelLogin: string;
   enabled: boolean;

@@ -558,6 +558,13 @@ async fn main() {
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
     let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone()).await;
+    // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
+    // Pipeline-Aufbau konsumiert, der Trenn-Endpoint der internen API braucht
+    // die ID aber erst ganz am Ende (Mod-Entzug im Streamer-Kanal).
+    let internal_bot_user_id: String = chat_api_handle
+        .as_ref()
+        .map(|h| h.bot_user_id.clone())
+        .unwrap_or_default();
     // P1.7: Bot-Token-Quelle für den Follower-Total-Abruf (moderator:read:followers).
     // P1.19: mit verfügbarem Streamer-Token-Provider (Krypto-Key + Helix) wird die
     // Bot-Token-Quelle mit dem Streamer-OAuth-Token-Fallback umwickelt — bei 403
@@ -1819,6 +1826,32 @@ async fn main() {
     // → der Handler antwortet 503 statt stumm zu scheitern.
     let chat_action: Option<Arc<dyn tb_internal_api::ChatActionPort>> =
         chat_wiring::build_chat_action_port(chat_action_api, pool.clone());
+    // Mod-Entzug für den Trenn-Endpoint. Braucht Streamer-Token-Provider
+    // (DB_MASTER_KEY_V1), Helix und die Bot-User-ID; fehlt eines, meldet der
+    // Endpoint "unavailable" statt so zu tun, als wäre entmoddet worden.
+    let moderator_removal: Option<Arc<dyn tb_internal_api::ModeratorRemovalPort>> = match (
+        helix
+            .as_ref()
+            .clone()
+            .and_then(|hc| build_moderator_token_provider(pool.clone(), hc)),
+        helix.as_ref().clone(),
+        internal_bot_user_id.trim().is_empty(),
+    ) {
+        (Some(token_provider), Some(helix_client), false) => {
+            Some(Arc::new(eventsub_hooks::HelixModeratorRemover::new(
+                token_provider,
+                helix_client,
+                internal_bot_user_id.clone(),
+            )) as Arc<dyn tb_internal_api::ModeratorRemovalPort>)
+        }
+        _ => {
+            tracing::info!(
+                "Mod-Entzug nicht verdrahtet (Token-Provider, Helix oder Bot-ID fehlt) — \
+                 der Trenn-Endpoint meldet das als 'unavailable'"
+            );
+            None
+        }
+    };
     let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
         scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
     let scam_enforce: Option<Arc<dyn tb_internal_api::ScamEnforcePort>> =
@@ -1837,6 +1870,7 @@ async fn main() {
         eventsub_stats,
         discord_role,
         chat_action,
+        moderator_removal,
         scam_revoke,
         scam_enforce,
         bulk_reauth,

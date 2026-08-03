@@ -148,6 +148,41 @@ pub trait ChatActionPort: Send + Sync {
 #[derive(Clone)]
 pub struct ChatActionExt(pub Option<Arc<dyn ChatActionPort>>);
 
+// ── Moderator-Entzug (bewusstes Trennen) ──────────────────────────────────────
+
+/// Ausgang des Unmod-Schritts. Jeder Wert landet unverändert im Antwort-JSON und
+/// im Log — auch die, bei denen nichts passiert ist. Ein Trenn-Lauf, der die
+/// Mod-Rechte NICHT losgeworden ist, darf nicht wie ein Erfolg aussehen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModeratorRemovalResult {
+    /// Twitch hat die Mod-Rechte entfernt.
+    Removed,
+    /// Der Bot war in diesem Kanal gar kein Moderator — selber Zielzustand.
+    NotModerator,
+    /// Keine gültige Streamer-Autorisierung: ohne Broadcaster-Token kann
+    /// niemand den Bot entmoderieren, die Rechte bleiben bestehen.
+    NoToken,
+    /// Helix-Fehler oder fehlende Bot-Identität. `detail` ist bereits gekappt.
+    Failed { detail: String },
+}
+
+/// Port für den Mod-Entzug im Streamer-Kanal (Helix `DELETE /moderation/moderators`
+/// mit dem **Streamer-Token**). Echte Impl in tb-bot, weil nur dort Bot-User-ID
+/// und der rotierende Token-Provider leben. `None` → der Handler meldet
+/// `unavailable` statt stillschweigend weiterzumachen.
+#[async_trait::async_trait]
+pub trait ModeratorRemovalPort: Send + Sync {
+    async fn remove_bot_moderator(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> ModeratorRemovalResult;
+}
+
+/// Router-Extension-Wrapper für [`ModeratorRemovalPort`] (`None` = kein Unmod).
+#[derive(Clone)]
+pub struct ModeratorRemovalExt(pub Option<Arc<dyn ModeratorRemovalPort>>);
+
 // ── Response-Typen ────────────────────────────────────────────────────────────
 //
 // Die `{ok, login, message}`-Antwort der Mutations-Routen wird seit P2.143 direkt
@@ -833,6 +868,178 @@ async fn revoke_role_note(
     }
 }
 
+/// `POST /internal/twitch/v1/streamers/:login/disconnect-bot`
+///
+/// Bewusstes Trennen: der Bot verlässt den Kanal operativ. Drei Schritte in
+/// fester Reihenfolge, jeder fehler-isoliert:
+///
+/// 1. Mod-Rechte auf Twitch abgeben — **zuerst**, weil Schritt 2 die Raid-Auth
+///    deaktiviert und der Unmod den Streamer-Token braucht.
+/// 2. Departnern (`departner_active_partner` mit `clear_verification`).
+/// 3. `manual_partner_opt_out = 1` festnageln, damit kein Reaktivierungs-Sweep
+///    den Kanal zurückholt.
+///
+/// Die Antwort nennt jeden Ausgang einzeln — auch die fehlgeschlagenen. Ein
+/// Lauf, bei dem nur der Unmod scheitert, ist kein stiller Erfolg.
+#[allow(clippy::too_many_arguments)]
+pub async fn disconnect_bot_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Extension(role_ext): Extension<DiscordRoleExt>,
+    Extension(removal_ext): Extension<ModeratorRemovalExt>,
+    Extension(idem): Extension<IdempotencyState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Path(raw_login): Path<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
+    if !auth.is_privileged() {
+        return ApiError::unauthorized().into_response();
+    }
+    let payload = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
+        disconnect_bot_handler_inner(&pool, &role_ext, &removal_ext, &raw_login)
+    })
+    .await
+}
+
+/// Broadcaster-ID aus allen drei Quellen, in denen sie stehen kann. Ein
+/// departnerter oder nie promoteter Streamer fehlt in `twitch_partners`, hat
+/// aber oft noch eine Auth-Zeile — deshalb der Fallback.
+async fn resolve_broadcaster_id(pool: &PgPool, login: &str) -> Option<String> {
+    let row: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT COALESCE(NULLIF(TRIM(p.twitch_user_id), ''), \
+                NULLIF(TRIM(a.twitch_user_id), ''), \
+                NULLIF(TRIM(s.twitch_user_id), '')) \
+           FROM (SELECT $1::text AS login) q \
+           LEFT JOIN twitch_partners p ON LOWER(p.twitch_login) = q.login \
+           LEFT JOIN twitch_raid_auth a ON LOWER(a.twitch_login) = q.login \
+           LEFT JOIN twitch_streamers s ON LOWER(s.twitch_login) = q.login \
+          LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, login, "disconnect-bot: Broadcaster-ID nicht ladbar");
+        None
+    });
+    row.flatten().filter(|id| !id.trim().is_empty())
+}
+
+async fn disconnect_bot_handler_inner(
+    pool: &PgPool,
+    role_ext: &DiscordRoleExt,
+    removal_ext: &ModeratorRemovalExt,
+    raw_login: &str,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let login = match normalize_twitch_login(raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
+    // Schritt 1: Mod-Rechte abgeben, solange der Streamer-Token noch aktiv ist.
+    let (unmod, unmod_detail) = match removal_ext.0.as_ref() {
+        None => ("unavailable", None),
+        Some(port) => match resolve_broadcaster_id(pool, &login).await {
+            None => ("unknown_channel", None),
+            Some(broadcaster_id) => match port.remove_bot_moderator(&broadcaster_id, &login).await {
+                ModeratorRemovalResult::Removed => ("removed", None),
+                ModeratorRemovalResult::NotModerator => ("not_moderator", None),
+                ModeratorRemovalResult::NoToken => ("no_token", None),
+                ModeratorRemovalResult::Failed { detail } => ("failed", Some(detail)),
+            },
+        },
+    };
+
+    // Schritt 2: Departnern. Kein aktiver Partner ist kein Fehler — die
+    // Trennung ist dann schlicht schon halb passiert.
+    let outcome = lifecycle::departner_active_partner(pool, &login, true)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, login, "disconnect-bot: Departnern fehlgeschlagen");
+            ApiError::internal()
+        })?;
+    let departnered = outcome.is_some();
+
+    // Schritt 3: Opt-out festnageln. Bewusst redundant zum Departner-Pfad —
+    // dieses UPDATE ist die Stelle, auf die sich der Endpoint verlässt.
+    let opt_out = match sqlx::query(
+        "UPDATE twitch_partners SET manual_partner_opt_out = 1 \
+          WHERE LOWER(twitch_login) = LOWER($1)",
+    )
+    .bind(&login)
+    .execute(pool)
+    .await
+    {
+        Ok(result) => result.rows_affected() > 0,
+        Err(error) => {
+            tracing::error!(%error, login, "disconnect-bot: Opt-out nicht setzbar");
+            false
+        }
+    };
+
+    // Schritt 4: Discord-Streamer-Rolle entziehen (best-effort wie verify=clear).
+    let discord_user_id = outcome.as_ref().and_then(|o| o.discord_user_id.clone());
+    let discord_role = if discord_user_id.is_some() && role_ext.0.is_some() {
+        revoke_role_note(
+            role_ext,
+            discord_user_id.as_deref(),
+            "Bot bewusst vom Kanal getrennt (Admin-Aktion)",
+        )
+        .await;
+        "revoked"
+    } else {
+        "skipped"
+    };
+
+    // Jede Entscheidung ins Log, nicht nur die Treffer.
+    tracing::info!(
+        login = %login,
+        unmod,
+        unmod_detail = unmod_detail.as_deref().unwrap_or(""),
+        departnered,
+        opt_out,
+        discord_role,
+        "Bot bewusst getrennt"
+    );
+
+    let message = disconnect_message(&login, unmod, departnered, opt_out);
+    Ok((
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "login": login,
+            "unmod": unmod,
+            "unmod_detail": unmod_detail,
+            "departnered": departnered,
+            "opt_out": opt_out,
+            "discord_role": discord_role,
+            "message": message,
+        }),
+    ))
+}
+
+/// Deutscher Ergebnissatz. Nennt zuerst, was NICHT geklappt hat — ein halb
+/// erledigter Trenn-Lauf soll sich auch so lesen.
+fn disconnect_message(login: &str, unmod: &str, departnered: bool, opt_out: bool) -> String {
+    let partner_teil = match (departnered, opt_out) {
+        (true, true) => "Partnerschaft beendet und Opt-out gesetzt",
+        (false, true) => "war kein aktiver Partner mehr, Opt-out gesetzt",
+        (true, false) => "Partnerschaft beendet, Opt-out konnte nicht gesetzt werden",
+        (false, false) => "kein Partner-Eintrag gefunden, nichts zu deaktivieren",
+    };
+    let mod_teil = match unmod {
+        "removed" => "Moderator-Rechte entzogen",
+        "not_moderator" => "war ohnehin kein Moderator",
+        "no_token" => "ACHTUNG: keine gültige Twitch-Autorisierung, Moderator-Rechte bleiben",
+        "unknown_channel" => "ACHTUNG: Kanal-ID nicht auflösbar, Moderator-Rechte bleiben",
+        "unavailable" => "ACHTUNG: Bot nicht erreichbar, Moderator-Rechte bleiben",
+        _ => "ACHTUNG: Entzug der Moderator-Rechte fehlgeschlagen",
+    };
+    format!("{login}: {mod_teil}; {partner_teil}.")
+}
+
 /// `POST /internal/twitch/v1/streamers/:login/archive`
 ///
 /// Body: `{"mode": "toggle"|"archive"|"unarchive"|"block"|"unblock"|...}` — Default: "toggle".
@@ -1509,6 +1716,14 @@ mod tests {
     }
 
     fn make_router(pool: PgPool, token: &str) -> Router {
+        make_router_with_removal(pool, token, None)
+    }
+
+    fn make_router_with_removal(
+        pool: PgPool,
+        token: &str,
+        removal: Option<Arc<dyn ModeratorRemovalPort>>,
+    ) -> Router {
         let base = INTERNAL_API_BASE_PATH;
         let helix: Arc<Option<HelixClient>> = Arc::new(None);
         Router::new()
@@ -1522,6 +1737,10 @@ mod tests {
             .route(
                 &format!("{base}/streamers/:login/archive"),
                 post(archive_handler),
+            )
+            .route(
+                &format!("{base}/streamers/:login/disconnect-bot"),
+                post(disconnect_bot_handler),
             )
             .route(
                 &format!("{base}/streamers/:login/discord-flag"),
@@ -1547,6 +1766,7 @@ mod tests {
             .with_state(pool)
             .layer(Extension(helix))
             .layer(Extension(DiscordRoleExt(None)))
+            .layer(Extension(ModeratorRemovalExt(removal)))
             .layer(Extension(IdempotencyState::new()))
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(
@@ -2227,5 +2447,213 @@ mod tests {
         );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Bot bewusst trennen ──────────────────────────────────────────────────
+
+    /// Fake-Port: liefert einen festen Ausgang und merkt sich den Aufruf.
+    struct FakeRemoval {
+        result: ModeratorRemovalResult,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeRemoval {
+        fn new(result: ModeratorRemovalResult) -> Arc<Self> {
+            Arc::new(Self {
+                result,
+                calls: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModeratorRemovalPort for FakeRemoval {
+        async fn remove_bot_moderator(
+            &self,
+            broadcaster_id: &str,
+            login: &str,
+        ) -> ModeratorRemovalResult {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push((broadcaster_id.to_string(), login.to_string()));
+            }
+            self.result.clone()
+        }
+    }
+
+    /// Legt einen aktiven Partner samt Auth-Zeile an (Ausgangslage wie in Prod).
+    async fn seed_aktiver_partner(pool: &PgPool, login: &str, user_id: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status, manual_partner_opt_out) \
+             VALUES (1, $1, $2, 'active', 0)",
+        )
+        .bind(login)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .expect("Partner anlegen");
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ($1, $2, TRUE, FALSE)")
+            .bind(user_id)
+            .bind(login)
+            .execute(pool)
+            .await
+            .expect("Auth-Zeile anlegen");
+    }
+
+    async fn partner_zustand(pool: &PgPool, login: &str) -> (String, i32) {
+        sqlx::query_as::<_, (String, Option<i32>)>(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1)",
+        )
+        .bind(login)
+        .fetch_one(pool)
+        .await
+        .map(|(status, opt_out)| (status, opt_out.unwrap_or(0)))
+        .expect("Partner-Zustand")
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_entmoddet_departnert_und_setzt_opt_out() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_ok").await;
+        seed_aktiver_partner(&pool, "umiwaver", "563673818").await;
+        let port = FakeRemoval::new(ModeratorRemovalResult::Removed);
+        let app = make_router_with_removal(pool.clone(), "secret", Some(port.clone()));
+        let base = INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["unmod"], "removed");
+        assert_eq!(body["departnered"], true);
+        assert_eq!(body["opt_out"], true);
+
+        // Der Unmod lief mit der Broadcaster-ID aus der DB, nicht mit dem Login.
+        let calls = port.calls.lock().expect("calls").clone();
+        assert_eq!(calls, vec![("563673818".to_string(), "umiwaver".to_string())]);
+
+        let (status, opt_out) = partner_zustand(&pool, "umiwaver").await;
+        assert_eq!(status, "departnered");
+        assert_eq!(opt_out, 1);
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_departnert_auch_wenn_bot_kein_moderator_war() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_notmod").await;
+        seed_aktiver_partner(&pool, "umiwaver", "563673818").await;
+        let port = FakeRemoval::new(ModeratorRemovalResult::NotModerator);
+        let app = make_router_with_removal(pool.clone(), "secret", Some(port));
+        let base = INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            Some("secret"),
+        );
+        let body = json_body(app.oneshot(req).await.unwrap()).await;
+        assert_eq!(body["unmod"], "not_moderator");
+        assert_eq!(body["departnered"], true);
+        assert_eq!(body["opt_out"], true);
+
+        let (status, opt_out) = partner_zustand(&pool, "umiwaver").await;
+        assert_eq!(status, "departnered");
+        assert_eq!(opt_out, 1);
+    }
+
+    /// Der gefährliche Fall: der Unmod scheitert. Die Partnerschaft wird trotzdem
+    /// beendet — aber die Antwort darf das NICHT als sauberen Erfolg verkaufen.
+    #[tokio::test]
+    async fn disconnect_bot_meldet_fehlgeschlagenen_unmod_offen() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_fail").await;
+        seed_aktiver_partner(&pool, "umiwaver", "563673818").await;
+        let port = FakeRemoval::new(ModeratorRemovalResult::Failed {
+            detail: "Twitch antwortete 401".to_string(),
+        });
+        let app = make_router_with_removal(pool.clone(), "secret", Some(port));
+        let base = INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            Some("secret"),
+        );
+        let body = json_body(app.oneshot(req).await.unwrap()).await;
+        assert_eq!(body["unmod"], "failed");
+        assert_eq!(body["unmod_detail"], "Twitch antwortete 401");
+        assert_eq!(body["departnered"], true);
+        assert!(
+            body["message"].as_str().unwrap_or_default().contains("ACHTUNG"),
+            "Fehlgeschlagener Unmod muss in der Meldung stehen: {}",
+            body["message"]
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_ohne_port_meldet_unavailable() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_noport").await;
+        seed_aktiver_partner(&pool, "umiwaver", "563673818").await;
+        let app = make_router(pool.clone(), "secret");
+        let base = INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            Some("secret"),
+        );
+        let body = json_body(app.oneshot(req).await.unwrap()).await;
+        assert_eq!(body["unmod"], "unavailable");
+        assert_eq!(body["departnered"], true);
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_ohne_aktiven_partner_ist_kein_fehler() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_nopartner").await;
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('umiwaver', '563673818')")
+            .execute(&pool)
+            .await
+            .expect("Streamer anlegen");
+        let port = FakeRemoval::new(ModeratorRemovalResult::Removed);
+        let app = make_router_with_removal(pool.clone(), "secret", Some(port));
+        let base = INTERNAL_API_BASE_PATH;
+
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["unmod"], "removed");
+        assert_eq!(body["departnered"], false);
+        assert_eq!(body["opt_out"], false);
+    }
+
+    #[tokio::test]
+    async fn disconnect_bot_ohne_auth_401() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_disc_401").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/umiwaver/disconnect-bot"),
+            "{}",
+            None,
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
