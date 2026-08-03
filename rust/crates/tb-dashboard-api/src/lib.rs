@@ -156,7 +156,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
-        chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode,
+        chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
+        engagement_mode,
         engagement_settings, exp_analytics, follower_funnel, greeting_settings, internal_home,
         leaderboard,
         loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings, monetization,
@@ -384,6 +385,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/lurk-command-settings",
             get(lurk_command_settings::get_handler).post(lurk_command_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
+        // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.
+        .route(
+            "/twitch/api/v2/streamer/clip-command-settings",
+            get(clip_command_settings::get_handler).post(clip_command_settings::post_handler),
         )
         // Streamer-Selbstbedienung: automatischer Rückgruß im Chat. Default
         // aktiviert (bestehendes Verhalten), Spalte

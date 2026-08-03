@@ -1,28 +1,59 @@
+import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { ClipCommandSection } from '@/components/verwaltung/ClipCommandSection';
 import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
+import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
   ArrowLeft,
   ArrowRight,
+  Bot,
   Gamepad2,
   Loader2,
   MessageSquare,
+  Monitor,
   ShieldAlert,
   ShieldCheck,
+  Terminal,
   User,
 } from 'lucide-react';
 
+interface VerwaltungTabDef {
+  id: VerwaltungTabId;
+  label: string;
+  icon: typeof User;
+  render: () => ReactNode;
+}
+
 export function VerwaltungPage() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+
+  // Tab im Hash halten: Reload und geteilte Links landen wieder im selben Bereich.
+  const [tab, setTab] = useState<VerwaltungTabId>(() =>
+    resolveVerwaltungTab(typeof window === 'undefined' ? '' : window.location.hash),
+  );
+
+  useEffect(() => {
+    const onHashChange = () => setTab(resolveVerwaltungTab(window.location.hash));
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const selectTab = (next: VerwaltungTabId) => {
+    setTab(next);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `#${next}`);
+    }
+  };
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['internal-home', null],
@@ -104,6 +135,275 @@ export function VerwaltungPage() {
   const partnerStatus = String((authStatus as any)?.partnerStatus || '').trim().toLowerCase();
   const tokenErrorGraceExpiresAt = String((authStatus as any)?.tokenErrorGraceExpiresAt || '').trim();
 
+  const kontoTab = (
+    <>
+      {/* Twitch OAuth Section */}
+      <motion.section
+        className="panel-card rounded-2xl p-5 md:p-6"
+        initial={{ opacity: 0, y: 16 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ duration: 0.32, delay: 0.04 }}
+      >
+        <div className="mb-5">
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">OAuth</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">Twitch-Verbindung</h2>
+        </div>
+
+        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
+              {oauthConnected
+                ? <ShieldCheck className="h-5 w-5 text-on-gold" />
+                : <ShieldAlert className="h-5 w-5 text-on-gold" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className={`text-base font-bold ${oauthStatusClass}`}>{oauthStatusText}</p>
+              <p className="mt-0.5 text-xs text-text-secondary">{oauthHintText}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Scope chips */}
+        {(grantedScopes.length > 0 || missingScopes.length > 0) && (
+          <div className="mb-5 space-y-2">
+            {grantedScopes.length > 0 && (
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Aktive Scopes ({grantedScopes.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {grantedScopes.map((scope: string) => (
+                    <span key={scope} className="rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-success">
+                      {scope}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {missingScopes.length > 0 && (
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Fehlende Scopes ({missingScopes.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {missingScopes.map((scope: string) => (
+                    <span key={scope} className="rounded-full border border-error/40 bg-error/10 px-2.5 py-0.5 text-[11px] font-medium text-error">
+                      {scope}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <a
+          href={reconnectUrl}
+          className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
+        >
+          <ShieldCheck className="h-4 w-4" />
+          Jetzt neu autorisieren
+        </a>
+      </motion.section>
+
+      {/* Discord Section */}
+      <motion.section
+        className="panel-card rounded-2xl p-5 md:p-6"
+        initial={{ opacity: 0, y: 16 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ duration: 0.32, delay: 0.08 }}
+      >
+        <div className="mb-5">
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Discord</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">Discord verbinden</h2>
+        </div>
+
+        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
+              <MessageSquare className="h-5 w-5 text-on-gold" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
+                {discordConnected ? 'Verbunden' : 'Nicht verbunden'}
+              </p>
+              <p className="mt-0.5 text-xs text-text-secondary">
+                {discordConnected ? 'Discord-Verknüpfung erkannt.' : 'Noch kein Discord-Profil verknüpft.'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {discordConnectUrl ? (
+          <a
+            href={discordConnectUrl}
+            className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
+          >
+            <MessageSquare className="h-4 w-4" />
+            {discordConnected ? 'Erneut verbinden' : 'Discord verknüpfen'}
+          </a>
+        ) : (
+          <div className="space-y-2">
+            <button
+              type="button"
+              disabled
+              className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
+            >
+              <MessageSquare className="h-4 w-4" />
+              {discordConnected ? 'Discord verbunden' : 'Discord-Link nicht im Self-Service verfügbar'}
+            </button>
+            {!discordConnected && (
+              <p className="text-xs text-text-secondary">
+                Discord-Verknüpfungen laufen nicht über den Admin-Login und sind auf dieser Seite aktuell nicht als Self-Service freigeschaltet.
+              </p>
+            )}
+          </div>
+        )}
+      </motion.section>
+
+      {/* Steam Section */}
+      <motion.section
+        className="panel-card rounded-2xl p-5 md:p-6"
+        initial={{ opacity: 0, y: 16 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ duration: 0.32, delay: 0.1 }}
+      >
+        <div className="mb-5">
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Steam</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">Steam verbinden</h2>
+        </div>
+
+        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
+              <Gamepad2 className="h-5 w-5 text-on-gold" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
+                {steamConnected ? 'Verbunden' : 'Nicht verbunden'}
+              </p>
+              <p className="mt-0.5 text-xs text-text-secondary">
+                {steamConnected ? 'Steam-Account verknüpft.' : 'Noch kein Steam-Account verknüpft.'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {steamConnectUrl ? (
+          <a
+            href={steamConnectUrl}
+            className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
+          >
+            <Gamepad2 className="h-4 w-4" />
+            {steamConnected ? 'Erneut verknüpfen' : 'Steam verknüpfen'}
+          </a>
+        ) : (
+          <div className="space-y-2">
+            <button
+              type="button"
+              disabled
+              className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
+            >
+              <Gamepad2 className="h-4 w-4" />
+              Steam verknüpfen
+            </button>
+            <p className="text-xs text-text-secondary">
+              Verknüpfe zuerst deinen Discord-Account — die Steam-Verknüpfung läuft darüber.
+            </p>
+          </div>
+        )}
+      </motion.section>
+
+      {/* Profile Section */}
+      <motion.section
+        className="panel-card rounded-2xl p-5 md:p-6"
+        initial={{ opacity: 0, y: 16 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ duration: 0.32, delay: 0.12 }}
+      >
+        <div className="mb-5">
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Profil</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">Account-Details</h2>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3 mb-4">
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Twitch Login</p>
+            <p className="text-sm font-semibold text-white font-mono">{twitchLogin ? `@${twitchLogin}` : '–'}</p>
+          </div>
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Display Name</p>
+            <p className="text-sm font-semibold text-white">{displayName || '–'}</p>
+          </div>
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">User-ID</p>
+            <p className="text-sm font-semibold text-white font-mono">{userId || '–'}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border/50 bg-background/40 px-4 py-3 text-xs text-text-secondary">
+          Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
+        </div>
+      </motion.section>
+    </>
+  );
+
+  const chatTab = (
+    <>
+      <GreetingSection />
+      <LurkCommandSection />
+      <ClipCommandSection />
+      <LurkerTaxSection />
+    </>
+  );
+
+  const botTab = (
+    <>
+      <AIEngagementSection />
+      <ScamGuardSection />
+      <SilentNotificationsSection />
+      <DisconnectBotSection login={selfLogin} />
+    </>
+  );
+
+  const overlayTab = (
+    <motion.section
+      className="panel-card rounded-2xl p-5 md:p-6"
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true }}
+      transition={{ duration: 0.32, delay: 0.14 }}
+    >
+      <div className="mb-5">
+        <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
+          Stream-Overlay
+        </p>
+        <h2 className="display-font mb-1 text-2xl font-bold text-white">
+          Overlay für OBS
+        </h2>
+        <p className="text-sm text-text-secondary">
+          Stell dir dein Stream-Overlay zusammen — Rang, Winrate, Serie und Live-Match als einblendbare Karte für OBS.
+        </p>
+      </div>
+
+      <a
+        href={PREVIEW_OVERLAY_ROUTE}
+        className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
+      >
+        <ArrowRight className="h-4 w-4" />
+        Overlay-Baukasten öffnen
+      </a>
+    </motion.section>
+  );
+
+  const tabs: VerwaltungTabDef[] = [
+    { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },
+    { id: 'chat', label: 'Chat-Befehle', icon: Terminal, render: () => chatTab },
+    { id: 'bot', label: 'Bot & Schutz', icon: Bot, render: () => botTab },
+    { id: 'overlay', label: 'Overlay', icon: Monitor, render: () => overlayTab },
+  ];
+  const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0];
+
   return (
     <div className="internal-home-vibe min-h-screen relative px-3 py-4 md:px-7 md:py-8">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -172,7 +472,7 @@ export function VerwaltungPage() {
                 verwalten
               </h1>
               <p className="max-w-2xl text-sm text-text-secondary md:text-base">
-                OAuth-Status, Discord-Verbindung und Profil-Details auf einen Blick.
+                Verbindungen, Chat-Befehle, Bot-Verhalten und Overlay — nach Bereichen getrennt.
               </p>
             </div>
             <a
@@ -185,256 +485,29 @@ export function VerwaltungPage() {
           </div>
         </motion.section>
 
-        {/* Twitch OAuth Section */}
-        <motion.section
-          className="panel-card rounded-2xl p-5 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.04 }}
-        >
-          <div className="mb-5">
-            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">OAuth</p>
-            <h2 className="display-font text-2xl font-bold text-white mb-1">Twitch-Verbindung</h2>
-          </div>
-
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-                {oauthConnected
-                  ? <ShieldCheck className="h-5 w-5 text-on-gold" />
-                  : <ShieldAlert className="h-5 w-5 text-on-gold" />}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className={`text-base font-bold ${oauthStatusClass}`}>{oauthStatusText}</p>
-                <p className="mt-0.5 text-xs text-text-secondary">{oauthHintText}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Scope chips */}
-          {(grantedScopes.length > 0 || missingScopes.length > 0) && (
-            <div className="mb-5 space-y-2">
-              {grantedScopes.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Aktive Scopes ({grantedScopes.length})</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {grantedScopes.map((scope: string) => (
-                      <span key={scope} className="rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-success">
-                        {scope}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {missingScopes.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Fehlende Scopes ({missingScopes.length})</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {missingScopes.map((scope: string) => (
-                      <span key={scope} className="rounded-full border border-error/40 bg-error/10 px-2.5 py-0.5 text-[11px] font-medium text-error">
-                        {scope}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          <a
-            href={reconnectUrl}
-            className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            Jetzt neu autorisieren
-          </a>
-        </motion.section>
-
-        {/* Discord Section */}
-        <motion.section
-          className="panel-card rounded-2xl p-5 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.08 }}
-        >
-          <div className="mb-5">
-            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Discord</p>
-            <h2 className="display-font text-2xl font-bold text-white mb-1">Discord verbinden</h2>
-          </div>
-
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-                <MessageSquare className="h-5 w-5 text-on-gold" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
-                  {discordConnected ? 'Verbunden' : 'Nicht verbunden'}
-                </p>
-                <p className="mt-0.5 text-xs text-text-secondary">
-                  {discordConnected ? 'Discord-Verknüpfung erkannt.' : 'Noch kein Discord-Profil verknüpft.'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {discordConnectUrl ? (
-            <a
-              href={discordConnectUrl}
-              className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
-            >
-              <MessageSquare className="h-4 w-4" />
-              {discordConnected ? 'Erneut verbinden' : 'Discord verknüpfen'}
-            </a>
-          ) : (
-            <div className="space-y-2">
+        {/* Bereichswechsel. Sticky, damit er auch nach langem Scrollen erreichbar bleibt. */}
+        <nav className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
+          {tabs.map((item) => {
+            const Icon = item.icon;
+            const isActive = item.id === activeTab.id;
+            return (
               <button
+                key={item.id}
                 type="button"
-                disabled
-                className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
+                onClick={() => selectTab(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors ${
+                  isActive ? 'bg-primary/85 text-bg' : 'text-text-secondary hover:text-white'
+                }`}
               >
-                <MessageSquare className="h-4 w-4" />
-                {discordConnected ? 'Discord verbunden' : 'Discord-Link nicht im Self-Service verfügbar'}
+                <Icon className="h-4 w-4" />
+                {item.label}
               </button>
-              {!discordConnected && (
-                <p className="text-xs text-text-secondary">
-                  Discord-Verknüpfungen laufen nicht über den Admin-Login und sind auf dieser Seite aktuell nicht als Self-Service freigeschaltet.
-                </p>
-              )}
-            </div>
-          )}
-        </motion.section>
+            );
+          })}
+        </nav>
 
-        {/* Steam Section */}
-        <motion.section
-          className="panel-card rounded-2xl p-5 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.1 }}
-        >
-          <div className="mb-5">
-            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Steam</p>
-            <h2 className="display-font text-2xl font-bold text-white mb-1">Steam verbinden</h2>
-          </div>
-
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-                <Gamepad2 className="h-5 w-5 text-on-gold" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
-                  {steamConnected ? 'Verbunden' : 'Nicht verbunden'}
-                </p>
-                <p className="mt-0.5 text-xs text-text-secondary">
-                  {steamConnected ? 'Steam-Account verknüpft.' : 'Noch kein Steam-Account verknüpft.'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {steamConnectUrl ? (
-            <a
-              href={steamConnectUrl}
-              className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
-            >
-              <Gamepad2 className="h-4 w-4" />
-              {steamConnected ? 'Erneut verknüpfen' : 'Steam verknüpfen'}
-            </a>
-          ) : (
-            <div className="space-y-2">
-              <button
-                type="button"
-                disabled
-                className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
-              >
-                <Gamepad2 className="h-4 w-4" />
-                Steam verknüpfen
-              </button>
-              <p className="text-xs text-text-secondary">
-                Verknüpfe zuerst deinen Discord-Account — die Steam-Verknüpfung läuft darüber.
-              </p>
-            </div>
-          )}
-        </motion.section>
-
-        {/* Profile Section */}
-        <motion.section
-          className="panel-card rounded-2xl p-5 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.12 }}
-        >
-          <div className="mb-5">
-            <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Profil</p>
-            <h2 className="display-font text-2xl font-bold text-white mb-1">Account-Details</h2>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3 mb-4">
-            <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Twitch Login</p>
-              <p className="text-sm font-semibold text-white font-mono">{twitchLogin ? `@${twitchLogin}` : '–'}</p>
-            </div>
-            <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Display Name</p>
-              <p className="text-sm font-semibold text-white">{displayName || '–'}</p>
-            </div>
-            <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">User-ID</p>
-              <p className="text-sm font-semibold text-white font-mono">{userId || '–'}</p>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-border/50 bg-background/40 px-4 py-3 text-xs text-text-secondary">
-            Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
-          </div>
-        </motion.section>
-
-        <motion.section
-          className="panel-card rounded-2xl p-5 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.32, delay: 0.14 }}
-        >
-          <div className="mb-5">
-            <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-              Stream-Overlay
-            </p>
-            <h2 className="display-font mb-1 text-2xl font-bold text-white">
-              Overlay für OBS
-            </h2>
-            <p className="text-sm text-text-secondary">
-              Stell dir dein Stream-Overlay zusammen — Rang, Winrate, Serie und Live-Match als einblendbare Karte für OBS.
-            </p>
-          </div>
-
-          <a
-            href={PREVIEW_OVERLAY_ROUTE}
-            className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
-          >
-            <ArrowRight className="h-4 w-4" />
-            Overlay-Baukasten öffnen
-          </a>
-        </motion.section>
-
-        <SilentNotificationsSection />
-
-        <ScamGuardSection />
-
-        <AIEngagementSection />
-
-        <LurkerTaxSection />
-
-        <LurkCommandSection />
-
-        <GreetingSection />
-
-        <DisconnectBotSection login={selfLogin} />
+        <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
 
       </div>
     </div>

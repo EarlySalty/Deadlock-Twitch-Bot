@@ -1317,6 +1317,29 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_clip(&self, event: &ChatMessageEvent, args: &str) {
+        // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
+        // kein Helix-Call und keine Antwort im Chat. DB-Fehler lassen den
+        // Command an, damit ein Ausfall der Abfrage kein Feature abschaltet.
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT COALESCE(clip_command_enabled, 1)
+               FROM streamer_plans
+              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+                 OR twitch_user_id = $2
+              LIMIT 1",
+        )
+        .bind(&event.broadcaster_user_login)
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Toggle konnte nicht gelesen werden");
+            true
+        });
+        if !enabled {
+            return;
+        }
+
         let partner = match self.get_partner(&event.broadcaster_user_login).await {
             Some(p) => p,
             None => {
@@ -1912,6 +1935,7 @@ mod tests {
     use crate::types::{
         ChatBadge, ChatMessageBody, ChatMessageEvent, MessageFragment, SendOutcome,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // -----------------------------------------------------------------------
     // Mock-Implementierungen
@@ -2514,6 +2538,7 @@ mod tests {
                 plan_name TEXT,
                 lurker_tax_enabled INTEGER DEFAULT 0,
                 lurk_command_enabled INTEGER DEFAULT 1,
+                clip_command_enabled INTEGER DEFAULT 1,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
                 manual_plan_expires_at TIMESTAMPTZ,
@@ -3338,5 +3363,106 @@ mod tests {
 
         assert!(handled);
         assert_eq!(api.message_count().await, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // !clip-Toggle (streamer_plans.clip_command_enabled)
+    // -----------------------------------------------------------------------
+
+    /// Clip-Port, der nur zählt statt Helix zu rufen. Der Zähler belegt, dass
+    /// ein abgeschaltetes `!clip` gar nicht erst bis zur Clip-Erstellung kommt.
+    struct CountingClipPort {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ClipPort for CountingClipPort {
+        async fn create_clip(&self, _broadcaster_user_id: &str, _login: &str) -> ClipOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ClipOutcome::Created {
+                url: "https://clips.twitch.tv/testclip".to_string(),
+            }
+        }
+    }
+
+    async fn engine_mit_clip_port(
+        pool: PgPool,
+        api: Arc<MockApi>,
+    ) -> (CommandEngine, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = make_engine_with_pool(pool, api).set_clip_port(Arc::new(CountingClipPort {
+            calls: calls.clone(),
+        }));
+        (engine, calls)
+    }
+
+    #[tokio::test]
+    async fn clip_command_default_verhaelt_sich_wie_bisher() {
+        let pool = pool_or_skip!("cmd_clip_default");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        let api = MockApi::new();
+        let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
+
+        let handled = engine
+            .handle(&make_event("!clip", false, false), true)
+            .await;
+
+        assert!(handled);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "Clip muss erstellt werden");
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("Clip erstellt"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn clip_command_aus_antwortet_nicht() {
+        let pool = pool_or_skip!("cmd_clip_disabled");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, clip_command_enabled) \
+             VALUES ('bc123', 'testchannel', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
+
+        let handled = engine
+            .handle(&make_event("!clip", false, false), true)
+            .await;
+
+        assert!(handled, "!clip bleibt ein bekannter Command");
+        assert_eq!(api.message_count().await, 0, "keine Chat-Antwort");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "kein Helix-Call bei abgeschaltetem Command"
+        );
+    }
+
+    #[tokio::test]
+    async fn clip_command_aus_gilt_auch_fuer_createclip_alias() {
+        let pool = pool_or_skip!("cmd_clip_alias_disabled");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, clip_command_enabled) \
+             VALUES ('bc123', 'testchannel', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
+
+        let handled = engine
+            .handle(&make_event("!createclip", false, false), true)
+            .await;
+
+        assert!(handled);
+        assert_eq!(api.message_count().await, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
