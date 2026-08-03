@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use tb_raid::partner_setup::{
     ChatGreeterPort, DiscordDirectoryPort, ModeratorInstallPort, PartnerSetupService,
 };
+use tb_internal_api::RoleRevokeOutcome;
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
@@ -52,6 +53,61 @@ impl BrokerDiscordDirectory {
             relay,
             guild_id: env_u64("STREAMER_GUILD_ID").or_else(|| env_u64("MAIN_GUILD_ID")),
             role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
+        }
+    }
+
+    /// Rollen-Entzug mit Ausgang. Meldet, ob die Rolle wirklich weg ist —
+    /// „übersprungen" (keine Guild, kein Relay, kaputte ID) ist ein eigener
+    /// Zustand und darf nicht als Erfolg beim Aufrufer landen.
+    async fn revoke_streamer_role_detailed(
+        &self,
+        discord_user_id: &str,
+        reason: &str,
+    ) -> RoleRevokeOutcome {
+        let skipped = |reason: &str| RoleRevokeOutcome::Skipped {
+            reason: reason.to_string(),
+        };
+        let Some(ref relay) = self.relay else {
+            tracing::warn!("Streamer-Rollen-Entzug übersprungen: kein BrokerRelay konfiguriert");
+            return skipped("no_relay");
+        };
+        let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            tracing::warn!(
+                "Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}"
+            );
+            return skipped("invalid_user_id");
+        };
+        let guild_ids = self.role_guild_ids(relay).await;
+        if guild_ids.is_empty() {
+            tracing::warn!("Streamer-Rollen-Entzug übersprungen: keine Guild-Kandidaten verfügbar");
+            return skipped("no_guild");
+        }
+        // B10: Fehler brechen nichts ab, werden aber zurückgemeldet.
+        let mut revoked = false;
+        let mut last_error: Option<String> = None;
+        for guild_id in guild_ids {
+            match relay
+                .remove_member_role(guild_id, user_id, self.role_id, reason)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        "Streamer role removed from {discord_user_id} in guild {guild_id}"
+                    );
+                    revoked = true;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Streamer-Rollen-Entzug für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
+                    );
+                    last_error = Some(e.to_string());
+                }
+            }
+        }
+        match (revoked, last_error) {
+            (true, _) => RoleRevokeOutcome::Revoked,
+            (false, Some(detail)) => RoleRevokeOutcome::Failed { detail },
+            (false, None) => skipped("no_guild"),
         }
     }
 
@@ -125,35 +181,10 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
     }
 
     async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
-        let Some(ref relay) = self.relay else {
-            tracing::warn!("Streamer-Rollen-Entzug übersprungen: kein BrokerRelay konfiguriert");
-            return;
-        };
-        let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            tracing::warn!(
-                "Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}"
-            );
-            return;
-        };
-        let guild_ids = self.role_guild_ids(relay).await;
-        if guild_ids.is_empty() {
-            tracing::warn!("Streamer-Rollen-Entzug übersprungen: keine Guild-Kandidaten verfügbar");
-            return;
-        }
-        // B10: Fehler NUR loggen, kein Hard-Fail.
-        for guild_id in guild_ids {
-            match relay
-                .remove_member_role(guild_id, user_id, self.role_id, reason)
-                .await
-            {
-                Ok(()) => tracing::info!(
-                    "Streamer role removed from {discord_user_id} in guild {guild_id}"
-                ),
-                Err(e) => tracing::warn!(
-                    "Streamer-Rollen-Entzug für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
-                ),
-            }
-        }
+        // Ausgang hier bewusst verworfen: dieser Pfad (Deautorisierung) ist
+        // best-effort und hat keinen Aufrufer, der ihn melden könnte. Wer den
+        // Ausgang braucht, nutzt `revoke_streamer_role_detailed`.
+        let _ = self.revoke_streamer_role_detailed(discord_user_id, reason).await;
     }
 }
 
@@ -165,8 +196,13 @@ impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
         <Self as DiscordDirectoryPort>::grant_streamer_role(self, discord_user_id, reason).await
     }
 
-    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
-        <Self as DiscordDirectoryPort>::revoke_streamer_role(self, discord_user_id, reason).await
+    async fn revoke_streamer_role(
+        &self,
+        discord_user_id: &str,
+        reason: &str,
+    ) -> RoleRevokeOutcome {
+        self.revoke_streamer_role_detailed(discord_user_id, reason)
+            .await
     }
 }
 

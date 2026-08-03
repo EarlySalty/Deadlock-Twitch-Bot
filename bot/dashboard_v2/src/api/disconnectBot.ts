@@ -49,3 +49,29 @@ export async function disconnectBot(confirmLogin: string): Promise<DisconnectBot
 export function unmodNeedsAttention(outcome: UnmodOutcome): boolean {
   return outcome !== 'removed' && outcome !== 'not_moderator';
 }
+
+/**
+ * `true`, wenn die Discord-Streamer-Rolle noch beim Streamer liegt. `revoked`
+ * ist der Erfolgsfall, `skipped:no_discord_link` heißt: es gibt gar keine
+ * Verknüpfung, also nichts zu entziehen. Alles andere — kein Guild-Kandidat,
+ * Broker-Fehler, Port fehlt — bleibt offen und muss sichtbar sein.
+ */
+export function roleNeedsAttention(discordRole: string | undefined): boolean {
+  if (!discordRole) return false;
+  return discordRole !== 'revoked' && discordRole !== 'skipped:no_discord_link';
+}
+
+/** Kurzer deutscher Klartext für den Rollen-Ausgang. */
+export function roleLabel(discordRole: string | undefined): string {
+  if (!discordRole || discordRole === 'skipped:no_discord_link') {
+    return 'kein Discord-Account verknüpft';
+  }
+  if (discordRole === 'revoked') return 'entzogen';
+  if (discordRole.startsWith('skipped:')) {
+    return `ACHTUNG — bleibt bestehen (${discordRole.slice('skipped:'.length)})`;
+  }
+  if (discordRole.startsWith('failed:')) {
+    return `ACHTUNG — Entzug fehlgeschlagen (${discordRole.slice('failed:'.length)})`;
+  }
+  return `ACHTUNG — unklarer Ausgang (${discordRole})`;
+}

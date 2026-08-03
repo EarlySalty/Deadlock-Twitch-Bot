@@ -1,3 +1,11 @@
+## #415 — Trennen entzieht die Discord-Rolle wirklich
+
+**Problem:** Beim Trennen stand im Ergebnis „Discord-Rolle: entzogen", auch wenn gar nichts entzogen wurde. Die Streamer-Rolle blieb im Discord stehen, und weil die Meldung sauber aussah, fiel es niemandem auf.
+
+**Änderung:** Der Rollen-Entzug meldet jetzt seinen echten Ausgang zurück. Bleibt die Rolle liegen, steht der Grund im Ergebnis und die Meldung wird als Warnung angezeigt statt als Erfolg. Zusätzlich weiß der Bot wieder, in welchem Discord er die Rolle entziehen soll — das war die Ursache.
+
+**Aktuelles Verhalten:** Nach dem Trennen ist die Streamer-Rolle weg. Klappt das ausnahmsweise nicht, sagt das Ergebnis das offen, statt einen erledigten Lauf vorzutäuschen.
+
 ## #414 — Bot selbst vom eigenen Kanal trennen
 
 **Problem:** Wer den Bot nicht mehr wollte, musste sich melden. Trennen ging nur von Hand: unmodden, aus der Partnerliste nehmen, dafür sorgen, dass er nicht von allein zurückkommt.

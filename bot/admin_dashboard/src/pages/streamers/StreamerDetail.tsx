@@ -68,11 +68,26 @@ const UNMOD_LABELS: Record<DisconnectBotResult['unmod'], string> = {
   failed: 'Entzug fehlgeschlagen — Moderator-Rechte bleiben bestehen',
 };
 
-const DISCORD_ROLE_LABELS: Record<DisconnectBotResult['discordRole'], string> = {
-  revoked: 'Streamer-Rolle entzogen',
-  skipped: 'keine Discord-Verknüpfung — nichts zu entziehen',
-  failed: 'Streamer-Rolle konnte nicht entzogen werden',
-};
+/**
+ * Klartext für den Rollen-Entzug. Nur `revoked` und „keine Verknüpfung" sind
+ * erledigt; jeder andere Ausgang heißt, die Rolle liegt noch beim Streamer —
+ * inklusive des Grundes, sonst ist es nicht nachvollziehbar.
+ */
+function discordRoleLabel(role: string): string {
+  if (role === 'revoked') return 'Streamer-Rolle entzogen';
+  if (role === 'skipped:no_discord_link') return 'keine Discord-Verknüpfung — nichts zu entziehen';
+  if (role.startsWith('skipped:')) {
+    return `Streamer-Rolle bleibt bestehen — Entzug übersprungen (${role.slice('skipped:'.length)})`;
+  }
+  if (role.startsWith('failed:')) {
+    return `Streamer-Rolle konnte nicht entzogen werden (${role.slice('failed:'.length)})`;
+  }
+  return `Streamer-Rolle: unklarer Ausgang (${role})`;
+}
+
+function discordRoleDone(role: string): boolean {
+  return role === 'revoked' || role === 'skipped:no_discord_link';
+}
 
 const CHAT_COLORS: Array<{ value: PartnerChatAnnouncementColor; label: string }> = [
   { value: 'purple', label: 'Purple' },
@@ -614,8 +629,16 @@ export function StreamerDetailPage() {
             <li className={disconnectReport.optOut ? 'text-success' : 'text-warning'}>
               Opt-out: {disconnectReport.optOut ? 'gesetzt' : 'nicht gesetzt'}
             </li>
-            <li className={disconnectReport.discordRole === 'revoked' ? 'text-success' : 'text-text-secondary'}>
-              Discord: {DISCORD_ROLE_LABELS[disconnectReport.discordRole]}
+            <li
+              className={
+                disconnectReport.discordRole === 'revoked'
+                  ? 'text-success'
+                  : discordRoleDone(disconnectReport.discordRole)
+                    ? 'text-text-secondary'
+                    : 'text-warning'
+              }
+            >
+              Discord: {discordRoleLabel(disconnectReport.discordRole)}
             </li>
           </ul>
         ) : null}
