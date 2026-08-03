@@ -1,3 +1,11 @@
+## #413 — Begrüßung im Chat lässt sich abschalten
+
+**Problem:** Der Bot grüßte automatisch zurück, wenn jemand „hi“ oder „moin“ schrieb. Wer das schon über einen anderen Chatbot laufen hat, bekam zwei Begrüßungen und konnte nur die eine davon abstellen.
+
+**Änderung:** In der Verwaltung gibt es jetzt einen Schalter für die Begrüßung, direkt neben dem für !lurk. Standardmäßig bleibt sie an.
+
+**Aktuelles Verhalten:** Aus heißt, der Bot reagiert auf Grüße gar nicht mehr; alles andere — auch die Antwort auf die Release-Frage — läuft weiter wie bisher. Nach dem Wiedereinschalten grüßt er sofort, ohne Wartezeit.
+
 ## #412 — VOD-Link läuft nicht mehr nach einer Woche ab
 
 **Problem:** Der Link zum exportierten Stream-VOD war sieben Tage gültig, danach war die Aufnahme weg. Der Speicher dahinter wurde auf Dauer außerdem teuer.

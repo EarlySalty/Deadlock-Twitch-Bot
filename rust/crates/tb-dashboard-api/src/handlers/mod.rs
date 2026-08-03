@@ -52,6 +52,7 @@ pub mod follower_funnel;
 pub mod forward_auth;
 pub mod health_probe;
 pub mod help_page;
+pub mod greeting_settings;
 pub mod internal_home;
 pub mod last_session;
 pub mod leaderboard;
