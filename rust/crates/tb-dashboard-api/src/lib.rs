@@ -163,7 +163,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         onboarding, overview,
         performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
-        streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers,
+        streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
+        viewer_timeline, viewers,
         watch_time,
     };
 
@@ -390,6 +391,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/greeting-settings",
             get(greeting_settings::get_handler).post(greeting_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: Bot bewusst vom eigenen Kanal trennen.
+        // Gleiche Kette wie die Admin-Route, Login kommt aber aus der Session.
+        .route(
+            "/twitch/api/v2/streamer/disconnect-bot",
+            post(streamer_disconnect::post_handler),
         )
         // AI-Engagement-Dashboard: Admin/Super-Mod sieht alle Kanäle, Partner nur
         // den eigenen. settings (Liste), toggle (an/aus), update (steam/persona/

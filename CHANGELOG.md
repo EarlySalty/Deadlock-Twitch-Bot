@@ -1,3 +1,11 @@
+## #414 — Bot selbst vom eigenen Kanal trennen
+
+**Problem:** Wer den Bot nicht mehr wollte, musste sich melden. Trennen ging nur von Hand: unmodden, aus der Partnerliste nehmen, dafür sorgen, dass er nicht von allein zurückkommt.
+
+**Änderung:** In der Verwaltung steht die Aktion jetzt selbst zur Verfügung, ganz unten. Zwei Bestätigungen — erst die Warnung, dann den eigenen Kanalnamen abtippen —, danach gibt der Bot seine Moderator-Rechte ab, die Partnerschaft endet und er kommt nicht von selbst zurück.
+
+**Aktuelles Verhalten:** Nach dem Trennen laufen keine Chat-Funktionen, Raids, Statistiken oder Overlays mehr; erfasste Daten bleiben erhalten. Jeder Teilschritt wird einzeln gemeldet — klappt der Entzug der Moderator-Rechte nicht, steht das da, statt als Erfolg durchzugehen. Die Twitch-Verbindung bleibt bestehen: wer sich später neu anmeldet, holt den Bot damit zurück.
+
 ## #413 — Begrüßung im Chat lässt sich abschalten
 
 **Problem:** Der Bot grüßte automatisch zurück, wenn jemand „hi“ oder „moin“ schrieb. Wer das schon über einen anderen Chatbot laufen hat, bekam zwei Begrüßungen und konnte nur die eine davon abstellen.

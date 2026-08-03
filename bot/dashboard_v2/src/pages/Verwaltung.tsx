@@ -4,6 +4,7 @@ import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
@@ -84,6 +85,11 @@ export function VerwaltungPage() {
   const steamConnected = Boolean(home.steam?.connected);
   const steamConnectUrl = home.steam?.connectUrl || null;
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
+  // Eigener Kanal-Login für die Trenn-Aktion. Leer heißt: Aktion bleibt
+  // gesperrt, statt gegen einen geratenen Login zu bestätigen.
+  const selfLogin = String(
+    (authStatus as any)?.twitchLogin || (home as any)?.twitchLogin || '',
+  ).trim();
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
   const oauthStatusText = oauthConnected ? 'Verbunden' : needsReauth ? 'Re-Auth nötig' : 'Unvollständig';
@@ -427,6 +433,8 @@ export function VerwaltungPage() {
         <LurkCommandSection />
 
         <GreetingSection />
+
+        <DisconnectBotSection login={selfLogin} />
 
       </div>
     </div>
