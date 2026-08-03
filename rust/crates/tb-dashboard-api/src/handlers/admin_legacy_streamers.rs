@@ -251,7 +251,7 @@ async fn do_add(pool: &PgPool, login: &str) -> Result<String, sqlx::Error> {
 
 /// `_remove`-Äquivalent: departnert aktiven Partner bzw. löscht den Streamer.
 async fn do_remove(pool: &PgPool, login: &str) -> Result<String, sqlx::Error> {
-    if let Some(outcome) = departner_streamer(pool, login).await? {
+    if let Some(outcome) = departner_streamer(pool, login, false).await? {
         return Ok(format!("{} operativ deaktiviert", outcome.twitch_login));
     }
     match remove_streamer(pool, login).await? {

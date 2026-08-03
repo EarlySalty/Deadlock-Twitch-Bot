@@ -1,10 +1,18 @@
-## #416 — Verwaltung in Bereiche geteilt, !clip abschaltbar
+## #417 — Verwaltung in Bereiche geteilt, !clip abschaltbar
 
 **Problem:** Die Verwaltung war eine einzige lange Seite. Verbindungen, Chat-Befehle, Schutzfunktionen und Overlay standen ungeordnet untereinander, und wer eine bestimmte Einstellung suchte, scrollte an allem anderen vorbei. Für !clip gab es außerdem keinen Schalter — wer Clips im Chat nicht wollte, konnte den Befehl nicht loswerden.
 
 **Änderung:** Die Seite hat jetzt vier Bereiche zum Umschalten: Konto & Verbindungen, Chat-Befehle, Bot & Schutz, Overlay. Die Leiste bleibt beim Scrollen oben stehen, und der gewählte Bereich steht in der Adresszeile — ein Reload oder ein geteilter Link landet wieder an derselben Stelle. Unter Chat-Befehle liegt neu ein Schalter für !clip.
 
 **Aktuelles Verhalten:** !clip ist wie bisher an. Wird es abgeschaltet, legt der Bot keinen Clip mehr an und antwortet auch nicht darauf — der Befehl läuft still ins Leere. !createclip ist mit abgedeckt.
+
+## #416 — „Ich will nicht mehr" hält jetzt wirklich
+
+**Problem:** Wer als Streamer rausgenommen wurde, weil er kein Partner mehr sein wollte, war zwar sofort raus — aber der Vermerk „will nicht mehr" wurde gar nicht erst gesetzt. Beim nächsten Login im Dashboard wäre der Kanal wortlos wieder eingeschaltet worden.
+
+**Änderung:** Beim Zurücksetzen der Verifizierung wird der Wunsch jetzt fest hinterlegt — über beide Wege, den internen und den in der Verwaltung. Ein Login hebt ihn nicht mehr auf; nur ein abgelaufener Zugang heilt sich weiterhin von selbst.
+
+**Aktuelles Verhalten:** Wer so rausgenommen wird, bleibt draußen, bis er selbst wieder aktiv zustimmt. Das reine Entfernen eines Kanals bleibt davon unberührt — dort darf er später ohne Weiteres zurückkommen.
 
 ## #415 — Trennen entzieht die Discord-Rolle wirklich
 

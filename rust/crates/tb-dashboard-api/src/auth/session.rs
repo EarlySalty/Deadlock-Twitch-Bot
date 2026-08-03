@@ -1280,7 +1280,10 @@ impl DashboardAuthState {
             SET status = 'active',
                 departnered_at = NULL,
                 admin_archived_at = NULL,
-                manual_partner_opt_out = 0,
+                manual_partner_opt_out = CASE
+                    WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
+                    THEN 0 ELSE manual_partner_opt_out
+                END,
                 technical_pause_reason = CASE
                     WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
                     THEN NULL ELSE technical_pause_reason
@@ -1291,6 +1294,13 @@ impl DashboardAuthState {
                 )
               AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
               AND COALESCE(status, '') <> 'active'
+              -- Opt-out heißt „will nicht mehr": nur der Token-Ablauf heilt sich
+              -- selbst, ein Login allein holt den Kanal nicht zurück (gleiche
+              -- Regel wie tb-raid/src/auth_writer.rs).
+              AND (
+                    COALESCE(manual_partner_opt_out, 0) = 0
+                    OR LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
+                  )
             "#,
             login,
             user_id
@@ -3257,6 +3267,24 @@ print(f.encrypt(payload.encode()).decode(), end='')
                 .await
                 .unwrap();
         assert_eq!(blocked_status, "departnered");
+
+        // Opt-out ohne technischen Grund → Login holt den Kanal NICHT zurück.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, manual_partner_opt_out, departnered_at)
+             VALUES ('optout', '770003', 'departnered', 1, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!state.reactivate_partner("optout", "").await.unwrap());
+        let (optout_status, optout_flag): (String, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE twitch_login='optout'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(optout_status, "departnered");
+        assert_eq!(optout_flag, Some(1));
 
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login IN ('healme','blockme')")
             .execute(&pool)

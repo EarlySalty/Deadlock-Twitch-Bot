@@ -523,7 +523,7 @@ pub async fn verify_handler(
     // Departner-Modi (clear/failed) laufen über die native Departnerung — nicht
     // über verify_streamer. Beide Modi sind DB-identisch (Python-Parität).
     if matches!(mode.trim().to_lowercase().as_str(), "clear" | "failed") {
-        let outcome = departner_streamer(&pool, &login).await.map_err(|e| {
+        let outcome = departner_streamer(&pool, &login, true).await.map_err(|e| {
             tracing::error!("departner_streamer Fehler für {login}: {e}");
             ApiError::internal()
         })?;

@@ -201,7 +201,7 @@ pub struct DepartnerOutcome {
 pub async fn departner_active_partner(
     pool: &PgPool,
     login: &str,
-    _clear_verification: bool,
+    clear_verification: bool,
 ) -> Result<Option<DepartnerOutcome>, sqlx::Error> {
     let Some(row) = load_active_partner(pool, login).await? else {
         return Ok(None);
@@ -239,6 +239,10 @@ pub async fn departner_active_partner(
     )
     .await?;
 
+    // `clear_verification` ist der Opt-out-Fall (`verify mode=clear|failed`):
+    // Der Streamer will nichts mehr vom Bot. Ohne das Flag hätte ein späteres
+    // Promote ihn wortlos zurückgeholt — `is_partner_active` wertet es aus.
+    let opt_out = i32::from(clear_verification);
     sqlx::query!(
         r#"
         UPDATE twitch_partners
@@ -246,14 +250,16 @@ pub async fn departner_active_partner(
             departnered_at = $2,
             admin_archived_at = NULL,
             twitch_login = $3,
-            twitch_user_id = $4
+            twitch_user_id = $4,
+            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6)
         WHERE id = $5
         "#,
         STATUS_DEPARTNERED,
         &departnered_at,
         &normalized_login,
         normalized_user_id.as_deref(),
-        row.id
+        row.id,
+        opt_out
     )
     .execute(pool)
     .await?;
@@ -1154,7 +1160,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn departner_clear_verification_departnert_ohne_verify_spalten() {
+    async fn departner_clear_verification_setzt_opt_out() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_lc_departner_clear").await;
         insert_active_partner(&pool, 1, "drag", "42").await;
@@ -1164,12 +1170,37 @@ mod tests {
             .unwrap()
             .expect("departnert");
 
-        let status: Option<String> =
-            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
+        let (status, opt_out): (Option<String>, Option<i32>) =
+            sqlx::query_as("SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(status.as_deref(), Some("departnered"));
+        // Opt-out ist die einzige Sperre gegen ein automatisches Zurückholen —
+        // ohne sie wäre `verify mode=clear` nach dem nächsten Promote wirkungslos.
+        assert_eq!(opt_out, Some(1));
+    }
+
+    #[tokio::test]
+    async fn departner_ohne_clear_laesst_opt_out_unberuehrt() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_departner_plain").await;
+        insert_active_partner(&pool, 1, "drag", "42").await;
+
+        departner_active_partner(&pool, "drag", false)
+            .await
+            .unwrap()
+            .expect("departnert");
+
+        let (status, opt_out): (Option<String>, Option<i32>) =
+            sqlx::query_as("SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status.as_deref(), Some("departnered"));
+        // Reines Departnern (DELETE-Route) ist kein Opt-out: der Streamer darf
+        // später ohne Admin-Eingriff wieder Partner werden.
+        assert_eq!(opt_out, Some(0));
     }
 
     #[tokio::test]
