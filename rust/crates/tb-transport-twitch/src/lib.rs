@@ -17,7 +17,7 @@ pub use chat::{
 pub use client::{ClipInfo, HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use clips::HelixClip;
 pub use eventsub::{CreateOutcome, EventSubCreateError, EventSubSubscription};
-pub use moderation::AddModeratorOutcome;
+pub use moderation::{AddModeratorOutcome, RemoveModeratorOutcome};
 pub use streams::{
     AdSchedule, BroadcasterSubscriptions, FollowersTotalFetch, HelixChannelInfo, HelixStream,
     Subscription,

@@ -9,6 +9,9 @@
 //!
 //! - Begrüßung: nur wenn die Nachricht praktisch *nur* ein Gruß ist, sonst
 //!   antwortet der Bot mitten in Gesprächen. Kanalweit, kein Deadlock-Gate.
+//! - Begrüßung ist pro Kanal abschaltbar (`streamer_plans.greeting_reply_enabled`,
+//!   Dashboard → Verwaltung). Default an; DB-Fehler lässt sie an, damit ein
+//!   Ausfall den Bot nicht stumm schaltet. Die Release-Antwort hängt nicht daran.
 //! - Release-Frage: nur wenn Deadlock live läuft — der Verweis auf `!invite`
 //!   ist sonst wertlos, weil der Befehl selbst live-gegated ist.
 //! - Cooldowns: pro Kanal, damit ein Gruß-Sturm nicht zum Bot-Monolog wird.
@@ -19,7 +22,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
-use tracing::warn;
+use sqlx::PgPool;
+use tracing::{info, warn};
 
 use crate::api::ChatApi;
 use crate::types::{ChatMessageEvent, SendOutcome};
@@ -113,15 +117,42 @@ pub fn classify_standard_reply(content: &str, is_deadlock_live: bool) -> Option<
 
 pub struct StandardReplies {
     api: Arc<dyn ChatApi>,
+    pool: PgPool,
     cooldowns: Mutex<HashMap<(String, StandardReply), Instant>>,
 }
 
 impl StandardReplies {
-    pub fn new(api: Arc<dyn ChatApi>) -> Self {
+    pub fn new(api: Arc<dyn ChatApi>, pool: PgPool) -> Self {
         Self {
             api,
+            pool,
             cooldowns: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Kanal-Schalter für den Rückgruß (Dashboard → Verwaltung). Fehlende Zeile
+    /// oder DB-Fehler heißt an — ein Ausfall darf den Bot nicht stumm schalten.
+    async fn greeting_enabled(&self, event: &ChatMessageEvent, channel_login: &str) -> bool {
+        sqlx::query_scalar(
+            "SELECT COALESCE(greeting_reply_enabled, 1)
+               FROM streamer_plans
+              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+                 OR twitch_user_id = $2
+              LIMIT 1",
+        )
+        .bind(&event.broadcaster_user_login)
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
+        .unwrap_or_else(|error| {
+            warn!(
+                channel = channel_login,
+                %error,
+                "Begrüßungs-Toggle konnte nicht gelesen werden — Gruß bleibt an"
+            );
+            true
+        })
     }
 
     /// Antwortet, wenn ein Muster trifft und der Kanal-Cooldown frei ist.
@@ -135,6 +166,17 @@ impl StandardReplies {
         let Some(kind) = classify_standard_reply(event.text(), is_deadlock_live) else {
             return false;
         };
+        // Kanal-Schalter vor dem Cooldown: ein unterdrückter Gruß darf keine
+        // Sperre setzen, sonst schluckt er nach dem Wiedereinschalten noch
+        // zehn Minuten. Jede Entscheidung wird geloggt, auch das Unterdrücken.
+        if kind == StandardReply::Greeting && !self.greeting_enabled(event, channel_login).await {
+            info!(
+                channel = channel_login,
+                chatter = %event.chatter_user_login,
+                "Gruß unterdrückt: Begrüßung im Dashboard deaktiviert"
+            );
+            return false;
+        }
         // Prüfen und Belegen in einem Zug: zwischen Prüfung und Senden liegt
         // ein await, in dem sonst ein zweites Chat-Event durchrutschen und
         // dieselbe Antwort ein zweites Mal schicken könnte.
@@ -211,6 +253,66 @@ mod tests {
     use crate::types::ChatMessageBody;
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    /// Pool ohne erreichbare DB: die Toggle-Abfrage scheitert, der Gruß bleibt
+    /// an — genau der Fallback, den die Cooldown-Tests brauchen.
+    fn offline_pool() -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://tb-tests-ohne-db/postgres")
+            .expect("lazy pool")
+    }
+
+    /// Frisches Schema mit `streamer_plans` für die Toggle-Tests. `None`, wenn
+    /// keine Test-DB gesetzt ist (`eval "$(rust/scripts/test_db.sh env)"`).
+    async fn plans_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+             greeting_reply_enabled INTEGER DEFAULT 1 NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    async fn set_greeting_flag(pool: &PgPool, flag: i32) {
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, greeting_reply_enabled) \
+             VALUES ('ch1', 'streamer1', $1) \
+             ON CONFLICT (twitch_user_id) DO UPDATE SET greeting_reply_enabled = EXCLUDED.greeting_reply_enabled",
+        )
+        .bind(flag)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
     struct MockApi {
         sent: Mutex<Vec<String>>,
@@ -284,7 +386,7 @@ mod tests {
     #[tokio::test]
     async fn gruss_wird_beantwortet_und_dann_vom_cooldown_gebremst() {
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone());
+        let replies = StandardReplies::new(api.clone(), offline_pool());
 
         assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
@@ -303,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn release_antwort_nennt_den_invite_befehl() {
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone());
+        let replies = StandardReplies::new(api.clone(), offline_pool());
 
         assert!(
             replies
@@ -357,7 +459,7 @@ mod tests {
             }
         }
 
-        let replies = StandardReplies::new(Arc::new(DroppingApi));
+        let replies = StandardReplies::new(Arc::new(DroppingApi), offline_pool());
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         // Kein Cooldown gesetzt: der naechste Versuch darf es erneut probieren.
         assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
@@ -413,7 +515,7 @@ mod tests {
         let api = Arc::new(SlowApi {
             sent: Mutex::new(vec![]),
         });
-        let replies = StandardReplies::new(api.clone());
+        let replies = StandardReplies::new(api.clone(), offline_pool());
 
         let erstes = event("hallo");
         let zweites = event("moin");
@@ -429,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn ohne_treffer_wird_nichts_gesendet() {
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone());
+        let replies = StandardReplies::new(api.clone(), offline_pool());
 
         assert!(
             !replies
@@ -507,5 +609,53 @@ mod tests {
             classify_standard_reply("hallo https://example.com", true),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn gruss_bleibt_aus_wenn_der_kanal_ihn_abgeschaltet_hat() {
+        let Some(pool) = plans_pool("t_greeting_aus").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Toggle-Test braucht die Test-DB");
+        };
+        set_greeting_flag(&pool, 0).await;
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool.clone());
+        assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert!(api.messages().is_empty());
+
+        // Unterdrueckt heisst nicht gesperrt: nach dem Einschalten antwortet
+        // der Bot sofort, nicht erst nach dem 10-Minuten-Cooldown.
+        set_greeting_flag(&pool, 1).await;
+        assert!(replies.maybe_respond(&event("moin"), "ch1", false).await);
+        assert_eq!(api.messages().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ohne_plan_zeile_gruesst_der_bot_weiter() {
+        let Some(pool) = plans_pool("t_greeting_ohne_zeile").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Toggle-Test braucht die Test-DB");
+        };
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool);
+        assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert_eq!(api.messages().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn release_antwort_haengt_nicht_am_gruss_schalter() {
+        let Some(pool) = plans_pool("t_greeting_release").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Toggle-Test braucht die Test-DB");
+        };
+        set_greeting_flag(&pool, 0).await;
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool);
+        assert!(
+            replies
+                .maybe_respond(&event("wann kommt das spiel raus"), "ch1", true)
+                .await
+        );
+        assert!(api.messages()[0].contains("!invite"));
     }
 }

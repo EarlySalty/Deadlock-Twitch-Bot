@@ -157,12 +157,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_mode,
-        engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard,
+        engagement_settings, exp_analytics, follower_funnel, greeting_settings, internal_home,
+        leaderboard,
         loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings, monetization,
         onboarding, overview,
         performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
-        streamers, tag_analysis, tip_settings, title, title_performance, viewer_timeline, viewers,
+        streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
+        viewer_timeline, viewers,
         watch_time,
     };
 
@@ -382,6 +384,19 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/lurk-command-settings",
             get(lurk_command_settings::get_handler).post(lurk_command_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: automatischer Rückgruß im Chat. Default
+        // aktiviert (bestehendes Verhalten), Spalte
+        // streamer_plans.greeting_reply_enabled.
+        .route(
+            "/twitch/api/v2/streamer/greeting-settings",
+            get(greeting_settings::get_handler).post(greeting_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: Bot bewusst vom eigenen Kanal trennen.
+        // Gleiche Kette wie die Admin-Route, Login kommt aber aus der Session.
+        .route(
+            "/twitch/api/v2/streamer/disconnect-bot",
+            post(streamer_disconnect::post_handler),
         )
         // AI-Engagement-Dashboard: Admin/Super-Mod sieht alle Kanäle, Partner nur
         // den eigenen. settings (Liste), toggle (an/aus), update (steam/persona/
@@ -749,6 +764,10 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/streamers/:login/block",
             post(admin_streamers::block_handler),
+        )
+        .route(
+            "/twitch/api/admin/streamers/:login/disconnect-bot",
+            post(admin_streamers::disconnect_bot_handler),
         )
         .route(
             "/twitch/api/admin/streamers/:login/discord-flag",

@@ -16,6 +16,8 @@ import type {
   CreateChangelogEntryPayload,
   ConfigOverview,
   DatabaseStatsResponse,
+  DisconnectBotResult,
+  DisconnectBotUnmodOutcome,
   DiscordFlagMode,
   EngagementSettings,
   ErrorLogsResponse,
@@ -1172,6 +1174,41 @@ export function sendPartnerChatAction(payload: PartnerChatActionPayload) {
 
 export function reloadBot() {
   return submitLegacyAction('/twitch/reload', {});
+}
+
+const DISCONNECT_UNMOD_OUTCOMES: DisconnectBotUnmodOutcome[] = [
+  'removed',
+  'not_moderator',
+  'no_token',
+  'unknown_channel',
+  'unavailable',
+  'failed',
+];
+
+/// Trennt den Bot bewusst vom Kanal: Mod-Rechte entziehen, departnern, Opt-out
+/// setzen. `confirmLogin` ist die zweite Bestätigung und wird serverseitig
+/// gegen den Pfad-Login geprüft — passt sie nicht, mutiert der Server nichts.
+export async function disconnectBotFromChannel(
+  login: string,
+  confirmLogin: string,
+): Promise<DisconnectBotResult> {
+  const payload = await postAdminJson<Record<string, unknown>>(
+    `/streamers/${encodeURIComponent(login)}/disconnect-bot`,
+    { confirm_login: confirmLogin },
+  );
+  const record = coerceRecord(payload);
+  const unmod = readString(record, 'unmod') as DisconnectBotUnmodOutcome;
+  const discordRole = readString(record, 'discordRole', 'discord_role');
+  return {
+    ok: readBoolean(record, 'ok') ?? false,
+    login: readString(record, 'login') || login,
+    unmod: DISCONNECT_UNMOD_OUTCOMES.includes(unmod) ? unmod : 'failed',
+    unmodDetail: readString(record, 'unmodDetail', 'unmod_detail') || null,
+    departnered: readBoolean(record, 'departnered') ?? false,
+    optOut: readBoolean(record, 'optOut', 'opt_out') ?? false,
+    discordRole: discordRole || 'skipped:unknown',
+    message: readString(record, 'message') || 'Trennung ausgeführt.',
+  };
 }
 
 export async function fetchEngagementSettings(login: string): Promise<EngagementSettings | null> {

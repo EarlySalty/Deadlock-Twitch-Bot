@@ -2193,7 +2193,7 @@ mod tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait))),
+            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -2383,7 +2383,7 @@ mod tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait))),
+            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 invite_api_trait,
                 Arc::new(StaticInviteUrl),

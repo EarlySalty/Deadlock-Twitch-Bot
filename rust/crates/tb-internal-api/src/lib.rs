@@ -29,6 +29,7 @@ pub use handlers::scam_guard::{ScamEnforceExt, ScamEnforcePort, ScamRevokeExt, S
 pub use handlers::stats_native::{EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource};
 pub use handlers::streamers::{
     ChatActionExt, ChatActionPort, ChatActionResult, DiscordRoleExt, DiscordRolePort,
+    ModeratorRemovalExt, ModeratorRemovalPort, ModeratorRemovalResult, RoleRevokeOutcome,
 };
 pub use idempotency::IdempotencyState;
 pub use security::{
@@ -58,6 +59,7 @@ pub fn build_internal_router(
     eventsub_stats: Option<Arc<dyn handlers::stats_native::EventSubStatsSource>>,
     discord_role: Option<Arc<dyn handlers::streamers::DiscordRolePort>>,
     chat_action: Option<Arc<dyn handlers::streamers::ChatActionPort>>,
+    moderator_removal: Option<Arc<dyn handlers::streamers::ModeratorRemovalPort>>,
     scam_revoke: Option<Arc<dyn handlers::scam_guard::ScamRevokePort>>,
     scam_enforce: Option<Arc<dyn handlers::scam_guard::ScamEnforcePort>>,
     bulk_reauth: Option<Arc<dyn handlers::reauth_all::BulkReauthPort>>,
@@ -297,6 +299,10 @@ pub fn build_internal_router(
             post(streamers::verify_handler),
         )
         .route(
+            &format!("{base}/streamers/:login/disconnect-bot"),
+            post(streamers::disconnect_bot_handler),
+        )
+        .route(
             &format!("{base}/streamers/:login/archive"),
             post(streamers::archive_handler),
         )
@@ -319,6 +325,9 @@ pub fn build_internal_router(
         )))
         .layer(Extension(handlers::streamers::DiscordRoleExt(discord_role)))
         .layer(Extension(handlers::streamers::ChatActionExt(chat_action)))
+        .layer(Extension(handlers::streamers::ModeratorRemovalExt(
+            moderator_removal,
+        )))
         .layer(Extension(handlers::scam_guard::ScamRevokeExt(scam_revoke)))
         .layer(Extension(handlers::scam_guard::ScamEnforceExt(
             scam_enforce,

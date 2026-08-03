@@ -1,10 +1,34 @@
-## #413 — „Ich will nicht mehr" hält jetzt wirklich
+## #416 — „Ich will nicht mehr" hält jetzt wirklich
 
-**Problem:** Wer als Streamer rausgenommen wurde, weil er kein Partner mehr sein wollte, war zwar sofort raus — aber der Vermerk „will nicht mehr" wurde gar nicht erst gesetzt. Ein späteres Zurückholen hätte den Kanal wortlos wieder eingeschaltet.
+**Problem:** Wer als Streamer rausgenommen wurde, weil er kein Partner mehr sein wollte, war zwar sofort raus — aber der Vermerk „will nicht mehr" wurde gar nicht erst gesetzt. Beim nächsten Login im Dashboard wäre der Kanal wortlos wieder eingeschaltet worden.
 
-**Änderung:** Beim Zurücksetzen der Verifizierung wird der Wunsch jetzt fest hinterlegt und bleibt stehen.
+**Änderung:** Beim Zurücksetzen der Verifizierung wird der Wunsch jetzt fest hinterlegt — über beide Wege, den internen und den in der Verwaltung. Ein Login hebt ihn nicht mehr auf; nur ein abgelaufener Zugang heilt sich weiterhin von selbst.
 
-**Aktuelles Verhalten:** Wer so rausgenommen wird, bleibt draußen, bis er selbst wieder aktiv zustimmt. Alle anderen Wege, einen Kanal zu pausieren, bleiben unverändert.
+**Aktuelles Verhalten:** Wer so rausgenommen wird, bleibt draußen, bis er selbst wieder aktiv zustimmt. Das reine Entfernen eines Kanals bleibt davon unberührt — dort darf er später ohne Weiteres zurückkommen.
+
+## #415 — Trennen entzieht die Discord-Rolle wirklich
+
+**Problem:** Beim Trennen stand im Ergebnis „Discord-Rolle: entzogen", auch wenn gar nichts entzogen wurde. Die Streamer-Rolle blieb im Discord stehen, und weil die Meldung sauber aussah, fiel es niemandem auf.
+
+**Änderung:** Der Rollen-Entzug meldet jetzt seinen echten Ausgang zurück. Bleibt die Rolle liegen, steht der Grund im Ergebnis und die Meldung wird als Warnung angezeigt statt als Erfolg. Zusätzlich weiß der Bot wieder, in welchem Discord er die Rolle entziehen soll — das war die Ursache.
+
+**Aktuelles Verhalten:** Nach dem Trennen ist die Streamer-Rolle weg. Klappt das ausnahmsweise nicht, sagt das Ergebnis das offen, statt einen erledigten Lauf vorzutäuschen.
+
+## #414 — Bot selbst vom eigenen Kanal trennen
+
+**Problem:** Wer den Bot nicht mehr wollte, musste sich melden. Trennen ging nur von Hand: unmodden, aus der Partnerliste nehmen, dafür sorgen, dass er nicht von allein zurückkommt.
+
+**Änderung:** In der Verwaltung steht die Aktion jetzt selbst zur Verfügung, ganz unten. Zwei Bestätigungen — erst die Warnung, dann den eigenen Kanalnamen abtippen —, danach gibt der Bot seine Moderator-Rechte ab, die Partnerschaft endet und er kommt nicht von selbst zurück.
+
+**Aktuelles Verhalten:** Nach dem Trennen laufen keine Chat-Funktionen, Raids, Statistiken oder Overlays mehr; erfasste Daten bleiben erhalten. Jeder Teilschritt wird einzeln gemeldet — klappt der Entzug der Moderator-Rechte nicht, steht das da, statt als Erfolg durchzugehen. Die Twitch-Verbindung bleibt bestehen: wer sich später neu anmeldet, holt den Bot damit zurück.
+
+## #413 — Begrüßung im Chat lässt sich abschalten
+
+**Problem:** Der Bot grüßte automatisch zurück, wenn jemand „hi“ oder „moin“ schrieb. Wer das schon über einen anderen Chatbot laufen hat, bekam zwei Begrüßungen und konnte nur die eine davon abstellen.
+
+**Änderung:** In der Verwaltung gibt es jetzt einen Schalter für die Begrüßung, direkt neben dem für !lurk. Standardmäßig bleibt sie an.
+
+**Aktuelles Verhalten:** Aus heißt, der Bot reagiert auf Grüße gar nicht mehr; alles andere — auch die Antwort auf die Release-Frage — läuft weiter wie bisher. Nach dem Wiedereinschalten grüßt er sofort, ohne Wartezeit.
 
 ## #412 — VOD-Link läuft nicht mehr nach einer Woche ab
 

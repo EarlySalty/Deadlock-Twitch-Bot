@@ -10,6 +10,7 @@
 use crate::auth::level::DashboardAuthLevel;
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -25,7 +26,7 @@ use tb_analytics::streamers_crud::{
     archive_streamer, departner_streamer, set_discord_flag, verify_streamer, ArchiveMode,
     VerifyStreamerResult,
 };
-use tb_http_core::ApiError;
+use tb_http_core::{ApiError, INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER};
 
 // ── Query-Parameter ──────────────────────────────────────────────────────────
 
@@ -646,6 +647,149 @@ pub async fn discord_flag_handler(
     } else {
         Err(ApiError::not_found())
     }
+}
+
+// ── Bot bewusst trennen ───────────────────────────────────────────────────────
+
+/// `POST /twitch/api/admin/streamers/{login}/disconnect-bot`
+///
+/// Body: `{"confirm_login": "<login>"}`. Die Eingabe ist die zweite
+/// Bestätigungsstufe und wird hier — nicht nur im Frontend — gegen den
+/// Pfad-Login geprüft. Passt sie nicht, mutiert nichts.
+///
+/// Die eigentliche Arbeit macht die interne API im Bot-Prozess: nur dort liegen
+/// Bot-User-ID und der rotierende Streamer-Token für den Mod-Entzug.
+pub async fn disconnect_bot_handler(
+    auth: DashboardAuthLevel,
+    Path(login): Path<String>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return err.into_response();
+    }
+    let confirm = body_str(&body, "confirm_login").unwrap_or_default();
+    if !confirmation_matches(&confirm, &login) {
+        return ApiError::bad_request(
+            "Bestätigung stimmt nicht mit dem Streamer-Login überein — nichts geändert.",
+        )
+        .into_response();
+    }
+    call_internal_disconnect(&login).await
+}
+
+/// Ruft die Trenn-Kette in der internen Bot-API auf und reicht deren
+/// Teilschritt-Report unverändert durch.
+///
+/// Geteilt zwischen Admin-Route und Streamer-Selbstbedienung: beide trennen
+/// exakt gleich, sie unterscheiden sich nur darin, wer den Login bestimmen
+/// darf. Ein zweiter Aufrufpfad darf keine zweite Reihenfolge bekommen.
+pub(crate) async fn call_internal_disconnect(login: &str) -> axum::response::Response {
+    // 503 mit deutschem Klartext statt der generischen Upstream-Meldung: der
+    // Aufrufer muss unterscheiden können zwischen "nicht konfiguriert" und
+    // "Bot gerade weg" — beides heißt, dass NICHTS getrennt wurde.
+    let unavailable = |message: &str| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "upstream_unavailable", "message": message })),
+        )
+            .into_response()
+    };
+
+    let Some(token) = internal_api_token() else {
+        tracing::error!("disconnect-bot: TWITCH_INTERNAL_API_TOKEN fehlt");
+        return unavailable("Interne Bot-API nicht konfiguriert — Trennung nicht ausgeführt.");
+    };
+    let url = format!(
+        "{}{}/streamers/{}/disconnect-bot",
+        worker_internal_base_url(),
+        INTERNAL_API_BASE_PATH,
+        urlencoding_login(login),
+    );
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::error!(%error, "disconnect-bot: HTTP-Client nicht baubar");
+            return ApiError::internal().into_response();
+        }
+    };
+    let response = match client
+        .post(url)
+        .header(INTERNAL_TOKEN_HEADER, token)
+        .json(&json!({}))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, login = %login, "disconnect-bot: interne API nicht erreichbar");
+            return unavailable(
+                "Bot nicht erreichbar — Trennung nicht ausgeführt, bitte erneut versuchen.",
+            );
+        }
+    };
+    let status = response.status();
+    let payload: Value = match response.json().await {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, login = %login, "disconnect-bot: Antwort nicht lesbar");
+            return ApiError::internal().into_response();
+        }
+    };
+    if !status.is_success() {
+        tracing::error!(
+            login = %login,
+            status = status.as_u16(),
+            "disconnect-bot: interne API meldet Fehler"
+        );
+        return ApiError::internal().into_response();
+    }
+    Json(payload).into_response()
+}
+
+/// Zweite Bestätigungsstufe. Leere Eingabe zählt nie als Bestätigung — sonst
+/// würde ein Client, der das Feld schlicht weglässt, die Trennung auslösen.
+pub(crate) fn confirmation_matches(confirm: &str, login: &str) -> bool {
+    let confirm = confirm.trim();
+    let login = login.trim();
+    !confirm.is_empty() && !login.is_empty() && confirm.eq_ignore_ascii_case(login)
+}
+
+/// Login für den Pfad absichern: der Router lässt nur Segmente ohne `/` durch,
+/// hier bleibt nur das Trimmen plus Prozent-Kodierung der Sonderfälle.
+fn urlencoding_login(login: &str) -> String {
+    login
+        .trim()
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c.to_string(),
+            other => format!("%{:02X}", other as u32 as u8),
+        })
+        .collect()
+}
+
+fn internal_api_token() -> Option<String> {
+    std::env::var("TWITCH_INTERNAL_API_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn worker_internal_base_url() -> String {
+    let read = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(explicit) = read("TWITCH_INTERNAL_API_BASE_URL") {
+        return explicit.trim_end_matches('/').to_string();
+    }
+    let host = read("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = read("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
+    format!("http://{host}:{port}")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1559,5 +1703,31 @@ mod tests {
         );
         assert!(body_str(br#"{"mode":"  "}"#, "mode").is_none()); // nur-Whitespace
         assert!(body_str(br#"not json"#, "mode").is_none());
+    }
+
+    // ── Bot bewusst trennen: zweite Bestätigung ──────────────────────────────
+
+    #[test]
+    fn bestaetigung_muss_zum_login_passen() {
+        assert!(confirmation_matches("umiwaver", "umiwaver"));
+        // Groß-/Kleinschreibung und Leerzeichen sind egal — Tippfehler nicht.
+        assert!(confirmation_matches("  UmiWaver ", "umiwaver"));
+        assert!(!confirmation_matches("umiwave", "umiwaver"));
+        assert!(!confirmation_matches("anderer", "umiwaver"));
+    }
+
+    #[test]
+    fn fehlende_bestaetigung_zaehlt_nie() {
+        // Ein Client, der das Feld weglässt, darf nichts auslösen.
+        assert!(!confirmation_matches("", "umiwaver"));
+        assert!(!confirmation_matches("   ", "umiwaver"));
+        assert!(!confirmation_matches("", ""));
+    }
+
+    #[test]
+    fn login_im_pfad_wird_kodiert() {
+        assert_eq!(urlencoding_login("umiwaver"), "umiwaver");
+        assert_eq!(urlencoding_login("bot_name-1"), "bot_name-1");
+        assert_eq!(urlencoding_login("a b"), "a%20b");
     }
 }
