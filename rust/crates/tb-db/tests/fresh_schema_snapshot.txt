@@ -276,6 +276,7 @@ streamer_onboarding|twitch_login|text|NO|
 streamer_onboarding|twitch_user_id|text|NO|
 streamer_onboarding|updated_at|timestamp with time zone|NO|now()
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
+streamer_plans|clip_command_enabled|integer|NO|1
 streamer_plans|expires_at|text|YES|
 streamer_plans|first_login_at|text|YES|
 streamer_plans|greeting_reply_enabled|integer|NO|1
