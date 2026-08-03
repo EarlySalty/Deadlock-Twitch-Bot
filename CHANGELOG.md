@@ -1,3 +1,11 @@
+## #416 — „Ich will nicht mehr" hält jetzt wirklich
+
+**Problem:** Wer als Streamer rausgenommen wurde, weil er kein Partner mehr sein wollte, war zwar sofort raus — aber der Vermerk „will nicht mehr" wurde gar nicht erst gesetzt. Beim nächsten Login im Dashboard wäre der Kanal wortlos wieder eingeschaltet worden.
+
+**Änderung:** Beim Zurücksetzen der Verifizierung wird der Wunsch jetzt fest hinterlegt — über beide Wege, den internen und den in der Verwaltung. Ein Login hebt ihn nicht mehr auf; nur ein abgelaufener Zugang heilt sich weiterhin von selbst.
+
+**Aktuelles Verhalten:** Wer so rausgenommen wird, bleibt draußen, bis er selbst wieder aktiv zustimmt. Das reine Entfernen eines Kanals bleibt davon unberührt — dort darf er später ohne Weiteres zurückkommen.
+
 ## #415 — Trennen entzieht die Discord-Rolle wirklich
 
 **Problem:** Beim Trennen stand im Ergebnis „Discord-Rolle: entzogen", auch wenn gar nichts entzogen wurde. Die Streamer-Rolle blieb im Discord stehen, und weil die Meldung sauber aussah, fiel es niemandem auf.

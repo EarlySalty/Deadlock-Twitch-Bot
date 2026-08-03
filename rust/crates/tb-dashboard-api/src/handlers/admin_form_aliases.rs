@@ -55,7 +55,7 @@ pub async fn verify_handler(
     let mode = form_get(&form, "mode").trim().to_lowercase();
 
     let message = if matches!(mode.as_str(), "clear" | "failed") {
-        match departner_streamer(&pool, &login).await {
+        match departner_streamer(&pool, &login, true).await {
             Ok(Some(_)) if mode == "clear" => {
                 format!("Verifizierung für {login} zurückgesetzt (keine DM versendet)")
             }
