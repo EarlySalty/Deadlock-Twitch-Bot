@@ -11,41 +11,41 @@ export const features: Feature[] = [
     icon: "Swords",
     title: "Auto-Raid",
     description:
-      "Auto-Raid hält eure Community in Bewegung: Endet ein Deadlock-Stream, wird sie automatisch an einen passenden Live-Partner weitergegeben. Manuelle Raids bleiben jederzeit möglich.",
+      "Endet dein Stream, raidet der Bot automatisch den passendsten Live-Partner, fair verteilt und mit Vorrang für neue Partner. Und wenn andere offline gehen, landen ihre Raids genauso bei dir. Manuelle Raids bleiben jederzeit möglich.",
+  },
+  {
+    id: "discord-live",
+    icon: "Zap",
+    title: "Live-Post im Discord",
+    description:
+      "Du gehst live, der Bot postet dich im Community-Discord, automatisch erkannt und auf Wunsch mit Ping-Rolle. Sichtbarkeit ab der ersten Minute, ohne dass du selbst irgendwo posten musst.",
   },
   {
     id: "analytics",
     icon: "BarChart2",
     title: "Analytics",
     description:
-      "Echtzeit-Dashboard mit 13 Tabs – von Chat und Audience bis Viewer, Wachstum und Coaching. Erkenne schneller, was deinen Stream wirklich nach vorne bringt.",
+      "Echtzeit-Dashboard mit 13 Tabs: Zuschauer, Chat, Wachstum, Raids, persönliche Bestwerte und der faire Vergleich mit dem Netzwerk. Nach jedem Stream siehst du, was funktioniert hat, statt nur ein Bauchgefühl zu haben.",
   },
   {
     id: "clip-manager",
     icon: "Clapperboard",
     title: "Clip Manager (Coming Soon)",
     description:
-      "Multi-Plattform Upload für YouTube, TikTok und Instagram – Clips aus dem Chat erstellen und künftig automatisch auf YouTube, TikTok und Instagram verteilen.",
+      "Clips direkt aus dem Chat erstellen, die KI schlägt Titel vor. Als Nächstes kommt der Multi-Plattform-Upload zu YouTube, TikTok und Instagram, damit deine besten Momente sich von selbst verbreiten.",
   },
   {
     id: "community",
     icon: "Users",
     title: "Community",
     description:
-      "Belohne treue Zuschauer automatisch und aktiviere Lurker gezielt im Chat — für eine Community, die wächst.",
-  },
-  {
-    id: "monitoring",
-    icon: "Activity",
-    title: "Monitoring",
-    description:
-      "24/7 Stream-Überwachung mit 15s Polling – erkennt Ausfälle, verfolgt Latenz und benachrichtigt dich sofort bei ungewöhnlichen Ereignissen oder Verbindungsproblemen.",
+      "Treue Zuschauer werden automatisch belohnt, Lurker gezielt aktiviert. Dazu ein eigener Streamer-Bereich im Community-Discord: Austausch mit anderen Creatorn und echte Zuschauer statt Algorithmus.",
   },
   {
     id: "moderation",
     icon: "ShieldCheck",
     title: "Moderation",
     description:
-      "Auto-Mod, Chat-Filter und Timeout-Management – halte deinen Chat sauber mit anpassbaren Regeln, Wortfiltern und automatischen Timeouts für Regelverstöße.",
+      "Ein KI-Wächter erkennt Scam- und Spam-Konten und bannt sie, bevor dein Chat sie überhaupt sieht. Dazu die globale Ban-Liste des Netzwerks und Timeouts für Fremdwerbung, beides pro Kanal abschaltbar.",
   },
 ];

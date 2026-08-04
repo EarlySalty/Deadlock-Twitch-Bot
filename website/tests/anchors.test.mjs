@@ -39,6 +39,34 @@ test('jeder Sprungmarken-Link zeigt auf eine existierende id', () => {
   );
 });
 
+// Die Navbar verlinkt ihre Sektionen nicht per href, sondern über den
+// Objekt-Schlüssel `id` in NAV_LINKS. Der Test oben sieht diese Links deshalb
+// nicht: ein Menüpunkt auf eine geloeschte oder umbenannte Sektion scrollt
+// stillschweigend nirgendwohin.
+test('jeder Navbar-Menuepunkt zeigt auf eine existierende Sektion', () => {
+  const navbar = readFileSync(join(SRC, 'components/layout/Navbar.tsx'), 'utf8');
+  const block = navbar.match(/const NAV_LINKS[^=]*=\s*\[([\s\S]*?)\n\]/);
+  assert.ok(block, 'NAV_LINKS nicht gefunden');
+
+  const menuIds = [...block[1].matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(menuIds.length > 0, 'keine Sektions-Menuepunkte gefunden');
+
+  // Nur die Sektionen der Landing zaehlen. Der globale id-Pool des Tests oben
+  // sammelt auch aus v2/ und den Unterseiten: "ablauf" existiert dort ebenfalls,
+  // eine geloeschte Landing-Sektion bliebe damit unbemerkt.
+  const sectionIds = new Set(
+    sourceFiles(join(SRC, 'components/sections'))
+      .flatMap((file) => [...readFileSync(file, 'utf8').matchAll(/id="([A-Za-z0-9_-]+)"/g)])
+      .map((m) => m[1]),
+  );
+
+  assert.deepEqual(
+    menuIds.filter((id) => !sectionIds.has(id)),
+    [],
+    'Menuepunkte ohne Sektion',
+  );
+});
+
 test('Anker enthalten keinen eingebetteten Hex-Farbwert', () => {
   const verstuemmelt = anchors.filter(({ anchor }) => /^[0-9a-f]{6}[a-z]/i.test(anchor));
   assert.deepEqual(verstuemmelt.map((a) => `#${a.anchor} (${a.file})`), []);

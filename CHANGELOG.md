@@ -1,3 +1,11 @@
+## #423 — Die Streamer-Seite erzählt jetzt, was der Bot wirklich tut
+
+**Problem:** Die Seite verkaufte das Raid-Netzwerk, erklärte aber kaum, was der Bot sonst übernimmt und was ein Streamer davon hat. Wer ohne Vorwissen kam, blieb ratlos.
+
+**Änderung:** Direkt nach dem Einstieg steht eine neue Sektion mit dem Ablauf eines Streams in drei Schritten: du gehst live, du streamst, dein Stream endet. Zu jedem Schritt steht, was der Bot in dieser Phase von selbst tut. Die Feature-Karten nennen jetzt den konkreten Nutzen statt Stichworte, der Discord-Live-Post hat eine eigene Karte bekommen, und Demo-Dashboard sowie Funktionsvergleich sind verlinkt.
+
+**Aktuelles Verhalten:** Die Seite beantwortet, was der Bot macht, warum man ihn braucht und was er bringt. Die Sektion hängt im Menü unter „So funktioniert's". Look und bestehende Sektionen bleiben unverändert. Die Karte „Monitoring" ist aus der Feature-Liste raus, die Überwachung selbst läuft weiter.
+
 ## #422 — Neue Streamer-Seite als Vorschau unter /streamer/v2/
 
 **Problem:** Die Streamer-Seite verkauft einen Twitch-Bot. Das trifft nicht, was das Angebot ist: ein Netzwerk, das Zuschauer beim Stream-Ende an andere deutsche Deadlock-Kanäle weitergibt. Dazu standen dort acht Preispläne nebeneinander und Kennzahlen, die bei Ausfall der API durch Beispielwerte ersetzt wurden.
