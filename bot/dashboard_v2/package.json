@@ -37,7 +37,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "fast-check": "^4.9.0",
     "globals": "^17.7.0",
-    "react-is": "^19.2.7",
+    "react-is": "^19.2.8",
     "tsx": "^4.23.0",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.65.0",
