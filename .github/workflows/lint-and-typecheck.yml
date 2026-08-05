@@ -1,6 +1,20 @@
 name: "Frontend CI"
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "bot/admin_dashboard/**"
+      - "bot/dashboard_v2/**"
+      - ".github/workflows/lint-and-typecheck.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "bot/admin_dashboard/**"
+      - "bot/dashboard_v2/**"
+      - ".github/workflows/lint-and-typecheck.yml"
   workflow_dispatch:
 
 permissions:

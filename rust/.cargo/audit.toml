@@ -1,0 +1,14 @@
+# Ausnahmen fuer cargo-audit. Jeder Eintrag nennt Grund und offenen Weg.
+[advisories]
+ignore = [
+  # lopdf 0.39 (Stack overflow bei tief verschachtelten PDF-Objekten, 7.5 high).
+  # Kommt ueber printpdf 0.9.1 in den Lock, wird aber nicht kompiliert: printpdf
+  # ist mit default-features = false eingebunden, cargo tree -i lopdf ist leer.
+  # Aufloesbar erst mit printpdf 0.12 (0.9.x hat keinen Patch), das ist ein
+  # eigenes Upgrade mit API-Bruch in tb-analytics.
+  "RUSTSEC-2026-0187",
+  # rsa 0.9.10 (Marvin-Attack, Timing-Seitenkanal). Kommt ueber sqlx-mysql; wir
+  # bauen sqlx nur mit dem postgres-Feature, mysql wird nie kompiliert.
+  # Upstream gibt es keine feste Version.
+  "RUSTSEC-2023-0071",
+]

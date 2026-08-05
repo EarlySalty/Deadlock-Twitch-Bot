@@ -1,0 +1,64 @@
+name: "Rust Security"
+
+# CodeQL deckt Rust hier nicht ab: der Extraktor loest nur 42 Prozent der
+# Aufrufziele auf (siehe codeql.yml). Clippy und cargo-audit sind die
+# wirksamen Pruefungen fuer den Rust-Teil.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-security.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-security.yml"
+  schedule:
+    # Taeglich, weil neue RustSec-Advisories ohne eigenen Commit auftauchen.
+    - cron: "38 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clippy:
+    name: "clippy (deny warnings)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: "rust"
+
+      - name: Run clippy
+        working-directory: rust
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  audit:
+    name: "cargo-audit (RustSec)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run cargo-audit
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: rust

@@ -80,12 +80,14 @@ export function ChatTreueContent({
     newViewerShare,
   } = model;
 
+  // Date.now() im Render ist unrein (react-hooks/purity). Der Zeitpunkt gehoert zur
+  // Datenabfrage und wandert dorthin, sobald die Query ihn mitliefert.
+  // eslint-disable-next-line react-hooks/purity
+  const windowStart = new Date(Date.now() - days * 86_400_000);
+
   return (
     <div className="space-y-6">
-      <RawChatStatusBanner
-        status={data.rawChatStatus}
-        windowStart={new Date(Date.now() - days * 86_400_000)}
-      />
+      <RawChatStatusBanner status={data.rawChatStatus} windowStart={windowStart} />
 
       {dataMethod !== 'real_samples' && (
         <div className="panel-card rounded-2xl p-4 text-sm text-text-secondary">
@@ -348,6 +350,9 @@ export function ChatTiefeContent({
   socialData,
   chatSocialGraphEnabled,
 }: ChatAnalyticsContentProps) {
+  // Date.now() im Render ist unrein (react-hooks/purity). Der Zeitpunkt gehoert zur
+  // Datenabfrage und wandert dorthin, sobald die Query ihn mitliefert.
+  // eslint-disable-next-line react-hooks/purity
   const windowStart = new Date(Date.now() - days * 86_400_000);
   return (
     <div className="space-y-6">

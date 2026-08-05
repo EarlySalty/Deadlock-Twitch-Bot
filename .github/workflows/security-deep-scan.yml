@@ -1,6 +1,10 @@
 name: "🔒 Deep Security Scan (Optimized)"
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
@@ -10,7 +14,7 @@ permissions:
 
 concurrency:
   group: deep-security-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   detect-languages:
@@ -79,6 +83,9 @@ jobs:
   security-scorecard:
     name: 🏆 OSSF Security Scorecard
     runs-on: ubuntu-latest
+    # Scorecard bewertet den Default-Branch und braucht id-token: write.
+    # Aus einem Fork-PR heraus gibt es dieses Token nicht.
+    if: github.event_name != 'pull_request'
     permissions:
       security-events: write
       id-token: write
