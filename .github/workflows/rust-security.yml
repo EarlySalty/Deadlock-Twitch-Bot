@@ -57,8 +57,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Run cargo-audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: rust
+          tool: cargo-audit
+
+      # Bewusst als eigener Schritt statt ueber rustsec/audit-check: die Action
+      # ruft cargo-audit aus dem Repo-Wurzelverzeichnis auf und liest damit
+      # rust/.cargo/audit.toml nicht. Hier laeuft derselbe Befehl wie lokal.
+      - name: Run cargo-audit
+        working-directory: rust
+        run: cargo audit

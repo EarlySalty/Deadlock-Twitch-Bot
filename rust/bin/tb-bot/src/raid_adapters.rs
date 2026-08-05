@@ -80,6 +80,9 @@ impl FollowerEnricher for HelixFollowerEnricher {
 
 /// Helix-Anreicherung für alle noch unbekannten Kandidaten — gemeinsam genutzt
 /// vom direkten Enricher und dem cache-vorgeschalteten [`CachedFollowerEnricher`].
+// Im Test-Build des bin-Crates gibt es kein main(), das die Enricher baut; ohne
+// diesen Einstieg haelt rustc 1.97 die Kette fuer tot. Im echten Binary ist sie es nicht.
+#[cfg_attr(test, allow(dead_code))]
 async fn enrich_via_helix(followers: &dyn FollowerCountSource, pool: &mut [FairnessCandidate]) {
     for candidate in pool.iter_mut() {
         if candidate.followers_total != FOLLOWERS_UNKNOWN {
@@ -121,6 +124,9 @@ pub struct CachedFollowerEnricher {
 }
 
 impl CachedFollowerEnricher {
+    // Im Test-Build des bin-Crates gibt es kein main(), das die Enricher baut; ohne
+    // diesen Einstieg haelt rustc 1.97 die Kette fuer tot. Im echten Binary ist sie es nicht.
+    #[cfg_attr(test, allow(dead_code))]
     async fn backfill_from_cache(&self, pool: &mut [FairnessCandidate]) {
         let pending_logins: Vec<String> = pool
             .iter()
@@ -197,6 +203,9 @@ impl FollowerEnricher for CachedFollowerEnricher {
     }
 }
 
+// Im Test-Build des bin-Crates gibt es kein main(), das die Enricher baut; ohne
+// diesen Einstieg haelt rustc 1.97 die Kette fuer tot. Im echten Binary ist sie es nicht.
+#[cfg_attr(test, allow(dead_code))]
 fn record_followers_observation_signal(
     fetch: &FollowerFetch,
     first_http_error: &mut Option<(i64, String)>,
