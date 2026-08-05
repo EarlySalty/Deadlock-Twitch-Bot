@@ -44,12 +44,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Rust und Abhaengigkeiten laden
+      - name: Setup Rust und Abhaengigkeiten bauen
         if: matrix.language == 'rust'
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
           cargo fetch --locked --manifest-path rust/Cargo.toml
+          # Der Extraktor expandiert Makros ueber die gebauten Artefakte.
+          # Ohne diesen Schritt scheitert tracing::info und Verwandtes in
+          # nahezu jeder Datei, und die Datenbank bleibt unbrauchbar.
+          cargo check --workspace --locked --manifest-path rust/Cargo.toml
 
       - name: Setup Node.js
         if: matrix.node == true
