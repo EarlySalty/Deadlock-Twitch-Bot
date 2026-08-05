@@ -3,11 +3,42 @@ title = "Deadlock bots custom gitleaks config"
 [extend]
 useDefault = true
 
-[allowlist]
+# [[allowlists]] statt [allowlist]: gitleaks laesst beide Formen nicht
+# nebeneinander zu und lehnt die Konfiguration sonst ganz ab.
+[[allowlists]]
+description = "Fremd- und Build-Artefakte, kein eigener Code."
 paths = [
   "(.*/)?node_modules/.*",
   "(.*/)?dist/.*",
   "(.*/)?build/.*"
+]
+
+# Ausnahmen zu den mitgelieferten Default-Regeln. Ohne sie meldet der Lauf ueber
+# die volle Historie 24 Treffer, von denen keiner ein Geheimnis ist — ein
+# dauerhaft roter Job, in den niemand mehr schaut. Jede Ausnahme unten ist
+# einzeln geprueft; eine neue braucht denselben Nachweis: warum der Treffer kein
+# Geheimnis ist, nicht nur dass er stoert.
+
+[[allowlists]]
+description = "Discord-Snowflakes sind oeffentlich: Application-, Guild-, Rollen-, Kanal- und User-IDs stehen in jedem OAuth-Link und in jeder Einladung. Geheim ist allein das Client-Secret, das eine eigene Regel und einen eigenen Eintrag hat. Die Regel ist als Ganzes aus, sonst meldet jede neue Rollen-ID im Code wieder einen Fund."
+targetRules = ["discord-client-id"]
+regexTarget = "line"
+regexes = ['''.*''']
+
+[[allowlists]]
+description = "Kein Geheimnis, sondern der Name einer importierten Konstante: die Fundzeile in bot/internal_api/app.py ist ein Import-Alias der Form `X as _Y` ohne Stringliteral. Die Datei existiert nur noch in der Historie, der Scan laeuft mit fetch-depth 0 darueber."
+targetRules = ["discord-client-secret"]
+paths = ['''bot/internal_api/app\.py''']
+
+[[allowlists]]
+description = "Testfixtures und Dokumentation. fernet.rs: base64 von testkey1234567890 in den Verschluesselungstests. Security.tsx: Demo-Chiffrate der Sicherheitskonzept-Seite, mit einem Wegwerf-Schluessel ueber Dummy-Klartext erzeugt und ohne diesen wertlos, mit derselben Begruendung schon in .gitguardian.yaml. affiliate_commission.rs: Bezeichner in einem SQL-Rohstring. follower_funnel.rs: Dateiname in einem Doc-Kommentar. build-plan-dag.md: Task-IDs eines Bauplans."
+targetRules = ["generic-api-key"]
+paths = [
+  '''rust/crates/tb-dashboard-api/src/auth/fernet\.rs''',
+  '''rust/crates/tb-dashboard-api/src/handlers/follower_funnel\.rs''',
+  '''rust/crates/tb-analytics/src/affiliate_commission\.rs''',
+  '''rust/docs/implementation/2026-06-15-build-plan-dag\.md''',
+  '''website/src/components/sections/Security\.tsx''',
 ]
 
 [[rules]]
