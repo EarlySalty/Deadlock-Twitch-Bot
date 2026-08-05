@@ -20,13 +20,6 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    env:
-      # Der Rust-Extraktor expandiert sqlx-Makros; ohne den Offline-Cache
-      # sucht sqlx eine Datenbank und die Expansion scheitert.
-      SQLX_OFFLINE: "true"
-      # Ohne diese Angabe legt der Extraktor ein leeres Scratch-Verzeichnis an
-      # und baut alles erneut, statt die Artefakte aus cargo check zu nutzen.
-      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +30,13 @@ jobs:
           - language: actions
             build: none
             node: true
+          # Achtung beim Lesen der Rust-Ergebnisse: der Extraktor liest 517 der
+          # 563 Dateien mit Fehlern ein, weil er tracing::info und Verwandtes
+          # nicht expandieren kann. Die Quote aufgeloester Aufrufziele liegt bei
+          # 42 Prozent gegen einen Schwellwert von 50. Ein Lauf ohne Treffer
+          # belegt deshalb nichts. Geprueft und wirkungslos: cargo fetch,
+          # cargo check --workspace, CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR
+          # auf das gebaute Verzeichnis (jeweils unveraendert 517 von 563).
           - language: rust
             build: none
             node: false
@@ -46,17 +46,6 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-
-      - name: Setup Rust und Abhaengigkeiten bauen
-        if: matrix.language == 'rust'
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          cargo fetch --locked --manifest-path rust/Cargo.toml
-          # Der Extraktor expandiert Makros ueber die gebauten Artefakte.
-          # Ohne diesen Schritt scheitert tracing::info und Verwandtes in
-          # nahezu jeder Datei, und die Datenbank bleibt unbrauchbar.
-          cargo check --workspace --locked --manifest-path rust/Cargo.toml
 
       - name: Setup Node.js
         if: matrix.node == true
