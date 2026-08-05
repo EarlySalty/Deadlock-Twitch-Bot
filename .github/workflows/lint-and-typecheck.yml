@@ -1,20 +1,9 @@
 name: "Frontend CI"
 
+# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "website/**"
-      - "bot/admin_dashboard/**"
-      - "bot/dashboard_v2/**"
-      - ".github/workflows/lint-and-typecheck.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "website/**"
-      - "bot/admin_dashboard/**"
-      - "bot/dashboard_v2/**"
-      - ".github/workflows/lint-and-typecheck.yml"
+  schedule:
+    - cron: "51 4 * * 1"
   workflow_dispatch:
 
 permissions:

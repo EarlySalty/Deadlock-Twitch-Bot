@@ -3,20 +3,12 @@ name: "Rust Security"
 # CodeQL deckt Rust hier nicht ab: der Extraktor loest nur 42 Prozent der
 # Aufrufziele auf (siehe codeql.yml). Clippy und cargo-audit sind die
 # wirksamen Pruefungen fuer den Rust-Teil.
+# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht. Neue
+# RustSec-Advisories tauchen ohne eigenen Commit auf, deshalb ueberhaupt ein
+# fester Termin und nicht nur ein Trigger am Code.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-security.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-security.yml"
   schedule:
-    # Taeglich, weil neue RustSec-Advisories ohne eigenen Commit auftauchen.
-    - cron: "38 5 * * *"
+    - cron: "38 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +16,7 @@ permissions:
 
 concurrency:
   group: rust-security-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   clippy:
