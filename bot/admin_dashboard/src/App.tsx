@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, useParams } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useParams } from 'react-router';
 import { AdminShell } from '@/components/layout/AdminShell';
 import { Dashboard } from '@/pages/Dashboard';
 import { Affiliates } from '@/pages/billing/Affiliates';

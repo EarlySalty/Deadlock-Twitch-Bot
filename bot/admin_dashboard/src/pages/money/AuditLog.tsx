@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Clock3, Layers3, Link2, ListChecks, RefreshCw, SearchX } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { AuditLogEntry } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';

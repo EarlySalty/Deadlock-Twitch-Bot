@@ -27,6 +27,7 @@
     "vite-prerender-plugin": "^0.5.13"
   },
   "overrides": {
-    "picomatch": "^4.0.4"
+    "picomatch": "^4.0.4",
+    "postcss": "^8.5.23"
   }
 }

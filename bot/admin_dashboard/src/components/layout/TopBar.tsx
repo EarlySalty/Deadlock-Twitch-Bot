@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, LogOut, Search, ShieldCheck, Wifi, X } from 'lucide-react';
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { fetchAdminStreamers } from '@/api/client';
 import type { AdminAuthStatus, StreamerRow } from '@/api/types';
 

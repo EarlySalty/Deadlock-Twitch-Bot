@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Ban, BarChart3, CctvOff, Clock3, PlugZap, Radio, Save, Send, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import { PageHeader } from '@/components/layout/PageHeader';

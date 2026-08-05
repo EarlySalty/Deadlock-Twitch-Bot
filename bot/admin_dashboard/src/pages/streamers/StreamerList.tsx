@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArchiveRestore, Ban, Eye, FolderArchive, Maximize2, Minimize2, Plus, SearchX, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import type { ScopeStatusRow, StreamerPartnerStatus, StreamerRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';

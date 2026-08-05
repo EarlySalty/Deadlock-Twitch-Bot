@@ -1,5 +1,5 @@
 import { Activity, AlertTriangle, ArrowUpRight, CreditCard, Database, Radio, RefreshCw, Server, ShieldCheck, Users, ZapOff } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { StreamerRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';

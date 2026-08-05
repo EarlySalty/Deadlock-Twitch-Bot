@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle, Link2, Maximize2, Minimize2, RefreshCw, SearchX, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { ScopeStatusResponse, ScopeStatusRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';

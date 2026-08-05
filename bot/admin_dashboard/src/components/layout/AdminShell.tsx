@@ -1,6 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TopBar } from '@/components/layout/TopBar';
 import { useRequireAdminAuth, toAuthErrorMessage } from '@/hooks/useAuth';

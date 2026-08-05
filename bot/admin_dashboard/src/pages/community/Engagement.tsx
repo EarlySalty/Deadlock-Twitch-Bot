@@ -1,6 +1,6 @@
 import { RefreshCw, SearchX, Sparkles, UserCheck, UserMinus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { fetchEngagementSettings } from '@/api/client';
 import type { EngagementSettings, StreamerRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
