@@ -20,6 +20,10 @@ jobs:
       actions: read
       contents: read
       security-events: write
+    env:
+      # Der Rust-Extraktor expandiert sqlx-Makros; ohne den Offline-Cache
+      # sucht sqlx eine Datenbank und die Expansion scheitert.
+      SQLX_OFFLINE: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +43,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+
+      - name: Setup Rust und Abhaengigkeiten laden
+        if: matrix.language == 'rust'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo fetch --locked --manifest-path rust/Cargo.toml
 
       - name: Setup Node.js
         if: matrix.node == true
