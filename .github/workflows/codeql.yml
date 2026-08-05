@@ -24,6 +24,9 @@ jobs:
       # Der Rust-Extraktor expandiert sqlx-Makros; ohne den Offline-Cache
       # sucht sqlx eine Datenbank und die Expansion scheitert.
       SQLX_OFFLINE: "true"
+      # Ohne diese Angabe legt der Extraktor ein leeres Scratch-Verzeichnis an
+      # und baut alles erneut, statt die Artefakte aus cargo check zu nutzen.
+      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     strategy:
       fail-fast: false
       matrix:
