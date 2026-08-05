@@ -30,6 +30,16 @@ jobs:
           - language: actions
             build: none
             node: true
+          # Achtung beim Lesen der Rust-Ergebnisse: der Extraktor liest 517 der
+          # 563 Dateien mit Fehlern ein, weil er tracing::info und Verwandtes
+          # nicht expandieren kann. Die Quote aufgeloester Aufrufziele liegt bei
+          # 42 Prozent gegen einen Schwellwert von 50. Ein Lauf ohne Treffer
+          # belegt deshalb nichts. Geprueft und wirkungslos: cargo fetch,
+          # cargo check --workspace, CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR
+          # auf das gebaute Verzeichnis (jeweils unveraendert 517 von 563).
+          - language: rust
+            build: none
+            node: false
 
     steps:
       - name: Checkout (full history)
@@ -51,7 +61,7 @@ jobs:
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
         with:
           category: /language:${{ matrix.language }}
 

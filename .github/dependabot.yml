@@ -4,6 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      # init und analyze muessen dieselbe Version haben, sonst bricht die Analyse
+      # mit "Loaded a configuration file for version X, but running version Y".
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
     labels:
       - "dependencies"
       - "github-actions"
