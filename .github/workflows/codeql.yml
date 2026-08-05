@@ -30,6 +30,9 @@ jobs:
           - language: actions
             build: none
             node: true
+          - language: rust
+            build: none
+            node: false
 
     steps:
       - name: Checkout (full history)
