@@ -134,6 +134,22 @@ export function SocialMediaAdminDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <select
+              value={streamer}
+              onChange={(event) => {
+                hasAutoSetStreamer.current = true;
+                setStreamer(event.target.value);
+              }}
+              disabled={loadingStreamers}
+              className="rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
+            >
+              <option value="">— Streamer waehlen —</option>
+              {streamers.map((channel) => (
+                <option key={channel.login} value={channel.login}>
+                  {channel.login}
+                </option>
+              ))}
+            </select>
             <a
               href="/analyse"
               className="text-xs text-text-secondary hover:text-text-primary transition-colors"
@@ -166,8 +182,6 @@ export function SocialMediaAdminDashboard() {
             <SocialMedia streamer={streamer} />
           )}
         </PlanProvider>
-        {/* Streamer-Liste & Loading-Indikator absichtlich ohne Header — die SocialMedia-
-            Page hat eigene Streamer-Auswahl + KPI-Hero. */}
         {loadingStreamers && (
           <div className="mt-4 text-xs text-text-secondary">Lade Streamer-Liste…</div>
         )}

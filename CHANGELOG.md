@@ -1,3 +1,11 @@
+## #419 — Streamer-Auswahl im Social-Media-Dashboard
+
+**Problem:** Das Social-Media-Dashboard zeigte nur „Streamer auswählen" — es gab aber nirgends etwas zum Auswählen. Wer als Admin ohne eigenen Twitch-Login draufkam, saß vor einer leeren Seite und kam nur über einen von Hand gebauten Link weiter.
+
+**Änderung:** Oben rechts im Kopfbereich sitzt jetzt ein Auswahlfeld mit allen Streamern. Die Wahl landet in der Adresszeile, ein geteilter Link öffnet also direkt den richtigen Kanal.
+
+**Aktuelles Verhalten:** Streamer im Auswahlfeld wählen, Clips und Layout des Kanals erscheinen sofort. Ohne Auswahl bleibt der bisherige Hinweis stehen.
+
 ## #418 — Nach dem Trennen wieder zurückkommen
 
 **Problem:** Wer den Bot selbst über die Verwaltung getrennt hatte, kam nicht mehr zurück. Die Seite bot zwar „Jetzt neu autorisieren" an und versprach, dass eine erfolgreiche Twitch-Anmeldung den Status wieder auf aktiv setzt — passiert ist dabei nichts. Der Kanal blieb inaktiv, Analyse und Social Media blieben gesperrt, egal wie oft man den Knopf drückte.
