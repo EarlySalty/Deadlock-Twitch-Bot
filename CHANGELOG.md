@@ -4,7 +4,7 @@
 
 **Änderung:** Es gibt jetzt einen eigenen Zustand für Kanäle, die nicht ins Partnerprogramm aufgenommen werden. Wer davon betroffen ist, bekommt beim Autorisieren und beim Login in die Verwaltung einen ausformulierten Absagetext statt einer technischen Fehlermeldung. Die Autorisierung bricht ab, bevor Zugangsdaten gespeichert werden, der Bot wird in dem Kanal kein Moderator, und bereits vorhandene Zugangsdaten werden beim Setzen des Zustands gelöscht. Der Zustand zieht die Raid-Blacklist mit, umgekehrt gilt das nicht.
 
-**Aktuelles Verhalten:** Betroffene Kanäle sehen eine verständliche Absage und tauchen weder in der Partnerliste noch als Raid-Ziel auf. Ein bereits aus anderem Grund gesetzter Raid-Blacklist-Eintrag bleibt unverändert stehen und wird beim Aufheben nicht mit entfernt. Schlägt der Nachschlag in der Datenbank fehl, bricht die Autorisierung ab, statt still durchzulassen.
+**Aktuelles Verhalten:** Betroffene Kanäle sehen eine verständliche Absage und tauchen weder in der Partnerliste noch als Raid-Ziel auf. Sperren, die von woanders herkommen, bleiben beim Aufheben unangetastet: ein Raid-Blacklist-Eintrag mit fremdem Grund ebenso wie ein Block aus der Streamer-Verwaltung. Schlägt der Nachschlag in der Datenbank fehl, bricht die Autorisierung ab, statt still durchzulassen.
 
 ## #418 — Nach dem Trennen wieder zurückkommen
 

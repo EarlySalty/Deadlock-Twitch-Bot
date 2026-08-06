@@ -12,12 +12,13 @@
 -- Raid-Blacklist impliziert KEINEN Signup-Block.
 
 CREATE TABLE IF NOT EXISTS public.twitch_partner_signup_denylist (
-    twitch_user_id  text PRIMARY KEY,
-    twitch_login    text NOT NULL,
-    reason          text NOT NULL,
-    public_message  text,
-    added_by        text NOT NULL,
-    added_at        timestamptz NOT NULL DEFAULT now()
+    twitch_user_id          text PRIMARY KEY,
+    twitch_login            text NOT NULL,
+    reason                  text NOT NULL,
+    public_message          text,
+    added_by                text NOT NULL,
+    added_at                timestamptz NOT NULL DEFAULT now(),
+    partner_paused_by_block boolean NOT NULL DEFAULT false
 );
 
 COMMENT ON TABLE public.twitch_partner_signup_denylist IS
@@ -26,6 +27,8 @@ COMMENT ON COLUMN public.twitch_partner_signup_denylist.reason IS
     'Interner Grund. Wird niemals an den Streamer ausgeliefert.';
 COMMENT ON COLUMN public.twitch_partner_signup_denylist.public_message IS
     'Optionaler individueller Absagetext. NULL bedeutet: Default-Text aus dem Code.';
+COMMENT ON COLUMN public.twitch_partner_signup_denylist.partner_paused_by_block IS
+    'true = die technical_pause_reason=blocked auf twitch_partners stammt von diesem Signup-Block. Nur dann darf das Aufheben sie zuruecknehmen; ein Admin-Block aus der Streamer-Verwaltung setzt dasselbe Wort und bleibt sonst stehen.';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_partner_signup_denylist_login
     ON public.twitch_partner_signup_denylist (lower(twitch_login));

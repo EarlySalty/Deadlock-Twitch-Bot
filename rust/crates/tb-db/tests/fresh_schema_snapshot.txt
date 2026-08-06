@@ -944,6 +944,7 @@ twitch_partner_raid_scores|twitch_login|text|NO|
 twitch_partner_raid_scores|twitch_user_id|text|NO|
 twitch_partner_signup_denylist|added_at|timestamp with time zone|NO|now()
 twitch_partner_signup_denylist|added_by|text|NO|
+twitch_partner_signup_denylist|partner_paused_by_block|boolean|NO|false
 twitch_partner_signup_denylist|public_message|text|YES|
 twitch_partner_signup_denylist|reason|text|NO|
 twitch_partner_signup_denylist|twitch_login|text|NO|

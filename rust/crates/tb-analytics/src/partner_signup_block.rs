@@ -20,8 +20,12 @@
 //!    Rechte mehr ausübt und kein Re-OAuth sie reaktiviert (Guard in
 //!    `tb_raid::partner_setup::promote_streamer_to_partner`).
 //!
-//! [`remove`] nimmt 1., 2. und 4. zurück. Gelöschte Credentials kommen nicht
-//! zurück, der Streamer muss neu autorisieren.
+//! [`remove`] nimmt 1. immer zurück, 2. und 4. nur soweit dieser Block sie
+//! selbst gesetzt hat: einen fremden Raid-Grund (Bot-Ban, Vier-Raid-Sperre)
+//! und einen Admin-Block aus der Streamer-Verwaltung lässt es stehen. Beides
+//! benutzt dieselben Wörter, darum hält `add` die Herkunft der Pause in
+//! `partner_paused_by_block` fest. Gelöschte Credentials kommen nicht zurück,
+//! der Streamer muss neu autorisieren.
 
 use sqlx::PgPool;
 use tb_domain::RAID_BLACKLIST_REASON_PREFIX;
@@ -156,24 +160,41 @@ pub async fn add(
     //    nicht ueberschreiben: sonst raeumt ein spaeteres `remove` ihn mit weg,
     //    obwohl er nie zu uns gehoerte. Der Kanal steht dann eben mit dem
     //    fremden Grund auf der Liste — die Wirkung ist dieselbe.
+    //    `ON CONFLICT (target_login)` reicht dafuer nicht: der Primaerschluessel
+    //    vergleicht exakt, eine bestehende Zeile `Eigener` kollidiert also nicht
+    //    mit unserem lowercase `eigener` und wir haetten zwei Zeilen fuer
+    //    denselben Kanal. Darum erst case-insensitiv aktualisieren, dann nur
+    //    einfuegen, wenn es wirklich keine Zeile gibt.
     let raid_reason = format!("{RAID_BLACKLIST_REASON_PREFIX}{reason}");
     let raid_prefix_like = format!("{RAID_BLACKLIST_REASON_PREFIX}%");
     sqlx::query(
         r#"
-        INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (target_login) DO UPDATE SET
-            target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
-            reason    = EXCLUDED.reason,
-            added_at  = CURRENT_TIMESTAMP
-        WHERE COALESCE(twitch_raid_blacklist.reason, '') = ''
-           OR twitch_raid_blacklist.reason LIKE $4
+        UPDATE twitch_raid_blacklist
+           SET target_id = COALESCE(NULLIF($1, ''), target_id),
+               reason    = $3,
+               added_at  = CURRENT_TIMESTAMP
+         WHERE lower(target_login) = $2
+           AND (COALESCE(reason, '') = '' OR reason LIKE $4)
         "#,
     )
     .bind(twitch_user_id)
     .bind(login)
     .bind(&raid_reason)
     .bind(&raid_prefix_like)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+        SELECT $1, $2, $3
+         WHERE NOT EXISTS (
+             SELECT 1 FROM twitch_raid_blacklist WHERE lower(target_login) = $2
+         )
+        "#,
+    )
+    .bind(twitch_user_id)
+    .bind(login)
+    .bind(&raid_reason)
     .execute(&mut *tx)
     .await?;
     // Nicht `rows_affected` melden: bei einem stehen gelassenen Fremdgrund ist
@@ -210,6 +231,23 @@ pub async fn add(
     .bind(login)
     .execute(&mut *tx)
     .await?;
+    let partner_paused = paused.rows_affected() > 0;
+
+    // Herkunft der Pause festhalten. 'blocked' setzt auch der Admin-Block aus
+    // der Streamer-Verwaltung; ohne diesen Vermerk koennte `remove` einen
+    // fremden Admin-Block stillschweigend aufheben. Nur hochsetzen, nie
+    // zuruecknehmen: ein zweites `add` trifft die Zeile nicht mehr (sie steht
+    // ja schon auf 'blocked'), die Herkunft von damals gilt weiter.
+    if partner_paused {
+        sqlx::query(
+            "UPDATE twitch_partner_signup_denylist
+                SET partner_paused_by_block = true
+              WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     tx.commit().await?;
 
@@ -217,7 +255,7 @@ pub async fn add(
         inserted,
         raid_blacklisted,
         credentials_deleted: creds.rows_affected() > 0,
-        active_partner_paused: paused.rows_affected() > 0,
+        active_partner_paused: partner_paused,
     };
     tracing::warn!(
         twitch_user_id = %twitch_user_id,
@@ -245,12 +283,12 @@ pub async fn remove(
     let user_id = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
     let mut tx = pool.begin().await?;
 
-    let removed_ids: Vec<(String, String)> = sqlx::query_as(
+    let removed_ids: Vec<(String, String, bool)> = sqlx::query_as(
         r#"
         DELETE FROM twitch_partner_signup_denylist
          WHERE ($1::text IS NOT NULL AND twitch_user_id = $1)
             OR ($2::text <> '' AND lower(twitch_login) = $2)
-        RETURNING twitch_user_id, twitch_login
+        RETURNING twitch_user_id, twitch_login, partner_paused_by_block
         "#,
     )
     .bind(user_id)
@@ -271,7 +309,7 @@ pub async fn remove(
     let like = format!("{RAID_BLACKLIST_REASON_PREFIX}%");
     let mut raid_entries_removed = 0u64;
     let mut partner_pause_cleared = false;
-    for (uid, entry_login) in &removed_ids {
+    for (uid, entry_login, paused_by_block) in &removed_ids {
         let raid = sqlx::query(
             r#"
             DELETE FROM twitch_raid_blacklist
@@ -286,18 +324,40 @@ pub async fn remove(
         .await?;
         raid_entries_removed += raid.rows_affected();
 
+        // Die Pause nur zuruecknehmen, wenn dieser Block sie gesetzt hat.
+        // 'blocked' schreibt auch der Admin-Block aus der Streamer-Verwaltung
+        // (streamers_crud::ArchiveMode::Block); der setzt zusaetzlich
+        // manual_partner_opt_out=1. Beides wird geprueft: das Herkunftsflag
+        // deckt den Normalfall ab, die opt_out-Bedingung faengt den Fall, dass
+        // der Admin-Block nach unserem `add` dazukam.
+        if !*paused_by_block {
+            tracing::info!(
+                twitch_user_id = %uid,
+                twitch_login = %entry_login,
+                "Signup-Block aufheben: Partner-Pause stammt nicht von uns, bleibt stehen"
+            );
+            continue;
+        }
         let cleared = sqlx::query(
             r#"
             UPDATE twitch_partners
                SET technical_pause_reason = NULL
              WHERE (twitch_user_id = $1 OR lower(twitch_login) = lower($2))
                AND COALESCE(technical_pause_reason, '') = 'blocked'
+               AND COALESCE(manual_partner_opt_out, 0) = 0
             "#,
         )
         .bind(uid)
         .bind(entry_login)
         .execute(&mut *tx)
         .await?;
+        if cleared.rows_affected() == 0 {
+            tracing::info!(
+                twitch_user_id = %uid,
+                twitch_login = %entry_login,
+                "Signup-Block aufheben: Partner-Pause nicht zurueckgenommen (Opt-out gesetzt oder Zeile fehlt)"
+            );
+        }
         partner_pause_cleared |= cleared.rows_affected() > 0;
     }
 
@@ -415,7 +475,8 @@ mod tests {
                 reason         TEXT NOT NULL,
                 public_message TEXT,
                 added_by       TEXT NOT NULL,
-                added_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+                added_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                partner_paused_by_block BOOLEAN NOT NULL DEFAULT false
             )"#,
             r#"CREATE UNIQUE INDEX idx_denylist_login
                 ON twitch_partner_signup_denylist (lower(twitch_login))"#,
@@ -435,7 +496,8 @@ mod tests {
                 twitch_login TEXT,
                 status TEXT,
                 raid_bot_enabled INTEGER,
-                technical_pause_reason TEXT
+                technical_pause_reason TEXT,
+                manual_partner_opt_out INTEGER DEFAULT 0
             )"#,
             r#"CREATE TABLE twitch_streamer_identities (
                 twitch_user_id TEXT PRIMARY KEY,
@@ -564,6 +626,147 @@ mod tests {
         let eintraege: i64 =
             skalar(&pool, "SELECT COUNT(*) FROM twitch_partner_signup_denylist").await;
         assert_eq!(eintraege, 0);
+    }
+
+    /// Beweisziel: ein Admin-Block aus der Streamer-Verwaltung ueberlebt das
+    /// Aufheben eines Signup-Blocks. Beide schreiben
+    /// `technical_pause_reason='blocked'`; ohne Herkunftspruefung wuerde
+    /// `remove` den fremden Block still aufheben und den Kanal wieder
+    /// freigeben.
+    #[tokio::test]
+    async fn remove_laesst_fremden_admin_block_stehen() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "psb_fremder_admin_block").await;
+        // So sieht ein Admin-Block aus (streamers_crud::ArchiveMode::Block):
+        // pause='blocked' plus manual_partner_opt_out=1.
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_user_id, twitch_login, status, raid_bot_enabled,
+                 technical_pause_reason, manual_partner_opt_out)
+             VALUES ('7','adminblocked','active',0,'blocked',1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let add_outcome = add(&pool, "7", "adminblocked", "owner_decision", None, "test")
+            .await
+            .unwrap();
+        assert!(
+            !add_outcome.active_partner_paused,
+            "war schon geblockt, wir haben die Pause nicht gesetzt"
+        );
+        let herkunft: bool = skalar(
+            &pool,
+            "SELECT partner_paused_by_block FROM twitch_partner_signup_denylist
+              WHERE twitch_user_id = '7'",
+        )
+        .await;
+        assert!(!herkunft, "die Pause stammt nicht von uns");
+
+        let outcome = remove(&pool, Some("7"), "adminblocked").await.unwrap();
+        assert!(outcome.removed);
+        assert!(
+            !outcome.partner_pause_cleared,
+            "fremder Admin-Block darf nicht aufgehoben werden"
+        );
+        let (pause, opt_out): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT technical_pause_reason, manual_partner_opt_out FROM twitch_partners
+              WHERE twitch_user_id = '7'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pause.as_deref(), Some("blocked"), "Admin-Block bleibt");
+        assert_eq!(opt_out, Some(1));
+    }
+
+    /// Beweisziel: die Pause, die dieser Block selbst gesetzt hat, nimmt
+    /// `remove` sehr wohl zurueck. Sonst waere die Herkunftspruefung eine
+    /// Sperre, die auch den eigenen Fall trifft.
+    #[tokio::test]
+    async fn remove_nimmt_eigene_pause_zurueck() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "psb_eigene_pause").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_user_id, twitch_login, status, raid_bot_enabled, manual_partner_opt_out)
+             VALUES ('8','eigenepause','active',1,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let add_outcome = add(&pool, "8", "eigenepause", "owner_decision", None, "test")
+            .await
+            .unwrap();
+        assert!(add_outcome.active_partner_paused);
+        let herkunft: bool = skalar(
+            &pool,
+            "SELECT partner_paused_by_block FROM twitch_partner_signup_denylist
+              WHERE twitch_user_id = '8'",
+        )
+        .await;
+        assert!(herkunft);
+
+        let outcome = remove(&pool, Some("8"), "eigenepause").await.unwrap();
+        assert!(outcome.partner_pause_cleared);
+        let pause: Option<String> = skalar(
+            &pool,
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '8'",
+        )
+        .await;
+        assert_eq!(pause, None);
+    }
+
+    /// Beweisziel: ein bestehender Raid-Blacklist-Eintrag in anderer
+    /// Schreibweise wird aktualisiert statt verdoppelt. `target_login` ist
+    /// Primaerschluessel ohne `lower()`-Index, ein reines `ON CONFLICT` haette
+    /// zwei Zeilen fuer denselben Kanal erzeugt.
+    #[tokio::test]
+    async fn add_verdoppelt_keinen_raid_eintrag_bei_anderer_schreibweise() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "psb_mixed_case").await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+             VALUES ('9', 'GemischtGeschrieben', '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        add(
+            &pool,
+            "9",
+            "gemischtgeschrieben",
+            "owner_decision",
+            None,
+            "test",
+        )
+        .await
+        .unwrap();
+
+        let zeilen: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT target_login, reason FROM twitch_raid_blacklist ORDER BY 1")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            zeilen,
+            vec![(
+                "GemischtGeschrieben".to_string(),
+                Some("signup_block:owner_decision".to_string())
+            )],
+            "genau eine Zeile, aktualisiert statt verdoppelt"
+        );
+
+        let outcome = remove(&pool, Some("9"), "gemischtgeschrieben")
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.raid_entries_removed, 1,
+            "eigener Grund geht wieder weg"
+        );
     }
 
     /// Beweisziel: hat der Kanal keinen fremden Grund, setzt `add` den eigenen
