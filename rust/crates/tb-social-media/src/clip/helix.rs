@@ -1,11 +1,43 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use tb_transport_twitch::{HelixClient, HelixError};
 
 use super::model::ClipRecord;
 
 /// Maximale Clips pro API-Seite (Helix-Limit).
 const HELIX_PAGE_SIZE: u32 = 100;
+
+/// Fetch-Fenster in Tagen. Muss zur 14-Tage-Retention des DB-Triggers
+/// `social_media_set_retention_until` (schema.rs) passen: der Trigger setzt
+/// `retention_until = created_at + 14 Tage` auf die Twitch-Erstellzeit —
+/// ältere Clips wären beim INSERT sofort expired und der Retention-Worker
+/// löscht sie im nächsten Lauf wieder (Fetch-Kreislauf).
+const FETCH_WINDOW_DAYS: i64 = 14;
+
+/// Baut die Query-Parameter für GET /clips — pur, damit das Zeitfenster
+/// ohne HTTP testbar ist.
+fn clip_query_params(
+    broadcaster_id: &str,
+    per_page: u32,
+    cursor: Option<&str>,
+    now: DateTime<Utc>,
+) -> Vec<(String, String)> {
+    let started_at =
+        (now - Duration::days(FETCH_WINDOW_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let ended_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    let mut params = vec![
+        ("broadcaster_id".to_string(), broadcaster_id.to_string()),
+        ("first".to_string(), per_page.to_string()),
+        ("started_at".to_string(), started_at),
+        ("ended_at".to_string(), ended_at),
+    ];
+    if let Some(c) = cursor {
+        params.push(("after".to_string(), c.to_string()));
+    }
+    params
+}
 
 /// Eine Seite Clips aus der Helix-API mit optionalem Pagination-Cursor.
 #[derive(Debug)]
@@ -33,26 +65,17 @@ impl HelixClipSource {
         Ok(users.get(&login.to_lowercase()).map(|u| u.id.clone()))
     }
 
-    /// Fetcht eine Seite Clips für einen Broadcaster.
+    /// Fetcht eine Seite Clips für einen Broadcaster im 14-Tage-Fenster.
     pub async fn fetch_clips_page(
         &self,
         broadcaster_id: &str,
         limit: u32,
         cursor: Option<&str>,
+        now: DateTime<Utc>,
     ) -> Result<ClipPage, HelixError> {
         let per_page = HELIX_PAGE_SIZE.min(limit);
-        let mut req = self
-            .client
-            .get("/clips")
-            .await?
-            .query(&[
-                ("broadcaster_id", broadcaster_id),
-                ("first", &per_page.to_string()),
-            ]);
-
-        if let Some(c) = cursor {
-            req = req.query(&[("after", c)]);
-        }
+        let params = clip_query_params(broadcaster_id, per_page, cursor, now);
+        let req = self.client.get("/clips").await?.query(&params);
 
         let resp: serde_json::Value = req.send().await?.json().await?;
 
@@ -84,6 +107,9 @@ impl HelixClipSource {
     ) -> Result<Vec<ClipRecord>, HelixError> {
         let mut all = Vec::new();
         let mut cursor: Option<String> = None;
+        // Ein Zeitstempel für den ganzen Lauf, damit alle Seiten dasselbe
+        // Fenster sehen und die Pagination konsistent bleibt.
+        let now = Utc::now();
 
         loop {
             let remaining = limit.saturating_sub(all.len() as u32);
@@ -92,7 +118,7 @@ impl HelixClipSource {
             }
 
             let page = self
-                .fetch_clips_page(broadcaster_id, remaining, cursor.as_deref())
+                .fetch_clips_page(broadcaster_id, remaining, cursor.as_deref(), now)
                 .await?;
 
             if page.clips.is_empty() {
@@ -159,4 +185,45 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         view_count,
         game_name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn query_traegt_14_tage_fenster() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 6, 12, 0, 0).unwrap();
+        let params = clip_query_params("123", 100, None, now);
+
+        assert!(
+            params.contains(&("started_at".to_string(), "2026-07-23T12:00:00Z".to_string())),
+            "started_at fehlt oder falsch: {params:?}"
+        );
+        assert!(
+            params.contains(&("ended_at".to_string(), "2026-08-06T12:00:00Z".to_string())),
+            "ended_at fehlt oder falsch: {params:?}"
+        );
+        assert!(params.contains(&("broadcaster_id".to_string(), "123".to_string())));
+        assert!(params.contains(&("first".to_string(), "100".to_string())));
+    }
+
+    #[test]
+    fn fenster_passt_zur_trigger_retention() {
+        // Muss mit dem 14-Tage-Intervall des DB-Triggers
+        // social_media_set_retention_until (schema.rs) übereinstimmen.
+        assert_eq!(FETCH_WINDOW_DAYS, 14);
+    }
+
+    #[test]
+    fn cursor_landet_als_after() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 6, 12, 0, 0).unwrap();
+        let params = clip_query_params("123", 50, Some("abc"), now);
+        assert!(params.contains(&("after".to_string(), "abc".to_string())));
+
+        let ohne = clip_query_params("123", 50, None, now);
+        assert!(!ohne.iter().any(|(k, _)| k == "after"));
+    }
 }
