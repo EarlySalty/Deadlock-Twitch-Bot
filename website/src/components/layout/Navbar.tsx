@@ -13,6 +13,7 @@ interface NavLink {
 }
 
 const NAV_LINKS: NavLink[] = [
+  { label: "So funktioniert's", id: 'ablauf' },
   { label: 'Raids', id: 'raid' },
   { label: 'Moderation', id: 'moderation' },
   { label: 'Features', id: 'features' },

@@ -2,6 +2,7 @@ import { Navbar } from '@/components/layout/Navbar'
 import { Footer } from '@/components/layout/Footer'
 import { GlowOrb } from '@/components/effects/GlowOrb'
 import { Hero } from '@/components/sections/Hero'
+import { StreamDay } from '@/components/sections/StreamDay'
 import { Stats } from '@/components/sections/Stats'
 import { Features } from '@/components/sections/Features'
 import { RaidExplainer } from '@/components/sections/RaidExplainer'
@@ -19,6 +20,7 @@ export default function App() {
       <Navbar />
       <main>
         <Hero />
+        <StreamDay />
         <RaidExplainer />
         <BanFeed />
         <Stats />

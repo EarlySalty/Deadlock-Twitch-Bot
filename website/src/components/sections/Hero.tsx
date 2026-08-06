@@ -42,9 +42,10 @@ export function Hero() {
             transition={{ duration: 0.6, delay: 0.2 }}
             className="mt-6 text-xl text-[var(--color-text-secondary)] max-w-2xl mx-auto"
           >
-            Unser Auto-Raid-Netzwerk hält die Deadlock-Community in Bewegung.
-            Endet ein Stream, finden deine Viewer automatisch den nächsten
-            passenden Partner.
+            Der Bot postet deinen Stream im Community-Discord, schützt deinen
+            Chat und sammelt deine Zahlen. Und wenn du offline gehst, reicht er
+            deine Viewer an den nächsten Deadlock-Partner weiter, statt sie zu
+            verlieren.
           </motion.p>
 
         </div>
