@@ -63,13 +63,13 @@
 //!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
 //!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
-use crate::idempotency::{IDEMPOTENCY_KEY_HEADER, IdempotencyState, Prepared};
+use crate::idempotency::{IdempotencyState, Prepared, IDEMPOTENCY_KEY_HEADER};
 use crate::streamer_lifecycle as lifecycle;
 use axum::{
-    Extension, Json,
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1002,12 +1002,14 @@ async fn disconnect_bot_handler_inner(
         None => ("unavailable", None),
         Some(port) => match resolve_broadcaster_id(pool, &login).await {
             None => ("unknown_channel", None),
-            Some(broadcaster_id) => match port.remove_bot_moderator(&broadcaster_id, &login).await {
-                ModeratorRemovalResult::Removed => ("removed", None),
-                ModeratorRemovalResult::NotModerator => ("not_moderator", None),
-                ModeratorRemovalResult::NoToken => ("no_token", None),
-                ModeratorRemovalResult::Failed { detail } => ("failed", Some(detail)),
-            },
+            Some(broadcaster_id) => {
+                match port.remove_bot_moderator(&broadcaster_id, &login).await {
+                    ModeratorRemovalResult::Removed => ("removed", None),
+                    ModeratorRemovalResult::NotModerator => ("not_moderator", None),
+                    ModeratorRemovalResult::NoToken => ("no_token", None),
+                    ModeratorRemovalResult::Failed { detail } => ("failed", Some(detail)),
+                }
+            }
         },
     };
 
@@ -1201,8 +1203,8 @@ async fn archive_handler_inner(
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
 fn enforce_discord_action_scope() -> Result<(), ApiError> {
     use super::telemetry_routes::{
-        ENV_ALLOWED_CHANNEL_IDS, ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
-        enforce_scope_allowlist, parse_allowlist_ids,
+        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
+        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
     };
     for (env, key) in [
         (ENV_ALLOWED_GUILD_IDS, "guild_id"),
@@ -1576,16 +1578,16 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::{delete, get, post},
+        Extension, Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
+    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
     // ── P2.142: mark_member Loose-Coercion ────────────────────────────────────
@@ -2850,7 +2852,10 @@ mod tests {
 
         // Der Unmod lief mit der Broadcaster-ID aus der DB, nicht mit dem Login.
         let calls = port.calls.lock().expect("calls").clone();
-        assert_eq!(calls, vec![("563673818".to_string(), "umiwaver".to_string())]);
+        assert_eq!(
+            calls,
+            vec![("563673818".to_string(), "umiwaver".to_string())]
+        );
 
         let (status, opt_out) = partner_zustand(&pool, "umiwaver").await;
         assert_eq!(status, "departnered");
@@ -2906,7 +2911,10 @@ mod tests {
         assert_eq!(body["unmod_detail"], "Twitch antwortete 401");
         assert_eq!(body["departnered"], true);
         assert!(
-            body["message"].as_str().unwrap_or_default().contains("ACHTUNG"),
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("ACHTUNG"),
             "Fehlgeschlagener Unmod muss in der Meldung stehen: {}",
             body["message"]
         );

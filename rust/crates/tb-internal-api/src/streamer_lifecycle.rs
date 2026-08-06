@@ -795,7 +795,7 @@ pub async fn archive_with_message(
     login: &str,
     raw_mode: &str,
 ) -> Result<ArchiveOutcome, sqlx::Error> {
-    use tb_analytics::streamers_crud::{ArchiveMode, archive_streamer};
+    use tb_analytics::streamers_crud::{archive_streamer, ArchiveMode};
 
     // desired wie Python `_dashboard_archive` (mode_clean → desired).
     let desired = match raw_mode.trim().to_lowercase().as_str() {
@@ -1170,11 +1170,12 @@ mod tests {
             .unwrap()
             .expect("departnert");
 
-        let (status, opt_out): (Option<String>, Option<i32>) =
-            sqlx::query_as("SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (status, opt_out): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status.as_deref(), Some("departnered"));
         // Opt-out ist die einzige Sperre gegen ein automatisches Zurückholen —
         // ohne sie wäre `verify mode=clear` nach dem nächsten Promote wirkungslos.
@@ -1192,11 +1193,12 @@ mod tests {
             .unwrap()
             .expect("departnert");
 
-        let (status, opt_out): (Option<String>, Option<i32>) =
-            sqlx::query_as("SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (status, opt_out): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status.as_deref(), Some("departnered"));
         // Reines Departnern (DELETE-Route) ist kein Opt-out: der Streamer darf
         // später ohne Admin-Eingriff wieder Partner werden.
