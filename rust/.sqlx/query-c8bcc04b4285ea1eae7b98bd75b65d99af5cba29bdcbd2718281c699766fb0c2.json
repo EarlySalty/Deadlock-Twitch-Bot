@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.twitch_login AS \"twitch_login!\",\n               COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,\n               CASE WHEN NOT EXISTS (\n                    SELECT 1 FROM twitch_partners p\n                    WHERE p.twitch_user_id = s.twitch_user_id\n                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)\n               ) THEN 1 ELSE 0 END                                      AS \"is_monitored_only!\"\n          FROM twitch_streamers s\n         INNER JOIN twitch_partners tp\n            ON tp.twitch_login = s.twitch_login\n           AND tp.departnered_at IS NULL\n           AND tp.admin_archived_at IS NULL\n          LEFT JOIN twitch_streamer_identities i\n            ON i.twitch_user_id = s.twitch_user_id\n         WHERE (i.discord_user_id IS NULL OR i.discord_user_id = '')\n           -- Signup-Block: geblockte Streamer tauchen als Verknuepfungs-\n           -- Kandidat gar nicht erst auf. Der Filter sitzt bewusst in der\n           -- Query und nicht im HTTP-Handler, weil es zwei Konsumenten gibt:\n           -- den Discord-Bot ueber /streamers/link-candidates und den\n           -- Auto-Matcher in tb-bot/src/streamer_link.rs, der hier direkt\n           -- am Pool haengt.\n           AND NOT EXISTS (\n                SELECT 1 FROM twitch_partner_signup_denylist d\n                 WHERE d.twitch_user_id = COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id)\n                    OR LOWER(d.twitch_login) = LOWER(s.twitch_login)\n           )\n         ORDER BY s.twitch_login\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_monitored_only!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "c8bcc04b4285ea1eae7b98bd75b65d99af5cba29bdcbd2718281c699766fb0c2"
+}

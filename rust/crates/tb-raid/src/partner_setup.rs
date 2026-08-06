@@ -99,6 +99,10 @@ pub enum PartnerSetupError {
     InvalidIdentity,
     /// Datenbankfehler.
     Db(sqlx::Error),
+    /// Der Signup-Denylist-Nachschlag war nicht beantwortbar. Die Promotion
+    /// bricht fail-closed ab, statt einen womöglich gesperrten Streamer
+    /// durchzulassen.
+    SignupBlockLookupFailed,
 }
 
 impl std::fmt::Display for PartnerSetupError {
@@ -106,6 +110,7 @@ impl std::fmt::Display for PartnerSetupError {
         match self {
             Self::InvalidIdentity => write!(f, "twitch_login_and_user_id_required"),
             Self::Db(e) => write!(f, "db error: {e}"),
+            Self::SignupBlockLookupFailed => write!(f, "signup_block_lookup_failed"),
         }
     }
 }
@@ -184,6 +189,21 @@ pub struct PromotedIdentity {
     /// Gesetzter Hard-Kill-Grund bei abgewiesener Promotion, sonst `None`
     /// (Python-Rückgabefeld `reason`).
     pub hard_pause_reason: Option<String>,
+    /// Gesetzt, wenn die Promotion am Signup-Block gescheitert ist. Eigener
+    /// Zustand, bewusst getrennt von `hard_pause_reason`: eine technische
+    /// Zwangspause ist etwas anderes als eine Aufnahme-Ablehnung. Trägt den
+    /// user-sichtbaren Absagetext für den aufrufenden Pfad.
+    pub signup_block: Option<tb_domain::SignupBlock>,
+}
+
+/// Ergebnis von `sync_partner_state_after_auth`.
+#[derive(Debug, Clone, Default)]
+pub struct PartnerSyncOutcome {
+    /// Aufgelöste Discord-ID des Streamers, sofern vorhanden.
+    pub discord_user_id: Option<String>,
+    /// Gesetzt, wenn der Sync am Signup-Block abgebrochen wurde. Alle
+    /// Folgeschritte des Aufrufers müssen dann unterbleiben.
+    pub signup_block: Option<tb_domain::SignupBlock>,
 }
 
 /// Argumente für `promote_streamer_to_partner` — exakt die Parameter, die der
@@ -626,6 +646,38 @@ pub async fn promote_streamer_to_partner(
         return Err(PartnerSetupError::InvalidIdentity);
     }
 
+    // Signup-Block-Guard: eigenständiger Zustand
+    // (`twitch_partner_signup_denylist`), getrennt von Raid-Blacklist,
+    // Opt-out und technischer Zwangspause. Sitzt bewusst NACH der
+    // ID-Normalisierung und VOR jedem Schreibzugriff, damit er auch bei
+    // Umbenennung des Streamers greift (Anker ist die twitch_user_id).
+    // No-op wie die beiden Guards darunter: keine Partner-Zeile, kein UPDATE.
+    // Fail-closed: ein fehlgeschlagener Nachschlag bricht ab, statt
+    // durchzulassen.
+    match crate::signup_denylist::lookup_or_fail_closed(
+        &mut **tx,
+        Some(&normalized_user_id),
+        &normalized_login,
+        "promote",
+    )
+    .await
+    {
+        Ok(Some(block)) => {
+            return Ok(PromotedIdentity {
+                twitch_login: normalized_login,
+                twitch_user_id: normalized_user_id,
+                discord_user_id: None,
+                discord_display_name: None,
+                is_on_discord: None,
+                reactivated: false,
+                hard_pause_reason: Some(tb_domain::PROMOTE_BLOCK_REASON.to_string()),
+                signup_block: Some(block),
+            });
+        }
+        Ok(None) => {}
+        Err(()) => return Err(PartnerSetupError::SignupBlockLookupFailed),
+    }
+
     let source_row = load_streamer_source_row(tx, &normalized_user_id, &normalized_login).await?;
     let active_row = load_active_partner_row(tx, &normalized_user_id, &normalized_login).await?;
     let active = active_row.as_ref();
@@ -646,6 +698,7 @@ pub async fn promote_streamer_to_partner(
             is_on_discord: None,
             reactivated: false,
             hard_pause_reason: Some(reason),
+            signup_block: None,
         });
     }
 
@@ -668,6 +721,7 @@ pub async fn promote_streamer_to_partner(
             is_on_discord: None,
             reactivated: false,
             hard_pause_reason: Some(reason),
+            signup_block: None,
         });
     }
 
@@ -831,6 +885,7 @@ pub async fn promote_streamer_to_partner(
         is_on_discord: identity_is_on_discord,
         reactivated: true,
         hard_pause_reason: None,
+        signup_block: None,
     })
 }
 
@@ -953,7 +1008,7 @@ impl PartnerSetupService {
         twitch_login: &str,
         state_discord_user_id: Option<&str>,
         activate_partner_features: bool,
-    ) -> Result<Option<String>, PartnerSetupError> {
+    ) -> Result<PartnerSyncOutcome, PartnerSetupError> {
         let provided_discord_id = normalize_discord_user_id(state_discord_user_id);
 
         let identity = load_streamer_identity(&self.pool, twitch_user_id, twitch_login).await?;
@@ -974,9 +1029,9 @@ impl PartnerSetupService {
 
         // Promotion in eigener Transaktion — isoliert von Backfill, damit ein
         // Backfill-Fehler die Partner-Zeile nicht zurückrollt.
-        {
+        let promoted = {
             let mut tx = self.pool.begin().await?;
-            promote_streamer_to_partner(
+            let promoted = promote_streamer_to_partner(
                 &mut tx,
                 &PromotePartnerArgs {
                     twitch_login: twitch_login.to_string(),
@@ -991,6 +1046,25 @@ impl PartnerSetupService {
             )
             .await?;
             tx.commit().await?;
+            promoted
+        };
+
+        // Signup-Block: die Promotion war ein No-op. Alles, was danach kommt,
+        // würde die Ablehnung faktisch aushebeln — Backfill legt Datensätze an,
+        // grant_streamer_role gäbe dem abgelehnten Streamer die Discord-Rolle.
+        // Deshalb hier raus, nicht erst beim Aufrufer.
+        if let Some(block) = promoted.signup_block {
+            tracing::warn!(
+                twitch_user_id = %twitch_user_id,
+                twitch_login = %twitch_login,
+                reason = %block.reason,
+                pfad = "sync_partner_state_after_auth",
+                "Signup-Block: Partner-Sync abgebrochen, keine Discord-Rolle, kein Backfill"
+            );
+            return Ok(PartnerSyncOutcome {
+                discord_user_id: None,
+                signup_block: Some(block),
+            });
         }
 
         // Stats-Backfill best-effort in eigener Transaktion (kein Rollback der Promotion).
@@ -1006,7 +1080,10 @@ impl PartnerSetupService {
                 .grant_streamer_role(discord_id, "Twitch-Bot erfolgreich autorisiert")
                 .await;
         }
-        Ok(final_discord_id)
+        Ok(PartnerSyncOutcome {
+            discord_user_id: final_discord_id,
+            signup_block: None,
+        })
     }
 
     /// Python `complete_setup_for_streamer` (Z. 391) — Erst-Autorisierung:
@@ -1036,6 +1113,24 @@ impl PartnerSetupService {
             .await;
         if let Err(e) = &partner_sync_result {
             tracing::error!("sync_partner_state_after_auth failed for {twitch_login}: {e}");
+        }
+
+        // Signup-Block: Schritt 1 war ein No-op. Die restlichen Schritte würden
+        // die Ablehnung aushebeln — Schritt 2 legt eine streamer_plans-Zeile an,
+        // Schritt 4 macht den Bot zum Moderator im Kanal des abgelehnten
+        // Streamers, Schritt 5 begrüßt ihn öffentlich in seinem Chat.
+        // Deshalb hier vollständig abbrechen.
+        if let Ok(outcome) = &partner_sync_result {
+            if let Some(block) = &outcome.signup_block {
+                tracing::warn!(
+                    twitch_user_id = %twitch_user_id,
+                    twitch_login = %twitch_login,
+                    reason = %block.reason,
+                    pfad = "complete_setup_for_streamer",
+                    "Signup-Block: Setup abgebrochen, kein first_login, kein Moderator, keine Begruessung"
+                );
+                return Ok(());
+            }
         }
 
         // Schritt 2: first_login_at (loggt Fehler selbst).

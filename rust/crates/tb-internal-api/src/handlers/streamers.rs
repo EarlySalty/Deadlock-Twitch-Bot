@@ -63,13 +63,13 @@
 //!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
 //!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
-use crate::idempotency::{IDEMPOTENCY_KEY_HEADER, IdempotencyState, Prepared};
+use crate::idempotency::{IdempotencyState, Prepared, IDEMPOTENCY_KEY_HEADER};
 use crate::streamer_lifecycle as lifecycle;
 use axum::{
-    Extension, Json,
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -794,7 +794,7 @@ async fn verify_handler_inner(
                 return Ok(ok_message(format!("{login} ist nicht gespeichert")));
             };
 
-            lifecycle::promote_streamer_to_partner(
+            let promote_outcome = lifecycle::promote_streamer_to_partner(
                 pool,
                 &login,
                 &source.twitch_user_id,
@@ -809,6 +809,16 @@ async fn verify_handler_inner(
             )
             .await
             .map_err(|e| internal(e, "promote"))?;
+
+            // Signup-Block: nichts wurde geschrieben. Ohne diesen Abbruch würde
+            // der Handler Erfolg melden, Stats backfillen und die Discord-Rolle
+            // vergeben, obwohl es keine Partnerschaft gibt.
+            if let lifecycle::PromoteOutcome::Blocked(entry) = promote_outcome {
+                return Ok(ok_message(format!(
+                    "{login} steht auf der Signup-Denylist und wurde nicht aufgenommen (Grund: {})",
+                    entry.reason
+                )));
+            }
 
             let copied = lifecycle::backfill_tracked_stats_from_category(pool, &login)
                 .await
@@ -1002,12 +1012,14 @@ async fn disconnect_bot_handler_inner(
         None => ("unavailable", None),
         Some(port) => match resolve_broadcaster_id(pool, &login).await {
             None => ("unknown_channel", None),
-            Some(broadcaster_id) => match port.remove_bot_moderator(&broadcaster_id, &login).await {
-                ModeratorRemovalResult::Removed => ("removed", None),
-                ModeratorRemovalResult::NotModerator => ("not_moderator", None),
-                ModeratorRemovalResult::NoToken => ("no_token", None),
-                ModeratorRemovalResult::Failed { detail } => ("failed", Some(detail)),
-            },
+            Some(broadcaster_id) => {
+                match port.remove_bot_moderator(&broadcaster_id, &login).await {
+                    ModeratorRemovalResult::Removed => ("removed", None),
+                    ModeratorRemovalResult::NotModerator => ("not_moderator", None),
+                    ModeratorRemovalResult::NoToken => ("no_token", None),
+                    ModeratorRemovalResult::Failed { detail } => ("failed", Some(detail)),
+                }
+            }
         },
     };
 
@@ -1201,8 +1213,8 @@ async fn archive_handler_inner(
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
 fn enforce_discord_action_scope() -> Result<(), ApiError> {
     use super::telemetry_routes::{
-        ENV_ALLOWED_CHANNEL_IDS, ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
-        enforce_scope_allowlist, parse_allowlist_ids,
+        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
+        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
     };
     for (env, key) in [
         (ENV_ALLOWED_GUILD_IDS, "guild_id"),
@@ -1576,16 +1588,16 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::{delete, get, post},
+        Extension, Router,
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
+    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
     // ── P2.142: mark_member Loose-Coercion ────────────────────────────────────
@@ -1762,6 +1774,14 @@ mod tests {
             r#"CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
                 ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
                 is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+            // Signup-Denylist. Der Promote-Guard ist fail-closed, eine fehlende
+            // Tabelle bricht jede Promotion mit 500 ab.
+            r#"CREATE TABLE IF NOT EXISTS twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                reason TEXT NOT NULL, public_message TEXT, added_by TEXT NOT NULL,
+                added_at TIMESTAMPTZ NOT NULL DEFAULT now() )"#,
+            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_partner_signup_denylist_login
+                ON twitch_partner_signup_denylist (lower(twitch_login))"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL stats");
         }
@@ -2850,7 +2870,10 @@ mod tests {
 
         // Der Unmod lief mit der Broadcaster-ID aus der DB, nicht mit dem Login.
         let calls = port.calls.lock().expect("calls").clone();
-        assert_eq!(calls, vec![("563673818".to_string(), "umiwaver".to_string())]);
+        assert_eq!(
+            calls,
+            vec![("563673818".to_string(), "umiwaver".to_string())]
+        );
 
         let (status, opt_out) = partner_zustand(&pool, "umiwaver").await;
         assert_eq!(status, "departnered");
@@ -2906,7 +2929,10 @@ mod tests {
         assert_eq!(body["unmod_detail"], "Twitch antwortete 401");
         assert_eq!(body["departnered"], true);
         assert!(
-            body["message"].as_str().unwrap_or_default().contains("ACHTUNG"),
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("ACHTUNG"),
             "Fehlgeschlagener Unmod muss in der Meldung stehen: {}",
             body["message"]
         );

@@ -7,6 +7,7 @@ pub mod global_ban;
 pub mod healthz;
 pub mod legacy_proxy;
 pub mod market_share;
+pub mod partner_signup_block;
 pub mod python_stubs;
 pub mod raid;
 pub mod raid_blacklist;

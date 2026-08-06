@@ -55,8 +55,12 @@ fn partner_secret() -> Option<String> {
 
 fn no_store(mut resp: Response) -> Response {
     use axum::http::header::{HeaderValue, CACHE_CONTROL, PRAGMA};
-    resp.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store, max-age=0"));
-    resp.headers_mut().insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    resp.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    resp.headers_mut()
+        .insert(PRAGMA, HeaderValue::from_static("no-cache"));
     resp
 }
 
@@ -82,20 +86,36 @@ pub async fn link_handler(
 ) -> Response {
     let _ = &pool; // State trägt den Pool; hier nur Symmetrie zu anderen Handlern.
     if !auth.is_privileged() {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "admin_required" }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "admin_required" })),
+        )
+            .into_response();
     }
     // P2.134: Same-Origin-Guard für Browser-Admin-Caller (Cookie-Session).
     // Ein nachweislich fremder Origin auf der Link-Ausstellung → 403 (Vorfall #235:
     // kein harter X-CSRF-Header-Zwang, sondern Origin/Referer same-origin).
     if !is_allowed_origin(&headers) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid_csrf" }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "invalid_csrf" })),
+        )
+            .into_response();
     }
     let Some(Extension(state)) = state else {
         // Ohne Auth-State kein Persistenz-Pfad → Feature aus.
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "auth_unavailable" }))).into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "auth_unavailable" })),
+        )
+            .into_response();
     };
     let Some(secret) = partner_secret() else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "partner_login_disabled" }))).into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "partner_login_disabled" })),
+        )
+            .into_response();
     };
 
     let body = body.map(|Json(b)| b).unwrap_or_default();
@@ -106,13 +126,22 @@ pub async fn link_handler(
         .filter(|s| !s.is_empty())
         .map(str::to_lowercase);
     let Some(login) = login else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "login required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "login required" })),
+        )
+            .into_response();
     };
     let next_path = sanitize_next_path(body.next.as_deref());
 
     let now = unix_now();
     let sid = tb_crypto::random_urlsafe_token(STATE_ID_BYTES);
-    let token = PartnerLoginToken::new(sid.clone(), next_path.clone(), now, PARTNER_LOGIN_TOKEN_TTL_SECS);
+    let token = PartnerLoginToken::new(
+        sid.clone(),
+        next_path.clone(),
+        now,
+        PARTNER_LOGIN_TOKEN_TTL_SECS,
+    );
     let wire = token.sign(secret.as_bytes());
 
     if let Err(error) = state
@@ -120,7 +149,11 @@ pub async fn link_handler(
         .await
     {
         warn!(%error, "Partner-Login-State persistieren fehlgeschlagen");
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "state_unavailable" }))).into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "state_unavailable" })),
+        )
+            .into_response();
     }
 
     no_store(
@@ -147,12 +180,19 @@ pub async fn login_handler(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let _ = &pool;
     let Some(Extension(state)) = state else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login nicht verfügbar.").into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Partner-Login nicht verfügbar.",
+        )
+            .into_response();
     };
     let Some(secret) = partner_secret() else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login nicht verfügbar.").into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Partner-Login nicht verfügbar.",
+        )
+            .into_response();
     };
 
     // P3.27: Existiert bereits eine gültige Session (Admin / Partner / durable
@@ -172,7 +212,11 @@ pub async fn login_handler(
     let parsed = match PartnerLoginToken::verify(&token, secret.as_bytes(), now) {
         Ok(t) => t,
         Err(_) => {
-            return (StatusCode::UNAUTHORIZED, "Partner-Login-Token ungültig oder abgelaufen.").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Partner-Login-Token ungültig oder abgelaufen.",
+            )
+                .into_response();
         }
     };
 
@@ -180,27 +224,55 @@ pub async fn login_handler(
     let (login, stored_next) = match state.consume_partner_login_state(&parsed.sid).await {
         Ok(Some(v)) => v,
         Ok(None) => {
-            return (StatusCode::UNAUTHORIZED, "Partner-Login-Token ungültig oder abgelaufen.").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Partner-Login-Token ungültig oder abgelaufen.",
+            )
+                .into_response();
         }
         Err(error) => {
             warn!(%error, "Partner-Login-State consume DB-Fehler");
-            return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login konnte nicht abgeschlossen werden.").into_response();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Partner-Login konnte nicht abgeschlossen werden.",
+            )
+                .into_response();
         }
     };
     // Defensive: next-Pfad aus Token und State müssen übereinstimmen (Python-Parität).
     if parsed.next != stored_next {
-        return (StatusCode::UNAUTHORIZED, "Partner-Login-Token ungültig oder abgelaufen.").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Partner-Login-Token ungültig oder abgelaufen.",
+        )
+            .into_response();
     }
 
     // 3. Partner auflösen (nur aktive, nicht-blockierte Partner).
     let partner = match state.find_partner_for_login(&login, "").await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return (StatusCode::FORBIDDEN, "Kein aktiver Partner für diesen Login.").into_response();
+            // Signup-Block bekommt den echten Absagetext statt "kein aktiver
+            // Partner" — sonst liest sich eine bewusste Entscheidung wie ein
+            // technischer Fehler und landet als Support-Anfrage bei uns.
+            // Nur hier nachgeschlagen, damit der Normalfall keine Extra-Query hat.
+            if let Ok(Some(block)) = tb_raid::signup_denylist::lookup(&pool, None, &login).await {
+                warn!(%login, "Partner-Login abgewiesen: Signup-Block");
+                return (StatusCode::FORBIDDEN, block.public_text().to_string()).into_response();
+            }
+            return (
+                StatusCode::FORBIDDEN,
+                "Kein aktiver Partner für diesen Login.",
+            )
+                .into_response();
         }
         Err(error) => {
             warn!(%error, "Partner-Lookup beim Einmal-Login fehlgeschlagen");
-            return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login konnte nicht abgeschlossen werden.").into_response();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Partner-Login konnte nicht abgeschlossen werden.",
+            )
+                .into_response();
         }
     };
 
@@ -223,7 +295,11 @@ pub async fn login_handler(
         Ok(s) => s,
         Err(error) => {
             warn!(%error, "Session-Erstellung beim Einmal-Login fehlgeschlagen");
-            return (StatusCode::SERVICE_UNAVAILABLE, "Partner-Login konnte nicht abgeschlossen werden.").into_response();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Partner-Login konnte nicht abgeschlossen werden.",
+            )
+                .into_response();
         }
     };
 
@@ -280,7 +356,10 @@ async fn has_active_dashboard_session(state: &DashboardAuthState, headers: &Head
             .get(axum::http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if matches!(state.load_partner_access_session(&sid, ua).await, Ok(Some(_))) {
+        if matches!(
+            state.load_partner_access_session(&sid, ua).await,
+            Ok(Some(_))
+        ) {
             return true;
         }
     }
@@ -364,12 +443,28 @@ mod route_tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             r#"CREATE TABLE dashboard_sessions (
                 session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL,
@@ -410,10 +505,20 @@ mod route_tests {
     async fn mint_token(state: &DashboardAuthState) -> String {
         let now = unix_now();
         let sid = tb_crypto::random_urlsafe_token(STATE_ID_BYTES);
-        let token = PartnerLoginToken::new(sid.clone(), "/analyse".to_string(), now, PARTNER_LOGIN_TOKEN_TTL_SECS);
+        let token = PartnerLoginToken::new(
+            sid.clone(),
+            "/analyse".to_string(),
+            now,
+            PARTNER_LOGIN_TOKEN_TTL_SECS,
+        );
         let wire = token.sign(TEST_SECRET.as_bytes());
         state
-            .save_partner_login_state(&sid, "linkpartner", "/analyse", PARTNER_LOGIN_TOKEN_TTL_SECS)
+            .save_partner_login_state(
+                &sid,
+                "linkpartner",
+                "/analyse",
+                PARTNER_LOGIN_TOKEN_TTL_SECS,
+            )
             .await
             .unwrap();
         wire
@@ -423,7 +528,9 @@ mod route_tests {
     /// (`twitch_dash_session_partner`) mit einer `partner_token`-Row.
     #[tokio::test]
     async fn login_setzt_durable_partner_access_cookie() {
-        let Some(pool) = make_pool("t_plogin_durable").await else { return; };
+        let Some(pool) = make_pool("t_plogin_durable").await else {
+            return;
+        };
         let _guard = ENV_LOCK.lock().await;
         std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
@@ -449,13 +556,12 @@ mod route_tests {
             .strip_prefix(&format!("{PARTNER_ACCESS_COOKIE_NAME}="))
             .and_then(|s| s.split(';').next())
             .unwrap();
-        let session_type: String = sqlx::query_scalar(
-            "SELECT session_type FROM dashboard_sessions WHERE session_id = $1",
-        )
-        .bind(sid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let session_type: String =
+            sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
+                .bind(sid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(session_type, "partner_token");
     }
 
@@ -463,18 +569,22 @@ mod route_tests {
     /// verbraucht und KEIN neues Cookie/keine neue Session-Row geschrieben.
     #[tokio::test]
     async fn login_short_circuit_bei_bestehender_session() {
-        let Some(pool) = make_pool("t_plogin_shortcircuit").await else { return; };
+        let Some(pool) = make_pool("t_plogin_shortcircuit").await else {
+            return;
+        };
         let _guard = ENV_LOCK.lock().await;
         std::env::set_var("TWITCH_PARTNER_TOKEN", TEST_SECRET);
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         let wire = mint_token(&state).await;
-        let admin = state.create_admin_session("admin-1", "Admin").await.unwrap();
+        let admin = state
+            .create_admin_session("admin-1", "Admin")
+            .await
+            .unwrap();
 
-        let rows_before: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let rows_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
         let req = Request::builder()
             .method("POST")
@@ -491,14 +601,19 @@ mod route_tests {
         std::env::remove_var("TWITCH_PARTNER_TOKEN");
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         // Kein Set-Cookie (keine neue Session).
-        assert!(resp.headers().get(SET_COOKIE).is_none(), "kein neues Cookie");
+        assert!(
+            resp.headers().get(SET_COOKIE).is_none(),
+            "kein neues Cookie"
+        );
         // Zeilenzahl unverändert (Token-State NICHT verbraucht, keine neue Session).
-        let rows_after: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(rows_after, rows_before, "weder State verbraucht noch Session erzeugt");
+        let rows_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows_after, rows_before,
+            "weder State verbraucht noch Session erzeugt"
+        );
     }
 }
 
@@ -508,8 +623,14 @@ mod tests {
 
     #[test]
     fn token_aus_json_und_form() {
-        assert_eq!(extract_token(r#"{"token":"abc.def"}"#).as_deref(), Some("abc.def"));
-        assert_eq!(extract_token("token=abc.def&x=1").as_deref(), Some("abc.def"));
+        assert_eq!(
+            extract_token(r#"{"token":"abc.def"}"#).as_deref(),
+            Some("abc.def")
+        );
+        assert_eq!(
+            extract_token("token=abc.def&x=1").as_deref(),
+            Some("abc.def")
+        );
         // url-encodierter Punkt-Token.
         assert_eq!(extract_token("token=abc%2Edef").as_deref(), Some("abc.def"));
         assert_eq!(extract_token("nothing=here").as_deref(), None);

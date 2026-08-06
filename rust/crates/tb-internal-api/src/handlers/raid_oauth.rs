@@ -18,7 +18,7 @@
 //!   ?discord_user_id=<digits>  (required)
 //!   → 200 {ok:true, discord_user_id, twitch_login, twitch_user_id,
 //!           authorized, partner_opt_out, token_blacklisted,
-//!           raid_blacklisted, blocked}
+//!           raid_blacklisted, signup_blocked, blocked}
 //!   → 400 / 500
 //!
 //! GET  /internal/twitch/v1/raid/block-state
@@ -125,6 +125,9 @@ pub struct RaidStatePayload {
     pub partner_opt_out: bool,
     pub token_blacklisted: bool,
     pub raid_blacklisted: bool,
+    /// Steht auf der Signup-Denylist — gehoert nicht ins Partnerprogramm.
+    /// Eigener Zustand, deshalb eigenes Feld statt nur ein Bit in `blocked`.
+    pub signup_blocked: bool,
     pub blocked: bool,
 }
 
@@ -160,10 +163,7 @@ pub trait RaidOAuthPort: Send + Sync {
     /// Gibt den OAuth-Auth-State für einen Discord-User zurück.
     ///
     /// Python: `_raid_auth_state(discord_user_id)`.
-    async fn auth_state(
-        &self,
-        discord_user_id: &str,
-    ) -> Result<RaidStatePayload, RaidOAuthError>;
+    async fn auth_state(&self, discord_user_id: &str) -> Result<RaidStatePayload, RaidOAuthError>;
 
     /// Gibt den Block-State für einen Discord-User und/oder Twitch-Login zurück.
     ///
@@ -303,6 +303,7 @@ pub struct StateResponse {
     pub partner_opt_out: bool,
     pub token_blacklisted: bool,
     pub raid_blacklisted: bool,
+    pub signup_blocked: bool,
     pub blocked: bool,
 }
 
@@ -317,6 +318,7 @@ impl StateResponse {
             partner_opt_out: p.partner_opt_out,
             token_blacklisted: p.token_blacklisted,
             raid_blacklisted: p.raid_blacklisted,
+            signup_blocked: p.signup_blocked,
             blocked: p.blocked,
         }
     }
@@ -461,11 +463,7 @@ pub async fn auth_url_handler(
     }
 
     let auth_url_result = port
-        .auth_url(
-            &login,
-            discord_user_id.as_deref(),
-            scope_profile.as_deref(),
-        )
+        .auth_url(&login, discord_user_id.as_deref(), scope_profile.as_deref())
         .await;
 
     let auth_url = match auth_url_result {
@@ -544,7 +542,12 @@ pub async fn block_state_handler(
         .map_err(|_| ApiError::bad_request("invalid query parameters"))?;
 
     // twitch_login normalisieren (Python: _normalize_login via normalize_twitch_login)
-    let raw_login = params.twitch_login.as_deref().unwrap_or("").trim().to_string();
+    let raw_login = params
+        .twitch_login
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let twitch_login = if raw_login.is_empty() {
         None
     } else {
@@ -585,12 +588,7 @@ pub async fn go_url_handler(
         return Err(ApiError::unavailable());
     };
 
-    let state = params
-        .state
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let state = params.state.as_deref().unwrap_or("").trim().to_string();
     if state.is_empty() {
         return Err(ApiError::bad_request("missing state parameter"));
     }
@@ -605,10 +603,7 @@ pub async fn go_url_handler(
         .filter(|u| !u.trim().is_empty())
         .ok_or(ApiError::not_found_with("state not found or expired"))?;
 
-    Ok(Json(GoUrlResponse {
-        ok: true,
-        auth_url,
-    }))
+    Ok(Json(GoUrlResponse { ok: true, auth_url }))
 }
 
 /// `POST /internal/twitch/v1/raid/requirements`
@@ -706,8 +701,8 @@ async fn requirements_inner(
         }
     };
 
-    let login = normalize_twitch_login(&raw)
-        .ok_or(ApiError::bad_request("invalid or missing login"))?;
+    let login =
+        normalize_twitch_login(&raw).ok_or(ApiError::bad_request("invalid or missing login"))?;
 
     let message = port.requirements(&login).await.map_err(|e| {
         tracing::error!("raid requirements Fehler: {e:?}");
@@ -764,7 +759,10 @@ pub async fn oauth_callback_handler(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| path.clone());
 
-    match idem.prepare(raw_key, "POST", &path, &path_qs, &raw_payload).await {
+    match idem
+        .prepare(raw_key, "POST", &path, &path_qs, &raw_payload)
+        .await
+    {
         Prepared::Immediate(resp) => Ok(resp),
         Prepared::Skip => {
             let json_body = run_oauth_callback(&*port, &body).await?;
@@ -901,6 +899,7 @@ mod tests {
                 partner_opt_out: false,
                 token_blacklisted: false,
                 raid_blacklisted: false,
+                signup_blocked: false,
                 blocked: false,
             })
         }
@@ -921,6 +920,7 @@ mod tests {
                 partner_opt_out: false,
                 token_blacklisted: false,
                 raid_blacklisted: false,
+                signup_blocked: false,
                 blocked: false,
             })
         }
@@ -977,13 +977,22 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RaidOAuthPort for ScopeGuardedPort {
-        async fn auth_url(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<String, RaidOAuthError> {
+        async fn auth_url(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<String, RaidOAuthError> {
             Ok("https://example.com/auth".to_string())
         }
         async fn auth_state(&self, _: &str) -> Result<RaidStatePayload, RaidOAuthError> {
             Err(RaidOAuthError::NotInitialized)
         }
-        async fn block_state(&self, _: Option<&str>, _: Option<&str>) -> Result<RaidStatePayload, RaidOAuthError> {
+        async fn block_state(
+            &self,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<RaidStatePayload, RaidOAuthError> {
             Err(RaidOAuthError::NotInitialized)
         }
         async fn go_url(&self, _: &str) -> Result<Option<String>, RaidOAuthError> {
@@ -992,8 +1001,18 @@ mod tests {
         async fn requirements(&self, _: &str) -> Result<String, RaidOAuthError> {
             Ok("ok".to_string())
         }
-        async fn oauth_callback(&self, _: &str, _: &str, _: &str) -> Result<OAuthCallbackResult, RaidOAuthError> {
-            Ok(OAuthCallbackResult { status: 200, title: "ok".to_string(), body_html: "ok".to_string(), redirect_url: None })
+        async fn oauth_callback(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<OAuthCallbackResult, RaidOAuthError> {
+            Ok(OAuthCallbackResult {
+                status: 200,
+                title: "ok".to_string(),
+                body_html: "ok".to_string(),
+                redirect_url: None,
+            })
         }
         async fn enforce_discord_action_scope(
             &self,
@@ -1013,7 +1032,10 @@ mod tests {
         Router::new()
             .route(&format!("{base}/raid/auth-url"), get(auth_url_handler))
             .route(&format!("{base}/raid/auth-state"), get(auth_state_handler))
-            .route(&format!("{base}/raid/block-state"), get(block_state_handler))
+            .route(
+                &format!("{base}/raid/block-state"),
+                get(block_state_handler),
+            )
             .route(&format!("{base}/raid/go-url"), get(go_url_handler))
             .route(
                 &format!("{base}/raid/requirements"),
@@ -1038,7 +1060,9 @@ mod tests {
             .method(method)
             .uri(uri)
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -1058,7 +1082,12 @@ mod tests {
     async fn auth_url_ohne_token_401() {
         let app = make_router(Some(Arc::new(StubPort::ready())));
         let resp = app
-            .oneshot(req("GET", &format!("{BASE}/raid/auth-url?login=dragscope"), "", None))
+            .oneshot(req(
+                "GET",
+                &format!("{BASE}/raid/auth-url?login=dragscope"),
+                "",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -1068,7 +1097,12 @@ mod tests {
     async fn auth_url_ohne_login_400() {
         let app = make_router(Some(Arc::new(StubPort::ready())));
         let resp = app
-            .oneshot(req("GET", &format!("{BASE}/raid/auth-url"), "", Some("tok")))
+            .oneshot(req(
+                "GET",
+                &format!("{BASE}/raid/auth-url"),
+                "",
+                Some("tok"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1108,7 +1142,10 @@ mod tests {
         let j = json_body(resp).await;
         assert_eq!(j["ok"], true);
         assert_eq!(j["login"], "dragscope");
-        assert!(j["auth_url"].as_str().map(|u| u.contains("login=dragscope")).unwrap_or(false));
+        assert!(j["auth_url"]
+            .as_str()
+            .map(|u| u.contains("login=dragscope"))
+            .unwrap_or(false));
     }
 
     #[tokio::test]
@@ -1180,7 +1217,12 @@ mod tests {
     async fn auth_state_discord_id_pflicht() {
         let app = make_router(Some(Arc::new(StubPort::ready())));
         let resp = app
-            .oneshot(req("GET", &format!("{BASE}/raid/auth-state"), "", Some("tok")))
+            .oneshot(req(
+                "GET",
+                &format!("{BASE}/raid/auth-state"),
+                "",
+                Some("tok"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1228,6 +1270,7 @@ mod tests {
             "partner_opt_out",
             "token_blacklisted",
             "raid_blacklisted",
+            "signup_blocked",
         ] {
             assert!(j.get(key).is_some(), "Feld fehlt: {key}");
         }
@@ -1239,7 +1282,12 @@ mod tests {
     async fn block_state_keiner_der_beiden_400() {
         let app = make_router(Some(Arc::new(StubPort::ready())));
         let resp = app
-            .oneshot(req("GET", &format!("{BASE}/raid/block-state"), "", Some("tok")))
+            .oneshot(req(
+                "GET",
+                &format!("{BASE}/raid/block-state"),
+                "",
+                Some("tok"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1341,7 +1389,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["ok"], true);
-        assert!(j["auth_url"].as_str().map(|u| !u.is_empty()).unwrap_or(false));
+        assert!(j["auth_url"]
+            .as_str()
+            .map(|u| !u.is_empty())
+            .unwrap_or(false));
     }
 
     // ── requirements ─────────────────────────────────────────────────────────
@@ -1415,7 +1466,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["ok"], true);
-        assert!(j["message"].as_str().map(|m| !m.is_empty()).unwrap_or(false));
+        assert!(j["message"]
+            .as_str()
+            .map(|m| !m.is_empty())
+            .unwrap_or(false));
     }
 
     // ── oauth-callback ───────────────────────────────────────────────────────
@@ -1475,9 +1529,15 @@ mod tests {
 
     #[test]
     fn normalize_raid_target_regular_login() {
-        assert_eq!(normalize_raid_auth_target("DragScope"), Some("dragscope".to_string()));
+        assert_eq!(
+            normalize_raid_auth_target("DragScope"),
+            Some("dragscope".to_string())
+        );
         // @ wird von normalize_twitch_login gestrippt
-        assert_eq!(normalize_raid_auth_target("@DragScope"), Some("dragscope".to_string()));
+        assert_eq!(
+            normalize_raid_auth_target("@DragScope"),
+            Some("dragscope".to_string())
+        );
     }
 
     #[test]

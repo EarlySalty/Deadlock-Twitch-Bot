@@ -35,6 +35,7 @@ pub mod network;
 pub mod network_stats;
 pub mod overview;
 pub mod partner_access;
+pub mod partner_signup_block;
 pub mod peer_group;
 pub mod plan;
 pub mod raw_chat_status;
