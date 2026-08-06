@@ -1,3 +1,11 @@
+## #422 — Neue Streamer-Seite als Vorschau unter /streamer/v2/
+
+**Problem:** Die Streamer-Seite verkauft einen Twitch-Bot. Das trifft nicht, was das Angebot ist: ein Netzwerk, das Zuschauer beim Stream-Ende an andere deutsche Deadlock-Kanäle weitergibt. Dazu standen dort acht Preispläne nebeneinander und Kennzahlen, die bei Ausfall der API durch Beispielwerte ersetzt wurden.
+
+**Änderung:** Unter /streamer/v2/ steht eine zweite Fassung der Seite. Sie erzählt das Angebot als Netzwerk, führt die Leistungen in der Reihenfolge Raids, Chat-Schutz, Auswertung, Clips und zeigt drei Stufen statt acht Plänen. Alle Zahlen kommen live aus dem laufenden Betrieb; ist die Schnittstelle nicht erreichbar, steht das da, statt eine Beispielzahl einzusetzen. Die bestehende Seite unter /streamer/ bleibt unverändert.
+
+**Aktuelles Verhalten:** /streamer/ zeigt weiter die aktive Seite. /streamer/v2/ zeigt die Vorschau, ist für Suchmaschinen gesperrt und trägt unten den Hinweis, dass die aktive Seite woanders liegt. Die Preise für Plus und Creator Pro sind als „startet mit dem Netzwerk-Update" gekennzeichnet, weil die Abrechnung noch auf den alten Plänen läuft. Der Kanal-Report führt in den Discord, weil er zurzeit von Hand erstellt wird.
+
 ## #421 — Partner-Freigabe sitzt jetzt beim Streamer im Admin-Dashboard
 
 **Problem:** Der Schalter für die Social-Media-Freigabe saß im Social-Media-Dashboard. Wer einen Streamer verwaltet, arbeitet aber in der Streamer-Detailseite und musste für diese eine Einstellung in ein anderes Dashboard wechseln.

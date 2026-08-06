@@ -1,0 +1,183 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Streamer-Landing V2 — "Sendeprotokoll"
+   Nur fuer /streamer/v2/. Farben, Fonts und Flaechen kommen unveraendert aus
+   index.css + theme-v2.css (Gold #c8a86b / Teal #55978f / Patch-Schwarz);
+   hier stehen ausschliesslich die Kompositions- und Bewegungs-Bausteine,
+   die es auf der produktiven Landing nicht gibt.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Leitung: durchgehender Signalstrang links neben dem Inhalt ─────────── */
+.v2-rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(201, 168, 106, 0.42) 12%,
+    rgba(201, 168, 106, 0.22) 50%,
+    rgba(85, 151, 143, 0.3) 88%,
+    transparent 100%
+  );
+}
+
+/* Wanderndes Signal auf der Leitung — der Raid, der weitergereicht wird. */
+.v2-rail::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  width: 5px;
+  height: 84px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, transparent, #efd49d, transparent);
+  filter: blur(1px);
+  animation: v2-rail-run 7s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  opacity: 0.75;
+}
+
+@keyframes v2-rail-run {
+  0%   { top: -10%; opacity: 0; }
+  12%  { opacity: 0.85; }
+  88%  { opacity: 0.85; }
+  100% { top: 105%; opacity: 0; }
+}
+
+/* Knoten auf der Leitung: markiert jeden Protokoll-Schritt. */
+.v2-node {
+  position: absolute;
+  left: -4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid rgba(201, 168, 106, 0.55);
+  box-shadow: 0 0 0 4px rgba(11, 11, 11, 0.9), 0 0 14px rgba(201, 168, 106, 0.35);
+}
+
+/* ── Protokoll-Marke: Zeitstempel-artiges Label ueber jeder Sektion ─────── */
+.v2-stamp {
+  font-family: var(--font-mono, ui-monospace, "JetBrains Mono", monospace);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(201, 168, 106, 0.72);
+}
+
+.v2-stamp-dim {
+  color: rgba(183, 170, 145, 0.5);
+}
+
+/* ── Haarlinie mit Gold-Ausklang, trennt Blöcke ohne harte Kante ────────── */
+.v2-hairline {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(201, 168, 106, 0.34),
+    rgba(201, 168, 106, 0.08) 38%,
+    transparent 78%
+  );
+}
+
+/* ── Die Leere: Zuschauerpunkte, die nach Stream-Ende verglimmen ────────── */
+.v2-void-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #b7aa91;
+  animation: v2-fade-out 3.4s ease-in-out infinite;
+}
+
+@keyframes v2-fade-out {
+  0%, 18%  { opacity: 0.9; transform: translateY(0) scale(1); filter: none; }
+  70%      { opacity: 0.06; transform: translateY(14px) scale(0.6); }
+  100%     { opacity: 0; transform: translateY(20px) scale(0.4); }
+}
+
+/* ── Die Uebergabe: dieselben Punkte, aber sie wandern weiter ───────────── */
+.v2-relay-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #efd49d;
+  box-shadow: 0 0 10px rgba(201, 168, 106, 0.6);
+  animation: v2-relay 3.4s cubic-bezier(0.5, 0, 0.2, 1) infinite;
+}
+
+@keyframes v2-relay {
+  0%, 12%  { opacity: 0.95; transform: translateX(0); }
+  62%      { opacity: 1; transform: translateX(var(--v2-relay-distance, 132px)); }
+  86%      { opacity: 1; transform: translateX(var(--v2-relay-distance, 132px)); }
+  100%     { opacity: 0.95; transform: translateX(0); }
+}
+
+/* ── Laufband: Partnerkanaele als endlose Reihe ─────────────────────────── */
+.v2-marquee {
+  display: flex;
+  width: max-content;
+  animation: v2-marquee 42s linear infinite;
+}
+
+.v2-marquee:hover {
+  animation-play-state: paused;
+}
+
+@keyframes v2-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+.v2-marquee-mask {
+  mask-image: linear-gradient(90deg, transparent, black 8%, black 92%, transparent);
+}
+
+/* ── Preiskarte: die empfohlene Stufe bekommt einen goldenen Saum ───────── */
+.v2-plan-featured {
+  position: relative;
+  border-color: rgba(239, 212, 157, 0.42) !important;
+  box-shadow:
+    0 0 0 1px rgba(239, 212, 157, 0.16),
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    0 0 70px -28px rgba(201, 168, 106, 0.55);
+}
+
+.v2-plan-featured::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(160deg, rgba(239, 212, 157, 0.55), transparent 55%);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ── Puls fuer Live-Indikatoren ─────────────────────────────────────────── */
+.v2-pulse {
+  animation: v2-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes v2-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(70, 192, 123, 0.45); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 7px rgba(70, 192, 123, 0); }
+}
+
+/* ── Einwand-Aufklapper ─────────────────────────────────────────────────── */
+.v2-objection summary::-webkit-details-marker { display: none; }
+.v2-objection summary { list-style: none; cursor: pointer; }
+.v2-objection[open] .v2-objection-chevron { transform: rotate(45deg); }
+.v2-objection-chevron { transition: transform 200ms ease; }
+
+/* Reduzierte Bewegung respektieren: alles Laufende steht still. */
+@media (prefers-reduced-motion: reduce) {
+  .v2-rail::after,
+  .v2-void-dot,
+  .v2-relay-dot,
+  .v2-marquee,
+  .v2-pulse {
+    animation: none !important;
+  }
+  .v2-void-dot { opacity: 0.25; }
+}
