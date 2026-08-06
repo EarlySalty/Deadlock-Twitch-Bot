@@ -1,10 +1,18 @@
-## #419 — Klare Absage statt Fehlermeldung beim Partner-Signup
+## #420 — Klare Absage statt Fehlermeldung beim Partner-Signup
 
 **Problem:** Es gab keinen Weg, einen Kanal vom Partnerprogramm auszunehmen, ohne einen der bestehenden Zustände zweckzuentfremden. Raid-Blacklist, das Opt-out des Streamers und die technische Zwangspause bedeuten jeweils etwas anderes. Wer sie dafür mitbenutzt, kann später nicht mehr auseinanderhalten, warum ein Kanal in welchem Zustand steckt.
 
 **Änderung:** Es gibt jetzt einen eigenen Zustand für Kanäle, die nicht ins Partnerprogramm aufgenommen werden. Wer davon betroffen ist, bekommt beim Autorisieren und beim Login in die Verwaltung einen ausformulierten Absagetext statt einer technischen Fehlermeldung. Die Autorisierung bricht ab, bevor Zugangsdaten gespeichert werden, der Bot wird in dem Kanal kein Moderator, und bereits vorhandene Zugangsdaten werden beim Setzen des Zustands gelöscht. Der Zustand zieht die Raid-Blacklist mit, umgekehrt gilt das nicht.
 
 **Aktuelles Verhalten:** Betroffene Kanäle sehen eine verständliche Absage und tauchen weder in der Partnerliste noch als Raid-Ziel auf. Sperren, die von woanders herkommen, bleiben beim Aufheben unangetastet: ein Raid-Blacklist-Eintrag mit fremdem Grund ebenso wie ein Block aus der Streamer-Verwaltung. Schlägt der Nachschlag in der Datenbank fehl, bricht die Autorisierung ab, statt still durchzulassen.
+
+## #419 — Streamer-Auswahl im Social-Media-Dashboard
+
+**Problem:** Das Social-Media-Dashboard zeigte nur „Streamer auswählen" — es gab aber nirgends etwas zum Auswählen. Wer als Admin ohne eigenen Twitch-Login draufkam, saß vor einer leeren Seite und kam nur über einen von Hand gebauten Link weiter.
+
+**Änderung:** Oben rechts im Kopfbereich sitzt jetzt ein Auswahlfeld mit allen Streamern. Die Wahl landet in der Adresszeile, ein geteilter Link öffnet also direkt den richtigen Kanal.
+
+**Aktuelles Verhalten:** Streamer im Auswahlfeld wählen, Clips und Layout des Kanals erscheinen sofort. Ohne Auswahl bleibt der bisherige Hinweis stehen.
 
 ## #418 — Nach dem Trennen wieder zurückkommen
 
