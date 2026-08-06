@@ -180,7 +180,6 @@ pub async fn login_handler(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let _ = &pool;
     let Some(Extension(state)) = state else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -253,6 +252,14 @@ pub async fn login_handler(
     let partner = match state.find_partner_for_login(&login, "").await {
         Ok(Some(p)) => p,
         Ok(None) => {
+            // Signup-Block bekommt den echten Absagetext statt "kein aktiver
+            // Partner" — sonst liest sich eine bewusste Entscheidung wie ein
+            // technischer Fehler und landet als Support-Anfrage bei uns.
+            // Nur hier nachgeschlagen, damit der Normalfall keine Extra-Query hat.
+            if let Ok(Some(block)) = tb_raid::signup_denylist::lookup(&pool, None, &login).await {
+                warn!(%login, "Partner-Login abgewiesen: Signup-Block");
+                return (StatusCode::FORBIDDEN, block.public_text().to_string()).into_response();
+            }
             return (
                 StatusCode::FORBIDDEN,
                 "Kein aktiver Partner für diesen Login.",

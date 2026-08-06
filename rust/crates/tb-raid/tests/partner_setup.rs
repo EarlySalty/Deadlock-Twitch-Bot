@@ -106,6 +106,26 @@ async fn apply_ddl(pool: &PgPool) {
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT
         )"#,
+        // Signup-Denylist: eigenstaendiger Zustand "gehoert nicht ins
+        // Partnerprogramm". Muss hier stehen, weil der Promote-Guard
+        // fail-closed ist — eine fehlende Tabelle wuerde jede Promotion
+        // abbrechen statt sie durchzulassen.
+        r#"CREATE TABLE twitch_partner_signup_denylist (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            public_message TEXT,
+            added_by TEXT NOT NULL,
+            added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+        r#"CREATE UNIQUE INDEX idx_denylist_login
+            ON twitch_partner_signup_denylist (lower(twitch_login))"#,
+        r#"CREATE TABLE twitch_raid_blacklist (
+            target_login TEXT PRIMARY KEY,
+            target_id TEXT,
+            reason TEXT,
+            added_at TEXT
+        )"#,
         r#"CREATE TABLE twitch_partner_raid_scores (
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT
@@ -799,7 +819,8 @@ async fn sync_loest_discord_auf_und_setzt_rolle() {
         .sync_partner_state_after_auth("901", "synckanal", Some("123456789"), true)
         .await
         .unwrap();
-    assert_eq!(result.as_deref(), Some("123456789"));
+    assert_eq!(result.discord_user_id.as_deref(), Some("123456789"));
+    assert!(result.signup_block.is_none());
 
     // Display-Name kam aus dem Resolve (keine bestehende Identität).
     let display: Option<String> = sqlx::query_scalar(
@@ -827,7 +848,8 @@ async fn sync_ohne_discord_id_setzt_keine_rolle() {
         .sync_partner_state_after_auth("902", "ohnediscord", None, true)
         .await
         .unwrap();
-    assert_eq!(result, None);
+    assert_eq!(result.discord_user_id, None);
+    assert!(result.signup_block.is_none());
     assert!(recorder.calls().is_empty(), "kein Resolve, keine Rolle");
 
     let is_on_discord: Option<i32> = sqlx::query_scalar(
@@ -1022,4 +1044,165 @@ async fn revoke_streamer_role_default_ist_noop() {
     let port = GrantOnly;
     // Darf nicht panicken; Default-Impl ist ein reines Debug-Log.
     DiscordDirectoryPort::revoke_streamer_role(&port, "999", "egal").await;
+}
+
+// ---------------------------------------------------------------------------
+// Signup-Block
+// ---------------------------------------------------------------------------
+
+async fn block_setzen(pool: &PgPool, uid: &str, login: &str, public_message: Option<&str>) {
+    sqlx::query(
+        "INSERT INTO twitch_partner_signup_denylist
+             (twitch_user_id, twitch_login, reason, public_message, added_by)
+         VALUES ($1, $2, 'owner_decision:repraesentation', $3, 'test')",
+    )
+    .bind(uid)
+    .bind(login)
+    .bind(public_message)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn partner_zeilen(pool: &PgPool, uid: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE twitch_user_id = $1")
+        .bind(uid)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Beweisziel: ein geblockter Streamer bekommt keine Partner-Zeile — auch nicht
+/// halb, auch nicht pausiert. Der Guard gibt No-op zurueck, kein Fehler.
+#[tokio::test]
+async fn signup_block_legt_keine_partner_zeile_an() {
+    let pool = pool_or_skip!("ps_block_kein_insert");
+    block_setzen(&pool, "173926844", "temmiee985", None).await;
+
+    let args = default_args("temmiee985", "173926844");
+    let mut tx = pool.begin().await.unwrap();
+    let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(result.signup_block.is_some(), "Block muss durchgereicht werden");
+    assert_eq!(result.hard_pause_reason.as_deref(), Some("signup_blocked"));
+    assert!(!result.reactivated);
+    assert_eq!(
+        partner_zeilen(&pool, "173926844").await,
+        0,
+        "geblockter Streamer darf keine Partner-Zeile haben"
+    );
+}
+
+/// Beweisziel: der Block haengt an der stabilen ID. Benennt sich der Streamer
+/// um, greift er trotzdem — sonst waere er per Namenswechsel aushebelbar.
+#[tokio::test]
+async fn signup_block_greift_nach_umbenennung() {
+    let pool = pool_or_skip!("ps_block_rename");
+    block_setzen(&pool, "173926844", "temmiee985", None).await;
+
+    // Gleiche ID, neuer Login.
+    let args = default_args("temmiee_neu", "173926844");
+    let mut tx = pool.begin().await.unwrap();
+    let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(result.signup_block.is_some());
+    assert_eq!(partner_zeilen(&pool, "173926844").await, 0);
+}
+
+/// Beweisziel: die Richtungsregel gilt nur in eine Richtung. Ein Streamer, der
+/// aus einem anderen Grund auf der Raid-Blacklist steht (Bot-Ban), darf sich
+/// weiterhin ganz normal ins Partnerprogramm melden.
+#[tokio::test]
+async fn raid_blacklist_allein_blockt_signup_nicht() {
+    let pool = pool_or_skip!("ps_block_nur_raid");
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at)
+         VALUES ('botbanner', '444', 'bot_banned', '2026-01-01T00:00:00+00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let args = default_args("botbanner", "444");
+    let mut tx = pool.begin().await.unwrap();
+    let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(result.signup_block.is_none());
+    assert_eq!(
+        partner_zeilen(&pool, "444").await,
+        1,
+        "Raid-Blacklist allein ist kein Signup-Block"
+    );
+}
+
+/// Beweisziel: faellt der Nachschlag aus (Tabelle weg, DB-Fehler), bricht die
+/// Promotion ab, statt den Block still zu uebergehen.
+#[tokio::test]
+async fn signup_block_nachschlag_fehler_bricht_ab() {
+    let pool = pool_or_skip!("ps_block_failclosed");
+    sqlx::query("DROP TABLE twitch_partner_signup_denylist")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let args = default_args("irgendwer", "555");
+    let mut tx = pool.begin().await.unwrap();
+    let err = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap_err();
+    drop(tx);
+
+    assert!(
+        matches!(err, PartnerSetupError::SignupBlockLookupFailed),
+        "erwartet SignupBlockLookupFailed, war {err:?}"
+    );
+    assert_eq!(partner_zeilen(&pool, "555").await, 0);
+}
+
+/// Beweisziel: der Absagetext aus der DB schlaegt den Standardtext durch bis in
+/// das Objekt, das die Antwort baut.
+#[tokio::test]
+async fn signup_block_liefert_eigenen_absagetext() {
+    let pool = pool_or_skip!("ps_block_text");
+    block_setzen(&pool, "839304219", "taiju_redestein", Some("Eigener Text.")).await;
+
+    let args = default_args("taiju_redestein", "839304219");
+    let mut tx = pool.begin().await.unwrap();
+    let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let block = result.signup_block.expect("Block erwartet");
+    assert_eq!(block.public_text(), "Eigener Text.");
+    assert_eq!(block.public_body_html(), "<p>Eigener Text.</p>");
+    // Der interne Grund darf nie im user-sichtbaren Text auftauchen.
+    assert!(!block.public_text().contains("owner_decision"));
+}
+
+/// Beweisziel: ohne eigenen Text kommt der Standard-Absagetext, wortgleich.
+#[tokio::test]
+async fn signup_block_ohne_eigenen_text_nutzt_standard() {
+    let pool = pool_or_skip!("ps_block_standardtext");
+    block_setzen(&pool, "166907981", "ludi7", None).await;
+
+    let args = default_args("ludi7", "166907981");
+    let mut tx = pool.begin().await.unwrap();
+    let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let block = result.signup_block.expect("Block erwartet");
+    assert_eq!(block.public_text(), tb_domain::SIGNUP_BLOCK_BODY);
+    assert!(block.public_text().contains("repräsentieren"));
 }

@@ -649,7 +649,26 @@ async fn resolve_integration_state(
         }
     }
 
-    let blocked = partner_opt_out || token_blacklisted || raid_blacklisted;
+    // Signup-Block als eigener Term: er sagt "gehoert nicht ins
+    // Partnerprogramm" und ist damit eine andere Aussage als Opt-out
+    // (Streamer will nicht) oder Raid-Blacklist (kein Raid-Ziel).
+    let mut signup_blocked = false;
+    for uid in candidate_user_ids.iter() {
+        if is_signup_blocked(pool, Some(uid), "").await {
+            signup_blocked = true;
+            break;
+        }
+    }
+    if !signup_blocked {
+        for l in candidate_logins.iter() {
+            if is_signup_blocked(pool, None, l).await {
+                signup_blocked = true;
+                break;
+            }
+        }
+    }
+
+    let blocked = partner_opt_out || token_blacklisted || raid_blacklisted || signup_blocked;
 
     // result_login: Fallback auf normalisierter twitch_login-Parameter.
     let final_login = result_login.or_else(|| twitch_login.and_then(normalize_login_db));
@@ -662,8 +681,26 @@ async fn resolve_integration_state(
         partner_opt_out,
         token_blacklisted,
         raid_blacklisted,
+        signup_blocked,
         blocked,
     })
+}
+
+/// Signup-Block-Nachschlag fuer den State-Payload. Fail-closed wie ueberall
+/// sonst: ein DB-Fehler meldet "geblockt", statt den Zustand still zu
+/// verschweigen — der Guard im Callback entscheidet ohnehin final.
+async fn is_signup_blocked(pool: &PgPool, twitch_user_id: Option<&str>, login: &str) -> bool {
+    match tb_raid::signup_denylist::lookup(pool, twitch_user_id, login).await {
+        Ok(hit) => hit.is_some(),
+        Err(e) => {
+            tracing::error!(
+                twitch_user_id = %twitch_user_id.unwrap_or(""),
+                %login,
+                "signup_denylist Nachschlag im State-Payload fehlgeschlagen: {e}"
+            );
+            true
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1350,6 +1387,26 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             return Ok(invalid_scopes_failure());
         }
 
+        // 7b. Signup-Block. Bewusst VOR `store_new_auth`: wer nicht ins
+        // Partnerprogramm gehört, soll gar nicht erst Credentials bei uns
+        // liegen haben. Der Streamer bekommt den Absagetext statt einer
+        // generischen Fehlermeldung. Fail-closed: ein DB-Fehler speichert
+        // nichts, statt den Block still zu übergehen.
+        match tb_raid::signup_denylist::lookup_or_fail_closed(
+            &self.pool,
+            Some(&twitch_user_id),
+            &twitch_login,
+            "oauth_callback",
+        )
+        .await
+        {
+            Ok(Some(block)) => {
+                return Ok(failure(403, block.public_title(), block.public_body_html()));
+            }
+            Ok(None) => {}
+            Err(()) => return Ok(generic_failure()),
+        }
+
         // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
         // Schritt 10 (Python: VOR save_auth geprüft).
         let had_existing_auth = self
@@ -1965,6 +2022,31 @@ mod db_tests {
         .execute(pool)
         .await
         .expect("DDL twitch_raid_blacklist");
+
+        // Signup-Denylist. Muss hier stehen, weil der Guard fail-closed ist:
+        // eine fehlende Tabelle bricht jede Autorisierung ab.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id  TEXT PRIMARY KEY,
+                twitch_login    TEXT NOT NULL,
+                reason          TEXT NOT NULL,
+                public_message  TEXT,
+                added_by        TEXT NOT NULL,
+                added_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("DDL twitch_partner_signup_denylist");
+        sqlx::query(
+            "CREATE UNIQUE INDEX idx_partner_signup_denylist_login \
+             ON twitch_partner_signup_denylist (lower(twitch_login))",
+        )
+        .execute(pool)
+        .await
+        .expect("DDL idx_partner_signup_denylist_login");
 
         // oauth_state_tokens (für StateStore)
         sqlx::query(
@@ -2821,6 +2903,18 @@ mod callback_tests {
                 stream_title TEXT,
                 tags TEXT
             )"#,
+            // Signup-Denylist. Der Guard ist fail-closed, eine fehlende
+            // Tabelle wuerde jede Autorisierung als blockiert melden.
+            r#"CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                public_message TEXT,
+                added_by TEXT NOT NULL,
+                added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+            r#"CREATE UNIQUE INDEX idx_partner_signup_denylist_login
+                ON twitch_partner_signup_denylist (lower(twitch_login))"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3007,6 +3101,83 @@ mod callback_tests {
                 .await
                 .unwrap();
         assert!(leftover.is_none(), "State muss konsumiert sein");
+    }
+
+    /// Kernforderung: ein geblockter Streamer bekommt den Absagetext und es
+    /// entstehen gar keine Credentials. Der Guard sitzt deshalb VOR
+    /// `store_new_auth`, nicht danach mit anschliessendem Aufraeumen.
+    #[tokio::test]
+    async fn signup_block_speichert_keine_credentials_und_zeigt_absagetext() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_signup_block").await;
+        sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist
+                (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('900', 'denyme', 'owner_decision', 'test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = seed_state(&pool, "denyme", None, None).await;
+        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "900", "denyme")).await;
+
+        let result = imp
+            .oauth_callback("code-block", &state, "")
+            .await
+            .expect("callback");
+        assert_eq!(result.status, 403, "body: {}", result.body_html);
+        assert_eq!(result.title, "Aufnahme ins Partnerprogramm nicht möglich");
+        assert!(
+            result.body_html.contains("repräsentieren"),
+            "Absagetext fehlt: {}",
+            result.body_html
+        );
+        assert!(
+            result.redirect_url.is_none(),
+            "Block darf nicht weiterleiten"
+        );
+
+        let auth_rows: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM twitch_raid_auth WHERE twitch_user_id = '900'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            auth_rows.0, 0,
+            "Geblockter Streamer darf keine Credentials hinterlassen"
+        );
+    }
+
+    /// Fail-closed im Callback: faellt der Nachschlag aus, wird nichts
+    /// gespeichert. Sabotiert wird ueber eine fehlende Tabelle, weil genau das
+    /// der reale Ausfall ist (Migration nicht gelaufen).
+    #[tokio::test]
+    async fn signup_block_lookup_fehler_speichert_keine_credentials() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_signup_block_fail").await;
+        sqlx::query("DROP TABLE twitch_partner_signup_denylist")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = seed_state(&pool, "irgendwer", None, None).await;
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "901", "irgendwer"),
+        )
+        .await;
+
+        let result = imp
+            .oauth_callback("code-fail", &state, "")
+            .await
+            .expect("callback");
+        assert_eq!(result.status, 500, "body: {}", result.body_html);
+
+        let auth_rows: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM twitch_raid_auth WHERE twitch_user_id = '901'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(auth_rows.0, 0, "DB-Fehler darf nicht still durchlassen");
     }
 
     #[tokio::test]

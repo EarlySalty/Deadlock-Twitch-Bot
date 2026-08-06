@@ -167,6 +167,31 @@ mod tests {
         .await
         .expect("DDL twitch_partners");
 
+        // Signup-Denylist: list_unlinked filtert geblockte Streamer per
+        // NOT EXISTS aus. Ohne die Tabelle scheitert die Abfrage komplett.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id  TEXT PRIMARY KEY,
+                twitch_login    TEXT NOT NULL,
+                reason          TEXT NOT NULL,
+                public_message  TEXT,
+                added_by        TEXT NOT NULL,
+                added_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partner_signup_denylist");
+        sqlx::query(
+            "CREATE UNIQUE INDEX idx_partner_signup_denylist_login \
+             ON twitch_partner_signup_denylist (lower(twitch_login))",
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL idx_partner_signup_denylist_login");
+
         pool
     }
 

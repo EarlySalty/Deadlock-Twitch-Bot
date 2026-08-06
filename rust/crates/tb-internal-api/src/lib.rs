@@ -67,9 +67,9 @@ pub fn build_internal_router(
 ) -> Router {
     use handlers::{
         chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
-        python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all, scam_guard,
-        self_explainer_log, session_detail, spam_learning, stats_native, streamer_analytics_native,
-        streamer_link, streamers, telemetry_routes,
+        partner_signup_block, python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all,
+        scam_guard, self_explainer_log, session_detail, spam_learning, stats_native,
+        streamer_analytics_native, streamer_link, streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -135,6 +135,26 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/raid/blacklist/check"),
             get(raid_blacklist::check_handler),
+        )
+        // Signup-Block: eigenstaendiger Zustand "kommt nicht ins Partnerprogramm".
+        // Getrennt von der Raid-Blacklist, weil die eine andere Frage beantwortet
+        // (Raid-Ziel-Auswahl). Ein Signup-Block zieht einen Raid-Blacklist-Eintrag
+        // nach sich, umgekehrt nicht.
+        .route(
+            &format!("{base}/partner/signup-block"),
+            get(partner_signup_block::list_handler),
+        )
+        .route(
+            &format!("{base}/partner/signup-block/add"),
+            post(partner_signup_block::add_handler),
+        )
+        .route(
+            &format!("{base}/partner/signup-block/remove"),
+            post(partner_signup_block::remove_handler),
+        )
+        .route(
+            &format!("{base}/partner/signup-block/check"),
+            get(partner_signup_block::check_handler),
         )
         // Streamer-Link-Kandidaten (nativer Port, reiner GET-Read; kein POST auf
         // demselben Pfad → kein 405-vs-Fallback-Konflikt).

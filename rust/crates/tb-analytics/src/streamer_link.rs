@@ -44,6 +44,17 @@ pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx:
           LEFT JOIN twitch_streamer_identities i
             ON i.twitch_user_id = s.twitch_user_id
          WHERE (i.discord_user_id IS NULL OR i.discord_user_id = '')
+           -- Signup-Block: geblockte Streamer tauchen als Verknuepfungs-
+           -- Kandidat gar nicht erst auf. Der Filter sitzt bewusst in der
+           -- Query und nicht im HTTP-Handler, weil es zwei Konsumenten gibt:
+           -- den Discord-Bot ueber /streamers/link-candidates und den
+           -- Auto-Matcher in tb-bot/src/streamer_link.rs, der hier direkt
+           -- am Pool haengt.
+           AND NOT EXISTS (
+                SELECT 1 FROM twitch_partner_signup_denylist d
+                 WHERE d.twitch_user_id = COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id)
+                    OR LOWER(d.twitch_login) = LOWER(s.twitch_login)
+           )
          ORDER BY s.twitch_login
         "#,
     )
@@ -146,6 +157,24 @@ mod tests {
         .await
         .expect("DDL twitch_partners");
 
+        // Signup-Denylist: der Kandidaten-Feed filtert sie aus, die Query
+        // referenziert die Tabelle also immer.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login   TEXT NOT NULL,
+                reason         TEXT NOT NULL,
+                public_message TEXT,
+                added_by       TEXT NOT NULL,
+                added_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partner_signup_denylist");
+
         pool
     }
 
@@ -188,6 +217,39 @@ mod tests {
         assert_eq!(rows[0].twitch_login, "streamer_a");
         assert_eq!(rows[0].twitch_user_id.as_deref(), Some("uid_a"));
         assert_eq!(rows[0].is_monitored_only, 0);
+    }
+
+    /// Beweisziel: ein geblockter Streamer taucht nicht im Link-Kandidaten-Feed
+    /// auf — weder im Discord-Bot noch im Auto-Matcher, die beide diese Query
+    /// lesen. Sonst bekaeme der Owner ihn weiter als Vorschlag angeboten.
+    #[tokio::test]
+    async fn signup_geblockter_streamer_ist_kein_link_kandidat() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sl_signup_block").await;
+
+        for (login, uid) in [("bleibt", "uid_bleibt"), ("geblockt", "uid_geblockt")] {
+            sqlx::query(
+                "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)",
+            )
+            .bind(login)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .expect("insert");
+            insert_active_partner(&pool, login).await;
+        }
+        sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist
+                 (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('uid_geblockt', 'geblockt', 'owner_decision', 'test')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert denylist");
+
+        let rows = list_unlinked(&pool).await.expect("list_unlinked");
+        let logins: Vec<&str> = rows.iter().map(|r| r.twitch_login.as_str()).collect();
+        assert_eq!(logins, vec!["bleibt"]);
     }
 
     #[tokio::test]

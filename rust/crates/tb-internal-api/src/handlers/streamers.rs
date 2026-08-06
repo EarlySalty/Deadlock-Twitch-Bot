@@ -794,7 +794,7 @@ async fn verify_handler_inner(
                 return Ok(ok_message(format!("{login} ist nicht gespeichert")));
             };
 
-            lifecycle::promote_streamer_to_partner(
+            let promote_outcome = lifecycle::promote_streamer_to_partner(
                 pool,
                 &login,
                 &source.twitch_user_id,
@@ -809,6 +809,16 @@ async fn verify_handler_inner(
             )
             .await
             .map_err(|e| internal(e, "promote"))?;
+
+            // Signup-Block: nichts wurde geschrieben. Ohne diesen Abbruch würde
+            // der Handler Erfolg melden, Stats backfillen und die Discord-Rolle
+            // vergeben, obwohl es keine Partnerschaft gibt.
+            if let lifecycle::PromoteOutcome::Blocked(entry) = promote_outcome {
+                return Ok(ok_message(format!(
+                    "{login} steht auf der Signup-Denylist und wurde nicht aufgenommen (Grund: {})",
+                    entry.reason
+                )));
+            }
 
             let copied = lifecycle::backfill_tracked_stats_from_category(pool, &login)
                 .await
@@ -1764,6 +1774,14 @@ mod tests {
             r#"CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
                 ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
                 is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+            // Signup-Denylist. Der Promote-Guard ist fail-closed, eine fehlende
+            // Tabelle bricht jede Promotion mit 500 ab.
+            r#"CREATE TABLE IF NOT EXISTS twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                reason TEXT NOT NULL, public_message TEXT, added_by TEXT NOT NULL,
+                added_at TIMESTAMPTZ NOT NULL DEFAULT now() )"#,
+            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_partner_signup_denylist_login
+                ON twitch_partner_signup_denylist (lower(twitch_login))"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL stats");
         }

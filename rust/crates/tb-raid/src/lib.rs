@@ -57,6 +57,7 @@ pub mod score_store;
 pub mod score_tracking_store;
 pub mod scoring;
 pub mod signal_correlation;
+pub mod signup_denylist;
 pub mod state_store;
 pub mod strikes_store;
 pub mod target_resolution;

@@ -18,7 +18,7 @@
 //!   ?discord_user_id=<digits>  (required)
 //!   → 200 {ok:true, discord_user_id, twitch_login, twitch_user_id,
 //!           authorized, partner_opt_out, token_blacklisted,
-//!           raid_blacklisted, blocked}
+//!           raid_blacklisted, signup_blocked, blocked}
 //!   → 400 / 500
 //!
 //! GET  /internal/twitch/v1/raid/block-state
@@ -125,6 +125,9 @@ pub struct RaidStatePayload {
     pub partner_opt_out: bool,
     pub token_blacklisted: bool,
     pub raid_blacklisted: bool,
+    /// Steht auf der Signup-Denylist — gehoert nicht ins Partnerprogramm.
+    /// Eigener Zustand, deshalb eigenes Feld statt nur ein Bit in `blocked`.
+    pub signup_blocked: bool,
     pub blocked: bool,
 }
 
@@ -300,6 +303,7 @@ pub struct StateResponse {
     pub partner_opt_out: bool,
     pub token_blacklisted: bool,
     pub raid_blacklisted: bool,
+    pub signup_blocked: bool,
     pub blocked: bool,
 }
 
@@ -314,6 +318,7 @@ impl StateResponse {
             partner_opt_out: p.partner_opt_out,
             token_blacklisted: p.token_blacklisted,
             raid_blacklisted: p.raid_blacklisted,
+            signup_blocked: p.signup_blocked,
             blocked: p.blocked,
         }
     }
@@ -894,6 +899,7 @@ mod tests {
                 partner_opt_out: false,
                 token_blacklisted: false,
                 raid_blacklisted: false,
+                signup_blocked: false,
                 blocked: false,
             })
         }
@@ -914,6 +920,7 @@ mod tests {
                 partner_opt_out: false,
                 token_blacklisted: false,
                 raid_blacklisted: false,
+                signup_blocked: false,
                 blocked: false,
             })
         }
@@ -1263,6 +1270,7 @@ mod tests {
             "partner_opt_out",
             "token_blacklisted",
             "raid_blacklisted",
+            "signup_blocked",
         ] {
             assert!(j.get(key).is_some(), "Feld fehlt: {key}");
         }

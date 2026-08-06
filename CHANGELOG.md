@@ -1,3 +1,11 @@
+## #419 — Klare Absage statt Fehlermeldung beim Partner-Signup
+
+**Problem:** Es gab keinen Weg, einen Kanal vom Partnerprogramm auszunehmen, ohne einen der bestehenden Zustände zweckzuentfremden. Raid-Blacklist, das Opt-out des Streamers und die technische Zwangspause bedeuten jeweils etwas anderes. Wer sie dafür mitbenutzt, kann später nicht mehr auseinanderhalten, warum ein Kanal in welchem Zustand steckt.
+
+**Änderung:** Es gibt jetzt einen eigenen Zustand für Kanäle, die nicht ins Partnerprogramm aufgenommen werden. Wer davon betroffen ist, bekommt beim Autorisieren und beim Login in die Verwaltung einen ausformulierten Absagetext statt einer technischen Fehlermeldung. Die Autorisierung bricht ab, bevor Zugangsdaten gespeichert werden, der Bot wird in dem Kanal kein Moderator, und bereits vorhandene Zugangsdaten werden beim Setzen des Zustands gelöscht. Der Zustand zieht die Raid-Blacklist mit, umgekehrt gilt das nicht.
+
+**Aktuelles Verhalten:** Betroffene Kanäle sehen eine verständliche Absage und tauchen weder in der Partnerliste noch als Raid-Ziel auf. Ein bereits aus anderem Grund gesetzter Raid-Blacklist-Eintrag bleibt unverändert stehen und wird beim Aufheben nicht mit entfernt. Schlägt der Nachschlag in der Datenbank fehl, bricht die Autorisierung ab, statt still durchzulassen.
+
 ## #418 — Nach dem Trennen wieder zurückkommen
 
 **Problem:** Wer den Bot selbst über die Verwaltung getrennt hatte, kam nicht mehr zurück. Die Seite bot zwar „Jetzt neu autorisieren" an und versprach, dass eine erfolgreiche Twitch-Anmeldung den Status wieder auf aktiv setzt — passiert ist dabei nichts. Der Kanal blieb inaktiv, Analyse und Social Media blieben gesperrt, egal wie oft man den Knopf drückte.

@@ -942,6 +942,12 @@ twitch_partner_raid_scores|time_pattern_score|double precision|NO|0.5
 twitch_partner_raid_scores|today_received_raids|integer|NO|0
 twitch_partner_raid_scores|twitch_login|text|NO|
 twitch_partner_raid_scores|twitch_user_id|text|NO|
+twitch_partner_signup_denylist|added_at|timestamp with time zone|NO|now()
+twitch_partner_signup_denylist|added_by|text|NO|
+twitch_partner_signup_denylist|public_message|text|YES|
+twitch_partner_signup_denylist|reason|text|NO|
+twitch_partner_signup_denylist|twitch_login|text|NO|
+twitch_partner_signup_denylist|twitch_user_id|text|NO|
 twitch_partners_all_state|archived_at|text|YES|
 twitch_partners_all_state|created_at|text|YES|
 twitch_partners_all_state|departnered_at|text|YES|

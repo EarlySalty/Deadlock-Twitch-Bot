@@ -1296,6 +1296,14 @@ impl DashboardAuthState {
                     OR ($2 <> '' AND twitch_user_id = $2)
                 )
               AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
+              -- Signup-Block: wer nicht ins Partnerprogramm gehoert, heilt sich
+              -- auch nicht per Login zurueck. Eigenstaendiger Zustand, deshalb
+              -- eigene Bedingung statt Verlass auf 'blocked' oben.
+              AND NOT EXISTS (
+                    SELECT 1 FROM twitch_partner_signup_denylist d
+                     WHERE ($2 <> '' AND d.twitch_user_id = $2)
+                        OR LOWER(d.twitch_login) = $1
+              )
               AND COALESCE(status, '') <> 'active'
               -- Opt-out heißt „will nicht mehr": nur der Token-Ablauf heilt sich
               -- selbst, ein Login allein holt den Kanal nicht zurück (gleiche
@@ -3236,6 +3244,15 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .ok();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                reason TEXT NOT NULL, public_message TEXT,
+                added_by TEXT NOT NULL, added_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+        )
+        .execute(&pool)
+        .await
+        .ok();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         // departnered + token_error → wird geheilt.
@@ -3289,10 +3306,41 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert_eq!(optout_status, "departnered");
         assert_eq!(optout_flag, Some(1));
 
-        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login IN ('healme','blockme')")
+        // Signup-Block: technischer Grund waere heilbar, der Block ist es nicht.
+        // Ohne diese Bedingung holt sich ein geblockter Streamer den Zugang per
+        // Login zurueck.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason, departnered_at)
+             VALUES ('denyme', '770004', 'departnered', 'token_error', NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('770004', 'denyme', 'owner_decision', 'test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!state.reactivate_partner("DenyMe", "770004").await.unwrap());
+        let deny_status: String =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_login='denyme'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(deny_status, "departnered");
+
+        sqlx::query("DELETE FROM twitch_partner_signup_denylist WHERE twitch_user_id = '770004'")
             .execute(&pool)
             .await
             .ok();
+        sqlx::query(
+            "DELETE FROM twitch_partners WHERE twitch_login IN ('healme','blockme','optout','denyme')",
+        )
+        .execute(&pool)
+        .await
+        .ok();
     }
 
     /// Logout: invalidate_session löscht die Row → load_partner_session → None.

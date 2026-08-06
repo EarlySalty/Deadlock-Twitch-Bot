@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_partners\n            SET status = 'active',\n                departnered_at = NULL,\n                admin_archived_at = NULL,\n                manual_partner_opt_out = CASE\n                    WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'\n                    THEN 0 ELSE manual_partner_opt_out\n                END,\n                technical_pause_reason = CASE\n                    WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'\n                    THEN NULL ELSE technical_pause_reason\n                END\n            WHERE (\n                    LOWER(twitch_login) = $1\n                    OR ($2 <> '' AND twitch_user_id = $2)\n                )\n              AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')\n              -- Signup-Block: wer nicht ins Partnerprogramm gehoert, heilt sich\n              -- auch nicht per Login zurueck. Eigenstaendiger Zustand, deshalb\n              -- eigene Bedingung statt Verlass auf 'blocked' oben.\n              AND NOT EXISTS (\n                    SELECT 1 FROM twitch_partner_signup_denylist d\n                     WHERE ($2 <> '' AND d.twitch_user_id = $2)\n                        OR LOWER(d.twitch_login) = $1\n              )\n              AND COALESCE(status, '') <> 'active'\n              -- Opt-out heißt „will nicht mehr\": nur der Token-Ablauf heilt sich\n              -- selbst, ein Login allein holt den Kanal nicht zurück (gleiche\n              -- Regel wie tb-raid/src/auth_writer.rs).\n              AND (\n                    COALESCE(manual_partner_opt_out, 0) = 0\n                    OR LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'\n                  )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "288110c8ef9474d81b8bc18f2d4f197093757548bc72a055b5dd2c26b8aed186"
+}

@@ -412,6 +412,14 @@ fn clean_opt(v: Option<String>) -> Option<String> {
 /// Die zahlreichen optionalen Spalten (`silent_*`, `live_ping_*`,
 /// `last_link_*`) bleiben auf ihren bestehenden Werten bzw. Defaults — der
 /// Verify-Pfad setzt sie in Python nicht (alle `_UNSET`).
+/// Ergebnis des Verify-Promote-Pfads. `Blocked` heisst: es wurde nichts
+/// geschrieben, der Streamer steht auf der Signup-Denylist.
+#[derive(Debug)]
+pub enum PromoteOutcome {
+    Promoted,
+    Blocked(Box<tb_analytics::partner_signup_block::SignupBlockEntry>),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn promote_streamer_to_partner(
     pool: &PgPool,
@@ -421,13 +429,38 @@ pub async fn promote_streamer_to_partner(
     discord_display_name: Option<&str>,
     is_on_discord: i32,
     verification: &VerificationPayload,
-) -> Result<(), sqlx::Error> {
+) -> Result<PromoteOutcome, sqlx::Error> {
     let normalized_login = login.to_lowercase();
     let normalized_user_id = twitch_user_id.trim();
     if normalized_login.is_empty() || normalized_user_id.is_empty() {
         // Python: ValueError("twitch_login_and_user_id_required").
         // Der Handler stellt sicher, dass user_id vorhanden ist; defensiv no-op.
-        return Ok(());
+        tracing::warn!(
+            %login,
+            "verify-promote: leere Identitaet, kein Partner angelegt"
+        );
+        return Ok(PromoteOutcome::Promoted);
+    }
+
+    // Signup-Block-Guard. Dieser Pfad umgeht
+    // `tb_raid::partner_setup::promote_streamer_to_partner` vollständig und
+    // setzt `technical_pause_reason = NULL` bedingungslos — ohne diesen Guard
+    // könnte ein Verify-Aufruf einen gesperrten Streamer aufnehmen und dabei
+    // sogar einen bestehenden Block aufheben.
+    // Fail-closed: ein DB-Fehler beim Nachschlag propagiert per `?` und bricht
+    // die Promotion ab, statt sie durchzulassen.
+    if let Some(entry) =
+        tb_analytics::partner_signup_block::check(pool, Some(normalized_user_id), &normalized_login)
+            .await?
+    {
+        tracing::warn!(
+            twitch_user_id = %entry.twitch_user_id,
+            twitch_login = %entry.twitch_login,
+            reason = %entry.reason,
+            pfad = "verify_promote",
+            "Signup-Block greift: Aufnahme ins Partnerprogramm abgelehnt"
+        );
+        return Ok(PromoteOutcome::Blocked(Box::new(entry)));
     }
 
     upsert_streamer_identity(
@@ -472,7 +505,7 @@ pub async fn promote_streamer_to_partner(
     .rows_affected();
 
     if updated > 0 {
-        return Ok(());
+        return Ok(PromoteOutcome::Promoted);
     }
 
     // … oder neu einfügen, wenn noch kein Partner-Datensatz existiert.
@@ -497,7 +530,7 @@ pub async fn promote_streamer_to_partner(
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(PromoteOutcome::Promoted)
 }
 
 // ── Reactivate aus History (Python `reactivate_partner`) ───────────────────────
@@ -578,6 +611,28 @@ pub async fn reactivate_partner(
 
     let normalized_login = history.twitch_login.to_lowercase();
     let normalized_user_id = clean_opt(history.twitch_user_id);
+
+    // Signup-Block-Guard: dieser Pfad holt eine departnerte/archivierte Zeile
+    // zurück und umgeht dabei den Guard in
+    // `tb_raid::partner_setup::promote_streamer_to_partner`.
+    // Fail-closed über `?`.
+    if let Some(entry) = tb_analytics::partner_signup_block::check(
+        pool,
+        normalized_user_id.as_deref(),
+        &normalized_login,
+    )
+    .await?
+    {
+        tracing::warn!(
+            twitch_user_id = %entry.twitch_user_id,
+            twitch_login = %entry.twitch_login,
+            reason = %entry.reason,
+            pfad = "reactivate_partner",
+            "Signup-Block greift: Reaktivierung abgelehnt"
+        );
+        return Ok(None);
+    }
+
     let was_departnered = history
         .status
         .as_deref()
@@ -1086,6 +1141,18 @@ mod tests {
                 ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
                 is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT
             )"#,
+            // Signup-Denylist. Der Promote-Guard ist fail-closed, eine fehlende
+            // Tabelle bricht jede Promotion ab.
+            r#"CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                public_message TEXT,
+                added_by TEXT NOT NULL,
+                added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+            r#"CREATE UNIQUE INDEX idx_partner_signup_denylist_login
+                ON twitch_partner_signup_denylist (lower(twitch_login))"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL");
         }
