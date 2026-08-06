@@ -484,6 +484,17 @@ export interface EngagementSettings {
   updatedAt?: string | null;
 }
 
+/**
+ * Ein Eintrag aus `social_media_partner_access`. Feldnamen bleiben snake_case,
+ * weil das Backend die Struktur unverändert serialisiert.
+ */
+export interface PartnerAccessEntry {
+  streamer_login: string;
+  granted: boolean;
+  granted_by: string | null;
+  granted_at: string;
+}
+
 export interface MarketSharePoint {
   ts: string;
   partnerViewers: number;

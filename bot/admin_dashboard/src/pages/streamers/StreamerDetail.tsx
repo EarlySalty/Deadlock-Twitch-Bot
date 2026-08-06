@@ -18,7 +18,9 @@ import {
   useEngagementSettings,
   useEngagementToggle,
   useManualPlanOverride,
+  usePartnerAccess,
   usePartnerChatAction,
+  useSetPartnerAccess,
   useRemoveStreamer,
   useStreamerDetail,
   useToggleStreamerDiscordFlag,
@@ -33,6 +35,7 @@ import type {
   SessionSummary,
 } from '@/api/types';
 import { coerceRecord, formatDateTime, formatNumber, formatRelativeTime } from '@/utils/formatters';
+import { resolvePartnerGranted } from '@/utils/partnerAccess';
 
 const PLAN_OPTIONS = [
   { value: 'raid_free', label: 'Raid Free' },
@@ -173,6 +176,12 @@ export function StreamerDetailPage() {
   const disconnectMutation = useDisconnectBot();
   const engagementQuery = useEngagementSettings(login);
   const engagementToggle = useEngagementToggle();
+  const partnerAccessQuery = usePartnerAccess();
+  const partnerAccessMutation = useSetPartnerAccess();
+  const partnerAccessEntry = (partnerAccessQuery.data ?? []).find(
+    (entry) => entry.streamer_login.trim().toLowerCase() === (login ?? '').trim().toLowerCase(),
+  );
+  const partnerAccessGranted = resolvePartnerGranted(partnerAccessQuery.data, login);
 
   const [verifyMode, setVerifyMode] = useState<LegacyVerifyMode>('permanent');
   const [discordUserId, setDiscordUserId] = useState('');
@@ -642,6 +651,47 @@ export function StreamerDetailPage() {
             </li>
           </ul>
         ) : null}
+      </article>
+
+      <article className="panel-card rounded-[1.8rem] p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Partner-Freigabe (Social Media)</p>
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm text-white">Social-Media-Posts für diesen Streamer erlaubt</p>
+            <p className="mt-1 text-xs text-text-secondary">
+              {partnerAccessQuery.isLoading
+                ? 'Wird geladen …'
+                : partnerAccessQuery.isError
+                  ? 'Freigabestatus konnte nicht geladen werden — Toggle bleibt gesperrt.'
+                  : partnerAccessGranted
+                    ? `Freigegeben${partnerAccessEntry?.granted_by ? ` · zuletzt von ${partnerAccessEntry.granted_by}` : ''}${partnerAccessEntry?.granted_at ? ` · ${formatDateTime(partnerAccessEntry.granted_at)}` : ''}`
+                    : 'Nicht freigegeben — jeder Schreibpfad (Post, Draft, Caption, Upload) wird serverseitig mit 403 abgelehnt.'}
+            </p>
+          </div>
+          <button
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+              partnerAccessGranted ? 'bg-success' : 'bg-white/20'
+            } ${partnerAccessMutation.isPending || partnerAccessQuery.isError ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={partnerAccessMutation.isPending || partnerAccessQuery.isError}
+            role="switch"
+            aria-checked={partnerAccessGranted}
+            aria-label={partnerAccessGranted ? 'Partner-Freigabe entfernen' : 'Partner-Freigabe erteilen'}
+            onClick={async () => {
+              if (!login) return;
+              const result = await partnerAccessMutation.mutateAsync({
+                login,
+                granted: !partnerAccessGranted,
+              });
+              setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
+            }}
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition duration-200 ${
+                partnerAccessGranted ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
       </article>
 
       <article className="panel-card rounded-[1.8rem] p-6">

@@ -7,8 +7,6 @@ import type {
   ClipListResponse,
   ClipStatus,
   LayoutPayload,
-  PartnerAccessEntry,
-  PartnerAccessResponse,
   SocialClip,
   SocialMediaReport,
   SocialMediaReportKind,
@@ -302,22 +300,4 @@ export async function uploadClip(input: {
     throw new Error(message);
   }
   return (await response.json()) as UploadResponse;
-}
-
-const ACCESS_API = '/social-media/api/access';
-
-export async function fetchPartnerAccess(): Promise<PartnerAccessResponse> {
-  return fetchJson<PartnerAccessResponse>(ACCESS_API);
-}
-
-export async function setPartnerAccess(
-  streamerLogin: string,
-  granted: boolean,
-): Promise<PartnerAccessEntry> {
-  const response = await fetchJson<{ item: PartnerAccessEntry }>(ACCESS_API, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ streamer_login: streamerLogin, granted }),
-  });
-  return response.item;
 }

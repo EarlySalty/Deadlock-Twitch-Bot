@@ -1,3 +1,11 @@
+## #421 — Partner-Freigabe sitzt jetzt beim Streamer im Admin-Dashboard
+
+**Problem:** Der Schalter für die Social-Media-Freigabe saß im Social-Media-Dashboard. Wer einen Streamer verwaltet, arbeitet aber in der Streamer-Detailseite und musste für diese eine Einstellung in ein anderes Dashboard wechseln.
+
+**Änderung:** Der Schalter ist in die Streamer-Detailseite des Admin-Dashboards umgezogen, in eine eigene Karte über dem AI-Engagement-Schalter. Aus dem Social-Media-Dashboard ist er verschwunden. An der Freigabe selbst und an der serverseitigen Prüfung ändert sich nichts.
+
+**Aktuelles Verhalten:** Freigabe erteilen und entziehen läuft im Admin-Dashboard beim jeweiligen Streamer. Die Karte zeigt an, ob der Kanal freigegeben ist, wer die Freigabe zuletzt gesetzt hat und wann. Lässt sich der Status nicht laden, bleibt der Schalter gesperrt statt einen falschen Zustand anzuzeigen.
+
 ## #420 — Klare Absage statt Fehlermeldung beim Partner-Signup
 
 **Problem:** Es gab keinen Weg, einen Kanal vom Partnerprogramm auszunehmen, ohne einen der bestehenden Zustände zweckzuentfremden. Raid-Blacklist, das Opt-out des Streamers und die technische Zwangspause bedeuten jeweils etwas anderes. Wer sie dafür mitbenutzt, kann später nicht mehr auseinanderhalten, warum ein Kanal in welchem Zustand steckt.

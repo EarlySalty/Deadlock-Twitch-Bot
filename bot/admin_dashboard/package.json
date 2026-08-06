@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --test src/utils/commissionRate.test.mjs",
+    "test": "node --test src/utils/commissionRate.test.mjs src/utils/partnerAccess.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

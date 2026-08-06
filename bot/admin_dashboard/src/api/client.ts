@@ -31,6 +31,7 @@ import type {
   ManualPlanPayload,
   MarketShareResponse,
   MarketShareScope,
+  PartnerAccessEntry,
   PartnerChatActionPayload,
   PiiReadiness,
   RaidConfigSnapshot,
@@ -49,6 +50,7 @@ import { coerceArray, coerceRecord } from '@/utils/formatters';
 
 const ADMIN_API_BASE = '/twitch/api/admin';
 const ENGAGEMENT_API_BASE = '/twitch/api/v2/engagement';
+const PARTNER_ACCESS_URL = '/social-media/api/access';
 const AUTH_STATUS_URL = '/twitch/api/v2/auth-status';
 const INTERNAL_HOME_URL = '/twitch/api/v2/internal-home';
 let cachedCsrfToken = '';
@@ -1242,6 +1244,42 @@ export async function toggleEngagement(login: string, enabled: boolean): Promise
     return { ok: true, message: `AI-Engagement ${enabled ? 'aktiviert' : 'deaktiviert'}.` };
   } catch (error) {
     const message = error instanceof ApiError ? error.message : 'Toggle fehlgeschlagen.';
+    return { ok: false, message };
+  }
+}
+
+/**
+ * Liste aller Streamer mit Social-Media-Freigabe (`GET /social-media/api/access`).
+ * Admin-only; der Endpunkt liegt bewusst weiter beim Social-Media-Backend, nur
+ * die Bedienung sitzt hier in der Admin-SPA.
+ */
+export async function fetchPartnerAccess(): Promise<PartnerAccessEntry[]> {
+  const payload = await request<Record<string, unknown>>(PARTNER_ACCESS_URL);
+  return coerceArray(coerceRecord(payload).items) as PartnerAccessEntry[];
+}
+
+/** Freigabe für einen Streamer setzen oder entziehen (`PUT`, admin-only). */
+export async function setPartnerAccess(
+  login: string,
+  granted: boolean,
+): Promise<AdminActionResult> {
+  try {
+    const csrfToken = await resolveJsonCsrfToken({});
+    await request<Record<string, unknown>>(PARTNER_ACCESS_URL, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({ streamer_login: login, granted }),
+    });
+    return {
+      ok: true,
+      message: `Partner-Freigabe ${granted ? 'erteilt' : 'entfernt'}.`,
+    };
+  } catch (error) {
+    const message =
+      error instanceof ApiError ? error.message : 'Partner-Freigabe konnte nicht gesetzt werden.';
     return { ok: false, message };
   }
 }

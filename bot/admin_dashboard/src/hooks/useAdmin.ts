@@ -26,6 +26,7 @@ import {
   fetchEventSubStatus,
   fetchGlobalBans,
   fetchLegalPage,
+  fetchPartnerAccess,
   fetchRoadmap,
   generateGutschriften,
   saveManualPlanOverride,
@@ -34,6 +35,7 @@ import {
   saveRoadmap,
   setAffiliateCommissionRate,
   setGlobalBanChannelEnforcement,
+  setPartnerAccess,
   sendPartnerChatAction,
   fetchSubscriptions,
   fetchSystemHealth,
@@ -531,6 +533,25 @@ export function useEngagementToggle() {
       void queryClient.invalidateQueries({
         queryKey: ['admin-engagement-settings', variables.login],
       });
+    },
+  });
+}
+
+export function usePartnerAccess() {
+  return useQuery({
+    queryKey: ['admin-partner-access'],
+    queryFn: fetchPartnerAccess,
+    staleTime: 30_000,
+  });
+}
+
+export function useSetPartnerAccess() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, granted }: { login: string; granted: boolean }) =>
+      setPartnerAccess(login, granted),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-partner-access'] });
     },
   });
 }
