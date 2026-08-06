@@ -35,7 +35,7 @@ import type {
   SessionSummary,
 } from '@/api/types';
 import { coerceRecord, formatDateTime, formatNumber, formatRelativeTime } from '@/utils/formatters';
-import { resolvePartnerGranted } from '@/utils/partnerAccess';
+import { findPartnerAccessEntry } from '@/utils/partnerAccess';
 
 const PLAN_OPTIONS = [
   { value: 'raid_free', label: 'Raid Free' },
@@ -178,10 +178,8 @@ export function StreamerDetailPage() {
   const engagementToggle = useEngagementToggle();
   const partnerAccessQuery = usePartnerAccess();
   const partnerAccessMutation = useSetPartnerAccess();
-  const partnerAccessEntry = (partnerAccessQuery.data ?? []).find(
-    (entry) => entry.streamer_login.trim().toLowerCase() === (login ?? '').trim().toLowerCase(),
-  );
-  const partnerAccessGranted = resolvePartnerGranted(partnerAccessQuery.data, login);
+  const partnerAccessEntry = findPartnerAccessEntry(partnerAccessQuery.data, login);
+  const partnerAccessGranted = Boolean(partnerAccessEntry?.granted);
 
   const [verifyMode, setVerifyMode] = useState<LegacyVerifyMode>('permanent');
   const [discordUserId, setDiscordUserId] = useState('');

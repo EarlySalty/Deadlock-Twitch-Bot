@@ -50,7 +50,10 @@ import { coerceArray, coerceRecord } from '@/utils/formatters';
 
 const ADMIN_API_BASE = '/twitch/api/admin';
 const ENGAGEMENT_API_BASE = '/twitch/api/v2/engagement';
-const PARTNER_ACCESS_URL = '/social-media/api/access';
+// Admin-Prefix statt `/social-media/api/access`: die Admin-SPA läuft nur auf
+// admin.deutsche-deadlock-community.de, und dort ist `/social-media/*` laut
+// docs/HOST_ROUTING_CONTRACT.md bewusst 404. Dahinter liegen dieselben Handler.
+const PARTNER_ACCESS_URL = '/twitch/api/admin/partner-access';
 const AUTH_STATUS_URL = '/twitch/api/v2/auth-status';
 const INTERNAL_HOME_URL = '/twitch/api/v2/internal-home';
 let cachedCsrfToken = '';

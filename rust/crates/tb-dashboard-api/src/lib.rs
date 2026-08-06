@@ -747,7 +747,7 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
 /// Writes laufen wie der Admin-Config-Router durch den CSRF-Schutz (GET/HEAD
 /// passieren, Localhost-Bypass für interne Tools).
 pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
-    use handlers::{admin_research, admin_streamers};
+    use handlers::{admin_research, admin_streamers, social_media};
 
     Router::new()
         .route(
@@ -785,6 +785,16 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/streamers/:login/discord-flag",
             post(admin_streamers::discord_flag_handler),
+        )
+        // Partner-Freigabe unter dem Admin-Prefix: dieselben Handler wie
+        // `/social-media/api/access`, aber auf einem Pfad, den die
+        // Admin-Subdomain durchlässt. `/social-media/*` ist dort laut
+        // HOST_ROUTING_CONTRACT.md bewusst 404, und die Admin-SPA läuft
+        // ausschließlich auf dieser Subdomain.
+        .route(
+            "/twitch/api/admin/partner-access",
+            get(social_media::partner_access_get_handler)
+                .put(social_media::partner_access_put_handler),
         )
         .with_state(pool)
         .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
