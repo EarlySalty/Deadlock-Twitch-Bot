@@ -48,4 +48,11 @@ export const features: Feature[] = [
     description:
       "Ein KI-Wächter erkennt Scam- und Spam-Konten und bannt sie, bevor dein Chat sie überhaupt sieht. Dazu die globale Ban-Liste des Netzwerks und Timeouts für Fremdwerbung, beides pro Kanal abschaltbar.",
   },
+  {
+    id: "monitoring",
+    icon: "Activity",
+    title: "Monitoring",
+    description:
+      "Der Bot verfolgt deinen Kanal rund um die Uhr: Twitch meldet den Sendestart als Ereignis, zusätzlich fragt der Bot alle 15 Sekunden selbst nach. Deshalb steht dein Live-Post auch dann im Discord, wenn Twitch das Ereignis verschluckt, und deine Stream-Zeiten landen vollständig in der Auswertung.",
+  },
 ];

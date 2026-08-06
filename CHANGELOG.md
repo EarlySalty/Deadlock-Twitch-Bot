@@ -1,3 +1,11 @@
+## #424 — Monitoring steht wieder auf der Streamer-Seite
+
+**Problem:** Beim Umbau der Feature-Karten ist die Karte „Monitoring" herausgefallen, obwohl die Überwachung weiterläuft. Die Überschrift der Sektion versprach außerdem eine Anzahl Module, die niemand nachzählt, wenn sich die Karten ändern.
+
+**Änderung:** Die Karte ist als siebte wieder da und erklärt, was die Überwachung bringt: Twitch meldet den Sendestart als Ereignis, zusätzlich fragt der Bot alle 15 Sekunden selbst nach, damit der Live-Post auch bei verschluckten Ereignissen steht. Die Angabe „benachrichtigt dich sofort bei Verbindungsproblemen" aus der alten Karte ist raus, weil es diese Benachrichtigung an den Streamer nicht gibt.
+
+**Aktuelles Verhalten:** Die Sektion zeigt sieben Karten und nennt in der Überschrift dieselbe Zahl. Weichen Kartenzahl und Überschrift künftig voneinander ab oder trägt eine Karte ein unbekanntes Symbol, schlägt der Testlauf fehl. Der Abfragetakt liegt bei 15 Sekunden und lässt sich zwischen 5 Sekunden und einer Stunde einstellen.
+
 ## #423 — Die Streamer-Seite erzählt jetzt, was der Bot wirklich tut
 
 **Problem:** Die Seite verkaufte das Raid-Netzwerk, erklärte aber kaum, was der Bot sonst übernimmt und was ein Streamer davon hat. Wer ohne Vorwissen kam, blieb ratlos.
