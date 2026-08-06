@@ -201,6 +201,17 @@ export interface SocialMediaReportListResponse {
   items: SocialMediaReport[];
 }
 
+export interface PartnerAccessEntry {
+  streamer_login: string;
+  granted: boolean;
+  granted_by: string | null;
+  granted_at: string;
+}
+
+export interface PartnerAccessResponse {
+  items: PartnerAccessEntry[];
+}
+
 export const DEFAULT_SOURCE_WIDTH = 1920;
 export const DEFAULT_SOURCE_HEIGHT = 1080;
 

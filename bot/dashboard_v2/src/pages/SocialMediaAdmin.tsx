@@ -1,11 +1,116 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield, Film } from 'lucide-react';
+import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield, Film, ToggleLeft, ToggleRight } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
+import { fetchPartnerAccess, setPartnerAccess } from '@/api/socialMedia';
+import type { PartnerAccessEntry } from '@/types/socialMedia';
+
+/**
+ * Partner-Freigabe-Toggle für den ausgewählten Streamer.
+ *
+ * Lädt die Partner-Access-Liste und zeigt einen Toggle-Switch für den
+ * aktuell selektierten Streamer. Der Admin kann damit die Social-Media-
+ * Freigabe pro Streamer ein- und ausschalten.
+ */
+function PartnerAccessToggle({
+  streamerLogin,
+}: {
+  streamerLogin: string;
+}) {
+  const [entries, setEntries] = useState<PartnerAccessEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchPartnerAccess()
+      .then((res) => {
+        if (!cancelled) setEntries(res.items);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Fehler beim Laden.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const current =
+    entries.find((e) => e.streamer_login.toLowerCase() === streamerLogin.toLowerCase()) ??
+    null;
+  const granted = current?.granted ?? false;
+
+  const handleToggle = async () => {
+    const next = !granted;
+    setToggling(true);
+    setError(null);
+    try {
+      const updated = await setPartnerAccess(streamerLogin, next);
+      setEntries((prev) => {
+        const rest = prev.filter(
+          (e) => e.streamer_login.toLowerCase() !== streamerLogin.toLowerCase(),
+        );
+        return [...rest, updated];
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Fehler beim Speichern.');
+    } finally {
+      setToggling(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="mb-4 text-xs text-text-secondary">
+        Partner-Freigabe laden…
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <span className="text-sm text-text-secondary font-medium">
+        Partner-Freigabe:
+      </span>
+      <button
+        type="button"
+        onClick={handleToggle}
+        disabled={toggling}
+        className="flex items-center gap-2 disabled:opacity-50"
+        title={granted ? 'Freigabe entfernen' : 'Freigabe erteilen'}
+      >
+        {granted ? (
+          <ToggleRight className="w-6 h-6 text-success" />
+        ) : (
+          <ToggleLeft className="w-6 h-6 text-text-secondary" />
+        )}
+        <span
+          className={`text-xs font-semibold ${
+            granted ? 'text-success' : 'text-text-secondary'
+          }`}
+        >
+          {granted ? 'Freigegeben' : 'Nicht freigegeben'}
+        </span>
+      </button>
+      {current?.granted_by && (
+        <span className="text-xs text-text-secondary">
+          (von {current.granted_by})
+        </span>
+      )}
+      {error && (
+        <span className="text-xs text-error">{error}</span>
+      )}
+    </div>
+  );
+}
 
 /**
  * Eigenständiges Social-Media-Admin-Dashboard.
@@ -161,6 +266,11 @@ export function SocialMediaAdminDashboard() {
             <AuthBadge />
           </div>
         </div>
+
+        {/* Partner-Freigabe-Toggle (Admin-only, visible when streamer selected) */}
+        {(authStatus?.isAdmin || authStatus?.isLocalhost) && streamer && (
+          <PartnerAccessToggle streamerLogin={streamer} />
+        )}
 
         <PlanProvider
           plan={authStatus?.plan ?? null}

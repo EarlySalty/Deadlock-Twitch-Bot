@@ -58,7 +58,7 @@ use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::partner_access::{
-    is_partner_granted, list_partner_access, set_partner_access, PartnerAccessEntry,
+    is_partner_granted, list_partner_access, set_partner_access,
 };
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::scheduler::next_free_slot;
@@ -276,6 +276,24 @@ async fn streamer_template_owned(pool: &PgPool, template_id: i64, streamer: &str
     .is_some()
 }
 
+/// Partner-Freigabe-Guard für Clip-basierte Admin-Handler: lädt den
+/// Clip-Owner und prüft die Freigabe. `None` wenn kein Owner oder OK.
+async fn guard_partner_access_for_clip(pool: &PgPool, clip_db_id: i64) -> Option<Response> {
+    let streamer_login: Option<String> = sqlx::query_scalar(
+        "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
+    )
+    .bind(clip_db_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some(ref login) = streamer_login {
+        check_partner_access_guard(pool, login).await
+    } else {
+        None
+    }
+}
+
 /// `?category=` für die globalen Templates.
 #[derive(Debug, Deserialize)]
 pub struct CategoryQuery {
@@ -368,6 +386,10 @@ pub async fn create_template_handler(
         Err(e) => return e,
     };
     let streamer = scope.unwrap_or_default();
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+        return guard_response;
+    }
     let name = body.template_name.unwrap_or_default();
     let description = body.description.unwrap_or_default();
     if name.is_empty() || description.is_empty() {
@@ -419,6 +441,12 @@ pub async fn apply_template_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(streamer) = &scope {
+        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+            return guard_response;
+        }
+    }
     if let Some(streamer) = &scope {
         if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
             return (
@@ -773,6 +801,12 @@ pub async fn upload_clip_handler(
     let title = title
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
+    if let Some(ref login) = streamer_login {
+        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+            return guard_response;
+        }
+    }
     match process_uploaded_clip(
         &pool,
         "data/clips/uploads",
@@ -864,6 +898,10 @@ pub async fn streamer_layout_put_handler(
         )
             .into_response();
     }
+    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &slug).await {
+        return guard_response;
+    }
     let layout = match parse_layout_request(&payload) {
         Ok(l) => l,
         Err(e) => return e,
@@ -903,6 +941,11 @@ pub async fn clip_layout_put_handler(
             Json(json!({ "error": "clip_not_found" })),
         )
             .into_response();
+    }
+
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+        return guard_response;
     }
 
     // `layout` fehlt/null → Override löschen.
@@ -1164,6 +1207,11 @@ pub async fn fetch_clips_handler(
     let streamer = scope.unwrap_or_default();
     let limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
 
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+        return guard_response;
+    }
+
     let Some(service) = build_clip_fetch_service(pool, limit) else {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "twitch_api_unavailable", "message": "Clip-Fetch ist derzeit nicht verfügbar." }))).into_response();
     };
@@ -1269,6 +1317,12 @@ pub async fn mark_uploaded_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(streamer) = &scope {
+        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+            return guard_response;
+        }
+    }
     if let Some(streamer) = &scope {
         if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
             return (
@@ -1884,6 +1938,10 @@ pub async fn admin_clip_discard_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+        return guard_response;
+    }
     if !mark_clip_discarded(&pool, clip_db_id).await {
         return clip_not_found();
     }
@@ -2034,6 +2092,10 @@ pub async fn enrichment_put_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+        return guard_response;
+    }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_put").await {
         Ok(id) => id,
         Err(e) => return e,
@@ -2137,6 +2199,10 @@ pub async fn enrichment_run_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+        return guard_response;
+    }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_run").await {
         Ok(id) => id,
         Err(e) => return e,
@@ -2229,6 +2295,12 @@ pub async fn reports_run_handler(
         .and_then(Value::as_str)
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
+    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
+    if let Some(ref login) = streamer {
+        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+            return guard_response;
+        }
+    }
     if !matches!(kind.as_str(), "streamer" | "cross") {
         return (
             StatusCode::BAD_REQUEST,
@@ -2372,6 +2444,10 @@ pub async fn approval_decision_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+        return guard_response;
+    }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "approval_decision").await
     {
         Ok(id) => id,
@@ -2523,6 +2599,12 @@ pub async fn oauth_start_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(ref login) = scope {
+        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+            return guard_response;
+        }
+    }
     if !is_supported_platform(&platform) {
         return (StatusCode::BAD_REQUEST, "Invalid platform").into_response();
     }
@@ -2620,6 +2702,12 @@ pub async fn oauth_disconnect_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(ref login) = scope {
+        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+            return guard_response;
+        }
+    }
     if !is_supported_platform(&platform) {
         return (
             StatusCode::BAD_REQUEST,
@@ -2649,7 +2737,7 @@ pub async fn oauth_disconnect_handler(
 
 /// Request-Body für PUT /social-media/api/access.
 #[derive(Debug, Deserialize)]
-struct PartnerAccessPutBody {
+pub(crate) struct PartnerAccessPutBody {
     streamer_login: String,
     granted: bool,
 }
