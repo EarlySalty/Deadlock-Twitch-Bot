@@ -115,6 +115,11 @@ const STATEMENTS: &[&str] = &[
         status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, \
         submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
         UNIQUE (clip_id, form_key))",
+    // Partner-Freigabe für Social-Media-Posts (zentraler Guard).
+    "CREATE TABLE IF NOT EXISTS social_media_partner_access (\
+        streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
+        granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
+        granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \
         ADD COLUMN IF NOT EXISTS bucket TEXT, \
@@ -178,6 +183,7 @@ mod tests {
             "social_media_clip_enrichment",
             "social_media_clip_approval",
             "twitch_clip_form_submissions",
+            "social_media_partner_access",
         ] {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables \

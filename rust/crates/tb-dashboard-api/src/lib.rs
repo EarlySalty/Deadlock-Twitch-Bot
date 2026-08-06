@@ -187,6 +187,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/last-hashtags",
             get(social_media::last_hashtags_handler),
         )
+        // Partner-Freigabe: Liste + Setzen/Entfernen (Admin-only).
+        .route(
+            "/social-media/api/access",
+            get(social_media::partner_access_get_handler)
+                .put(social_media::partner_access_put_handler),
+        )
         // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
         .route(
             "/social-media/api/analytics",

@@ -57,6 +57,9 @@ use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
+use tb_social_media::partner_access::{
+    is_partner_granted, list_partner_access, set_partner_access, PartnerAccessEntry,
+};
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::scheduler::next_free_slot;
 use tb_social_media::seed_vocab::seed_vocab;
@@ -1001,6 +1004,12 @@ pub async fn queue_upload_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(streamer) = &scope {
+        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+            return guard_response;
+        }
+    }
     if let Some(streamer) = &scope {
         if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
             return (
@@ -1189,6 +1198,10 @@ pub async fn batch_upload_handler(
         Err(e) => return e,
     };
     let streamer = scope.unwrap_or_default();
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+        return guard_response;
+    }
     let platforms: Vec<String> = body
         .platforms
         .as_array()
@@ -2629,6 +2642,96 @@ pub async fn oauth_disconnect_handler(
             Json(json!({ "error": "disconnect_failed" })),
         )
             .into_response(),
+    }
+}
+
+// ── Partner-Freigabe-API ─────────────────────────────────────────────────
+
+/// Request-Body für PUT /social-media/api/access.
+#[derive(Debug, Deserialize)]
+struct PartnerAccessPutBody {
+    streamer_login: String,
+    granted: bool,
+}
+
+/// GET /social-media/api/access — Liste aller Streamer mit Freigabestatus.
+///
+/// Admin-only. Liefert alle Einträge aus `social_media_partner_access`.
+pub async fn partner_access_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    match list_partner_access(&pool).await {
+        Ok(entries) => Json(json!({ "items": entries })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "partner_access_get: DB-Fehler");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// PUT /social-media/api/access — Freigabe für einen Streamer setzen/entfernen.
+///
+/// Admin-only. Body: `{ "streamer_login": "...", "granted": true/false }`.
+pub async fn partner_access_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<PartnerAccessPutBody>,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let login = body.streamer_login.trim().to_lowercase();
+    if login.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "streamer_login is required" })),
+        )
+            .into_response();
+    }
+    let actor = editor_user_id(&auth);
+    match set_partner_access(&pool, &login, body.granted, actor.as_deref()).await {
+        Ok(entry) => Json(json!({ "item": entry })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, login = %login, "partner_access_put: DB-Fehler");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Zentraler Partner-Freigabe-Guard: prüft ob `streamer_login` für
+/// Social-Media-Schreibzugriffe freigegeben ist. Liefert `Some(Response)`
+/// (403) wenn nicht freigegeben, `None` wenn OK.
+///
+/// Wird vor jedem Schreibpfad aufgerufen: Post, Draft, Caption, Upload, etc.
+pub async fn check_partner_access_guard(
+    pool: &PgPool,
+    streamer_login: &str,
+) -> Option<Response> {
+    if !is_partner_granted(pool, streamer_login).await {
+        Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "partner_access_required",
+                    "message": "Dieser Streamer ist nicht für Social-Media-Posts freigegeben."
+                })),
+            )
+                .into_response(),
+        )
+    } else {
+        None
     }
 }
 
