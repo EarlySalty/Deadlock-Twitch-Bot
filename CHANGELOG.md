@@ -1,3 +1,11 @@
+## #425 — Impressum und Datenschutz bleiben nicht mehr im Ladekreis stecken
+
+**Problem:** Wer Impressum, Datenschutz oder AGB aufrief, landete auf einer Zwischenseite mit Ladekreis und dem Satz „Der Server ist gerade etwas langsam". Der Server war nicht langsam, er antwortete in Millisekunden. Die Prüfung, ob ein Mensch die Seite aufruft, saß in einem unsichtbaren Bereich der Seite: verlangte sie ein Häkchen, konnte niemand es setzen. Blockierte ein Werbeblocker oder ein Browser-Schutzschild die Prüfung, passierte gar nichts mehr. In beiden Fällen drehte der Kreis endlos.
+
+**Änderung:** Die Prüfung liegt jetzt in einem sichtbaren Bereich, ein Häkchen lässt sich also anklicken. Schlägt sie fehl, läuft sie ab oder kommt sie binnen zwölf Sekunden gar nicht erst zustande, ersetzt eine Meldung den Ladekreis: sie nennt Werbeblocker und Schutzschild als wahrscheinliche Ursache und bietet einen Knopf zum Neuladen. Ohne JavaScript steht jetzt ein Hinweis statt einer leeren Seite. Der Satz über den langsamen Server ist raus, weil er die falsche Ursache nannte.
+
+**Aktuelles Verhalten:** Die Zwischenseite endet immer sichtbar, entweder auf der Zielseite oder mit einer Meldung samt Neuladen-Knopf. Drei Testläufe halten das fest: das Prüffeld darf in keinem versteckten Bereich liegen, die Fehler- und Zeitgeber-Rückmeldungen müssen vorhanden sein, und der Text darf keinen langsamen Server behaupten.
+
 ## #424 — Monitoring steht wieder auf der Streamer-Seite
 
 **Problem:** Beim Umbau der Feature-Karten ist die Karte „Monitoring" herausgefallen, obwohl die Überwachung weiterläuft. Die Überschrift der Sektion versprach außerdem eine Anzahl Module, die niemand nachzählt, wenn sich die Karten ändern.

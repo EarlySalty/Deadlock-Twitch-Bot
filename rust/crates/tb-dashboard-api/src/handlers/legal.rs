@@ -752,26 +752,61 @@ fn render_legal_gate_page(next_path: &str, site_key: &str) -> String {
             "*{{box-sizing:border-box;margin:0;padding:0}}",
             "body{{display:flex;align-items:center;justify-content:center;",
             "min-height:100vh;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;}}",
-            ".loader{{display:flex;flex-direction:column;align-items:center;gap:18px;}}",
+            ".loader{{display:flex;flex-direction:column;align-items:center;gap:18px;",
+            "padding:24px;max-width:440px;text-align:center;}}",
             ".spin{{width:36px;height:36px;border:3px solid #e2e8f0;",
             "border-top-color:#2563eb;border-radius:50%;animation:s .8s linear infinite;}}",
             "@keyframes s{{to{{transform:rotate(360deg)}}}}",
             "p{{font-size:14px;color:#64748b;letter-spacing:.01em;}}",
             ".hint{{font-size:12px;color:#94a3b8;}}",
+            "#err{{display:none;gap:12px;flex-direction:column;align-items:center;}}",
+            "#err h2{{font-size:16px;color:#0f172a;font-weight:600;}}",
+            "#err button{{background:#2563eb;color:#fff;border:none;border-radius:8px;",
+            "padding:10px 22px;font-size:14px;font-weight:600;cursor:pointer;}}",
+            "#err button:hover{{background:#1d4ed8;}}",
             "</style></head><body>",
             "<div class='loader'>",
+            "<div id='wait'>",
             "<div class='spin'></div>",
             "<p>Einen Moment bitte …</p>",
-            "<span class='hint'>Der Server ist gerade etwas langsam.</span>",
-            "<form id='lgf' method='post' action='/twitch/legal/verify' style='display:none'>",
+            "<span class='hint'>Wir prüfen kurz, ob du ein Mensch bist.</span>",
+            "</div>",
+            // Das Widget darf nicht in einem versteckten Container liegen:
+            // im Modus interaction-only zeigt Turnstile bei Bedarf eine Checkbox,
+            // und die muss anklickbar sein.
+            "<form id='lgf' method='post' action='/twitch/legal/verify'>",
             "<input type='hidden' name='next' value='{next}'>",
             "<div class='cf-turnstile' data-sitekey='{site_key}'",
             " data-action='{action}'",
             " data-appearance='interaction-only'",
-            " data-callback='_tsOk'></div>",
+            " data-callback='_tsOk'",
+            " data-error-callback='_tsFail'",
+            " data-timeout-callback='_tsFail'",
+            " data-expired-callback='_tsFail'></div>",
             "</form>",
+            "<div id='err'>",
+            "<h2>Die Prüfung kommt nicht durch</h2>",
+            "<p>Ein Werbeblocker oder der Schutzschild deines Browsers blockiert ",
+            "vermutlich challenges.cloudflare.com. Schalte ihn für diese Seite aus ",
+            "und lade neu.</p>",
+            "<button type='button' onclick='location.reload()'>Neu laden</button>",
             "</div>",
-            "<script>function _tsOk(){{document.getElementById('lgf').submit();}}</script>",
+            "<noscript>",
+            "<p>Diese Seite braucht JavaScript, um dich als Mensch zu bestätigen.</p>",
+            "</noscript>",
+            "</div>",
+            "<script>",
+            "var _done=false;",
+            "function _tsOk(){{_done=true;document.getElementById('lgf').submit();}}",
+            "function _tsFail(){{",
+            "if(_done)return;",
+            "document.getElementById('wait').style.display='none';",
+            "document.getElementById('err').style.display='flex';",
+            "}}",
+            // Laedt api.js gar nicht, feuert kein Callback. Ohne diesen Watchdog
+            // dreht der Spinner endlos.
+            "setTimeout(function(){{if(!window.turnstile)_tsFail();}},12000);",
+            "</script>",
             "</body></html>",
         ),
         next = escaped_next,
@@ -1436,6 +1471,52 @@ mod tests {
         }
         let gate = render_legal_gate_page("/twitch/agb", "DIFF-SITE-KEY");
         std::fs::write("/tmp/rust_legal_gate.html", gate).unwrap();
+    }
+
+    /// Das Turnstile-Widget muss sichtbar sein koennen: verlangt Cloudflare eine
+    /// Interaktion, sitzt die Checkbox sonst unsichtbar im DOM und der Spinner
+    /// laeuft ewig.
+    #[test]
+    fn gate_widget_liegt_nicht_in_einem_versteckten_container() {
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        let widget = gate.find("cf-turnstile").expect("Widget fehlt");
+        let form = gate.find("<form").expect("Form fehlt");
+        assert!(form < widget, "Widget liegt nicht in der Form");
+        let form_tag = &gate[form..widget];
+        assert!(
+            !form_tag.contains("display:none"),
+            "Form um das Widget ist versteckt: {form_tag}"
+        );
+    }
+
+    /// Ohne Fehler-Callbacks bleibt die Seite stumm haengen, wenn ein Adblocker
+    /// oder Browser-Schild challenges.cloudflare.com blockiert.
+    #[test]
+    fn gate_meldet_fehler_und_timeout_statt_ewig_zu_drehen() {
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        for hook in [
+            "data-error-callback",
+            "data-timeout-callback",
+            "data-expired-callback",
+        ] {
+            assert!(gate.contains(hook), "{hook} fehlt im Gate-HTML");
+        }
+        assert!(
+            gate.contains("setTimeout"),
+            "Kein Watchdog, wenn api.js gar nicht laedt"
+        );
+        assert!(
+            gate.contains("<noscript>"),
+            "Kein Hinweis fuer Browser ohne JavaScript"
+        );
+    }
+
+    /// Der alte Text behauptete einen langsamen Server, obwohl das Backend in
+    /// Millisekunden antwortet.
+    #[test]
+    fn gate_behauptet_keinen_langsamen_server() {
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        assert!(!gate.contains("langsam"), "Falsche Ursache im Gate-Text");
     }
 
     #[test]
