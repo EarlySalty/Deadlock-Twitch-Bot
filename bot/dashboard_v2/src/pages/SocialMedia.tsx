@@ -234,10 +234,10 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
         <ShieldAlert className="w-12 h-12 text-danger mx-auto mb-4" />
-        <h2 className="text-2xl font-bold text-white mb-2">Admin-Zugang erforderlich</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">Noch nicht freigeschaltet</h2>
         <p className="text-text-secondary">
-          Das Social-Media-Dashboard ist aktuell nur für Admins freigeschaltet. Partner-Streamer
-          erhalten Zugriff, sobald die Pipeline ausreichend validiert wurde.
+          Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty,
+          wenn du deine Clips hier aufbereiten möchtest.
         </p>
       </div>
     );
