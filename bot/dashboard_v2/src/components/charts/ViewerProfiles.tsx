@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { ViewerProfiles as ViewerProfilesData } from '@/types/analytics';
@@ -31,9 +31,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
 
   return (
     <div className="space-y-4">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="panel-card rounded-2xl p-6"
       >
         <h4 className="text-sm font-medium text-text-secondary mb-4">Zuschauer-Segmente</h4>
@@ -98,14 +96,12 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
           </div>
         </div>
       </div>
-    </motion.div>
+    </Rise>
 
       {/* Exclusivity Distribution */}
       {exclusivityDistribution.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        <Rise
+          step={{ seconds: 0.1 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
@@ -141,7 +137,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );

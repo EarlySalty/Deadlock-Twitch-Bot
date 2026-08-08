@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { Award, Heart, Info, MessageCircle, TrendingUp, Users } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
@@ -110,7 +111,7 @@ export function ChatTreueContent({
           </div>
         ) : null)}
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="panel-card flex min-h-[21rem] flex-col rounded-2xl p-6 lg:px-7 lg:py-8">
+      <Rise className="panel-card flex min-h-[21rem] flex-col rounded-2xl p-6 lg:px-7 lg:py-8">
         <div className="mb-6 flex items-center gap-3">
           <Heart className="h-6 w-6 text-primary" />
           <h2 className="text-xl font-bold text-white">Community-Treue</h2>
@@ -192,11 +193,11 @@ export function ChatTreueContent({
             )}
           </div>
         </div>
-      </motion.div>
+      </Rise>
 
       {coachingData && !coachingData.empty && <ChatConcentrationSection data={coachingData} />}
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/16 via-card to-accent/16 p-6">
+      <Rise step={{ seconds: 0.1 }} className="rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/16 via-card to-accent/16 p-6">
         <h3 className="mb-4 font-bold text-white">Chat-Insights</h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {totalChatters > 0 ? (
@@ -224,7 +225,7 @@ export function ChatTreueContent({
             <InsightItem type="info" text="Keine aktiven Chatter im Zeitraum: Erst bei echten Chat-Samples werden Treue-Insights angezeigt." />
           )}
         </div>
-      </motion.div>
+      </Rise>
     </div>
   );
 }
@@ -244,7 +245,7 @@ export function ChatAktivitaetContent({
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="panel-card rounded-2xl p-6">
+        <Rise step={{ seconds: 0.15 }} className="panel-card rounded-2xl p-6">
           <div className="mb-6 flex items-center gap-3">
             <MessageCircle className="h-6 w-6 text-accent" />
             <h2 className="text-xl font-bold text-white">Nachrichtentypen</h2>
@@ -265,9 +266,9 @@ export function ChatAktivitaetContent({
               <p className="py-4 text-center text-text-secondary">Keine Daten verfügbar</p>
             )}
           </div>
-        </motion.div>
+        </Rise>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="panel-card rounded-2xl p-6">
+        <Rise step={{ seconds: 0.2 }} className="panel-card rounded-2xl p-6">
           <div className="mb-6 flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
@@ -315,10 +316,10 @@ export function ChatAktivitaetContent({
               Keine belastbaren Stundenmuster: zu wenig valide Chat-Timestamps.
             </div>
           )}
-        </motion.div>
+        </Rise>
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="panel-card rounded-2xl p-6">
+      <Rise step={{ seconds: 0.25 }} className="panel-card rounded-2xl p-6">
         <div className="mb-6 flex items-center gap-3">
           <Award className="h-6 w-6 text-warning" />
           <h2 className="text-xl font-bold text-white">Top Chatter</h2>
@@ -335,7 +336,7 @@ export function ChatAktivitaetContent({
             <p>Keine Chatter-Daten vorhanden</p>
           </div>
         )}
-      </motion.div>
+      </Rise>
     </div>
   );
 }

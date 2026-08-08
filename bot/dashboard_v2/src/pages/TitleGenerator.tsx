@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   Sparkles,
   Copy,
@@ -199,9 +200,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
       {/* Result */}
       <AnimatePresence>
         {result && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
+          <Rise
             className="panel-card rounded-2xl p-5 space-y-4 border border-accent/20"
           >
             <div className="flex items-center gap-2 text-sm font-semibold text-accent">
@@ -259,7 +258,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
                 ))}
               </div>
             )}
-          </motion.div>
+          </Rise>
         )}
       </AnimatePresence>
 

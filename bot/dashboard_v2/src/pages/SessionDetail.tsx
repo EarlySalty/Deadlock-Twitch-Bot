@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   ArrowLeft,
   MessageCircle,
@@ -43,15 +44,13 @@ function KpiTile({
   sub?: string;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-4"
     >
       <p className="text-xs text-text-secondary mb-1">{label}</p>
       <p className={`text-xl font-bold ${color}`}>{value}</p>
       {sub && <p className="text-xs text-text-secondary mt-0.5">{sub}</p>}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -158,9 +157,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
   return (
     <div className="space-y-6">
       {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="flex items-start gap-4"
       >
         <button
@@ -177,7 +174,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
             {dateLabel} um {timeLabel} &middot; {formatDuration(duration)}
           </p>
         </div>
-      </motion.div>
+      </Rise>
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -261,10 +258,8 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
       </div>
 
       {activeTab === 'overview' && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        <Rise
+          step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-5"
         >
           <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
@@ -319,7 +314,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
               </LineChart>
             </ResponsiveContainer>
           )}
-        </motion.div>
+        </Rise>
       )}
 
       {activeTab === 'events' && (
@@ -330,10 +325,8 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
             loading={loadingEvents}
           />
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
+          <Rise
+            step={{ seconds: 0.15 }}
             className="bg-card rounded-xl border border-border p-5"
           >
             <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
@@ -370,7 +363,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 </table>
               </div>
             )}
-          </motion.div>
+          </Rise>
         </div>
       )}
 

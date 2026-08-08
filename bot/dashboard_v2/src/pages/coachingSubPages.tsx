@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { GraduationCap, AlertCircle, Loader2, Zap, Target } from 'lucide-react';
 import { useCoaching } from '@/hooks/useAnalytics';
 import {
@@ -63,7 +63,7 @@ export function CoachingEmpfehlungen({ streamer, days }: CoachingSubPageProps) {
   return (
     <div className="space-y-6">
       {topRecs.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+        <Rise>
           <div className="flex items-center gap-3 mb-4">
             <Zap className="w-6 h-6 text-warning" />
             <h2 className="text-xl font-bold text-white">Top-Empfehlungen</h2>
@@ -73,15 +73,11 @@ export function CoachingEmpfehlungen({ streamer, days }: CoachingSubPageProps) {
               <RecommendationCard key={i} rec={rec} index={i} />
             ))}
           </div>
-        </motion.div>
+        </Rise>
       )}
 
       {otherRecs.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-        >
+        <Rise step={{ seconds: 0.5 }}>
           <div className="flex items-center gap-3 mb-4">
             <Target className="w-6 h-6 text-primary" />
             <h2 className="text-xl font-bold text-white">Weitere Empfehlungen</h2>
@@ -91,7 +87,7 @@ export function CoachingEmpfehlungen({ streamer, days }: CoachingSubPageProps) {
               <RecommendationCard key={i} rec={rec} index={i} />
             ))}
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );

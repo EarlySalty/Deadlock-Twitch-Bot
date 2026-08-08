@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   AlertCircle,
   Loader2,
@@ -534,9 +535,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
 
       {/* ── Segment Cards ── */}
       {segments && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="grid grid-cols-2 md:grid-cols-5 gap-3"
         >
           {['dedicated', 'regular', 'casual', 'lurker', 'new'].map(seg => (
@@ -547,14 +546,12 @@ export function Viewers({ streamer, days }: ViewersProps) {
 
             />
           ))}
-        </motion.div>
+        </Rise>
       )}
 
       {/* ── Insights Row ── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
+      <Rise
+        step={{ seconds: 0.1 }}
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         {/* Churn Risk — "Vermisst"-Liste */}
@@ -670,13 +667,11 @@ export function Viewers({ streamer, days }: ViewersProps) {
             </div>
           ) : null}
         </div>
-      </motion.div>
+      </Rise>
 
       {/* ── Viewer Directory ── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+      <Rise
+        step={{ seconds: 0.2 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         {/* Header */}
@@ -785,7 +780,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
             </button>
           </div>
         )}
-      </motion.div>
+      </Rise>
     </div>
   );
 }

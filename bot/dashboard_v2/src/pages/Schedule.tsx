@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star, Crown, Users, Play } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/analytics';
@@ -72,9 +73,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
   return (
     <div className="space-y-6">
       {/* Best Time Recommendations */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="bg-gradient-to-r from-primary/20 to-accent/20 rounded-xl border border-primary/30 p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -108,13 +107,11 @@ export function Schedule({ streamer, days }: ScheduleProps) {
             ))}
           </div>
         )}
-      </motion.div>
+      </Rise>
 
       {weeklyData && weeklyData.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
+        <Rise
+          step={{ seconds: 0.15 }}
           className="bg-card rounded-xl border border-border p-6"
         >
           <div className="flex items-center gap-3 mb-6">
@@ -122,13 +119,11 @@ export function Schedule({ streamer, days }: ScheduleProps) {
             <h2 className="text-xl font-bold text-white">Wochentags-Analyse</h2>
           </div>
           <WeekdayCards data={weeklyData} />
-        </motion.div>
+        </Rise>
       )}
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+      <Rise
+        step={{ seconds: 0.2 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -160,13 +155,11 @@ export function Schedule({ streamer, days }: ScheduleProps) {
             />
           ))}
         </div>
-      </motion.div>
+      </Rise>
 
       {/* Hourly Heatmap (7x24) */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
+      <Rise
+        step={{ seconds: 0.3 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -192,13 +185,11 @@ export function Schedule({ streamer, days }: ScheduleProps) {
           </div>
           <span>Mehr Viewer</span>
         </div>
-      </motion.div>
+      </Rise>
 
       {/* Best Time Per Day */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
+      <Rise
+        step={{ seconds: 0.4 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -233,7 +224,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
               })}
           </div>
         )}
-      </motion.div>
+      </Rise>
     </div>
   );
 }

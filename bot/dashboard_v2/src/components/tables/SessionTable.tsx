@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { ExternalLink } from 'lucide-react';
 import type { StreamSession } from '@/types/analytics';
 import { formatNumber, formatDurationShort, formatDate, formatTime, getRetentionColor } from '@/utils/formatters';
@@ -21,9 +22,7 @@ export function SessionTable({
   const displaySessions = limit ? sessions.slice(0, limit) : sessions;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border overflow-hidden"
     >
       {/* Header */}
@@ -113,6 +112,6 @@ export function SessionTable({
           </div>
         )}
       </div>
-    </motion.div>
+    </Rise>
   );
 }

@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { AlertTriangle, CheckCircle, Info, TrendingUp } from 'lucide-react';
 import type { Insight, ActionItem } from '@/types/analytics';
 
@@ -40,9 +41,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="space-y-6"
     >
       {/* Findings */}
@@ -105,6 +104,6 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
           </div>
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }

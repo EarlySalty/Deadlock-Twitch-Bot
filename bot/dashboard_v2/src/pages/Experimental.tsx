@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   FlaskConical,
   Gamepad2,
@@ -269,9 +269,7 @@ function KpiCard({
   icon: React.ComponentType<{ className?: string }>;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-5 flex flex-col gap-2"
     >
       <div className="flex items-center gap-2 text-text-secondary text-sm">
@@ -280,7 +278,7 @@ function KpiCard({
       </div>
       <p className="text-2xl font-bold text-white">{value}</p>
       {sub && <p className="text-xs text-text-secondary">{sub}</p>}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -348,10 +346,8 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
       </div>
 
       {/* Game Breakdown Bar Chart */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
+      <Rise
+        step={{ seconds: 0.1 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -365,13 +361,11 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         ) : (
           <ExpGameBreakdownChart data={breakdown} />
         )}
-      </motion.div>
+      </Rise>
 
       {/* Growth Curves */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
+      <Rise
+        step={{ seconds: 0.15 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -385,13 +379,11 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         ) : (
           <ExpGrowthCurvesChart data={growthCurves} />
         )}
-      </motion.div>
+      </Rise>
 
       {/* Game Transitions Table */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+      <Rise
+        step={{ seconds: 0.2 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -441,14 +433,12 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
             </table>
           </div>
         )}
-      </motion.div>
+      </Rise>
 
       {/* Per-Game Stats Table */}
       {breakdown.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
+        <Rise
+          step={{ seconds: 0.25 }}
           className="bg-card rounded-xl border border-border p-5"
         >
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -501,7 +491,7 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
               </tbody>
             </table>
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );

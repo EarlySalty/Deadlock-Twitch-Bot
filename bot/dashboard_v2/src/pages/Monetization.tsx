@@ -1,5 +1,5 @@
 import { TrendingDown, Zap, Gift, Radio, AlertCircle, Loader2, Clock, BarChart3, Lightbulb, ArrowLeftRight, Timer, BellOff, Calendar } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { useMonetization, useAdsSchedule } from '@/hooks/useAnalytics';
 import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule } from '@/types/analytics';
 import { fmtDrop } from '@/utils/monetization';
@@ -107,9 +107,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
   const { current, history } = scheduleData;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="mb-4 space-y-4"
     >
       {/* Section Header */}
@@ -223,7 +221,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
           </div>
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 

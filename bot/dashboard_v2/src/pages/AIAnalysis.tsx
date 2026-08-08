@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   Brain,
   Loader2,
@@ -360,9 +361,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
 
       {/* Results */}
       {result && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="space-y-4"
         >
           {/* Data Snapshot */}
@@ -433,7 +432,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               onSend={handleSendChat}
             />
           )}
-        </motion.div>
+        </Rise>
       )}
 
       {/* History Panel */}

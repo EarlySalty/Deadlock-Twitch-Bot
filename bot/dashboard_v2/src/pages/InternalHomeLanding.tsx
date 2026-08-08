@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchInternalHome,
@@ -809,11 +810,9 @@ export function InternalHomeLanding() {
 
       <div className="relative mx-auto max-w-[1440px]">
         <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <motion.aside
+          <Rise
+            as="aside"
             className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.32 }}
           >
             <div className="space-y-4">
               <div className="flex items-center gap-3">
@@ -977,14 +976,11 @@ export function InternalHomeLanding() {
                 </button>
               </div>
             </div>
-          </motion.aside>
+          </Rise>
 
           <main className="space-y-4 md:space-y-5">
             {adminMode ? (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.24 }}
+              <Rise
                 className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3"
               >
                 <div className="flex items-center gap-2 text-sm font-medium text-warning">
@@ -999,14 +995,13 @@ export function InternalHomeLanding() {
                 >
                   Beenden
                 </button>
-              </motion.div>
+              </Rise>
             ) : null}
-            <motion.section
+            <Rise
+              step={{ seconds: 0.04 }}
+              as="section"
               data-tour-id="tour-intro"
               className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.32, delay: 0.04 }}
             >
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1064,14 +1059,13 @@ export function InternalHomeLanding() {
                   </a>
                 ) : null}
               </div>
-            </motion.section>
+            </Rise>
 
             {hasRestrictedAnalyticsAccess ? (
-              <motion.section
+              <Rise
+                step={{ seconds: 0.06 }}
+                as="section"
                 className="panel-card rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4"
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.24, delay: 0.06 }}
               >
                 <div className="space-y-1">
                   <div className="text-sm font-semibold text-white">
@@ -1083,14 +1077,13 @@ export function InternalHomeLanding() {
                       : 'Dieser Account hat aktuell keinen Zugriff auf das Analyse-Dashboard. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.'}
                   </p>
                 </div>
-              </motion.section>
+              </Rise>
             ) : null}
 
-            <motion.section
+            <Rise
+              step={{ seconds: 0.08 }}
+              as="section"
               className="grid gap-4 lg:grid-cols-3"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.32, delay: 0.08 }}
             >
               {healthScore ? (
                 <div
@@ -1274,7 +1267,7 @@ export function InternalHomeLanding() {
                   </div>
                 ) : null}
               </div>
-            </motion.section>
+            </Rise>
 
             <StreamRecapCard
               personalBests={personalBests}
@@ -1285,11 +1278,10 @@ export function InternalHomeLanding() {
             />
 
             {recentStreams.length > 0 ? (
-              <motion.section
+              <Rise
+                step={{ seconds: 0.14 }}
+                as="section"
                 className="panel-card card-glow rounded-2xl p-5 md:p-6"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.32, delay: 0.14 }}
               >
                 <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
@@ -1387,14 +1379,13 @@ export function InternalHomeLanding() {
                     );
                   })}
                 </ul>
-              </motion.section>
+              </Rise>
             ) : null}
 
-            <motion.section
+            <Rise
+              step={{ seconds: 0.16 }}
+              as="section"
               className="grid gap-4 lg:grid-cols-2"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.32, delay: 0.16 }}
             >
               <aside id="changelog" className="panel-card card-glow rounded-2xl p-5 md:p-6">
                 <div className="mb-4">
@@ -1580,7 +1571,7 @@ export function InternalHomeLanding() {
                   </button>
                 ) : null}
               </article>
-            </motion.section>
+            </Rise>
           </main>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { AtSign, MessageCircle, Smile, Zap, Brain, Loader2, Sparkles, Target } from 'lucide-react';
 import {
   Area,
@@ -101,10 +102,8 @@ export function ChatConcentrationSection({ data }: { data: CoachingData }) {
     }));
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.28 }}
+    <Rise
+      step={{ seconds: 0.28 }}
       className="panel-card rounded-2xl p-6"
     >
       <div className="mb-6 flex items-center gap-3">
@@ -178,7 +177,7 @@ export function ChatConcentrationSection({ data }: { data: CoachingData }) {
           </p>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -197,10 +196,8 @@ export function HypeMomenteSection({
     Math.abs(data.correlation.chatViewerR) >= 0.4 ? `${data.correlation.chatViewerR.toFixed(2)} r` : 'schwach';
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.35 }}
+    <Rise
+      step={{ seconds: 0.35 }}
       className="panel-card rounded-2xl p-6"
     >
       <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
@@ -287,7 +284,7 @@ export function HypeMomenteSection({
           </div>
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -313,10 +310,8 @@ export function StimmungTopicsSection({ data, windowStart }: { data: ChatContent
   }));
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.4 }}
+    <Rise
+      step={{ seconds: 0.4 }}
       className="panel-card rounded-2xl p-6"
     >
       <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
@@ -485,7 +480,7 @@ export function StimmungTopicsSection({ data, windowStart }: { data: ChatContent
           </div>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -499,10 +494,8 @@ export function ChatNetzwerkSection({ data, windowStart }: { data: ChatSocialGra
   if (data.totalMentions === 0 && !shouldRenderEmptyState) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.45 }}
+    <Rise
+      step={{ seconds: 0.45 }}
       className="panel-card rounded-2xl p-6"
     >
       <RawChatStatusBanner status={data.rawChatStatus} compact windowStart={windowStart} />
@@ -592,7 +585,7 @@ export function ChatNetzwerkSection({ data, windowStart }: { data: ChatSocialGra
           </div>
         </>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -632,10 +625,8 @@ export function ChatMinimaxDeepSection({
   }));
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.5 }}
+    <Rise
+      step={{ seconds: 0.5 }}
       className="panel-card rounded-2xl p-6 bg-gradient-to-br from-background via-background to-primary/5"
     >
       <div className="mb-6 flex items-center justify-between">
@@ -736,6 +727,6 @@ export function ChatMinimaxDeepSection({
           Klicke auf "Analyse starten", um eine detaillierte KI-Auswertung der Chat-Substanz für diese Session zu erhalten.
         </p>
       )}
-    </motion.div>
+    </Rise>
   );
 }

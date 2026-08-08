@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import type { HourlyHeatmapData } from '@/types/analytics';
 import { getWeekdayLabel, formatNumber, getHeatmapColor } from '@/utils/formatters';
 
@@ -21,9 +22,7 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
   const maxViewers = Math.max(...data.map(d => d.avgViewers), 1);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
@@ -104,6 +103,6 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
           </div>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }

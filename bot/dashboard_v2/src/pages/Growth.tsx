@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { TrendingUp, AlertCircle, Loader2, Clock, Crown, Users, ArrowDownLeft, ArrowUpRight, UserPlus, Star } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, Cell } from 'recharts';
@@ -105,10 +106,8 @@ export function Growth({ streamer, days }: GrowthProps) {
       </div>
 
       {/* Hours Watched Trend */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+      <Rise
+        step={{ seconds: 0.2 }}
         className="panel-card rounded-2xl p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -150,7 +149,7 @@ export function Growth({ streamer, days }: GrowthProps) {
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </motion.div>
+      </Rise>
 
       {/* Tag & Title Performance */}
       <PlanGateCard featureId="title_performance" title="Titel-Performance">
@@ -260,16 +259,13 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
 
   if (incomingRaids.length === 0) {
     return (
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
+      <Rise>
         <NoDataCard
           message="Keine eingehenden Raids"
           submessage="Es wurden noch keine Raids zu deinem Kanal erkannt."
           icon={ArrowDownLeft}
         />
-      </motion.div>
+      </Rise>
     );
   }
 
@@ -283,9 +279,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
     <>
       {/* 1. Raid-Bilanz */}
       {summary && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="bg-card rounded-xl border border-border p-5"
         >
           <div className="flex items-center gap-3 mb-4">
@@ -327,14 +321,12 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
               <span className="text-white font-medium">{formatNumber(summary.raid_balance.received)}</span>
             </span>
           </div>
-        </motion.div>
+        </Rise>
       )}
 
       {/* 2. Raid-Impact Zusammenfassung (KPI cards) */}
       {summary && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
         >
           <div className="bg-card rounded-xl border border-border p-4">
@@ -371,13 +363,11 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
               {summary.best_raider ?? '-'}
             </div>
           </div>
-        </motion.div>
+        </Rise>
       )}
 
       {/* 3. Incoming Raids Tabelle */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="bg-card rounded-xl border border-border p-5"
       >
         <div className="flex items-center gap-3 mb-4">
@@ -422,13 +412,11 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
             </tbody>
           </table>
         </div>
-      </motion.div>
+      </Rise>
 
       {/* 4. Top Raiders */}
       {topRaiders.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="bg-card rounded-xl border border-border p-5"
         >
           <div className="flex items-center gap-3 mb-4">
@@ -458,7 +446,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
               </div>
             ))}
           </div>
-        </motion.div>
+        </Rise>
       )}
     </>
   );

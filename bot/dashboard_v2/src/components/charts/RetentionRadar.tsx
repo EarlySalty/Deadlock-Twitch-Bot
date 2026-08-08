@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import {
   RadarChart,
   PolarGrid,
@@ -77,9 +77,7 @@ export function RetentionRadar({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="panel-card p-6 rounded-2xl"
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
@@ -132,6 +130,6 @@ export function RetentionRadar({
       <div className="mt-4 text-xs text-center text-text-secondary">
         Basierend auf Benchmarks vs. Deadlock Kategorie
       </div>
-    </motion.div>
+    </Rise>
   );
 }

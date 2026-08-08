@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { AlertCircle, Loader2, MessageSquare, Search, Users } from 'lucide-react';
 import { useViewerTimeline } from '@/hooks/useAnalytics';
 import { SEGMENT_CONFIG } from '@/pages/Viewers';
@@ -89,9 +90,7 @@ export function ViewerTimeline({
 
   return (
     <div className="space-y-5">
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="bg-card rounded-xl border border-border p-5"
       >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -120,11 +119,9 @@ export function ViewerTimeline({
             </div>
           </div>
         </div>
-      </motion.div>
+      </Rise>
 
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="bg-card rounded-xl border border-border p-5 space-y-4"
       >
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_180px_minmax(0,1fr)_120px]">
@@ -294,7 +291,7 @@ export function ViewerTimeline({
             )}
           </div>
         )}
-      </motion.div>
+      </Rise>
     </div>
   );
 }

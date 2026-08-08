@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Tag, TrendingUp, TrendingDown, Minus, Users, Clock, UserPlus, ChevronDown, ChevronUp, Trophy, Target, Info } from 'lucide-react';
 import type { TagPerformanceExtended, TitlePerformance, PeerBenchmark } from '@/types/analytics';
 
@@ -25,9 +26,7 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
   const maxTitleViewers = sortedTitles.length > 0 ? Math.max(...sortedTitles.map(t => t.avgViewers), 1) : 1;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center justify-between mb-6">
@@ -167,7 +166,7 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
           </div>
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 

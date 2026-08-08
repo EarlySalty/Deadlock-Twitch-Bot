@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import {
   ArrowLeft,
   ArrowRight,
@@ -566,12 +566,10 @@ export function OnboardingWizard({ onNavigateOverview }: OnboardingWizardProps) 
         onSelect={step => void selectStep(step)}
       />
 
-      <motion.section
+      <Rise
+        as="section"
         key={activeStep}
         className="panel-card rounded-2xl p-5 md:p-6"
-        initial={{ opacity: 0, y: 14 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.24 }}
       >
         {activeStep === 0 && <WelcomeStep />}
         {activeStep === 1 && (
@@ -597,7 +595,7 @@ export function OnboardingWizard({ onNavigateOverview }: OnboardingWizardProps) 
             onNavigateOverview={onNavigateOverview}
           />
         )}
-      </motion.section>
+      </Rise>
 
       <div className="flex items-center justify-between gap-3">
         <button

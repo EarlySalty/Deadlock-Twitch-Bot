@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Target, UserPlus, TrendingUp } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { RaidRetention as RaidRetentionData } from '@/types/analytics';
@@ -23,9 +23,7 @@ export function RaidRetention({ data }: RaidRetentionProps) {
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         <SummaryCard
@@ -47,14 +45,12 @@ export function RaidRetention({ data }: RaidRetentionProps) {
           sublabel={`über ${summary.raidCount} Raids`}
           color="accent"
         />
-      </motion.div>
+      </Rise>
 
       {/* Raids Table */}
       {raids.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        <Rise
+          step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">Raid-Details</h4>
@@ -96,7 +92,7 @@ export function RaidRetention({ data }: RaidRetentionProps) {
               </tbody>
             </table>
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { Users, AlertCircle, Loader2, TrendingUp, TrendingDown, Target, Clock, UserPlus } from 'lucide-react';
 import { useWatchTimeDistribution, useFollowerFunnel, useAudienceDemographics, useLurkerAnalysis, useViewerProfiles } from '@/hooks/useAnalytics';
 import { WatchTimeDistribution } from '@/components/charts/WatchTimeDistribution';
@@ -155,13 +156,11 @@ export function Audience({ streamer, days }: AudienceProps) {
               );
             }
             return cards.length > 0 ? (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
+              <Rise
                 className="grid grid-cols-2 md:grid-cols-4 gap-4"
               >
                 {cards}
-              </motion.div>
+              </Rise>
             ) : null;
           })()}
 
@@ -202,10 +201,8 @@ export function Audience({ streamer, days }: AudienceProps) {
 
           {/* Audience Insights Summary */}
           {(hasWatchTimeInsight || hasFunnelInsight || hasLurkerInsight || hasDemographicsInsight) && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
+            <Rise
+              step={{ seconds: 0.3 }}
               className="bg-gradient-to-r from-primary/10 to-accent/10 rounded-xl border border-primary/20 p-6"
             >
               <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
@@ -258,7 +255,7 @@ export function Audience({ streamer, days }: AudienceProps) {
                   />
                 )}
               </div>
-            </motion.div>
+            </Rise>
           )}
         </>
       )}

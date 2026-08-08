@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Clock, TrendingUp, TrendingDown, Users, Timer } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { WatchTimeDistribution as WatchTimeDistributionType } from '@/types/analytics';
@@ -49,9 +50,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
   const avgTrendUp = avgDelta != null && avgDelta >= 0;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center justify-between mb-6">
@@ -236,7 +235,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
           )}
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 

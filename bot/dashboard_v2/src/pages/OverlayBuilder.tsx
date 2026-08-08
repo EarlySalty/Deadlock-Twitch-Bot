@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
@@ -69,18 +69,14 @@ export function OverlayBuilderPage() {
 
   return (
     <OverlayBuilderFrame>
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.24 }}
-      >
+      <Rise>
         <a
           href={PREVIEW_VERWALTUNG_ROUTE}
           className="inline-flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-white"
         >
           ← Zurück zur Verwaltung
         </a>
-      </motion.div>
+      </Rise>
 
       <OverlayBuilderSection login={twitchLogin} />
     </OverlayBuilderFrame>

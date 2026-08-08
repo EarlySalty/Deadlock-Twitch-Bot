@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { Scale, Users, TrendingUp, Target, AlertCircle, Loader2, Filter, Award } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCategoryComparison, fetchViewerOverlap } from '@/api/analytics';
@@ -71,9 +72,7 @@ export function Comparison({ streamer, days }: ComparisonProps) {
       )}
 
       {/* Category Comparison Section */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -150,14 +149,12 @@ export function Comparison({ streamer, days }: ComparisonProps) {
             </motion.div>
           )}
         </PlanGateCard>
-      </motion.div>
+      </Rise>
 
       {/* Viewer Overlap Section */}
       <PlanGateCard featureId="viewer_overlap" title="Viewer-Overlap">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
+        <Rise
+          step={{ seconds: 0.2 }}
           className="bg-card rounded-xl border border-border p-6"
         >
           <div className="flex items-center gap-3 mb-6">
@@ -217,14 +214,12 @@ export function Comparison({ streamer, days }: ComparisonProps) {
               })()}
             </div>
           )}
-        </motion.div>
+        </Rise>
       </PlanGateCard>
 
       {/* Zuschauer-Netzwerk */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
+      <Rise
+        step={{ seconds: 0.3 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -232,7 +227,7 @@ export function Comparison({ streamer, days }: ComparisonProps) {
           <h2 className="text-xl font-bold text-white">Zuschauer-Netzwerk</h2>
         </div>
         <AudienceSharing data={audienceSharingData} />
-      </motion.div>
+      </Rise>
     </div>
   );
 }
@@ -377,9 +372,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
   ];
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-6"
     >
       {/* Header with Tier Badge */}
@@ -412,7 +405,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
           />
         ))}
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 

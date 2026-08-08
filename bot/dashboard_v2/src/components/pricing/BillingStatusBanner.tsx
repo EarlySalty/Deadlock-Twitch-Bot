@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
 type Tone = 'success' | 'info' | 'warn';
@@ -92,10 +92,7 @@ export default function BillingStatusBanner() {
   const Icon = TONE_ICON[message.tone];
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+    <Rise
       className={`mb-6 flex items-start gap-3 rounded-xl border px-4 py-3 ${TONE_STYLES[message.tone]}`}
       role="status"
     >
@@ -108,6 +105,6 @@ export default function BillingStatusBanner() {
       >
         <X className="h-4 w-4" />
       </button>
-    </motion.div>
+    </Rise>
   );
 }

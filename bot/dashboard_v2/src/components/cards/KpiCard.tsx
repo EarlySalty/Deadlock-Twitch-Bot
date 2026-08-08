@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -46,9 +46,7 @@ export function KpiCard({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className={`panel-card soft-elevate p-5 rounded-2xl ${
         size === 'large' ? 'md:col-span-2' : ''
       }`}
@@ -80,6 +78,6 @@ export function KpiCard({
       {subValue && (
         <div className="mt-3 text-xs text-text-secondary font-medium">{subValue}</div>
       )}
-    </motion.div>
+    </Rise>
   );
 }

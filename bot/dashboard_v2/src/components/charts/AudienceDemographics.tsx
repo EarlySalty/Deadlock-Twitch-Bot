@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Globe, Users, Clock, Heart, Activity, TrendingUp } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
@@ -99,9 +100,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   const chattersCoverage = getChattersCoverage(data.dataQuality);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center justify-between mb-6">
@@ -323,7 +322,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
           )}
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 

@@ -169,6 +169,19 @@ a[data-press]:active {
   animation: ddc-rise-in 260ms var(--ease-out) both;
 }
 
+/* Einzelner Block mit eigener Verzoegerung. Loest die framer-motion-Ketten
+   (`initial={{opacity:0,y:20}}` + `transition={{delay}}`) ab: dieselbe Geste,
+   aber als CSS-Animation und damit ausserhalb des Hauptthreads — framer-motions
+   `y`-Prop laeuft ueber requestAnimationFrame und verliert Bilder, sobald die
+   Seite gleichzeitig Daten nachlaedt. Die Distanz ist mit 8px bewusst kleiner
+   als die bisherigen 16-20px: der Blick soll den Block finden, nicht ihm
+   hinterherlaufen. Verzoegerung kommt ueber `--rise-delay`, gerechnet in
+   `src/motion/rise.ts`. */
+.rise-in {
+  animation: ddc-rise-in 260ms var(--ease-out) both;
+  animation-delay: var(--rise-delay, 0ms);
+}
+
 .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
 .stagger-children > *:nth-child(2) { animation-delay: 40ms; }
 .stagger-children > *:nth-child(3) { animation-delay: 80ms; }
@@ -250,10 +263,18 @@ a[data-press]:active {
   .card-glow:hover,
   .kpi-glow-always:hover,
   .soft-elevate:hover,
-  .stagger-children > * {
+  .stagger-children > *,
+  .rise-in {
     transform: none;
     translate: none;
     scale: 1;
+  }
+
+  /* Der Auftritt bleibt als Einblendung erhalten, nur ohne Ortswechsel und
+     ohne Warteschlange — sonst blitzt die halbe Seite verzoegert auf. */
+  .rise-in {
+    animation: none;
+    animation-delay: 0ms;
   }
 }
 

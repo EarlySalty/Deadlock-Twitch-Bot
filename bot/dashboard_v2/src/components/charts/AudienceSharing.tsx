@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend,
@@ -55,9 +55,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
   return (
     <div className="space-y-4">
       {/* Summary */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="panel-card rounded-2xl p-4"
       >
         <div className="flex items-center justify-between">
@@ -66,14 +64,12 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
             {totalUniqueViewers.toLocaleString('de-DE')}
           </span>
         </div>
-      </motion.div>
+      </Rise>
 
       {/* Horizontal Bar Chart: Top Partners */}
       {barData.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        <Rise
+          step={{ seconds: 0.1 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
@@ -137,15 +133,13 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
               </div>
             ))}
           </div>
-        </motion.div>
+        </Rise>
       )}
 
       {/* Timeline Line Chart */}
       {lineData.length > 1 && topStreamers.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
+        <Rise
+          step={{ seconds: 0.2 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
@@ -180,7 +174,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );

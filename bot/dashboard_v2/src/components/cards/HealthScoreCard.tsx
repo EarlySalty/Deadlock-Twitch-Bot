@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Zap } from 'lucide-react';
 import type { HealthScore } from '@/types/analytics';
 
@@ -30,14 +31,13 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
 
       {/* Main Score */}
       <div className="flex items-baseline justify-center gap-1 mb-2">
-        <motion.span
+        <Rise
+          step={{ seconds: 0.2 }}
+          as="span"
           className="display-font text-6xl font-bold text-white"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
         >
           {scores.total}
-        </motion.span>
+        </Rise>
         <span className="text-xl text-primary">/100</span>
       </div>
 

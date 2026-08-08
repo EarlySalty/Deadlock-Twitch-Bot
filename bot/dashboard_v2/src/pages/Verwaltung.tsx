@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
@@ -414,11 +415,9 @@ export function VerwaltungPage() {
       <div className="relative max-w-[900px] mx-auto space-y-4 md:space-y-5">
 
         {partnerStatus && partnerStatus !== 'active' && partnerStatus !== 'blocked' ? (
-          <motion.section
+          <Rise
+            as="section"
             className="panel-card rounded-2xl border border-warning/30 bg-warning/10 p-5 md:p-6"
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.26 }}
           >
             <div className="space-y-3">
               <h2 className="text-lg font-bold text-white">
@@ -448,15 +447,13 @@ export function VerwaltungPage() {
                 Jetzt neu autorisieren
               </a>
             </div>
-          </motion.section>
+          </Rise>
         ) : null}
 
         {/* Hero */}
-        <motion.section
+        <Rise
+          as="section"
           className="panel-card rounded-2xl p-5 md:p-8"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.32 }}
         >
           <div className="space-y-4">
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-1.5 text-sm font-medium text-text-secondary">
@@ -483,7 +480,7 @@ export function VerwaltungPage() {
               Zurück zur Startseite
             </a>
           </div>
-        </motion.section>
+        </Rise>
 
         {/* Bereichswechsel. Sticky, damit er auch nach langem Scrollen erreichbar bleibt. */}
         <nav className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">

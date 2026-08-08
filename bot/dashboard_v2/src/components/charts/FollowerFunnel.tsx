@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { UserPlus, Users, Heart, TrendingUp, TrendingDown, Zap, Radio, Share2, Info, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 import type { FollowerFunnel as FollowerFunnelType } from '@/types/analytics';
@@ -86,9 +87,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
   const totalSourceFollowers = sourceData.reduce((sum, s) => sum + s.value, 0);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center justify-between mb-6">
@@ -329,7 +328,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
           )}
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import type { CalendarHeatmapData } from '@/types/analytics';
 import { getHeatmapColor, formatHours, getMonthLabel } from '@/utils/formatters';
 
@@ -69,9 +70,7 @@ export function CalendarHeatmap({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+    <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
@@ -179,6 +178,6 @@ export function CalendarHeatmap({
           </div>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }

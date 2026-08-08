@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   AlertTriangle, TrendingDown, Clock, Calendar, Tag, Users,
   Search, Type, UserMinus, AlertCircle, ChevronRight,
@@ -93,10 +94,8 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.1 }}
+    <Rise
+      step={{ seconds: 0.1 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -218,7 +217,7 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
           )}
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -237,10 +236,8 @@ export function DurationSection({ data }: { data: CoachingData }) {
   }));
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.15 }}
+    <Rise
+      step={{ seconds: 0.15 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -291,7 +288,7 @@ export function DurationSection({ data }: { data: CoachingData }) {
           {dur.correlation < -0.2 && ' (Laengere Streams = weniger Viewer)'}
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -331,10 +328,8 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
   if (!sched) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.2 }}
+    <Rise
+      step={{ seconds: 0.2 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -420,7 +415,7 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
           <span>Deine Slots</span>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -434,10 +429,8 @@ export function TitleSection({ data }: { data: CoachingData }) {
   if (!titles) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.25 }}
+    <Rise
+      step={{ seconds: 0.25 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -523,7 +516,7 @@ export function TitleSection({ data }: { data: CoachingData }) {
           )}
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -537,10 +530,8 @@ export function TagSection({ data }: { data: CoachingData }) {
   if (!tags) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.3 }}
+    <Rise
+      step={{ seconds: 0.3 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -607,7 +598,7 @@ export function TagSection({ data }: { data: CoachingData }) {
           )}
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -641,10 +632,8 @@ export function RetentionSection({ data }: { data: CoachingData }) {
   if (!ret) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.35 }}
+    <Rise
+      step={{ seconds: 0.35 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -695,7 +684,7 @@ export function RetentionSection({ data }: { data: CoachingData }) {
           </LineChart>
         </ResponsiveContainer>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -713,10 +702,8 @@ export function CommunitySection({ data }: { data: CoachingData }) {
     : 1;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.4 }}
+    <Rise
+      step={{ seconds: 0.4 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -762,7 +749,7 @@ export function CommunitySection({ data }: { data: CoachingData }) {
           </div>
         ))}
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -776,10 +763,8 @@ export function DoubleStreamSection({ data }: { data: CoachingData }) {
   if (!ds || !ds.detected) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.45 }}
+    <Rise
+      step={{ seconds: 0.45 }}
       className="bg-error/5 rounded-xl border border-error/20 p-6"
     >
       <div className="flex items-center gap-3 mb-4">
@@ -815,7 +800,7 @@ export function DoubleStreamSection({ data }: { data: CoachingData }) {
           </div>
         </div>
       )}
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -834,10 +819,8 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
   );
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.55 }}
+    <Rise
+      step={{ seconds: 0.55 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -924,7 +907,7 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
           <span>Erhalten</span>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -948,10 +931,8 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
   const percentile = Math.round((pc.ownRank / Math.max(pc.totalStreamers, 1)) * 100);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.6 }}
+    <Rise
+        step={{ seconds: 0.6 }}
       className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
@@ -1052,7 +1033,7 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
           </div>
         )}
       </div>
-    </motion.div>
+    </Rise>
   );
 }
 
@@ -1068,10 +1049,8 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
   const maxStreamers = Math.max(...comp.hourly.map(h => h.activeStreamers), 1);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.65 }}
+    <Rise
+      step={{ seconds: 0.65 }}
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center gap-3 mb-6">
@@ -1174,6 +1153,6 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
           <span>Ohne dich</span>
         </div>
       </div>
-    </motion.div>
+    </Rise>
   );
 }

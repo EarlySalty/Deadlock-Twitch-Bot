@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { Rise } from '../motion/Rise';
 import {
   Search, Crown, TrendingUp, Users, Star, Filter,
   ArrowUpDown, ChevronUp, ChevronDown, ExternalLink, Loader2,
@@ -181,21 +182,17 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
       {/* Timings Charts */}
       <PlanGateCard featureId="category_timings" title="Kategorie-Timings">
         {activitySeries && (
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
+          <Rise
             className="bg-card border border-border rounded-xl p-5"
           >
             <CategoryTimingsChart data={activitySeries} />
-          </motion.div>
+          </Rise>
         )}
       </PlanGateCard>
 
       {/* Top Partner Streamer */}
       {!loadingCat && topPartners.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="bg-card border border-border rounded-xl overflow-hidden"
         >
           <div className="px-5 py-3 border-b border-border bg-background/30 flex items-center gap-2">
@@ -204,14 +201,12 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
             <span className="text-xs text-text-secondary ml-auto">Top {topPartners.length}</span>
           </div>
           <TopStreamerTable entries={topPartners} selected={streamer} onSelect={handleSelect} />
-        </motion.div>
+        </Rise>
       )}
 
       {/* Top Deadlock Streamer (Kategorie gesamt) */}
       {!loadingCat && topAll.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
+        <Rise
           className="bg-card border border-border rounded-xl overflow-hidden"
         >
           <div className="px-5 py-3 border-b border-border bg-background/30 flex items-center gap-2">
@@ -220,7 +215,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
             <span className="text-xs text-text-secondary ml-auto">Top {topAll.length}</span>
           </div>
           <TopStreamerTable entries={topAll} selected={streamer} onSelect={handleSelect} />
-        </motion.div>
+        </Rise>
       )}
 
       {/* Controls */}

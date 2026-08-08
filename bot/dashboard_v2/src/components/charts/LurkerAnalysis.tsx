@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { Rise } from '../../motion/Rise';
 import { Eye, UserCheck, Users } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { LurkerAnalysis as LurkerAnalysisData } from '@/types/analytics';
@@ -17,9 +17,7 @@ export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
   return (
     <div className="space-y-4">
       {/* Stat Cards */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <Rise
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         <StatCard
@@ -43,14 +41,12 @@ export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
           sublabel={`Ø ${lurkerStats.avgSessions.toFixed(1)} Sessions`}
           color="accent"
         />
-      </motion.div>
+      </Rise>
 
       {/* Lurker Table */}
       {regularLurkers.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        <Rise
+          step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">Top Lurker</h4>
@@ -78,7 +74,7 @@ export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
               </tbody>
             </table>
           </div>
-        </motion.div>
+        </Rise>
       )}
     </div>
   );
