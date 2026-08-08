@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield, Film } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
+import {
+  fetchMyAccess,
+  fetchPartnerAccessList,
+  setPartnerAccess,
+} from '@/api/socialMedia';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 
 /**
@@ -21,6 +27,37 @@ export function SocialMediaAdminDashboard() {
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
+
+  // Was diese Session darf: Admin sieht alles, Partner nur nach Freigabe.
+  const { data: access, isLoading: loadingAccess } = useQuery({
+    queryKey: ['social-media-access'],
+    queryFn: fetchMyAccess,
+    staleTime: 60 * 1000,
+    retry: false,
+  });
+
+  const isAdminView = Boolean(authStatus?.isAdmin || authStatus?.isLocalhost);
+
+  const queryClient = useQueryClient();
+  const { data: accessList = [] } = useQuery({
+    queryKey: ['social-media-access-list'],
+    queryFn: fetchPartnerAccessList,
+    enabled: isAdminView,
+    staleTime: 60 * 1000,
+    retry: false,
+  });
+
+  const accessMutation = useMutation({
+    mutationFn: ({ login, granted }: { login: string; granted: boolean }) =>
+      setPartnerAccess(login, granted),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media-access-list'] });
+    },
+  });
+
+  const selectedGranted = accessList.some(
+    (entry) => entry.streamer_login.toLowerCase() === streamer && entry.granted,
+  );
 
   const isDemoShell = resolveEffectiveDemoMode({
     pathname: window.location.pathname,
@@ -126,7 +163,7 @@ export function SocialMediaAdminDashboard() {
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] font-bold text-primary/90">
-                Admin-Tooling
+                {isAdminView ? 'Admin-Tooling' : 'Clip-Pipeline'}
               </div>
               <h1 className="display-font font-extrabold text-white text-xl md:text-2xl tracking-tight leading-tight">
                 Social-Media-Pipeline
@@ -134,7 +171,28 @@ export function SocialMediaAdminDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {(authStatus?.isAdmin || authStatus?.isLocalhost) && (
+            {isAdminView && streamer && (
+              <button
+                type="button"
+                onClick={() =>
+                  accessMutation.mutate({ login: streamer, granted: !selectedGranted })
+                }
+                disabled={accessMutation.isPending}
+                title={
+                  selectedGranted
+                    ? 'Freigabe für diesen Streamer entziehen'
+                    : 'Diesen Streamer für das eigene Social-Media-Dashboard freischalten'
+                }
+                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                  selectedGranted
+                    ? 'border-success/40 bg-success/10 text-success hover:bg-success/20'
+                    : 'border-border bg-background/80 text-text-secondary hover:text-white'
+                }`}
+              >
+                {selectedGranted ? 'Freigegeben' : 'Freigeben'}
+              </button>
+            )}
+            {isAdminView && (
               <select
                 value={streamer}
                 onChange={(event) => {
@@ -171,17 +229,23 @@ export function SocialMediaAdminDashboard() {
           <TrialExpiryModal />
           <TrialBanner />
 
-          {!authStatus?.isAdmin && !authStatus?.isLocalhost ? (
+          {isAdminView ? (
+            <SocialMedia streamer={streamer} />
+          ) : loadingAccess ? (
+            <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
+              Zugriff wird geprüft…
+            </div>
+          ) : access?.allowed ? (
+            <SocialMedia streamer={access.streamer ?? streamer} />
+          ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />
-              <h2 className="text-xl font-bold text-white mb-2">Admin-Zugriff erforderlich</h2>
+              <h2 className="text-xl font-bold text-white mb-2">Noch nicht freigeschaltet</h2>
               <p className="text-text-secondary">
-                Das Social-Media-Dashboard ist ein internes Admin-Tool und für Partner-Streamer
-                aktuell nicht freigegeben.
+                Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei
+                EarlySalty, wenn du deine Clips hier aufbereiten möchtest.
               </p>
             </div>
-          ) : (
-            <SocialMedia streamer={streamer} />
           )}
         </PlanProvider>
         {loadingStreamers && (

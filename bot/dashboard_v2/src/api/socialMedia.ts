@@ -57,6 +57,39 @@ function buildQuery(params: Record<string, string | number | undefined>): string
   return qs ? `?${qs}` : '';
 }
 
+/** Was die eigene Session im Social-Media-Dashboard darf. */
+export interface SocialMediaAccess {
+  allowed: boolean;
+  streamer: string | null;
+  isAdmin: boolean;
+}
+
+/** Ein Eintrag der Freigabe-Liste (Admin-Sicht). */
+export interface PartnerAccessEntry {
+  streamer_login: string;
+  granted: boolean;
+}
+
+export async function fetchMyAccess(): Promise<SocialMediaAccess> {
+  return fetchJson<SocialMediaAccess>('/social-media/api/access/me');
+}
+
+export async function fetchPartnerAccessList(): Promise<PartnerAccessEntry[]> {
+  const data = await fetchJson<{ items: PartnerAccessEntry[] }>('/social-media/api/access');
+  return data.items ?? [];
+}
+
+export async function setPartnerAccess(
+  streamerLogin: string,
+  granted: boolean,
+): Promise<void> {
+  await fetchJson('/social-media/api/access', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_login: streamerLogin, granted }),
+  });
+}
+
 export async function fetchStreamerLayout(streamerLogin: string): Promise<StreamerLayoutResponse> {
   const qs = buildQuery({ streamer_login: streamerLogin });
   return fetchJson<StreamerLayoutResponse>(`${ADMIN_PREFIX}/streamer-layout${qs}`);
