@@ -1,6 +1,6 @@
 # Streamer-Dashboard auf Apple-/Emil-Standard heben
 
-status: aktiv · 2026-08-08 · Klasse mittel
+status: erledigt · 2026-08-08 · Klasse mittel · live seit 17:32
 
 ## Auftrag
 
@@ -100,3 +100,29 @@ Spring-Konfiguration im Repo.
 - Offen: Screenshot-Vergleich. In dieser Umgebung gibt es keine
   Browser-Automation (`preview_open` meldet „No preview automation host is
   available"), der Preview-Server läuft auf Port 4174 zum Draufschauen.
+
+## Live
+
+Merge `32481998` auf `main`. Zwei Gate-Durchgänge haben blockiert, beide
+Befunde waren echt und sind behoben: ungelayertes CSS, das alle Tailwind-
+Utilities schlug, und Übergangslisten ohne `translate`/`scale` (Tailwind v4
+nutzt die eigenständigen Properties, nicht `transform`).
+
+Der Frontend-Deploy ist der Build: `tb-dashboard` (PID 3582916, unverändert)
+liest `dist` bei jedem Request von der Platte, ein Neustart wäre wirkungslos.
+
+- `bot/analytics/dashboard_v2/dist/assets/index-CSu-HWlB.css`, 164882 Bytes,
+  17:32 — vorher `index-DUwD9-FN.css` von 16:30.
+- Über HTTP ausgeliefert: `https://deutsche-deadlock-community.de/twitch/dashboard-v2/assets/index-CSu-HWlB.css`
+  → 200, `text/css`, 164882 Bytes, enthält `--text-xs--letter-spacing:.012em`,
+  `--text-4xl--letter-spacing:-.026em`, `--ease-out:cubic-bezier(.23, 1, .32, 1)`,
+  `a[data-press]:active{scale:var(--press-scale)}`.
+- Die Shell verweist darauf: `/twitch/demo` und `/twitch/pricing` liefern
+  `assets/index-CSu-HWlB.css` im HTML.
+- `bot/admin_dashboard/dist/assets/index-B5UCzibt.css`, 69419 Bytes, 17:33,
+  dieselben Anker.
+- `journalctl --user -u deadlock-twitch-dashboard-rust -p err --since "5 minutes ago"`
+  leer, `NRestarts=0`, `ActiveState=active`.
+
+Zu sehen: `https://deutsche-deadlock-community.de/analyse`, Tab „Übersicht" —
+Druck auf eine Kachel, Tab-Wechsel, Streamer-Dropdown oben rechts.
