@@ -37,6 +37,20 @@ pub const TARGET_WIDTH: i64 = 1080;
 /// Höhe des fertigen Hochformat-Frames (9:16).
 pub const TARGET_HEIGHT: i64 = 1920;
 
+/// Kantenlänge der Cam-Kachel im PiP-Standard.
+const DEFAULT_PIP_SIZE: i64 = 320;
+/// Abstand der Cam-Kachel zum Frame-Rand im PiP-Standard.
+const DEFAULT_PIP_INSET: i64 = 48;
+
+/// Cam-Kachel rechts oben: der PiP-Standard, wie er vor der Umstellung fest im
+/// Renderer stand.
+pub const DEFAULT_PIP_TILE: LayoutBox = LayoutBox {
+    x: TARGET_WIDTH - DEFAULT_PIP_SIZE - DEFAULT_PIP_INSET,
+    y: DEFAULT_PIP_INSET,
+    w: DEFAULT_PIP_SIZE,
+    h: DEFAULT_PIP_SIZE,
+};
+
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct LayoutValidationError(pub String);
@@ -114,16 +128,45 @@ impl LayoutBox {
         }
     }
 
-    /// Zielrechteck, garantiert innerhalb des Hochformat-Frames. Der Renderer
-    /// ruft das defensiv auf, damit ein Altlayout keinen Overlay ausserhalb des
-    /// Bildes erzeugt.
+    /// Zielrechteck, garantiert innerhalb des Hochformat-Frames und mit geraden
+    /// Kantenlängen. Der Renderer ruft das defensiv auf: ein Altlayout darf
+    /// keinen Overlay ausserhalb des Bildes erzeugen, und ungerade Maße lassen
+    /// libx264 mit yuv420p abbrechen (`scale=421:561`).
     pub fn clamped_to_target(self) -> Self {
-        self.clamped_within(TARGET_WIDTH, TARGET_HEIGHT)
+        let inside = self.clamped_within(TARGET_WIDTH, TARGET_HEIGHT);
+        Self {
+            w: even_size(inside.w),
+            h: even_size(inside.h),
+            ..inside
+        }
     }
 
     fn to_json(self) -> Value {
         json!({ "x": self.x, "y": self.y, "w": self.w, "h": self.h })
     }
+}
+
+/// Rundet eine Kantenlänge auf einen geraden Wert ab (Minimum 2).
+fn even_size(value: i64) -> i64 {
+    (value - value.rem_euclid(2)).max(2)
+}
+
+/// Bringt ein gespeichertes `cam_position` in den Zielframe.
+///
+/// Sonderfall PiP: vor diesem Umbau war `cam_position` im PiP-Modus weder im
+/// Dashboard editierbar noch im Renderer wirksam (die Kachel stand fest auf
+/// 320x320 mit Rand 48). Gespeichert wurde trotzdem der Stacked-Default
+/// `{0,0,1080,540}`. Ein frameweiter Wert ist dort also keine Entscheidung des
+/// Nutzers, sondern Altlast; würde man ihn übernehmen, klebte plötzlich eine
+/// 1080x540 große Cam oben links im Bild. Deshalb zurück auf den PiP-Standard.
+///
+/// Im Stacked-Modus war der Wert echt gesetzt (die Streifenhöhe war editierbar
+/// und wirksam) und bleibt unangetastet.
+fn normalize_stored_cam_position(cam_position: LayoutBox, mode: &str) -> LayoutBox {
+    if mode == "pip" && cam_position.w >= TARGET_WIDTH {
+        return DEFAULT_PIP_TILE;
+    }
+    cam_position.clamped_to_target()
 }
 
 /// Quell-Auflösung des Layouts.
@@ -220,10 +263,6 @@ impl StreamerLayout {
         let game_crop = LayoutBox::from_value("game_crop", obj.get("game_crop"))?;
         let cam_crop = LayoutBox::from_value("cam_crop", obj.get("cam_crop"))?;
         let cam_position = LayoutBox::from_value("cam_position", obj.get("cam_position"))?;
-        let cam_position = match cam_position_policy {
-            CamPositionPolicy::Strict => cam_position,
-            CamPositionPolicy::Clamp => cam_position.clamped_to_target(),
-        };
 
         let resolved_mode = match mode {
             Some(m) => m.to_string(),
@@ -243,6 +282,10 @@ impl StreamerLayout {
                 .get("cam_enabled")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
+        };
+        let cam_position = match cam_position_policy {
+            CamPositionPolicy::Strict => cam_position,
+            CamPositionPolicy::Clamp => normalize_stored_cam_position(cam_position, &resolved_mode),
         };
 
         let layout = Self {
@@ -312,12 +355,7 @@ pub fn default_streamer_layout() -> StreamerLayout {
             w: 380,
             h: 380,
         },
-        cam_position: LayoutBox {
-            x: 712,
-            y: 48,
-            w: 320,
-            h: 320,
-        },
+        cam_position: DEFAULT_PIP_TILE,
         cam_enabled: true,
         mode: "pip".to_string(),
     }
@@ -529,6 +567,65 @@ mod tests {
         assert!(StreamerLayout::from_value(&p, None, None).is_err());
     }
 
+    /// Exakt der Stand der 57 Zeilen in `twitch_clips_social_media`
+    /// (`layout_override_json`) vor der Umstellung.
+    fn live_altlayout() -> Value {
+        serde_json::from_str(
+            r#"{"version":1,
+                "source":{"width":1920,"height":1080},
+                "game_crop":{"x":0,"y":0,"w":1080,"h":1080},
+                "cam_crop":{"x":1500,"y":50,"w":380,"h":380},
+                "cam_position":{"x":0,"y":0,"w":1080,"h":540},
+                "cam_enabled":true,
+                "mode":"pip"}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn altes_pip_layout_faellt_auf_die_kachel_zurueck() {
+        // Im PiP-Modus war cam_position vorher weder editierbar noch wirksam.
+        // Ein frameweiter Wert ist Altlast, keine Nutzerentscheidung: sonst
+        // klebt ab dem Deploy eine 1080x540-Cam oben links im Bild.
+        let layout = StreamerLayout::from_stored_value(&live_altlayout(), None, None).unwrap();
+        assert_eq!(layout.mode, "pip");
+        assert_eq!(layout.cam_position, DEFAULT_PIP_TILE);
+        assert_eq!(layout, default_streamer_layout());
+
+        // Auch wenn mode aus der Spalte kommt statt aus dem JSON.
+        let layout =
+            StreamerLayout::from_stored_value(&live_altlayout(), Some(true), Some("PIP")).unwrap();
+        assert_eq!(layout.cam_position, DEFAULT_PIP_TILE);
+
+        // Stacked bleibt unangetastet: dort war der Wert echt gesetzt.
+        let mut stacked = live_altlayout();
+        stacked["mode"] = json!("stacked");
+        let layout = StreamerLayout::from_stored_value(&stacked, None, None).unwrap();
+        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+
+        // Ein echter, schmaler PiP-Wert kommt unveraendert durch.
+        let mut echt = live_altlayout();
+        echt["cam_position"] = json!({"x": 40, "y": 900, "w": 300, "h": 300});
+        let layout = StreamerLayout::from_stored_value(&echt, None, None).unwrap();
+        assert_eq!(layout.cam_position, LayoutBox { x: 40, y: 900, w: 300, h: 300 });
+
+        // Der strenge Pfad (neue Eingaben) fasst nichts an.
+        let layout = StreamerLayout::from_value(&live_altlayout(), None, None).unwrap();
+        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+    }
+
+    #[test]
+    fn cam_position_bekommt_gerade_kantenlaengen() {
+        // yuv420p vertraegt keine ungeraden Chroma-Maße: scale=421:561 laesst
+        // libx264 abbrechen.
+        assert_eq!(
+            LayoutBox { x: 100, y: 100, w: 321, h: 201 }.clamped_to_target(),
+            LayoutBox { x: 100, y: 100, w: 320, h: 200 }
+        );
+        // Gerade Werte bleiben, wie sie sind.
+        assert_eq!(DEFAULT_PIP_TILE.clamped_to_target(), DEFAULT_PIP_TILE);
+    }
+
     #[test]
     fn altes_layout_wird_beim_lesen_in_den_zielframe_geclampt() {
         // Genau so liegen Layouts aus der Zeit vor der Umstellung in der DB:
@@ -543,10 +640,11 @@ mod tests {
         .unwrap();
 
         // Neue Eingaben ueber die API werden streng geprueft: 126 + 1080 > 1080.
-        assert!(StreamerLayout::from_value(&alt, None, None).is_err());
+        assert!(StreamerLayout::from_value(&alt, None, Some("stacked")).is_err());
 
         // Beim Lesen aus der DB darf dasselbe Layout nicht verloren gehen.
-        let layout = StreamerLayout::from_stored_value(&alt, None, None)
+        // (Stacked, damit hier das Clampen greift und nicht die PiP-Altlast-Regel.)
+        let layout = StreamerLayout::from_stored_value(&alt, None, Some("stacked"))
             .expect("gespeichertes Altlayout bleibt lesbar");
         assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 700, w: 1080, h: 540 });
         // Die Crops bleiben unberuehrt.

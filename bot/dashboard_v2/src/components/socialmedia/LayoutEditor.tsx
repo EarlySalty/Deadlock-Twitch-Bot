@@ -5,12 +5,14 @@ import type { LayoutBox, LayoutPayload, LayoutMode } from '@/types/socialMedia';
 import { DEFAULT_LAYOUT, DEFAULT_SOURCE_HEIGHT, DEFAULT_SOURCE_WIDTH } from '@/types/socialMedia';
 import type { DragMode } from '@/utils/socialMediaLayout';
 import {
+  MAX_BAND_HEIGHT,
   TARGET_HEIGHT,
   TARGET_WIDTH,
   applyDrag,
   clampCamPositionToTarget,
   clampToFrame,
   formatBox,
+  normalizeStoredCamPosition,
   withBandHeight,
 } from '@/utils/socialMediaLayout';
 
@@ -322,7 +324,10 @@ interface LayoutEditorProps {
 
 /** Gespeicherte Layouts können ein cam_position aus dem alten Quellraum tragen. */
 function normalizeLayout(payload: LayoutPayload): LayoutPayload {
-  return { ...payload, cam_position: clampCamPositionToTarget(payload.cam_position) };
+  return {
+    ...payload,
+    cam_position: normalizeStoredCamPosition(payload.cam_position, payload.mode),
+  };
 }
 
 export function LayoutEditor({
@@ -350,9 +355,12 @@ export function LayoutEditor({
 
   const handleBoxChange = (id: BoxId, next: LayoutBox) => {
     setLayout((l) => {
-      if (id === 'cam_position' && l.mode === 'stacked') {
-        // Nur die Streifenhöhe übernehmen, x/y/w des PiP-Rechtecks bleiben stehen.
-        return { ...l, cam_position: withBandHeight(l.cam_position, next.h) };
+      if (id === 'cam_position') {
+        // Streifen-Modus: nur die Höhe übernehmen, x und w des PiP-Rechtecks
+        // bleiben stehen. PiP: gerade Kantenlängen wie im Renderer.
+        return l.mode === 'stacked'
+          ? { ...l, cam_position: withBandHeight(l.cam_position, next.h) }
+          : { ...l, cam_position: clampCamPositionToTarget(next) };
       }
       return { ...l, [id]: next };
     });
@@ -500,7 +508,7 @@ export function LayoutEditor({
               ? 'Cam ist aus: das Game füllt das ganze Bild.'
               : mode === 'pip'
               ? `Cam-Kachel frei ziehen und an den Ecken skalieren: ${formatBox(layout.cam_position)}.`
-              : `Cam-Streifen oben, Höhe an der Unterkante ziehen: ${Math.round(layout.cam_position.h)} von ${TARGET_HEIGHT} px.`}
+              : `Cam-Streifen oben, Höhe an der Unterkante ziehen: ${Math.round(layout.cam_position.h)} von maximal ${MAX_BAND_HEIGHT} px.`}
           </div>
         </div>
       </div>

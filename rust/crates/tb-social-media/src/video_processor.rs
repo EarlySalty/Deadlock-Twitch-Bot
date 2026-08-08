@@ -50,7 +50,9 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     // Defensiv clampen: ein Altlayout darf keinen Overlay ausserhalb des Frames
     // erzeugen (gelesene Layouts sind bereits geclampt, direkt gebaute nicht).
     let p = layout.cam_position.clamped_to_target();
-    let top_height = p.h.clamp(1, TARGET_HEIGHT - 1);
+    // `clamped_to_target` liefert gerade Kantenlängen; die 2 px Reserve halten
+    // auch die Game-Fläche darunter gerade und größer als null.
+    let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
     let game_height = TARGET_HEIGHT - top_height;
 
     let base_game = format!(
@@ -348,6 +350,22 @@ mod tests {
         let f = build_compose_filter(&layout, "pip", true);
         let parts: Vec<&str> = f.split(';').collect();
         assert_eq!(parts[2], "[gamefull][cam]overlay=480:1520[vout]");
+    }
+
+    #[test]
+    fn compose_filter_erzwingt_gerade_kantenlaengen() {
+        // Ungerade Maße im Filtergraphen lassen libx264 mit yuv420p abbrechen.
+        let mut layout = default_streamer_layout();
+        layout.cam_position = LayoutBox { x: 60, y: 1200, w: 421, h: 561 };
+        let f = build_compose_filter(&layout, "pip", true);
+        assert!(f.contains("scale=420:560:"), "{f}");
+        assert!(f.contains("crop=420:560,"), "{f}");
+
+        // Auch der Streifen und die Restflaeche darunter bleiben gerade.
+        layout.cam_position = LayoutBox { x: 0, y: 0, w: 1080, h: 541 };
+        let f = build_compose_filter(&layout, "stacked", true);
+        assert!(f.contains("scale=1080:540:"), "{f}");
+        assert!(f.contains("scale=1080:1380:"), "{f}");
     }
 
     #[test]
