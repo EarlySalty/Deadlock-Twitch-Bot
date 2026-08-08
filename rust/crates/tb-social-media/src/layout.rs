@@ -1,22 +1,41 @@
 //! Layout-Modell + Persistenz (Port von `bot/social_media/layout/`).
 //!
-//! Beschreibt das Compositing-Layout eines Clips (Game-Crop + Cam-Crop +
-//! Cam-Position über einer Quell-Auflösung). Ein Streamer hat ein Default-Layout
-//! in `social_media_streamer_layout`; einzelne Clips können es über
-//! `twitch_clips_social_media.layout_override_json` überschreiben.
+//! Beschreibt das Compositing-Layout eines Clips. Zwei Koordinatenräume, die
+//! nicht verwechselt werden dürfen:
+//!
+//! * `game_crop` und `cam_crop` sind Ausschnitte AUS dem Twitch-Bild und liegen
+//!   im Quellraum (`source`, üblich 1920x1080).
+//! * `cam_position` ist das Zielrechteck IM fertigen Hochformat-Frame
+//!   ([`TARGET_WIDTH`] x [`TARGET_HEIGHT`], also 1080x1920).
+//!
+//! Ein Streamer hat ein Default-Layout in `social_media_streamer_layout`;
+//! einzelne Clips können es über `twitch_clips_social_media.layout_override_json`
+//! überschreiben.
 //!
 //! JSON-Schema (gespeichert):
 //! ```json
 //! { "version": 1, "source": {"width":1920,"height":1080},
 //!   "game_crop": {"x":0,"y":0,"w":1080,"h":1080},
 //!   "cam_crop": {"x":1500,"y":50,"w":380,"h":380},
-//!   "cam_position": {"x":0,"y":0,"w":1080,"h":540} }
+//!   "cam_position": {"x":712,"y":48,"w":320,"h":320} }
 //! ```
-//! Validierung: version==1, x/y>=0, w/h>0, x+w<=source.width, y+h<=source.height,
-//! mode ∈ {pip, stacked}.
+//! Validierung: version==1, x/y>=0, w/h>0, Crops innerhalb `source`,
+//! `cam_position` innerhalb des Zielframes, mode ∈ {pip, stacked}.
+//!
+//! Kompatibilität: Layouts aus der Zeit, als `cam_position` im Quellraum
+//! validiert wurde, können Werte tragen, die im Zielframe nicht mehr passen.
+//! [`StreamerLayout::from_stored_value`] clampt sie beim Lesen, damit ein
+//! bestehendes Layout nicht stillschweigend auf den globalen Default kippt;
+//! neue Eingaben über die API laufen weiter streng über
+//! [`StreamerLayout::from_value`].
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
+
+/// Breite des fertigen Hochformat-Frames (9:16).
+pub const TARGET_WIDTH: i64 = 1080;
+/// Höhe des fertigen Hochformat-Frames (9:16).
+pub const TARGET_HEIGHT: i64 = 1920;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -59,24 +78,47 @@ impl LayoutBox {
         Ok(Self { x, y, w, h })
     }
 
+    /// Prüft, dass die Box vollständig in einem Rahmen liegt. `frame` benennt
+    /// den Bezugsrahmen in der Fehlermeldung, damit im Dashboard nicht "source"
+    /// steht, wenn der Zielframe gemeint ist.
     fn validate_within(
         &self,
-        source: &LayoutSource,
+        width: i64,
+        height: i64,
         name: &str,
+        frame: &str,
     ) -> Result<(), LayoutValidationError> {
-        if self.x + self.w > source.width {
+        if self.x + self.w > width {
             return Err(err(format!(
-                "{name}.x + {name}.w must be <= source.width ({})",
-                source.width
+                "{name}.x + {name}.w must be <= {frame}.width ({width})"
             )));
         }
-        if self.y + self.h > source.height {
+        if self.y + self.h > height {
             return Err(err(format!(
-                "{name}.y + {name}.h must be <= source.height ({})",
-                source.height
+                "{name}.y + {name}.h must be <= {frame}.height ({height})"
             )));
         }
         Ok(())
+    }
+
+    /// Schiebt und schrumpft die Box in den Rahmen, statt sie abzulehnen.
+    /// Nur für gespeicherte Layouts (siehe Modul-Doku), nie für neue Eingaben.
+    fn clamped_within(self, width: i64, height: i64) -> Self {
+        let w = self.w.min(width).max(1);
+        let h = self.h.min(height).max(1);
+        Self {
+            x: self.x.min(width - w).max(0),
+            y: self.y.min(height - h).max(0),
+            w,
+            h,
+        }
+    }
+
+    /// Zielrechteck, garantiert innerhalb des Hochformat-Frames. Der Renderer
+    /// ruft das defensiv auf, damit ein Altlayout keinen Overlay ausserhalb des
+    /// Bildes erzeugt.
+    pub fn clamped_to_target(self) -> Self {
+        self.clamped_within(TARGET_WIDTH, TARGET_HEIGHT)
     }
 
     fn to_json(self) -> Value {
@@ -124,13 +166,45 @@ pub struct StreamerLayout {
     pub mode: String,
 }
 
+/// Wie mit einem `cam_position` umgegangen wird, das nicht in den Zielframe passt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CamPositionPolicy {
+    /// Neue Eingaben: ablehnen.
+    Strict,
+    /// Gespeicherte Layouts: in den Zielframe schieben.
+    Clamp,
+}
+
 impl StreamerLayout {
     /// Parst + validiert ein Layout aus JSON. `cam_enabled`/`mode` überschreiben
     /// die Werte aus dem Payload (für die getrennt gespeicherten DB-Spalten).
+    /// Streng: ein `cam_position` ausserhalb des Zielframes ist ein Fehler.
     pub fn from_value(
         payload: &Value,
         cam_enabled: Option<bool>,
         mode: Option<&str>,
+    ) -> Result<Self, LayoutValidationError> {
+        Self::parse(payload, cam_enabled, mode, CamPositionPolicy::Strict)
+    }
+
+    /// Wie [`Self::from_value`], aber für Layouts aus der DB: `cam_position`
+    /// wird in den Zielframe geclampt statt abgelehnt. Altlayouts stammen aus
+    /// der Zeit, als `cam_position` gegen die Quellauflösung geprüft wurde;
+    /// ohne das Clampen würden sie beim Lesen stumm auf den globalen Default
+    /// zurückfallen.
+    pub fn from_stored_value(
+        payload: &Value,
+        cam_enabled: Option<bool>,
+        mode: Option<&str>,
+    ) -> Result<Self, LayoutValidationError> {
+        Self::parse(payload, cam_enabled, mode, CamPositionPolicy::Clamp)
+    }
+
+    fn parse(
+        payload: &Value,
+        cam_enabled: Option<bool>,
+        mode: Option<&str>,
+        cam_position_policy: CamPositionPolicy,
     ) -> Result<Self, LayoutValidationError> {
         let obj = payload
             .as_object()
@@ -146,6 +220,10 @@ impl StreamerLayout {
         let game_crop = LayoutBox::from_value("game_crop", obj.get("game_crop"))?;
         let cam_crop = LayoutBox::from_value("cam_crop", obj.get("cam_crop"))?;
         let cam_position = LayoutBox::from_value("cam_position", obj.get("cam_position"))?;
+        let cam_position = match cam_position_policy {
+            CamPositionPolicy::Strict => cam_position,
+            CamPositionPolicy::Clamp => cam_position.clamped_to_target(),
+        };
 
         let resolved_mode = match mode {
             Some(m) => m.to_string(),
@@ -181,10 +259,14 @@ impl StreamerLayout {
     }
 
     fn validate(&self) -> Result<(), LayoutValidationError> {
-        self.game_crop.validate_within(&self.source, "game_crop")?;
-        self.cam_crop.validate_within(&self.source, "cam_crop")?;
+        // Crops liegen im Twitch-Bild ...
+        self.game_crop
+            .validate_within(self.source.width, self.source.height, "game_crop", "source")?;
+        self.cam_crop
+            .validate_within(self.source.width, self.source.height, "cam_crop", "source")?;
+        // ... cam_position dagegen im fertigen Hochformat-Frame.
         self.cam_position
-            .validate_within(&self.source, "cam_position")?;
+            .validate_within(TARGET_WIDTH, TARGET_HEIGHT, "cam_position", "target")?;
         Ok(())
     }
 
@@ -209,7 +291,8 @@ impl StreamerLayout {
     }
 }
 
-/// Default-Layout (16:9 → 1:1, Cam oben rechts).
+/// Default-Layout: Game formatfüllend, Cam als 320x320-Kachel rechts oben im
+/// Hochformat-Frame (1080 - 320 - 48 = 712 / 48 Rand).
 pub fn default_streamer_layout() -> StreamerLayout {
     StreamerLayout {
         version: 1,
@@ -230,10 +313,10 @@ pub fn default_streamer_layout() -> StreamerLayout {
             h: 380,
         },
         cam_position: LayoutBox {
-            x: 0,
-            y: 0,
-            w: 1080,
-            h: 540,
+            x: 712,
+            y: 48,
+            w: 320,
+            h: 320,
         },
         cam_enabled: true,
         mode: "pip".to_string(),
@@ -280,7 +363,7 @@ pub async fn get_streamer_layout(pool: &PgPool, login: &str) -> Option<StreamerL
     let cam_enabled = row.cam_enabled;
     let mode = row.mode;
     let payload = decode_layout_json(&layout_json)?;
-    StreamerLayout::from_value(&payload, Some(cam_enabled), Some(&mode)).ok()
+    StreamerLayout::from_stored_value(&payload, Some(cam_enabled), Some(&mode)).ok()
 }
 
 /// Schreibt/aktualisiert das Default-Layout eines Streamers.
@@ -343,7 +426,7 @@ pub async fn get_clip_effective_layout(
 
     if let Some(raw) = override_json.filter(|s| !s.is_empty()) {
         if let Some(payload) = decode_layout_json(&raw) {
-            if let Ok(layout) = StreamerLayout::from_value(&payload, None, None) {
+            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, None, None) {
                 return layout;
             }
         }
@@ -352,7 +435,7 @@ pub async fn get_clip_effective_layout(
         if let Some(payload) = decode_layout_json(&raw) {
             let cam = streamer_cam.unwrap_or(true);
             let mode = streamer_mode.as_deref().unwrap_or("pip");
-            if let Ok(layout) = StreamerLayout::from_value(&payload, Some(cam), Some(mode)) {
+            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, Some(cam), Some(mode)) {
                 return layout;
             }
         }
@@ -416,8 +499,70 @@ mod tests {
             "source": {"width": 1920, "height": 1080},
             "game_crop": {"x": 0, "y": 0, "w": 1080, "h": 1080},
             "cam_crop": {"x": 1500, "y": 50, "w": 380, "h": 380},
-            "cam_position": {"x": 0, "y": 0, "w": 1080, "h": 540}
+            "cam_position": {"x": 712, "y": 48, "w": 320, "h": 320}
         })
+    }
+
+    #[test]
+    fn cam_position_gilt_im_zielframe_nicht_in_der_quelle() {
+        // Hoher Cam-Streifen: passt in den 1920 hohen Zielframe, nicht in die
+        // 1080 hohe Quelle. Muss trotzdem gueltig sein.
+        let mut p = valid_payload();
+        p["cam_position"] = json!({"x": 0, "y": 0, "w": 1080, "h": 1600});
+        let layout = StreamerLayout::from_value(&p, None, None)
+            .expect("cam_position gehoert in den Zielframe 1080x1920");
+        assert_eq!(layout.cam_position.h, 1600);
+
+        // Breiter als der Zielframe: abgelehnt, obwohl es in die 1920 breite
+        // Quelle passen wuerde.
+        let mut p = valid_payload();
+        p["cam_position"] = json!({"x": 0, "y": 0, "w": 1600, "h": 200});
+        assert!(StreamerLayout::from_value(&p, None, None).is_err());
+
+        // Randfall: exakt buendig ist erlaubt.
+        let mut p = valid_payload();
+        p["cam_position"] = json!({"x": 0, "y": 0, "w": TARGET_WIDTH, "h": TARGET_HEIGHT});
+        assert!(StreamerLayout::from_value(&p, None, None).is_ok());
+        // Ein Pixel darueber nicht mehr.
+        let mut p = valid_payload();
+        p["cam_position"] = json!({"x": 1, "y": 0, "w": TARGET_WIDTH, "h": 100});
+        assert!(StreamerLayout::from_value(&p, None, None).is_err());
+    }
+
+    #[test]
+    fn altes_layout_wird_beim_lesen_in_den_zielframe_geclampt() {
+        // Genau so liegen Layouts aus der Zeit vor der Umstellung in der DB:
+        // cam_position war im Quellkoordinatenraum gemeint.
+        let alt: Value = serde_json::from_str(
+            r#"{"version":1,
+                "source":{"width":1920,"height":1080},
+                "game_crop":{"x":420,"y":0,"w":1080,"h":1080},
+                "cam_crop":{"x":1500,"y":50,"w":380,"h":380},
+                "cam_position":{"x":126,"y":700,"w":1080,"h":540}}"#,
+        )
+        .unwrap();
+
+        // Neue Eingaben ueber die API werden streng geprueft: 126 + 1080 > 1080.
+        assert!(StreamerLayout::from_value(&alt, None, None).is_err());
+
+        // Beim Lesen aus der DB darf dasselbe Layout nicht verloren gehen.
+        let layout = StreamerLayout::from_stored_value(&alt, None, None)
+            .expect("gespeichertes Altlayout bleibt lesbar");
+        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 700, w: 1080, h: 540 });
+        // Die Crops bleiben unberuehrt.
+        assert_eq!(layout.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
+        assert_eq!(layout.cam_crop, LayoutBox { x: 1500, y: 50, w: 380, h: 380 });
+
+        // Auch zu hohe Werte werden gestutzt statt abgelehnt.
+        let mut zu_hoch = alt.clone();
+        zu_hoch["cam_position"] = json!({"x": 900, "y": 1800, "w": 600, "h": 400});
+        let layout = StreamerLayout::from_stored_value(&zu_hoch, None, None).unwrap();
+        assert_eq!(layout.cam_position, LayoutBox { x: 480, y: 1520, w: 600, h: 400 });
+
+        // Kaputte Struktur bleibt ein Fehler, auch beim Lesen.
+        let mut kaputt = alt.clone();
+        kaputt["cam_position"] = json!({"x": 0, "y": 0, "w": 0, "h": 100});
+        assert!(StreamerLayout::from_stored_value(&kaputt, None, None).is_err());
     }
 
     #[test]
@@ -554,6 +699,46 @@ mod tests {
         // Override löschen → fällt auf Streamer-Layout (stacked) zurück.
         set_clip_layout_override(&pool, clip, None).await.unwrap();
         assert_eq!(get_clip_effective_layout(&pool, clip).await.mode, "stacked");
+    }
+
+    #[tokio::test]
+    async fn gespeichertes_altlayout_faellt_nicht_auf_den_default_zurueck() {
+        let Some(pool) = make_pool("t_sm_layout_alt").await else {
+            return;
+        };
+        // Layout direkt als JSON einspielen, so wie es vor der Umstellung
+        // geschrieben wurde (cam_position im Quellraum, x + w > 1080).
+        sqlx::query(
+            "INSERT INTO social_media_streamer_layout (streamer_login, layout_json, cam_enabled, mode) \
+             VALUES ('alt', $1::text::jsonb, TRUE, 'stacked')",
+        )
+        .bind(
+            r#"{"version":1,"source":{"width":1920,"height":1080},
+                "game_crop":{"x":420,"y":0,"w":1080,"h":1080},
+                "cam_crop":{"x":1500,"y":50,"w":380,"h":380},
+                "cam_position":{"x":126,"y":0,"w":1080,"h":540}}"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let got = get_streamer_layout(&pool, "alt")
+            .await
+            .expect("Altlayout muss lesbar bleiben, nicht auf den Default kippen");
+        assert_eq!(got.mode, "stacked");
+        assert_eq!(got.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
+        assert_eq!(got.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+
+        // Auch der Clip-Pfad (Override) darf daran nicht scheitern.
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('alt') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let eff = get_clip_effective_layout(&pool, clip).await;
+        assert_eq!(eff.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_ne!(eff, default_streamer_layout());
     }
 
     #[tokio::test]
