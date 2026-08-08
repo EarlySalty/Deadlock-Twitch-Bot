@@ -204,12 +204,17 @@ export interface SocialMediaReportListResponse {
 export const DEFAULT_SOURCE_WIDTH = 1920;
 export const DEFAULT_SOURCE_HEIGHT = 1080;
 
+/**
+ * Default-Layout, identisch zu `default_streamer_layout()` in
+ * rust/crates/tb-social-media/src/layout.rs. `cam_position` ist die Cam-Kachel
+ * im 1080x1920-Zielframe, nicht im Twitch-Bild.
+ */
 export const DEFAULT_LAYOUT: LayoutPayload = {
   version: 1,
   source: { width: DEFAULT_SOURCE_WIDTH, height: DEFAULT_SOURCE_HEIGHT },
   game_crop: { x: 420, y: 0, w: 1080, h: 1080 },
   cam_crop: { x: 1500, y: 50, w: 380, h: 380 },
-  cam_position: { x: 0, y: 0, w: 1080, h: 540 },
+  cam_position: { x: 712, y: 48, w: 320, h: 320 },
   cam_enabled: true,
   mode: 'pip',
 };
