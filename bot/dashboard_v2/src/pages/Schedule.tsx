@@ -375,7 +375,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.05 * i }}
-            className={`relative p-4 rounded-xl border transition-[background-color,border-color,color,box-shadow] ${
+            className={`relative p-4 rounded-xl border transition-[background-color,border-color,color,box-shadow,transform] ${
               isBest
                 ? 'bg-gradient-to-b from-accent/20 to-card border-accent/40 ring-1 ring-accent/20'
                 : hasStreams

@@ -45,7 +45,10 @@ export function TrialExpiryModal() {
   return (
     <AnimatePresence>
       {visible && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    /* Traeger als motion-Element mit key: nur dann haelt AnimatePresence den
+       Baum, bis Scrim und Dialog ihre Austritte gelaufen sind. Ein gewoehnliches
+       div waere sofort ausgehaengt und das Modal verschwaende hart. */
+    <motion.div key="trial-expiry" className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Verdunkeln und zurueckdruecken: die Aufgabe dahinter ruht, solange der
           Dialog offen ist. Der Weichzeichner faehrt mit der Deckkraft hoch,
           damit die Flaeche wie ein ankommendes Material wirkt statt wie ein Bild,
@@ -130,7 +133,7 @@ export function TrialExpiryModal() {
           </div>
         </div>
       </motion.div>
-    </div>
+    </motion.div>
       )}
     </AnimatePresence>
   );

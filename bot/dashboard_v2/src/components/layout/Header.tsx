@@ -137,11 +137,16 @@ export function Header({
               <ChevronDown className="w-4 h-4 text-text-secondary" />
             </button>
 
+            {/* Die Klickflaeche liegt ausserhalb der AnimatePresence: ein
+                Fragment als direktes Kind laesst sich nicht animieren, das
+                Menue waere beim Schliessen hart verschwunden. */}
+            {dropdownOpen && (
+              <div className="fixed inset-0 z-40" onClick={() => { setDropdownOpen(false); setSearch(''); }} />
+            )}
             <AnimatePresence>
             {dropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => { setDropdownOpen(false); setSearch(''); }} />
                 <motion.div
+                  key="streamer-dropdown"
                   {...MENU_MOTION}
                   transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
                   style={{ transformOrigin: 'top right' }}
@@ -228,7 +233,6 @@ export function Header({
                   )}
                   </div>{/* end scrollable */}
                 </motion.div>
-              </>
             )}
             </AnimatePresence>
           </div>

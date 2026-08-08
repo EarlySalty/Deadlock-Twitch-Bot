@@ -98,7 +98,7 @@ export default function Pricing() {
         <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-white/5 border border-white/10">
           <button
             onClick={() => setCycle(1)}
-            className={`px-5 py-2 rounded-lg text-sm font-medium transition-[background-color,border-color,color,box-shadow] duration-200 ${
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-200 ${
               cycle === 1
                 ? 'bg-white/10 text-white shadow'
                 : 'text-white/50 hover:text-white/70'
@@ -108,7 +108,7 @@ export default function Pricing() {
           </button>
           <button
             onClick={() => setCycle(12)}
-            className={`relative px-5 py-2 rounded-lg text-sm font-medium transition-[background-color,border-color,color,box-shadow] duration-200 ${
+            className={`relative px-5 py-2 rounded-lg text-sm font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-200 ${
               cycle === 12
                 ? 'bg-white/10 text-white shadow'
                 : 'text-white/50 hover:text-white/70'

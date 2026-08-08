@@ -138,7 +138,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                 onClick={() => toggle(f.id)}
                 onMouseEnter={() => setHoveredId(f.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                className={`w-full h-full rounded-2xl border p-5 text-left transition-[background-color,border-color,color,box-shadow] duration-200 cursor-pointer ${
+                className={`w-full h-full rounded-2xl border p-5 text-left transition-[background-color,border-color,color,box-shadow,transform] duration-200 cursor-pointer ${
                   isActive ? `${f.borderActive} ${f.bgActive}` : ''
                 }`}
                 style={!isActive ? {
@@ -263,7 +263,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
 
           <a
             href={getPlanCheckoutHref(isFree ? null : planId, isFree, cycle)}
-            className={`flex-shrink-0 px-6 py-3 rounded-xl text-sm font-semibold transition-[background-color,border-color,color,box-shadow] duration-200 whitespace-nowrap ${
+            className={`flex-shrink-0 px-6 py-3 rounded-xl text-sm font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-200 whitespace-nowrap ${
               isFree
                 ? 'bg-white/10 hover:bg-white/15 text-white'
                 : isBundle
