@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::layout::StreamerLayout;
+use crate::layout::{StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VideoProcessorError {
@@ -37,19 +37,29 @@ pub struct VideoInfo {
 }
 
 /// Baut den `-filter_complex`-Graph fürs layout-bewusste Compositing
-/// (Game-Crop + optional Cam als PiP oder Stacked). Rein, byte-identisch zu
-/// Pythons `_build_compose_filter`.
+/// (Game-Crop + optional Cam als PiP oder Stacked).
+///
+/// `game_crop`/`cam_crop` sind Ausschnitte aus dem Twitch-Bild, `cam_position`
+/// ist das Zielrechteck im 1080x1920-Frame. Im PiP-Modus bestimmt es Größe und
+/// Position der Cam-Kachel; im Stacked-Modus zählt bewusst nur `h` (die Höhe des
+/// Cam-Streifens oben), weil der Streifen immer oben sitzt und immer die volle
+/// Breite hat — `x`, `y` und `w` werden dort ignoriert.
 pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bool) -> String {
     let g = &layout.game_crop;
     let c = &layout.cam_crop;
-    let top_height = layout.cam_position.h.clamp(1, 1919);
-    let game_height = 1920 - top_height;
+    // Defensiv clampen: ein Altlayout darf keinen Overlay ausserhalb des Frames
+    // erzeugen (gelesene Layouts sind bereits geclampt, direkt gebaute nicht).
+    let p = layout.cam_position.clamped_to_target();
+    // `clamped_to_target` liefert gerade Kantenlängen; die 2 px Reserve halten
+    // auch die Game-Fläche darunter gerade und größer als null.
+    let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
+    let game_height = TARGET_HEIGHT - top_height;
 
     let base_game = format!(
         "[0:v]crop={gw}:{gh}:{gx}:{gy},\
-         scale=1080:1920:force_original_aspect_ratio=increase,\
-         crop=1080:1920,setsar=1[gamefull]",
-        gw = g.w, gh = g.h, gx = g.x, gy = g.y
+         scale={tw}:{th}:force_original_aspect_ratio=increase,\
+         crop={tw}:{th},setsar=1[gamefull]",
+        gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, th = TARGET_HEIGHT
     );
 
     if !cam_enabled {
@@ -59,28 +69,27 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     if mode == "stacked" {
         let cam = format!(
             "[0:v]crop={cw}:{ch}:{cx}:{cy},\
-             scale=1080:{top}:force_original_aspect_ratio=increase,\
-             crop=1080:{top},setsar=1[cam]",
-            cw = c.w, ch = c.h, cx = c.x, cy = c.y, top = top_height
+             scale={tw}:{top}:force_original_aspect_ratio=increase,\
+             crop={tw}:{top},setsar=1[cam]",
+            cw = c.w, ch = c.h, cx = c.x, cy = c.y, tw = TARGET_WIDTH, top = top_height
         );
         let game = format!(
             "[0:v]crop={gw}:{gh}:{gx}:{gy},\
-             scale=1080:{gh2}:force_original_aspect_ratio=increase,\
-             crop=1080:{gh2},setsar=1[game]",
-            gw = g.w, gh = g.h, gx = g.x, gy = g.y, gh2 = game_height
+             scale={tw}:{gh2}:force_original_aspect_ratio=increase,\
+             crop={tw}:{gh2},setsar=1[game]",
+            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, gh2 = game_height
         );
         return [cam, game, "[cam][game]vstack=inputs=2[vout]".to_string()].join(";");
     }
 
-    let pip_size = 320;
-    let inset = 48;
+    // PiP: die Cam landet exakt auf dem Zielrechteck aus cam_position.
     let cam = format!(
         "[0:v]crop={cw}:{ch}:{cx}:{cy},\
-         scale={pip}:{pip}:force_original_aspect_ratio=increase,\
-         crop={pip}:{pip},setsar=1[cam]",
-        cw = c.w, ch = c.h, cx = c.x, cy = c.y, pip = pip_size
+         scale={pw}:{ph}:force_original_aspect_ratio=increase,\
+         crop={pw}:{ph},setsar=1[cam]",
+        cw = c.w, ch = c.h, cx = c.x, cy = c.y, pw = p.w, ph = p.h
     );
-    let overlay = format!("[gamefull][cam]overlay=W-w-{inset}:{inset}[vout]");
+    let overlay = format!("[gamefull][cam]overlay={px}:{py}[vout]", px = p.x, py = p.y);
     [base_game, cam, overlay].join(";")
 }
 
@@ -289,7 +298,7 @@ fn ensure_output(output_path: &str) -> Result<(), VideoProcessorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::default_streamer_layout;
+    use crate::layout::{default_streamer_layout, LayoutBox};
 
     #[test]
     fn compose_filter_cam_off() {
@@ -303,6 +312,7 @@ mod tests {
 
     #[test]
     fn compose_filter_pip() {
+        // Default-cam_position ist die Kachel rechts oben: 320x320 bei (712,48).
         let f = build_compose_filter(&default_streamer_layout(), "pip", true);
         let parts: Vec<&str> = f.split(';').collect();
         assert_eq!(parts.len(), 3);
@@ -311,24 +321,80 @@ mod tests {
             parts[1],
             "[0:v]crop=380:380:1500:50,scale=320:320:force_original_aspect_ratio=increase,crop=320:320,setsar=1[cam]"
         );
-        assert_eq!(parts[2], "[gamefull][cam]overlay=W-w-48:48[vout]");
+        assert_eq!(parts[2], "[gamefull][cam]overlay=712:48[vout]");
+    }
+
+    #[test]
+    fn compose_filter_pip_folgt_cam_position() {
+        // Frei gesetztes Zielrechteck: Groesse UND Position kommen aus cam_position.
+        let mut layout = default_streamer_layout();
+        layout.cam_position = LayoutBox { x: 60, y: 1200, w: 420, h: 560 };
+        let f = build_compose_filter(&layout, "pip", true);
+        let parts: Vec<&str> = f.split(';').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            parts[1],
+            "[0:v]crop=380:380:1500:50,scale=420:560:force_original_aspect_ratio=increase,crop=420:560,setsar=1[cam]"
+        );
+        assert_eq!(parts[2], "[gamefull][cam]overlay=60:1200[vout]");
+        // Keine festen 320/48-Reste mehr im Graphen.
+        assert!(!f.contains("W-w-"));
+    }
+
+    #[test]
+    fn compose_filter_pip_clampt_in_den_zielframe() {
+        // Defensiv: ein Altlayout, das ueber den Rand ragt, darf keinen
+        // ffmpeg-Graphen erzeugen, der ausserhalb des Frames landet.
+        let mut layout = default_streamer_layout();
+        layout.cam_position = LayoutBox { x: 900, y: 1800, w: 600, h: 400 };
+        let f = build_compose_filter(&layout, "pip", true);
+        let parts: Vec<&str> = f.split(';').collect();
+        assert_eq!(parts[2], "[gamefull][cam]overlay=480:1520[vout]");
+    }
+
+    #[test]
+    fn compose_filter_erzwingt_gerade_kantenlaengen() {
+        // Ungerade Maße im Filtergraphen lassen libx264 mit yuv420p abbrechen.
+        let mut layout = default_streamer_layout();
+        layout.cam_position = LayoutBox { x: 60, y: 1200, w: 421, h: 561 };
+        let f = build_compose_filter(&layout, "pip", true);
+        assert!(f.contains("scale=420:560:"), "{f}");
+        assert!(f.contains("crop=420:560,"), "{f}");
+
+        // Auch der Streifen und die Restflaeche darunter bleiben gerade.
+        layout.cam_position = LayoutBox { x: 0, y: 0, w: 1080, h: 541 };
+        let f = build_compose_filter(&layout, "stacked", true);
+        assert!(f.contains("scale=1080:540:"), "{f}");
+        assert!(f.contains("scale=1080:1380:"), "{f}");
     }
 
     #[test]
     fn compose_filter_stacked() {
-        // top_height = cam_position.h = 540, game_height = 1380.
+        // Stacked nutzt nur cam_position.h: 320 → game_height = 1600.
         let f = build_compose_filter(&default_streamer_layout(), "stacked", true);
         let parts: Vec<&str> = f.split(';').collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(
             parts[0],
-            "[0:v]crop=380:380:1500:50,scale=1080:540:force_original_aspect_ratio=increase,crop=1080:540,setsar=1[cam]"
+            "[0:v]crop=380:380:1500:50,scale=1080:320:force_original_aspect_ratio=increase,crop=1080:320,setsar=1[cam]"
         );
         assert_eq!(
             parts[1],
-            "[0:v]crop=1080:1080:0:0,scale=1080:1380:force_original_aspect_ratio=increase,crop=1080:1380,setsar=1[game]"
+            "[0:v]crop=1080:1080:0:0,scale=1080:1600:force_original_aspect_ratio=increase,crop=1080:1600,setsar=1[game]"
         );
         assert_eq!(parts[2], "[cam][game]vstack=inputs=2[vout]");
+    }
+
+    #[test]
+    fn compose_filter_stacked_ignoriert_x_y_w() {
+        // x/y/w sind im Streifen-Modus bewusst wirkungslos: der Streifen sitzt
+        // immer oben und ist immer 1080 breit.
+        let mut layout = default_streamer_layout();
+        layout.cam_position = LayoutBox { x: 333, y: 777, w: 444, h: 320 };
+        assert_eq!(
+            build_compose_filter(&layout, "stacked", true),
+            build_compose_filter(&default_streamer_layout(), "stacked", true)
+        );
     }
 
     #[test]

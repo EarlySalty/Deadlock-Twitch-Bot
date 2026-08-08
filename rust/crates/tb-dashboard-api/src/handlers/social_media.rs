@@ -3704,6 +3704,36 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Neue Eingaben werden streng gegen den Zielframe 1080x1920 geprueft:
+        // die Kulanz beim Lesen alter Layouts darf hier nicht durchschlagen.
+        let mut zu_breit = valid_layout();
+        zu_breit["cam_position"] = json!({"x": 126, "y": 0, "w": 1080, "h": 540});
+        let resp = streamer_layout_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Json(json!({ "streamer_login": "nani", "layout": zu_breit })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(resp).await["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cam_position")
+        );
+
+        // Ein hoher Cam-Streifen passt dagegen: 1600 < 1920 (Zielframe), auch
+        // wenn die Quelle nur 1080 hoch ist.
+        let mut hoch = valid_layout();
+        hoch["cam_position"] = json!({"x": 0, "y": 0, "w": 1080, "h": 1600});
+        let resp = streamer_layout_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Json(json!({ "streamer_login": "nani", "layout": hoch, "mode": "stacked" })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
