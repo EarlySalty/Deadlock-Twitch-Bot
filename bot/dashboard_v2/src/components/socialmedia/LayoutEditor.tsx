@@ -9,6 +9,7 @@ import {
   TARGET_HEIGHT,
   TARGET_WIDTH,
   applyDrag,
+  cappedTileWidth,
   clampCamPositionToTarget,
   clampToFrame,
   formatBox,
@@ -357,10 +358,12 @@ export function LayoutEditor({
     setLayout((l) => {
       if (id === 'cam_position') {
         // Streifen-Modus: nur die Höhe übernehmen, x und w des PiP-Rechtecks
-        // bleiben stehen. PiP: gerade Kantenlängen wie im Renderer.
+        // bleiben stehen. PiP: gerade Kantenlängen wie im Renderer, Breite
+        // knapp unter Framebreite, sonst liest der Legacy-Erkenner die Kachel
+        // beim nächsten Laden als Altlast und setzt sie auf den Standard.
         return l.mode === 'stacked'
           ? { ...l, cam_position: withBandHeight(l.cam_position, next.h) }
-          : { ...l, cam_position: clampCamPositionToTarget(next) };
+          : { ...l, cam_position: clampCamPositionToTarget(cappedTileWidth(next)) };
       }
       return { ...l, [id]: next };
     });

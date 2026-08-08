@@ -8,6 +8,7 @@ import {
   TARGET_HEIGHT,
   TARGET_WIDTH,
   applyDrag,
+  cappedTileWidth,
   clampCamPositionToTarget,
   clampToFrame,
   normalizeStoredCamPosition,
@@ -144,4 +145,26 @@ test('normalizeStoredCamPosition faengt die PiP-Altlast ab', () => {
   // Echter, schmaler PiP-Wert kommt unveraendert durch.
   const echt = { x: 40, y: 900, w: 300, h: 300 };
   assert.deepEqual(normalizeStoredCamPosition(echt, 'pip'), echt);
+});
+
+// Der Editor darf keine Kachel erzeugen, die der Legacy-Erkenner beim naechsten
+// Laden wieder einkassiert: sonst speichert der Nutzer und sieht danach etwas
+// anderes.
+test('cappedTileWidth haelt die PiP-Kachel unter der Framebreite', () => {
+  const voll = { x: 0, y: 200, w: TARGET_WIDTH, h: 400 };
+  const gedeckelt = cappedTileWidth(voll);
+  assert.equal(gedeckelt.w, TARGET_WIDTH - 2);
+  assert.deepEqual(normalizeStoredCamPosition(clampCamPositionToTarget(gedeckelt), 'pip'), {
+    x: 0,
+    y: 200,
+    w: TARGET_WIDTH - 2,
+    h: 400,
+  });
+  // Schmalere Kacheln bleiben unangetastet.
+  assert.deepEqual(cappedTileWidth({ x: 40, y: 40, w: 320, h: 320 }), {
+    x: 40,
+    y: 40,
+    w: 320,
+    h: 320,
+  });
 });

@@ -139,6 +139,16 @@ export function withBandHeight(camPosition: LayoutBox, height: number): LayoutBo
   };
 }
 
+/**
+ * Deckelt die Breite der PiP-Kachel knapp unter die Framebreite. Eine Kachel,
+ * die den Frame voll ausfüllt, liest [`normalizeStoredCamPosition`] beim
+ * nächsten Laden als Altlast und ersetzt sie durch den Standard. Der Nutzer
+ * würde also speichern und beim Neuladen etwas anderes sehen.
+ */
+export function cappedTileWidth(box: LayoutBox): LayoutBox {
+  return { ...box, w: Math.min(box.w, TARGET_WIDTH - 2) };
+}
+
 /** `320x320 @ (712,48)` — kompakte Anzeige einer Box. */
 export function formatBox(box: LayoutBox): string {
   return `${Math.round(box.w)}×${Math.round(box.h)} @ (${Math.round(box.x)},${Math.round(box.y)})`;
