@@ -58,7 +58,7 @@ export function SessionTable({
                 key={session.id}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
+                transition={{ delay: Math.min(index * 0.04, 0.24) }}
                 className="hover:bg-white/5 transition cursor-pointer"
                 onClick={() => onSessionClick?.(session.id)}
               >

@@ -74,7 +74,7 @@ export function Growth({ streamer, days }: GrowthProps) {
             key={`${month.year}-${month.month}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
+            transition={{ delay: Math.min(i * 0.04, 0.24) }}
             className={`panel-card rounded-2xl p-5 ${i === 0 ? 'ring-2 ring-primary/30' : ''}`}
           >
             <div className="flex items-center justify-between mb-3">

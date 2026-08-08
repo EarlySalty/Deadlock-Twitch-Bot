@@ -58,7 +58,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
                   key={i}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.1 }}
+                  transition={{ delay: Math.min(i * 0.04, 0.24) }}
                   className={`p-4 rounded-lg border border-l-4 ${config.bgClass} ${config.borderClass}`}
                 >
                   <div className="flex items-start gap-3">
@@ -92,7 +92,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
                 key={i}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + i * 0.1 }}
+                transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
                 className="bg-black/25 p-4 rounded-lg border-l-4 border-accent"
               >
                 <span className="text-xs font-bold text-accent uppercase tracking-wider mb-1 block">

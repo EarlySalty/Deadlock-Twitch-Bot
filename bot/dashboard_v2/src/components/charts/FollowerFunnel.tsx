@@ -242,7 +242,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
               key={stage.label}
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.1 }}
+              transition={{ delay: Math.min(i * 0.04, 0.24) }}
               className="relative"
             >
               <div className="flex items-center gap-4">
@@ -260,7 +260,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                     <motion.div
                       initial={{ width: 0 }}
                       animate={{ width: `${Math.max(stage.width, 2)}%` }}
-                      transition={{ delay: 0.3 + i * 0.1, duration: 0.5 }}
+                      transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
                       className={`h-full bg-gradient-to-r ${stage.color} rounded-full`}
                     />
                   </div>
@@ -286,7 +286,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                 key={source.label}
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.5 + i * 0.05 }}
+                transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
                 className="bg-background rounded-lg p-3 text-center"
               >
                 <Icon className={`w-5 h-5 mx-auto mb-2 ${source.color}`} />

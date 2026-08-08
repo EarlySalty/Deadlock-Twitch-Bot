@@ -215,7 +215,7 @@ export function ViewerTimeline({
                     key={viewer.login}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: Math.min(index * 0.01, 0.2) }}
+                    transition={{ delay: Math.min(index * 0.01, 0.24) }}
                     className="group relative grid grid-cols-[minmax(220px,280px)_minmax(0,1fr)] gap-4 rounded-xl border border-white/8 bg-background/35 p-3"
                   >
                     <div className="min-w-0">

@@ -48,7 +48,7 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
             key={sub.label}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 + i * 0.1 }}
+            transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
             className="bg-black/25 rounded-lg p-2 border border-border/40"
           >
             <span className="block">{sub.label}</span>

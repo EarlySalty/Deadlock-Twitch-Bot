@@ -121,7 +121,7 @@ export function CalendarHeatmap({
                         key={dayIndex}
                         initial={{ opacity: 0, scale: 0.8 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: weekIndex * 0.01 }}
+                        transition={{ delay: Math.min(weekIndex * 0.01, 0.24) }}
                         className="w-3 h-3 rounded-sm relative group cursor-pointer"
                         style={{ backgroundColor: getHeatmapColor(value, maxValue) }}
                       >

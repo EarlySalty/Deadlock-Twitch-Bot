@@ -350,7 +350,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                         key={c.login}
                         initial={{ opacity: 0, x: -5 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.03 }}
+                        transition={{ delay: Math.min(i * 0.03, 0.24) }}
                         className="border-b border-border/50 hover:bg-white/5 transition"
                       >
                         <td className="px-3 py-2 text-white">{c.login}</td>

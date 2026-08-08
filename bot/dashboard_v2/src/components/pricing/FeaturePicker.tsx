@@ -150,9 +150,9 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                 <AnimatePresence>
                   {isActive && (
                     <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      exit={{ scale: 0 }}
+                      initial={{ scale: 0.6, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.6, opacity: 0 }}
                       className="absolute top-3 right-3 w-5 h-5 rounded-full bg-white/20 flex items-center justify-center"
                     >
                       <Check className="w-3 h-3 text-white" />

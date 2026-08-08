@@ -851,7 +851,7 @@ export function InternalHomeLanding() {
                       key={item.href}
                       initial={{ opacity: 0, x: -6 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.22, delay: 0.05 + index * 0.04 }}
+                      transition={{ duration: 0.22, delay: Math.min(0.05 + index * 0.04, 0.24) }}
                     >
                       <SidebarLink
                         href={item.href}
@@ -874,7 +874,7 @@ export function InternalHomeLanding() {
                       key={item.href}
                       initial={{ opacity: 0, x: -6 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.22, delay: 0.2 + index * 0.04 }}
+                      transition={{ duration: 0.22, delay: Math.min(0.1 + index * 0.04, 0.24) }}
                     >
                       <SidebarLink
                         href={item.href}
@@ -1318,7 +1318,7 @@ export function InternalHomeLanding() {
                         key={stream.id ?? `stream-row-${index}`}
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.24, delay: index * 0.04 }}
+                        transition={{ duration: 0.24, delay: Math.min(index * 0.04, 0.24) }}
                       >
                         <a
                           href={analyticsTabHref('streams')}
@@ -1518,7 +1518,7 @@ export function InternalHomeLanding() {
                           data-tone={accentTone}
                           initial={{ opacity: 0, y: 6 }}
                           animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.22, delay: index * 0.04 }}
+                          transition={{ duration: 0.22, delay: Math.min(index * 0.04, 0.24) }}
                         >
                           <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
                             <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">

@@ -42,7 +42,7 @@ export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay: index * 0.05 }}
+      transition={{ delay: Math.min(index * 0.04, 0.24) }}
       className={`${styles.bg} rounded-xl border ${styles.border} p-5`}
     >
       <div className="flex items-start gap-3">
@@ -739,7 +739,7 @@ export function CommunitySection({ data }: { data: CoachingData }) {
               <motion.div
                 initial={{ width: 0 }}
                 animate={{ width: `${(src.sharedChatters / maxShared) * 100}%` }}
-                transition={{ duration: 0.6, delay: i * 0.05 }}
+                transition={{ duration: 0.6, delay: Math.min(i * 0.04, 0.24) }}
                 className="h-full rounded-full bg-accent/60"
               />
             </div>

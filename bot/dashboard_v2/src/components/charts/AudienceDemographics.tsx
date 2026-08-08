@@ -273,7 +273,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                         key={i}
                         initial={{ height: 0 }}
                         animate={{ height: isPeak ? 32 : isNearPeak ? 20 : 8 }}
-                        transition={{ delay: i * 0.02 }}
+                        transition={{ delay: Math.min(i * 0.02, 0.24) }}
                         className={`flex-1 rounded-sm ${
                           isPeak ? 'bg-primary' : isNearPeak ? 'bg-primary/50' : 'bg-border'
                         }`}

@@ -343,7 +343,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                           key={entry.streamer}
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
-                          transition={{ delay: Math.min(i * 0.02, 0.3) }}
+                          transition={{ delay: Math.min(i * 0.02, 0.24) }}
                           className={`border-b border-border/50 transition-colors ${
                             isSelected
                               ? 'bg-accent/10 border-accent/20'

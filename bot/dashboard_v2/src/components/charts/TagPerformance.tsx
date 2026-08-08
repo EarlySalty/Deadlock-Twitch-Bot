@@ -189,7 +189,7 @@ function TopTagCard({ tag, rank }: TopTagCardProps) {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: rank * 0.1 }}
+      transition={{ delay: Math.min(rank * 0.04, 0.24) }}
       className={`bg-gradient-to-br ${rankStyles[rank as 1 | 2 | 3]} rounded-lg p-4 border`}
     >
       <div className="flex items-center justify-between mb-2">
@@ -232,7 +232,7 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
     <motion.div
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: index * 0.03 }}
+      transition={{ delay: Math.min(index * 0.03, 0.24) }}
       className="bg-background rounded-lg overflow-hidden"
     >
       <div
@@ -330,7 +330,7 @@ function TitleRow({ title, index, maxViewers }: TitleRowProps) {
     <motion.div
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: index * 0.03 }}
+      transition={{ delay: Math.min(index * 0.03, 0.24) }}
       className="bg-background rounded-lg p-3"
     >
       <div className="flex items-center justify-between mb-2">

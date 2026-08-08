@@ -452,7 +452,7 @@ function ChatterCard({
           : 'bg-border text-text-secondary';
 
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: rank * 0.03 }} className="flex items-center gap-3 rounded-xl border border-border/65 bg-background/75 p-3">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(rank * 0.03, 0.24) }} className="flex items-center gap-3 rounded-xl border border-border/65 bg-background/75 p-3">
       <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold ${rankStyle}`}>{rank}</div>
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium text-white">{login}</div>

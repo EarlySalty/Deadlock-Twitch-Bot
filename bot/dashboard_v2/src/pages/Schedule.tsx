@@ -88,7 +88,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
                 key={`${slot.weekday}-${slot.hour}`}
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: i * 0.1 }}
+                transition={{ delay: Math.min(i * 0.04, 0.24) }}
                 className={`p-4 rounded-lg ${i === 0 ? 'bg-gradient-to-br from-warning/20 to-warning/5 border border-warning/30' : 'bg-background/50'}`}
               >
                 <div className="flex items-center justify-between mb-2">
@@ -208,7 +208,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
                     key={day.weekday}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3 + i * 0.05 }}
+                    transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
                     className="p-4 bg-background rounded-lg text-center"
                   >
                     <div className="text-sm text-text-secondary mb-2">{weekdayNames[day.weekday]}</div>
@@ -365,7 +365,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
             key={day.weekdayLabel}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 * i }}
+            transition={{ delay: Math.min(i * 0.04, 0.24) }}
             className={`relative p-4 rounded-xl border transition-[background-color,border-color,color,box-shadow,transform,translate,scale] ${
               isBest
                 ? 'bg-gradient-to-b from-accent/20 to-card border-accent/40 ring-1 ring-accent/20'
@@ -388,7 +388,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
               <motion.div
                 initial={{ height: 0 }}
                 animate={{ height: `${Math.max(hasStreams ? 8 : 0, viewerPct)}%` }}
-                transition={{ delay: 0.2 + i * 0.05, duration: 0.5, ease: 'easeOut' }}
+                transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5, ease: 'easeOut' }}
                 className={`w-8 rounded-t-lg ${
                   isBest
                     ? 'bg-gradient-to-t from-accent/60 to-accent'

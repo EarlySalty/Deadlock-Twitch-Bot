@@ -133,7 +133,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
               key={segment.key}
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.06 }}
+              transition={{ delay: Math.min(i * 0.04, 0.24) }}
             >
               <div className="flex items-center gap-3">
                 {/* Label */}
@@ -149,7 +149,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                       <motion.div
                         initial={{ width: 0 }}
                         animate={{ width: `${(currVal / barMax) * 100}%` }}
-                        transition={{ delay: 0.2 + i * 0.06, duration: 0.5 }}
+                        transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
                         className="h-full rounded"
                         style={{ backgroundColor: segment.color, minWidth: currVal > 0 ? '2px' : '0' }}
                       />
@@ -164,7 +164,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                         <motion.div
                           initial={{ width: 0 }}
                           animate={{ width: `${(prevVal / barMax) * 100}%` }}
-                          transition={{ delay: 0.3 + i * 0.06, duration: 0.5 }}
+                          transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
                           className="h-full rounded opacity-35"
                           style={{ backgroundColor: segment.color, minWidth: prevVal > 0 ? '2px' : '0' }}
                         />

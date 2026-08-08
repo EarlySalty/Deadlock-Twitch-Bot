@@ -299,7 +299,7 @@ function OverlapBar({ rank, streamer, sharedChatters, percentage }: OverlapBarPr
     <motion.div
       initial={{ opacity: 0, x: -20 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: rank * 0.05 }}
+      transition={{ delay: Math.min(rank * 0.04, 0.24) }}
       className="flex items-center gap-4"
     >
       <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
@@ -319,7 +319,7 @@ function OverlapBar({ rank, streamer, sharedChatters, percentage }: OverlapBarPr
           <motion.div
             initial={{ width: 0 }}
             animate={{ width: `${Math.max(0, Math.min(pct, 100))}%` }}
-            transition={{ delay: 0.3 + rank * 0.05, duration: 0.5 }}
+            transition={{ delay: Math.min(0.1 + rank * 0.04, 0.24), duration: 0.5 }}
             className={`h-full ${rank <= 3 ? 'bg-gradient-to-r from-accent to-primary' : 'bg-primary/60'}`}
           />
         </div>

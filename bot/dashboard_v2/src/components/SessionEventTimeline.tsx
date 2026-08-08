@@ -157,7 +157,7 @@ export function SessionEventTimeline({ events, sessionStart, loading }: SessionE
               key={`${entry.at}-${i}`}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.05 }}
+              transition={{ delay: Math.min(i * 0.04, 0.24) }}
               className="relative flex items-start gap-3"
             >
               {/* Dot on the line */}
