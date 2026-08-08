@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { X, Sparkles, Clock } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
 import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
@@ -31,8 +32,6 @@ export function TrialExpiryModal() {
     }
   }, [trialInfo, tier]);
 
-  if (!visible) return null;
-
   const handleUpgrade = () => {
     localStorage.setItem(MODAL_SHOWN_KEY, new Date().toISOString());
     window.location.href = PREVIEW_PRICING_ROUTE;
@@ -44,20 +43,39 @@ export function TrialExpiryModal() {
   };
 
   return (
+    <AnimatePresence>
+      {visible && (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+      {/* Verdunkeln und zurueckdruecken: die Aufgabe dahinter ruht, solange der
+          Dialog offen ist. Der Weichzeichner faehrt mit der Deckkraft hoch,
+          damit die Flaeche wie ein ankommendes Material wirkt statt wie ein Bild,
+          das eingeblendet wird. */}
+      <motion.div
+        initial={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+        animate={{ opacity: 1, backdropFilter: 'blur(6px)' }}
+        exit={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+        transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
+        className="absolute inset-0 bg-black/70"
         onClick={handleDismiss}
       />
 
-      {/* Modal */}
-      <div className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#1F1815] to-[#1A1210] p-6 shadow-2xl">
+      {/* Der Dialog haengt an keinem Ausloeser, also skaliert er aus der Mitte.
+          Austritt schneller als Eintritt: beim Schliessen hat der Nutzer schon
+          entschieden und wartet nur noch. */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.98 }}
+        transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
+        className="relative z-10 mx-4 w-full max-w-lg rounded-2xl border border-border bg-gradient-to-b from-[#1F1815] to-[#1A1210] p-6 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+      >
         <button
           type="button"
           onClick={handleDismiss}
           className="absolute right-4 top-4 rounded-lg p-1 text-text-secondary hover:bg-white/5 hover:text-white transition-colors"
-          aria-label="Schliessen"
+          aria-label="Schließen"
         >
           <X className="h-5 w-5" />
         </button>
@@ -68,11 +86,11 @@ export function TrialExpiryModal() {
           </div>
 
           <h2 className="mb-2 text-xl font-bold text-white">
-            Deine Testphase laeuft ab
+            Deine Testphase läuft ab
           </h2>
           <p className="mb-6 text-sm text-text-secondary">
             In weniger als 7 Tagen endet deine kostenlose Testphase.
-            Danach werden einige Analytics-Funktionen eingeschraenkt.
+            Danach werden einige Analytics-Funktionen eingeschränkt.
           </p>
 
           <div className="mb-6 rounded-xl border border-warning/30 bg-warning/10 p-4">
@@ -88,8 +106,8 @@ export function TrialExpiryModal() {
             <p className="font-medium text-white">Was passiert nach der Testphase?</p>
             <ul className="list-inside list-disc space-y-1 text-text-secondary">
               <li>Erweiterte Analytics werden deaktiviert</li>
-              <li> Manche Tabs sind nicht mehr zugaenglich</li>
-              <li>Keine Daten gehen verloren - alles bleibt gespeichert</li>
+              <li>Manche Tabs sind nicht mehr zugänglich</li>
+              <li>Keine Daten gehen verloren, alles bleibt gespeichert</li>
             </ul>
           </div>
 
@@ -99,7 +117,7 @@ export function TrialExpiryModal() {
               onClick={handleDismiss}
               className="flex-1 rounded-lg border border-border bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
             >
-              Vielleicht spaeter
+              Vielleicht später
             </button>
             <button
               type="button"
@@ -111,7 +129,9 @@ export function TrialExpiryModal() {
             </button>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 }

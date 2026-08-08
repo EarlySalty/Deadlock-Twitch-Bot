@@ -34,7 +34,7 @@ export default function TrialCallout() {
           {/* Right: CTA */}
           <a
             href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
-            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white font-medium transition-all duration-200 hover:gap-3"
+            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white font-medium transition-[gap,background-color,border-color] duration-200 hover:gap-3"
           >
             Mehr erfahren
             <ArrowRight className="w-4 h-4" />

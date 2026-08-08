@@ -158,7 +158,7 @@ function SegmentCard({ name, data }: { name: string; data: SegmentData }) {
       {/* Mini progress bar */}
       <div className="mt-2 h-1.5 bg-background rounded-full overflow-hidden">
         <div
-          className="h-full rounded-full transition-all"
+          className="h-full rounded-full transition-[width]"
           style={{ width: `${data.pct}%`, backgroundColor: config.color }}
         />
       </div>

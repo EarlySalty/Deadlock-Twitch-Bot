@@ -1,0 +1,241 @@
+/* Bewegung & Material — Deutsche Deadlock Community
+ *
+ * Geteilte Grundlage fuer dashboard_v2 und admin_dashboard. Wird nach
+ * industrial-gold.css importiert; Farbe und Flaeche bleiben dort, hier steht
+ * ausschliesslich, wie sich das Interface anfuehlt.
+ *
+ * Drei Saetze, aus denen alles Weitere folgt:
+ *   1. Rueckmeldung kommt beim Druecken, nicht beim Loslassen.
+ *   2. Bewegung ist unterbrechbar: Transitions statt Keyframes, wo der Nutzer
+ *      schneller sein kann als die Animation.
+ *   3. Eigene Kurven. Die eingebauten CSS-Easings sind zu weich, um Absicht zu
+ *      transportieren.
+ *
+ * Quellen: skills/apple-design (WWDC "Designing Fluid Interfaces"),
+ * skills/emil-design-eng.
+ */
+
+/* ── Kurven ────────────────────────────────────────────────────────────────
+   Bewusst im Tailwind-Namespace: damit tragen alle vorhandenen
+   `ease-out`/`ease-in-out`-Utilities und jede `transition-*` ohne eigene Kurve
+   sofort die staerkeren Varianten, ohne dass eine Komponente angefasst wird.
+
+   ease-out fuer alles, was auftaucht oder verschwindet: startet schnell, also
+   sieht der Nutzer sofort, dass sein Klick angekommen ist. ease-in fehlt hier
+   absichtlich — es verzoegert genau den Moment, den der Nutzer am genauesten
+   beobachtet, und laesst die Oberflaeche traege wirken. */
+@theme {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --default-transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  --default-transition-duration: 170ms;
+}
+
+:root {
+  /* ── Dauern ──────────────────────────────────────────────────────────────
+     Obergrenze fuer alles, was der Nutzer oft sieht: 300ms. Je haeufiger eine
+     Bewegung vorkommt, desto kuerzer gehoert sie. */
+  --dur-press: 130ms;   /* Druckfeedback */
+  --dur-hover: 170ms;   /* Hover-Lift, Rahmenfarbe */
+  --dur-tooltip: 150ms; /* Tooltip, kleines Popover */
+  --dur-menu: 200ms;    /* Dropdown, Select, Tab-Wechsel */
+  --dur-modal: 280ms;   /* Modal, Drawer, Sheet */
+
+  /* ── Druck ───────────────────────────────────────────────────────────────
+     Grosse Flaechen duerfen weniger schrumpfen als kleine Buttons, sonst
+     kippt die ganze Kachel. Wird pro Element ueberschrieben, siehe unten. */
+  --press-scale: 0.97;
+}
+
+/* ── Druckfeedback ─────────────────────────────────────────────────────────
+   Gilt fuer alles Drueckbare, ohne dass es jede Komponente selbst mitbringen
+   muss. `:not(:disabled)` hebt die Spezifitaet ueber Tailwinds hover-Utilities,
+   damit eine gehoverte Kachel beim Druecken trotzdem reagiert. */
+button,
+[role="button"],
+summary,
+a[data-press] {
+  transition:
+    transform var(--dur-press) var(--ease-out),
+    opacity var(--dur-press) var(--ease-out);
+}
+
+button:not(:disabled):not([data-press="none"]):active,
+[role="button"]:not([aria-disabled="true"]):not([data-press="none"]):active,
+summary:active,
+a[data-press]:active {
+  transform: scale(var(--press-scale));
+}
+
+/* Kachelgrosse Druckflaechen: dieselbe Geste, kleinerer Ausschlag. */
+.panel-card,
+.card-glow,
+.glass,
+[data-press="soft"] {
+  --press-scale: 0.994;
+}
+
+/* ── Hover nur mit echtem Zeiger ───────────────────────────────────────────
+   Touch-Geraete loesen :hover beim Tippen aus und lassen ihn danach stehen.
+   Die Lifts der Kachelklassen laufen deshalb nur, wo es einen Mauszeiger gibt. */
+@media not all and (hover: hover) and (pointer: fine) {
+  .card-glow:hover,
+  .kpi-glow-always:hover,
+  .soft-elevate:hover,
+  .internal-home-status-card:hover,
+  .internal-home-link-card:hover,
+  .internal-home-action-item:hover,
+  .internal-home-news-item:hover,
+  .internal-home-insight-chip:hover,
+  .internal-home-kpi:hover,
+  .internal-home-quick-action:hover,
+  .internal-home-log-card:hover,
+  .internal-home-changelog-entry:hover {
+    transform: none;
+  }
+}
+
+/* ── Auftauchen ────────────────────────────────────────────────────────────
+   Nichts in der echten Welt entsteht aus dem Nichts: Eintritte starten bei
+   scale(0.96), nie bei 0. Popover skalieren aus ihrem Ausloeser heraus, Modals
+   bleiben zentriert — sie haengen an keinem Ausloeser. */
+[data-enter] {
+  transform-origin: var(--transform-origin, center);
+  transition:
+    transform var(--dur-menu) var(--ease-out),
+    opacity var(--dur-menu) var(--ease-out);
+}
+
+[data-enter="closed"] {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+/* ── Gestaffelter Auftritt ─────────────────────────────────────────────────
+   Fuer Kachelgitter, die gemeinsam laden. Kurze Abstaende (40ms): laenger
+   wirkt die Seite langsam, nicht lebendig. */
+@keyframes ddc-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stagger-children > * {
+  animation: ddc-rise-in 260ms var(--ease-out) both;
+}
+
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 160ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(n + 7) { animation-delay: 240ms; }
+
+/* ── Schwebende Leisten ────────────────────────────────────────────────────
+   Statt einer harten 1px-Linie unter der Kopfzeile laeuft der Inhalt unter
+   einer durchscheinenden Schicht durch und wird an der Kante weichgezeichnet. */
+.chrome-layer {
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  box-shadow: inset 0 1px 0 rgba(241, 210, 153, 0.08);
+}
+
+.scroll-edge {
+  position: relative;
+}
+
+.scroll-edge::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 16px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-bg) 55%, transparent),
+    transparent
+  );
+}
+
+/* ── Fokus ─────────────────────────────────────────────────────────────────
+   Ein Ring, der zur Marke gehoert, statt des blauen Browser-Standards. Nur bei
+   Tastaturbedienung, damit ein Mausklick keine Umrandung hinterlaesst. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ── Weniger Bewegung ──────────────────────────────────────────────────────
+   Nicht "keine Rueckmeldung", sondern eine ohne Ortswechsel: Deckkraft und
+   Farbe bleiben, Verschiebung und Federn fallen weg. Die beiden
+   Dauerschleifen (hero-aura, internal-home-vibe) stehen still — langsame
+   Oszillationen auf ganzer Flaeche sind der unangenehmste Fall. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  button:active,
+  [role="button"]:active,
+  summary:active,
+  a[data-press]:active {
+    transform: none;
+    opacity: 0.82;
+  }
+
+  .card-glow:hover,
+  .kpi-glow-always:hover,
+  .soft-elevate:hover,
+  .stagger-children > * {
+    transform: none;
+  }
+}
+
+/* ── Weniger Transparenz ───────────────────────────────────────────────────
+   Durchscheinende Flaechen werden dicht, der Weichzeichner faellt weg. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .chrome-layer {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background-color: var(--color-popover);
+  }
+
+  .scroll-edge::after {
+    display: none;
+  }
+}
+
+/* ── Mehr Kontrast ─────────────────────────────────────────────────────────
+   Feste Rahmen statt Schein, dichtere Flaechen, kein Koernungsflor. */
+@media (prefers-contrast: more) {
+  .glass,
+  .panel-card,
+  .card-glow {
+    border-color: var(--color-border-strong);
+    background-color: var(--color-popover);
+  }
+
+  body::before,
+  body::after {
+    display: none;
+  }
+}

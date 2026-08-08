@@ -96,7 +96,7 @@ export default function PricingHero() {
         <button
           onClick={handleTrial}
           disabled={trialState === 'loading' || trialState === 'granted' || isBlocked}
-          className={`inline-flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
+          className={`inline-flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-lg transition-[transform,background-color,box-shadow,color] duration-200 ${
             trialState === 'granted'
               ? 'bg-[#00D9FF] text-bg shadow-lg shadow-[#00D9FF]/25'
               : isBlocked
@@ -133,7 +133,7 @@ export default function PricingHero() {
           </div>
           <a
             href="#plans"
-            className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/6 hover:bg-white/10 border border-white/12 text-white/70 hover:text-white text-sm font-medium transition-all duration-200"
+            className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/6 hover:bg-white/10 border border-white/12 text-white/70 hover:text-white text-sm font-medium transition-[transform,background-color,box-shadow,color] duration-200"
           >
             Mehr erfahren
             <ArrowRight className="w-3.5 h-3.5" />

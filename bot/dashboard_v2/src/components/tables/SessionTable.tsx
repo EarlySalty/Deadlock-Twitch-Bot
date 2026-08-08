@@ -74,7 +74,7 @@ export function SessionTable({
                   <div className="flex items-center gap-2">
                     <div className="w-16 h-1.5 bg-border rounded-full overflow-hidden">
                       <div
-                        className="h-full rounded-full transition-all"
+                        className="h-full rounded-full transition-[width]"
                         style={{
                           width: `${Math.min(session.retention10m, 100)}%`,
                           backgroundColor: getRetentionColor(session.retention10m),

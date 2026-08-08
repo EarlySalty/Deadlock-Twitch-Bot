@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "../../shared-theme/industrial-gold.css";
+@import "../../shared-theme/motion.css";
+@import "../../shared-theme/typography.css";
 
 @theme {
   --color-bg: #140D0A;
@@ -91,6 +93,8 @@ body::after {
   z-index: 1;
 }
 
+/* Laufweite siehe shared-theme/typography.css — gestaffelt statt ein Wert fuer
+   alle Groessen. */
 h1,
 h2,
 h3,
@@ -99,7 +103,6 @@ h5,
 h6,
 .display-font {
   font-family: var(--font-display);
-  letter-spacing: -0.02em;
 }
 
 a {

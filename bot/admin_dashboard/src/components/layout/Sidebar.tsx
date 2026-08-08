@@ -134,7 +134,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={[
-        'glass sticky top-0 flex h-screen flex-col border-r border-white/8 px-3 py-4 transition-all duration-200',
+        // Nur die Breite laeuft — `transition-all` haette auch Farbe, Rahmen
+        // und Schatten der Glasflaeche mitgezogen, die sich beim Einklappen
+        // gar nicht aendern.
+        'glass sticky top-0 flex h-screen flex-col border-r border-white/8 px-3 py-4 transition-[width] duration-200',
         collapsed ? 'w-[92px]' : 'w-[240px]',
       ].join(' ')}
     >

@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "../../shared-theme/industrial-gold.css";
+@import "../../shared-theme/motion.css";
+@import "../../shared-theme/typography.css";
 
 /* Brand Theme — Deutsche Deadlock Community (Industrial Gold)
  *
@@ -133,13 +135,15 @@ body::after {
   z-index: 1;
 }
 
+/* Die Laufweite steht nicht mehr hier: ein fester Wert fuer h1 bis h4 war auf
+   einer 40px-Ueberschrift zu locker und auf einem 12px-Label zu eng. Die
+   groessenabhaengige Staffelung liegt in shared-theme/typography.css. */
 h1,
 h2,
 h3,
 h4,
 .display-font {
   font-family: var(--font-display);
-  letter-spacing: -0.02em;
 }
 
 /* KPI-Zahlen: geometrische Outfit-Ziffern, tabellarisch (springen beim Zaehlen

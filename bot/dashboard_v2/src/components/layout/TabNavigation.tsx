@@ -100,7 +100,11 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
                       'inset 0 0 0 1px rgba(255,255,255,0.08), 0 8px 22px -8px rgba(197, 160, 89, 0.45), 0 4px 12px rgba(0,0,0,0.28)',
                   }}
                   initial={false}
-                  transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                  // Kritisch gedaempft: der Tab-Wechsel ist ein Klick, keine
+                  // Wischbewegung — ein Nachschwingen haette hier keinen Anlass.
+                  // Vorher stiffness 500 / damping 35, das entspricht einer
+                  // Daempfung von 0.78 und schwang sichtbar ueber.
+                  transition={{ type: 'spring', bounce: 0, duration: 0.35 }}
                 />
               )}
               <span className="relative z-10 flex items-center gap-2">

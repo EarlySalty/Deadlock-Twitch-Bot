@@ -1,0 +1,51 @@
+/* Typografie — Deutsche Deadlock Community
+ *
+ * Ein fester Laufweitenwert ist immer irgendwo falsch. Buchstaben stehen
+ * gefuehlt weiter auseinander, je groesser die Schrift wird: grosse Zeilen
+ * brauchen negative Laufweite, kleine eine leicht positive, damit sie nicht
+ * zusammenkleben. Vorher trugen h1 bis h4 pauschal -0.02em — auf einer
+ * Ueberschrift zu wenig, auf einem 11px-Label deutlich zu viel.
+ *
+ * Die Werte haengen an den Tailwind-Textgroessen, greifen also ueberall dort,
+ * wo bereits `text-xs` bis `text-7xl` steht, ohne eine einzige Komponente
+ * anzufassen.
+ *
+ * Quelle: skills/apple-design §15 (WWDC "The Details of UI Typography").
+ */
+
+@theme {
+  --text-xs--letter-spacing: 0.012em;
+  --text-sm--letter-spacing: 0.006em;
+  --text-base--letter-spacing: 0em;
+  --text-lg--letter-spacing: -0.006em;
+  --text-xl--letter-spacing: -0.011em;
+  --text-2xl--letter-spacing: -0.016em;
+  --text-3xl--letter-spacing: -0.021em;
+  --text-4xl--letter-spacing: -0.026em;
+  --text-5xl--letter-spacing: -0.03em;
+  --text-6xl--letter-spacing: -0.034em;
+  --text-7xl--letter-spacing: -0.038em;
+}
+
+/* Der Zeilenabstand bleibt bei Tailwinds Werten. Er waere nach derselben Regel
+   zu behandeln (eng oben, luftig unten), aendert aber jede Kachelhoehe im
+   Dashboard, und das laesst sich hier ohne Screenshot-Vergleich nicht
+   nachpruefen. Laufweite ist der Teil, der ohne Layoutfolgen wirkt. */
+
+@layer base {
+  /* Ueberschriften ohne eigene Groessen-Utility: dieselbe Staffelung ueber das
+     Element. Steht in `base`, damit eine `text-*`-Klasse am selben Element
+     weiterhin gewinnt — ungelayertes CSS wuerde jede Utility schlagen. */
+  h1 { letter-spacing: -0.03em; }
+  h2 { letter-spacing: -0.025em; }
+  h3 { letter-spacing: -0.02em; }
+  h4 { letter-spacing: -0.015em; }
+  h5 { letter-spacing: -0.008em; }
+  h6 { letter-spacing: 0; }
+
+  /* Zahlen in Tabellen laufen tabellarisch, damit die Spalte beim
+     Aktualisieren nicht in der Breite springt. */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}

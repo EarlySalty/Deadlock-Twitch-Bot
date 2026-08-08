@@ -261,7 +261,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <button
               onClick={handleAnalyze}
               disabled={isLoading || !streamer}
-              className="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed text-[#0D0806] rounded-xl font-semibold transition-all text-sm shadow-lg shadow-primary/20"
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed text-[#0D0806] rounded-xl font-semibold transition-[background-color,border-color,color,box-shadow] text-sm shadow-lg shadow-primary/20"
             >
               {isLoading ? (
                 <>
@@ -702,7 +702,7 @@ function AIChatPanel({
             type="button"
             onClick={onSend}
             disabled={isSending || !inputValue.trim() || followUpsRemaining <= 0}
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed text-[#0D0806] rounded-xl font-semibold transition-all text-sm"
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed text-[#0D0806] rounded-xl font-semibold transition-[background-color,border-color,color,box-shadow] text-sm"
           >
             {isSending ? (
               <>

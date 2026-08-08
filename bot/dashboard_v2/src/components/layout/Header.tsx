@@ -1,7 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { usePlan } from '@/context/PlanContext';
 import type { TimeRange } from '@/types/analytics';
+
+// Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
+// Auswahl behaelt ihren Ort im Raum. Kritisch gedaempft (bounce 0) — ein
+// Ueberschwingen gehoert nur dorthin, wo vorher eine Wischbewegung war.
+const SEGMENT_SPRING = { type: 'spring', bounce: 0, duration: 0.32 } as const;
+
+// Menue-Eintritt: 200ms ease-out, aus dem Ausloeser heraus statt aus der Mitte,
+// und nie von scale(0) — nichts in der echten Welt entsteht aus dem Nichts.
+const MENU_MOTION = {
+  initial: { opacity: 0, scale: 0.96, y: -4 },
+  animate: { opacity: 1, scale: 1, y: 0 },
+  exit: { opacity: 0, scale: 0.97, y: -2 },
+} as const;
 
 interface HeaderProps {
   streamer: string | null;
@@ -28,11 +42,30 @@ export function Header({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
 
+  const viewOptions: { value: 'basic' | 'extended'; label: string }[] = [
+    { value: 'basic', label: 'Basis' },
+    { value: 'extended', label: 'Preview' },
+  ];
+
   const timeRanges: { value: TimeRange; label: string }[] = [
     { value: 7, label: '7d' },
     { value: 30, label: '30d' },
     { value: 90, label: '90d' },
   ];
+
+  // Escape schliesst das Menue. Ein Menue, das nur per Klick daneben weggeht,
+  // sperrt den Nutzer gefuehlt ein — es muss immer einen Weg heraus geben.
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDropdownOpen(false);
+        setSearch('');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dropdownOpen]);
 
   const q = search.trim().toLowerCase();
   const partners = streamers.filter(s => s.isPartner && (!q || s.login.includes(q)));
@@ -71,28 +104,26 @@ export function Header({
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {canPreviewExtended && (
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
-              <button
-                type="button"
-                onClick={() => setView('basic')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                  view === 'basic'
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
-                    : 'text-text-secondary hover:text-white'
-                }`}
-              >
-                Basis
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('extended')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                  view === 'extended'
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
-                    : 'text-text-secondary hover:text-white'
-                }`}
-              >
-                Preview
-              </button>
+              {viewOptions.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setView(option.value)}
+                  className={`relative px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                    view === option.value ? 'text-[#0D0806]' : 'text-text-secondary hover:text-white'
+                  }`}
+                >
+                  {view === option.value && (
+                    <motion.span
+                      layoutId="headerViewIndicator"
+                      className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                      initial={false}
+                      transition={SEGMENT_SPRING}
+                    />
+                  )}
+                  <span className="relative z-10">{option.label}</span>
+                </button>
+              ))}
             </div>
           )}
 
@@ -106,10 +137,16 @@ export function Header({
               <ChevronDown className="w-4 h-4 text-text-secondary" />
             </button>
 
+            <AnimatePresence>
             {dropdownOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => { setDropdownOpen(false); setSearch(''); }} />
-                <div className="absolute top-full right-0 mt-2 w-full sm:w-72 panel-card rounded-xl z-50 flex flex-col">
+                <motion.div
+                  {...MENU_MOTION}
+                  transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
+                  style={{ transformOrigin: 'top right' }}
+                  className="absolute top-full right-0 mt-2 w-full sm:w-72 panel-card rounded-xl z-50 flex flex-col"
+                >
                   {/* Search */}
                   <div className="p-2 border-b border-border">
                     <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/60 border border-border">
@@ -190,9 +227,10 @@ export function Header({
                     </>
                   )}
                   </div>{/* end scrollable */}
-                </div>
+                </motion.div>
               </>
             )}
+            </AnimatePresence>
           </div>
 
           {/* Time Range Selector */}
@@ -204,13 +242,19 @@ export function Header({
               <button
                 key={range.value}
                 onClick={() => onDaysChange(range.value)}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                  days === range.value
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806] shadow-lg shadow-primary/20'
-                    : 'text-text-secondary hover:text-white'
+                className={`relative px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                  days === range.value ? 'text-[#0D0806]' : 'text-text-secondary hover:text-white'
                 }`}
               >
-                {range.label}
+                {days === range.value && (
+                  <motion.span
+                    layoutId="headerRangeIndicator"
+                    className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                    initial={false}
+                    transition={SEGMENT_SPRING}
+                  />
+                )}
+                <span className="relative z-10">{range.label}</span>
               </button>
             ))}
           </div>
