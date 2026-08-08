@@ -188,7 +188,7 @@ pub async fn stats_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -205,7 +205,7 @@ pub async fn clips_handler(
         Ok(l) => l,
         Err(()) => return invalid_limit(),
     };
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -219,7 +219,7 @@ pub async fn last_hashtags_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -278,7 +278,11 @@ async fn streamer_template_owned(pool: &PgPool, template_id: i64, streamer: &str
 
 /// Partner-Freigabe-Guard für Clip-basierte Admin-Handler: lädt den
 /// Clip-Owner und prüft die Freigabe. `None` wenn kein Owner oder OK.
-async fn guard_partner_access_for_clip(pool: &PgPool, clip_db_id: i64) -> Option<Response> {
+async fn guard_partner_access_for_clip(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    clip_db_id: i64,
+) -> Option<Response> {
     let streamer_login: Option<String> = sqlx::query_scalar(
         "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
     )
@@ -288,7 +292,7 @@ async fn guard_partner_access_for_clip(pool: &PgPool, clip_db_id: i64) -> Option
     .ok()
     .flatten();
     if let Some(ref login) = streamer_login {
-        check_partner_access_guard(pool, login).await
+        check_partner_access_guard(pool, auth, login).await
     } else {
         None
     }
@@ -350,7 +354,7 @@ pub async fn templates_streamer_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -387,7 +391,7 @@ pub async fn create_template_handler(
     };
     let streamer = scope.unwrap_or_default();
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
-    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer).await {
         return guard_response;
     }
     let name = body.template_name.unwrap_or_default();
@@ -443,7 +447,7 @@ pub async fn apply_template_handler(
     };
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(streamer) = &scope {
-        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, streamer).await {
             return guard_response;
         }
     }
@@ -479,6 +483,68 @@ fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
         DashboardAuthLevel::Admin { .. } => Ok(()),
         DashboardAuthLevel::Partner { .. } => Err(forbidden("Admin access required.")),
         DashboardAuthLevel::None => Err(unauthorized()),
+    }
+}
+
+/// Zugriff auf das Social-Media-Dashboard: Admin/Localhost frei, Partner nur
+/// mit Freigabe in `social_media_partner_access` und nur für den eigenen Kanal.
+///
+/// Ersetzt `require_admin` an allen Endpoints mit Streamer-Bezug. Der
+/// zurückgegebene Scope ist bei Partnern immer der eigene Login, bei Admins der
+/// angefragte (oder `None` für alle).
+#[allow(clippy::result_large_err)]
+async fn require_sm_access(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    requested: Option<&str>,
+) -> Result<Option<String>, Response> {
+    if let DashboardAuthLevel::Partner { twitch_login, .. } = auth {
+        if !is_partner_granted(pool, twitch_login).await {
+            return Err(forbidden(
+                "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
+            ));
+        }
+    }
+    resolve_streamer_scope(auth, requested, false)
+}
+
+/// Ownership-Prüfung für Endpoints, die nur eine `clip_db_id` kennen: Partner
+/// dürfen nur eigene Clips sehen und ändern. Admin-Scope (`None`) lässt durch.
+#[allow(clippy::result_large_err)]
+async fn require_clip_in_scope(
+    pool: &PgPool,
+    clip_db_id: i64,
+    scope: Option<&str>,
+) -> Result<(), Response> {
+    match scope {
+        None => Ok(()),
+        Some(streamer) => {
+            if clip_owned_by_streamer(pool, clip_db_id, streamer).await {
+                Ok(())
+            } else {
+                Err(forbidden(
+                    "Dieser Clip gehört nicht zu deinem Kanal.",
+                ))
+            }
+        }
+    }
+}
+
+/// `GET /social-media/api/access/me` — was die eigene Session darf.
+///
+/// Das Frontend entscheidet damit zwischen Vollansicht, Eigenkanal-Ansicht und
+/// dem Hinweis „noch nicht freigeschaltet".
+pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+    match &auth {
+        DashboardAuthLevel::Admin { .. } => {
+            Json(json!({ "allowed": true, "streamer": null, "isAdmin": true })).into_response()
+        }
+        DashboardAuthLevel::Partner { twitch_login, .. } => {
+            let login = twitch_login.to_lowercase();
+            let allowed = is_partner_granted(&pool, &login).await;
+            Json(json!({ "allowed": allowed, "streamer": login, "isAdmin": false })).into_response()
+        }
+        DashboardAuthLevel::None => unauthorized(),
     }
 }
 
@@ -775,9 +841,10 @@ pub async fn upload_clip_handler(
     State(pool): State<PgPool>,
     mut multipart: Multipart,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let mut bytes: Option<Vec<u8>> = None;
     let mut streamer_login: Option<String> = None;
     let mut clip_id: Option<String> = None;
@@ -801,9 +868,14 @@ pub async fn upload_clip_handler(
     let title = title
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    // Partner laden nur in den eigenen Kanal hoch, egal was im Formular steht.
+    let streamer_login = match scope {
+        Some(own) => Some(own),
+        None => streamer_login,
+    };
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
     if let Some(ref login) = streamer_login {
-        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
             return guard_response;
         }
     }
@@ -834,7 +906,7 @@ pub async fn streamer_layout_get_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerLoginQuery>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
+    if let Err(e) = require_sm_access(&auth, &pool, q.streamer_login.as_deref()).await {
         return e;
     }
     let slug = match normalize_safe_slug(q.streamer_login.as_deref(), "streamer_login") {
@@ -881,7 +953,13 @@ pub async fn streamer_layout_put_handler(
     State(pool): State<PgPool>,
     Json(payload): Json<Value>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
+    if let Err(e) = require_sm_access(
+        &auth,
+        &pool,
+        payload.get("streamer_login").and_then(Value::as_str),
+    )
+    .await
+    {
         return e;
     }
     let slug = match normalize_safe_slug(
@@ -899,7 +977,7 @@ pub async fn streamer_layout_put_handler(
             .into_response();
     }
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
-    if let Some(guard_response) = check_partner_access_guard(&pool, &slug).await {
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &slug).await {
         return guard_response;
     }
     let layout = match parse_layout_request(&payload) {
@@ -925,9 +1003,10 @@ pub async fn clip_layout_put_handler(
     Path(clip_db_id_raw): Path<String>,
     Json(payload): Json<Value>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(clip_db_id_raw))) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -935,6 +1014,9 @@ pub async fn clip_layout_put_handler(
         )
             .into_response();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     if !clip_exists(&pool, clip_db_id).await {
         return (
             StatusCode::NOT_FOUND,
@@ -944,7 +1026,7 @@ pub async fn clip_layout_put_handler(
     }
 
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
-    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
 
@@ -1049,7 +1131,7 @@ pub async fn queue_upload_handler(
     };
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(streamer) = &scope {
-        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, streamer).await {
             return guard_response;
         }
     }
@@ -1208,7 +1290,7 @@ pub async fn fetch_clips_handler(
     let limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
 
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
-    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer).await {
         return guard_response;
     }
 
@@ -1247,7 +1329,7 @@ pub async fn batch_upload_handler(
     };
     let streamer = scope.unwrap_or_default();
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
-    if let Some(guard_response) = check_partner_access_guard(&pool, &streamer).await {
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer).await {
         return guard_response;
     }
     let platforms: Vec<String> = body
@@ -1319,7 +1401,7 @@ pub async fn mark_uploaded_handler(
     };
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(streamer) = &scope {
-        if let Some(guard_response) = check_partner_access_guard(&pool, streamer).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, streamer).await {
             return guard_response;
         }
     }
@@ -1842,9 +1924,10 @@ pub async fn admin_clips_handler(
     State(pool): State<PgPool>,
     Query(q): Query<AdminClipsQuery>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let page = match q.page.as_deref().unwrap_or("1").parse::<i64>() {
         Ok(n) => n.max(1),
         Err(_) => return invalid_pagination(),
@@ -1858,11 +1941,9 @@ pub async fn admin_clips_handler(
         .as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
-    let streamer = q
-        .streamer
-        .as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    // Filter kommt aus dem Scope, nicht roh aus der Query: bei Partnern ist das
+    // immer der eigene Login, bei Admins der angefragte.
+    let streamer = scope;
     let offset = (page - 1) * page_size;
 
     let mut qb_total =
@@ -1913,12 +1994,16 @@ pub async fn admin_clip_detail_handler(
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     match load_clip_row(&pool, clip_db_id).await {
         Ok(Some(clip)) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
         Ok(None) => clip_not_found(),
@@ -1932,14 +2017,18 @@ pub async fn admin_clip_discard_handler(
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
-    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
     if !mark_clip_discarded(&pool, clip_db_id).await {
@@ -2086,14 +2175,18 @@ pub async fn enrichment_put_handler(
     Path(raw): Path<String>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
-    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_put").await {
@@ -2167,12 +2260,16 @@ pub async fn enrichment_get_handler(
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_get").await {
         Ok(id) => id,
         Err(e) => return e,
@@ -2193,14 +2290,18 @@ pub async fn enrichment_run_handler(
     Path(raw): Path<String>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
-    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_run").await {
@@ -2243,12 +2344,16 @@ pub async fn clip_analytics_get_handler(
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
         return e;
     }
@@ -2297,7 +2402,7 @@ pub async fn reports_run_handler(
         .filter(|s| !s.is_empty());
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
     if let Some(ref login) = streamer {
-        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
             return guard_response;
         }
     }
@@ -2418,12 +2523,16 @@ pub async fn approval_get_handler(
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
         return e;
     }
@@ -2438,14 +2547,18 @@ pub async fn approval_decision_handler(
     Path(raw): Path<String>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+        return e;
+    }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
-    if let Some(guard_response) = guard_partner_access_for_clip(&pool, clip_db_id).await {
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "approval_decision").await
@@ -2601,7 +2714,7 @@ pub async fn oauth_start_handler(
     };
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(ref login) = scope {
-        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
             return guard_response;
         }
     }
@@ -2704,7 +2817,7 @@ pub async fn oauth_disconnect_handler(
     };
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(ref login) = scope {
-        if let Some(guard_response) = check_partner_access_guard(&pool, login).await {
+        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
             return guard_response;
         }
     }
@@ -2737,7 +2850,7 @@ pub async fn oauth_disconnect_handler(
 
 /// Request-Body für PUT /social-media/api/access.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PartnerAccessPutBody {
+pub struct PartnerAccessPutBody {
     streamer_login: String,
     granted: bool,
 }
@@ -2805,8 +2918,14 @@ pub async fn partner_access_put_handler(
 /// Wird vor jedem Schreibpfad aufgerufen: Post, Draft, Caption, Upload, etc.
 pub async fn check_partner_access_guard(
     pool: &PgPool,
+    auth: &DashboardAuthLevel,
     streamer_login: &str,
 ) -> Option<Response> {
+    // Admin und Localhost arbeiten für jeden Kanal, auch ohne Freigabe-Eintrag:
+    // die Freigabe steuert den Selfservice der Partner, nicht das Admin-Werkzeug.
+    if matches!(auth, DashboardAuthLevel::Admin { .. }) {
+        return None;
+    }
     if !is_partner_granted(pool, streamer_login).await {
         Some(
             (
@@ -3046,6 +3165,7 @@ mod tests {
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3057,6 +3177,120 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn sm_partner(login: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.to_string(),
+            twitch_user_id: "42".to_string(),
+            display_name: login.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn partner_ohne_freigabe_bekommt_403() {
+        let Some(pool) = make_pool("t_dash_sm_access_deny").await else {
+            return;
+        };
+        let err = require_sm_access(&sm_partner("earlysalty"), &pool, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+
+        // Auch ein explizit auf false gesetzter Eintrag bleibt gesperrt.
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', FALSE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = require_sm_access(&sm_partner("earlysalty"), &pool, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn partner_mit_freigabe_bekommt_eigenen_scope_und_kein_fremdes_konto() {
+        let Some(pool) = make_pool("t_dash_sm_access_grant").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let scope = require_sm_access(&sm_partner("EarlySalty"), &pool, None)
+            .await
+            .unwrap();
+        assert_eq!(scope, Some("earlysalty".to_string()));
+
+        let err = require_sm_access(&sm_partner("earlysalty"), &pool, Some("ismile_e"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_bleibt_ungebremst_und_none_ist_401() {
+        let Some(pool) = make_pool("t_dash_sm_access_admin").await else {
+            return;
+        };
+        let scope = require_sm_access(&DashboardAuthLevel::admin(), &pool, Some("ismile_e"))
+            .await
+            .unwrap();
+        assert_eq!(scope, Some("ismile_e".to_string()));
+
+        let err = require_sm_access(&DashboardAuthLevel::None, &pool, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_clips_partner_sieht_nur_eigene_clips() {
+        let Some(pool) = make_pool("t_dash_sm_access_clips").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('eigen', 'earlysalty', 'pending'), ('fremd', 'ismile_e', 'pending')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Partner fragt ohne Filter: der Scope schneidet fremde Clips weg.
+        let resp = admin_clips_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(AdminClipsQuery {
+                page: None,
+                page_size: None,
+                status: None,
+                streamer: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["clip_id"], "eigen");
+
+        // Der fremde Clip ist auch einzeln nicht erreichbar.
+        let fremd_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM twitch_clips_social_media WHERE clip_id = 'fremd'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let resp = admin_clip_detail_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Path(fremd_id.to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -3115,6 +3349,10 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_tpl_create").await else {
             return;
         };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
         // Partner legt eigenes Template an.
         let resp = create_template_handler(
             partner("nani"),
@@ -3173,6 +3411,27 @@ mod tests {
         };
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, game_name) VALUES ('c1', 'nani', 'Titel', 'Deadlock') RETURNING id").fetch_one(&pool).await.unwrap();
         let tpl: i64 = sqlx::query_scalar("INSERT INTO clip_templates_streamer (streamer_login, template_name, description_template, hashtags) VALUES ('nani', 'T', 'Beschr {{title}}', '[\"a\"]') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // Ohne Freigabe kommt der Partner gar nicht erst durch.
+        let resp = apply_template_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(ApplyTemplateBody {
+                clip_id: Some(json!(clip)),
+                template_id: Some(json!(tpl)),
+                is_global: false,
+                streamer: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Beide Partner freigeben, damit hier wirklich die Clip-Zugehörigkeit greift.
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE), ('other', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Partner wendet eigenes Template auf eigenen Clip an → success.
         let resp = apply_template_handler(
@@ -3256,6 +3515,20 @@ mod tests {
             body_json(resp).await["templates"].as_array().unwrap().len(),
             1
         );
+
+        // Ohne Freigabe sieht ein Partner seine Templates nicht mehr.
+        let resp = templates_streamer_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // streamer: Partner nani sieht 2, is_default als int (1/0), default zuerst.
         let resp = templates_streamer_handler(

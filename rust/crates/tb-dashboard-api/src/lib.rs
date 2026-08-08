@@ -193,6 +193,11 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(social_media::partner_access_get_handler)
                 .put(social_media::partner_access_put_handler),
         )
+        // Was die eigene Session darf (Partner und Admin).
+        .route(
+            "/social-media/api/access/me",
+            get(social_media::my_access_handler),
+        )
         // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
         .route(
             "/social-media/api/analytics",
