@@ -65,7 +65,7 @@ export function PaidTeaserBlock() {
         {/* CTA */}
         <a
           href={PREVIEW_PRICING_ROUTE}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-warning to-orange text-bg hover:brightness-110 transition-[filter,box-shadow,transform] shadow-lg shadow-warning/20 mb-3"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-warning to-orange text-bg hover:brightness-110 transition-[filter,box-shadow,transform,translate,scale] shadow-lg shadow-warning/20 mb-3"
         >
           <Sparkles className="w-4 h-4" />
           30 Tage gratis testen

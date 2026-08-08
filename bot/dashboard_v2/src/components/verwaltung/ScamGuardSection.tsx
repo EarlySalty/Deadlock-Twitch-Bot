@@ -164,7 +164,7 @@ function SettingsBlock() {
             }`}
           >
             <span
-              className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+              className={`inline-block h-5 w-5 transform rounded-full bg-white transition-[transform,translate,scale] ${
                 draft.enabled ? 'translate-x-6' : 'translate-x-1'
               }`}
             />

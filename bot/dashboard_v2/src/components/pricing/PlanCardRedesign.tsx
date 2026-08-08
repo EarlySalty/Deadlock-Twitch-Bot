@@ -189,7 +189,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
         ) : (
           <a
             href={getPlanCheckoutHref(plan.id, plan.price_monthly === 0, cycle)}
-            className={`block text-center py-3 rounded-xl text-sm font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-200 ${config.ctaStyle}`}
+            className={`block text-center py-3 rounded-xl text-sm font-semibold transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${config.ctaStyle}`}
           >
             {plan.price_monthly === 0
               ? 'Kostenlos starten'

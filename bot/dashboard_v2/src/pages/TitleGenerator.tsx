@@ -156,7 +156,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
                 className="sr-only"
               />
               <div className={`w-8 h-4 rounded-full transition-colors ${includeLive ? 'bg-primary' : 'bg-border'}`}>
-                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform shadow ${includeLive ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-[transform,translate,scale] shadow ${includeLive ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </div>
             </div>
             <Zap className="w-3.5 h-3.5" />

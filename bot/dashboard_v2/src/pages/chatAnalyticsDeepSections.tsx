@@ -649,7 +649,7 @@ export function ChatMinimaxDeepSection({
         {!data && !isLoading && (
           <button
             onClick={handleAnalysis}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-[#0D0806] shadow-lg shadow-primary/20 transition-transform hover:scale-105 active:scale-95"
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-[#0D0806] shadow-lg shadow-primary/20 transition-[transform,translate,scale] hover:scale-105 active:scale-95"
           >
             <Sparkles className="h-4 w-4" />
             Analyse starten

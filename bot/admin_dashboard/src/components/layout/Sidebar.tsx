@@ -178,7 +178,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   </span>
                   <ChevronDown
                     className={[
-                      'h-4 w-4 text-text-secondary transition-transform',
+                      'h-4 w-4 text-text-secondary transition-[transform,translate,scale]',
                       groupOpen ? 'rotate-0' : '-rotate-90',
                     ].join(' ')}
                   />

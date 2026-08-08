@@ -32,6 +32,19 @@ export function TrialExpiryModal() {
     }
   }, [trialInfo, tier]);
 
+  // Ein Dialog mit aria-modal muss sich auch ohne Maus schliessen lassen —
+  // sonst sitzt jemand, der mit der Tastatur arbeitet, darin fest.
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      localStorage.setItem(MODAL_SHOWN_KEY, new Date().toISOString());
+      setVisible(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible]);
+
   const handleUpgrade = () => {
     localStorage.setItem(MODAL_SHOWN_KEY, new Date().toISOString());
     window.location.href = PREVIEW_PRICING_ROUTE;

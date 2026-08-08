@@ -55,7 +55,12 @@
    einem Button muss weiterhin gewinnen duerfen. Deshalb enthaelt die Liste
    nicht nur Transform und Deckkraft, sondern auch die Eigenschaften, fuer die
    Komponenten sonst `transition-colors` schreiben — sonst muesste jede
-   Schaltflaeche ihren Farbuebergang selbst mitbringen. */
+   Schaltflaeche ihren Farbuebergang selbst mitbringen.
+
+   `translate` und `scale` stehen ausdruecklich mit drin: Tailwind v4 setzt
+   `hover:-translate-y-1` und `hover:scale-105` ueber die eigenstaendigen
+   Properties, nicht ueber `transform`. Wer nur `transform` auffuehrt, laesst
+   genau diese Hover-Bewegungen springen. */
 @layer base {
   button,
   [role="button"],
@@ -63,6 +68,8 @@
   a[data-press] {
     transition:
       transform var(--dur-press) var(--ease-out),
+      scale var(--dur-press) var(--ease-out),
+      translate var(--dur-hover) var(--ease-out),
       opacity var(--dur-press) var(--ease-out),
       background-color var(--dur-hover) var(--ease-out),
       border-color var(--dur-hover) var(--ease-out),
@@ -73,25 +80,28 @@
 }
 
 /* Der gedrueckte Zustand bleibt ungelayert und damit staerker als Tailwinds
-   `hover:-translate-y-*`: eine gehoverte Kachel muss auf den Druck reagieren. */
+   `hover:-translate-y-*`: eine gehoverte Kachel muss auf den Druck reagieren.
+   Geschrieben ueber die `scale`-Property, nicht ueber `transform` — so ersetzt
+   der Druck ein `hover:scale-105` sauber, statt sich damit zu multiplizieren,
+   und ein gleichzeitiges `translate` bleibt unberuehrt. */
 button:not(:disabled):not([data-press="none"]):active,
 [role="button"]:not([aria-disabled="true"]):not([data-press="none"]):active,
 summary:active,
 a[data-press]:active {
-  transform: scale(var(--press-scale));
+  scale: var(--press-scale);
 }
 
 /* `transition-colors` steht 141× im Frontend, meist an Schaltflaechen. Die
    Utility ersetzt die komplette Uebergangsliste — Transform faellt dabei
    heraus und das Druckfeedback wuerde hart springen. Statt 141 Fundstellen
-   umzuschreiben bekommt die Klasse Transform und Deckkraft dazu; `duration-*`
+   umzuschreiben bekommt die Klasse Bewegung und Deckkraft dazu; `duration-*`
    und `ease-*` ueberschreiben weiterhin, weil hier nur die Property-Liste
    gesetzt wird. */
 @layer utilities {
   .transition-colors {
     transition-property:
       color, background-color, border-color, outline-color,
-      text-decoration-color, fill, stroke, transform, opacity;
+      text-decoration-color, fill, stroke, transform, translate, scale, opacity;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
@@ -220,11 +230,20 @@ a[data-press]:active {
     scroll-behavior: auto !important;
   }
 
+  /* Ladeanzeigen sind ausgenommen: ein stehender Spinner sagt "haengt", nicht
+     "laedt". Er dreht sich langsamer weiter statt zu verschwinden. */
+  .animate-spin,
+  .animate-pulse {
+    animation-duration: 1.8s !important;
+    animation-iteration-count: infinite !important;
+  }
+
   button:active,
   [role="button"]:active,
   summary:active,
   a[data-press]:active {
     transform: none;
+    scale: 1;
     opacity: 0.82;
   }
 
@@ -233,6 +252,8 @@ a[data-press]:active {
   .soft-elevate:hover,
   .stagger-children > * {
     transform: none;
+    translate: none;
+    scale: 1;
   }
 }
 

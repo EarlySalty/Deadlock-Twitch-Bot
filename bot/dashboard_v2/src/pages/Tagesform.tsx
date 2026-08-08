@@ -180,7 +180,7 @@ export function Tagesform({ streamer, days, onSessionClick: _onSessionClick }: T
         aria-label="War das heute über oder unter deinem Schnitt? Verlauf ansehen"
       >
         {/* Shimmer-Effekt */}
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-warning/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-warning/5 to-transparent -translate-x-full group-hover:translate-x-full transition-[transform,translate,scale] duration-700 pointer-events-none" />
 
         <div className="w-9 h-9 rounded-xl flex items-center justify-center border border-warning/40 bg-warning/10 flex-shrink-0">
           <Lock className="w-4 h-4 text-warning" />

@@ -40,7 +40,7 @@ export default function MySubscriptionCard({ subscription, invoiceHref }: MySubs
 
         <a
           href={invoiceHref}
-          className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-[#00D9FF] px-6 py-3 text-sm font-semibold text-bg shadow-lg shadow-[#00D9FF]/20 transition-[background-color,border-color,color,box-shadow,transform] duration-200 hover:bg-[#00D9FF]"
+          className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-[#00D9FF] px-6 py-3 text-sm font-semibold text-bg shadow-lg shadow-[#00D9FF]/20 transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 hover:bg-[#00D9FF]"
         >
           <Receipt className="h-4 w-4" />
           Rechnungen &amp; Abo verwalten

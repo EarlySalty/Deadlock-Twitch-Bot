@@ -70,7 +70,7 @@ function MiniStat({
           ? '168,85,247'
           : '6,182,212';
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
+    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{
@@ -1057,7 +1057,7 @@ export function InternalHomeLanding() {
                 {canAccessAnalyticsDashboard ? (
                   <a
                     href={analyticsTabHref('overview')}
-                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
+                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-[transform,translate,scale] hover:-translate-y-0.5"
                   >
                     Analyse Dashboard
                     <ArrowRight className="h-4 w-4" />

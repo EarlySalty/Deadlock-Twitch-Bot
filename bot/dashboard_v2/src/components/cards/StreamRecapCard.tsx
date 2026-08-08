@@ -100,7 +100,7 @@ function BestTile({
 }) {
   const achieved = achievedLabel(entry?.achieved_at ?? null);
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
+    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{ background: `radial-gradient(120% 80% at 50% 0%, rgba(${GOLD}, 0.22), transparent 60%)` }}

@@ -142,7 +142,7 @@ export function SilentNotificationsSection() {
                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     <span
-                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-[transform,translate,scale] ${
                         on ? 'translate-x-6' : 'translate-x-1'
                       }`}
                     />
