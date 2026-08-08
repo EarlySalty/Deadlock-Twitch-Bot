@@ -2615,12 +2615,16 @@ pub async fn approval_decision_handler(
     }
 }
 
-/// `GET /social-media/api/admin/settings/auto-approve` — Auto-Approve-Flags (Admin).
+/// `GET /social-media/api/admin/settings/auto-approve` — Auto-Approve-Flags lesen.
+///
+/// Lesen darf jeder mit Social-Media-Zugriff: die Pipeline-Seite fragt die Flags
+/// beim Aufbau ab, ein 403 hier würde die ganze Seite für freigegebene Partner
+/// zur Admin-Wand machen. Gesetzt werden die Flags weiterhin nur vom Admin.
 pub async fn auto_approve_get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
+    if let Err(e) = require_sm_access(&auth, &pool, None).await {
         return e;
     }
     let s = get_auto_approve_settings(&pool).await;
@@ -2921,8 +2925,9 @@ pub async fn check_partner_access_guard(
     auth: &DashboardAuthLevel,
     streamer_login: &str,
 ) -> Option<Response> {
-    // Admin und Localhost arbeiten für jeden Kanal, auch ohne Freigabe-Eintrag:
-    // die Freigabe steuert den Selfservice der Partner, nicht das Admin-Werkzeug.
+    // Admin arbeitet für jeden Kanal, auch ohne Freigabe-Eintrag: die Freigabe
+    // steuert den Selfservice der Partner, nicht das Admin-Werkzeug. Localhost
+    // landet ebenfalls hier, es wird in auth/level.rs zu Admin promotet.
     if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         return None;
     }
@@ -3243,6 +3248,64 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Die Pipeline-Seite baut sich aus drei Abfragen auf. Reißt eine davon mit 403
+    /// ab, zeigt das Dashboard dem Partner trotz Freigabe wieder die Admin-Wand.
+    #[tokio::test]
+    async fn freigegebener_partner_kommt_durch_alle_drei_einstiegsabfragen() {
+        let Some(pool) = make_pool("t_dash_sm_access_entry").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('earlysalty', '1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = streamer_layout_get_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("earlysalty".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "Layout-Abfrage");
+
+        let resp = admin_clips_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(AdminClipsQuery {
+                page: None,
+                page_size: None,
+                status: None,
+                streamer: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "Clip-Liste");
+
+        let resp = auto_approve_get_handler(sm_partner("earlysalty"), State(pool.clone())).await;
+        assert_eq!(resp.status(), StatusCode::OK, "Auto-Approve-Flags");
+
+        // Ohne Freigabe bleibt dieselbe Abfrage zu.
+        let resp = auto_approve_get_handler(sm_partner("ismile_e"), State(pool.clone())).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Setzen bleibt Admin-Sache, auch für freigegebene Partner.
+        let resp = auto_approve_put_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            "{\"youtube\":true}".to_string(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
