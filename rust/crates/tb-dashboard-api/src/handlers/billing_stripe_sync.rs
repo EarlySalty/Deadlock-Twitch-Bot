@@ -453,6 +453,8 @@ mod tests {
     #[tokio::test]
     async fn dry_run_admin_liefert_operations_ohne_stripe_call() {
         use sqlx::postgres::PgPoolOptions;
+        let _lock = crate::handlers::billing_page::stripe_id_env::lock().await;
+        let _env = crate::handlers::billing_page::stripe_id_env::premium_ids();
         // Kein echter Pool nötig — State wird nicht gelesen. Lazy-Connect.
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -471,8 +473,9 @@ mod tests {
         assert_eq!(v["dry_run"], true);
         assert_eq!(v["persisted_to_windows_vault"], false);
         let ops = v["operations"].as_array().unwrap();
-        // Genau die 7 bezahlten Pläne (8 Katalog-Pläne minus raid_free).
-        assert_eq!(ops.len(), 7);
+        // Genau der eine bezahlte Plan (2 Katalog-Pläne minus free).
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0]["plan_id"], "premium");
         // Jeder bezahlte Plan hat Preis-Reports für beide Zyklen.
         for op in ops {
             assert!(!op["prices"].as_array().unwrap().is_empty());
@@ -484,14 +487,14 @@ mod tests {
         assert_eq!(v["readiness"]["provider"], "stripe");
         // dry_run hat keinen Stripe-Client → checkout_ready=false.
         assert_eq!(v["readiness"]["checkout_ready"], false);
-        // Eingecheckte Defaults füllen beide Maps. chat_quiet hat sowohl Product-
-        // als auch Price-Default; raid_boost nur Price-Default (kein Product).
+        // Seit dem Pricing-Umbau gibt es keine eingecheckten Defaults mehr; die
+        // IDs kommen aus der Vault-Map, die der Test oben gesetzt hat.
         let pmap = v["product_id_map"].as_object().unwrap();
-        assert!(pmap.contains_key("chat_quiet"), "product_id_map ohne chat_quiet");
+        assert!(pmap.contains_key("premium"), "product_id_map ohne premium");
         let prmap = v["price_id_map"].as_object().unwrap();
-        let boost_cycles = prmap["raid_boost"].as_object().unwrap();
-        assert!(boost_cycles.contains_key("1"), "price_id_map ohne raid_boost/1m");
-        assert!(boost_cycles.contains_key("12"), "price_id_map ohne raid_boost/12m");
+        let premium_cycles = prmap["premium"].as_object().unwrap();
+        assert!(premium_cycles.contains_key("1"), "price_id_map ohne premium/1m");
+        assert!(premium_cycles.contains_key("12"), "price_id_map ohne premium/12m");
     }
 
     /// P2.113: Live-Sync, bei dem `retrieve_price` für eine eingecheckte Default-ID
@@ -504,6 +507,11 @@ mod tests {
         use tb_analytics::stripe::StripeClient;
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Ohne eingecheckte Defaults liefert erst die Vault-Map die IDs, die
+        // hier absichtlich veraltet sein sollen.
+        let _lock = crate::handlers::billing_page::stripe_id_env::lock().await;
+        let _env = crate::handlers::billing_page::stripe_id_env::premium_ids();
 
         let server = MockServer::start().await;
         // Jeder Price-Retrieve (GET /v1/prices/{id}) schlägt mit 404 fehl
@@ -607,6 +615,11 @@ mod tests {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        // Ohne eingecheckte Defaults liefert erst die Vault-Map die IDs, die
+        // hier absichtlich veraltet sein sollen.
+        let _lock = crate::handlers::billing_page::stripe_id_env::lock().await;
+        let _env = crate::handlers::billing_page::stripe_id_env::premium_ids();
+
         let server = MockServer::start().await;
         // Default-Produkt-Retrieve → deleted:true → Default verworfen.
         Mock::given(method("GET"))
@@ -665,9 +678,9 @@ mod tests {
 
         // Kein Produkt darf als verifizierter Default 'reused' zählen.
         assert_eq!(v["reused_products"], 0, "gelöschter Default zählte als reused");
-        // Die Default-Produkte (4 Pläne) wurden neu angelegt.
+        // Das konfigurierte Produkt wurde neu angelegt.
         assert!(
-            v["created_products"].as_u64().unwrap() >= 4,
+            v["created_products"].as_u64().unwrap() >= 1,
             "gelöschte Produkte nicht recreated"
         );
         // Kein Operations-Eintrag trägt product.status == reused.
@@ -684,6 +697,11 @@ mod tests {
         use tb_analytics::stripe::StripeClient;
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Ohne eingecheckte Defaults liefert erst die Vault-Map die IDs, die
+        // hier absichtlich veraltet sein sollen.
+        let _lock = crate::handlers::billing_page::stripe_id_env::lock().await;
+        let _env = crate::handlers::billing_page::stripe_id_env::premium_ids();
 
         let server = MockServer::start().await;
         // Default-Produkt-Retrieve → 500 (transient) → ID geleert, kein Abbruch.
@@ -743,7 +761,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["reused_products"], 0, "transienter Fehler zählte als reused");
         assert!(
-            v["created_products"].as_u64().unwrap() >= 4,
+            v["created_products"].as_u64().unwrap() >= 1,
             "Produkte nach Retrieve-Fehler nicht recreated"
         );
     }

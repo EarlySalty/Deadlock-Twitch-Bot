@@ -1080,9 +1080,77 @@ async fn persist_cancelled_subscription(
     Ok(())
 }
 
+/// Test-Hilfen für die Stripe-ID-Maps.
+///
+/// Seit dem Pricing-Umbau (2026-08-09) gibt es keine eingecheckten Price-/
+/// Product-Defaults mehr; die IDs kommen ausschließlich aus der Prozess-Env
+/// (`STRIPE_PRICE_ID_MAP` / `STRIPE_PRODUCT_ID_MAP`). Tests, die einen
+/// Checkout oder Sync mit vorhandenen IDs prüfen, müssen sie deshalb setzen.
+/// Env ist prozessweit, also serialisiert `lock()` alle Tests, die sie lesen
+/// oder schreiben — sonst kippt `price_map_ready()` in einem Nachbartest.
+#[cfg(test)]
+pub(crate) mod stripe_id_env {
+    use std::sync::OnceLock;
+
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    pub(crate) async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
+
+    pub(crate) struct Guard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl Guard {
+        pub(crate) fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            match self.old.take() {
+                Some(old) => std::env::set_var(self.key, old),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Setzt beide Maps auf Premium-Test-IDs. Die Alias-Variablen werden
+    /// mitgeleert, sonst gewinnt ein gesetzter Alias über die leere Hauptvariable.
+    pub(crate) fn premium_ids() -> Vec<Guard> {
+        vec![
+            Guard::set(
+                "STRIPE_PRICE_ID_MAP",
+                r#"{"premium":{"1":"price_premium_1m","12":"price_premium_12m"}}"#,
+            ),
+            Guard::set("TWITCH_BILLING_STRIPE_PRICE_ID_MAP", ""),
+            Guard::set("STRIPE_PRODUCT_ID_MAP", r#"{"premium":"prod_premium"}"#),
+            Guard::set("TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP", ""),
+        ]
+    }
+
+    /// Leert beide Maps inklusive Aliasse (Zustand vor Milestone 8).
+    pub(crate) fn no_ids() -> Vec<Guard> {
+        vec![
+            Guard::set("STRIPE_PRICE_ID_MAP", ""),
+            Guard::set("TWITCH_BILLING_STRIPE_PRICE_ID_MAP", ""),
+            Guard::set("STRIPE_PRODUCT_ID_MAP", ""),
+            Guard::set("TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP", ""),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::stripe_id_env;
 
     fn partner(login: &str, uid: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
@@ -1130,14 +1198,30 @@ mod tests {
         assert_eq!(parse_u32(None, 1), 1);
     }
 
-    #[test]
-    fn readiness_without_config_is_not_checkout_ready() {
+    /// Ohne Stripe-Config UND ohne hinterlegte Price-IDs (Zustand bis
+    /// Milestone 8 die Premium-Preise anlegt) ist weder Checkout noch
+    /// Price-Map bereit.
+    #[tokio::test]
+    async fn readiness_without_config_is_not_checkout_ready() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::no_ids();
         let payload = readiness_payload(None);
         assert_eq!(payload["provider"], "stripe");
         assert_eq!(payload["checkout_ready"], false);
-        assert_eq!(payload["price_map_ready"], true);
+        assert_eq!(payload["price_map_ready"], false);
         assert_eq!(payload["integration_state"], "planned");
         assert_eq!(payload["ready_for_live"], false);
+    }
+
+    /// Gegenstueck: liegen die Premium-Price-IDs in der Vault-Map, meldet die
+    /// Readiness `price_map_ready = true`. Beweist, dass der Check die Map
+    /// wirklich liest und nicht konstant `false` liefert.
+    #[tokio::test]
+    async fn readiness_mit_hinterlegten_price_ids_ist_price_map_ready() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::premium_ids();
+        let payload = readiness_payload(None);
+        assert_eq!(payload["price_map_ready"], true);
     }
 
     /// P1.37: GET /twitch/abbo/kündigen löst KEINE Kündigung aus, sondern
@@ -1262,22 +1346,23 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "unknown_plan_id");
-        assert!(v["available_plan_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p == "raid_boost"));
+        let available = v["available_plan_ids"].as_array().unwrap();
+        assert!(available.iter().any(|p| p == "premium"), "{available:?}");
+        assert!(available.iter().any(|p| p == "free"), "{available:?}");
+        assert_eq!(available.len(), 2, "{available:?}");
     }
 
     /// P1.44: gültiger bezahlter Plan ohne Stripe-Config → 200 mit readiness/
     /// next_steps; ready=false (Checkout nicht konfiguriert), price_id=null.
     #[tokio::test]
     async fn checkout_preview_valid_plan_returns_readiness() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::no_ids();
         let resp = checkout_preview_handler(
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle_months: Some(serde_json::json!(1)),
             }),
         )
@@ -1288,7 +1373,7 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["provider"], "stripe");
-        assert_eq!(v["plan"]["id"], "raid_boost");
+        assert_eq!(v["plan"]["id"], "premium");
         assert_eq!(v["integration_state"], "planned");
         assert_eq!(v["ready"], false);
         assert!(v["next_steps"].as_array().unwrap().len() == 2);
@@ -1297,11 +1382,13 @@ mod tests {
     /// P1.44: Free-Plan → ready=true (kein Stripe nötig).
     #[tokio::test]
     async fn checkout_preview_free_plan_is_ready() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::no_ids();
         let resp = checkout_preview_handler(
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle_months: None,
             }),
         )
@@ -1362,7 +1449,7 @@ mod tests {
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1377,6 +1464,8 @@ mod tests {
     /// erstellt UND auf die hosted URL redirected (302).
     #[tokio::test]
     async fn checkout_creates_session_and_redirects_to_hosted_url() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::premium_ids();
         let Some(pool) = pool_or_skip("bp_checkout_session").await else {
             return;
         };
@@ -1409,7 +1498,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: Some("1".into()),
             }),
@@ -1421,7 +1510,7 @@ mod tests {
         assert_eq!(loc, "https://checkout.stripe.com/c/pay/cs_test_abc");
     }
 
-    /// Free-Plan (raid_free) → kein Stripe-Price → Redirect auf Pricing, KEIN Call.
+    /// Free-Plan → kein Stripe-Price → Redirect auf Pricing, KEIN Call.
     #[tokio::test]
     async fn checkout_free_plan_redirects_to_pricing() {
         let resp = checkout_start_handler(
@@ -1429,7 +1518,7 @@ mod tests {
             Some(Extension(cfg_with_base("http://unused.invalid"))),
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1443,12 +1532,14 @@ mod tests {
     /// Stripe nicht konfiguriert (keine Config) → Redirect mit reason, KEIN 500.
     #[tokio::test]
     async fn checkout_without_config_redirects_with_reason() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::premium_ids();
         let resp = checkout_start_handler(
             partner("login", "1"),
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1465,6 +1556,8 @@ mod tests {
     /// Stripe-API-Fehler beim Erstellen → Redirect mit reason=checkout_create_failed.
     #[tokio::test]
     async fn checkout_stripe_error_redirects_with_reason() {
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::premium_ids();
         let Some(pool) = pool_or_skip("bp_checkout_stripe_error").await else {
             return;
         };
@@ -1481,7 +1574,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1718,6 +1811,8 @@ mod tests {
         let Some(pool) = pool_or_skip("bp_catalog").await else {
             return;
         };
+        let _lock = stripe_id_env::lock().await;
+        let _env = stripe_id_env::premium_ids();
         let server = MockServer::start().await;
         let resp = catalog_handler(
             partner("login", "5"),
@@ -1735,18 +1830,19 @@ mod tests {
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["currency"], "EUR");
         let plans = v["plans"].as_array().unwrap();
-        assert_eq!(plans.len(), 8);
-        // raid_free = aktueller Default-Plan.
-        assert_eq!(v["current_subscription"]["plan_id"], "raid_free");
-        let raid_free = plans.iter().find(|p| p["id"] == "raid_free").unwrap();
-        assert_eq!(raid_free["is_current"], true);
-        assert_eq!(raid_free["checkout_available"], false);
-        assert!(raid_free["stripe_price_id"].is_null());
+        assert_eq!(plans.len(), 2);
+        // free = aktueller Default-Plan; er muss im Katalog auffindbar sein,
+        // sonst kann das Frontend den laufenden Plan keiner Karte zuordnen.
+        assert_eq!(v["current_subscription"]["plan_id"], "free");
+        let free = plans.iter().find(|p| p["id"] == "free").unwrap();
+        assert_eq!(free["is_current"], true);
+        assert_eq!(free["checkout_available"], false);
+        assert!(free["stripe_price_id"].is_null());
         // Bezahlter Plan trägt Price-ID + checkout_available (Config ⇒ checkout_ready).
-        let raid_boost = plans.iter().find(|p| p["id"] == "raid_boost").unwrap();
-        assert_eq!(raid_boost["is_current"], false);
-        assert!(raid_boost["stripe_price_id"].is_string());
-        assert_eq!(raid_boost["checkout_available"], true);
+        let premium = plans.iter().find(|p| p["id"] == "premium").unwrap();
+        assert_eq!(premium["is_current"], false);
+        assert_eq!(premium["stripe_price_id"], "price_premium_1m");
+        assert_eq!(premium["checkout_available"], true);
         // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
         // persistiert; recipient_name fällt auf den Login zurück, country=DE).
         assert_eq!(v["billing_profile"]["customer_reference"], "login");

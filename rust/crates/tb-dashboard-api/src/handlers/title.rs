@@ -181,6 +181,10 @@ pub async fn suggest_handler(
     Query(query): Query<TitleQuery>,
     body: String,
 ) -> impl IntoResponse {
+    // Premium-Gate (Pricing-Umbau 2026-08-09): KI-Titelgenerator ist Premium. Der Chat-Befehl !titel laeuft nicht ueber diesen Endpunkt.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     let body: TitleSuggestBody = match serde_json::from_str(&body) {
         Ok(body) => body,
         Err(_) => {
@@ -314,6 +318,10 @@ pub async fn insights_handler(
     State(pool): State<PgPool>,
     Query(query): Query<TitleQuery>,
 ) -> impl IntoResponse {
+    // Premium-Gate (Pricing-Umbau 2026-08-09): KI-Titelanalyse ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     let login = match requested_login(&auth, query.streamer.as_deref()) {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),

@@ -294,11 +294,11 @@ async fn resolve_streamer(
 }
 
 /// Effektive Plan-ID nach dem Schreiben (Python liest sie aus den Plan-Rows). Wir
-/// nutzen den kanonischen Resolver; bei Fehler `raid_free` (Python-Fallback).
+/// nutzen den kanonischen Resolver; bei Fehler `free` (Gratis-Plan seit 2026-08-09).
 async fn effective_plan_id(pool: &PgPool, login: &str, user_id: &str) -> String {
     match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
         Ok(snapshot) => snapshot.plan_id.to_string(),
-        Err(_) => "raid_free".to_string(),
+        Err(_) => "free".to_string(),
     }
 }
 
@@ -471,14 +471,14 @@ mod tests {
         let plan = set_manual_plan(
             &pool,
             "nanistream",
-            "analysis_dashboard",
+            "premium",
             "2026-12-31",
             "VIP",
         )
         .await
         .expect("set ok");
         // Effektiver Plan = der manuell gesetzte (aktiv, nicht abgelaufen).
-        assert_eq!(plan, "analysis_dashboard");
+        assert_eq!(plan, "premium");
 
         let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
             "SELECT manual_plan_id, manual_plan_notes, manual_plan_expires_at FROM streamer_plans WHERE twitch_user_id='42'",
@@ -486,15 +486,15 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0.as_deref(), Some("analysis_dashboard"));
+        assert_eq!(row.0.as_deref(), Some("premium"));
         assert_eq!(row.1.as_deref(), Some("VIP"));
         assert!(row.2.unwrap().starts_with("2026-12-31T23:59:59"));
 
-        // CLEAR: Override entfernen → effektiver Plan fällt auf raid_free.
+        // CLEAR: Override entfernen → effektiver Plan fällt auf free.
         let plan = clear_manual_plan(&pool, "nanistream")
             .await
             .expect("clear ok");
-        assert_eq!(plan, "raid_free");
+        assert_eq!(plan, "free");
         let cleared: (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT manual_plan_id, manual_plan_notes FROM streamer_plans WHERE twitch_user_id='42'",
         )
@@ -510,7 +510,7 @@ mod tests {
         let Some(pool) = make_pool("t_manplan_unknown").await else {
             return;
         };
-        let err = set_manual_plan(&pool, "gibtsnicht", "raid_boost", "", "")
+        let err = set_manual_plan(&pool, "gibtsnicht", "premium", "", "")
             .await
             .unwrap_err();
         assert!(matches!(err, ManualPlanError::UnknownStreamer));
@@ -589,28 +589,28 @@ mod tests {
         Some(pool)
     }
 
-    /// P2.129: Setzt man einen raid_boost-Plan, muss der Partner-Raid-Score sofort
+    /// P2.129: Setzt man einen Plan mit Raid-Prio, muss der Partner-Raid-Score sofort
     /// neu berechnet werden (Boost-Multiplikator > 1.0 sofort wirksam).
     #[tokio::test]
     async fn set_manual_plan_refreshes_raid_score() {
         let Some(pool) = make_pool_with_scores("t_manplan_score").await else {
             return;
         };
-        // raid_boost greift im Refresher über streamer_plans.raid_boost_enabled.
+        // Der Boost greift im Refresher über streamer_plans.raid_boost_enabled.
         // set_manual_plan setzt manual_plan_id; für den Boost-Flag im Refresher
         // setzen wir raid_boost_enabled direkt (Entitlement-Auflösung ist eigene
         // Slice, siehe partner_score_refresh.rs:load_boost_flag).
-        let plan = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "")
+        let plan = set_manual_plan(&pool, "booststreamer", "premium", "", "")
             .await
             .expect("set ok");
-        assert_eq!(plan, "raid_boost");
+        assert_eq!(plan, "premium");
         sqlx::query("UPDATE streamer_plans SET raid_boost_enabled = 1 WHERE twitch_user_id = '77'")
             .execute(&pool)
             .await
             .unwrap();
         // Refresh erneut auslösen (clear→set würde Score erneut schreiben); wir
         // rufen den Refresh-Pfad direkt über einen zweiten set auf.
-        let _ = set_manual_plan(&pool, "booststreamer", "raid_boost", "", "")
+        let _ = set_manual_plan(&pool, "booststreamer", "premium", "", "")
             .await
             .unwrap();
 

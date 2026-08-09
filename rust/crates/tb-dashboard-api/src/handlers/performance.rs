@@ -74,6 +74,10 @@ pub async fn monthly_stats_handler(
     if let Err(e) = require_auth(&auth) {
         return e.into_response();
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Verlauf ueber Monate ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
 
     let months = match parse_bounded_query_int(params.months.as_deref(), "months", 12, 1, 24) {
         Ok(m) => m,
@@ -198,6 +202,10 @@ pub async fn weekly_stats_handler(
     if let Err(e) = require_auth(&auth) {
         return e.into_response();
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Verlauf ueber Wochen ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
 
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
@@ -282,6 +290,10 @@ pub async fn hourly_heatmap_handler(
 ) -> impl IntoResponse {
     if let Err(e) = require_auth(&auth) {
         return e.into_response();
+    }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Zeitraumvergleich ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {

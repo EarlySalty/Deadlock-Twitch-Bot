@@ -66,6 +66,10 @@ pub async fn viewer_overlap_handler(
     if let Err(e) = require_auth(&auth) {
         return e.into_response();
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Zuschauer-Vergleich ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
 
     // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
     // 403); Admin/Localhost dürfen `streamer` frei wählen.

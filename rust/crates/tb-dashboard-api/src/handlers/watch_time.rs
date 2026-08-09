@@ -29,15 +29,6 @@ pub struct WatchTimeQuery {
     pub days: Option<i32>,
 }
 
-/// Pures Fenster-Mapping anhand der Plan-Entitlements (Python `_plan_has_entitlement`).
-fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
-    if entitlements.contains(&"analytics") {
-        "full"
-    } else {
-        "last_stream"
-    }
-}
-
 /// Lesefenster auflösen: Admin → `full`; sonst Plan des Streamers prüfen.
 /// Bei Plan-Lookup-Fehler konservativ `last_stream` (nie mehr Daten zeigen als erlaubt).
 async fn resolve_read_window(
@@ -48,10 +39,8 @@ async fn resolve_read_window(
     if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         return "full";
     }
-    match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
-        Ok(snap) => window_for_entitlements(&snap.entitlements),
-        Err(_) => "last_stream",
-    }
+    // Ein Prädikat für die ganze Paywall; fail-closed steckt in read_window.
+    tb_analytics::plan::read_window(pool, streamer).await
 }
 
 /// `GET /twitch/api/v2/watch-time-distribution?streamer=&days=30`
@@ -126,17 +115,6 @@ mod tests {
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, chatter_login TEXT, chatter_id TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
-    }
-
-    #[test]
-    fn fenster_mapping() {
-        assert_eq!(
-            window_for_entitlements(&["analytics", "chat.lurker_tax"]),
-            "full"
-        );
-        assert_eq!(window_for_entitlements(&["analytics"]), "full");
-        assert_eq!(window_for_entitlements(&["chat.lurker_tax"]), "last_stream"); // kein Flag
-        assert_eq!(window_for_entitlements(&[]), "last_stream");
     }
 
     #[tokio::test]

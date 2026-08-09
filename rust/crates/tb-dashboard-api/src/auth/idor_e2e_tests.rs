@@ -102,6 +102,25 @@ async fn make_pool(schema: &str) -> Option<PgPool> {
             output_mode   TEXT NOT NULL DEFAULT 'off',
             updated_at    TIMESTAMPTZ
         )"#,
+        // Premium-Gate (Pricing-Umbau 2026-08-09): monthly-stats liegt hinter
+        // `extended_gate`, das `streamer_plans`/`twitch_billing_subscriptions`
+        // liest. Ohne die Tabellen faellt das Gate zu und die IDOR-Gegenprobe
+        // haette einen zweiten 403-Grund.
+        r#"CREATE TABLE streamer_plans (
+            twitch_user_id           TEXT,
+            twitch_login             TEXT,
+            manual_plan_id           TEXT,
+            manual_plan_expires_at   TEXT,
+            manual_plan_notes        TEXT,
+            manual_plan_updated_at   TEXT
+        )"#,
+        r#"CREATE TABLE twitch_billing_subscriptions (
+            customer_reference  TEXT,
+            plan_id             TEXT,
+            status              TEXT,
+            current_period_end  TEXT,
+            updated_at          TEXT
+        )"#,
     ] {
         sqlx::query(ddl)
             .execute(&pool)
@@ -227,6 +246,11 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
     .execute(&pool)
     .await
     .unwrap();
+    // Premium, damit die IDOR-Gegenprobe nicht am Plan-Gate haengenbleibt.
+    sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ('earlysalty', 'premium')")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
     let session = auth_state

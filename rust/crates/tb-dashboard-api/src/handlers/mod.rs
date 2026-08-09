@@ -86,6 +86,8 @@ pub mod roadmap;
 pub mod roadmap_page;
 pub mod scam_guard_enforce;
 pub mod scam_guard_queue;
+#[cfg(test)]
+mod premium_gate_tests;
 pub mod scam_guard_settings;
 pub mod self_explainer;
 pub mod session_detail;

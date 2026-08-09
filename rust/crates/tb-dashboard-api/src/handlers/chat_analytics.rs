@@ -38,6 +38,10 @@ pub async fn chat_analytics_handler(
     if matches!(auth, DashboardAuthLevel::None) {
         return crate::auth::unauthorized_v2_response();
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Chat-Analytics in der Tiefe ist Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_chat_analytics).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,

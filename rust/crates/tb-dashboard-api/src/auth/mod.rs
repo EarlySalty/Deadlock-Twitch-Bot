@@ -152,6 +152,10 @@ pub async fn require_extended_plan(
 /// Manual-Eintrag fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei
 /// DB-Fehler `false` (fail-closed — kein versehentlicher Gratis-Zugang).
 pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
+    if user_id.trim().is_empty() {
+        // Ein Prädikat für die ganze Paywall (tb_analytics::plan::is_premium).
+        return tb_analytics::plan::is_premium(pool, login).await.unwrap_or(false);
+    }
     match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
         Ok(snapshot) => snapshot.entitlements.contains(&"analytics"),
         Err(_) => false,
@@ -240,7 +244,9 @@ pub fn plan_required_response() -> Response {
 /// Analytics-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
 /// `tb-analytics` privat) und gegen Drift testgesichert.
 fn extended_required_plans() -> Vec<&'static str> {
-    const KNOWN_BILLING_PLAN_IDS: [&str; 9] = [
+    const KNOWN_BILLING_PLAN_IDS: [&str; 11] = [
+        "free",
+        "premium",
         "raid_free",
         "chat_quiet",
         "raid_boost",
@@ -275,6 +281,8 @@ mod tests {
         assert_eq!(body["error"], "plan_required");
         assert_eq!(body["required_entitlements"], json!(["analytics"]));
         // Exakt die Analyse-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
+        // `premium` ist seit dem Pricing-Umbau 2026-08-09 dabei, die fünf alten
+        // bleiben, weil sie in Bestandszeilen stehen.
         assert_eq!(
             body["required_plans"],
             json!([
@@ -283,12 +291,14 @@ mod tests {
                 "bundle_analysis_raid_boost",
                 "bundle_komplett",
                 "bundle_werbefrei_analyse",
+                "premium",
             ])
         );
     }
 
     /// Drift-Gate: jeder gelistete required_plan trägt tatsächlich das
-    /// `analytics`-Flag, free (raid_free) ist nie dabei. Genau die 5 Analyse-Pläne.
+    /// `analytics`-Flag, Free (`free`/`raid_free`) ist nie dabei. Genau die
+    /// 5 alten Analyse-Pläne plus `premium`.
     #[test]
     fn extended_required_plans_sind_alle_extended() {
         let plans = extended_required_plans();
@@ -300,6 +310,7 @@ mod tests {
                 "bundle_analysis_raid_boost",
                 "bundle_komplett",
                 "bundle_werbefrei_analyse",
+                "premium",
             ]
         );
         assert!(!plans.contains(&"raid_free"));

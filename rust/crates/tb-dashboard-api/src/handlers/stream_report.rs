@@ -124,6 +124,11 @@ pub async fn stream_report_handler(
     State(pool): State<PgPool>,
     Query(params): Query<StreamReportParams>,
 ) -> impl IntoResponse {
+    // Premium-Gate (Pricing-Umbau 2026-08-09): KI-Stream-Report und seine
+    // Historie sind Premium.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     let streamer = params.streamer.unwrap_or_default().trim().to_lowercase();
     let session_id: Option<i64> = params
         .session_id

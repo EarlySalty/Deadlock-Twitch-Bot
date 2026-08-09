@@ -398,17 +398,11 @@ async fn resolve_read_window(
     if privileged {
         return WindowMode::Full;
     }
-    match tb_analytics::plan::resolve_plan_snapshot(pool, login, "").await {
-        Ok(snapshot) => {
-            let ents = tb_analytics::plan::plan_entitlements(snapshot.plan_id);
-            if ents.contains(&"analytics") {
-                WindowMode::Full
-            } else {
-                WindowMode::LastStream
-            }
-        }
-        // Plan unbekannt/DB-Fehler → fail-closed auf die kostenlose Tagesform.
-        Err(_) => WindowMode::LastStream,
+    // Ein Prädikat für die ganze Paywall; DB-Fehler → fail-closed auf die
+    // kostenlose Tagesform (steckt in read_window).
+    match tb_analytics::plan::read_window(pool, login).await {
+        "full" => WindowMode::Full,
+        _ => WindowMode::LastStream,
     }
 }
 

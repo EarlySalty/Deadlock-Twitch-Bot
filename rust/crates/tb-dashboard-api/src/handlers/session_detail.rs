@@ -320,6 +320,10 @@ pub async fn session_events_handler(
     if let Err(e) = require_auth(&auth) {
         return e.into_response();
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): Session-Verlauf ist Premium (wie session_detail).
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
 
     let session_id: i64 = match session_id_str.parse() {
         Ok(v) => v,

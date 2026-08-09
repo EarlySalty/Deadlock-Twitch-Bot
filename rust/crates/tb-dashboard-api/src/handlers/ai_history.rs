@@ -26,8 +26,8 @@ pub struct AiHistoryQuery {
 
 /// AI-Modell des Streamer-Plans: konsolidiertes `analytics`-Flag → opus, sonst None.
 async fn ai_plan_model(pool: &PgPool, streamer: &str) -> Option<&'static str> {
-    match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
-        Ok(s) if s.entitlements.contains(&"analytics") => Some("opus"),
+    match tb_analytics::plan::is_premium(pool, streamer).await {
+        Ok(true) => Some("opus"),
         _ => None,
     }
 }

@@ -303,9 +303,11 @@ async fn check_and_grant_inner(
     if hours < TRIAL_GRACE_PERIOD_HOURS {
         return Ok(false);
     }
-    // Manueller Bezahlplan (≠ raid_free) → kein Grant.
+    // Manueller Bezahlplan (≠ Free) → kein Grant. Seit dem Pricing-Umbau
+    // 2026-08-09 heisst der Gratis-Plan `free`; `raid_free` bleibt fuer
+    // Bestandszeilen gueltig.
     if let Some(mp) = row.manual_plan_id.as_deref().map(str::trim) {
-        if !mp.is_empty() && mp != "raid_free" {
+        if !mp.is_empty() && mp != "raid_free" && mp != "free" {
             return Ok(false);
         }
     }

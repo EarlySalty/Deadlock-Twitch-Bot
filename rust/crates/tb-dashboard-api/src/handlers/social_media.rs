@@ -504,8 +504,38 @@ async fn require_sm_access(
                 "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
             ));
         }
+        // Premium-Gate (Pricing-Umbau 2026-08-09): die Clip- und Social-Pipeline
+        // ist Premium. Zentral hier, weil jeder streamer-bezogene Endpunkt des
+        // Moduls durch diese Funktion läuft; ein Gate je Handler hätte 25
+        // Stellen und damit 25 Gelegenheiten, eine zu vergessen.
+        if let Some(resp) = premium_required(pool, twitch_login).await {
+            return Err(resp);
+        }
     }
     resolve_streamer_scope(auth, requested, false)
+}
+
+/// 403 `premium_required`, wenn der Streamer keinen Premium-Zugang hat.
+///
+/// Fail-closed: bei DB-Fehler gilt der Zugang als nicht vorhanden.
+async fn premium_required(pool: &PgPool, streamer: &str) -> Option<Response> {
+    if tb_analytics::plan::is_premium(pool, streamer)
+        .await
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "plan_required",
+                "required_entitlements": ["analytics"],
+                "message": "Die Clip- und Social-Pipeline gehört zu Premium.",
+            })),
+        )
+            .into_response(),
+    )
 }
 
 /// Ownership-Prüfung für Endpoints, die nur eine `clip_db_id` kennen: Partner
@@ -2932,7 +2962,7 @@ pub async fn check_partner_access_guard(
         return None;
     }
     if !is_partner_granted(pool, streamer_login).await {
-        Some(
+        return Some(
             (
                 StatusCode::FORBIDDEN,
                 Json(json!({
@@ -2941,10 +2971,11 @@ pub async fn check_partner_access_guard(
                 })),
             )
                 .into_response(),
-        )
-    } else {
-        None
+        );
     }
+    // Premium-Gate (Pricing-Umbau 2026-08-09): zweiter Chokepoint des Moduls,
+    // er deckt die Schreibpfade ab, die nicht über `require_sm_access` laufen.
+    premium_required(pool, streamer_login).await
 }
 
 #[cfg(test)]
@@ -3171,6 +3202,10 @@ mod tests {
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            // Premium-Gate (Pricing-Umbau 2026-08-09): die Clip- und
+            // Social-Pipeline ist Premium, `is_premium` liest diese beiden.
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+            "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, status TEXT, current_period_end TEXT, updated_at TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3182,6 +3217,16 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Premium-Gate: setzt einen Manual-Override auf `premium`, damit die
+    /// Freigabe-Tests den Zugangspfad pruefen und nicht am Plan haengenbleiben.
+    async fn grant_premium(pool: &sqlx::PgPool, login: &str) {
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ($1, 'premium')")
+            .bind(login.to_lowercase())
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     fn sm_partner(login: &str) -> DashboardAuthLevel {
@@ -3218,6 +3263,7 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_access_grant").await else {
             return;
         };
+        grant_premium(&pool, "earlysalty").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
             .execute(&pool)
             .await
@@ -3257,6 +3303,7 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_access_entry").await else {
             return;
         };
+        grant_premium(&pool, "earlysalty").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
             .execute(&pool)
             .await
@@ -3313,6 +3360,7 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_access_clips").await else {
             return;
         };
+        grant_premium(&pool, "earlysalty").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
             .execute(&pool)
             .await
@@ -3412,6 +3460,7 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_tpl_create").await else {
             return;
         };
+        grant_premium(&pool, "nani").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
             .execute(&pool)
             .await
@@ -3491,6 +3540,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
         // Beide Partner freigeben, damit hier wirklich die Clip-Zugehörigkeit greift.
+        grant_premium(&pool, "nani").await;
+        grant_premium(&pool, "other").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE), ('other', TRUE)")
             .execute(&pool)
             .await
@@ -3588,6 +3639,7 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
+        grant_premium(&pool, "nani").await;
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
             .execute(&pool)
             .await

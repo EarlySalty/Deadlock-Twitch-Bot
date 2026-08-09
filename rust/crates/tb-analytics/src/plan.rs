@@ -6,7 +6,7 @@
 //! # Priorität
 //! 1. Manual-Override in `streamer_plans` (wenn aktiv + nicht abgelaufen)
 //! 2. Stripe-Abo in `twitch_billing_subscriptions` (Status active/trialing/past_due)
-//! 3. Default: `raid_free`
+//! 3. Default: `free` (bis 2026-08-09: `raid_free`)
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -124,7 +124,11 @@ fn normalize_plan_id(raw: &str) -> &'static str {
         "bundle_werbefrei_analyse" => "bundle_werbefrei_analyse",
         "bundle_komplett" => "bundle_komplett",
         "analytics_trial" => "analytics_trial",
-        _ => "raid_free",
+        // Pricing-Umbau 2026-08-09: Fallback ist `free`, nicht mehr `raid_free`.
+        // `raid_free` bleibt lesbar (Bestandszeilen), taucht aber nicht mehr im
+        // Katalog auf — ein Streamer ohne Zeile bekaeme sonst eine plan_id, zu
+        // der es keine Karte gibt. Tier und Entitlements sind identisch leer.
+        _ => "free",
     }
 }
 
@@ -225,12 +229,12 @@ impl PlanSnapshot {
         }
     }
 
-    /// Default-Snapshot (`raid_free`, kein Override/Abo) mit Fallback-Ref.
+    /// Default-Snapshot (`free`, kein Override/Abo) mit Fallback-Ref.
     /// Öffentlich, damit Konsumenten (z.B. Billing-Page-Fail-Safe) den
-    /// kanonischen raid_free-Snapshot bauen, ohne das Feld-Set zu duplizieren.
+    /// kanonischen Free-Snapshot bauen, ohne das Feld-Set zu duplizieren.
     pub fn default_basic(fallback_ref: &str) -> Self {
         Self::from_plan(
-            "raid_free",
+            "free",
             "default_basic",
             None,
             fallback_ref.trim().to_string(),
@@ -263,9 +267,39 @@ struct BillingRow {
 
 const ACTIVE_BILLING_STATUSES: [&str; 3] = ["active", "trialing", "past_due"];
 
+/// `true`, wenn der Streamer den bezahlten Zugang hat.
+///
+/// Eine Wahrheit für die gesamte Paywall. Bei einer einzigen bezahlten Stufe
+/// braucht es keinen Entitlement-Graph; geprüft wird das konsolidierte
+/// `analytics`-Flag, das `premium`, die abgeschafften Analyse-Pläne und der
+/// laufende Trial tragen. Kommt später eine zweite Stufe, wird aus dem Prädikat
+/// eine Tier-Abfrage und die Aufrufstellen bleiben unverändert.
+///
+/// Der Fehler wird bewusst durchgereicht statt geschluckt: jede Aufrufstelle
+/// muss sich für fail-closed entscheiden, ein stiller `false` an der falschen
+/// Stelle wäre ein Gratis-Zugang aus Versehen.
+pub async fn is_premium(pool: &PgPool, streamer: &str) -> Result<bool, sqlx::Error> {
+    Ok(resolve_plan_snapshot(pool, streamer, "")
+        .await?
+        .entitlements
+        .contains(&"analytics"))
+}
+
+/// Lesefenster eines Streamers: `"full"` mit Premium, sonst `"last_stream"`.
+///
+/// Gegenstück zu [`is_premium`] für die Endpunkte, die ohne Premium nicht
+/// gesperrt, sondern auf den letzten Stream verkürzt werden. Fail-closed: bei
+/// DB-Fehler das kleine Fenster, nie mehr Daten zeigen als erlaubt.
+pub async fn read_window(pool: &PgPool, streamer: &str) -> &'static str {
+    match is_premium(pool, streamer).await {
+        Ok(true) => "full",
+        _ => "last_stream",
+    }
+}
+
 /// Löst den effektiven Plan für `login` auf.
 ///
-/// Priorität: Manual-Override → Stripe-Abo → Default `raid_free`.
+/// Priorität: Manual-Override → Stripe-Abo → Default `free`.
 pub async fn resolve_plan_snapshot(
     pool: &PgPool,
     login: &str,
@@ -415,7 +449,7 @@ pub async fn resolve_plan_snapshot(
     if let Some(row) = billing {
         // Strikt-kanonisch wie Python `load_billing_subscription` (repository.py:186):
         // `normalize_plan_id(plan_id, default="raid_free")` ohne Lowercasing/Legacy.
-        let plan_raw = row.plan_id.as_deref().unwrap_or("raid_free");
+        let plan_raw = row.plan_id.as_deref().unwrap_or("free");
         let pid = normalize_plan_id(plan_raw);
         // status: leerer Wert → "active" (Python build_plan_snapshot:219).
         let status_raw = row.status.as_deref().unwrap_or("").trim();
@@ -567,10 +601,11 @@ mod tests {
 
     #[test]
     fn normalize_ist_case_sensitive() {
-        // Python lowercased NICHT in normalize_plan_id → Case-Mismatch fällt auf raid_free.
-        assert_eq!(normalize_plan_id("Raid_Boost"), "raid_free");
-        assert_eq!(normalize_plan_id("ANALYSIS_DASHBOARD"), "raid_free");
-        assert_eq!(normalize_plan_id("Chat_Quiet"), "raid_free");
+        // Kein Lowercasing → Case-Mismatch fällt auf den Gratis-Plan.
+        assert_eq!(normalize_plan_id("Raid_Boost"), "free");
+        assert_eq!(normalize_plan_id("ANALYSIS_DASHBOARD"), "free");
+        assert_eq!(normalize_plan_id("Chat_Quiet"), "free");
+        assert_eq!(normalize_plan_id("Premium"), "free");
     }
 
     #[test]
@@ -587,17 +622,17 @@ mod tests {
         ] {
             assert_eq!(
                 normalize_plan_id(alias),
-                "raid_free",
+                "free",
                 "Legacy-Alias darf in DB-Resolution nicht aufgelöst werden: {alias}"
             );
         }
     }
 
     #[test]
-    fn normalize_unbekannt_faellt_auf_raid_free() {
-        assert_eq!(normalize_plan_id(""), "raid_free");
-        assert_eq!(normalize_plan_id("garbage"), "raid_free");
-        assert_eq!(normalize_plan_id("premium_max"), "raid_free");
+    fn normalize_unbekannt_faellt_auf_free() {
+        assert_eq!(normalize_plan_id(""), "free");
+        assert_eq!(normalize_plan_id("garbage"), "free");
+        assert_eq!(normalize_plan_id("premium_max"), "free");
     }
 
     // ── is_known_plan_id: Manual-Override-Gate (Python repository.py:82) ─────
@@ -791,7 +826,7 @@ mod tests {
     #[test]
     fn default_basic_snapshot_hat_alle_felder() {
         let snap = PlanSnapshot::default_basic("Nani");
-        assert_eq!(snap.plan_id, "raid_free");
+        assert_eq!(snap.plan_id, "free");
         assert_eq!(snap.source, "default_basic");
         assert_eq!(snap.status, "active");
         assert_eq!(snap.customer_reference, "Nani"); // getrimmt durchgereicht
@@ -848,6 +883,59 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    /// Das eine Praedikat der Paywall (Pricing-Umbau 2026-08-09): `is_premium`
+    /// und das davon abgeleitete Lesefenster, gegen alle drei Faelle.
+    #[tokio::test]
+    async fn is_premium_und_read_window_pro_plan() {
+        let Some(pool) = snapshot_pool("plan_is_premium").await else {
+            return;
+        };
+        for (user_id, login, plan) in [
+            ("1", "kostenlos", "free"),
+            ("2", "bezahlt", "premium"),
+            ("3", "bestand", "analysis_dashboard"),
+        ] {
+            sqlx::query(
+                "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id) \
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(user_id)
+            .bind(login)
+            .bind(plan)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        assert!(!is_premium(&pool, "kostenlos").await.unwrap());
+        assert!(is_premium(&pool, "bezahlt").await.unwrap());
+        assert!(
+            is_premium(&pool, "bestand").await.unwrap(),
+            "alter Bezahlplan muss weiter als Premium gelten"
+        );
+        // Ohne Zeile in der Tabelle: Free.
+        assert!(!is_premium(&pool, "gibtsnicht").await.unwrap());
+
+        assert_eq!(read_window(&pool, "kostenlos").await, "last_stream");
+        assert_eq!(read_window(&pool, "bezahlt").await, "full");
+        assert_eq!(read_window(&pool, "bestand").await, "full");
+        assert_eq!(read_window(&pool, "gibtsnicht").await, "last_stream");
+    }
+
+    /// Fail-closed: ohne die Plan-Tabellen (DB-Fehler) ist das Fenster
+    /// `last_stream`, nicht `full`. Sonst oeffnet ein Ausfall die Paywall.
+    #[tokio::test]
+    async fn read_window_ist_bei_db_fehler_last_stream() {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            // Ohne kurzes Timeout wartet sqlx 30 s je Versuch.
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .unwrap();
+        assert_eq!(read_window(&pool, "egal").await, "last_stream");
+        assert!(is_premium(&pool, "egal").await.is_err());
     }
 
     #[tokio::test]
