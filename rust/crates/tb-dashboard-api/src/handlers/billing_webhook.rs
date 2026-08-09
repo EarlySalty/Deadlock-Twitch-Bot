@@ -623,6 +623,47 @@ mod tests {
         assert_eq!(plan.0, "raid_boost");
     }
 
+    /// M1-Beweis: ein Testevent OHNE `metadata.plan_id`, mit Lookup-Key am Price
+    /// und Perioden am Subscription-Item — genau die Form, die in Produktion
+    /// `plan_id`, `current_period_start` und `current_period_end` leer ließ.
+    /// Nach dem Event stehen alle drei Spalten in `twitch_billing_subscriptions`.
+    #[tokio::test]
+    async fn webhook_fuellt_plan_id_und_perioden_ohne_metadata() {
+        let Some(pool) = pool_or_skip("h_sub_periods").await else {
+            return;
+        };
+        let payload = br#"{"id":"evt_periods","type":"customer.subscription.created","livemode":false,"data":{"object":{"id":"sub_periods","customer":"cus_p","status":"active","metadata":{"customer_reference":"login"},"items":{"data":[{"current_period_start":1700000000,"current_period_end":1702000000,"price":{"id":"price_x","lookup_key":"deadlock_premium_12m_gross_v3","metadata":{},"recurring":{"interval":"month","interval_count":12}}}]}}}}"#;
+        let ts = chrono::Utc::now().timestamp();
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&sign(payload, ts, SECRET))),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT plan_id, current_period_start, current_period_end \
+             FROM twitch_billing_subscriptions WHERE stripe_subscription_id='sub_periods'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("premium"), "plan_id muss gefüllt sein");
+        assert!(
+            row.1.as_deref().is_some_and(|s| s.starts_with("2023-11-14")),
+            "current_period_start: {:?}",
+            row.1
+        );
+        assert!(
+            row.2.as_deref().is_some_and(|s| s.starts_with("2023-12-08")),
+            "current_period_end: {:?}",
+            row.2
+        );
+    }
+
     #[tokio::test]
     async fn invalid_signature_returns_400_no_db_write() {
         let Some(pool) = pool_or_skip("h_bad_sig").await else {

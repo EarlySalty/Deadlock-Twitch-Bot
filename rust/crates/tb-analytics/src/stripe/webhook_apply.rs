@@ -187,18 +187,29 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         .and_then(|q| i32::try_from(q).ok())
         .unwrap_or(1);
 
-    // plan_id: metadata.plan_id → price.metadata.plan_id → price.lookup_key.
+    // plan_id: metadata.plan_id → price.metadata.plan_id → price.lookup_key
+    // (in die Plan-ID zerlegt) → price.id (Rückwärts-Suche im Katalog).
+    //
+    // Die letzten beiden Stufen sind der Fix zum Datenfehler von 2026-08-09: in
+    // Produktion trugen weder Subscription- noch Price-Metadaten eine plan_id,
+    // und ein roher Lookup-Key (`deadlock_chat_quiet_1m_net_v2`) ist keine
+    // Plan-ID. Ergebnis war eine leere `plan_id`-Spalte bei jedem aktiven Abo.
     let plan_id = {
         let from_meta = str_field(&metadata, "plan_id");
+        let from_price_meta = str_field(&price_metadata, "plan_id");
+        let lookup_key = str_field(&price, "lookup_key");
         if !from_meta.is_empty() {
             from_meta
+        } else if !from_price_meta.is_empty() {
+            from_price_meta
+        } else if let Some(from_lookup) = crate::billing::plan_id_from_lookup_key(&lookup_key) {
+            from_lookup
+        } else if let Some(from_price_id) =
+            crate::billing::plan_id_from_price_id(&str_field(&price, "id"))
+        {
+            from_price_id.to_string()
         } else {
-            let from_price_meta = str_field(&price_metadata, "plan_id");
-            if !from_price_meta.is_empty() {
-                from_price_meta
-            } else {
-                str_field(&price, "lookup_key")
-            }
+            lookup_key
         }
     };
 
@@ -217,8 +228,13 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         plan_id,
         cycle_months,
         quantity,
-        current_period_start: epoch_to_iso(sub, "current_period_start"),
-        current_period_end: epoch_to_iso(sub, "current_period_end"),
+        // Seit Stripe-API 2025-03-31 hängen die Perioden am Subscription-Item,
+        // nicht mehr am Subscription-Objekt. Beide Orte lesen, sonst bleiben
+        // `current_period_start`/`current_period_end` in der DB leer.
+        current_period_start: epoch_to_iso(sub, "current_period_start")
+            .or_else(|| epoch_to_iso(&first_item, "current_period_start")),
+        current_period_end: epoch_to_iso(sub, "current_period_end")
+            .or_else(|| epoch_to_iso(&first_item, "current_period_end")),
         cancel_at_period_end: sub
             .get("cancel_at_period_end")
             .and_then(Value::as_bool)
@@ -895,6 +911,75 @@ mod tests {
         let state2 = subscription_payload_from_object(&sub2);
         assert_eq!(state2.plan_id, "fallback_key");
         assert_eq!(state2.cycle_months, 12);
+    }
+
+    /// M1-Regression: ohne jede `plan_id`-Metadata muss der Lookup-Key in eine
+    /// echte Plan-ID zerlegt werden, nicht roh in die Spalte wandern.
+    #[test]
+    fn payload_plan_id_aus_lookup_key_zerlegt() {
+        for (key, expected) in [
+            ("deadlock_chat_quiet_1m_net_v2", "chat_quiet"),
+            ("deadlock_premium_12m_gross_v3", "premium"),
+            (
+                "deadlock_bundle_analysis_raid_boost_1m_net_v2",
+                "bundle_analysis_raid_boost",
+            ),
+        ] {
+            let sub = json!({
+                "id": "s", "status": "active", "metadata": {},
+                "items": { "data": [ { "price": {
+                    "metadata": {}, "lookup_key": key,
+                    "recurring": { "interval": "month", "interval_count": 1 }
+                } } ] }
+            });
+            assert_eq!(
+                subscription_payload_from_object(&sub).plan_id,
+                expected,
+                "lookup_key {key}"
+            );
+        }
+    }
+
+    /// M1-Regression: Price ohne Lookup-Key und ohne Metadata — die Price-ID ist
+    /// dann die einzige Brücke zum Katalog. Genau dieser Fall ließ die Spalte
+    /// `twitch_billing_subscriptions.plan_id` in Produktion leer.
+    #[test]
+    fn payload_plan_id_aus_price_id_rueckwaerts() {
+        let sub = json!({
+            "id": "s", "status": "active", "metadata": {},
+            "items": { "data": [ { "price": {
+                "id": "price_1TeNGH0yU8I2yGJ0UqKylecO",
+                "metadata": {},
+                "recurring": { "interval": "month", "interval_count": 1 }
+            } } ] }
+        });
+        assert_eq!(
+            subscription_payload_from_object(&sub).plan_id,
+            "analysis_dashboard"
+        );
+    }
+
+    /// M1-Regression: seit Stripe-API 2025-03-31 stehen die Perioden am Item.
+    /// Ohne diesen Fallback bleiben beide Perioden-Spalten leer.
+    #[test]
+    fn payload_perioden_vom_subscription_item() {
+        let sub = json!({
+            "id": "s", "status": "active", "metadata": { "plan_id": "premium" },
+            "items": { "data": [ {
+                "current_period_start": 1_700_000_000_i64,
+                "current_period_end": 1_702_000_000_i64,
+                "price": { "metadata": {}, "recurring": { "interval": "month", "interval_count": 1 } }
+            } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(
+            state.current_period_start.as_deref(),
+            Some("2023-11-14T22:13:20+00:00")
+        );
+        assert_eq!(
+            state.current_period_end.as_deref(),
+            Some("2023-12-08T01:46:40+00:00")
+        );
     }
 
     #[test]

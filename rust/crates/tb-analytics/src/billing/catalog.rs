@@ -318,6 +318,40 @@ pub fn price_id_default(plan_id: &str, cycle_months: u32) -> Option<&'static str
         })
 }
 
+/// Plan-ID aus einem Stripe-Lookup-Key (`deadlock_{plan}_{cycle}m_{...}`).
+///
+/// Der Suffix hinter dem Zyklus-Segment ist versioniert (`net_v2`, `gross_v3`),
+/// deshalb wird nicht auf einen festen Suffix geprüft, sondern bis zum ersten
+/// Segment der Form `<zahl>m` gelesen. `None`, wenn das Format nicht passt.
+pub fn plan_id_from_lookup_key(lookup_key: &str) -> Option<String> {
+    let rest = lookup_key.trim().strip_prefix("deadlock_")?;
+    let segments: Vec<&str> = rest.split('_').collect();
+    let cycle_at = segments.iter().position(|seg| {
+        seg.strip_suffix('m')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    })?;
+    if cycle_at == 0 {
+        return None;
+    }
+    Some(segments[..cycle_at].join("_"))
+}
+
+/// Plan-ID aus einer Stripe-Price-ID (Rückwärts-Suche in [`PRICE_ID_DEFAULTS`]).
+///
+/// Nötig für den Webhook: Prices ohne `lookup_key` und ohne `metadata.plan_id`
+/// liefern sonst gar keine Plan-Zuordnung, und `twitch_billing_subscriptions.plan_id`
+/// bleibt leer.
+pub fn plan_id_from_price_id(price_id: &str) -> Option<&'static str> {
+    let needle = price_id.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    PRICE_ID_DEFAULTS
+        .iter()
+        .find(|(_, cycles)| cycles.iter().any(|(_, pid)| *pid == needle))
+        .map(|(plan_id, _)| *plan_id)
+}
+
 /// Default-Product-ID eines Plans (aus [`PRODUCT_ID_DEFAULTS`]).
 pub fn product_id_default(plan_id: &str) -> Option<&'static str> {
     PRODUCT_ID_DEFAULTS
@@ -793,6 +827,42 @@ mod tests {
                 plan.id
             );
         }
+    }
+
+    #[test]
+    fn plan_id_from_lookup_key_zerlegt_beide_key_generationen() {
+        assert_eq!(
+            plan_id_from_lookup_key("deadlock_chat_quiet_1m_net_v2").as_deref(),
+            Some("chat_quiet")
+        );
+        assert_eq!(
+            plan_id_from_lookup_key("deadlock_premium_12m_gross_v3").as_deref(),
+            Some("premium")
+        );
+        assert_eq!(
+            plan_id_from_lookup_key("deadlock_bundle_analysis_raid_boost_1m_net_v2").as_deref(),
+            Some("bundle_analysis_raid_boost")
+        );
+        // Kein deadlock-Prefix, kein Zyklus-Segment, leerer Plan-Teil → None.
+        assert_eq!(plan_id_from_lookup_key("fallback_key"), None);
+        assert_eq!(plan_id_from_lookup_key("deadlock_premium_gross_v3"), None);
+        assert_eq!(plan_id_from_lookup_key("deadlock_1m_net_v2"), None);
+        assert_eq!(plan_id_from_lookup_key(""), None);
+    }
+
+    #[test]
+    fn plan_id_from_price_id_findet_jeden_eingecheckten_price() {
+        for (plan_id, cycles) in PRICE_ID_DEFAULTS {
+            for (_, price) in *cycles {
+                assert_eq!(
+                    plan_id_from_price_id(price),
+                    Some(*plan_id),
+                    "price {price} muss auf {plan_id} zurückführen"
+                );
+            }
+        }
+        assert_eq!(plan_id_from_price_id("price_unbekannt"), None);
+        assert_eq!(plan_id_from_price_id("  "), None);
     }
 
     #[test]
