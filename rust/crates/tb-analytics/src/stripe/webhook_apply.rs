@@ -108,11 +108,17 @@ impl StreamerPlanSync {
 
 /// `plan_id` (Stripe-/Katalog-seitig) → `streamer_plans.plan_name`.
 ///
-/// 1:1 `_billing_plan_name_from_id`: nur drei Pläne mappen auf einen
-/// Nicht-Frei-Namen, alles andere fällt auf `"free"`. (Bewusst KEINE
-/// Voll-Auflösung des Katalogs — diese Engführung ist das Python-Orakel.)
+/// Das Feld ist reine Anzeige/Fallback (`admin_streamers`, `auth_status`); die
+/// Berechtigung hängt an `plan_id`. Es wird trotzdem mitgezogen, damit nicht
+/// zwei Wahrheiten in derselben Zeile stehen: ein Premium-Abo mit
+/// `plan_name = "free"` sieht in der Admin-Liste aus wie ein Gratis-Konto.
+///
+/// Die drei Altnamen bleiben (Python-Orakel `_billing_plan_name_from_id`), weil
+/// Bestandszeilen sie tragen.
 pub fn plan_name_from_id(plan_id: &str) -> &'static str {
     match plan_id.trim() {
+        "premium" => "premium",
+        "free" => "free",
         "raid_boost" => "raid_boost",
         "analysis_dashboard" => "analysis",
         "bundle_analysis_raid_boost" => "bundle",
@@ -837,9 +843,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── Plan-Name-Mapping (Geld-kritisch: nur 3 Pläne ≠ free) ───────────────
+    // ── Plan-Name-Mapping (Geld-kritisch: Anzeige darf nicht „free" lügen) ──
     #[test]
     fn plan_name_map_matches_python_oracle() {
+        // Neuer Katalog: der Anzeigename folgt der Plan-ID.
+        assert_eq!(plan_name_from_id("premium"), "premium");
+        assert_eq!(plan_name_from_id("free"), "free");
+        assert_eq!(plan_name_from_id("  premium  "), "premium");
+        // Altnamen bleiben, weil Bestandszeilen sie tragen.
         assert_eq!(plan_name_from_id("raid_boost"), "raid_boost");
         assert_eq!(plan_name_from_id("analysis_dashboard"), "analysis");
         assert_eq!(plan_name_from_id("bundle_analysis_raid_boost"), "bundle");

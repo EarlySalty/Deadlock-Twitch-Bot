@@ -43,8 +43,8 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_default,
-    price_id_map_from_env, resolved_price_id,
+    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_map_from_env,
+    resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
@@ -588,6 +588,7 @@ pub async fn catalog_handler(
     let current_plan_id = current.plan_id;
 
     // Pro Plan: is_current + Stripe-Price-Verfügbarkeit annotieren.
+    let price_vault = price_id_map_from_env();
     if let Some(plans) = payload.get_mut("plans").and_then(Value::as_array_mut) {
         for plan in plans.iter_mut() {
             let pid = plan
@@ -601,12 +602,15 @@ pub async fn catalog_handler(
                 plan["stripe_price_id"] = Value::Null;
                 continue;
             }
-            let price_id = price_id_default(&pid, cycle);
+            // Dieselbe Auflösung wie der Checkout (Default + Vault). Nur den
+            // Default zu lesen zeigt „nicht kaufbar" an, während der Checkout
+            // funktioniert.
+            let price_id = resolved_price_id(&pid, cycle, &price_vault);
+            plan["checkout_available"] = json!(price_id.is_some() && checkout_ready);
             plan["stripe_price_id"] = match price_id {
                 Some(id) => json!(id),
                 None => Value::Null,
             };
-            plan["checkout_available"] = json!(price_id.is_some() && checkout_ready);
         }
     }
 
@@ -700,14 +704,14 @@ pub async fn checkout_preview_handler(
             .into_response();
     };
 
-    let total_cents = selected_plan["price"]["total_net_cents"]
+    let total_cents = selected_plan["price"]["total_gross_cents"]
         .as_i64()
         .unwrap_or(0);
     let readiness = readiness_payload(config.as_ref().map(|Extension(c)| c));
     let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
     let price_map_ready = readiness["price_map_ready"].as_bool().unwrap_or(false);
     let price_id = if is_paid_plan_id(&selected_plan_id) {
-        price_id_default(&selected_plan_id, cycle)
+        resolved_price_id(&selected_plan_id, cycle, &price_id_map_from_env())
     } else {
         None
     };
@@ -782,8 +786,8 @@ pub async fn readiness_handler(
 ///
 /// Bewusst KEINE Secret-Previews — der native Pfad liest Secrets aus Infisical
 /// und gibt sie nie aus. `checkout_ready` = Stripe-Client konfiguriert;
-/// `price_map_ready` = eingecheckte Price-ID-Defaults decken alle bezahlten
-/// Pläne ab (sie tun es per Konstruktion, s. catalog::PRICE_ID_DEFAULTS).
+/// `price_map_ready` = für jeden bezahlten Plan sind beide Zyklus-Price-IDs
+/// auflösbar (eingecheckter Default oder Vault-Map).
 fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
     let checkout_ready = config.is_some();
     let webhook_ready = non_empty_env(&[
@@ -791,8 +795,7 @@ fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
         "TWITCH_BILLING_STRIPE_WEBHOOK_SECRET",
     ])
     .is_some();
-    // Eingecheckte Defaults decken alle bezahlten Pläne × {1,12} ab.
-    let price_map_ready = true;
+    let price_map_ready = self::price_map_ready();
     json!({
         "provider": "stripe",
         "integration_state": if checkout_ready && price_map_ready { "live" } else { "planned" },
@@ -801,6 +804,23 @@ fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
         "price_map_ready": price_map_ready,
         "ready_for_live": checkout_ready && webhook_ready && price_map_ready,
     })
+}
+
+/// `true`, wenn für jeden bezahlten Plan beide Zyklus-Price-IDs auflösbar sind.
+///
+/// Bis Milestone 8 die Premium-Preise in Stripe angelegt hat, ist das `false` —
+/// vorher als `true` zu melden hieße, einen Checkout zu bewerben, der am
+/// fehlenden Preis scheitert.
+pub(crate) fn price_map_ready() -> bool {
+    let vault = price_id_map_from_env();
+    tb_analytics::billing::BILLING_PLANS
+        .iter()
+        .filter(|plan| plan.monthly_gross_cents > 0)
+        .all(|plan| {
+            [1u32, 12u32]
+                .iter()
+                .all(|cycle| resolved_price_id(plan.id, *cycle, &vault).is_some())
+        })
 }
 
 /// Baut die `payment`-Sektion des Katalogs (P2.125-Parität).

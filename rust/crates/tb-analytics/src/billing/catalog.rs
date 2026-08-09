@@ -22,8 +22,17 @@ pub struct BillingPlan {
     pub badge: &'static str,
     /// Marketing-Beschreibung.
     pub description: &'static str,
-    /// Monatlicher Netto-Preis in Cent (`0` = kostenlos).
-    pub monthly_net_cents: u32,
+    /// Monatlicher Endpreis in Cent (`0` = kostenlos).
+    ///
+    /// Endpreis heißt: kein Umsatzsteueraufschlag. Kleinunternehmer nach
+    /// § 19 UStG, deshalb weist der Katalog keine Steuer aus.
+    pub monthly_gross_cents: u32,
+    /// Endpreis für den 12-Monats-Zyklus in Cent (`0` = kostenlos).
+    ///
+    /// **Eigener Betrag, nicht aus dem Rabattsatz gerechnet.** 299 × 12 minus
+    /// 17 Prozent ergäbe 2978; beworben und abgerechnet werden aber 2990. Der
+    /// Prozentwert in [`CYCLE_DISCOUNTS`] dient nur der Anzeige.
+    pub yearly_gross_cents: u32,
     /// Empfehlungs-Hervorhebung in der UI.
     pub recommended: bool,
     /// Freigeschaltete Entitlements (alphabetisch sortiert).
@@ -40,134 +49,58 @@ pub struct BillingPlan {
 pub struct PlanPrice {
     /// Abrechnungszyklus in Monaten.
     pub cycle_months: u32,
-    /// Zwischensumme netto in Cent (`monthly * cycle`).
-    pub subtotal_net_cents: u32,
-    /// Tatsächlich angewandter Rabatt-Prozentsatz (0, falls Zyklus ≤ 1).
+    /// Zwischensumme in Cent (`monthly * cycle`), also der Preis ohne Jahresvorteil.
+    pub subtotal_gross_cents: u32,
+    /// Ersparnis in Prozent, aus den beiden Endpreisen gerechnet und gerundet.
     pub discount_percent: u32,
-    /// Rabattbetrag in Cent (kaufmännisch gerundet, `(x*p + 50) / 100`).
+    /// Ersparnis in Cent (`subtotal - total`).
     pub discount_cents: u32,
-    /// Gesamtsumme netto in Cent (`subtotal - discount`).
-    pub total_net_cents: u32,
-    /// Effektiver Monatspreis netto in Cent (`total` auf Monate gerundet).
-    pub effective_monthly_net_cents: u32,
+    /// Gesamtsumme in Cent — Endpreis des Zyklus.
+    pub total_gross_cents: u32,
+    /// Effektiver Monatspreis in Cent (`total` auf Monate gerundet).
+    pub effective_monthly_gross_cents: u32,
 }
 
-/// Zyklus-Rabatte: `(Monate, Rabatt-Prozent)`. Spiegelt Pythons
-/// `BILLING_CYCLE_DISCOUNTS = {1: 0, 12: 0}`.
-pub const CYCLE_DISCOUNTS: &[(u32, u32)] = &[(1, 0), (12, 0)];
+/// Beworbene Ersparnis je Zyklus: `(Monate, Prozent)`.
+///
+/// **Nur Anzeigewert.** Der Jahrespreis steht als eigener Betrag am Plan
+/// (`yearly_gross_cents`); aus 17 Prozent auf 12 × 299 kämen 2978 statt 2990.
+pub const CYCLE_DISCOUNTS: &[(u32, u32)] = &[(1, 0), (12, 17)];
 
-/// Die acht Plan-Blueprints — Reihenfolge identisch zu Pythons `BILLING_PLANS`.
+/// Die zwei Plan-Blueprints: Free und Premium.
+///
+/// Der Katalog ist seit dem Pricing-Umbau vom 2026-08-09 auf eine einzige
+/// bezahlte Stufe reduziert. Die alten Plan-IDs (`chat_quiet`, `raid_boost`,
+/// `analysis_dashboard`, `analytics_trial`, alle `bundle_*`) bleiben in
+/// [`crate::plan`] auflösbar, weil sie in der DB stehen — kaufbar sind sie nicht
+/// mehr und deshalb stehen sie nicht mehr hier.
 pub const BILLING_PLANS: &[BillingPlan] = &[
     BillingPlan {
-        id: "raid_free",
-        name: "Raid Free",
+        id: "free",
+        name: "Free",
         tier: "free",
         badge: "free",
-        description: "Starte kostenlos mit automatischen Raids in die Community.",
-        monthly_net_cents: 0,
+        description: "Die Tagesform deines letzten Streams, alle Chat-Befehle, Auto-Raid, Overlay und Planung.",
+        monthly_gross_cents: 0,
+        yearly_gross_cents: 0,
         recommended: false,
         entitlements: &[],
         features: &[
-            "Auto-Raid Grundfunktion bleibt aktiv",
-            "Keine monatlichen Kosten für Basis-Raids",
-            "Upgrade auf Raid Boost jederzeit moeglich",
+            "Tagesform deines letzten Streams",
+            "Alle Chat-Befehle",
+            "Auto-Raid Grundfunktion",
+            "Overlay-Builder und Sendeplan",
         ],
     },
     BillingPlan {
-        id: "chat_quiet",
-        name: "Werbefrei",
-        tier: "basic",
-        badge: "quiet",
-        description: "Discord-Werbung im eigenen Chat dauerhaft aus — kein Boost, keine Analytics.",
-        monthly_net_cents: 199,
-        recommended: false,
-        entitlements: &["chat.promos.disable"],
-        features: &[
-            "Chat-Werbung des Bots dauerhaft deaktiviert",
-            "Greift auch bei aktiven Admin-Promo-Events",
-            "Jederzeit monatlich kündbar",
-        ],
-    },
-    BillingPlan {
-        id: "raid_boost",
-        name: "Raid Boost",
-        tier: "basic",
-        badge: "raids",
-        description: "Dein Kanal wird bevorzugt als Raid-Ziel vorgeschlagen — mehr eingehende Zuschauer.",
-        monthly_net_cents: 199,
-        recommended: false,
-        entitlements: &["chat.lurker_tax", "raid.priority"],
-        features: &[
-            "Bevorzugte Platzierung im Raid-Netzwerk",
-            "Sichtbarkeit auch bei deiner Inaktivität",
-            "Lurker Steuer Erinnerungen für bekannte Lurker",
-            "Kein Setup nötig — läuft automatisch",
-        ],
-    },
-    BillingPlan {
-        id: "bundle_chat_quiet_raid_boost",
-        name: "Werbefrei + Raid Boost",
-        tier: "basic",
-        badge: "bundle",
-        description: "Werbefrei + bevorzugte Raid-Platzierung im Paket — günstiger als einzeln.",
-        monthly_net_cents: 349,
-        recommended: false,
-        entitlements: &[
-            "chat.lurker_tax",
-            "chat.promos.disable",
-            "raid.priority",
-        ],
-        features: &[
-            "Chat-Werbung dauerhaft aus",
-            "Bevorzugte Platzierung im Raid-Netzwerk",
-            "Lurker Steuer Erinnerungen für bekannte Lurker",
-            "Spart 49¢ gegenüber Einzelkauf",
-        ],
-    },
-    BillingPlan {
-        id: "analysis_dashboard",
-        name: "Analyse Dashboard",
+        id: "premium",
+        name: "Premium",
         tier: "extended",
-        badge: "analytics",
-        description: "Vollständiges Analytics-Dashboard mit Stream-Statistiken, Viewer-Kurven und Wachstumsvergleichen.",
-        monthly_net_cents: 199,
+        badge: "premium",
+        description: "Dein voller Verlauf, Vergleiche, KI-Analyse und die Clip-Pipeline.",
+        monthly_gross_cents: 299,
+        yearly_gross_cents: 2990,
         recommended: true,
-        entitlements: &["analytics", "chat.lurker_tax"],
-        features: &[
-            "Viewer-Verlauf & Peak-Analyse pro Stream",
-            "Zeitraumvergleiche und Wachstumstrends",
-            "Lurker Steuer Erinnerungen für bekannte Lurker",
-            "Follower- und Retention-Übersichten",
-        ],
-    },
-    BillingPlan {
-        id: "bundle_werbefrei_analyse",
-        name: "Werbefrei + Analyse",
-        tier: "extended",
-        badge: "bundle",
-        description: "Chat-Werbung dauerhaft aus + volles Analytics-Dashboard — günstiger als einzeln.",
-        monthly_net_cents: 349,
-        recommended: false,
-        entitlements: &[
-            "analytics",
-            "chat.lurker_tax",
-            "chat.promos.disable",
-        ],
-        features: &[
-            "Chat-Werbung dauerhaft deaktiviert",
-            "Vollständiges Analytics-Dashboard",
-            "KI-Analyse & Viewer-Auswertung",
-            "Spart 49¢ gegenüber Einzelkauf",
-        ],
-    },
-    BillingPlan {
-        id: "bundle_komplett",
-        name: "Alles drin",
-        tier: "extended",
-        badge: "bundle",
-        description: "Werbefrei + Raid Boost + Analytics — das komplette Paket zum besten Preis.",
-        monthly_net_cents: 499,
-        recommended: false,
         entitlements: &[
             "analytics",
             "chat.lurker_tax",
@@ -175,96 +108,51 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "raid.priority",
         ],
         features: &[
-            "Alle Features aus allen Plänen",
-            "Bevorzugte Raid-Platzierung aktiv",
-            "Volles Analytics + KI-Analyse",
-            "Spart 0,98€ gegenüber Einzelkauf",
-        ],
-    },
-    BillingPlan {
-        id: "bundle_analysis_raid_boost",
-        name: "Bundle: Analyse + Raid Boost",
-        tier: "extended",
-        badge: "bundle",
-        description: "Analyse Dashboard + Raid Boost im Paket — günstiger als einzeln.",
-        monthly_net_cents: 349,
-        recommended: false,
-        entitlements: &[
-            "analytics",
-            "chat.lurker_tax",
-            "chat.promos.disable",
-            "raid.priority",
-        ],
-        features: &[
-            "Alle Analytics-Features inklusive",
-            "Bevorzugte Raid-Platzierung aktiv",
-            "Lurker Steuer Erinnerungen für bekannte Lurker",
-            "Spart 49¢ gegenüber Einzelkauf",
+            "Voller Verlauf statt nur letzter Stream",
+            "Zeitraumvergleiche und Wachstum",
+            "KI-Analyse, KI-Chat und Coaching",
+            "Clip- und Social-Pipeline",
+            "Werbefrei im eigenen Chat",
+            "Raid-Prio und Lurker-Steuer",
         ],
     },
 ];
 
 /// In Source eingecheckte Stripe-Price-IDs (keine Secrets). `(plan_id, &[(cycle, price_id)])`.
-/// Spiegelt `STRIPE_PRICE_ID_DEFAULTS`. `raid_free` fehlt (kostenlos, kein Stripe-Price).
-pub const PRICE_ID_DEFAULTS: &[(&str, &[(u32, &str)])] = &[
-    (
-        "chat_quiet",
-        &[
-            (1, "price_1TeNGF0yU8I2yGJ0crjsfhHO"),
-            (12, "price_1TeNGF0yU8I2yGJ0YLkz7PCX"),
-        ],
-    ),
-    (
-        "raid_boost",
-        &[
-            (1, "price_1TeNGG0yU8I2yGJ0DhWzKQWU"),
-            (12, "price_1TeNGG0yU8I2yGJ0f9iYs3w1"),
-        ],
-    ),
-    (
-        "analysis_dashboard",
-        &[
-            (1, "price_1TeNGH0yU8I2yGJ0UqKylecO"),
-            (12, "price_1TeNGH0yU8I2yGJ0tdHu8izl"),
-        ],
-    ),
-    (
-        "bundle_chat_quiet_raid_boost",
-        &[
-            (1, "price_1TeNGH0yU8I2yGJ06sCbRobW"),
-            (12, "price_1TeNGI0yU8I2yGJ0GaUNdWmK"),
-        ],
-    ),
-    (
-        "bundle_werbefrei_analyse",
-        &[
-            (1, "price_1TeNGI0yU8I2yGJ0YX5iUzX4"),
-            (12, "price_1TeNGJ0yU8I2yGJ0NlPVBIHZ"),
-        ],
-    ),
-    (
-        "bundle_komplett",
-        &[
-            (1, "price_1TeNGJ0yU8I2yGJ0V8gH6IGg"),
-            (12, "price_1TeNGK0yU8I2yGJ0QTewVRfi"),
-        ],
-    ),
-    (
-        "bundle_analysis_raid_boost",
-        &[
-            (1, "price_1TeNGK0yU8I2yGJ0guZX1iD8"),
-            (12, "price_1TeNGL0yU8I2yGJ0Alhd0ZPo"),
-        ],
-    ),
+///
+/// Leer, bis die beiden Premium-Preise in Stripe angelegt sind (Milestone 8,
+/// braucht den Stripe-Zugang des Betreibers). Bis dahin liefert die Vault-Map
+/// `STRIPE_PRICE_ID_MAP` die IDs; siehe [`resolved_price_id`].
+pub const PRICE_ID_DEFAULTS: &[(&str, &[(u32, &str)])] = &[];
+
+/// Price-IDs der abgeschafften Pläne: `(price_id, plan_id)`.
+///
+/// Nicht mehr kaufbar, aber Bestands-Subscriptions in Stripe hängen weiter an
+/// diesen Preisen. Der Webhook braucht die Rückwärts-Zuordnung, sonst bleibt
+/// `twitch_billing_subscriptions.plan_id` bei genau diesen Abos leer.
+pub const LEGACY_PRICE_ID_PLANS: &[(&str, &str)] = &[
+    ("price_1TeNGF0yU8I2yGJ0crjsfhHO", "chat_quiet"),
+    ("price_1TeNGF0yU8I2yGJ0YLkz7PCX", "chat_quiet"),
+    ("price_1TeNGG0yU8I2yGJ0DhWzKQWU", "raid_boost"),
+    ("price_1TeNGG0yU8I2yGJ0f9iYs3w1", "raid_boost"),
+    ("price_1TeNGH0yU8I2yGJ0UqKylecO", "analysis_dashboard"),
+    ("price_1TeNGH0yU8I2yGJ0tdHu8izl", "analysis_dashboard"),
+    ("price_1TeNGH0yU8I2yGJ06sCbRobW", "bundle_chat_quiet_raid_boost"),
+    ("price_1TeNGI0yU8I2yGJ0GaUNdWmK", "bundle_chat_quiet_raid_boost"),
+    ("price_1TeNGI0yU8I2yGJ0YX5iUzX4", "bundle_werbefrei_analyse"),
+    ("price_1TeNGJ0yU8I2yGJ0NlPVBIHZ", "bundle_werbefrei_analyse"),
+    ("price_1TeNGJ0yU8I2yGJ0V8gH6IGg", "bundle_komplett"),
+    ("price_1TeNGK0yU8I2yGJ0QTewVRfi", "bundle_komplett"),
+    ("price_1TeNGK0yU8I2yGJ0guZX1iD8", "bundle_analysis_raid_boost"),
+    ("price_1TeNGL0yU8I2yGJ0Alhd0ZPo", "bundle_analysis_raid_boost"),
 ];
 
-/// In Source eingecheckte Stripe-Product-IDs (keine Secrets). Spiegelt `STRIPE_PRODUCT_ID_DEFAULTS`.
-pub const PRODUCT_ID_DEFAULTS: &[(&str, &str)] = &[
-    ("chat_quiet", "prod_UYKKvIg1sbjVrl"),
-    ("bundle_chat_quiet_raid_boost", "prod_UYKKwFHm0ozy5w"),
-    ("bundle_werbefrei_analyse", "prod_UYJjXXe90gt8WO"),
-    ("bundle_komplett", "prod_UYJjhWpzqyNqr0"),
-];
+/// In Source eingecheckte Stripe-Product-IDs (keine Secrets).
+///
+/// Leer aus demselben Grund wie [`PRICE_ID_DEFAULTS`]: das Premium-Produkt legt
+/// der Betreiber in Milestone 8 an, danach kommt die ID über
+/// `STRIPE_PRODUCT_ID_MAP` oder wird hier eingecheckt.
+pub const PRODUCT_ID_DEFAULTS: &[(&str, &str)] = &[];
 
 /// Normalisiert einen Roh-Zyklus auf einen bekannten Wert.
 ///
@@ -292,17 +180,18 @@ pub fn find_plan(plan_id: &str) -> Option<&'static BillingPlan> {
     BILLING_PLANS.iter().find(|plan| plan.id == plan_id)
 }
 
-/// `true`, wenn der Plan kostenpflichtig ist (`monthly_net_cents > 0`).
-/// Spiegelt `billing_is_paid_plan_id` / `PAID_PLAN_IDS`.
+/// `true`, wenn der Plan kostenpflichtig ist (`monthly_gross_cents > 0`).
 pub fn is_paid_plan_id(plan_id: &str) -> bool {
-    find_plan(plan_id).is_some_and(|plan| plan.monthly_net_cents > 0)
+    find_plan(plan_id).is_some_and(|plan| plan.monthly_gross_cents > 0)
 }
 
 /// Stripe-Lookup-Key eines Plans für einen Zyklus.
 ///
-/// Format identisch zu `routes_billing.py`: `deadlock_{plan_id}_{cycle}m_net_v2`.
+/// Format `deadlock_{plan_id}_{cycle}m_gross_v3`. Der Suffix ist neu: die
+/// alten Netto-Keys (`_net_v2`) hängen an den abgeschafften Preisen und dürfen
+/// nicht kollidieren.
 pub fn lookup_key(plan_id: &str, cycle_months: u32) -> String {
-    format!("deadlock_{plan_id}_{cycle_months}m_net_v2")
+    format!("deadlock_{plan_id}_{cycle_months}m_gross_v3")
 }
 
 /// Default-Price-ID eines Plans für einen Zyklus (aus [`PRICE_ID_DEFAULTS`]).
@@ -350,6 +239,12 @@ pub fn plan_id_from_price_id(price_id: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, cycles)| cycles.iter().any(|(_, pid)| *pid == needle))
         .map(|(plan_id, _)| *plan_id)
+        .or_else(|| {
+            LEGACY_PRICE_ID_PLANS
+                .iter()
+                .find(|(pid, _)| *pid == needle)
+                .map(|(_, plan_id)| *plan_id)
+        })
 }
 
 /// Default-Product-ID eines Plans (aus [`PRODUCT_ID_DEFAULTS`]).
@@ -360,39 +255,48 @@ pub fn product_id_default(plan_id: &str) -> Option<&'static str> {
         .map(|(_, product_id)| *product_id)
 }
 
-/// Reine Preis-Arithmetik für einen Monatspreis, Zyklus und Roh-Rabatt.
+/// Preis-Tableau aus zwei Endpreisen: Monatspreis und Zyklus-Endpreis.
 ///
-/// Spiegelt den Preisblock aus Pythons `build_billing_catalog` 1:1, inklusive
-/// kaufmännischer Rundung (`(x*p + 50) / 100`) und der Effektiv-Monatsrundung
-/// (`(total + cycle/2) / cycle`). Da alle Werte nicht-negativ sind, entspricht
-/// Rusts Integer-Division Pythons `//`.
-pub fn compute_plan_price(monthly_net_cents: u32, cycle_months: u32, cycle_discount: u32) -> PlanPrice {
-    let cycle = cycle_months;
-    let subtotal = monthly_net_cents.saturating_mul(cycle);
-    let discount_percent = if cycle > 1 && subtotal > 0 { cycle_discount } else { 0 };
-    let discount_cents = if discount_percent > 0 {
-        (subtotal.saturating_mul(discount_percent) + 50) / 100
-    } else {
-        0
-    };
-    let total = subtotal.saturating_sub(discount_cents);
-    // Python: (total + cycle//2) // cycle if cycle > 0 else total.
-    let effective_monthly = (total + cycle / 2).checked_div(cycle).unwrap_or(total);
+/// Beide Beträge sind hinterlegt, nicht gerechnet. Abgeleitet werden nur
+/// Zwischensumme (`monthly × cycle`), Ersparnis (`subtotal − total`) und der
+/// effektive Monatspreis (`total` auf Monate gerundet, `(total + cycle/2) / cycle`).
+///
+/// Der Prozentwert wird aus den echten Beträgen gerechnet und nicht aus
+/// [`CYCLE_DISCOUNTS`] übernommen: 2990 gegen 3588 sind 16,66 Prozent, gerundet
+/// 17. So kann die angezeigte Ersparnis nicht vom abgerechneten Betrag abdriften.
+pub fn compute_plan_price(monthly_gross_cents: u32, total_gross_cents: u32, cycle_months: u32) -> PlanPrice {
+    let cycle = cycle_months.max(1);
+    let subtotal = monthly_gross_cents.saturating_mul(cycle);
+    let total = if cycle == 1 { monthly_gross_cents } else { total_gross_cents };
+    let discount_cents = subtotal.saturating_sub(total);
+    let discount_percent = (discount_cents.saturating_mul(100) + subtotal / 2)
+        .checked_div(subtotal)
+        .unwrap_or(0);
+    let effective_monthly = (total + cycle / 2) / cycle;
     PlanPrice {
         cycle_months: cycle,
-        subtotal_net_cents: subtotal,
+        subtotal_gross_cents: subtotal,
         discount_percent,
         discount_cents,
-        total_net_cents: total,
-        effective_monthly_net_cents: effective_monthly,
+        total_gross_cents: total,
+        effective_monthly_gross_cents: effective_monthly,
     }
 }
 
 impl BillingPlan {
+    /// Endpreis dieses Plans für einen Zyklus (`1` → Monatspreis, sonst Jahrespreis).
+    pub fn total_gross_cents(&self, cycle_months: u32) -> u32 {
+        if normalize_billing_cycle(cycle_months) == 1 {
+            self.monthly_gross_cents
+        } else {
+            self.yearly_gross_cents
+        }
+    }
+
     /// Preis-Tableau dieses Plans für einen (zu normalisierenden) Zyklus.
     pub fn price_for_cycle(&self, cycle_months: u32) -> PlanPrice {
         let cycle = normalize_billing_cycle(cycle_months);
-        compute_plan_price(self.monthly_net_cents, cycle, cycle_discount_percent(cycle))
+        compute_plan_price(self.monthly_gross_cents, self.total_gross_cents(cycle), cycle)
     }
 
     /// Stripe-Lookup-Key dieses Plans für einen Zyklus.
@@ -473,13 +377,22 @@ pub fn cycle_label(cycle_months: u32) -> String {
     }
 }
 
-/// Baut die `build_billing_catalog`-JSON-Struktur für einen Zyklus.
+/// Pflichthinweis zur Preisangabe (§ 19 UStG, Kleinunternehmer).
 ///
-/// Wert-identischer Port von `billing_plans.py:build_billing_catalog`. Liefert
-/// `currency`/`tax_mode`/`gross_available`/`cycle_*`/`discount_percent`/`plans`.
-/// Die `payment`-Sektion und plan-spezifische Felder (`is_current`,
-/// `stripe_price_id`, `checkout_available`) werden in der HTTP-Schicht ergänzt
-/// (analog Python `api_billing_catalog`).
+/// Gehört an jede Preisangabe, in den Checkout und auf die Rechnung. Steht hier,
+/// damit Dashboard, Checkout und Rechnung denselben Satz benutzen.
+pub const TAX_NOTICE: &str = "Kein Ausweis von Umsatzsteuer gemäß § 19 UStG.";
+
+/// Baut die Katalog-JSON-Struktur für einen Zyklus.
+///
+/// Liefert `currency`/`tax_mode`/`gross_available`/`tax_notice`/`cycle_*`/
+/// `discount_percent`/`plans`. Die `payment`-Sektion und plan-spezifische Felder
+/// (`is_current`, `stripe_price_id`, `checkout_available`) werden in der
+/// HTTP-Schicht ergänzt.
+///
+/// Alle Beträge sind Endpreise (`*_gross_cents`). Der Katalog hieß bis zum
+/// Umbau vom 2026-08-09 netto und war zugleich brutto beschriftet — genau diese
+/// Doppeldeutigkeit ist hier aufgelöst.
 pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
     let cycle = normalize_billing_cycle(cycle_months);
     let cycle_lbl = cycle_label(cycle);
@@ -494,21 +407,22 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
                 "badge": plan.badge,
                 "description": plan.description,
                 "recommended": plan.recommended,
-                "monthly_net_cents": plan.monthly_net_cents,
+                "monthly_gross_cents": plan.monthly_gross_cents,
+                "yearly_gross_cents": plan.yearly_gross_cents,
                 "entitlements": plan.entitlements,
                 "features": plan.features,
                 "price": {
                     "cycle_months": price.cycle_months,
                     "cycle_label": cycle_lbl,
-                    "subtotal_net_cents": price.subtotal_net_cents,
+                    "subtotal_gross_cents": price.subtotal_gross_cents,
                     "discount_percent": price.discount_percent,
                     "discount_cents": price.discount_cents,
-                    "total_net_cents": price.total_net_cents,
-                    "effective_monthly_net_cents": price.effective_monthly_net_cents,
-                    "subtotal_net_label": format_eur_cents(price.subtotal_net_cents as i64),
-                    "total_net_label": format_eur_cents(price.total_net_cents as i64),
-                    "effective_monthly_net_label": format_eur_cents(
-                        price.effective_monthly_net_cents as i64,
+                    "total_gross_cents": price.total_gross_cents,
+                    "effective_monthly_gross_cents": price.effective_monthly_gross_cents,
+                    "subtotal_gross_label": format_eur_cents(price.subtotal_gross_cents as i64),
+                    "total_gross_label": format_eur_cents(price.total_gross_cents as i64),
+                    "effective_monthly_gross_label": format_eur_cents(
+                        price.effective_monthly_gross_cents as i64,
                     ),
                 },
             })
@@ -517,8 +431,9 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
 
     serde_json::json!({
         "currency": "EUR",
-        "tax_mode": "net_only",
-        "gross_available": false,
+        "tax_mode": "small_business",
+        "gross_available": true,
+        "tax_notice": TAX_NOTICE,
         "cycle_months": cycle,
         "cycle_label": cycle_lbl,
         "discount_percent": if cycle > 1 { cycle_discount_percent(cycle) } else { 0 },
@@ -685,33 +600,47 @@ pub fn product_id_map_from_env() -> ProductMap {
 mod tests {
     use super::*;
 
-    /// Erwartete Monatspreise je Plan — Orakel aus `billing_plans.py`.
-    /// `(id, monthly_net_cents, tier, recommended)`.
-    const EXPECTED: &[(&str, u32, &str, bool)] = &[
-        ("raid_free", 0, "free", false),
-        ("chat_quiet", 199, "basic", false),
-        ("raid_boost", 199, "basic", false),
-        ("bundle_chat_quiet_raid_boost", 349, "basic", false),
-        ("analysis_dashboard", 199, "extended", true),
-        ("bundle_werbefrei_analyse", 349, "extended", false),
-        ("bundle_komplett", 499, "extended", false),
-        ("bundle_analysis_raid_boost", 349, "extended", false),
+    /// Erwartete Endpreise je Plan — Orakel ist die Spec vom 2026-08-09.
+    /// `(id, monthly_gross_cents, yearly_gross_cents, tier, recommended)`.
+    const EXPECTED: &[(&str, u32, u32, &str, bool)] = &[
+        ("free", 0, 0, "free", false),
+        ("premium", 299, 2990, "extended", true),
     ];
 
     #[test]
-    fn catalog_has_exactly_eight_plans_in_python_order() {
-        assert_eq!(BILLING_PLANS.len(), 8);
+    fn catalog_has_exactly_two_plans_free_and_premium() {
+        assert_eq!(BILLING_PLANS.len(), 2, "genau zwei Pläne, kein Bundle mehr");
         for (plan, exp) in BILLING_PLANS.iter().zip(EXPECTED.iter()) {
             assert_eq!(plan.id, exp.0, "plan id order mismatch");
-            assert_eq!(plan.monthly_net_cents, exp.1, "monthly for {}", exp.0);
-            assert_eq!(plan.tier, exp.2, "tier for {}", exp.0);
-            assert_eq!(plan.recommended, exp.3, "recommended for {}", exp.0);
+            assert_eq!(plan.monthly_gross_cents, exp.1, "monthly für {}", exp.0);
+            assert_eq!(plan.yearly_gross_cents, exp.2, "yearly für {}", exp.0);
+            assert_eq!(plan.tier, exp.3, "tier für {}", exp.0);
+            assert_eq!(plan.recommended, exp.4, "recommended für {}", exp.0);
+        }
+    }
+
+    /// Kein Betrag aus dem alten Katalog überlebt im neuen.
+    #[test]
+    fn keine_alten_betraege_mehr_im_katalog() {
+        for plan in BILLING_PLANS {
+            for cents in [199u32, 349, 499, 2388] {
+                assert_ne!(
+                    plan.monthly_gross_cents, cents,
+                    "{} trägt noch einen abgeschafften Monatsbetrag",
+                    plan.id
+                );
+                assert_ne!(
+                    plan.yearly_gross_cents, cents,
+                    "{} trägt noch einen abgeschafften Jahresbetrag",
+                    plan.id
+                );
+            }
         }
     }
 
     #[test]
-    fn cycle_discounts_match_python_zero_zero() {
-        assert_eq!(CYCLE_DISCOUNTS, &[(1, 0), (12, 0)]);
+    fn cycle_discounts_sind_null_und_siebzehn() {
+        assert_eq!(CYCLE_DISCOUNTS, &[(1, 0), (12, 17)]);
     }
 
     #[test]
@@ -740,45 +669,83 @@ mod tests {
         );
     }
 
-    /// Kern-Orakel: 8 Pläne × Zyklen {1, 12} ergeben wert-identische Preise/lookup_keys.
-    /// Bei 0 % Rabatt gilt: subtotal = monthly*cycle, total = subtotal,
-    /// effective_monthly = monthly (Rundung verschwindet, da +cycle/2 < cycle).
+    /// Kern-Orakel: beide Pläne × Zyklen {1, 12} liefern die Beträge aus der Spec
+    /// und Lookup-Keys mit dem neuen Suffix `_gross_v3`.
     #[test]
-    fn prices_and_lookup_keys_value_identical_to_python() {
-        for (id, monthly, _tier, _rec) in EXPECTED {
+    fn preise_und_lookup_keys_entsprechen_der_spec() {
+        for (id, monthly, yearly, _tier, _rec) in EXPECTED {
             let plan = find_plan(id).expect("plan present");
+
+            let m = plan.price_for_cycle(1);
+            assert_eq!(m.cycle_months, 1);
+            assert_eq!(m.subtotal_gross_cents, *monthly, "subtotal {id}/1m");
+            assert_eq!(m.total_gross_cents, *monthly, "total {id}/1m");
+            assert_eq!(m.effective_monthly_gross_cents, *monthly, "effektiv {id}/1m");
+            assert_eq!(m.discount_cents, 0, "kein Rabatt im Monatszyklus {id}");
+            assert_eq!(m.discount_percent, 0, "kein Rabatt im Monatszyklus {id}");
+
+            let y = plan.price_for_cycle(12);
+            assert_eq!(y.cycle_months, 12);
+            assert_eq!(y.subtotal_gross_cents, monthly * 12, "subtotal {id}/12m");
+            assert_eq!(
+                y.total_gross_cents, *yearly,
+                "Jahrespreis ist der hinterlegte Betrag, kein gerechneter: {id}"
+            );
+
             for &cycle in &[1u32, 12u32] {
-                let price = plan.price_for_cycle(cycle);
-                assert_eq!(price.cycle_months, cycle);
-                assert_eq!(price.subtotal_net_cents, monthly * cycle, "subtotal {id}/{cycle}m");
-                assert_eq!(price.discount_percent, 0, "discount_percent {id}/{cycle}m");
-                assert_eq!(price.discount_cents, 0, "discount_cents {id}/{cycle}m");
-                assert_eq!(price.total_net_cents, monthly * cycle, "total {id}/{cycle}m");
-                assert_eq!(
-                    price.effective_monthly_net_cents, *monthly,
-                    "effective_monthly {id}/{cycle}m"
-                );
                 assert_eq!(
                     plan.lookup_key(cycle),
-                    format!("deadlock_{id}_{cycle}m_net_v2"),
+                    format!("deadlock_{id}_{cycle}m_gross_v3"),
                     "lookup_key {id}/{cycle}m"
+                );
+                assert!(
+                    plan.lookup_key(cycle).ends_with("_gross_v3"),
+                    "Lookup-Key muss auf _gross_v3 enden: {id}/{cycle}m"
                 );
             }
         }
     }
 
-    /// Validiert die Rundungs-Semantik unabhängig von den (aktuell 0 %) Live-Rabatten:
-    /// hypothetischer 10 %-Rabatt auf 199 ¢ × 12 → exakt wie Pythons Integer-Arithmetik.
+    /// Der Jahrespreis ist ein eigener Betrag. Aus dem Rabattsatz gerechnet
+    /// käme 2978 heraus, abgerechnet werden 2990 — die Anzeige-Prozente werden
+    /// aus den echten Beträgen zurückgerechnet und landen wieder bei 17.
     #[test]
-    fn rounding_semantics_match_python_with_synthetic_discount() {
-        // subtotal = 199*12 = 2388; discount = (2388*10 + 50)/100 = 239; total = 2149;
-        // effective = (2149 + 6)/12 = 179
-        let price = compute_plan_price(199, 12, 10);
-        assert_eq!(price.subtotal_net_cents, 2388);
-        assert_eq!(price.discount_percent, 10);
+    fn jahrespreis_ist_eigener_betrag_nicht_aus_prozent_gerechnet() {
+        let premium = find_plan("premium").expect("premium");
+        let y = premium.price_for_cycle(12);
+        assert_eq!(y.subtotal_gross_cents, 3588);
+        assert_eq!(y.total_gross_cents, 2990, "beworben und abgerechnet: 29,90 EUR");
+        assert_ne!(
+            y.total_gross_cents, 2978,
+            "Jahrespreis darf nicht aus dem Rabattsatz gerechnet sein"
+        );
+        assert_eq!(y.discount_cents, 598);
+        // 598/3588 = 16,66 % → gerundet 17, passend zur beworbenen Ersparnis.
+        assert_eq!(y.discount_percent, 17);
+        assert_eq!(y.discount_percent, cycle_discount_percent(12));
+        // 2990 auf 12 Monate = 249,17 → 249.
+        assert_eq!(y.effective_monthly_gross_cents, 249);
+    }
+
+    /// Rundungs-Semantik unabhängig von den Live-Beträgen.
+    #[test]
+    fn rundung_bei_synthetischen_betraegen() {
+        // subtotal = 199*12 = 2388, total = 2149 → Ersparnis 239 = 10,008 % → 10.
+        // effektiv = (2149 + 6)/12 = 179.
+        let price = compute_plan_price(199, 2149, 12);
+        assert_eq!(price.subtotal_gross_cents, 2388);
         assert_eq!(price.discount_cents, 239);
-        assert_eq!(price.total_net_cents, 2149);
-        assert_eq!(price.effective_monthly_net_cents, 179);
+        assert_eq!(price.discount_percent, 10);
+        assert_eq!(price.total_gross_cents, 2149);
+        assert_eq!(price.effective_monthly_gross_cents, 179);
+        // Kostenlos: keine Division durch Null, kein Rabatt.
+        let free = compute_plan_price(0, 0, 12);
+        assert_eq!(free.discount_percent, 0);
+        assert_eq!(free.total_gross_cents, 0);
+        // Ein Jahrespreis über der Zwischensumme erzeugt keinen negativen Rabatt.
+        let teurer = compute_plan_price(299, 4000, 12);
+        assert_eq!(teurer.discount_cents, 0);
+        assert_eq!(teurer.discount_percent, 0);
     }
 
     #[test]
@@ -792,41 +759,22 @@ mod tests {
 
     #[test]
     fn paid_plan_predicate_matches_monthly_price() {
-        assert!(!is_paid_plan_id("raid_free"));
-        assert!(is_paid_plan_id("chat_quiet"));
-        assert!(is_paid_plan_id("bundle_komplett"));
+        assert!(!is_paid_plan_id("free"));
+        assert!(is_paid_plan_id("premium"));
+        // Abgeschaffte Pläne sind nicht mehr kaufbar → kein Checkout.
+        assert!(!is_paid_plan_id("chat_quiet"));
+        assert!(!is_paid_plan_id("bundle_komplett"));
         assert!(!is_paid_plan_id("unknown_plan"));
     }
 
     #[test]
-    fn price_and_product_id_defaults_value_identical() {
-        // Spot-Checks gegen STRIPE_PRICE_ID_DEFAULTS / STRIPE_PRODUCT_ID_DEFAULTS.
-        assert_eq!(
-            price_id_default("chat_quiet", 1),
-            Some("price_1TeNGF0yU8I2yGJ0crjsfhHO")
-        );
-        assert_eq!(
-            price_id_default("bundle_komplett", 12),
-            Some("price_1TeNGK0yU8I2yGJ0QTewVRfi")
-        );
-        // raid_free hat keinen Stripe-Price (kostenlos).
-        assert_eq!(price_id_default("raid_free", 1), None);
-        assert_eq!(product_id_default("chat_quiet"), Some("prod_UYKKvIg1sbjVrl"));
-        assert_eq!(product_id_default("raid_boost"), None);
-
-        // Jeder kostenpflichtige Plan hat Price-IDs für beide Zyklen.
-        for plan in BILLING_PLANS.iter().filter(|p| p.monthly_net_cents > 0) {
-            assert!(
-                price_id_default(plan.id, 1).is_some(),
-                "missing 1m price id for {}",
-                plan.id
-            );
-            assert!(
-                price_id_default(plan.id, 12).is_some(),
-                "missing 12m price id for {}",
-                plan.id
-            );
-        }
+    fn price_und_product_defaults_sind_leer_bis_stripe_steht() {
+        // Milestone 8 legt die Premium-Preise in Stripe an; bis dahin kommen die
+        // IDs ausschließlich über die Vault-Map.
+        assert!(PRICE_ID_DEFAULTS.is_empty());
+        assert!(PRODUCT_ID_DEFAULTS.is_empty());
+        assert_eq!(price_id_default("premium", 1), None);
+        assert_eq!(product_id_default("premium"), None);
     }
 
     #[test]
@@ -850,16 +798,25 @@ mod tests {
         assert_eq!(plan_id_from_lookup_key(""), None);
     }
 
+    /// Bestands-Abos in Stripe hängen an den alten Preisen. Fällt diese
+    /// Rückwärts-Zuordnung weg, bleibt `plan_id` bei genau diesen Abos leer.
     #[test]
-    fn plan_id_from_price_id_findet_jeden_eingecheckten_price() {
-        for (plan_id, cycles) in PRICE_ID_DEFAULTS {
-            for (_, price) in *cycles {
-                assert_eq!(
-                    plan_id_from_price_id(price),
-                    Some(*plan_id),
-                    "price {price} muss auf {plan_id} zurückführen"
-                );
-            }
+    fn plan_id_from_price_id_findet_jeden_legacy_price() {
+        assert_eq!(LEGACY_PRICE_ID_PLANS.len(), 14, "7 Pläne × 2 Zyklen");
+        for (price_id, plan_id) in LEGACY_PRICE_ID_PLANS {
+            assert_eq!(
+                plan_id_from_price_id(price_id),
+                Some(*plan_id),
+                "price {price_id} muss auf {plan_id} zurückführen"
+            );
+            assert!(
+                crate::plan::is_known_plan_id(plan_id),
+                "{plan_id} muss weiterhin auflösbar sein"
+            );
+            assert!(
+                find_plan(plan_id).is_none(),
+                "{plan_id} darf nicht mehr im Katalog stehen"
+            );
         }
         assert_eq!(plan_id_from_price_id("price_unbekannt"), None);
         assert_eq!(plan_id_from_price_id("  "), None);
@@ -868,9 +825,8 @@ mod tests {
     #[test]
     fn format_eur_cents_matches_python() {
         assert_eq!(format_eur_cents(0), "0,00 EUR");
-        assert_eq!(format_eur_cents(199), "1,99 EUR");
-        assert_eq!(format_eur_cents(349), "3,49 EUR");
-        assert_eq!(format_eur_cents(2388), "23,88 EUR");
+        assert_eq!(format_eur_cents(299), "2,99 EUR");
+        assert_eq!(format_eur_cents(2990), "29,90 EUR");
         assert_eq!(format_eur_cents(5), "0,05 EUR");
         // Negativ → 0 (Python: max(int(cents), 0)).
         assert_eq!(format_eur_cents(-50), "0,00 EUR");
@@ -884,34 +840,56 @@ mod tests {
     }
 
     #[test]
-    fn catalog_json_shape_and_values() {
+    fn catalog_json_liefert_zwei_plaene_mit_299_und_2990() {
         let cat = catalog_json(1);
         assert_eq!(cat["currency"], "EUR");
-        assert_eq!(cat["tax_mode"], "net_only");
-        assert_eq!(cat["gross_available"], false);
+        assert_eq!(cat["tax_mode"], "small_business");
+        assert_eq!(cat["gross_available"], true);
+        assert_eq!(cat["tax_notice"], TAX_NOTICE);
         assert_eq!(cat["cycle_months"], 1);
         assert_eq!(cat["cycle_label"], "30 Tage");
         assert_eq!(cat["discount_percent"], 0);
+
         let plans = cat["plans"].as_array().unwrap();
-        assert_eq!(plans.len(), 8);
-        // Erster Plan = raid_free (kostenlos).
-        assert_eq!(plans[0]["id"], "raid_free");
-        assert_eq!(plans[0]["price"]["total_net_cents"], 0);
-        assert_eq!(plans[0]["price"]["total_net_label"], "0,00 EUR");
-        // chat_quiet → 1,99 EUR.
-        let chat_quiet = plans.iter().find(|p| p["id"] == "chat_quiet").unwrap();
-        assert_eq!(chat_quiet["price"]["total_net_cents"], 199);
-        assert_eq!(chat_quiet["price"]["total_net_label"], "1,99 EUR");
-        assert_eq!(chat_quiet["tier"], "basic");
-        assert_eq!(chat_quiet["price"]["cycle_label"], "30 Tage");
-        // 12-Monats-Zyklus: subtotal = monthly*12, kein Rabatt (0%).
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0]["id"], "free");
+        assert_eq!(plans[0]["price"]["total_gross_cents"], 0);
+        assert_eq!(plans[0]["price"]["total_gross_label"], "0,00 EUR");
+        assert_eq!(plans[0]["entitlements"].as_array().unwrap().len(), 0);
+
+        let premium = plans.iter().find(|p| p["id"] == "premium").unwrap();
+        assert_eq!(premium["price"]["total_gross_cents"], 299);
+        assert_eq!(premium["price"]["total_gross_label"], "2,99 EUR");
+        assert_eq!(premium["monthly_gross_cents"], 299);
+        assert_eq!(premium["yearly_gross_cents"], 2990);
+        assert_eq!(premium["tier"], "extended");
+        assert_eq!(premium["recommended"], true);
+        assert_eq!(premium["entitlements"].as_array().unwrap().len(), 4);
+
+        // Jahreszyklus: 29,90 EUR gesamt, 2,49 EUR effektiv, 17 Prozent Ersparnis.
         let cat12 = catalog_json(12);
         assert_eq!(cat12["cycle_months"], 12);
         assert_eq!(cat12["cycle_label"], "12 Monate");
-        let cq12 = cat12["plans"].as_array().unwrap().iter().find(|p| p["id"] == "chat_quiet").unwrap();
-        assert_eq!(cq12["price"]["subtotal_net_cents"], 2388);
-        assert_eq!(cq12["price"]["total_net_cents"], 2388);
-        assert_eq!(cq12["price"]["total_net_label"], "23,88 EUR");
+        assert_eq!(cat12["discount_percent"], 17);
+        let p12 = cat12["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "premium")
+            .unwrap();
+        assert_eq!(p12["price"]["subtotal_gross_cents"], 3588);
+        assert_eq!(p12["price"]["total_gross_cents"], 2990);
+        assert_eq!(p12["price"]["total_gross_label"], "29,90 EUR");
+        assert_eq!(p12["price"]["effective_monthly_gross_cents"], 249);
+        assert_eq!(p12["price"]["effective_monthly_gross_label"], "2,49 EUR");
+        assert_eq!(p12["price"]["discount_percent"], 17);
+
+        // Kein Netto-Schlüssel und kein alter Betrag im ausgelieferten JSON.
+        let raw = cat12.to_string();
+        assert!(!raw.contains("net_cents"), "Netto-Schlüssel im Katalog: {raw}");
+        assert!(!raw.contains("1,99"), "alter Betrag im Katalog: {raw}");
+        assert!(!raw.contains("bundle_"), "Bundle-Plan im Katalog: {raw}");
+
         // Unbekannter Zyklus fällt auf 1 zurück.
         assert_eq!(catalog_json(7)["cycle_months"], 1);
     }
@@ -939,44 +917,35 @@ mod tests {
         assert!(parse_price_id_mapping("").is_empty());
     }
 
+    /// Solange kein Default eingecheckt ist, liefert die Vault-Map die Premium-
+    /// Price-IDs. Genau darüber kommen die Preise aus Milestone 8 in den Betrieb.
     #[test]
-    fn resolved_price_id_default_wins_for_known_plan() {
-        // Vault versucht raid_boost umzubiegen — Default gewinnt (bekannter Plan).
-        let vault = parse_price_id_mapping(r#"{"raid_boost": {"1": "price_VAULT_HIJACK"}}"#);
-        assert_eq!(
-            resolved_price_id("raid_boost", 1, &vault).as_deref(),
-            Some("price_1TeNGG0yU8I2yGJ0DhWzKQWU")
+    fn resolved_price_id_kommt_bis_milestone_8_aus_dem_vault() {
+        let vault = parse_price_id_mapping(
+            r#"{"premium": {"1": "price_premium_1m", "12": "price_premium_12m"}}"#,
         );
-    }
-
-    #[test]
-    fn resolved_price_id_vault_adds_new_plan() {
-        // Neuer Plan ohne eingecheckten Default → Vault liefert die ID.
-        let vault = parse_price_id_mapping(r#"{"future_plan": {"1": "price_future_1m"}}"#);
         assert_eq!(
-            resolved_price_id("future_plan", 1, &vault).as_deref(),
-            Some("price_future_1m")
+            resolved_price_id("premium", 1, &vault).as_deref(),
+            Some("price_premium_1m")
+        );
+        assert_eq!(
+            resolved_price_id("premium", 12, &vault).as_deref(),
+            Some("price_premium_12m")
         );
         // Ohne Vault-Eintrag und ohne Default → None.
-        assert_eq!(resolved_price_id("future_plan", 12, &vault), None);
+        let leer = parse_price_id_mapping("");
+        assert_eq!(resolved_price_id("premium", 1, &leer), None);
     }
 
     #[test]
-    fn resolved_product_id_vault_wins() {
-        // Product-IDs: Vault gewinnt (Python result.update).
-        let vault = parse_product_id_mapping(r#"{"chat_quiet": "prod_VAULT_OVERRIDE"}"#);
+    fn resolved_product_id_kommt_aus_dem_vault() {
+        let vault = parse_product_id_mapping(r#"{"premium": "prod_premium"}"#);
         assert_eq!(
-            resolved_product_id("chat_quiet", &vault).as_deref(),
-            Some("prod_VAULT_OVERRIDE")
+            resolved_product_id("premium", &vault).as_deref(),
+            Some("prod_premium")
         );
-        // Ohne Vault-Eintrag → eingecheckter Default.
-        let empty = parse_product_id_mapping("");
-        assert_eq!(
-            resolved_product_id("chat_quiet", &empty).as_deref(),
-            Some("prod_UYKKvIg1sbjVrl")
-        );
-        // Plan ohne Default und ohne Vault → None.
-        assert_eq!(resolved_product_id("raid_boost", &empty), None);
+        let leer = parse_product_id_mapping("");
+        assert_eq!(resolved_product_id("premium", &leer), None);
     }
 
     #[test]
@@ -988,21 +957,18 @@ mod tests {
 
     #[test]
     fn entitlements_are_sorted() {
-        // raid_free trägt nach der Analytics-Konsolidierung keine Entitlements
-        // mehr (kein Flag => last_stream-Default). Sortier-Invariante bleibt für
-        // alle nicht-leeren Listen bestehen (Python plan_entitlements sortiert).
         for plan in BILLING_PLANS {
             let mut sorted = plan.entitlements.to_vec();
             sorted.sort_unstable();
             assert_eq!(
                 plan.entitlements, &sorted[..],
-                "entitlements for {} must be sorted (Python plan_entitlements sorts)",
+                "entitlements für {} müssen sortiert sein",
                 plan.id
             );
         }
     }
 
-    /// Drift-Guard: für jeden bekannten Plan stimmen die Katalog-Entitlements mit
+    /// Drift-Guard: für jeden Katalog-Plan stimmen die Entitlements mit
     /// [`crate::plan::plan_entitlements`] überein (eine Quelle der Wahrheit).
     #[test]
     fn catalog_entitlements_match_plan_module() {
@@ -1016,24 +982,24 @@ mod tests {
         }
     }
 
-    /// Konsolidiertes `"analytics"`-Flag: genau die 5 Analyse-Pläne tragen es,
-    /// die reinen Chat-/Raid-Pläne nicht.
+    /// Premium trägt alle vier Entitlements, Free keins.
     #[test]
-    fn analytics_flag_only_on_analysis_plans() {
-        for id in ["raid_boost", "bundle_chat_quiet_raid_boost", "raid_free", "chat_quiet"] {
-            assert!(
-                !crate::plan::plan_has_analytics(id),
-                "{id} darf kein analytics-Flag tragen"
-            );
-        }
-        for id in [
-            "analysis_dashboard",
-            "bundle_werbefrei_analyse",
-            "bundle_komplett",
-            "bundle_analysis_raid_boost",
-            "analytics_trial",
-        ] {
-            assert!(crate::plan::plan_has_analytics(id), "{id} muss analytics-Flag tragen");
-        }
+    fn premium_traegt_alle_vier_entitlements() {
+        let premium = find_plan("premium").expect("premium");
+        assert_eq!(
+            premium.entitlements,
+            &[
+                "analytics",
+                "chat.lurker_tax",
+                "chat.promos.disable",
+                "raid.priority"
+            ]
+        );
+        assert!(crate::plan::plan_has_analytics("premium"));
+        assert!(crate::plan::plan_is_extended("premium"));
+        let free = find_plan("free").expect("free");
+        assert!(free.entitlements.is_empty());
+        assert!(!crate::plan::plan_has_analytics("free"));
+        assert!(!crate::plan::plan_is_extended("free"));
     }
 }

@@ -16,6 +16,10 @@ use sqlx::PgPool;
 /// Plan-Tier aus Plan-ID ableiten (Python: `PLAN_TIER_MAP`).
 pub fn plan_tier(plan_id: &str) -> &'static str {
     match plan_id {
+        // Neuer Katalog seit 2026-08-09.
+        "free" => "free",
+        "premium" => "extended",
+        // Abgeschaffte Pläne: nicht mehr kaufbar, aber in der DB vorhanden.
         "raid_free" => "free",
         "chat_quiet" | "raid_boost" | "bundle_chat_quiet_raid_boost" => "basic",
         "analysis_dashboard"
@@ -30,6 +34,8 @@ pub fn plan_tier(plan_id: &str) -> &'static str {
 /// Anzeigename aus Plan-ID (Python: `PLAN_DISPLAY_NAME_MAP`).
 pub fn plan_display_name(plan_id: &str) -> &'static str {
     match plan_id {
+        "free" => "Free",
+        "premium" => "Premium",
         "raid_free" => "Free",
         "chat_quiet" => "Werbefrei",
         "raid_boost" => "Basic",
@@ -54,6 +60,14 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
         // Analytics-Konsolidierung auf EIN Flag: kein Flag => `last_stream`
         // (kostenlose Tagesform) ist der Default; das Flag `"analytics"` => voller
         // Analytics-Zugang (voller Verlauf, Vergleiche, KI-Analyse via Opus).
+        "free" => &[],
+        // Premium trägt alle vier Entitlements — eine bezahlte Stufe, kein Graph.
+        "premium" => &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        ],
         "raid_free" => &[],
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &["chat.lurker_tax", "raid.priority"],
@@ -99,6 +113,8 @@ pub fn plan_has_analytics(plan_id: &str) -> bool {
 /// bzw. ganz aus dem Override (Manual) wirft. Test-Gate: siehe `tests`.
 fn normalize_plan_id(raw: &str) -> &'static str {
     match raw.trim() {
+        "free" => "free",
+        "premium" => "premium",
         "raid_free" => "raid_free",
         "chat_quiet" => "chat_quiet",
         "raid_boost" => "raid_boost",
@@ -113,7 +129,9 @@ fn normalize_plan_id(raw: &str) -> &'static str {
 }
 
 /// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
-const KNOWN_PLAN_IDS: [&str; 9] = [
+const KNOWN_PLAN_IDS: [&str; 11] = [
+    "free",
+    "premium",
     "raid_free",
     "chat_quiet",
     "raid_boost",
@@ -128,7 +146,7 @@ const KNOWN_PLAN_IDS: [&str; 9] = [
 /// `true`, wenn `raw` (nur whitespace-getrimmt) ein bekannter kanonischer Plan
 /// ist. Spiegelt Python `manual_override_from_row` (repository.py:82):
 /// `if plan_id not in KNOWN_PLAN_IDS: return None`.
-fn is_known_plan_id(raw: &str) -> bool {
+pub(crate) fn is_known_plan_id(raw: &str) -> bool {
     KNOWN_PLAN_IDS.contains(&raw.trim())
 }
 
@@ -557,11 +575,10 @@ mod tests {
 
     #[test]
     fn normalize_lehnt_legacy_aliase_ab() {
-        // Legacy-Aliase (free/werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
+        // Legacy-Aliase (werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
         // gehören in Python NUR zu normalize_plan_id_from_legacy_name (Raid-
         // Subsystem), NICHT zur Entitlement-DB-Auflösung → hier kein Mapping.
         for alias in [
-            "free",
             "werbefrei",
             "quiet",
             "analysis",
@@ -598,7 +615,6 @@ mod tests {
         // Fall-Through zu Billing) statt ihn als raid_free zu honorieren.
         assert!(!is_known_plan_id("Raid_Boost"));
         assert!(!is_known_plan_id("analysis"));
-        assert!(!is_known_plan_id("free"));
         assert!(!is_known_plan_id(""));
         assert!(!is_known_plan_id("garbage"));
     }
@@ -624,6 +640,7 @@ mod tests {
     #[test]
     fn analytics_flag_nur_auf_analyse_plaenen() {
         for id in [
+            "free",
             "raid_boost",
             "bundle_chat_quiet_raid_boost",
             "raid_free",
@@ -639,6 +656,7 @@ mod tests {
             );
         }
         for id in [
+            "premium",
             "analysis_dashboard",
             "bundle_werbefrei_analyse",
             "bundle_komplett",
@@ -646,6 +664,74 @@ mod tests {
             "analytics_trial",
         ] {
             assert!(plan_has_analytics(id), "{id} muss analytics-Flag tragen");
+        }
+    }
+
+    // ── Pricing-Umbau 2026-08-09: Free + Premium neben den Altlasten ────────
+
+    #[test]
+    fn free_und_premium_sind_kanonisch() {
+        assert_eq!(plan_tier("free"), "free");
+        assert_eq!(plan_tier("premium"), "extended");
+        assert_eq!(plan_display_name("free"), "Free");
+        assert_eq!(plan_display_name("premium"), "Premium");
+        assert_eq!(normalize_plan_id("free"), "free");
+        assert_eq!(normalize_plan_id("premium"), "premium");
+        assert!(is_known_plan_id("free"));
+        assert!(is_known_plan_id("premium"));
+        assert_eq!(
+            plan_entitlements("premium"),
+            &[
+                "analytics",
+                "chat.lurker_tax",
+                "chat.promos.disable",
+                "raid.priority"
+            ]
+        );
+        assert!(plan_entitlements("free").is_empty());
+    }
+
+    /// Die abgeschafften Pläne stehen weiter in der DB. Sie sind nicht mehr
+    /// kaufbar, müssen aber unverändert auflösbar bleiben und ihre Entitlements
+    /// behalten — sonst verlieren Bestandsnutzer beim Deploy ihren Zugang.
+    #[test]
+    fn alte_plan_ids_bleiben_aufloesbar_und_behalten_entitlements() {
+        for (id, expected) in [
+            ("raid_free", &[][..]),
+            ("chat_quiet", &["chat.promos.disable"][..]),
+            ("raid_boost", &["chat.lurker_tax", "raid.priority"][..]),
+            (
+                "bundle_chat_quiet_raid_boost",
+                &["chat.lurker_tax", "chat.promos.disable", "raid.priority"][..],
+            ),
+            ("analysis_dashboard", &["analytics", "chat.lurker_tax"][..]),
+            (
+                "bundle_werbefrei_analyse",
+                &["analytics", "chat.lurker_tax", "chat.promos.disable"][..],
+            ),
+            (
+                "bundle_komplett",
+                &[
+                    "analytics",
+                    "chat.lurker_tax",
+                    "chat.promos.disable",
+                    "raid.priority",
+                ][..],
+            ),
+            (
+                "bundle_analysis_raid_boost",
+                &[
+                    "analytics",
+                    "chat.lurker_tax",
+                    "chat.promos.disable",
+                    "raid.priority",
+                ][..],
+            ),
+            ("analytics_trial", &["analytics", "chat.lurker_tax"][..]),
+        ] {
+            assert!(is_known_plan_id(id), "{id} muss bekannt bleiben");
+            assert_eq!(normalize_plan_id(id), id, "{id} darf nicht wegnormalisiert werden");
+            assert_eq!(plan_entitlements(id), expected, "entitlements für {id}");
         }
     }
 

@@ -16,5 +16,6 @@ pub use catalog::{
     parse_product_id_mapping, plan_id_from_lookup_key, plan_id_from_price_id, price_id_default,
     price_id_map_from_env, product_id_default,
     product_id_map_from_env, resolved_price_id, resolved_product_id, BillingPlan, PlanPrice,
-    BILLING_PLANS, CYCLE_DISCOUNTS, PRICE_ID_DEFAULTS, PRODUCT_ID_DEFAULTS,
+    BILLING_PLANS, CYCLE_DISCOUNTS, LEGACY_PRICE_ID_PLANS, PRICE_ID_DEFAULTS,
+    PRODUCT_ID_DEFAULTS, TAX_NOTICE,
 };

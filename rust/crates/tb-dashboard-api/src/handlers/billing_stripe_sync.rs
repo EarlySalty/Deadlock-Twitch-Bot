@@ -45,7 +45,8 @@ use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, is_paid_plan_id, price_id_default, product_id_default,
+    catalog_json, is_paid_plan_id, price_id_map_from_env, product_id_map_from_env, resolved_price_id,
+    resolved_product_id,
 };
 
 use crate::auth::level::DashboardAuthLevel;
@@ -93,6 +94,10 @@ pub async fn sync_products_handler(
     // P2.114: ID-Maps für den Response-Payload akkumulieren.
     let mut product_id_map: Map<String, Value> = Map::new();
     let mut price_id_map: Map<String, Value> = Map::new();
+    // Bereits hinterlegte IDs (Vault-Map über eingecheckten Defaults). Ohne sie
+    // legt ein zweiter Sync-Lauf dieselben Produkte und Preise erneut an.
+    let price_vault = price_id_map_from_env();
+    let product_vault = product_id_map_from_env();
 
     // Bezahlte Pläne aus dem 1-Monats-Katalog (Plan-Stammdaten sind zyklus-stabil).
     let base_catalog = catalog_json(1);
@@ -120,7 +125,7 @@ pub async fn sync_products_handler(
         //    gezählt → der Create-Pfad legt neu an (Self-Heal). Ein transienter 5xx
         //    killt den Sync NICHT (Python schluckt jede Exception).
         //    dry_run: kein Stripe-Call, Default gilt unverifiziert als reused.
-        let mut product_id = product_id_default(plan_id).unwrap_or("").to_string();
+        let mut product_id = resolved_product_id(plan_id, &product_vault).unwrap_or_default();
         if !product_id.is_empty() && !dry_run {
             if let Some(client) = client.as_ref() {
                 match client.retrieve_product(&product_id).await {
@@ -179,17 +184,19 @@ pub async fn sync_products_handler(
         let mut price_reports: Vec<Value> = Vec::new();
         for &cycle in SYNC_CYCLES.iter() {
             let cycle_catalog = catalog_json(cycle);
-            let amount_cents = cycle_plan_total_net_cents(&cycle_catalog, plan_id);
+            let amount_cents = cycle_plan_total_gross_cents(&cycle_catalog, plan_id);
             if amount_cents <= 0 {
                 continue;
             }
-            let lookup_key = format!("deadlock_{plan_id}_{cycle}m_net_v2");
+            // Ein Lookup-Key, eine Quelle: der Katalog. Ein hier zweitgeschriebenes
+            // Format driftet beim nächsten Suffix-Wechsel auseinander.
+            let lookup_key = tb_analytics::billing::lookup_key(plan_id, cycle);
 
             // 1) Eingecheckter Price-Default → gegen Stripe verifizieren (P2.113).
             //    Live: retrieve_price; schlägt er fehl (gelöscht/ungültig), wird die
             //    ID verworfen und NICHT als reused gezählt → Lookup/Create heilt.
             //    dry_run: kein Stripe-Call, Default gilt unverifiziert als reused.
-            let mut price_id = price_id_default(plan_id, cycle).unwrap_or("").to_string();
+            let mut price_id = resolved_price_id(plan_id, cycle, &price_vault).unwrap_or_default();
             let mut price_status = "missing";
             if !price_id.is_empty() {
                 if dry_run {
@@ -274,7 +281,7 @@ pub async fn sync_products_handler(
 
             price_reports.push(json!({
                 "cycle_months": cycle,
-                "amount_net_cents": amount_cents,
+                "amount_gross_cents": amount_cents,
                 "price_id": (!price_id.is_empty()).then_some(price_id),
                 "lookup_key": lookup_key,
                 "status": price_status,
@@ -319,15 +326,14 @@ pub async fn sync_products_handler(
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
-/// Liest `total_net_cents` des Plans aus dem Zyklus-Katalog (Python
-/// `cycle_plan["price"]["total_net_cents"]`).
-fn cycle_plan_total_net_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
+/// Liest den Zyklus-Endpreis (`total_gross_cents`) des Plans aus dem Katalog.
+fn cycle_plan_total_gross_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
     cycle_catalog
         .get("plans")
         .and_then(Value::as_array)
         .and_then(|plans| plans.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(plan_id)))
         .and_then(|p| p.get("price"))
-        .and_then(|price| price.get("total_net_cents"))
+        .and_then(|price| price.get("total_gross_cents"))
         .and_then(Value::as_i64)
         .unwrap_or(0)
 }
@@ -336,8 +342,8 @@ fn cycle_plan_total_net_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
 /// `_billing_stripe_readiness_payload`, identisch zu `billing_page::readiness_payload`).
 ///
 /// Keine Secrets. `checkout_ready` = Stripe-Client konfiguriert; `price_map_ready`
-/// ist per Konstruktion `true` (eingecheckte Defaults decken alle bezahlten Pläne
-/// × {1,12} ab); `webhook_ready` aus dem Vorhandensein des Webhook-Secrets.
+/// wird gegen die tatsächlich auflösbaren Price-IDs geprüft; `webhook_ready` aus
+/// dem Vorhandensein des Webhook-Secrets.
 fn readiness_payload(checkout_ready: bool) -> Value {
     let webhook_ready = std::env::var("STRIPE_WEBHOOK_SECRET")
         .ok()
@@ -348,7 +354,7 @@ fn readiness_payload(checkout_ready: bool) -> Value {
                 .filter(|v| !v.trim().is_empty())
         })
         .is_some();
-    let price_map_ready = true;
+    let price_map_ready = crate::handlers::billing_page::price_map_ready();
     json!({
         "provider": "stripe",
         "integration_state": if checkout_ready && price_map_ready { "live" } else { "planned" },
@@ -419,14 +425,27 @@ mod tests {
     }
 
     #[test]
-    fn total_net_cents_aus_katalog() {
+    fn total_gross_cents_aus_katalog() {
         let cat = catalog_json(1);
-        // raid_boost: 199 ct/Monat × 1 Monat.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "raid_boost"), 199);
-        // raid_free ist nicht bezahlt → 0.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "raid_free"), 0);
-        // Unbekannt → 0.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "gibtsnicht"), 0);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "premium"), 299);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "free"), 0);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "gibtsnicht"), 0);
+        // Jahreszyklus: eigener Betrag, nicht 12 × 299.
+        assert_eq!(cycle_plan_total_gross_cents(&catalog_json(12), "premium"), 2990);
+    }
+
+    /// Der Sync legt Preise mit dem Katalog-Lookup-Key an. Driftet er auf das
+    /// alte Netto-Format, kollidiert Milestone 8 mit den Bestandspreisen.
+    #[test]
+    fn sync_nutzt_die_neuen_lookup_keys() {
+        assert_eq!(
+            tb_analytics::billing::lookup_key("premium", 1),
+            "deadlock_premium_1m_gross_v3"
+        );
+        assert_eq!(
+            tb_analytics::billing::lookup_key("premium", 12),
+            "deadlock_premium_12m_gross_v3"
+        );
     }
 
     /// dry_run als Admin ohne Stripe-Config: erzeugt nichts, liefert pro bezahltem
