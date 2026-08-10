@@ -645,6 +645,13 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
     "com", "org", "net", "online", "site", "link",
 ];
 
+/// Ab dieser Wortzahl trägt ein Muster allein durch seine Satzlänge — beides
+/// muss zutreffen, sonst rutschen kurze Wortgruppen wie „get top views now"
+/// durch.
+const PHRASE_MIN_WORDS: usize = 4;
+/// Zweite Bedingung der Phrasen-Regel: Mindestlänge in Zeichen.
+const PHRASE_MIN_CHARS: usize = 20;
+
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
 /// werden: mindestens ein Token muss eine Domain mit distinktivem
 /// registrierbarem Namen sein („eballo.com") oder ein Nicht-Generikum mit
@@ -652,14 +659,26 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
 /// > Alltagswörter („hello") tragen kein Muster, sie würden als Learned-*
 /// > hartes Spam-Signal (+2) gegen normale Chat-Nachrichten wirken.
 ///
+/// Ausnahme ist der ganze Satz: ab [`PHRASE_MIN_WORDS`] Wörtern **und**
+/// [`PHRASE_MIN_CHARS`] Zeichen trägt die Phrase sich selbst. Anonyme Angebote
+/// („boost viewers on the stream – promotion. ru") bestehen nur aus
+/// Allerweltswörtern und wären sonst nicht lernbar — genau daran scheiterte
+/// jede Mod-Korrektur solcher Alerts (10.08.2026).
+///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
 /// generisch wie „viewers".
 ///
-/// „eballo.com" ✓ · „streamboo" ✓ · „best viewers" ✗ · „hello viewers" ✗ ·
-/// „view.ers" ✗ · „viewer.com" ✗
+/// „eballo.com" ✓ · „streamboo" ✓ · „boost viewers on the stream" ✓ ·
+/// „best viewers" ✗ · „hello viewers" ✗ · „view.ers" ✗ · „viewer.com" ✗
 pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
-    pattern.to_lowercase().split_whitespace().any(|token| {
+    let lowered = pattern.to_lowercase();
+    if lowered.split_whitespace().count() >= PHRASE_MIN_WORDS
+        && lowered.chars().count() >= PHRASE_MIN_CHARS
+    {
+        return true;
+    }
+    lowered.split_whitespace().any(|token| {
         let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
         // Gleiche Normalform wie compact() im Matching: nur Alphanumerik.
         let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
@@ -956,6 +975,31 @@ mod tests {
         assert!(is_distinctive_spam_pattern("streamboo"));
         assert!(is_distinctive_spam_pattern("best viewers eballo .com"));
         assert!(is_distinctive_spam_pattern("Ai viewers clicknex.online"));
+    }
+
+    #[test]
+    fn gate_akzeptiert_ganze_saetze_ohne_dienstnamen() {
+        // Anonyme Angebote bestehen nur aus Allerweltswörtern. Als ganzer Satz
+        // sind sie trotzdem distinktiv — ohne diese Regel lief jede
+        // Mod-Korrektur eines solchen Alerts ins Leere (10.08.2026).
+        assert!(is_distinctive_spam_pattern(
+            "Boost viewers on the stream – promotion. ru"
+        ));
+        assert!(is_distinctive_spam_pattern(
+            "cheap viewers and followers available"
+        ));
+        assert!(is_distinctive_spam_pattern(
+            "i can help you grow your channel"
+        ));
+    }
+
+    #[test]
+    fn gate_lehnt_kurze_wortgruppen_weiter_ab() {
+        // Die Phrasen-Regel darf die generischen Kurzmuster nicht aufweichen:
+        // zu wenige Wörter oder zu kurz.
+        assert!(!is_distinctive_spam_pattern("buy best viewers"));
+        assert!(!is_distinctive_spam_pattern("more real subs"));
+        assert!(!is_distinctive_spam_pattern("get top views now"));
     }
 
     #[test]
