@@ -241,28 +241,20 @@ pub async fn checkout_start_handler(
         },
     });
 
-    // Trial nur für analysis_dashboard im Monatszyklus; +2 Bonus-Monate
-    // beim Jahreszyklus (vom Webhook via subscription_data.metadata verarbeitet).
-    //
-    // Pricing-Umbau 2026-08-09: Dauer auf 14 Tage gezogen (zweite Stelle neben
-    // `tb_analytics::trial::TRIAL_DURATION_DAYS`). Der Zweig ist seit dem
-    // Katalog-Umbau praktisch tot — `analysis_dashboard` ist nicht mehr
-    // kaufbar — und wird bewusst NICHT auf `premium` erweitert: die 14 Tage
-    // gibt es im Produkt automatisch beim ersten Login plus einmal auf Wunsch,
-    // ein dritter Gratiszeitraum im Checkout widerspricht dem.
-    if plan_id == "analysis_dashboard" && cycle == 1 {
-        session_payload["subscription_data"] =
-            json!({ "trial_period_days": tb_analytics::trial::TRIAL_DURATION_DAYS });
-    }
+    // Hier stand ein 30-Tage-Stripe-Trial für `analysis_dashboard` im
+    // Monatszyklus. Der Zweig ist mit dem Katalog-Umbau unerreichbar geworden:
+    // `checkout_start_handler` bricht oben bei `find_plan(plan_id) == None` ab,
+    // und der Katalog kennt nur noch `free` und `premium`. Statt die Zahl in
+    // totem Code auf 14 zu ziehen, ist der Zweig raus. Die 14 Tage gibt es im
+    // Produkt automatisch beim ersten Login plus einmal auf Wunsch
+    // (`tb_analytics::trial`); ein dritter Gratiszeitraum im Checkout
+    // widerspricht dem.
     if cycle == 12 {
-        // Auf bestehende subscription_data mergen (für Jahreszyklus ist sie leer,
-        // da der Trial nur bei Monatszyklus greift — Python-Parität).
-        let mut sub_data = session_payload
-            .get("subscription_data")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        sub_data["metadata"] = json!({ "bonus_months": "2" });
-        session_payload["subscription_data"] = sub_data;
+        // +2 Bonus-Monate beim Jahreszyklus (vom Webhook via
+        // subscription_data.metadata verarbeitet).
+        session_payload["subscription_data"] = json!({
+            "metadata": { "bonus_months": "2" },
+        });
     }
 
     let (profile, _) =

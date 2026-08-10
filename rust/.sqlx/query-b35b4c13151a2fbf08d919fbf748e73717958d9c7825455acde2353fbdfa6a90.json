@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               GREATEST(COALESCE(trials_granted, 0), COALESCE(trial_ever_granted, 0)) AS \"used!\",\n               manual_plan_id,\n               (EXTRACT(EPOCH FROM (NOW() - first_login_at::timestamptz)) / 3600.0)::float8 AS hours_since\n           FROM streamer_plans\n           WHERE TRIM(COALESCE(twitch_user_id,'')) = $1\n              OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "manual_plan_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "hours_since",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "b35b4c13151a2fbf08d919fbf748e73717958d9c7825455acde2353fbdfa6a90"
+}

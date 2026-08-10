@@ -292,6 +292,7 @@ streamer_plans|promo_disabled|integer|NO|0
 streamer_plans|promo_message|text|YES|
 streamer_plans|raid_boost_enabled|integer|NO|0
 streamer_plans|trial_ever_granted|integer|NO|0
+streamer_plans|trials_granted|integer|NO|0
 streamer_plans|twitch_login|text|YES|
 streamer_plans|twitch_user_id|text|NO|
 tb_chat_autoban_log|account_age_days|bigint|YES|
