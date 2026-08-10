@@ -138,11 +138,26 @@ impl SessionTracker {
 
     /// Aktive Session-ID: Cache zuerst, sonst DB-Lookup (füllt den Cache).
     pub async fn active_session_id(&self, login: &str) -> Option<i64> {
+        self.active_session_id_for(login, None).await
+    }
+
+    /// Wie [`Self::active_session_id`], aber mit der stabilen Kanal-ID — die
+    /// findet die offene Session auch dann, wenn die Zeile noch den Login von
+    /// vor der Umbenennung trägt.
+    ///
+    /// Der Cache bleibt login-geschlüsselt: nach einem Rename ist der Eintrag
+    /// unter dem alten Namen ein Rest, der auf dieselbe Session-ID zeigt und
+    /// mit ihr abläuft — falsch antworten kann er nicht.
+    pub async fn active_session_id_for(
+        &self,
+        login: &str,
+        twitch_user_id: Option<&str>,
+    ) -> Option<i64> {
         let login = login.to_lowercase();
         if let Some(id) = self.cache.lock().expect("cache lock").get(&login).copied() {
             return Some(id);
         }
-        match self.store.find_open_id(&login).await {
+        match self.store.find_open_id(&login, twitch_user_id).await {
             Ok(Some(id)) => {
                 self.cache.lock().expect("cache lock").insert(login, id);
                 Some(id)
@@ -173,7 +188,7 @@ impl SessionTracker {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let mut session_id = self.active_session_id(&login).await;
+        let mut session_id = self.active_session_id_for(&login, twitch_user_id).await;
         if let Some(id) = session_id {
             let current = match self.store.stream_id_of(id).await {
                 Ok(current) => current,
@@ -184,7 +199,8 @@ impl SessionTracker {
             };
             if let (Some(current), Some(new_id)) = (current.as_deref(), stream_id) {
                 if !current.is_empty() && current != new_id {
-                    self.finalize(&login, "restarted", None, None).await;
+                    self.finalize(&login, twitch_user_id, "restarted", None, None)
+                        .await;
                     session_id = None;
                 }
             }
@@ -220,6 +236,10 @@ impl SessionTracker {
 
         let new = NewSession {
             streamer_login: login.clone(),
+            twitch_user_id: twitch_user_id
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             stream_id: stream_id.map(str::to_string),
             started_at,
             viewer_count: stream.viewer_count,
@@ -282,9 +302,13 @@ impl SessionTracker {
 
     /// Session abschließen (Python `_finalize_stream_session`).
     /// `true` = abgeschlossen, `false` = keine offene Session / Fehler.
+    /// `twitch_user_id` findet Session und Live-State auch dann, wenn die
+    /// Zeilen noch den Login von vor der Umbenennung tragen. `None` nur, wo der
+    /// Aufrufer die ID wirklich nicht hat.
     pub async fn finalize(
         &self,
         login: &str,
+        twitch_user_id: Option<&str>,
         reason: &str,
         session_id: Option<i64>,
         ended_at: Option<DateTime<Utc>>,
@@ -292,7 +316,7 @@ impl SessionTracker {
         let login = login.to_lowercase();
         let resolved = match session_id {
             Some(id) => Some(id),
-            None => self.active_session_id(&login).await,
+            None => self.active_session_id_for(&login, twitch_user_id).await,
         };
         let Some(session_id) = resolved else {
             return false;
@@ -344,14 +368,18 @@ impl SessionTracker {
             };
         let returning_chatters = (unique_chatters - first_time_chatters).max(0);
 
-        let state = match self.live_state.finalize_state(&login).await {
+        let state = match self.live_state.finalize_state(&login, twitch_user_id).await {
             Ok(state) => state,
             Err(error) => {
                 tracing::warn!(%error, login, "Konnte Live-State für Session-Abschluss nicht laden");
                 None
             }
         };
-        let twitch_user_id = state.as_ref().and_then(|s| s.twitch_user_id.clone());
+        // Die übergebene ID hat Vorrang: sie kommt aus dem Event bzw. dem
+        // Poller-Roster, der Live-State ist nur die Rückfallquelle.
+        let twitch_user_id = twitch_user_id
+            .map(str::to_string)
+            .or_else(|| state.as_ref().and_then(|s| s.twitch_user_id.clone()));
         let last_game = state.as_ref().and_then(|s| s.last_game.clone());
         let had_deadlock_state = state
             .as_ref()
@@ -466,6 +494,7 @@ impl SessionTracker {
             if self
                 .finalize(
                     &login,
+                    candidate.twitch_user_id.as_deref(),
                     reason,
                     Some(candidate.id),
                     Some(candidate.finalized_at),

@@ -586,15 +586,29 @@ impl LiveStateStore {
             .filter(|l| !l.is_empty()))
     }
 
-    /// Liest den Finalize-relevanten Zustand eines Logins.
-    pub async fn finalize_state(&self, login: &str) -> Result<Option<FinalizeState>, sqlx::Error> {
+    /// Liest den Finalize-relevanten Zustand eines Kanals — ID zuerst.
+    ///
+    /// `twitch_live_state` ist über `twitch_user_id` geschlüsselt; der
+    /// Login-Zweig bleibt nur für Zeilen, denen die ID noch fehlt.
+    pub async fn finalize_state(
+        &self,
+        login: &str,
+        twitch_user_id: Option<&str>,
+    ) -> Result<Option<FinalizeState>, sqlx::Error> {
+        let user_id = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
         sqlx::query_as!(
             FinalizeState,
             r#"
             SELECT twitch_user_id AS "twitch_user_id?", last_game, had_deadlock_in_session
-              FROM twitch_live_state WHERE streamer_login = $1
+              FROM twitch_live_state
+             WHERE twitch_user_id = $2
+                OR (streamer_login = $1
+                    AND (twitch_user_id IS NULL OR $2::text IS NULL))
+             ORDER BY (twitch_user_id = $2) DESC NULLS LAST
+             LIMIT 1
             "#,
             login,
+            user_id,
         )
         .fetch_optional(&self.pool)
         .await

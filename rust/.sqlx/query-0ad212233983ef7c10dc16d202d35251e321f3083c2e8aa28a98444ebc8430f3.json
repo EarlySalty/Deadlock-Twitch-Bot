@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH _lock AS (\n                     SELECT pg_advisory_xact_lock(hashtextextended('twitch_stream_session_id:' || $1, 0))\n                 )\n                 SELECT 1 AS \"one!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ad212233983ef7c10dc16d202d35251e321f3083c2e8aa28a98444ebc8430f3"
+}

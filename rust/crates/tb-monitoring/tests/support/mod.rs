@@ -98,6 +98,9 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         "CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY,
             streamer_login TEXT NOT NULL,
+            -- 20260802140000: stabile Kanal-ID, nullable solange der Backfill
+            -- eine Restmenge lässt (Prod 2026-08-02: 8393 von 9325 Zeilen).
+            twitch_user_id TEXT,
             stream_id TEXT,
             -- P2.38: Prod-Spalten sind TEXT (ISO), nicht TIMESTAMPTZ —
             -- Fixture spiegelt das, sonst lügt sie gegen die Baseline.
@@ -450,13 +453,19 @@ pub async fn pool_with_chatters_schema(schema: &str) -> Option<PgPool> {
         "CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY,
             streamer_login TEXT NOT NULL,
+            twitch_user_id TEXT,
             started_at TIMESTAMPTZ NOT NULL,
-            ended_at TIMESTAMPTZ
+            ended_at TIMESTAMPTZ,
+            samples INTEGER DEFAULT 0
         )",
         "CREATE TABLE twitch_raid_history (
             id BIGINT NOT NULL,
             from_broadcaster_login TEXT NOT NULL,
             to_broadcaster_login TEXT NOT NULL,
+            -- Prod hat beide IDs seit dem Baseline-Schema (sogar als
+            -- compress_segmentby) — Helix liefert sie an jedem Raid mit.
+            from_broadcaster_id TEXT,
+            to_broadcaster_id TEXT,
             viewer_count INTEGER NOT NULL DEFAULT 0,
             executed_at TIMESTAMPTZ NOT NULL
         )",

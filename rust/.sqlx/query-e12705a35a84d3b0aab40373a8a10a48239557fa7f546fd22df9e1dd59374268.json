@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT ss.id, ss.streamer_login, ss.twitch_user_id AS \"twitch_user_id?\",\n                   MAX(sv.ts_utc) AS \"finalized_at!\"\n            FROM twitch_session_viewers sv\n            JOIN twitch_stream_sessions ss ON ss.id = sv.session_id\n            WHERE ss.ended_at IS NULL\n              AND ss.samples > 0\n            GROUP BY ss.id, ss.streamer_login, ss.twitch_user_id\n            HAVING MAX(sv.ts_utc) < NOW() - INTERVAL '1 hour'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "finalized_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "e12705a35a84d3b0aab40373a8a10a48239557fa7f546fd22df9e1dd59374268"
+}
