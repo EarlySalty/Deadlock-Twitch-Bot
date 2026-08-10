@@ -78,6 +78,109 @@ async fn find_open_id_ohne_id_findet_die_umbenannte_session_nicht() {
     );
 }
 
+/// Der Kernfall reicht nicht: an derselben offenen Zeile hängen Leser, die nur
+/// den Login kennen — allen voran `tb-chat::chatter_tracking::resolve_session_id`
+/// (`WHERE streamer_login = $1 AND ended_at IS NULL`). Findet nur das
+/// Monitoring die Session über die ID und bleibt der Login stehen, verwirft der
+/// Chat im Rename-Fenster jede Nachricht still: keine `twitch_chat_messages`,
+/// keine `twitch_session_chatters`, `unique_chatters` im Finalize = 0. Vorher
+/// entstand wenigstens eine zweite Zeile unter dem neuen Namen — also war der
+/// halbe ID-Umbau schlechter als gar keiner (Merge-Kritiker 10.08.2026).
+#[tokio::test]
+async fn find_open_id_zieht_den_login_nach_und_der_chat_findet_die_session_wieder() {
+    let pool = pool_or_skip!("t_sess_id_first_nachzug");
+    let erwartet = offene_session_mit_altem_login(&pool).await;
+    let store = SessionStore::new(pool.clone());
+
+    let gefunden = store
+        .find_open_id(NEU, Some(UID))
+        .await
+        .expect("Lookup darf nicht fehlschlagen");
+    assert_eq!(gefunden, Some(erwartet), "Vorbedingung: über die ID gefunden");
+
+    // Wortgleich zu chatter_tracking::resolve_session_id.
+    let per_login: Option<i64> = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM twitch_stream_sessions \
+         WHERE streamer_login = $1 AND ended_at IS NULL \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(NEU)
+    .fetch_optional(&pool)
+    .await
+    .expect("Login-Lookup");
+
+    assert_eq!(
+        per_login,
+        Some(erwartet),
+        "nach der ID-Adoption muss der login-geschlüsselte Zwilling dieselbe \
+         Session finden — sonst schreibt der Chat ins Leere"
+    );
+}
+
+/// Dasselbe für den Adoptionszweig in `start_session`.
+#[tokio::test]
+async fn start_session_zieht_den_login_der_adoptierten_zeile_nach() {
+    let pool = pool_or_skip!("t_sess_id_first_start_nachzug");
+    let bestehend = offene_session_mit_altem_login(&pool).await;
+    let store = SessionStore::new(pool.clone());
+
+    store
+        .start_session(&NewSession {
+            streamer_login: NEU.to_string(),
+            twitch_user_id: Some(UID.to_string()),
+            stream_id: Some("42".to_string()),
+            started_at: chrono::Utc::now(),
+            viewer_count: 7,
+            followers_start: None,
+            title: "Titel".to_string(),
+            language: "de".to_string(),
+            is_mature: false,
+            tags: String::new(),
+            game_name: None,
+            had_deadlock: false,
+        })
+        .await
+        .expect("start_session darf nicht fehlschlagen");
+
+    let login: String =
+        sqlx::query_scalar::<_, String>("SELECT streamer_login FROM twitch_stream_sessions WHERE id = $1")
+            .bind(bestehend)
+            .fetch_one(&pool)
+            .await
+            .expect("Zeile lesen");
+    assert_eq!(login, NEU, "die adoptierte Zeile muss den aktuellen Login tragen");
+}
+
+/// Gegenprobe zum Nachzug: ohne Rename darf er nichts anfassen. Sonst prüfen
+/// die beiden Tests oben nur, dass irgendein UPDATE läuft.
+#[tokio::test]
+async fn ohne_rename_bleibt_der_login_unveraendert() {
+    let pool = pool_or_skip!("t_sess_id_first_kein_nachzug");
+    let id: i64 = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, started_at)
+         VALUES ($1, $2, '2026-08-01T10:00:00Z') RETURNING id",
+    )
+    .bind(NEU)
+    .bind(UID)
+    .fetch_one(&pool)
+    .await
+    .expect("Session anlegen");
+    let store = SessionStore::new(pool.clone());
+
+    store
+        .find_open_id(NEU, Some(UID))
+        .await
+        .expect("Lookup darf nicht fehlschlagen");
+
+    let login: String =
+        sqlx::query_scalar::<_, String>("SELECT streamer_login FROM twitch_stream_sessions WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("Zeile lesen");
+    assert_eq!(login, NEU);
+}
+
 /// Der Login-Pfad muss weiter tragen, solange die ID-Spalte leer ist
 /// (Backfill-Restmenge, Prod: 8393 von 9325 Zeilen haben eine ID).
 #[tokio::test]

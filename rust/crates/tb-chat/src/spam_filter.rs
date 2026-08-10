@@ -678,6 +678,15 @@ const PHRASE_MIN_CHARS: usize = 30;
 /// die Schwelle hoch oder `Learned-Phrase` aus dem Hart-Zweig, nicht ein
 /// zweites Token-Gate (das würde genau die anonymen Angebote wieder sperren).
 ///
+/// Welcher Pfad die Ausnahme wirklich erreicht: der **Mod-Pfad**
+/// (`tb-internal-api::handlers::spam_learning`, ein Mensch trägt die Phrase
+/// ein). Auf dem **Judge-Pfad** greift sie kaum — der v3-Prompt verlangt für
+/// genau diese anonymen Angebote `pattern = null`, und
+/// `scam_pitch::persist_spam_learning` steigt bei `None` sofort aus. Das ist so
+/// gewollt: ein Judge-Fehlurteil würde hier ohne Menschen im Loop zu einem
+/// dauerhaften harten Signal über alle Kanäle. Wer den Prompt lockert, damit er
+/// auch anonyme Phrasen liefert, muss vorher einen Menschen dazwischenschalten.
+///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
 /// generisch wie „viewers".

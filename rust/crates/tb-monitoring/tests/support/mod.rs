@@ -368,7 +368,12 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
 /// - `twitch_session_chatters` mit voller Spaltenliste + `PK(session_id, chatter_login)`
 /// - `twitch_chatter_rollup` mit `timestamptz`-Timestamps + `PK(streamer_login, chatter_login)`
 /// - `twitch_viewer_presence_ticks` mit `PK(session_id, viewer_login, tick_at)`
-/// - `twitch_stream_sessions` mit `started_at`/`ended_at` als `TIMESTAMPTZ` (Prod!)
+/// - `twitch_stream_sessions` mit `started_at`/`ended_at` als `TIMESTAMPTZ` —
+///   das ist **nicht** die Prod-Form (die ist TEXT, Baseline-Schema Z. 1464),
+///   sondern der Gegenpol zu [`pool_in_schema`]: der Produktivcode bindet über
+///   `$n::text::timestamptz` und liest über `::text`, also muss er unter beiden
+///   Spaltentypen laufen. Zwei Fixtures, zwei Typen, ein Vertrag — wer hier
+///   angleicht, verliert genau diesen Nachweis.
 /// - `twitch_raid_history` + `twitch_raid_retention` (`target_session_id int4`)
 /// - `twitch_live_state` + `twitch_streamers_partner_state` für den Roster-Join.
 #[allow(dead_code)]

@@ -40,7 +40,7 @@ class TestKollaps:
     def test_schlagartiger_einbruch_wird_erkannt(self):
         """49 → 3 in einer Minute. Ein Publikum kann das nicht, ein Prozess schon."""
         curve = plateau(0, 40, 49) + [(40, 3)] + plateau(41, 60, 3)
-        got = vd.scan_viewers([session(1, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(1, 0, curve)], [])
         kollaps = [f for f in got if f.kind == "kollaps"]
         assert len(kollaps) == 1
         assert "49 → 3" in kollaps[0].detail
@@ -48,52 +48,52 @@ class TestKollaps:
     def test_langsames_abwandern_ist_kein_befund(self):
         """Dieselbe Spanne 49 → 3, aber über 46 Minuten verteilt: normales Ende."""
         curve = [(m, max(3, 49 - m)) for m in range(0, 60)]
-        got = vd.scan_viewers([session(2, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(2, 0, curve)], [])
         assert [f for f in got if f.kind == "kollaps"] == []
 
     def test_kleiner_absoluter_ruecksprung_ist_kein_befund(self):
         """Von 8 auf 2 ist prozentual dramatisch, absolut aber Rauschen kleiner Kanäle."""
         curve = plateau(0, 30, 8) + [(30, 2)] + plateau(31, 60, 2)
-        got = vd.scan_viewers([session(3, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(3, 0, curve)], [])
         assert [f for f in got if f.kind == "kollaps"] == []
 
     def test_abfall_am_streamende_ist_kein_befund(self):
         """Beim Beenden gehen alle gleichzeitig — das ist der Normalfall, kein Bot."""
         curve = plateau(0, 59, 40) + [(59, 1)]
-        got = vd.scan_viewers([session(4, 0, curve, duration_min=60)], [], "x")
+        got = vd.scan_viewers([session(4, 0, curve, duration_min=60)], [])
         assert [f for f in got if f.kind == "kollaps"] == []
 
 
 class TestEinspeisung:
     def test_sprung_ohne_raid_wird_erkannt(self):
         curve = plateau(0, 30, 16) + plateau(30, 60, 62)
-        got = vd.scan_viewers([session(5, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(5, 0, curve)], [])
         assert [f.kind for f in got if f.kind == "einspeisung"] == ["einspeisung"]
 
     def test_sprung_mit_raid_wird_unterdrueckt(self):
         """Ein Raid bringt legitim 46 Zuschauer auf einmal."""
         curve = plateau(0, 30, 16) + plateau(30, 60, 62)
         raid = T0 + timedelta(minutes=30)
-        got = vd.scan_viewers([session(6, 0, curve)], [raid], "x")
+        got = vd.scan_viewers([session(6, 0, curve)], [raid])
         assert [f for f in got if f.kind == "einspeisung"] == []
 
     def test_startphase_wird_unterdrueckt(self):
         """In den ersten Minuten trudelt das Stammpublikum ein — immer ein Sprung."""
         curve = [(0, 1), (1, 3), (2, 30)] + plateau(3, 60, 30)
-        got = vd.scan_viewers([session(7, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(7, 0, curve)], [])
         assert got == []
 
     def test_zulauf_auf_kleiner_basis_ist_kein_befund(self):
         """2 → 28 ist prozentual gewaltig, aber bei zwei Zuschauern erklärt das schon
         ein geteilter Link. Erst ein etabliertes Publikum macht den Sprung auffällig."""
         curve = plateau(0, 20, 2) + plateau(20, 60, 28)
-        got = vd.scan_viewers([session(8, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(8, 0, curve)], [])
         assert [f for f in got if f.kind == "einspeisung"] == []
 
     def test_kleiner_relativer_zuwachs_auf_hohem_niveau_ist_rauschen(self):
         """+12 auf 104 sind 12 % — die Zuschauerzahl der API schwankt so."""
         curve = plateau(0, 30, 104) + plateau(30, 60, 116)
-        got = vd.scan_viewers([session(9, 0, curve)], [], "x")
+        got = vd.scan_viewers([session(9, 0, curve)], [])
         assert [f for f in got if f.kind == "einspeisung"] == []
 
 
@@ -114,9 +114,7 @@ class TestFortsetzung:
         assert zweite.continuation_of is None
 
     def test_fortsetzung_wird_nicht_auf_einspeisung_geprueft(self):
-        """Die Methodenbox des Reports nennt Fortsetzungen als ausgeschlossen.
-        Ohne den Ausschluss in scan_viewers behauptet der Bericht einen
-        Prüfumfang, den er nicht hat (Merge-Kritiker 10.08.2026)."""
+        """Der Zuwachs einer Fortsetzung ist zurückkehrendes Publikum."""
         erste = session(14, 0, plateau(0, 60, 93), duration_min=60)
         # Sprung, den scan_viewers ohne den Ausschluss als Einspeisung meldet.
         sprung = plateau(0, 20, 40) + plateau(20, 60, 400)
@@ -124,12 +122,25 @@ class TestFortsetzung:
         vd.markiere_fortsetzungen([erste, zweite])
         assert zweite.continuation_of == erste.id, "Vorbedingung: markiert"
 
-        befunde = vd.scan_viewers([erste, zweite], [], "x")
-        assert [f for f in befunde if f.session_id == 15] == []
+        befunde = vd.scan_viewers([erste, zweite], [])
+        assert [f for f in befunde if f.session_id == 15 and f.kind == "einspeisung"] == []
         # Gegenprobe: dieselbe Kurve ohne Fortsetzungs-Markierung schlägt an,
         # sonst prüft der Test nur eine Kurve, die ohnehin nichts auslöst.
         allein = session(16, 200, sprung, duration_min=60)
-        assert [f for f in vd.scan_viewers([allein], [], "x") if f.kind == "einspeisung"]
+        assert [f for f in vd.scan_viewers([allein], []) if f.kind == "einspeisung"]
+
+    def test_fortsetzung_wird_weiter_auf_kollaps_geprueft(self):
+        """Der Ausschluss gilt nur dem Zustrom. Eine Fortsetzung ganz zu
+        überspringen und sie danach als 'unauffällig' auszuweisen, behauptet
+        einen Prüfumfang, den der Bericht nicht hat (Merge-Kritiker 10.08.2026)."""
+        erste = session(17, 0, plateau(0, 60, 93), duration_min=60)
+        einbruch = plateau(0, 40, 60) + [(40, 4)] + plateau(41, 60, 4)
+        zweite = session(18, 62, einbruch, duration_min=60)
+        vd.markiere_fortsetzungen([erste, zweite])
+        assert zweite.continuation_of == erste.id, "Vorbedingung: markiert"
+
+        befunde = vd.scan_viewers([erste, zweite], [])
+        assert [f.kind for f in befunde if f.session_id == 18] == ["kollaps"]
 
 
 class TestChatTakt:

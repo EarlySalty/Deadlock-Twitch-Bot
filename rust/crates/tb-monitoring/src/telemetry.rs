@@ -69,7 +69,10 @@ impl TelemetryStore {
         self
     }
 
-    /// Aktive Session über den Live-State (Sessions tragen keine user_id).
+    /// Aktive Session über den Live-State — der ist über `twitch_user_id`
+    /// geschlüsselt (PK) und damit die direkte Auflösung. `twitch_user_id` in
+    /// `twitch_stream_sessions` existiert seit 20260802140000, ist aber
+    /// nullable, solange der Backfill eine Restmenge lässt.
     async fn session_id_for(&self, broadcaster_user_id: &str) -> Option<i64> {
         sqlx::query_scalar!(
             "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",

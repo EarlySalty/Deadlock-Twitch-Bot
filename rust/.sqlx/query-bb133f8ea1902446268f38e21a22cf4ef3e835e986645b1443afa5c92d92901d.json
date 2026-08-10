@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH treffer AS (\n                SELECT id, streamer_login FROM twitch_stream_sessions\n                  WHERE ended_at IS NULL\n                    AND (twitch_user_id = $2\n                         OR (streamer_login = $1\n                             AND (twitch_user_id IS NULL OR $2::text IS NULL)))\n                  ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC\n                  LIMIT 1\n            ), nachzug AS (\n                UPDATE twitch_stream_sessions s SET streamer_login = $1\n                  FROM treffer\n                 WHERE s.id = treffer.id AND treffer.streamer_login <> $1\n            )\n            SELECT id AS \"id!\" FROM treffer\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bb133f8ea1902446268f38e21a22cf4ef3e835e986645b1443afa5c92d92901d"
+}

@@ -17,6 +17,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use tracing::warn;
 
 use super::metrics::ViewerSample;
 use crate::stream::{iso_seconds, parse_dt_utc};
@@ -134,13 +135,23 @@ impl SessionStore {
         .await
     }
 
-    /// Jüngste offene Session eines Kanals — ID zuerst, Login als Rückfall.
+    /// Jüngste offene Session eines Kanals — ID zuerst, Login als Rückfall,
+    /// und der Login wird beim Treffer sofort auf den aktuellen Stand gezogen.
     ///
     /// Die ID trägt über eine Umbenennung hinweg: die Zeile behält bis zum
     /// Nachzug in `streamer_login::rename_streamer_login` den alten Login, und
     /// genau in diesem Fenster legte der reine Login-Lookup eine zweite Session
     /// an. Der Login-Zweig bleibt, solange der Backfill eine Restmenge ohne ID
     /// lässt (Prod 2026-08-02: 8393 von 9325 Zeilen).
+    ///
+    /// Der Nachzug ist der Grund, warum die Funktion schreibt: an derselben
+    /// offenen Zeile hängen mehrere Leser, die **nur** den Login kennen — allen
+    /// voran `tb-chat::chatter_tracking::resolve_session_id`
+    /// (`WHERE streamer_login = $1 AND ended_at IS NULL`). Ohne den Nachzug
+    /// findet der Chat im Rename-Fenster gar keine Session mehr und verwirft
+    /// jede Nachricht still; vorher entstand wenigstens noch eine zweite Zeile
+    /// unter dem neuen Namen. Ein Rename ist selten, deshalb ist der Fall der
+    /// leere Zweig: das `UPDATE` läuft nur bei tatsächlich abweichendem Login.
     pub async fn find_open_id(
         &self,
         login: &str,
@@ -148,13 +159,22 @@ impl SessionStore {
     ) -> Result<Option<i64>, sqlx::Error> {
         let user_id = super::echte_twitch_user_id(twitch_user_id);
         sqlx::query_scalar!(
-            "SELECT id FROM twitch_stream_sessions
-              WHERE ended_at IS NULL
-                AND (twitch_user_id = $2
-                     OR (streamer_login = $1
-                         AND (twitch_user_id IS NULL OR $2::text IS NULL)))
-              ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
-              LIMIT 1",
+            r#"
+            WITH treffer AS (
+                SELECT id, streamer_login FROM twitch_stream_sessions
+                  WHERE ended_at IS NULL
+                    AND (twitch_user_id = $2
+                         OR (streamer_login = $1
+                             AND (twitch_user_id IS NULL OR $2::text IS NULL)))
+                  ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
+                  LIMIT 1
+            ), nachzug AS (
+                UPDATE twitch_stream_sessions s SET streamer_login = $1
+                  FROM treffer
+                 WHERE s.id = treffer.id AND treffer.streamer_login <> $1
+            )
+            SELECT id AS "id!" FROM treffer
+            "#,
             login,
             user_id,
         )
@@ -183,11 +203,7 @@ impl SessionStore {
     /// desselben Kanals aneinander vorbeilaufen, nur der ID-Lock lässt einen
     /// Aufrufer ohne ID vorbei. Erst zusammen decken sie die Übergangszeit ab.
     pub async fn start_session(&self, new: &NewSession) -> Result<StartOutcome, sqlx::Error> {
-        let user_id = new
-            .twitch_user_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let user_id = super::echte_twitch_user_id(new.twitch_user_id.as_deref());
         let mut tx = self.pool.begin().await?;
         sqlx::query!(
             "WITH _lock AS (
@@ -209,14 +225,26 @@ impl SessionStore {
             .fetch_one(&mut *tx)
             .await?;
         }
+        // Identisch zu `find_open_id`, inklusive Login-Nachzug: adoptiert die
+        // Zeile über die ID, muss der Login mitgezogen werden, sonst finden die
+        // login-geschlüsselten Leser (Chat) die offene Session nicht mehr.
         let existing: Option<i64> = sqlx::query_scalar!(
-            "SELECT id FROM twitch_stream_sessions
-              WHERE ended_at IS NULL
-                AND (twitch_user_id = $2
-                     OR (streamer_login = $1
-                         AND (twitch_user_id IS NULL OR $2::text IS NULL)))
-              ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
-              LIMIT 1",
+            r#"
+            WITH treffer AS (
+                SELECT id, streamer_login FROM twitch_stream_sessions
+                  WHERE ended_at IS NULL
+                    AND (twitch_user_id = $2
+                         OR (streamer_login = $1
+                             AND (twitch_user_id IS NULL OR $2::text IS NULL)))
+                  ORDER BY (twitch_user_id = $2) DESC NULLS LAST, started_at DESC
+                  LIMIT 1
+            ), nachzug AS (
+                UPDATE twitch_stream_sessions s SET streamer_login = $1
+                  FROM treffer
+                 WHERE s.id = treffer.id AND treffer.streamer_login <> $1
+            )
+            SELECT id AS "id!" FROM treffer
+            "#,
             &new.streamer_login,
             user_id,
         )
@@ -254,7 +282,7 @@ impl SessionStore {
         .await?;
         // twitch_live_state ist über twitch_user_id geschlüsselt (PK); der
         // Login-Zweig bleibt nur für Zeilen ohne ID.
-        sqlx::query!(
+        let live_state_rows = sqlx::query!(
             "UPDATE twitch_live_state SET active_session_id = $1
               WHERE twitch_user_id = $3
                  OR (streamer_login = $2
@@ -264,7 +292,19 @@ impl SessionStore {
             user_id,
         )
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        // Trifft das UPDATE keine Zeile, bleibt `active_session_id` leer und
+        // jeder Leser, der die laufende Session über den Live-State auflöst,
+        // sieht den Kanal als nicht live — ohne Fehler irgendwo. Der Fall ist
+        // erwartbar (Kanal noch nie im Live-State), aber nicht folgenlos.
+        if live_state_rows == 0 {
+            warn!(
+                channel = %new.streamer_login,
+                session_id,
+                "twitch_live_state ohne passende Zeile — active_session_id bleibt leer"
+            );
+        }
         tx.commit().await?;
         Ok(StartOutcome::Created(session_id))
     }

@@ -116,7 +116,7 @@ def main() -> int:
             """
             SELECT chatter_login, count(DISTINCT session_id), sum(COALESCE(messages, 0)),
                    min(COALESCE(first_message_at, last_seen_at))::date
-            FROM twitch_session_chatters WHERE streamer_login ILIKE %s
+            FROM twitch_session_chatters WHERE lower(streamer_login) = %s
             GROUP BY 1 HAVING count(DISTINCT session_id) >= %s
             """,
             (login, args.min_sessions),

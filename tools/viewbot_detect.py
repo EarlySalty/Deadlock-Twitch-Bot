@@ -110,7 +110,7 @@ def load_sessions(conn: psycopg.Connection, login: str) -> list[Session]:
             SELECT id, started_at, ended_at, COALESCE(duration_seconds, 0) / 60,
                    COALESCE(peak_viewers, 0), COALESCE(avg_viewers, 0), stream_title
             FROM twitch_stream_sessions
-            WHERE streamer_login ILIKE %s
+            WHERE lower(streamer_login) = %s
             ORDER BY started_at
             """,
             (login,),
@@ -126,7 +126,7 @@ def load_sessions(conn: psycopg.Connection, login: str) -> list[Session]:
             SELECT v.session_id, v.ts_utc, v.viewer_count
             FROM twitch_session_viewers v
             JOIN twitch_stream_sessions s ON s.id = v.session_id
-            WHERE s.streamer_login ILIKE %s
+            WHERE lower(s.streamer_login) = %s
             ORDER BY v.session_id, v.ts_utc
             """,
             (login,),
@@ -143,8 +143,8 @@ def markiere_fortsetzungen(sessions: list[Session]) -> None:
     """Markiert jede Session, die kurz nach der vorigen beginnt.
 
     Sonst liest sich jeder Werbe- oder Absturz-Neustart als Einspeisung: Twitch
-    vergibt eine neue Session-ID, das Publikum bleibt. `scan_viewers` überspringt
-    die Markierten.
+    vergibt eine neue Session-ID, das Publikum bleibt. `scan_viewers` wertet in
+    den Markierten keinen Zuwachs, prüft sie aber weiter auf Einbrüche.
     """
     for prev, cur_s in zip(sessions, sessions[1:]):
         prev_end = prev.ended_at or (prev.started_at + timedelta(minutes=prev.duration_min))
@@ -156,7 +156,7 @@ def load_raids(conn: psycopg.Connection, login: str) -> list[datetime]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT executed_at FROM twitch_raid_history "
-            "WHERE to_broadcaster_login ILIKE %s AND success ORDER BY executed_at",
+            "WHERE lower(to_broadcaster_login) = %s AND success ORDER BY executed_at",
             (login,),
         )
         return [r[0] for r in cur.fetchall()]
@@ -166,7 +166,7 @@ def load_messages(conn: psycopg.Connection, login: str) -> list[tuple[datetime, 
     with conn.cursor() as cur:
         cur.execute(
             "SELECT message_ts, chatter_login, COALESCE(content, '') "
-            "FROM twitch_chat_messages WHERE streamer_login ILIKE %s ORDER BY message_ts",
+            "FROM twitch_chat_messages WHERE lower(streamer_login) = %s ORDER BY message_ts",
             (login,),
         )
         return [(r[0], (r[1] or "").lower(), r[2]) for r in cur.fetchall()]
@@ -176,17 +176,18 @@ def near_raid(ts: datetime, raids: list[datetime]) -> bool:
     return any(abs(ts - r) <= RAID_GRACE for r in raids)
 
 
-def scan_viewers(sessions: list[Session], raids: list[datetime], login: str) -> list[Finding]:
+def scan_viewers(sessions: list[Session], raids: list[datetime]) -> list[Finding]:
     """Sucht Sprünge, die kein Publikum erzeugen kann."""
     out: list[Finding] = []
     for s in sessions:
         if len(s.samples) < 10:
             continue
         # Fortsetzung eines Neustarts: das Publikum der Vorsession ist noch da,
-        # jeder Anstieg darin ist Rückkehr, keine Einspeisung. Die Methodenbox
-        # des Reports nennt diesen Ausschluss — er muss hier auch stattfinden.
-        if s.continuation_of is not None:
-            continue
+        # jede Rückkehr sähe sonst wie eine Einspeisung aus. Der Ausschluss gilt
+        # deshalb nur für den Zustrom — ein Einbruch bleibt ein Einbruch, egal
+        # woher das Publikum kam, und eine übersprungene Session als "geprüft"
+        # zu zählen wäre eine Umfangsbehauptung ohne Deckung.
+        zustrom_erklaert = s.continuation_of is not None
         end = s.ended_at or (s.started_at + timedelta(minutes=s.duration_min))
         for (t0, v0), (t1, v1) in zip(s.samples, s.samples[1:]):
             dt = t1 - t0
@@ -204,7 +205,8 @@ def scan_viewers(sessions: list[Session], raids: list[datetime], login: str) -> 
                     f"({delta}, {100 * -delta / v0:.0f} %)",
                     "hoch",
                 ))
-            elif (delta >= INJECT_MIN_ABS and dt <= INJECT_WINDOW
+            elif (not zustrom_erklaert
+                  and delta >= INJECT_MIN_ABS and dt <= INJECT_WINDOW
                   and v0 >= INJECT_MIN_BASE
                   and delta / v0 >= INJECT_MIN_FRAC):
                 out.append(Finding(
@@ -455,10 +457,10 @@ erstellt {datetime.now():%d.%m.%Y %H:%M}</p>
     einer Session wird dabei so lange das Konto entfernt, dessen Wegfall die
     Streuung senkt — übrig bleiben nur die Konten, die gemeinsam den Takt bilden.</li>
 <li><b>Ausgeschlossen:</b> die ersten {int(SESSION_WARMUP.total_seconds() // 60)} Minuten jeder
-    Session, die letzten zwei Minuten vor Streamende, Sessions die innerhalb von
-    {int(CONTINUATION_GAP.total_seconds() // 60)} Minuten an die vorige anschließen
-    (Twitch vergibt beim Neustart eine neue Session, das Publikum bleibt), sowie
-    alle bestätigten Raids.</li>
+    Session, die letzten zwei Minuten vor Streamende sowie alle bestätigten Raids.
+    In Sessions, die innerhalb von {int(CONTINUATION_GAP.total_seconds() // 60)} Minuten an die
+    vorige anschließen, zählt zusätzlich kein Zuwachs (Twitch vergibt beim Neustart eine
+    neue Session, das Publikum bleibt) — auf Einbrüche werden auch sie geprüft.</li>
 </ul></div>
 </body></html>"""
 
@@ -479,7 +481,7 @@ def main() -> int:
         raids = load_raids(conn, login)
         messages = load_messages(conn, login)
 
-    viewer_findings = scan_viewers(sessions, raids, login)
+    viewer_findings = scan_viewers(sessions, raids)
     chat_findings, accounts = scan_cadence(messages, sessions, login)
     findings = sorted(viewer_findings + chat_findings, key=lambda f: f.at)
 

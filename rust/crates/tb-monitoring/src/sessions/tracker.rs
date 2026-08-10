@@ -145,9 +145,10 @@ impl SessionTracker {
     /// findet die offene Session auch dann, wenn die Zeile noch den Login von
     /// vor der Umbenennung trägt.
     ///
-    /// Der Cache bleibt login-geschlüsselt: nach einem Rename ist der Eintrag
-    /// unter dem alten Namen ein Rest, der auf dieselbe Session-ID zeigt und
-    /// mit ihr abläuft — falsch antworten kann er nicht.
+    /// Der Cache bleibt login-geschlüsselt: nach einem Rename zeigt der Eintrag
+    /// unter dem alten Namen auf dieselbe Session-ID und wird beim Finalize mit
+    /// ihr geräumt (`drop_cached` räumt nach Wert). Bis dahin kann er nur die
+    /// noch laufende Session desselben Kanals liefern.
     pub async fn active_session_id_for(
         &self,
         login: &str,
@@ -323,7 +324,7 @@ impl SessionTracker {
         let source = match self.store.finalize_source(session_id).await {
             Ok(Some(source)) => source,
             Ok(None) => {
-                self.drop_cached(&login, session_id);
+                self.drop_cached(session_id);
                 return false;
             }
             Err(error) => {
@@ -435,7 +436,7 @@ impl SessionTracker {
                 // Doppel-Finalize-Race: anderer Pfad war schneller —
                 // Kennzahlen nicht überschreiben, nur Cache aufräumen.
                 tracing::debug!(login, session_id, "Session bereits abgeschlossen");
-                self.drop_cached(&login, session_id);
+                self.drop_cached(session_id);
                 return false;
             }
             Err(error) => {
@@ -444,7 +445,7 @@ impl SessionTracker {
             }
         }
 
-        self.drop_cached(&login, session_id);
+        self.drop_cached(session_id);
 
         // Partner-Raid-Score-Tracking auflösen (B7 raid-scores-tracking-1):
         // sonst bleiben Deadlock-Raid-Zeilen dauerhaft offen (resolved_at NULL).
@@ -504,10 +505,13 @@ impl SessionTracker {
         closed
     }
 
-    fn drop_cached(&self, login: &str, session_id: i64) {
+    /// Räumt die finalisierte Session aus dem Cache — nach **Wert**, nicht nach
+    /// Schlüssel. Nach einer Umbenennung steht dieselbe ID unter altem und
+    /// neuem Login; bliebe der alte Eintrag stehen, zeigte er auf eine
+    /// geschlossene Session, und übernähme ein anderer Kanal den freigewordenen
+    /// Namen, bekäme dessen Anfrage die fremde Session-ID zurück.
+    fn drop_cached(&self, session_id: i64) {
         let mut cache = self.cache.lock().expect("cache lock");
-        if cache.get(login).copied() == Some(session_id) {
-            cache.remove(login);
-        }
+        cache.retain(|_, id| *id != session_id);
     }
 }

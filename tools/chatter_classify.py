@@ -212,7 +212,7 @@ def main() -> int:
         cur.execute(
             "SELECT lower(chatter_login), count(DISTINCT session_id), "
             "       sum(COALESCE(messages, 0)) "
-            "FROM twitch_session_chatters WHERE streamer_login ILIKE %s "
+            "FROM twitch_session_chatters WHERE lower(streamer_login) = %s "
             "  AND chatter_login IS NOT NULL GROUP BY 1",
             (login,),
         )
@@ -232,7 +232,7 @@ def main() -> int:
         folger = {r[0] for r in cur.fetchall()}
         cur.execute(
             "SELECT message_ts, lower(chatter_login), session_id FROM twitch_chat_messages "
-            "WHERE streamer_login ILIKE %s ORDER BY message_ts", (login,))
+            "WHERE lower(streamer_login) = %s ORDER BY message_ts", (login,))
         nachrichten = cur.fetchall()
 
     users = fetch_users(alle, cid, app_token(cid, secret))

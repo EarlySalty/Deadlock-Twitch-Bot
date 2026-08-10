@@ -193,6 +193,13 @@ async fn window_count(
 /// COUNT(DISTINCT chatter_login) der Ziel-Chatter ab `executed_at` (KEINE
 /// Obergrenze, Python-Parität), die bereits vor dem Raid im **Rollup des
 /// FROM-Streamers** standen (`first_seen_at < executed_at`).
+///
+/// Bleibt login-basiert, anders als die Zielseite in [`compute_one`]: gejoint
+/// wird gegen `twitch_chatter_rollup`, und die Tabelle führt keine
+/// Streamer-ID-Spalte — `raid.from_broadcaster_id` hilft hier also nicht, es
+/// gibt nichts, wogegen man sie binden könnte. Folge: ein umbenannter
+/// Quellkanal liefert still `0`. Der Weg dahin (Spalte, Backfill, Prädikat)
+/// steht in `docs/rename-audit.md` als Offen-Punkt 4.
 async fn count_known_from_raider(
     pool: &PgPool,
     target_session_id: i64,
