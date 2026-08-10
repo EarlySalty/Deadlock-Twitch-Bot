@@ -249,13 +249,13 @@ pub async fn checkout_start_handler(
     // Produkt automatisch beim ersten Login plus einmal auf Wunsch
     // (`tb_analytics::trial`); ein dritter Gratiszeitraum im Checkout
     // widerspricht dem.
-    if cycle == 12 {
-        // +2 Bonus-Monate beim Jahreszyklus (vom Webhook via
-        // subscription_data.metadata verarbeitet).
-        session_payload["subscription_data"] = json!({
-            "metadata": { "bonus_months": "2" },
-        });
-    }
+    // Hier hingen +2 Bonus-Monate am Jahreszyklus. Das passte zum alten
+    // Jahrespreis (12 × Monatspreis, Rabatt 0 Prozent): bezahlt wurden zwölf
+    // Monate, gutgeschrieben vierzehn. Der neue Jahrespreis ist 2990 statt
+    // 12 × 299 = 3588, die zwei Gratismonate stecken also schon im Betrag.
+    // Mit dem Bonus obendrauf zahlte ein Jahreskunde zehn Monate und bekaeme
+    // vierzehn. `webhook_apply` liest `bonus_months` weiter aus der
+    // Subscription-Metadata, damit Altabos ihre Verlaengerung behalten.
 
     let (profile, _) =
         crate::handlers::billing_profile::resolve_profile(&pool, &auth, Some(&config), None).await;
