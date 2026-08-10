@@ -25,7 +25,7 @@ function resolveHref(key: string): string {
   }
 }
 
-/** Drei Stufen statt acht Plaene, die empfohlene in der Mitte. */
+/** Zwei Stufen: Free und Premium, die empfohlene rechts. */
 export function PricingSection() {
   return (
     <ProtocolSection
@@ -34,7 +34,7 @@ export function PricingSection() {
       headline="Kostenlos bleibt kostenlos."
       intro="Das Netzwerk und der Schutz kosten nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht. Bezahlt wird nur, was Rechenzeit oder Bevorzugung verbraucht."
     >
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="mx-auto grid max-w-4xl gap-6 lg:grid-cols-2">
         {plans.map((plan, i) => (
           <motion.div
             key={plan.id}
