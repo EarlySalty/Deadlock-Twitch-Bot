@@ -34,15 +34,17 @@ Zwei Korrekturen am Bild oben, beide gemessen statt geschätzt:
 - **Backfill der drei Millionen-Tabellen ist auf Prod gelaufen.** Der Skriptkommentar lag falsch: nicht nur `twitch_viewer_presence_ticks` ist komprimiert, sondern alle drei (41/43, 41/43, 16/18 Chunks). Die implizite Dekompression trägt den Lauf **nicht** — er brach beim ersten Login von `twitch_stats_category` an `timescaledb.max_tuples_decompressed_per_dml_transaction` (Prod: 100000, gilt pro Transaktion = pro Login) ab. Lösung: alle Chunks vorher explizit dekomprimieren, die Compression-Policies (Jobs 1001/1002/1021, 12 h) holen den Zustand selbst nach. Ergebnis: `twitch_viewer_presence_ticks` 3.115.688/3.158.530 (98,6 %), `twitch_stats_tracked` 3.400.030/3.609.540 (94,2 %), `twitch_stats_category` 3.546.640/8.642.479 (41,0 %). Die 5,1 Mio Restzeilen in `stats_category` sind Scraper-Daten fremder Streamer und bleiben unauflösbar — das ist kein Fehlschlag, sondern der erwartete Anteil. Stichprobe gegen `twitch_streamer_identities`: 0 falsch zugeordnete IDs.
 - **Session-Pfad ID-first** (`sessions/store.rs`, `sessions/tracker.rs`): `find_open_id` und die Existenzprüfung in `start_session` lösen über `twitch_user_id` auf. `NewSession` trägt die ID und der Insert schreibt sie selbst — für `twitch_stream_sessions` ist Punkt 4 damit erledigt. Der Advisory-Lock greift über **beide** Schlüssel (erst Login, dann ID): nur über den Login laufen alter und neuer Name aneinander vorbei, nur über die ID läuft ein Aufrufer ohne ID vorbei.
 - **Session-Abschluss ID-first**: `finalize` nimmt die ID als Parameter (EventSub `broadcaster_id`, Poller-Roster) und gibt ihr Vorrang vor dem Live-State. `LiveStateStore::finalize_state` liest ID-first — `twitch_live_state` ist über `twitch_user_id` geschlüsselt, der Login-Lookup traf nach einem Rename gar nichts. `OrphanCandidate` trägt die ID aus der Session-Zeile.
-- **Raid-Retention ID-first**: `twitch_raid_history` führt `to_broadcaster_id` (auf Prod der Kompressions-Segmentschlüssel), der Code las nur die Logins. Ein umbenanntes Ziel fiel als `SkippedNoSession` heraus.
+- **Raid-Retention ID-first, Zielseite**: `twitch_raid_history` führt `to_broadcaster_id` (auf Prod der Kompressions-Segmentschlüssel), der Code las nur die Logins. Ein umbenanntes Ziel fiel als `SkippedNoSession` heraus. Die Raider-Seite ist noch Login-basiert, siehe Offen-Punkt 4.
 - 9 neue Tests, jeder mit Gegenprobe: die ID-Bindung wird sabotiert und der jeweilige Kernfall muss rot werden. Die Restmengen-Tests (Zeile ohne ID) bleiben dabei grün und belegen den Login-Rückfall.
 
 **Offen:**
 
 1. Die restlichen Prädikate paketweise nach P1–P6. 55 der 87 Tabellen mit Login-Spalte haben die ID-Spalte jetzt — dort ist es mechanisch.
 2. Akteur-Rollen (`chatter_login`, `viewer_login`, `moderator_login`, `donor_login`, `gifter_login`, `user_login`, `affiliate_twitch_login`). Brauchen die ID aus dem Event-Payload; eine Namensauflösung träfe bei einem freigegebenen Namen die falsche Person. Eigene Runde.
-3. Backfill der drei Millionen-Tabellen über `scripts/20260802_backfill_grosse_tabellen.sql`. `twitch_viewer_presence_ticks` ist komprimiert — vorher `decompress_chunk` einplanen.
-4. Schreibpfade sollen die ID selbst setzen, dann können die Trigger aus `20260801200000`/`20260802130000` weg.
+3. Schreibpfade sollen die ID selbst setzen, dann können die Trigger aus `20260801200000`/`20260802130000` weg.
+4. Raid-Retention nur zur Hälfte: `count_known_from_raider` löst den Raider weiter über `LOWER($3) = from_login` auf, obwohl `from_broadcaster_id` vorliegt. Ein umbenannter Quellkanal liefert still `known_from_raider = 0`.
+
+Der Backfill der drei Millionen-Tabellen stand hier bis 2026-08-10 als offen — er ist in Etappe 3 gelaufen, samt der dort widerlegten Annahme, nur `twitch_viewer_presence_ticks` sei komprimiert.
 
 ## Umfang und Methode
 

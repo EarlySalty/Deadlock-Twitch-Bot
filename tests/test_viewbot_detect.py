@@ -104,21 +104,32 @@ class TestFortsetzung:
         Einspeisung von 90 Zuschauern."""
         erste = session(10, 0, plateau(0, 60, 93), duration_min=60)
         zweite = session(11, 62, plateau(0, 60, 93), duration_min=60)
-        sessions = [erste, zweite]
-        for prev, cur in zip(sessions, sessions[1:]):
-            prev_end = prev.ended_at
-            if timedelta(0) <= cur.started_at - prev_end <= vd.CONTINUATION_GAP:
-                cur.continuation_of = prev.id
+        vd.markiere_fortsetzungen([erste, zweite])
         assert zweite.continuation_of == erste.id
 
     def test_langer_abstand_ist_keine_fortsetzung(self):
         erste = session(12, 0, plateau(0, 60, 93), duration_min=60)
         zweite = session(13, 120, plateau(0, 60, 93), duration_min=60)
-        sessions = [erste, zweite]
-        for prev, cur in zip(sessions, sessions[1:]):
-            if timedelta(0) <= cur.started_at - prev.ended_at <= vd.CONTINUATION_GAP:
-                cur.continuation_of = prev.id
+        vd.markiere_fortsetzungen([erste, zweite])
         assert zweite.continuation_of is None
+
+    def test_fortsetzung_wird_nicht_auf_einspeisung_geprueft(self):
+        """Die Methodenbox des Reports nennt Fortsetzungen als ausgeschlossen.
+        Ohne den Ausschluss in scan_viewers behauptet der Bericht einen
+        Prüfumfang, den er nicht hat (Merge-Kritiker 10.08.2026)."""
+        erste = session(14, 0, plateau(0, 60, 93), duration_min=60)
+        # Sprung, den scan_viewers ohne den Ausschluss als Einspeisung meldet.
+        sprung = plateau(0, 20, 40) + plateau(20, 60, 400)
+        zweite = session(15, 62, sprung, duration_min=60)
+        vd.markiere_fortsetzungen([erste, zweite])
+        assert zweite.continuation_of == erste.id, "Vorbedingung: markiert"
+
+        befunde = vd.scan_viewers([erste, zweite], [], "x")
+        assert [f for f in befunde if f.session_id == 15] == []
+        # Gegenprobe: dieselbe Kurve ohne Fortsetzungs-Markierung schlägt an,
+        # sonst prüft der Test nur eine Kurve, die ohnehin nichts auslöst.
+        allein = session(16, 200, sprung, duration_min=60)
+        assert [f for f in vd.scan_viewers([allein], [], "x") if f.kind == "einspeisung"]
 
 
 class TestChatTakt:

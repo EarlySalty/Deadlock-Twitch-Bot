@@ -64,6 +64,45 @@ class TestSalve:
                 (T0 + timedelta(seconds=4), "a")]
         assert cc.finde_salven(msgs) == set()
 
+    def test_welle_mitten_im_stream_ist_keine_salve(self):
+        """Fünf Leute, die in 40 Sekunden auf ein Spielereignis reagieren.
+
+        Die Legende nennt den Befund „ausschließlich in einer Nachrichtenwelle
+        am Streamende". Ohne die Endfenster-Bedingung landet hier jeder
+        Einmal-Chatter namentlich als belegter Bot im Bericht
+        (Merge-Kritiker 10.08.2026)."""
+        welle = [(T0 + timedelta(seconds=s), f"konto{i}")
+                 for i, s in enumerate([0, 8, 15, 27, 40])]
+        # Der Stream läuft danach zwei Stunden weiter.
+        danach = [(T0 + timedelta(minutes=m), "stammgast") for m in (30, 60, 90, 120)]
+        assert cc.finde_salven(welle + danach) == set()
+
+    def test_gleiche_welle_am_streamende_zaehlt_weiter(self):
+        """Gegenstück: dieselbe Welle, nur am Ende — muss anschlagen."""
+        davor = [(T0 + timedelta(minutes=m), "stammgast") for m in (0, 30, 60, 90)]
+        welle = [(T0 + timedelta(minutes=120, seconds=s), f"konto{i}")
+                 for i, s in enumerate([0, 8, 15, 27, 40])]
+        assert len(cc.finde_salven(davor + welle)) == 5
+
+
+class TestTaktkonten:
+    @staticmethod
+    def _takt(konten: list[str], n: int = 24):
+        """Fester 30-Sekunden-Takt, reihum über die Konten."""
+        return [(T0 + timedelta(seconds=30 * i), konten[i % len(konten)]) for i in range(n)]
+
+    def test_kanal_bots_bilden_keinen_ring(self):
+        """scan_cadence filtert Kanal-Bots vor der Ring-Bestimmung, taktkonten
+        muss dasselbe tun — sonst meldet jeder Kanal seinen eigenen Chatbot als
+        belegten Viewbot (Merge-Kritiker 10.08.2026)."""
+        msgs = self._takt(["nightbot", "streamelements", "moobot"])
+        assert cc.taktkonten({1: msgs}, "earlysalty") == set()
+
+    def test_echter_ring_wird_weiter_erkannt(self):
+        """Gegenprobe: dieselbe Taktkurve mit drei normalen Konten schlägt an."""
+        msgs = self._takt(["konto_a", "konto_b", "konto_c"])
+        assert cc.taktkonten({1: msgs}, "earlysalty") == {"konto_a", "konto_b", "konto_c"}
+
 
 class TestStammgast:
     def test_wiederkehrender_zuschauer(self):

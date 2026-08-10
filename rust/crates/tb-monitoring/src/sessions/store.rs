@@ -146,7 +146,7 @@ impl SessionStore {
         login: &str,
         twitch_user_id: Option<&str>,
     ) -> Result<Option<i64>, sqlx::Error> {
-        let user_id = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
+        let user_id = super::echte_twitch_user_id(twitch_user_id);
         sqlx::query_scalar!(
             "SELECT id FROM twitch_stream_sessions
               WHERE ended_at IS NULL

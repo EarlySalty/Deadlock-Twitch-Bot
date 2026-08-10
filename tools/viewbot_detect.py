@@ -135,12 +135,21 @@ def load_sessions(conn: psycopg.Connection, login: str) -> list[Session]:
             if sid in by_id:
                 by_id[sid].samples.append((ts, vc))
 
-    # Fortsetzungen markieren: sonst liest sich jeder Neustart als Einspeisung.
+    markiere_fortsetzungen(sessions)
+    return sessions
+
+
+def markiere_fortsetzungen(sessions: list[Session]) -> None:
+    """Markiert jede Session, die kurz nach der vorigen beginnt.
+
+    Sonst liest sich jeder Werbe- oder Absturz-Neustart als Einspeisung: Twitch
+    vergibt eine neue Session-ID, das Publikum bleibt. `scan_viewers` überspringt
+    die Markierten.
+    """
     for prev, cur_s in zip(sessions, sessions[1:]):
         prev_end = prev.ended_at or (prev.started_at + timedelta(minutes=prev.duration_min))
         if timedelta(0) <= cur_s.started_at - prev_end <= CONTINUATION_GAP:
             cur_s.continuation_of = prev.id
-    return sessions
 
 
 def load_raids(conn: psycopg.Connection, login: str) -> list[datetime]:
@@ -172,6 +181,11 @@ def scan_viewers(sessions: list[Session], raids: list[datetime], login: str) -> 
     out: list[Finding] = []
     for s in sessions:
         if len(s.samples) < 10:
+            continue
+        # Fortsetzung eines Neustarts: das Publikum der Vorsession ist noch da,
+        # jeder Anstieg darin ist Rückkehr, keine Einspeisung. Die Methodenbox
+        # des Reports nennt diesen Ausschluss — er muss hier auch stattfinden.
+        if s.continuation_of is not None:
             continue
         end = s.ended_at or (s.started_at + timedelta(minutes=s.duration_min))
         for (t0, v0), (t1, v1) in zip(s.samples, s.samples[1:]):
@@ -469,6 +483,11 @@ def main() -> int:
     chat_findings, accounts = scan_cadence(messages, sessions, login)
     findings = sorted(viewer_findings + chat_findings, key=lambda f: f.at)
 
+    # Erst hier, nach der gesamten DB-Arbeit, wird geschrieben: ein fehlendes
+    # Zielverzeichnis darf den Lauf nicht am Ende noch wegwerfen.
+    zielordner = os.path.dirname(out)
+    if zielordner:
+        os.makedirs(zielordner, exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(render(login, sessions, findings, accounts, raids, len(messages)))
 

@@ -648,9 +648,15 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
 /// Ab dieser Wortzahl trägt ein Muster allein durch seine Satzlänge — beides
 /// muss zutreffen, sonst rutschen kurze Wortgruppen wie „get top views now"
 /// durch.
-const PHRASE_MIN_WORDS: usize = 4;
+///
+/// Kalibriert an beiden Seiten, weil eine so gelernte Phrase hart bannt:
+/// echte Angebote liegen bei 32 bis 42 Zeichen („i can help you grow your
+/// channel" 7/32, „cheap viewers and followers available" 5/37), beiläufiger
+/// Chat darunter („hey how are you doing" 5/21, „gg that was a good game"
+/// 6/23). 4/20 fing beides und machte „more real live viewers" lernbar.
+const PHRASE_MIN_WORDS: usize = 5;
 /// Zweite Bedingung der Phrasen-Regel: Mindestlänge in Zeichen.
-const PHRASE_MIN_CHARS: usize = 20;
+const PHRASE_MIN_CHARS: usize = 30;
 
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
 /// werden: mindestens ein Token muss eine Domain mit distinktivem
@@ -664,6 +670,13 @@ const PHRASE_MIN_CHARS: usize = 20;
 /// („boost viewers on the stream – promotion. ru") bestehen nur aus
 /// Allerweltswörtern und wären sonst nicht lernbar — genau daran scheiterte
 /// jede Mod-Korrektur solcher Alerts (10.08.2026).
+///
+/// Diese Ausnahme umgeht [`GENERIC_PATTERN_TOKENS`] bewusst und vollständig:
+/// eine Phrase aus lauter generischen Tokens ist ab dieser Länge lernbar und
+/// wirkt dann über `has_hard_spam_signal` als hartes Signal. Die Decke dieser
+/// Lockerung ist die Länge, nicht das Vokabular — greift sie zu weit, gehört
+/// die Schwelle hoch oder `Learned-Phrase` aus dem Hart-Zweig, nicht ein
+/// zweites Token-Gate (das würde genau die anonymen Angebote wieder sperren).
 ///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
@@ -1000,6 +1013,26 @@ mod tests {
         assert!(!is_distinctive_spam_pattern("buy best viewers"));
         assert!(!is_distinctive_spam_pattern("more real subs"));
         assert!(!is_distinctive_spam_pattern("get top views now"));
+    }
+
+    #[test]
+    fn gate_lehnt_alltagssaetze_trotz_satzlaenge_ab() {
+        // Die Phrasen-Regel umgeht das Token-Gate bewusst — jede so gelernte
+        // Phrase wird über has_hard_spam_signal zum harten Ban-Signal. Die
+        // Schwelle muss deshalb ueber dem liegen, was ein Mensch beilaeufig
+        // schreibt (Merge-Kritiker 10.08.2026).
+        assert!(
+            !is_distinctive_spam_pattern("more real live viewers"),
+            "4 Woerter / 22 Zeichen, alle Tokens generisch"
+        );
+        assert!(
+            !is_distinctive_spam_pattern("hey how are you doing"),
+            "5 Woerter / 21 Zeichen, harmloser Gruss"
+        );
+        assert!(
+            !is_distinctive_spam_pattern("gg that was a good game"),
+            "6 Woerter / 23 Zeichen, normaler Chat"
+        );
     }
 
     #[test]

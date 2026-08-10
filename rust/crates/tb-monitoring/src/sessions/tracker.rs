@@ -236,10 +236,7 @@ impl SessionTracker {
 
         let new = NewSession {
             streamer_login: login.clone(),
-            twitch_user_id: twitch_user_id
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
+            twitch_user_id: super::echte_twitch_user_id(twitch_user_id).map(str::to_string),
             stream_id: stream_id.map(str::to_string),
             started_at,
             viewer_count: stream.viewer_count,
@@ -377,7 +374,7 @@ impl SessionTracker {
         };
         // Die übergebene ID hat Vorrang: sie kommt aus dem Event bzw. dem
         // Poller-Roster, der Live-State ist nur die Rückfallquelle.
-        let twitch_user_id = twitch_user_id
+        let twitch_user_id = super::echte_twitch_user_id(twitch_user_id)
             .map(str::to_string)
             .or_else(|| state.as_ref().and_then(|s| s.twitch_user_id.clone()));
         let last_game = state.as_ref().and_then(|s| s.last_game.clone());

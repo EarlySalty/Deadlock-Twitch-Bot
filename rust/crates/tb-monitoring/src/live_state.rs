@@ -595,7 +595,7 @@ impl LiveStateStore {
         login: &str,
         twitch_user_id: Option<&str>,
     ) -> Result<Option<FinalizeState>, sqlx::Error> {
-        let user_id = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
+        let user_id = crate::sessions::echte_twitch_user_id(twitch_user_id);
         sqlx::query_as!(
             FinalizeState,
             r#"

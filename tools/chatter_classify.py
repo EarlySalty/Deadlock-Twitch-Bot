@@ -60,6 +60,9 @@ STAMMGAST_MIN_SPANNE = timedelta(days=7)
 # Schlagzahl der Session.
 SALVE_FENSTER = timedelta(seconds=45)
 SALVE_MIN_KONTEN = 5
+# Nur Wellen in diesem Schlussfenster der Session zählen. Mitten im Stream ist
+# eine Welle aus fünf Konten normaler Chat, kein koordiniertes Verhalten.
+SALVE_ENDFENSTER = timedelta(minutes=10)
 
 # Zusammenhängendes Gespräch: mehrere Nachrichten desselben Kontos in kurzem
 # Abstand — ein Mensch, der auf etwas antwortet, schreibt nach.
@@ -126,10 +129,28 @@ def finde_wellen(monate: Counter) -> set[str]:
 
 
 def finde_salven(msgs: list[tuple[datetime, str]]) -> set[str]:
-    """Konten, die ausschließlich innerhalb einer Konten-Salve geschrieben haben."""
+    """Konten, die in einer Nachrichtenwelle am Ende der Session geschrieben haben.
+
+    Nur das Schlussfenster zählt. Eine Welle mitten im Stream ist normaler
+    lebhafter Chat — fünf Leute, die binnen 40 Sekunden auf dasselbe
+    Spielereignis reagieren, sind kein Ring, und ohne diese Bedingung landete
+    jeder von ihnen namentlich als belegter Bot im Bericht.
+
+    Die belastbare Beobachtung ist die Abschieds-Salve: koordiniertes
+    Verabschieden, wenn der Stream endet.
+    """
+    if not msgs:
+        return set()
+    ende = msgs[-1][0]
     in_salve: set[str] = set()
     for i, (ts, _) in enumerate(msgs):
-        fenster = [m for m in msgs[i:] if m[0] - ts <= SALVE_FENSTER]
+        if ende - ts > SALVE_ENDFENSTER:
+            continue
+        fenster: list[tuple[datetime, str]] = []
+        for m in msgs[i:]:
+            if m[0] - ts > SALVE_FENSTER:
+                break  # msgs ist zeitlich sortiert, alles Weitere liegt später
+            fenster.append(m)
         if len({w for _, w in fenster}) >= SALVE_MIN_KONTEN:
             in_salve.update(w for _, w in fenster)
     return in_salve
@@ -143,11 +164,13 @@ def ist_stammgast(zeiten: list[datetime]) -> bool:
             and max(zeiten) - min(zeiten) >= STAMMGAST_MIN_SPANNE)
 
 
-def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]]) -> set[str]:
+def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]], login: str) -> set[str]:
     """Konten, die in einer Session gemeinsam einen festen Takt bilden.
 
     Nutzt dieselbe Kern-Ring-Bestimmung wie tools/viewbot_detect.py, damit beide
-    Werkzeuge denselben Ring benennen.
+    Werkzeuge denselben Ring benennen — einschließlich des Bot-Filters, den
+    `scan_cadence` vor `core_ring` legt. Ohne ihn bilden nightbot und die
+    kanaleigenen Bots den Takt und stehen als belegte Viewbots im Bericht.
     """
     import importlib.util
     pfad = Path(__file__).resolve().parent / "viewbot_detect.py"
@@ -160,7 +183,7 @@ def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]]) -> set[str]:
 
     treffer: set[str] = set()
     for msgs in pro_session.values():
-        pool = [(ts, who, "") for ts, who in msgs]
+        pool = [(ts, who, "") for ts, who in msgs if not vd.is_channel_bot(who, login)]
         if len(pool) < vd.CADENCE_MIN_MSGS:
             continue
         ring = vd.core_ring(pool)
@@ -224,7 +247,7 @@ def main() -> int:
     salve_konten: set[str] = set()
     for msgs in pro_session.values():
         salve_konten |= finde_salven(msgs)
-    takt_konten = taktkonten(pro_session)
+    takt_konten = taktkonten(pro_session, login)
 
     for name, k in konten.items():
         u = users.get(name)

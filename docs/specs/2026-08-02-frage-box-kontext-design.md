@@ -137,11 +137,17 @@ Codepfad von einem String oder JSON-Feld zu einem Scope. Ein Nutzer, der
 das Feld wird nicht gelesen.
 
 Die Browser-Signale sind der einzige Score-Anteil, der vom Client kommt.
-Sie sind deshalb absichtlich mit 15 Punkten bewertet und damit nie
-hinreichend: ohne serverseitig geprüfte Cookie-Bindung (50) plus
-IP-Übereinstimmung (25) wird die Schwelle von 75 nicht erreicht. Wer
-Signale fälscht, kann einen bestehenden Treffer bestätigen, aber keinen
-erzeugen.
+Sie sind mit 15 Punkten bewertet und reichen allein nie: ohne die
+serverseitig geprüfte Cookie-Bindung (50) bleibt jede Kombination unter
+der Schwelle von 75.
+
+Sie sind aber sehr wohl ausschlaggebend, sobald die Cookie-Bindung steht:
+50 + 15 + 10 (Login jünger als 30 Tage) ergibt exakt 75, ebenso
+50 + 10 (gleiches /24) + 15. Wer das Cookie eines fremden Geräts besitzt,
+kommt mit gefälschten Signalen also über die Schwelle, die er ohne sie
+nicht erreicht hätte. Der Schutz liegt vollständig im Cookie, nicht in
+der Gewichtung — wer das nicht will, muss die Signale auf höchstens 10
+Punkte setzen oder die Cookie-Bindung zur harten Vorbedingung machen.
 
 ## 2. Kontext-Service (`tb-streamer-context`)
 
@@ -265,4 +271,11 @@ festschreiben:
 
 ## Offene Punkte
 
-Keine.
+Der Entwurf ist nicht implementiert — offen ist damit alles, was erst die
+Umsetzung zeigt. Konkret benannt:
+
+- Gewichtung der Browser-Signale: 15 Punkte machen sie bei stehender
+  Cookie-Bindung ausschlaggebend (siehe oben). Entweder auf 10 senken oder
+  die Cookie-Bindung als harte Vorbedingung prüfen.
+- Kein Praxiswert für die Schwelle 75: wie viele echte Streamer daran
+  scheitern, weiß erst der Shadow-Betrieb.
