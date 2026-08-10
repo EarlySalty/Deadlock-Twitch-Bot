@@ -275,6 +275,12 @@ streamer_onboarding|current_step|integer|NO|0
 streamer_onboarding|twitch_login|text|NO|
 streamer_onboarding|twitch_user_id|text|NO|
 streamer_onboarding|updated_at|timestamp with time zone|NO|now()
+streamer_plans_pricing_backup_20260810|gesichert_am|timestamp with time zone|YES|
+streamer_plans_pricing_backup_20260810|manual_plan_expires_at|text|YES|
+streamer_plans_pricing_backup_20260810|manual_plan_id|text|YES|
+streamer_plans_pricing_backup_20260810|plan_name|text|YES|
+streamer_plans_pricing_backup_20260810|twitch_login|text|YES|
+streamer_plans_pricing_backup_20260810|twitch_user_id|text|YES|
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
 streamer_plans|clip_command_enabled|integer|NO|1
 streamer_plans|expires_at|text|YES|
