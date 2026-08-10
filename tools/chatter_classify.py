@@ -164,14 +164,16 @@ def ist_stammgast(zeiten: list[datetime]) -> bool:
             and max(zeiten) - min(zeiten) >= STAMMGAST_MIN_SPANNE)
 
 
-def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]], login: str) -> set[str]:
-    """Konten, die in einer Session gemeinsam einen festen Takt bilden.
+def _viewbot_detect():
+    """viewbot_detect.py als Modul, einmal pro Prozess.
 
-    Nutzt dieselbe Kern-Ring-Bestimmung wie tools/viewbot_detect.py, damit beide
-    Werkzeuge denselben Ring benennen — einschließlich des Bot-Filters, den
-    `scan_cadence` vor `core_ring` legt. Ohne ihn bilden nightbot und die
-    kanaleigenen Bots den Takt und stehen als belegte Viewbots im Bericht.
+    Liegt neben dieser Datei, ist aber kein Paket. Der Import registriert das
+    Modul unter seinem Namen — bei jedem Aufruf neu geladen entstünden in einem
+    gemeinsamen pytest-Lauf zwei Modulidentitäten mit getrennten Konstanten.
     """
+    vorhanden = sys.modules.get("viewbot_detect")
+    if vorhanden is not None:
+        return vorhanden
     import importlib.util
     pfad = Path(__file__).resolve().parent / "viewbot_detect.py"
     spec = importlib.util.spec_from_file_location("viewbot_detect", pfad)
@@ -180,21 +182,22 @@ def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]], login: str) -
     # Auflösen ihres eigenen Moduls fehl.
     sys.modules["viewbot_detect"] = vd
     spec.loader.exec_module(vd)
+    return vd
 
+
+def taktkonten(pro_session: dict[int, list[tuple[datetime, str]]], login: str) -> set[str]:
+    """Konten, die in einer Session gemeinsam einen festen Takt bilden.
+
+    Ruft `viewbot_detect.takt_ring` auf — dieselbe Funktion, die auch
+    `scan_cadence` benutzt, samt Bot-Filter. Ohne den bilden nightbot und die
+    kanaleigenen Bots den Takt und stehen als belegte Viewbots im Bericht.
+    """
+    vd = _viewbot_detect()
     treffer: set[str] = set()
     for msgs in pro_session.values():
-        pool = [(ts, who, "") for ts, who in msgs if not vd.is_channel_bot(who, login)]
-        if len(pool) < vd.CADENCE_MIN_MSGS:
-            continue
-        ring = vd.core_ring(pool)
-        stats = vd._gap_stats(ring) if ring else None
-        if not stats:
-            continue
-        mean, _, cv = stats
-        wer = {m[1] for m in ring}
-        if cv <= vd.CADENCE_MAX_CV and mean <= vd.CADENCE_MAX_MEAN \
-                and len(wer) >= vd.CADENCE_MIN_ACCOUNTS:
-            treffer |= wer
+        ring = vd.takt_ring([(ts, who, "") for ts, who in msgs], login)
+        if ring is not None:
+            treffer |= set(ring[4])
     return treffer
 
 

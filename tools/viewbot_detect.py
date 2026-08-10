@@ -270,6 +270,33 @@ def is_channel_bot(account: str, streamer: str) -> bool:
     return "bot" in account and len(stem) >= 4 and stem[:6] in account
 
 
+def takt_ring(msgs: list[tuple[datetime, str, str]],
+              streamer: str = "") -> tuple[list[tuple[datetime, str, str]], float, float, float, list[str]] | None:
+    """Der Takt-Ring einer Session samt Kennzahlen, oder None.
+
+    Einzige Stelle, an der die Takt-Schwellen ausgewertet werden — `scan_cadence`
+    und `chatter_classify.taktkonten` teilen sie sich, damit beide Werkzeuge
+    denselben Ring benennen. Kopiert jemand die Bedingung, driften die
+    Werkzeuge auseinander und der Bericht widerspricht sich.
+
+    Rückgabe: (Ring, mittlerer Abstand, Standardabweichung, Streuungsmaß, Konten).
+    """
+    pool = [m for m in msgs if not is_channel_bot(m[1], streamer)]
+    if len(pool) < CADENCE_MIN_MSGS:
+        return None
+    ring = core_ring(pool)
+    stats = _gap_stats(ring) if ring else None
+    if stats is None:
+        return None
+    mean, sd, cv = stats
+    if cv > CADENCE_MAX_CV or mean > CADENCE_MAX_MEAN:
+        return None
+    who = sorted({m[1] for m in ring})
+    if len(who) < CADENCE_MIN_ACCOUNTS:
+        return None
+    return ring, mean, sd, cv, who
+
+
 def scan_cadence(messages: list[tuple[datetime, str, str]], sessions: list[Session],
                  streamer: str = "") -> tuple[list[Finding], dict[str, dict]]:
     """Ein fester Takt über mehrere Konten hinweg ist ein Scheduler."""
@@ -284,19 +311,10 @@ def scan_cadence(messages: list[tuple[datetime, str, str]], sessions: list[Sessi
 
     accounts: dict[str, dict] = {}
     for sid, msgs in sorted(per_session.items()):
-        pool = [m for m in msgs if not is_channel_bot(m[1], streamer)]
-        if len(pool) < CADENCE_MIN_MSGS:
+        treffer = takt_ring(msgs, streamer)
+        if treffer is None:
             continue
-        ring = core_ring(pool)
-        stats = _gap_stats(ring) if ring else None
-        if stats is None:
-            continue
-        mean, sd, cv = stats
-        if cv > CADENCE_MAX_CV or mean > CADENCE_MAX_MEAN:
-            continue
-        who = sorted({m[1] for m in ring})
-        if len(who) < CADENCE_MIN_ACCOUNTS:
-            continue
+        ring, mean, sd, cv, who = treffer
         findings.append(Finding(
             "chat-takt", ring[0][0], sid,
             f"{len(ring)} Nachrichten von {len(who)} Konten im Takt "
@@ -473,6 +491,12 @@ def main() -> int:
     login = args.login.lstrip("#").lower()
     out = args.out or f"security-reports/botanalyse-{login}.html"
 
+    # Vor der DB-Arbeit: ein nicht anlegbares Zielverzeichnis soll den Lauf
+    # sofort beenden, nicht erst nachdem alle Abfragen gelaufen sind.
+    zielordner = os.path.dirname(out)
+    if zielordner:
+        os.makedirs(zielordner, exist_ok=True)
+
     with connect() as conn:
         sessions = load_sessions(conn, login)
         if not sessions:
@@ -485,11 +509,6 @@ def main() -> int:
     chat_findings, accounts = scan_cadence(messages, sessions, login)
     findings = sorted(viewer_findings + chat_findings, key=lambda f: f.at)
 
-    # Erst hier, nach der gesamten DB-Arbeit, wird geschrieben: ein fehlendes
-    # Zielverzeichnis darf den Lauf nicht am Ende noch wegwerfen.
-    zielordner = os.path.dirname(out)
-    if zielordner:
-        os.makedirs(zielordner, exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(render(login, sessions, findings, accounts, raids, len(messages)))
 

@@ -13,11 +13,24 @@ use tb_monitoring::{LiveStateStore, NewSession, StartOutcome};
 
 mod support;
 
+/// Ohne Test-DB werden alle Tests dieser Datei zu stillen No-ops — ein Lauf
+/// meldet dann „ok" und hat nichts geprüft. `TB_TEST_REQUIRE_DB=1` macht das
+/// zum harten Fehler, damit ein Testnachweis belegbar bleibt.
 macro_rules! pool_or_skip {
     ($schema:expr) => {
         match support::pool_in_schema($schema).await {
             Some(pool) => pool,
-            None => return,
+            None => {
+                if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    panic!(
+                        "TB_TEST_REQUIRE_DB=1 gesetzt, aber keine Test-DB erreichbar \
+                         (TB_TEST_DATABASE_URL) — Schema {}",
+                        $schema
+                    );
+                }
+                eprintln!("SKIP {}: keine Test-DB (TB_TEST_DATABASE_URL)", $schema);
+                return;
+            }
         }
     };
 }
@@ -40,13 +53,13 @@ async fn offene_session_mit_altem_login(pool: &PgPool) -> i64 {
 
 /// Kernfall: veralteter Login in der Zeile, richtige ID gebunden.
 #[tokio::test]
-async fn find_open_id_findet_session_ueber_die_id_trotz_altem_login() {
+async fn claim_open_id_findet_session_ueber_die_id_trotz_altem_login() {
     let pool = pool_or_skip!("t_sess_id_first_kern");
     let erwartet = offene_session_mit_altem_login(&pool).await;
     let store = SessionStore::new(pool);
 
     let gefunden = store
-        .find_open_id(NEU, Some(UID))
+        .claim_open_id(NEU, Some(UID))
         .await
         .expect("Lookup darf nicht fehlschlagen");
 
@@ -61,13 +74,13 @@ async fn find_open_id_findet_session_ueber_die_id_trotz_altem_login() {
 /// die Zeile nicht. Wird dieser Test grün, während der Kernfall es auch ist,
 /// beweist das, dass die ID die Auflösung trägt und nicht der Name.
 #[tokio::test]
-async fn find_open_id_ohne_id_findet_die_umbenannte_session_nicht() {
+async fn claim_open_id_ohne_id_findet_die_umbenannte_session_nicht() {
     let pool = pool_or_skip!("t_sess_id_first_gegenprobe");
     offene_session_mit_altem_login(&pool).await;
     let store = SessionStore::new(pool);
 
     let gefunden = store
-        .find_open_id(NEU, None)
+        .claim_open_id(NEU, None)
         .await
         .expect("Lookup darf nicht fehlschlagen");
 
@@ -87,13 +100,13 @@ async fn find_open_id_ohne_id_findet_die_umbenannte_session_nicht() {
 /// entstand wenigstens eine zweite Zeile unter dem neuen Namen — also war der
 /// halbe ID-Umbau schlechter als gar keiner (Merge-Kritiker 10.08.2026).
 #[tokio::test]
-async fn find_open_id_zieht_den_login_nach_und_der_chat_findet_die_session_wieder() {
+async fn claim_open_id_zieht_den_login_nach_und_der_chat_findet_die_session_wieder() {
     let pool = pool_or_skip!("t_sess_id_first_nachzug");
     let erwartet = offene_session_mit_altem_login(&pool).await;
     let store = SessionStore::new(pool.clone());
 
     let gefunden = store
-        .find_open_id(NEU, Some(UID))
+        .claim_open_id(NEU, Some(UID))
         .await
         .expect("Lookup darf nicht fehlschlagen");
     assert_eq!(gefunden, Some(erwartet), "Vorbedingung: über die ID gefunden");
@@ -168,7 +181,7 @@ async fn ohne_rename_bleibt_der_login_unveraendert() {
     let store = SessionStore::new(pool.clone());
 
     store
-        .find_open_id(NEU, Some(UID))
+        .claim_open_id(NEU, Some(UID))
         .await
         .expect("Lookup darf nicht fehlschlagen");
 
@@ -184,7 +197,7 @@ async fn ohne_rename_bleibt_der_login_unveraendert() {
 /// Der Login-Pfad muss weiter tragen, solange die ID-Spalte leer ist
 /// (Backfill-Restmenge, Prod: 8393 von 9325 Zeilen haben eine ID).
 #[tokio::test]
-async fn find_open_id_faellt_auf_den_login_zurueck_wenn_die_id_fehlt() {
+async fn claim_open_id_faellt_auf_den_login_zurueck_wenn_die_id_fehlt() {
     let pool = pool_or_skip!("t_sess_id_first_fallback");
     let erwartet: i64 = sqlx::query_scalar::<_, i64>(
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at)
@@ -197,7 +210,7 @@ async fn find_open_id_faellt_auf_den_login_zurueck_wenn_die_id_fehlt() {
     let store = SessionStore::new(pool);
 
     let gefunden = store
-        .find_open_id(NEU, Some(UID))
+        .claim_open_id(NEU, Some(UID))
         .await
         .expect("Lookup darf nicht fehlschlagen");
 

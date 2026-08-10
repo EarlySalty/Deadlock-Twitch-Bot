@@ -687,12 +687,24 @@ const PHRASE_MIN_CHARS: usize = 30;
 /// dauerhaften harten Signal über alle Kanäle. Wer den Prompt lockert, damit er
 /// auch anonyme Phrasen liefert, muss vorher einen Menschen dazwischenschalten.
 ///
+/// Dritter Pfad, und der einzige rückwirkende: [`LearnedPatterns::load`] filtert
+/// den **Altbestand** bei jedem Reload durch dieselbe Funktion. Eine Zeile, die
+/// unter der alten Regel inert in `twitch_auto_learned_spam_patterns` lag, wird
+/// durch eine Lockerung wieder scharf, ohne dass jemand sie erneut einträgt.
+/// Deshalb gehört zu jeder Änderung an dieser Funktion ein Blick in die Tabelle.
+/// Stand 10.08.2026 stehen dort zwei Zeilen (`streamboo.com`, `eballo.com`),
+/// beide über den Domain-Zweig distinktiv, **null** von der Phrasen-Ausnahme
+/// erfasst — die Lockerung reaktiviert nichts.
+///
 /// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
 /// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
 /// generisch wie „viewers".
 ///
-/// „eballo.com" ✓ · „streamboo" ✓ · „boost viewers on the stream" ✓ ·
-/// „best viewers" ✗ · „hello viewers" ✗ · „view.ers" ✗ · „viewer.com" ✗
+/// „eballo.com" ✓ · „streamboo" ✓ ·
+/// „boost viewers on the stream – promotion. ru" ✓ (7 Wörter / 43 Zeichen) ·
+/// „boost viewers on the stream" ✗ (5 Wörter, aber 27 Zeichen — beide
+/// Bedingungen müssen halten) · „best viewers" ✗ · „hello viewers" ✗ ·
+/// „view.ers" ✗ · „viewer.com" ✗
 pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
     let lowered = pattern.to_lowercase();
     if lowered.split_whitespace().count() >= PHRASE_MIN_WORDS
@@ -1042,6 +1054,12 @@ mod tests {
             !is_distinctive_spam_pattern("gg that was a good game"),
             "6 Woerter / 23 Zeichen, normaler Chat"
         );
+        // Beide Bedingungen muessen halten: Wortzahl reicht, Laenge nicht.
+        // Ohne die Zeichen-Bedingung waere das hier lernbar.
+        assert!(
+            !is_distinctive_spam_pattern("boost viewers on the stream"),
+            "5 Woerter, aber nur 27 Zeichen"
+        );
     }
 
     #[test]
@@ -1293,6 +1311,42 @@ mod db_tests {
         assert_eq!(lp.spam.len(), 2);
         assert!(lp.spam.iter().any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase"));
         assert!(lp.spam.iter().any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment"));
+    }
+
+    #[tokio::test]
+    async fn load_filtert_den_altbestand_nach_derselben_regel() {
+        // load ist der einzige Pfad, auf dem eine Lockerung des Gates
+        // rueckwirkend wirkt: eine Zeile, die unter der alten Regel inert lag,
+        // wird beim naechsten Reload wieder scharf (Merge-Kritiker 10.08.2026).
+        // Der Test bindet load an dieselbe Regel wie die Schreibpfade.
+        let pool = pool_or_skip!("sf_load_gate");
+        create_learned_tables(&pool).await;
+
+        for (pattern, typ) in [
+            ("best viewers", "phrase"),                        // generisch, 2 Woerter
+            ("boost viewers on the stream", "phrase"),         // 5 Woerter, 27 Zeichen
+            ("cheap viewers and followers available", "phrase"), // 5 Woerter, 37 Zeichen
+            ("streamboo.com", "fragment"),                     // Domain
+        ] {
+            sqlx::query(
+                "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) \
+                 VALUES ($1, $2)",
+            )
+            .bind(pattern)
+            .bind(typ)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let lp = LearnedPatterns::load(&pool).await;
+        let mut geladen: Vec<&str> = lp.spam.iter().map(|p| p.pattern.as_str()).collect();
+        geladen.sort_unstable();
+        assert_eq!(
+            geladen,
+            vec!["cheap viewers and followers available", "streamboo.com"],
+            "nur was is_distinctive_spam_pattern passiert, darf scharf werden"
+        );
     }
 
     #[tokio::test]

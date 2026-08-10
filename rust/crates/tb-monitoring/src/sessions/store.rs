@@ -138,6 +138,12 @@ impl SessionStore {
     /// Jüngste offene Session eines Kanals — ID zuerst, Login als Rückfall,
     /// und der Login wird beim Treffer sofort auf den aktuellen Stand gezogen.
     ///
+    /// **Schreibt** (daher `claim`, nicht `find`): `$1` muss der *aktuelle*
+    /// Login des Kanals sein. Wer hier einen veralteten Namen übergibt und
+    /// dazu die passende ID, schreibt den alten Namen in die offene Zeile
+    /// zurück. Alle Aufrufer gehen über `SessionTracker`, der den Login aus
+    /// dem laufenden Poll-Zyklus nimmt.
+    ///
     /// Die ID trägt über eine Umbenennung hinweg: die Zeile behält bis zum
     /// Nachzug in `streamer_login::rename_streamer_login` den alten Login, und
     /// genau in diesem Fenster legte der reine Login-Lookup eine zweite Session
@@ -152,7 +158,7 @@ impl SessionStore {
     /// jede Nachricht still; vorher entstand wenigstens noch eine zweite Zeile
     /// unter dem neuen Namen. Ein Rename ist selten, deshalb ist der Fall der
     /// leere Zweig: das `UPDATE` läuft nur bei tatsächlich abweichendem Login.
-    pub async fn find_open_id(
+    pub async fn claim_open_id(
         &self,
         login: &str,
         twitch_user_id: Option<&str>,
@@ -225,7 +231,7 @@ impl SessionStore {
             .fetch_one(&mut *tx)
             .await?;
         }
-        // Identisch zu `find_open_id`, inklusive Login-Nachzug: adoptiert die
+        // Identisch zu `claim_open_id`, inklusive Login-Nachzug: adoptiert die
         // Zeile über die ID, muss der Login mitgezogen werden, sonst finden die
         // login-geschlüsselten Leser (Chat) die offene Session nicht mehr.
         let existing: Option<i64> = sqlx::query_scalar!(

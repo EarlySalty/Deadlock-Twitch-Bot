@@ -149,6 +149,11 @@ impl SessionTracker {
     /// unter dem alten Namen auf dieselbe Session-ID und wird beim Finalize mit
     /// ihr geräumt (`drop_cached` räumt nach Wert). Bis dahin kann er nur die
     /// noch laufende Session desselben Kanals liefern.
+    ///
+    /// Kein reiner Leser: bei einem Cache-Fehlschlag läuft
+    /// [`SessionStore::claim_open_id`] und zieht den Login der offenen Zeile
+    /// auf `login` nach. Deshalb muss `login` der aktuelle Name des Kanals
+    /// sein, nicht irgendein historischer.
     pub async fn active_session_id_for(
         &self,
         login: &str,
@@ -158,7 +163,7 @@ impl SessionTracker {
         if let Some(id) = self.cache.lock().expect("cache lock").get(&login).copied() {
             return Some(id);
         }
-        match self.store.find_open_id(&login, twitch_user_id).await {
+        match self.store.claim_open_id(&login, twitch_user_id).await {
             Ok(Some(id)) => {
                 self.cache.lock().expect("cache lock").insert(login, id);
                 Some(id)

@@ -144,8 +144,12 @@ const PATTERN_MIN_LEN: usize = 4;
 // Urteilsfrage: Der Judge schloss von „kein Dienstname" auf „harmlos" und ließ
 // anonyme Angebote wie „Boost viewers on the stream — promotion. ru" durch
 // (10.08.2026 live beobachtet). v3 entkoppelt beides und nennt den Domain-Rest
-// als eigenes Signal. Benchmark deepseek-v4-flash, 24 Produktionsfälle:
-// v2 6/10 Spam · 14/14 harmlos, v3 10/10 Spam · 14/14 harmlos.
+// als eigenes Signal. Einmalig gemessen am 10.08.2026 gegen
+// deepseek-v4-flash, 24 aus dem Livestrom gegriffene Fälle (10 Angebote,
+// 14 harmlos): v2 6/10 · 14/14, v3 10/10 · 14/14. Der Lauf war manuell und
+// liegt nicht im Repo — nachprüfbar ist nur die Teilmenge in
+// `live_judge_erkennt_anonyme_viewbot_angebote` (5 Angebote, 5 harmlos,
+// `#[ignore]`, braucht einen Judge-Key). Wer die Zahl braucht, muss neu messen.
 const SPAM_REVIEW_SYSTEM_PROMPT: &str = "\
 Du bist ein Spam-Erkennungs-Assistent speziell für Twitch Viewer-Bot-Spam und SMM-Dienste.\n\
 \n\
