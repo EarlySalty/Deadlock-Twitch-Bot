@@ -5,6 +5,7 @@ import { usePlan } from '../../context/PlanContext';
 import { usePremiumTeaser } from '../../hooks/useAnalytics';
 import { WachstumsKurve } from '../pricing-v2/WachstumsKurve';
 import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
+import { sollTrialEndeZeigen, TRIAL_ENDE_GESEHEN_PRAEFIX } from './trialEnde';
 
 /**
  * Der eine Moment am Ende des Trials.
@@ -16,22 +17,23 @@ import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
  * liefert. Jetzt: einmal nach Ablauf, gemerkt am Ablaufdatum, danach nie wieder.
  */
 
-const GESEHEN_PRAEFIX = 'trial-ende-gesehen:';
-
 export function TrialExpiryModal() {
   const { trialEndedAt, hasFullAccess, tier } = usePlan();
   const { data: teaser } = usePremiumTeaser();
   const [sichtbar, setSichtbar] = useState(false);
 
-  const schluessel = trialEndedAt ? `${GESEHEN_PRAEFIX}${trialEndedAt}` : null;
+  const schluessel = trialEndedAt ? `${TRIAL_ENDE_GESEHEN_PRAEFIX}${trialEndedAt}` : null;
 
   useEffect(() => {
-    if (!schluessel || hasFullAccess || tier === 'extended') {
-      setSichtbar(false);
-      return;
-    }
-    setSichtbar(localStorage.getItem(schluessel) === null);
-  }, [schluessel, hasFullAccess, tier]);
+    setSichtbar(
+      sollTrialEndeZeigen({
+        trialEndedAt,
+        hasFullAccess,
+        tier,
+        gesehen: schluessel !== null && localStorage.getItem(schluessel) !== null,
+      }),
+    );
+  }, [schluessel, trialEndedAt, hasFullAccess, tier]);
 
   const schliessen = () => {
     if (schluessel) localStorage.setItem(schluessel, new Date().toISOString());

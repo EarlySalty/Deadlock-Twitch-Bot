@@ -48,11 +48,32 @@ const AUTH_STATUS_FIXTURE: AuthStatus = {
  */
 type PreviewZustand = 'free' | 'trial' | 'trial-vorbei' | 'premium';
 
-function previewZustand(): PreviewZustand {
+function zustandParameter(): PreviewZustand | null {
   const roh = new URLSearchParams(window.location.search).get('zustand');
-  if (roh === 'trial' || roh === 'trial-vorbei' || roh === 'premium') return roh;
-  return 'free';
+  if (roh === 'free' || roh === 'trial' || roh === 'trial-vorbei' || roh === 'premium') {
+    return roh;
+  }
+  return null;
 }
+
+function previewZustand(): PreviewZustand {
+  return zustandParameter() ?? 'free';
+}
+
+/**
+ * Ohne `?zustand=` bleibt die Vorschau der bequeme Vollzugriff (Admin,
+ * Localhost, Demo), sonst waere jede andere Seite plötzlich gesperrt. Mit
+ * ausdruecklichem Zustand zaehlt nur noch der Plan: sonst zeigt die Vorschau
+ * „Free" an und verhaelt sich trotzdem wie Premium, und die Sperren, das
+ * Trial-Ende-Fenster und die Gate-Karten sind nicht pruefbar.
+ */
+const OHNE_VOLLZUGRIFF = {
+  level: 'partner' as const,
+  demoMode: false,
+  isAdmin: false,
+  isLocalhost: false,
+  canViewAllStreamers: false,
+};
 
 function inTagen(tage: number): string {
   return new Date(Date.now() + tage * 86400000).toISOString();
@@ -377,10 +398,11 @@ export function getPreviewApiFixture(
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
   if (endpoint === '/auth-status') {
-    const zustand = previewZustand();
+    const zustand = zustandParameter();
     if (zustand === 'free' || zustand === 'trial-vorbei') {
       return {
         ...AUTH_STATUS_FIXTURE,
+        ...OHNE_VOLLZUGRIFF,
         plan: {
           planId: 'free',
           planName: 'Free',
@@ -396,6 +418,7 @@ export function getPreviewApiFixture(
     if (zustand === 'trial') {
       return {
         ...AUTH_STATUS_FIXTURE,
+        ...OHNE_VOLLZUGRIFF,
         plan: {
           planId: 'analytics_trial',
           planName: 'Trial',
@@ -404,6 +427,21 @@ export function getPreviewApiFixture(
           expiresAt: inTagen(9),
           source: 'manual_override',
           entitlements: ['analytics'],
+        },
+      } as AuthStatus;
+    }
+    if (zustand === 'premium') {
+      return {
+        ...AUTH_STATUS_FIXTURE,
+        ...OHNE_VOLLZUGRIFF,
+        plan: {
+          planId: 'premium',
+          planName: 'Premium',
+          tier: 'extended',
+          isExtended: true,
+          expiresAt: null,
+          source: 'billing_subscription',
+          entitlements: ['analytics', 'chat.lurker_tax', 'chat.promos.disable', 'raid.priority'],
         },
       } as AuthStatus;
     }
