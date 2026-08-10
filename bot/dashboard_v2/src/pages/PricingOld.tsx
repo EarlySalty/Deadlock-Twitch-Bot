@@ -67,7 +67,7 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-export default function Pricing() {
+export default function PricingOld() {
   const [cycle, setCycle] = useState<1 | 12>(1);
   const { data } = useBillingCatalog(cycle);
   const plans = data?.plans ?? [];

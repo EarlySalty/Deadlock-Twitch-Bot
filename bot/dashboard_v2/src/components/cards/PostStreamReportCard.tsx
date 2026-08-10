@@ -170,7 +170,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           <p className="text-center text-sm text-text-secondary">
             Automatische Stream-Analyse nach jedem Stream
           </p>
-          <p className="text-xs text-white/40">Mit dem Analyse-Zugang freischalten</p>
+          <p className="text-xs text-white/40">Mit Premium freischalten</p>
         </div>
       </div>
     );

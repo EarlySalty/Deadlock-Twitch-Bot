@@ -16,7 +16,8 @@ import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
-import Pricing from '@/pages/Pricing';
+import Pricing from '@/pages/PricingNew';
+import PricingOld from '@/pages/PricingOld';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
 import { TrialBanner } from '@/components/banners/TrialBanner';
@@ -29,6 +30,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_PRICING_OLD_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from '@/preview/routes';
 import { shouldRetryApiQuery } from '@/api/httpError';
@@ -293,6 +295,7 @@ function AnalyticsDashboard() {
           isAdmin={authStatus?.isAdmin ?? false}
           isLocalhost={authStatus?.isLocalhost ?? false}
           isDemoMode={isDemoMode}
+          trialEndedAt={authStatus?.trialEndedAt ?? null}
         >
           <AnalyticsTour />
           <TrialExpiryModal />
@@ -381,6 +384,7 @@ export default function App() {
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
+  const isPricingOldRoute = path === PREVIEW_PRICING_OLD_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
@@ -400,6 +404,8 @@ export default function App() {
           <OverlayBuilderPage />
         ) : isPricingRoute ? (
           <Pricing />
+        ) : isPricingOldRoute ? (
+          <PricingOld />
         ) : isInternalHomeRoute ? (
           <InternalHome />
         ) : isAnalyticsRoute ? (

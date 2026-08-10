@@ -41,103 +41,94 @@ const AUTH_STATUS_FIXTURE: AuthStatus = {
   },
 };
 
-const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
-  plans: [
-    {
-      id: 'raid_free',
-      name: 'Free',
-      tier: 'free',
-      price_monthly: 0,
-      features: ['Auto-Raid', 'Basis-Dashboard', 'Discord Go-Live-Posts'],
-      is_current: false,
-    },
-    {
-      id: 'chat_quiet',
-      name: 'Werbefrei',
-      tier: 'basic',
-      price_monthly: 3.99,
-      features: [
-        'Chat-Werbung dauerhaft aus',
-        'Greift auch bei Admin-Events',
-        'Sonst alles wie Free',
-        'Monatlich kündbar',
-      ],
-      is_current: false,
-    },
-    {
-      id: 'raid_boost',
-      name: 'Raid Boost',
-      tier: 'basic',
-      price_monthly: 3.99,
-      features: [
-        'Bevorzugte Raid-Platzierung',
-        'Lurker-Tax-Erinnerungen',
-        'KI-Mini Insights',
-        'Basis-Analytics',
-      ],
-      is_current: false,
-    },
-    {
-      id: 'bundle_chat_quiet_raid_boost',
-      name: 'Werbefrei + Raid Boost',
-      tier: 'basic',
-      price_monthly: 5.99,
-      features: [
-        'Werbung aus + Raid Boost',
-        'Spart 2 € gegenüber Einzelkauf',
-        'Lurker-Tax-Erinnerungen',
-        'Basis-Analytics',
-      ],
-      is_current: false,
-    },
-    {
-      id: 'analysis_dashboard',
-      name: 'Erweitert',
-      tier: 'extended',
-      price_monthly: 8.49,
-      features: ['Volles KI-Coaching', 'Viewer-Profile', 'Retention-Analyse', 'Coaching & Monetization'],
-      is_current: true,
-    },
-    {
-      id: 'bundle_analysis_raid_boost',
-      name: 'Erweitert (Bundle)',
-      tier: 'extended',
-      price_monthly: 11.49,
-      features: [
-        'Alle Analytics-Features',
-        'Bevorzugte Raid-Platzierung',
-        'Chat-Werbung dauerhaft aus',
-        'Spart gegenüber Einzelkauf',
-      ],
-      is_current: false,
-    },
-    {
-      id: 'bundle_werbefrei_analyse',
-      name: 'Werbefrei + Analyse',
-      tier: 'extended',
-      price_monthly: 11.49,
-      features: [
-        'Chat-Werbung dauerhaft deaktiviert',
-        'Vollständiges Analytics-Dashboard',
-        'KI-Coaching & Viewer-Analyse',
-        'Spart gegenüber Einzelkauf',
-      ],
-      is_current: false,
-    },
-    {
-      id: 'bundle_komplett',
-      name: 'Alles drin',
-      tier: 'extended',
-      price_monthly: 13.99,
-      features: [
-        'Alle Features aus allen Plänen',
-        'Bevorzugte Raid-Platzierung aktiv',
-        'Volles Analytics + KI-Coaching',
-        'Beste Ersparnis gegenüber Einzelkauf',
-      ],
-      is_current: false,
-    },
-  ],
+/**
+ * Zustand der Vorschau, umschaltbar per `?zustand=` in der Adresszeile:
+ * `free` (Vorgabe), `trial`, `trial-vorbei`, `premium`. Damit laesst sich die
+ * Premium-Flaeche in allen vier Zustaenden ansehen, ohne die DB anzufassen.
+ */
+type PreviewZustand = 'free' | 'trial' | 'trial-vorbei' | 'premium';
+
+function previewZustand(): PreviewZustand {
+  const roh = new URLSearchParams(window.location.search).get('zustand');
+  if (roh === 'trial' || roh === 'trial-vorbei' || roh === 'premium') return roh;
+  return 'free';
+}
+
+function inTagen(tage: number): string {
+  return new Date(Date.now() + tage * 86400000).toISOString();
+}
+
+const PREMIUM_FEATURES = [
+  'Verlauf ueber Wochen und Monate',
+  'Zuschauerbindung und Vergleiche',
+  'KI-Analyse und Coaching',
+  'Clip-Pipeline und Social-Posts',
+];
+
+const BILLING_CATALOG_PLANS: CatalogPlan[] = [
+  {
+    id: 'free',
+    name: 'Free',
+    tier: 'free',
+    price_monthly: 0,
+    monthly_gross_cents: 0,
+    yearly_gross_cents: 0,
+    features: ['Auto-Raid', 'Basis-Dashboard', 'Letztes Stream-Fenster'],
+    is_current: true,
+  },
+  {
+    id: 'premium',
+    name: 'Premium',
+    tier: 'extended',
+    price_monthly: 2.99,
+    monthly_gross_cents: 299,
+    yearly_gross_cents: 2990,
+    features: PREMIUM_FEATURES,
+    is_current: false,
+  },
+];
+
+function billingCatalogFixture() {
+  const zustand = previewZustand();
+  const abo =
+    zustand === 'premium'
+      ? {
+          plan_id: 'premium',
+          plan_name: 'Premium',
+          tier: 'extended',
+          is_extended: true,
+          expires_at: null,
+          source: 'billing_subscription',
+        }
+      : zustand === 'trial'
+        ? {
+            plan_id: 'analytics_trial',
+            plan_name: 'Trial',
+            tier: 'extended',
+            is_extended: true,
+            expires_at: inTagen(9),
+            source: 'manual_override',
+          }
+        : {
+            plan_id: 'free',
+            plan_name: 'Free',
+            tier: 'free',
+            is_extended: false,
+            expires_at: null,
+            source: 'default',
+          };
+  return {
+    plans: BILLING_CATALOG_PLANS,
+    current_subscription: abo,
+    tax_notice: 'Kleinunternehmer nach § 19 UStG, keine Umsatzsteuer ausgewiesen.',
+  };
+}
+
+/** Normierte Kurvenform, wie sie `/premium-teaser` liefert. */
+const PREMIUM_TEASER_FIXTURE = {
+  tage: 47,
+  sitzungen: 23,
+  punkte: [0.18, 0.24, 0.21, 0.33, 0.29, 0.42, 0.38, 0.51, 0.47, 0.63, 0.71, 0.68, 0.84, 1.0],
 };
 
 const INTERNAL_HOME_FIXTURE: InternalHomeData = {
@@ -385,8 +376,41 @@ export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
-  if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
-  if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
+  if (endpoint === '/auth-status') {
+    const zustand = previewZustand();
+    if (zustand === 'free' || zustand === 'trial-vorbei') {
+      return {
+        ...AUTH_STATUS_FIXTURE,
+        plan: {
+          planId: 'free',
+          planName: 'Free',
+          tier: 'free',
+          isExtended: false,
+          expiresAt: null,
+          source: 'default',
+          entitlements: [],
+        },
+        trialEndedAt: zustand === 'trial-vorbei' ? inTagen(-2) : null,
+      } as AuthStatus;
+    }
+    if (zustand === 'trial') {
+      return {
+        ...AUTH_STATUS_FIXTURE,
+        plan: {
+          planId: 'analytics_trial',
+          planName: 'Trial',
+          tier: 'extended',
+          isExtended: true,
+          expiresAt: inTagen(9),
+          source: 'manual_override',
+          entitlements: ['analytics'],
+        },
+      } as AuthStatus;
+    }
+    return AUTH_STATUS_FIXTURE;
+  }
+  if (endpoint === '/billing/catalog') return billingCatalogFixture();
+  if (endpoint === '/premium-teaser') return PREMIUM_TEASER_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;
   if (endpoint === '/ads-schedule') return ADS_SCHEDULE_FIXTURE;

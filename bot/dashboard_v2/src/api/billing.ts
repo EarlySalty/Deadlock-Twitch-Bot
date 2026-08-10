@@ -1,6 +1,26 @@
 import { fetchApi } from './core';
 import type { BillingCatalog, CatalogPlan } from '../types/billing';
 
+/**
+ * Form der eigenen Wachstumskurve fuer die Premium-Flaeche. Der Server liefert
+ * bewusst keine absoluten Zuschauerzahlen, nur Werte zwischen 0 und 1 — der
+ * Weichzeichner auf der Karte ist Gestaltung, keine Zugriffskontrolle.
+ */
+export interface PremiumTeaser {
+  tage: number;
+  sitzungen: number;
+  punkte: number[];
+}
+
+export async function fetchPremiumTeaser(): Promise<PremiumTeaser> {
+  const raw = await fetchApi<Partial<PremiumTeaser>>('/premium-teaser');
+  return {
+    tage: raw.tage ?? 0,
+    sitzungen: raw.sitzungen ?? 0,
+    punkte: Array.isArray(raw.punkte) ? raw.punkte : [],
+  };
+}
+
 export async function fetchBillingCatalog(cycle: 1 | 12 = 1): Promise<BillingCatalog> {
   const raw = await fetchApi<any>('/billing/catalog', { cycle });
   const plans = ((raw.plans ?? []) as any[]).map((p: any) => ({
@@ -33,5 +53,6 @@ export async function fetchBillingCatalog(cycle: 1 | 12 = 1): Promise<BillingCat
           checkout_path: pay.checkout_path ?? undefined,
         }
       : null,
+    tax_notice: raw.tax_notice ?? null,
   };
 }

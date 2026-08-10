@@ -50,7 +50,7 @@ import {
   fetchStreamReportAB,
 } from '@/api/analytics';
 import { fetchAuthStatus } from '@/api/auth';
-import { fetchBillingCatalog } from '@/api/billing';
+import { fetchBillingCatalog, fetchPremiumTeaser } from '@/api/billing';
 import type { StreamReport, StreamReportABResponse, StreamReportVariant, TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
 // Stale time: 5 minutes
@@ -512,6 +512,16 @@ export function useBillingCatalog(cycle: 1 | 12 = 1) {
     queryKey: ['billing-catalog', cycle],
     queryFn: () => fetchBillingCatalog(cycle),
     staleTime: STALE_TIME,
+  });
+}
+
+/** Kurvenform fuer die Premium-Flaeche (ohne Premium abrufbar). */
+export function usePremiumTeaser() {
+  return useQuery({
+    queryKey: ['premium-teaser'],
+    queryFn: fetchPremiumTeaser,
+    staleTime: STALE_TIME,
+    retry: false,
   });
 }
 

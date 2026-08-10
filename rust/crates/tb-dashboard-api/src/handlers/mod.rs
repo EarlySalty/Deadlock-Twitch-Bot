@@ -74,6 +74,7 @@ pub mod overview;
 pub mod partner_login;
 pub mod pause_loop;
 pub mod performance;
+pub mod premium_teaser;
 pub mod raid_analytics;
 pub mod raid_history;
 pub mod raid_network_analytics;

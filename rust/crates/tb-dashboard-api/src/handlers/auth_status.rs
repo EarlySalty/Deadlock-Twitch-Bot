@@ -290,6 +290,11 @@ async fn partner_response(
             })
         });
 
+    // Signal fuer den einen Trial-Ende-Moment. Steht bewusst neben dem
+    // Snapshot: der Resolver wirft einen abgelaufenen Manual-Plan weg, das
+    // Frontend saehe sonst nur `free` und koennte den Moment nicht setzen.
+    let trial_ended_at = tb_analytics::trial::expired_trial_end(pool, user_id, login).await;
+
     let can_analytics = access.analytics_access_allowed;
     let payload = json!({
         "authenticated": true,
@@ -312,6 +317,7 @@ async fn partner_response(
         "csrfToken": csrf_token,
         "csrf_token": csrf_token,
         "plan": plan,
+        "trialEndedAt": trial_ended_at,
         "access": {
             "landing": access.landing_access_allowed,
             "analytics": can_analytics,

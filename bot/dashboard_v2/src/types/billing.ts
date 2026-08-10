@@ -108,6 +108,10 @@ export interface CatalogPlan {
   name: string;
   tier: PlanTier;
   price_monthly: number;
+  /** Endpreis pro Monat in Cent (§ 19 UStG, keine Umsatzsteuer ausgewiesen). */
+  monthly_gross_cents?: number;
+  /** Endpreis pro Jahr in Cent. Eigener Betrag, nicht aus dem Monatspreis gerechnet. */
+  yearly_gross_cents?: number;
   entitlements?: EntitlementId[];
   features: string[];
   is_current: boolean;
@@ -122,7 +126,8 @@ export interface TrialInfo {
 }
 
 // Aktuell aufgeloestes Abo des eingeloggten Nutzers (Katalog-Feld
-// `current_subscription`). Fuer Free-Nutzer ist plan_id === 'raid_free'.
+// `current_subscription`). Fuer Free-Nutzer ist plan_id === 'free'
+// (Bestandszeilen: 'raid_free').
 export interface CurrentSubscription {
   plan_id: string | null;
   plan_name: string | null;
@@ -146,6 +151,8 @@ export interface BillingCatalog {
   plans: CatalogPlan[];
   current_subscription: CurrentSubscription | null;
   payment: BillingPaymentPaths | null;
+  /** Steuerhinweis vom Server (§ 19 UStG). Nie im Frontend formulieren. */
+  tax_notice?: string | null;
 }
 
 // Free-Default vs. echtes bezahltes Abo. Nur bei einem bezahlten Plan zeigen wir
@@ -157,6 +164,7 @@ export function isActivePaidSubscription(
     !!sub &&
     !!sub.plan_id &&
     sub.plan_id !== 'raid_free' &&
+    sub.plan_id !== 'free' &&
     sub.tier !== 'free'
   );
 }

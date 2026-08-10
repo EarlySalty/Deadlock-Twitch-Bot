@@ -162,7 +162,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         leaderboard,
         loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings, monetization,
         onboarding, overview,
-        performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        performance, premium_teaser, raid_analytics, raid_history, rankings, retention_curve,
+        scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
         streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
         viewer_timeline, viewers,
@@ -487,6 +488,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(affiliate_portal::commissions_handler),
         )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
+        // Form der eigenen Wachstumskurve fuer die Preisseite, ohne
+        // Premium-Gate und ohne absolute Zahlen (siehe premium_teaser).
+        .route(
+            "/twitch/api/v2/premium-teaser",
+            get(premium_teaser::premium_teaser_handler),
+        )
         // Post-Stream-A/B-Report (B11): liest twitch_stream_ai_reports für die
         // Dashboard-Anzeige (Partner → eigener Login, Admin/Localhost → frei).
         .route(
@@ -1447,6 +1454,12 @@ pub fn build_v2_spa_pages_router() -> Router {
             get(spa::main_domain_spa_shell_handler),
         )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
+        // Die alte Preisseite mit Baukasten und Vergleichstabelle. Bleibt fuer
+        // Bestandslinks erreichbar, wird aber von nirgends mehr verlinkt.
+        .route(
+            "/twitch/old/pricing",
+            get(spa::main_domain_spa_shell_handler),
+        )
         .route(
             "/twitch/analyse",
             get(spa::legacy_analyse_root_redirect_handler),
@@ -1845,6 +1858,42 @@ mod router_wiring_tests {
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(json["error"], "live_announcement_builder_removed");
             assert!(json.get("message").and_then(|v| v.as_str()).is_some());
+        }
+    }
+
+    /// Beide Preisseiten sind registriert: die neue Flaeche unter
+    /// `/twitch/pricing`, die alte Referenz unter `/twitch/old/pricing`.
+    ///
+    /// Der Unterschied zwischen „Route fehlt" und „Bundle nicht gebaut" liegt im
+    /// Rumpf: eine nicht registrierte Route antwortet mit leerem 404, die
+    /// SPA-Shell mit dem Hinweistext. Ohne diese Unterscheidung waere der Test
+    /// bei fehlender Route genauso gruen wie bei vorhandener.
+    #[tokio::test]
+    async fn beide_preisseiten_sind_registriert() {
+        let app = build_router(lazy_pool(), "smoke-token".into());
+        for uri in ["/twitch/pricing", "/twitch/old/pricing"] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .header("host", "dashboard.example.com")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(
+                status == StatusCode::OK || text.contains("Dashboard not built"),
+                "{uri}: {status}, Rumpf {} Bytes",
+                body.len()
+            );
         }
     }
 }

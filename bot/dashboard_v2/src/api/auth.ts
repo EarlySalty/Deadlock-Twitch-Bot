@@ -41,6 +41,11 @@ export interface AuthStatus {
     source: string | null;
     entitlements: EntitlementId[];
   } | null;
+  /**
+   * Ende eines bereits abgelaufenen Trials. Nur gesetzt, solange die Zeile den
+   * Trial-Plan traegt; loest den einmaligen Trial-Ende-Moment aus.
+   */
+  trialEndedAt?: string | null;
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {

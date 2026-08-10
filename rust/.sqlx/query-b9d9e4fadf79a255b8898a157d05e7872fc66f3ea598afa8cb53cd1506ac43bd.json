@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT manual_plan_expires_at AS \"ende!\"\n             FROM streamer_plans\n            WHERE ($1 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $1\n                   OR LOWER(COALESCE(twitch_login, '')) = $2)\n              AND TRIM(COALESCE(manual_plan_id, '')) = 'analytics_trial'\n              AND NULLIF(TRIM(COALESCE(manual_plan_expires_at, '')), '') IS NOT NULL\n              AND TRIM(manual_plan_expires_at) ~ '^\\d{4}-\\d{2}-\\d{2}'\n              AND TRIM(manual_plan_expires_at)::timestamptz <= NOW()\n            LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ende!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b9d9e4fadf79a255b8898a157d05e7872fc66f3ea598afa8cb53cd1506ac43bd"
+}

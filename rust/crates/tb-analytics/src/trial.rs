@@ -88,6 +88,43 @@ pub async fn start_trial_for_user(
     .await
 }
 
+/// Ablaufzeitpunkt eines *abgelaufenen* Trials, solange die Zeile noch den
+/// Trial-Plan trägt. Das ist das Signal für den einen Trial-Ende-Moment im
+/// Dashboard: ohne diese Angabe kann das Frontend „Trial vorbei" nicht von
+/// „hatte nie einen Trial" unterscheiden und würde neue Streamer anblinken.
+///
+/// Läuft der Trial noch, ist das Ergebnis `None` — dann gilt der Plan selbst.
+/// Die Datumsprüfung steht bewusst in SQL, gleiche Form wie in der
+/// Bestandsmigration: unparsebarer Text zählt nicht als abgelaufen, sondern
+/// gar nicht.
+pub async fn expired_trial_end(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Option<String> {
+    let user_id = twitch_user_id.trim();
+    let login = twitch_login.trim().to_lowercase();
+    if user_id.is_empty() && login.is_empty() {
+        return None;
+    }
+    sqlx::query_scalar!(
+        r#"SELECT manual_plan_expires_at AS "ende!"
+             FROM streamer_plans
+            WHERE ($1 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $1
+                   OR LOWER(COALESCE(twitch_login, '')) = $2)
+              AND TRIM(COALESCE(manual_plan_id, '')) = 'analytics_trial'
+              AND NULLIF(TRIM(COALESCE(manual_plan_expires_at, '')), '') IS NOT NULL
+              AND TRIM(manual_plan_expires_at) ~ '^\d{4}-\d{2}-\d{2}'
+              AND TRIM(manual_plan_expires_at)::timestamptz <= NOW()
+            LIMIT 1"#,
+        user_id,
+        login
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+}
+
 /// Onboarding-„Mitbringsel": gewährt neuen Partnern automatisch die ersten
 /// 14 Tage. Idempotent über den Zähler (kein Doppel-Grant), überschreibt
 /// keinen bestehenden Bezahlplan. Das Ergebnis wird nur geloggt.

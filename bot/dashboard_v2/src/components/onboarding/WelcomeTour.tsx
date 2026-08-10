@@ -74,14 +74,14 @@ const TOUR_STEPS: TourStep[] = [
     tag: 'Dein Plan',
     title: 'Aktueller Plan & Upgrade-Optionen',
     description:
-      'Hier siehst du, welcher Plan aktiv ist. Werbefrei (3,99 €) schaltet die Chat-Werbung komplett ab, Raid Boost bringt mehr eingehende Raids.',
+      'Hier siehst du, welcher Plan aktiv ist. Premium schaltet alle Auswertungen frei, Free zeigt das letzte Stream-Fenster.',
   },
   {
     anchor: 'tour-promo-settings',
     tag: 'Werbung',
     title: 'Werbung & Chat-Einstellungen',
     description:
-      'Eigenen Werbe-Text setzen oder mit dem Werbefrei-Plan dauerhaft abschalten — auch bei aktiven Admin-Events.',
+      'Eigenen Werbe-Text setzen oder mit Premium dauerhaft abschalten, auch bei aktiven Admin-Events.',
   },
   {
     anchor: 'tour-nav',

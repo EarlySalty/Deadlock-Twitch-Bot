@@ -17,6 +17,8 @@ interface PlanContextType {
   hasFullAccess: boolean;
   isAdmin: boolean;
   trialInfo: TrialInfo | null;
+  /** Ende eines abgelaufenen Trials, sonst null. Siehe `AuthStatus`. */
+  trialEndedAt: string | null;
 }
 
 const PlanContext = createContext<PlanContextType | null>(null);
@@ -27,9 +29,10 @@ interface PlanProviderProps {
   isAdmin: boolean;
   isLocalhost: boolean;
   isDemoMode: boolean;
+  trialEndedAt?: string | null;
 }
 
-export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode }: PlanProviderProps) {
+export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode, trialEndedAt = null }: PlanProviderProps) {
   const hasFullAccess = isAdmin || isLocalhost || isDemoMode;
   const tier: PlanTier = hasFullAccess ? 'extended' : (plan?.tier ?? 'free');
   const entitlements = useMemo<EntitlementId[]>(
@@ -49,10 +52,13 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
 
   const isPreviewMode = view === 'extended' && !hasExtendedAnalytics;
 
-  // Compute trial info from plan snapshot
+  // Trial-Zustand aus dem Plan-Schnappschuss. Vorher stand hier ein Feld
+  // `trial_end_at`, das die API nie geliefert hat — `trialInfo` war damit immer
+  // null und Banner wie Modal sind nie erschienen. Der laufende Trial steckt in
+  // der Plan-ID selbst, das Ende im Ablaufdatum.
   const trialInfo = useMemo<TrialInfo | null>(() => {
-    // Try to get trial_end_at from plan metadata or source field
-    const trialEndsAt = (plan as { trial_end_at?: string } | null)?.trial_end_at ?? null;
+    const trialEndsAt =
+      plan?.planId === 'analytics_trial' ? (plan?.expiresAt ?? null) : null;
 
     if (!trialEndsAt) return null;
 
@@ -103,7 +109,8 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
     hasFullAccess,
     isAdmin,
     trialInfo,
-  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, isAdmin, trialInfo]);
+    trialEndedAt,
+  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, isAdmin, trialInfo, trialEndedAt]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

@@ -6,6 +6,8 @@ export const PREVIEW_HOME_ROUTE = PREVIEW_MODE ? '/dashboard' : '/twitch/dashboa
 export const PREVIEW_VERWALTUNG_ROUTE = PREVIEW_MODE ? '/verwaltung' : '/twitch/verwaltung';
 export const PREVIEW_OVERLAY_ROUTE = PREVIEW_MODE ? '/overlay' : '/twitch/overlay';
 export const PREVIEW_PRICING_ROUTE = PREVIEW_MODE ? '/pricing' : '/twitch/pricing';
+/// Die alte Preisseite bleibt erreichbar, wird aber von nirgends verlinkt.
+export const PREVIEW_PRICING_OLD_ROUTE = PREVIEW_MODE ? '/old-pricing' : '/twitch/old/pricing';
 export const PREVIEW_BILLING_ROUTE = `${PREVIEW_PRICING_ROUTE}#plans`;
 export const PREVIEW_CHANGELOG_ROUTE = `${PREVIEW_HOME_ROUTE}#changelog`;
 
