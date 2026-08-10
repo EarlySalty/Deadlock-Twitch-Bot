@@ -3254,6 +3254,7 @@ mod db_tests {
                 manual_plan_updated_at TEXT,
                 manual_plan_notes TEXT,
                 trial_ever_granted INTEGER DEFAULT 0,
+                trials_granted INTEGER NOT NULL DEFAULT 0,
                 first_login_at TIMESTAMPTZ,
                 plan_name TEXT
             )"#,

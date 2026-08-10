@@ -241,10 +241,18 @@ pub async fn checkout_start_handler(
         },
     });
 
-    // 30-Tage-Trial nur für analysis_dashboard im Monatszyklus; +2 Bonus-Monate
+    // Trial nur für analysis_dashboard im Monatszyklus; +2 Bonus-Monate
     // beim Jahreszyklus (vom Webhook via subscription_data.metadata verarbeitet).
+    //
+    // Pricing-Umbau 2026-08-09: Dauer auf 14 Tage gezogen (zweite Stelle neben
+    // `tb_analytics::trial::TRIAL_DURATION_DAYS`). Der Zweig ist seit dem
+    // Katalog-Umbau praktisch tot — `analysis_dashboard` ist nicht mehr
+    // kaufbar — und wird bewusst NICHT auf `premium` erweitert: die 14 Tage
+    // gibt es im Produkt automatisch beim ersten Login plus einmal auf Wunsch,
+    // ein dritter Gratiszeitraum im Checkout widerspricht dem.
     if plan_id == "analysis_dashboard" && cycle == 1 {
-        session_payload["subscription_data"] = json!({ "trial_period_days": 30 });
+        session_payload["subscription_data"] =
+            json!({ "trial_period_days": tb_analytics::trial::TRIAL_DURATION_DAYS });
     }
     if cycle == 12 {
         // Auf bestehende subscription_data mergen (für Jahreszyklus ist sie leer,
@@ -1626,7 +1634,8 @@ mod tests {
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
                    plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT,
                    manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_updated_at TEXT,
-                   trial_ever_granted INTEGER DEFAULT 0, first_login_at TEXT, promo_message TEXT
+                   trial_ever_granted INTEGER DEFAULT 0, trials_granted INTEGER NOT NULL DEFAULT 0,
+                   first_login_at TEXT, promo_message TEXT
                )"#,
         )
         .execute(&pool)

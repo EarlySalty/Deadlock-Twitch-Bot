@@ -2875,7 +2875,13 @@ mod callback_tests {
             r#"CREATE TABLE streamer_plans (
                 twitch_user_id TEXT PRIMARY KEY,
                 twitch_login TEXT,
-                first_login_at TEXT
+                first_login_at TEXT,
+                trial_ever_granted INTEGER DEFAULT 0,
+                trials_granted INTEGER NOT NULL DEFAULT 0,
+                manual_plan_id TEXT,
+                manual_plan_expires_at TEXT,
+                manual_plan_notes TEXT,
+                manual_plan_updated_at TEXT
             )"#,
             r#"CREATE TABLE twitch_partner_raid_scores (
                 twitch_user_id TEXT PRIMARY KEY,

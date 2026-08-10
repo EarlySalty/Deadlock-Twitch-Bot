@@ -100,7 +100,8 @@ async fn apply_ddl(pool: &PgPool) {
         r#"CREATE TABLE streamer_plans (
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT,
-            first_login_at TEXT
+            first_login_at TEXT,
+            trials_granted INTEGER NOT NULL DEFAULT 0
         )"#,
         r#"CREATE TABLE twitch_raid_auth (
             twitch_user_id TEXT PRIMARY KEY,
