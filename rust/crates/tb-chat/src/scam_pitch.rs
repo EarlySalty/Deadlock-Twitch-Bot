@@ -137,12 +137,15 @@ const REVIEW_COOLDOWN_MAX_LEN: usize = 2048;
 /// Minimale Pattern-Länge für DB-Speicherung (spam_ai_review.py Z. 332, 339).
 const PATTERN_MIN_LEN: usize = 4;
 
-// ── System-Prompt v2 (11.07.2026) ────────────────────────────────────────────
+// ── System-Prompt v3 (10.08.2026) ────────────────────────────────────────────
 // v1 nannte „best viewers" als harmloses Kompliment-Beispiel und ließ den
 // Judge Safe-Muster vorschlagen — beides fütterte das Safe-List-Poisoning.
-// v2: Werbung-vs-Gespräch-Unterscheidung, Muster nur noch für Spam und nur
-// distinktiv (Domain/Dienstname). Benchmark: 0 False-Positives auf 26 echten
-// harmlosen Viewer-Sätzen bei 3 Modellen.
+// v2 trennte Werbung von Gespräch, koppelte dabei aber die Musterregel an die
+// Urteilsfrage: Der Judge schloss von „kein Dienstname" auf „harmlos" und ließ
+// anonyme Angebote wie „Boost viewers on the stream — promotion. ru" durch
+// (10.08.2026 live beobachtet). v3 entkoppelt beides und nennt den Domain-Rest
+// als eigenes Signal. Benchmark deepseek-v4-flash, 24 Produktionsfälle:
+// v2 6/10 Spam · 14/14 harmlos, v3 10/10 Spam · 14/14 harmlos.
 const SPAM_REVIEW_SYSTEM_PROMPT: &str = "\
 Du bist ein Spam-Erkennungs-Assistent speziell für Twitch Viewer-Bot-Spam und SMM-Dienste.\n\
 \n\
@@ -154,23 +157,33 @@ Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne <think>-Block:\n\
 {\"is_spam\": true/false, \"pattern\": \"Kernmuster oder null\", \"pattern_type\": \"phrase\" \
 oder \"fragment\", \"reason\": \"Begründung max 80 Zeichen\"}\n\
 \n\
-is_spam=true NUR bei aktiver Werbung/Angeboten: Viewer-Kauf, Bot-Views, Bot-Follower, \
-SMM-Services, Wachstums-Angebote mit Kontaktaufforderung, neue/abgewandelte Schreibweisen \
-bekannter Spam-Dienste (Leerzeichen in Domains, Sonderzeichen, veränderte Namen).\n\
+Entscheidend ist allein, ob die Nachricht ein Angebot macht — NICHT, ob ein Dienstname, eine \
+Domain, ein Preis oder eine Kontaktaufforderung darin steht. Anonyme Angebote ohne Markennamen \
+sind der häufigste Fall und sind Spam.\n\
+\n\
+is_spam=true bei aktiver Werbung/Angeboten: Viewer-Kauf, Bot-Views, Bot-Follower, SMM-Services, \
+Wachstums- und Promotion-Angebote, neue oder abgewandelte Schreibweisen von Spam-Diensten \
+(Leerzeichen in Domains, Sonderzeichen, veränderte Namen). Beispiel: 'Boost viewers on the \
+stream - promotion. ru' ist Spam, auch ohne erkennbaren Dienstnamen.\n\
+Ein Domain-Rest belegt Spam zusätzlich, auch bei unbekanntem Dienst: abgetrennte TLD ('. ru', \
+'dot com'), verfremdete Zeichen ('c0m').\n\
 \n\
 is_spam=false bei allem anderen, INSBESONDERE:\n\
-- normale Chat-Gespräche über Viewer-Zahlen, Komplimente, Selbstpromotion, normale URLs\n\
+- normale Chat-Gespräche über Viewer-Zahlen, Komplimente, Selbstpromotion des eigenen Kanals, \
+normale URLs\n\
 - Fragen oder Gespräche ÜBER Spam, Viewer-Bots oder Bans (z.B. 'bannt der Bot mich, wenn \
 ich X eingebe?') — wer über einen Dienst redet, wirbt nicht für ihn. Nur die aktive \
 Bewerbung ist Spam.\n\
 \n\
-Bei is_spam=true: pattern = kürzestes eindeutiges Spam-Kernmuster. Es MUSS einen \
-unterscheidungskräftigen Token enthalten (Domain oder Dienstname, z.B. 'eballo.com', \
-'streamboo'). NIEMALS generisches Vokabular als pattern ('viewer', 'best viewers', \
-'follower', 'ai viewers').\n\
+pattern ist reines Lern-Nebenprodukt und beeinflusst is_spam nie. Bei is_spam=true: pattern = \
+kürzestes eindeutiges Spam-Kernmuster, sofern die Nachricht einen unterscheidungskräftigen Token \
+enthält (Domain oder Dienstname, z.B. 'eballo.com', 'streamboo'). NIEMALS generisches Vokabular \
+als pattern ('viewer', 'best viewers', 'follower', 'ai viewers'). Fehlt so ein Token, ist \
+pattern = null und is_spam bleibt trotzdem true.\n\
 Bei is_spam=false: pattern = null.\n\
 \n\
-Im Zweifel: is_spam=false.";
+Im Zweifel bei Gesprächen, Fragen und Komplimenten: is_spam=false. Bei einem erkennbaren \
+Angebot: is_spam=true.";
 
 // ── Regex-Muster (service_pitch_warning.py Z. 146–317) ───────────────────────
 
@@ -3077,5 +3090,50 @@ mod tests {
 
         std::env::remove_var("TWITCH_SERVICE_WARNING_LOG_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live-Baseline für [`SPAM_REVIEW_SYSTEM_PROMPT`]. Ein Prompt lässt sich
+    /// nur gegen ein echtes Modell prüfen — Mock-Tests bestätigen bloß die
+    /// eigene Formulierung. Die Spam-Fälle sind anonyme Angebote ohne
+    /// Dienstnamen (der am 10.08.2026 live durchgerutschte Typ), die harmlosen
+    /// Fälle das Viewer-Gerede, an dem v1 scheiterte.
+    #[tokio::test]
+    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
+    async fn live_judge_erkennt_anonyme_viewbot_angebote() {
+        let providers = tb_llm::endpoint_chain("spam_judge");
+        let provider = providers.first().expect("kein Judge-Key gesetzt");
+        let http = reqwest::Client::new();
+
+        let mut fehlurteile = Vec::new();
+        for (message, want_spam) in [
+            ("Boost viewers on the stream – promotion. ru", true),
+            ("Boost viewers on the stream", true),
+            ("cheap viewers and followers available", true),
+            ("I can help you grow your channel with real viewers", true),
+            ("viewers boost cheap price telegram", true),
+            ("yo more viewers today than yesterday nice", false),
+            ("bannt der bot mich wenn ich viewer bot schreibe?", false),
+            ("best viewers in chat today", false),
+            ("endlich affiliate erreicht!", false),
+            ("wie kriegt man eigentlich mehr viewer?", false),
+        ] {
+            let review = call_judge(&http, provider, false, message)
+                .await
+                .expect("Judge-Call fehlgeschlagen")
+                .expect("Judge lieferte kein parsebares JSON");
+            eprintln!(
+                "LIVE_SPAM_JUDGE want={want_spam} got={} reason={:?} msg={message:?}",
+                review.is_spam, review.reason
+            );
+            if review.is_spam != want_spam {
+                fehlurteile.push(format!("{message:?} (erwartet {want_spam})"));
+            }
+        }
+
+        assert!(
+            fehlurteile.is_empty(),
+            "Judge-Fehlurteile: {}",
+            fehlurteile.join(", ")
+        );
     }
 }
