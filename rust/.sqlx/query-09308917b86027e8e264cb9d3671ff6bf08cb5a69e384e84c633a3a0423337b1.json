@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_live_state SET active_session_id = $1\n              WHERE twitch_user_id = $3\n                 OR (streamer_login = $2 AND $3::text IS NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "09308917b86027e8e264cb9d3671ff6bf08cb5a69e384e84c633a3a0423337b1"
+}

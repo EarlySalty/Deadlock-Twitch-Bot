@@ -128,7 +128,8 @@ def finde_wellen(monate: Counter) -> set[str]:
     return {m for m, n in monate.items() if n >= 8 and n >= 4.0 * max(median, 1)}
 
 
-def finde_salven(msgs: list[tuple[datetime, str]]) -> set[str]:
+def finde_salven(msgs: list[tuple[datetime, str]],
+                 session_ende: datetime | None) -> set[str]:
     """Konten, die in einer Nachrichtenwelle am Ende der Session geschrieben haben.
 
     Nur das Schlussfenster zählt. Eine Welle mitten im Stream ist normaler
@@ -138,10 +139,17 @@ def finde_salven(msgs: list[tuple[datetime, str]]) -> set[str]:
 
     Die belastbare Beobachtung ist die Abschieds-Salve: koordiniertes
     Verabschieden, wenn der Stream endet.
+
+    `session_ende` muss das Ende des *Streams* sein, nicht die letzte Nachricht.
+    Beides gleichzusetzen macht jede Welle zur Salve, nach der der Chat einfach
+    schweigt — reagieren fünf Zuschauer um 20:30 auf ein Spielereignis und läuft
+    der Stream bis 23:00 weiter, stünden alle fünf namentlich als belegte Bots
+    im Bericht (Merge-Kritiker 10.08.2026). Ohne bekanntes Ende (Session läuft
+    noch) gibt es keine Abschieds-Salve und die Funktion wertet nichts.
     """
-    if not msgs:
+    if not msgs or session_ende is None:
         return set()
-    ende = msgs[-1][0]
+    ende = session_ende
     in_salve: set[str] = set()
     for i, (ts, _) in enumerate(msgs):
         if ende - ts > SALVE_ENDFENSTER:
@@ -237,6 +245,12 @@ def main() -> int:
             "SELECT message_ts, lower(chatter_login), session_id FROM twitch_chat_messages "
             "WHERE lower(streamer_login) = %s ORDER BY message_ts", (login,))
         nachrichten = cur.fetchall()
+        # Echtes Streamende je Session — die letzte Chat-Nachricht taugt dafür
+        # nicht (siehe finde_salven). Läuft die Session noch, bleibt es None.
+        cur.execute(
+            "SELECT id, ended_at FROM twitch_stream_sessions "
+            "WHERE lower(streamer_login) = %s", (login,))
+        session_ende: dict[int, datetime | None] = dict(cur.fetchall())
 
     users = fetch_users(alle, cid, app_token(cid, secret))
     monate = Counter(u["created_at"][:7] for u in users.values())
@@ -248,8 +262,8 @@ def main() -> int:
         pro_session[sid].append((ts, who))
         pro_konto[who].append(ts)
     salve_konten: set[str] = set()
-    for msgs in pro_session.values():
-        salve_konten |= finde_salven(msgs)
+    for sid, msgs in pro_session.items():
+        salve_konten |= finde_salven(msgs, session_ende.get(sid))
     takt_konten = taktkonten(pro_session, login)
 
     for name, k in konten.items():

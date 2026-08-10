@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id?\", last_game, had_deadlock_in_session\n              FROM twitch_live_state\n             WHERE twitch_user_id = $2\n                OR (streamer_login = $1\n                    AND (twitch_user_id IS NULL OR $2::text IS NULL))\n             ORDER BY (twitch_user_id = $2) DESC NULLS LAST\n             LIMIT 1\n            ",
+  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id?\", last_game, had_deadlock_in_session\n              FROM twitch_live_state\n             WHERE twitch_user_id = $2\n                OR (streamer_login = $1 AND $2::text IS NULL)\n             ORDER BY (twitch_user_id = $2) DESC NULLS LAST\n             LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -31,5 +31,5 @@
       true
     ]
   },
-  "hash": "1c22a007cfdc08444ccb8dc9d7906d1369328bbb0f2153fdd7004ef5c1d961ec"
+  "hash": "5891cf085b8cb9dab584c2be2fb6cc43ed15587d00d6edb9b18b1a08d4cd3158"
 }

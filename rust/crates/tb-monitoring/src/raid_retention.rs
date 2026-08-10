@@ -119,6 +119,16 @@ async fn compute_one(pool: &PgPool, raid: &RaidRow) -> Result<Outcome, sqlx::Err
     .fetch_optional(pool)
     .await?;
     let Some(target_session_id) = target_session else {
+        // Nur ein Zähler nach außen: hier steht der Einzelfall, weil er zwei
+        // sehr verschiedene Ursachen hat — das Ziel hatte keine offene Session
+        // (harmlos), oder die Session-Zeile trägt eine andere `twitch_user_id`
+        // als der Raid (Datenfehler, ID-Zweig sperrt dann den Login-Zweig).
+        tracing::debug!(
+            raid_id = raid.id,
+            to_login = %raid.to_login,
+            to_broadcaster_id = ?raid.to_broadcaster_id,
+            "raid_retention: keine Ziel-Session zum Raid-Zeitpunkt"
+        );
         return Ok(Outcome::SkippedNoSession);
     };
 

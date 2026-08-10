@@ -401,7 +401,7 @@ impl LearnedPatterns {
                     // Distinktivitäts-Gate darf nicht wirksam werden —
                     // generische Muster wären harte Signale (+2) gegen
                     // harmloses Viewer-Gerede.
-                    if !is_distinctive_spam_pattern(&pattern) {
+                    if !is_distinctive_spam_pattern_vom_menschen(&pattern) {
                         tracing::warn!(
                             pattern = %pattern,
                             "Gelerntes Spam-Muster ignoriert: nicht distinktiv (Altbestand)"
@@ -658,86 +658,130 @@ const PHRASE_MIN_WORDS: usize = 5;
 /// Zweite Bedingung der Phrasen-Regel: Mindestlänge in Zeichen.
 const PHRASE_MIN_CHARS: usize = 30;
 
+/// Höchstzahl Tokens, die ein Muster **ohne** Domain im strengen Gate haben
+/// darf. Ein Dienstname steht allein oder mit einem Zusatz („streamboo",
+/// „ai clicknex"); ab drei Tokens ist es ein Satz, und dann trägt nicht mehr
+/// der Name das Muster, sondern irgendein längeres Alltagswort darin. Genau
+/// daran scheiterte die erste Fassung: „cheap viewers and followers available"
+/// kam über „available" (9 Zeichen) durch, „i can help you grow your channel"
+/// über „channel" (7).
+const STRICT_MAX_TOKENS: usize = 2;
+
+/// Normalform eines Tokens für beide Gate-Zweige, oder `None`, wenn das Token
+/// von vornherein nichts trägt. Gleiche Normalform wie `compact()` im
+/// Matching: nur Alphanumerik — „view.ers" kompaktiert zu „viewers" und ist
+/// damit genauso generisch wie „viewers".
+fn gate_token(token: &str) -> Option<(&str, String)> {
+    let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+    let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+    if compacted.chars().count() < 4 || GENERIC_PATTERN_TOKENS.contains(&compacted.as_str()) {
+        return None;
+    }
+    Some((t, compacted))
+}
+
+/// Domain, deren registrierbarer Name (Label vor der TLD) selbst distinktiv
+/// ist. Fängt „viewer.com" und „view.ers" ab.
+fn ist_dienstdomain(token: &str) -> bool {
+    let Some((t, _)) = gate_token(token) else {
+        return false;
+    };
+    let labels: Vec<&str> = t.trim_matches('.').split('.').filter(|l| !l.is_empty()).collect();
+    labels.len() >= 2 && {
+        let name = labels[labels.len() - 2];
+        name.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&name)
+    }
+}
+
+/// Einzelwort ohne Punkt, ab 6 Zeichen dienstnamen-tauglich — darunter
+/// überwiegen Alltagswörter, die das Gate nicht per Blockliste aufzählen kann.
+/// Darüber auch, deshalb greift dieser Zweig nur bis [`STRICT_MAX_TOKENS`].
+fn ist_dienstwort(token: &str) -> bool {
+    let Some((t, compacted)) = gate_token(token) else {
+        return false;
+    };
+    !t.trim_matches('.').contains('.') && compacted.chars().count() >= 6
+}
+
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
-/// werden: mindestens ein Token muss eine Domain mit distinktivem
-/// registrierbarem Namen sein („eballo.com") oder ein Nicht-Generikum mit
-/// >= 6 Zeichen (Dienstname wie „streamboo", „clicknex", „peakpy") — kurze
-/// > Alltagswörter („hello") tragen kein Muster, sie würden als Learned-*
-/// > hartes Spam-Signal (+2) gegen normale Chat-Nachrichten wirken.
+/// werden: entweder trägt ein Token eine Domain mit distinktivem
+/// registrierbarem Namen („eballo.com", „clicknex.online") — dann ist die
+/// Länge des Musters egal —, oder das ganze Muster besteht aus höchstens
+/// [`STRICT_MAX_TOKENS`] Tokens, von denen eines ein Dienstname ist
+/// („streamboo", „peakpy").
 ///
-/// Ausnahme ist der ganze Satz: ab [`PHRASE_MIN_WORDS`] Wörtern **und**
-/// [`PHRASE_MIN_CHARS`] Zeichen trägt die Phrase sich selbst. Anonyme Angebote
-/// („boost viewers on the stream – promotion. ru") bestehen nur aus
-/// Allerweltswörtern und wären sonst nicht lernbar — genau daran scheiterte
-/// jede Mod-Korrektur solcher Alerts (10.08.2026).
+/// Dies ist das **strenge** Gate ohne Phrasen-Ausnahme. Es gilt überall, wo
+/// kein Mensch im Loop steht — allen voran auf dem Judge-Pfad
+/// (`scam_pitch::persist_spam_learning`). Ein gelerntes Muster ist laut
+/// `has_hard_spam_signal` immer ein hartes Signal (+2) und erreicht zusammen
+/// mit dem Erstnachricht-Zuschlag `SPAM_MIN_MATCHES` — ein Judge-Fehlurteil
+/// über einen harmlosen Langsatz („i can help you find good builds for this
+/// hero") würde damit jeden Erstchatter mit diesem Satz in **jedem** Kanal
+/// bannen, dauerhaft und rückwirkend über [`LearnedPatterns::load`].
+/// Die Phrasen-Ausnahme steht deshalb in
+/// [`is_distinctive_spam_pattern_vom_menschen`] und nicht hier.
 ///
-/// Diese Ausnahme umgeht [`GENERIC_PATTERN_TOKENS`] bewusst und vollständig:
-/// eine Phrase aus lauter generischen Tokens ist ab dieser Länge lernbar und
-/// wirkt dann über `has_hard_spam_signal` als hartes Signal. Die Decke dieser
-/// Lockerung ist die Länge, nicht das Vokabular — greift sie zu weit, gehört
-/// die Schwelle hoch oder `Learned-Phrase` aus dem Hart-Zweig, nicht ein
-/// zweites Token-Gate (das würde genau die anonymen Angebote wieder sperren).
-///
-/// Welcher Pfad die Ausnahme wirklich erreicht: der **Mod-Pfad**
-/// (`tb-internal-api::handlers::spam_learning`, ein Mensch trägt die Phrase
-/// ein). Auf dem **Judge-Pfad** greift sie kaum — der v3-Prompt verlangt für
-/// genau diese anonymen Angebote `pattern = null`, und
-/// `scam_pitch::persist_spam_learning` steigt bei `None` sofort aus. Das ist so
-/// gewollt: ein Judge-Fehlurteil würde hier ohne Menschen im Loop zu einem
-/// dauerhaften harten Signal über alle Kanäle. Wer den Prompt lockert, damit er
-/// auch anonyme Phrasen liefert, muss vorher einen Menschen dazwischenschalten.
-///
-/// Dritter Pfad, und der einzige rückwirkende: [`LearnedPatterns::load`] filtert
-/// den **Altbestand** bei jedem Reload durch dieselbe Funktion. Eine Zeile, die
-/// unter der alten Regel inert in `twitch_auto_learned_spam_patterns` lag, wird
-/// durch eine Lockerung wieder scharf, ohne dass jemand sie erneut einträgt.
-/// Deshalb gehört zu jeder Änderung an dieser Funktion ein Blick in die Tabelle.
-/// Stand 10.08.2026 stehen dort zwei Zeilen (`streamboo.com`, `eballo.com`),
-/// beide über den Domain-Zweig distinktiv, **null** von der Phrasen-Ausnahme
-/// erfasst — die Lockerung reaktiviert nichts.
-///
-/// Geprüft wird auf derselben Normalform wie das Matching (Kompaktform ohne
-/// Satzzeichen): „view.ers" kompaktiert zu „viewers" und ist damit genauso
-/// generisch wie „viewers".
-///
-/// „eballo.com" ✓ · „streamboo" ✓ ·
-/// „boost viewers on the stream – promotion. ru" ✓ (7 Wörter / 43 Zeichen) ·
-/// „boost viewers on the stream" ✗ (5 Wörter, aber 27 Zeichen — beide
-/// Bedingungen müssen halten) · „best viewers" ✗ · „hello viewers" ✗ ·
-/// „view.ers" ✗ · „viewer.com" ✗
+/// „eballo.com" ✓ · „streamboo" ✓ · „ai viewers clicknex.online" ✓ (Domain) ·
+/// „best viewers" ✗ · „hello viewers" ✗ · „view.ers" ✗ · „viewer.com" ✗ ·
+/// „cheap viewers and followers available" ✗ (5 Tokens, keine Domain) ·
+/// „boost viewers on the stream – promotion. ru" ✗ (8 Tokens, „promotion."
+/// hat kein zweites Label und ist damit keine Domain)
 pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
+    // „eballo .com" ist dieselbe Domain wie „eballo.com" — das Leerzeichen vor
+    // dem Punkt ist ein verbreiteter Trennversuch. Ein Satzpunkt klebt dagegen
+    // am Wortende („Hi. How are you") und bleibt hier unangetastet.
+    let lowered = pattern.to_lowercase().replace(" .", ".");
+    let tokens: Vec<&str> = lowered.split_whitespace().collect();
+    if tokens.iter().copied().any(ist_dienstdomain) {
+        return true;
+    }
+    tokens.len() <= STRICT_MAX_TOKENS && tokens.iter().copied().any(ist_dienstwort)
+}
+
+/// Wie [`is_distinctive_spam_pattern`], zusätzlich mit der Phrasen-Ausnahme:
+/// ab [`PHRASE_MIN_WORDS`] Wörtern **und** [`PHRASE_MIN_CHARS`] Zeichen trägt
+/// der Satz sich selbst, auch wenn er aus lauter generischen Tokens besteht.
+///
+/// **Nur für Muster, die ein Mensch eingetragen hat.** Anonyme Angebote
+/// („boost viewers on the stream – promotion. ru") haben keinen Dienstnamen und
+/// fallen durch das strenge Gate — genau daran scheiterte jede Mod-Korrektur
+/// solcher Alerts (10.08.2026). Die Lockerung umgeht [`GENERIC_PATTERN_TOKENS`]
+/// vollständig, ihre einzige Decke ist die Länge. Das ist tragbar, solange ein
+/// Mensch den Eintrag verantwortet; ohne einen wäre es ein Freibrief für
+/// beliebige Fünf-Wort-Sätze als globales Ban-Muster (Merge-Kritiker
+/// 10.08.2026).
+///
+/// Zwei Aufrufer, beide mit Mensch davor:
+/// - `tb-internal-api::handlers::spam_learning` — die Mod-Korrektur selbst.
+/// - [`LearnedPatterns::load`] — der Reload dessen, was so entstanden ist.
+///   Das ist der einzige **rückwirkende** Pfad: eine Lockerung hier hebt jede
+///   alte Zeile wieder in Kraft, die die neue Regel erfüllt. Stand 10.08.2026
+///   stehen in `twitch_auto_learned_spam_patterns` zwei Zeilen
+///   (`streamboo.com`, `eballo.com`), beide über den Domain-Zweig distinktiv,
+///   null von der Phrasen-Ausnahme erfasst.
+///
+/// Gezählt wird mit `split_whitespace`: „boost viewers on the stream –
+/// promotion. ru" sind 8 Tokens (der Gedankenstrich zählt mit) und 43 Zeichen.
+///
+/// Eine Lücke bleibt bewusst offen: mittellange Einträge ohne Domain
+/// (3 bis 4 Tokens, unter [`PHRASE_MIN_CHARS`] Zeichen — „cheap viewers
+/// available") fallen durch beide Zweige, weil sie für [`STRICT_MAX_TOKENS`]
+/// zu lang und für die Phrasen-Regel zu kurz sind. Der Mod bekommt eine
+/// Ablehnung und trägt den vollen Satz ein; das ist billiger als ein
+/// Drei-Wort-Generikum als globales Ban-Muster.
+///
+/// „boost viewers on the stream – promotion. ru" ✓ ·
+/// „cheap viewers and followers available" ✓ (5 / 37) ·
+/// „boost viewers on the stream" ✗ (5 Wörter, aber 27 Zeichen — beide
+/// Bedingungen müssen halten) · „hey how are you doing" ✗ (5 / 21)
+pub fn is_distinctive_spam_pattern_vom_menschen(pattern: &str) -> bool {
     let lowered = pattern.to_lowercase();
     if lowered.split_whitespace().count() >= PHRASE_MIN_WORDS
         && lowered.chars().count() >= PHRASE_MIN_CHARS
     {
         return true;
     }
-    lowered.split_whitespace().any(|token| {
-        let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
-        // Gleiche Normalform wie compact() im Matching: nur Alphanumerik.
-        let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
-        if compacted.chars().count() < 4
-            || GENERIC_PATTERN_TOKENS.contains(&compacted.as_str())
-        {
-            return false;
-        }
-        let core = t.trim_matches('.');
-        if core.contains('.') {
-            // Domain-artig: der registrierbare Name (Label vor der TLD) muss
-            // selbst distinktiv sein — fängt „viewer.com" und „view.ers".
-            let labels: Vec<&str> = core.split('.').filter(|l| !l.is_empty()).collect();
-            if labels.len() < 2 {
-                return false;
-            }
-            let name = labels[labels.len() - 2];
-            name.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&name)
-        } else {
-            // Einzelwort ohne Punkt: erst ab 6 Zeichen dienstnamen-tauglich —
-            // darunter überwiegen Alltagswörter, die das Gate nicht per
-            // Blockliste aufzählen kann.
-            compacted.chars().count() >= 6
-        }
-    })
+    is_distinctive_spam_pattern(pattern)
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,19 +1056,40 @@ mod tests {
     }
 
     #[test]
-    fn gate_akzeptiert_ganze_saetze_ohne_dienstnamen() {
+    fn menschen_gate_akzeptiert_ganze_saetze_ohne_dienstnamen() {
         // Anonyme Angebote bestehen nur aus Allerweltswörtern. Als ganzer Satz
         // sind sie trotzdem distinktiv — ohne diese Regel lief jede
         // Mod-Korrektur eines solchen Alerts ins Leere (10.08.2026).
-        assert!(is_distinctive_spam_pattern(
+        assert!(is_distinctive_spam_pattern_vom_menschen(
             "Boost viewers on the stream – promotion. ru"
         ));
-        assert!(is_distinctive_spam_pattern(
+        assert!(is_distinctive_spam_pattern_vom_menschen(
             "cheap viewers and followers available"
         ));
-        assert!(is_distinctive_spam_pattern(
+        assert!(is_distinctive_spam_pattern_vom_menschen(
             "i can help you grow your channel"
         ));
+    }
+
+    #[test]
+    fn strenges_gate_lehnt_dieselben_saetze_ab() {
+        // Der Judge-Pfad hat keinen Menschen im Loop: ein Fehlurteil würde hier
+        // zu einem dauerhaften harten Ban-Signal über alle Kanäle. Deshalb
+        // greift für ihn nur der Dienstnamen-Zweig (Merge-Kritiker 10.08.2026).
+        for satz in [
+            "Boost viewers on the stream – promotion. ru",
+            "cheap viewers and followers available",
+            "i can help you grow your channel",
+            // Der Fall, der den Blocker begründet: harmloser Langsatz.
+            "i can help you find good builds for this hero",
+        ] {
+            assert!(
+                !is_distinctive_spam_pattern(satz),
+                "ohne Menschen im Loop darf {satz:?} nicht lernbar sein"
+            );
+        }
+        // Mit Dienstname bleibt der Judge-Pfad lernfähig.
+        assert!(is_distinctive_spam_pattern("Ai viewers clicknex.online"));
     }
 
     #[test]
@@ -1037,27 +1102,27 @@ mod tests {
     }
 
     #[test]
-    fn gate_lehnt_alltagssaetze_trotz_satzlaenge_ab() {
+    fn menschen_gate_lehnt_alltagssaetze_trotz_satzlaenge_ab() {
         // Die Phrasen-Regel umgeht das Token-Gate bewusst — jede so gelernte
         // Phrase wird über has_hard_spam_signal zum harten Ban-Signal. Die
         // Schwelle muss deshalb ueber dem liegen, was ein Mensch beilaeufig
         // schreibt (Merge-Kritiker 10.08.2026).
         assert!(
-            !is_distinctive_spam_pattern("more real live viewers"),
+            !is_distinctive_spam_pattern_vom_menschen("more real live viewers"),
             "4 Woerter / 22 Zeichen, alle Tokens generisch"
         );
         assert!(
-            !is_distinctive_spam_pattern("hey how are you doing"),
+            !is_distinctive_spam_pattern_vom_menschen("hey how are you doing"),
             "5 Woerter / 21 Zeichen, harmloser Gruss"
         );
         assert!(
-            !is_distinctive_spam_pattern("gg that was a good game"),
+            !is_distinctive_spam_pattern_vom_menschen("gg that was a good game"),
             "6 Woerter / 23 Zeichen, normaler Chat"
         );
         // Beide Bedingungen muessen halten: Wortzahl reicht, Laenge nicht.
         // Ohne die Zeichen-Bedingung waere das hier lernbar.
         assert!(
-            !is_distinctive_spam_pattern("boost viewers on the stream"),
+            !is_distinctive_spam_pattern_vom_menschen("boost viewers on the stream"),
             "5 Woerter, aber nur 27 Zeichen"
         );
     }

@@ -114,14 +114,18 @@ def main() -> int:
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT chatter_login, count(DISTINCT session_id), sum(COALESCE(messages, 0)),
+            -- Gruppiert über den kleingeschriebenen Login: Twitch-Namen sind
+            -- fallunabhängig, zwei Schreibweisen desselben Kontos ergäben sonst
+            -- zwei Zeilen und eine überschriebe die andere im Dict.
+            SELECT lower(chatter_login), count(DISTINCT session_id),
+                   sum(COALESCE(messages, 0)),
                    min(COALESCE(first_message_at, last_seen_at))::date
             FROM twitch_session_chatters WHERE lower(streamer_login) = %s
             GROUP BY 1 HAVING count(DISTINCT session_id) >= %s
             """,
             (login, args.min_sessions),
         )
-        local = {r[0].lower(): {"sessions": r[1], "msgs": r[2] or 0, "erstmals": r[3]}
+        local = {r[0]: {"sessions": r[1], "msgs": r[2] or 0, "erstmals": r[3]}
                  for r in cur.fetchall() if r[0]}
 
     logins = sorted(local)

@@ -17,7 +17,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tracing::warn;
+use tracing::debug;
 
 use super::metrics::ViewerSample;
 use crate::stream::{iso_seconds, parse_dt_utc};
@@ -149,6 +149,16 @@ impl SessionStore {
     /// genau in diesem Fenster legte der reine Login-Lookup eine zweite Session
     /// an. Der Login-Zweig bleibt, solange der Backfill eine Restmenge ohne ID
     /// lässt (Prod 2026-08-02: 8393 von 9325 Zeilen).
+    ///
+    /// **Nicht gelöst, nur eingegrenzt:** Für eine offene Zeile *ohne* ID
+    /// entscheidet weiterhin allein der Name. Gibt Kanal A den Login `alt` frei
+    /// und Kanal B übernimmt ihn, adoptiert B eine noch offene ID-lose Session
+    /// von A — vor dem ID-Umbau genauso, der Umbau macht es weder besser noch
+    /// schlechter. Was ihn eingrenzt: eine heute entstehende Session trägt die
+    /// ID von Anfang an (`NewSession::twitch_user_id` aus Poller und EventSub),
+    /// betroffen sind also nur Zeilen aus der Backfill-Restmenge, die zugleich
+    /// noch offen sind. Endgültig weg ist der Fall erst, wenn kein offener
+    /// Datensatz mehr ohne ID existiert — dann kann der Login-Zweig ganz raus.
     ///
     /// Der Nachzug ist der Grund, warum die Funktion schreibt: an derselben
     /// offenen Zeile hängen mehrere Leser, die **nur** den Login kennen — allen
@@ -286,13 +296,13 @@ impl SessionStore {
         )
         .fetch_one(&mut *tx)
         .await?;
-        // twitch_live_state ist über twitch_user_id geschlüsselt (PK); der
-        // Login-Zweig bleibt nur für Zeilen ohne ID.
+        // twitch_live_state ist über twitch_user_id geschlüsselt — die Spalte
+        // ist PK und NOT NULL, eine Zeile ohne ID kann es dort nicht geben.
+        // Der Login-Zweig trägt deshalb nur Aufrufer, die selbst keine ID haben.
         let live_state_rows = sqlx::query!(
             "UPDATE twitch_live_state SET active_session_id = $1
               WHERE twitch_user_id = $3
-                 OR (streamer_login = $2
-                     AND (twitch_user_id IS NULL OR $3::text IS NULL))",
+                 OR (streamer_login = $2 AND $3::text IS NULL)",
             session_id,
             &new.streamer_login,
             user_id,
@@ -300,15 +310,15 @@ impl SessionStore {
         .execute(&mut *tx)
         .await?
         .rows_affected();
-        // Trifft das UPDATE keine Zeile, bleibt `active_session_id` leer und
-        // jeder Leser, der die laufende Session über den Live-State auflöst,
-        // sieht den Kanal als nicht live — ohne Fehler irgendwo. Der Fall ist
-        // erwartbar (Kanal noch nie im Live-State), aber nicht folgenlos.
+        // Kein Fehler: der Poller schreibt `active_session_id` im selben
+        // Durchlauf per Upsert nach (`poller::engine`), und ein Kanal, der zum
+        // ersten Mal live geht, hat hier naturgemäß noch keine Zeile. Als warn
+        // stünde für jeden solchen Kanal eine Meldung ohne Sachverhalt im Log.
         if live_state_rows == 0 {
-            warn!(
+            debug!(
                 channel = %new.streamer_login,
                 session_id,
-                "twitch_live_state ohne passende Zeile — active_session_id bleibt leer"
+                "twitch_live_state ohne passende Zeile — der Poller-Upsert zieht nach"
             );
         }
         tx.commit().await?;
@@ -585,9 +595,15 @@ impl SessionStore {
         )
         .execute(&mut *tx)
         .await?;
+        // Über die Session-ID, nicht über den Login: der Setter in
+        // `start_session` findet die Zeile ID-first, ein login-basierter Räumer
+        // fände sie im Rename-Fenster nicht und ließe `active_session_id` auf
+        // eine geschlossene Session zeigen. Die ID ist hier der genauere
+        // Schlüssel als beides — sie trifft genau die Zeile, die auf diese
+        // Session zeigt.
         sqlx::query!(
-            "UPDATE twitch_live_state SET active_session_id = NULL WHERE streamer_login = $1",
-            &update.streamer_login,
+            "UPDATE twitch_live_state SET active_session_id = NULL WHERE active_session_id = $1",
+            update.session_id,
         )
         .execute(&mut *tx)
         .await?;

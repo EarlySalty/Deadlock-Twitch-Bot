@@ -108,7 +108,7 @@ pub async fn learn_handler(
         return Err(ApiError::bad_request("verdict must be spam"));
     }
 
-    if !tb_chat::spam_filter::is_distinctive_spam_pattern(&pattern) {
+    if !tb_chat::spam_filter::is_distinctive_spam_pattern_vom_menschen(&pattern) {
         tracing::warn!(
             pattern = %pattern,
             "spam-learning: Muster abgelehnt (Distinktivitäts-Gate, nur generisches Vokabular)"

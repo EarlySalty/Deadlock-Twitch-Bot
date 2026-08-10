@@ -14,23 +14,14 @@ use tb_monitoring::{LiveStateStore, NewSession, StartOutcome};
 mod support;
 
 /// Ohne Test-DB werden alle Tests dieser Datei zu stillen No-ops — ein Lauf
-/// meldet dann „ok" und hat nichts geprüft. `TB_TEST_REQUIRE_DB=1` macht das
-/// zum harten Fehler, damit ein Testnachweis belegbar bleibt.
+/// meldet dann „ok" und hat nichts geprüft. Wer einen Testnachweis über diese
+/// Datei führt, setzt `TB_TEST_REQUIRE_DB=1`: `support::pool_in_schema` panict
+/// dann statt `None` zu liefern.
 macro_rules! pool_or_skip {
     ($schema:expr) => {
         match support::pool_in_schema($schema).await {
             Some(pool) => pool,
-            None => {
-                if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                    panic!(
-                        "TB_TEST_REQUIRE_DB=1 gesetzt, aber keine Test-DB erreichbar \
-                         (TB_TEST_DATABASE_URL) — Schema {}",
-                        $schema
-                    );
-                }
-                eprintln!("SKIP {}: keine Test-DB (TB_TEST_DATABASE_URL)", $schema);
-                return;
-            }
+            None => return,
         }
     };
 }
@@ -431,4 +422,56 @@ async fn raid_retention_findet_die_zielsession_ueber_die_id() {
         "die Ziel-Session muss über die ID gefunden werden, nicht über den Namen"
     );
     assert_eq!(stats.raids_computed, 1, "der Raid muss berechnet werden");
+}
+
+/// Kehrseite des ID-Vorrangs: trägt die Session-Zeile eine *andere* ID als der
+/// Raid, greift der Login-Zweig bewusst nicht mehr — der Raid fällt als
+/// `SkippedNoSession` heraus, statt einer fremden Session zugerechnet zu werden.
+///
+/// Das ist die gewollte Richtung: bei einem Rename ist gerade der Login
+/// mehrdeutig, die ID nicht. Der Preis steht hier im Test, damit ihn niemand
+/// versehentlich mit einem Login-Fallback wieder einhandelt — und der Fall
+/// bleibt über die `debug!`-Zeile in `compute_one` auffindbar
+/// (Merge-Kritiker 10.08.2026).
+#[tokio::test]
+async fn raid_retention_ueberspringt_session_mit_fremder_id() {
+    let Some(pool) = support::pool_with_chatters_schema("t_raid_retention_fremd").await else {
+        return;
+    };
+    let executed = chrono::Utc::now() - chrono::Duration::hours(2);
+    // Login passt, ID nicht: ein anderer Kanal, der denselben Namen führt.
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, twitch_user_id, started_at, samples)
+         VALUES (9002, $1, '999999999', $2, 5)",
+    )
+    .bind(NEU)
+    .bind(executed - chrono::Duration::hours(1))
+    .execute(&pool)
+    .await
+    .expect("Fremd-Session anlegen");
+    sqlx::query(
+        "INSERT INTO twitch_raid_history
+             (id, from_broadcaster_login, to_broadcaster_login, to_broadcaster_id,
+              viewer_count, executed_at)
+         VALUES (7002, 'quelle', $1, $2, 12, $3)",
+    )
+    .bind(NEU)
+    .bind(UID)
+    .bind(executed)
+    .execute(&pool)
+    .await
+    .expect("Raid anlegen");
+
+    let stats = tb_monitoring::raid_retention::compute_raid_retention(&pool)
+        .await
+        .expect("Retention-Lauf darf nicht fehlschlagen");
+
+    assert_eq!(
+        stats.raids_computed, 0,
+        "eine Session mit fremder ID darf dem Raid nicht zugerechnet werden"
+    );
+    assert_eq!(
+        stats.raids_skipped_no_session, 1,
+        "der Raid muss als SkippedNoSession gezählt werden"
+    );
 }

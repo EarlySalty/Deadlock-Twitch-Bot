@@ -50,19 +50,20 @@ class TestSalve:
         """Gemessener Fall: neun Konten verabschieden sich in 22 Sekunden."""
         msgs = [(T0 + timedelta(seconds=s), f"konto{i}")
                 for i, s in enumerate([58, 64, 70, 70, 71, 77, 78, 79, 80])]
-        assert len(cc.finde_salven(msgs)) == 9
+        ende = T0 + timedelta(seconds=85)
+        assert len(cc.finde_salven(msgs, ende)) == 9
 
     def test_normaler_chatverlauf_ist_keine_salve(self):
         """Vier Leute, die sich über eine Viertelstunde verteilt melden."""
         msgs = [(T0 + timedelta(seconds=s), f"konto{i % 4}")
                 for i, s in enumerate([0, 120, 300, 480, 700, 900])]
-        assert cc.finde_salven(msgs) == set()
+        assert cc.finde_salven(msgs, T0 + timedelta(seconds=920)) == set()
 
     def test_zu_wenige_konten_sind_keine_salve(self):
         """Zwei Leute, die gleichzeitig 'gg' schreiben, sind kein Ring."""
         msgs = [(T0, "a"), (T0 + timedelta(seconds=2), "b"),
                 (T0 + timedelta(seconds=4), "a")]
-        assert cc.finde_salven(msgs) == set()
+        assert cc.finde_salven(msgs, T0 + timedelta(seconds=10)) == set()
 
     def test_welle_mitten_im_stream_ist_keine_salve(self):
         """Fünf Leute, die in 40 Sekunden auf ein Spielereignis reagieren.
@@ -75,14 +76,33 @@ class TestSalve:
                  for i, s in enumerate([0, 8, 15, 27, 40])]
         # Der Stream läuft danach zwei Stunden weiter.
         danach = [(T0 + timedelta(minutes=m), "stammgast") for m in (30, 60, 90, 120)]
-        assert cc.finde_salven(welle + danach) == set()
+        ende = T0 + timedelta(minutes=125)
+        assert cc.finde_salven(welle + danach, ende) == set()
+
+    def test_welle_ohne_folgechat_ist_keine_salve(self):
+        """Dieselbe Welle, danach schweigt der Chat — der Stream läuft weiter.
+
+        Der Fall, an dem die letzte Nachricht als „Streamende" scheitert: ohne
+        Folgechat wäre `msgs[-1]` das Wellenende und alle fünf stünden namentlich
+        im Bericht (Merge-Kritiker 10.08.2026)."""
+        welle = [(T0 + timedelta(seconds=s), f"konto{i}")
+                 for i, s in enumerate([0, 8, 15, 27, 40])]
+        ende = T0 + timedelta(hours=2, minutes=30)
+        assert cc.finde_salven(welle, ende) == set()
 
     def test_gleiche_welle_am_streamende_zaehlt_weiter(self):
         """Gegenstück: dieselbe Welle, nur am Ende — muss anschlagen."""
         davor = [(T0 + timedelta(minutes=m), "stammgast") for m in (0, 30, 60, 90)]
         welle = [(T0 + timedelta(minutes=120, seconds=s), f"konto{i}")
                  for i, s in enumerate([0, 8, 15, 27, 40])]
-        assert len(cc.finde_salven(davor + welle)) == 5
+        ende = T0 + timedelta(minutes=121)
+        assert len(cc.finde_salven(davor + welle, ende)) == 5
+
+    def test_laufende_session_hat_kein_ende(self):
+        """Ohne `ended_at` gibt es keine Abschieds-Salve — nichts wird gewertet."""
+        msgs = [(T0 + timedelta(seconds=s), f"konto{i}")
+                for i, s in enumerate([58, 64, 70, 70, 71, 77, 78, 79, 80])]
+        assert cc.finde_salven(msgs, None) == set()
 
 
 class TestTaktkonten:

@@ -588,8 +588,9 @@ impl LiveStateStore {
 
     /// Liest den Finalize-relevanten Zustand eines Kanals — ID zuerst.
     ///
-    /// `twitch_live_state` ist über `twitch_user_id` geschlüsselt; der
-    /// Login-Zweig bleibt nur für Zeilen, denen die ID noch fehlt.
+    /// `twitch_live_state` ist über `twitch_user_id` geschlüsselt — die Spalte
+    /// ist PK und NOT NULL, eine Zeile ohne ID kann es dort nicht geben. Der
+    /// Login-Zweig trägt deshalb nur Aufrufer, die selbst keine ID haben.
     pub async fn finalize_state(
         &self,
         login: &str,
@@ -602,8 +603,7 @@ impl LiveStateStore {
             SELECT twitch_user_id AS "twitch_user_id?", last_game, had_deadlock_in_session
               FROM twitch_live_state
              WHERE twitch_user_id = $2
-                OR (streamer_login = $1
-                    AND (twitch_user_id IS NULL OR $2::text IS NULL))
+                OR (streamer_login = $1 AND $2::text IS NULL)
              ORDER BY (twitch_user_id = $2) DESC NULLS LAST
              LIMIT 1
             "#,
