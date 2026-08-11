@@ -216,6 +216,10 @@ impl BrokerAnnouncementSink {
         format!("{tracking_token}:{}", Self::live_bucket(render_now))
     }
 
+    fn preview_url_for_log(embed: &Value) -> Option<&str> {
+        embed.get("image")?.get("url")?.as_str()
+    }
+
     /// Rollen-ID aus einer Mention wie `<@&123>` (Python `_extract_role_id_from_mention`).
     #[allow(dead_code)]
     fn role_id_from_mention(text: &str) -> Option<i64> {
@@ -318,6 +322,7 @@ impl BrokerAnnouncementSink {
         let payload = self
             .render_live_payload(&login, &request, &tracking_token, render_now)
             .await;
+        let preview_url = Self::preview_url_for_log(&payload.embed).map(str::to_owned);
         let discord_message_id = message_id.clone();
         match self
             .transport
@@ -353,6 +358,14 @@ impl BrokerAnnouncementSink {
                         "Live-Sync nach Broker-Ausfall nachgeholt"
                     );
                 }
+                tracing::info!(
+                    login,
+                    discord_message_id = %discord_message_id,
+                    refresh_bucket = bucket,
+                    preview_url = ?preview_url,
+                    fehlversuche_vorher = recovered_after,
+                    "Live-Sync-Refresh via Broker erfolgreich"
+                );
                 EndAnnouncementOutcome::Updated
             }
             // Endgültig: Die Nachricht ist gelöscht, weitere Versuche sind
@@ -572,6 +585,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
+    use serde_json::json;
 
     use super::*;
     use crate::stream::{parse_dt_utc, StreamSnapshot};
@@ -608,5 +622,21 @@ mod tests {
 
         assert_eq!(image_for(base), image_for(same_bucket));
         assert_ne!(image_for(base), image_for(next_bucket));
+    }
+
+    #[test]
+    fn live_refresh_log_liest_die_gerenderte_preview_url() {
+        let embed = json!({
+            "image": {"url": "https://cdn/1280x720.jpg?rand=bucket-1"}
+        });
+
+        assert_eq!(
+            BrokerAnnouncementSink::preview_url_for_log(&embed),
+            Some("https://cdn/1280x720.jpg?rand=bucket-1")
+        );
+        assert_eq!(
+            BrokerAnnouncementSink::preview_url_for_log(&json!({})),
+            None
+        );
     }
 }
