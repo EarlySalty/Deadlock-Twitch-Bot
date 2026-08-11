@@ -1,4 +1,4 @@
-status: aktiv
+status: erledigt
 datum: 2026-08-11
 
 # Plan
