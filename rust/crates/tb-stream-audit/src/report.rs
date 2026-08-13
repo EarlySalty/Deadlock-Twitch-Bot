@@ -2,8 +2,10 @@
 //!
 //! Der Bericht ist das, was ein Mensch liest, und das Einzige, was den Rechner
 //! verlaesst. Deshalb steht in ihm nie ein Rohzitat, sondern die geschwaerzte
-//! Fassung und der Hash. Wer den Wortlaut braucht, geht ueber den Zeitstempel
-//! in die Aufnahme, und die liegt lokal.
+//! Fassung und der Hash. Der Wortlaut ist danach in aller Regel weg: die
+//! Aufnahme wird nach erfolgreicher Auswertung geloescht, und das Transkript
+//! bleibt nur liegen, wenn `STREAM_AUDIT_KEEP_TRANSCRIPT` vorher gesetzt war.
+//! Der Hash kann ein vorgelegtes Zitat bestaetigen, aber keines herstellen.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

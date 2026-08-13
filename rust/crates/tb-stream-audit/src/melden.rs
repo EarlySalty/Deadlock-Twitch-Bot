@@ -12,7 +12,10 @@ use serde::Serialize;
 
 /// Standard-Empfaenger, uebernommen aus `DEFAULT_ADMIN_DISCORD_USER_ID` der
 /// Python-Fassung.
-pub const STANDARD_EMPFAENGER: &str = "662995601738170389";
+pub const STANDARD_EMPFAENGER: u64 = 662995601738170389;
+
+/// Kopfzeile, mit der der Broker eine doppelte Zustellung erkennt.
+pub const IDEMPOTENZ_KOPF: &str = "X-Idempotency-Key";
 
 pub const BROKER_DM_PFAD: &str = "/internal/master/v1/discord/send-dm";
 
@@ -21,9 +24,12 @@ pub const BROKER_DM_PFAD: &str = "/internal/master/v1/discord/send-dm";
 /// die Kuerzung benannt.
 pub const DISCORD_GRENZE: usize = 1900;
 
+/// Der Broker nimmt `user_id` als Zahl. Als Zeichenkette weist er die
+/// Anfrage ab - der Fund waere dann dreimal erfolglos wiederholt und
+/// danach still verloren gewesen.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DmAnfrage {
-    pub user_id: String,
+    pub user_id: u64,
     pub content: String,
 }
 
@@ -66,12 +72,14 @@ pub fn broker_token() -> Option<String> {
 }
 
 /// Empfaenger aus `STREAM_AUDIT_DISCORD_USER_ID`, sonst der Standard.
-pub fn empfaenger() -> String {
+///
+/// Ein unlesbarer Wert faellt auf den Standard zurueck: lieber die DM an den
+/// bekannten Admin als gar keine.
+pub fn empfaenger() -> u64 {
     std::env::var("STREAM_AUDIT_DISCORD_USER_ID")
         .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| STANDARD_EMPFAENGER.to_owned())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(STANDARD_EMPFAENGER)
 }
 
 /// Kuerzt auf die Discord-Grenze und sagt es, statt still abzuschneiden.
@@ -85,11 +93,20 @@ pub fn kuerzen(text: &str) -> String {
     format!("{gekuerzt}{hinweis}")
 }
 
-pub fn anfrage(user_id: &str, content: &str) -> DmAnfrage {
+pub fn anfrage(user_id: u64, content: &str) -> DmAnfrage {
     DmAnfrage {
-        user_id: user_id.to_owned(),
+        user_id,
         content: kuerzen(content),
     }
+}
+
+/// Stabiler Schluessel je Bericht.
+///
+/// Faellt die Antwort des Brokers in eine Zeitueberschreitung, obwohl die DM
+/// ankam, wird der Block erneut ausgewertet und die DM erneut geschickt. Mit
+/// demselben Schluessel erkennt der Broker die Wiederholung.
+pub fn idempotenz_schluessel(lauf_id: &str) -> String {
+    format!("stream-audit:{lauf_id}")
 }
 
 #[cfg(test)]
@@ -119,9 +136,32 @@ mod tests {
 
     #[test]
     fn anfrage_traegt_empfaenger_und_gekuerzten_inhalt() {
-        let a = anfrage("123", "hallo");
-        assert_eq!(a.user_id, "123");
+        let a = anfrage(123, "hallo");
+        assert_eq!(a.user_id, 123);
         assert_eq!(a.content, "hallo");
+    }
+
+    #[test]
+    fn user_id_geht_als_zahl_ueber_die_leitung() {
+        // Der Broker-Endpunkt erwartet eine Zahl; als Zeichenkette lehnt er ab.
+        let json = serde_json::to_string(&anfrage(662995601738170389, "x")).expect("JSON");
+        assert!(
+            json.contains("\"user_id\":662995601738170389"),
+            "unerwartet: {json}"
+        );
+    }
+
+    #[test]
+    fn idempotenz_schluessel_haengt_am_lauf() {
+        assert_eq!(
+            idempotenz_schluessel("20260813-ricky-1"),
+            "stream-audit:20260813-ricky-1"
+        );
+        assert_ne!(
+            idempotenz_schluessel("a"),
+            idempotenz_schluessel("b"),
+            "zwei Berichte duerfen nicht denselben Schluessel bekommen"
+        );
     }
 
     #[test]
@@ -155,9 +195,13 @@ mod tests {
     #[test]
     fn empfaenger_kann_ueberschrieben_werden() {
         temp_env(&[("STREAM_AUDIT_DISCORD_USER_ID", Some("42"))], || {
-            assert_eq!(empfaenger(), "42")
+            assert_eq!(empfaenger(), 42)
         });
         temp_env(&[("STREAM_AUDIT_DISCORD_USER_ID", None)], || {
+            assert_eq!(empfaenger(), STANDARD_EMPFAENGER)
+        });
+        // Unlesbarer Wert: lieber die DM an den bekannten Admin als keine.
+        temp_env(&[("STREAM_AUDIT_DISCORD_USER_ID", Some("kein-id"))], || {
             assert_eq!(empfaenger(), STANDARD_EMPFAENGER)
         });
     }

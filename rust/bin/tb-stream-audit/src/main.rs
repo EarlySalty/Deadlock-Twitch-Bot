@@ -68,7 +68,7 @@ async fn main() {
         tracing::error!("TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET fehlen");
         std::process::exit(2);
     };
-    let Some(transkribierer) = OpenAiTranscriber::from_env() else {
+    let Some(transkribierer) = OpenAiTranscriber::from_env_with_timeout(STT_ZEITGRENZE) else {
         tracing::error!("Transkription nicht konfiguriert; ENGAGEMENT_STT_BASE_URL setzen");
         std::process::exit(2);
     };
@@ -162,8 +162,14 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
     let mut ohne_zettel = 0usize;
 
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
-        let Ok(mut dateien) = tokio::fs::read_dir(eintrag.path()).await else {
-            continue;
+        let mut dateien = match tokio::fs::read_dir(eintrag.path()).await {
+            Ok(dateien) => dateien,
+            Err(fehler) => {
+                // Weitermachen statt abbrechen: ein unlesbarer Ordner darf
+                // nicht alle folgenden Aufnahmen mitnehmen.
+                tracing::warn!(?fehler, ordner = ?eintrag.path(), "Ordner nicht lesbar");
+                continue;
+            }
         };
         while let Ok(Some(datei)) = dateien.next_entry().await {
             let pfad = datei.path();
@@ -238,6 +244,27 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
     })
 }
 
+/// Wie lange die Sendung schon laeuft, aus `started_at` von Helix.
+///
+/// Ein unlesbares oder fehlendes Datum ergibt 0 - dann zaehlen die Zeiten wie
+/// frueher ab Aufnahmebeginn, was ungenau, aber nicht falsch ist.
+fn sendungssekunden(sendung: &tb_transport_twitch::streams::HelixStream) -> u64 {
+    let Ok(start) = chrono::DateTime::parse_from_rfc3339(sendung.started_at.trim()) else {
+        return 0;
+    };
+    (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0) as u64
+}
+
+/// Zeitgrenze fuer eine Transkriptionsanfrage.
+///
+/// Ein Block ist zehn Minuten lang, und das lokale Whisper laeuft auf der CPU
+/// langsamer als Echtzeit. Die Vorgabe der Kiste sind 60 Sekunden - damit
+/// liefe jeder volle Block in die Zeitueberschreitung, dreimal, und waere
+/// danach verloren.
+const STT_ZEITGRENZE: Duration = Duration::from_secs(30 * 60);
+
 /// Umgebungsschalter fuer einen STT-Endpunkt ausserhalb dieses Rechners.
 const REMOTE_STT_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_STT";
 
@@ -296,20 +323,21 @@ async fn aufnahme_schleife(
     let mut staende: std::collections::HashMap<String, plan::Aufnahme> = Default::default();
 
     loop {
-        let live = match helix
+        let sendungen = match helix
             .get_streams_by_logins(&konfiguration.kanaele, None)
             .await
         {
-            Ok(streams) => streams
-                .into_iter()
-                .map(|s| s.user_login.to_lowercase())
-                .collect::<Vec<_>>(),
+            Ok(streams) => streams,
             Err(fehler) => {
                 tracing::warn!(?fehler, "Live-Abfrage fehlgeschlagen");
                 tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
                 continue;
             }
         };
+        let live: Vec<String> = sendungen
+            .iter()
+            .map(|s| s.user_login.to_lowercase())
+            .collect();
 
         // Beendete Tasks einsammeln und ihren Aufnahmestand zurueckholen.
         let fertige: Vec<String> = laufend
@@ -344,15 +372,23 @@ async fn aufnahme_schleife(
         // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
         staende.retain(|kanal, _| live.contains(kanal));
 
-        for kanal in &live {
+        for sendung in &sendungen {
+            let kanal = sendung.user_login.to_lowercase();
+            let kanal = &kanal;
             if laufend.contains_key(kanal) {
                 continue;
             }
             let zustand = staende.remove(kanal).unwrap_or_else(|| {
-                // Eine Kennung je Sendung. Ohne sie ueberschreibt der naechste
-                // Stream desselben Kanals die Berichte des vorigen.
-                let lauf = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-                plan::Aufnahme::starten(kanal.clone(), lauf)
+                // Kennung und Startzeit kommen von Twitch. Die Stream-ID ist
+                // ueber einen Neustart des Dienstes hinweg dieselbe, und der
+                // Zeitversatz macht die Zeiten im Bericht zu Sendungszeiten -
+                // "hoer dir Minute 12 an" trifft dann im VOD auch Minute 12.
+                let lauf = if sendung.id.trim().is_empty() {
+                    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
+                } else {
+                    sendung.id.trim().to_owned()
+                };
+                plan::Aufnahme::starten_bei(kanal.clone(), lauf, sendungssekunden(sendung))
             });
             if zustand.naechste_blocklaenge().is_none() {
                 // Deckel erreicht: Stand behalten, damit er beim naechsten Takt
@@ -427,6 +463,9 @@ async fn kanal_aufnehmen(
     }
 }
 
+/// Grundpause vor einer Wiederholung, mit dem Versuch multipliziert.
+const WIEDERHOLUNGS_PAUSE_SEKUNDEN: u64 = 120;
+
 /// Wie oft die Aufbewahrung greift.
 const AUFRAEUM_TAKT_SEKUNDEN: u64 = 60 * 60;
 
@@ -481,8 +520,16 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
             else {
                 continue;
             };
-            if alter > grenze && tokio::fs::remove_file(&pfad).await.is_ok() {
-                geloescht += 1;
+            if alter <= grenze {
+                continue;
+            }
+            match tokio::fs::remove_file(&pfad).await {
+                Ok(()) => geloescht += 1,
+                // Stilles Scheitern hiesse: der Bericht liegt weiter da und
+                // niemand weiss davon, obwohl die Aufbewahrung abgelaufen ist.
+                Err(fehler) => {
+                    tracing::warn!(?fehler, datei = ?pfad, "Bericht nicht loeschbar")
+                }
             }
         }
     }
@@ -527,6 +574,13 @@ async fn auswertungs_schleife(
             Err(fehler) => {
                 let bezeichnung = block.bezeichnung();
                 let versuch = block.versuche + 1;
+                // Ohne Pause sind die drei Versuche in Sekunden verbraucht.
+                // Der haeufigste Grund ist ein STT-Dienst, der gerade neu
+                // startet - der braucht laenger als drei Anlaeufe am Stueck.
+                tokio::time::sleep(Duration::from_secs(
+                    WIEDERHOLUNGS_PAUSE_SEKUNDEN * u64::from(versuch),
+                ))
+                .await;
                 if warteschlange.lock().await.erneut_versuchen(block) {
                     tracing::warn!(
                         block = %bezeichnung,
@@ -796,7 +850,7 @@ async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
     let Some(token) = melden::broker_token() else {
         return Err("kein Broker-Token, Fund waere unbemerkt geblieben".to_owned());
     };
-    let anfrage = melden::anfrage(&melden::empfaenger(), &report::dm_text(bericht, 5));
+    let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(bericht, 5));
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -805,6 +859,13 @@ async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
     match client
         .post(&url)
         .header("X-Internal-Token", token)
+        // Kommt die Antwort nicht an, obwohl die DM raus ist, laeuft der
+        // Block erneut. Der Schluessel haengt am Bericht, nicht am Versuch -
+        // der Broker erkennt die Wiederholung daran.
+        .header(
+            melden::IDEMPOTENZ_KOPF,
+            melden::idempotenz_schluessel(&bericht.lauf_id),
+        )
         .json(&anfrage)
         .send()
         .await
