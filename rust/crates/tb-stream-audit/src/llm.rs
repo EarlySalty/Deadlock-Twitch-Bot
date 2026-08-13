@@ -11,13 +11,18 @@
 //!
 //! # Was an das Modell geht
 //!
-//! Nur **redigierte** Segmenttexte. Kein Kanalname, keine Zuschauer, keine
-//! Steam- oder Discord-IDs. Das Modell soll Aussagen bewerten, nicht Personen.
+//! Segmenttexte, durch die Schwaerzung geschickt, mit laufender Nummer statt
+//! Segment-ID. Kein Kanalname, keine Stream-ID, keine Zuschauer, keine Steam-
+//! oder Discord-IDs: die eigentliche Segment-ID enthaelt Kanal und Sendung
+//! und bliebe sonst am Text kleben.
 //!
-//! Der Rohwortlaut geht nie hinaus. Ein Transkript fremder Streamer ist deren
-//! Sprache, nicht unsere; sie geht an einen fremden Anbieter nur geschwaerzt
-//! und nur, wenn das ausdruecklich erlaubt wurde. Ohne Erlaubnis bleibt es bei
-//! den Regelfunden, und der Bericht sagt das (siehe `report::Bericht`).
+//! Was die Schwaerzung **nicht** leistet: sie kennt die drei Muster aus
+//! [`crate::rules`] und sonst nichts. Alles andere - Namen, Beleidigungen ohne
+//! Reizwort, private Erzaehlungen - geht im Wortlaut mit. Das ist der Preis
+//! dafuer, dass ein Modell ueberhaupt etwas bewerten kann, und es ist der
+//! Grund, warum ein fremder Anbieter ausdruecklich erlaubt werden muss. Ohne
+//! Erlaubnis bleibt es bei den Regelfunden, und der Bericht sagt das (siehe
+//! `report::Bericht`). Audio verlaesst den Rechner nie.
 //!
 //! Die Erlaubnis steuert [`fernes_modell_erlaubt`]: ein Anbieter auf localhost
 //! gilt immer als erlaubt, alles andere nur mit
@@ -57,9 +62,11 @@ pub struct ModellFund {
     pub reason: String,
 }
 
+/// `findings` ist Pflicht. Frueher war das Feld optional: eine Antwort wie
+/// `{}` galt dann als vollstaendige Pruefung ohne Funde, und Stille war nicht
+/// von Sauberkeit zu unterscheiden.
 #[derive(Debug, Deserialize)]
 pub struct ModellAntwort {
-    #[serde(default)]
     pub findings: Vec<ModellFund>,
 }
 
@@ -116,16 +123,27 @@ fn host_aus_url(base_url: &str) -> Option<String> {
     Some(host.to_lowercase())
 }
 
-/// Die Nutzlast einer Anfrage: nur ID, Zeitfenster und **redigierter** Text.
+/// Laufende Nummer eines Segments innerhalb der Anfrage.
 ///
-/// Die Redaktion laeuft hier und nicht beim Aufrufer, damit kein zweiter
+/// Die echte Segment-ID traegt Kanal und Stream-ID. Sie mitzuschicken hiesse,
+/// dem Anbieter zu sagen, wen wir gerade pruefen - und genau das soll er
+/// nicht wissen.
+pub fn anfrage_id(stelle: usize) -> String {
+    format!("s{:05}", stelle + 1)
+}
+
+/// Die Nutzlast einer Anfrage: laufende Nummer, Zeitfenster und
+/// **geschwaerzter** Text.
+///
+/// Die Schwaerzung laeuft hier und nicht beim Aufrufer, damit kein zweiter
 /// Aufrufer sie vergessen kann.
 pub fn anfrage_json(stapel: &[Segment]) -> String {
     let eintraege: Vec<_> = stapel
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             serde_json::json!({
-                "id": s.id,
+                "id": anfrage_id(i),
                 "start_seconds": (s.start_sekunden * 100.0).round() / 100.0,
                 "end_seconds": (s.ende_sekunden * 100.0).round() / 100.0,
                 "text": crate::rules::redact_text(&s.text),
@@ -173,32 +191,72 @@ pub fn json_objekt_ausschneiden(roh: &str) -> Option<&str> {
 /// Funde zu unbekannten Segment-IDs fallen weg: das Modell soll keine IDs
 /// erfinden, und ein Fund ohne Zeitbezug ist im Bericht wertlos.
 pub fn zu_funden(antwort: &ModellAntwort, segmente: &[Segment]) -> Vec<Fund> {
-    antwort
-        .findings
-        .iter()
-        .filter_map(|treffer| {
-            let segment = segmente.iter().find(|s| s.id == treffer.segment_id)?;
-            Some(Fund {
-                segment_id: segment.id.clone(),
-                start_sekunden: segment.start_sekunden,
-                ende_sekunden: segment.ende_sekunden,
-                kategorie: treffer.category.clone(),
-                schwere: treffer.severity.clone(),
-                erkenner: "modell".to_owned(),
-                sicherheit: if treffer.confidence.is_empty() {
-                    "medium".to_owned()
-                } else {
-                    treffer.confidence.clone()
-                },
-                // Die Begruendung kommt vom Modell und zitiert gern das,
-                // was es beanstandet. Ohne Schwaerzung stuende genau der
-                // Wortlaut im Bericht, den der Beleg daneben verdeckt.
-                begruendung: crate::rules::redact_text(&treffer.reason),
-                zitat_redigiert: crate::rules::redact_text(&segment.text),
-                zitat_hash: crate::rules::evidence_hash(&segment.text),
-            })
-        })
-        .collect()
+    zu_funden_gezaehlt(antwort, segmente).0
+}
+
+/// Wie [`zu_funden`], gibt zusaetzlich die Zahl der verworfenen Treffer
+/// zurueck. Ein Modell, das IDs erfindet, hat nicht sauber gearbeitet; das
+/// gehoert in den Bericht und nicht ins Nichts.
+pub fn zu_funden_gezaehlt(antwort: &ModellAntwort, segmente: &[Segment]) -> (Vec<Fund>, usize) {
+    let mut verworfen = 0usize;
+    let mut funde = Vec::new();
+    for treffer in &antwort.findings {
+        let Some(segment) = stelle_aus_id(&treffer.segment_id).and_then(|i| segmente.get(i)) else {
+            verworfen += 1;
+            continue;
+        };
+        funde.push(Fund {
+            segment_id: segment.id.clone(),
+            start_sekunden: segment.start_sekunden,
+            ende_sekunden: segment.ende_sekunden,
+            kategorie: kategorie_normal(&treffer.category),
+            schwere: stufe_normal(&treffer.severity, "medium"),
+            erkenner: "modell".to_owned(),
+            sicherheit: stufe_normal(&treffer.confidence, "medium"),
+            // Die Begruendung kommt vom Modell und zitiert gern das, was sie
+            // beanstandet. Ohne Schwaerzung stuende genau der Wortlaut im
+            // Bericht, den der Beleg daneben verdeckt.
+            begruendung: crate::rules::redact_text(&treffer.reason),
+            zitat_redigiert: crate::rules::redact_text(&segment.text),
+            zitat_hash: crate::rules::evidence_hash(&segment.text),
+        });
+    }
+    (funde, verworfen)
+}
+
+/// Stelle im Stapel aus der laufenden Nummer, die wir vergeben haben.
+fn stelle_aus_id(id: &str) -> Option<usize> {
+    let nummer: usize = id.trim().trim_start_matches('s').parse().ok()?;
+    nummer.checked_sub(1)
+}
+
+/// Bekannte Kategorien; alles andere wird als `sonstiges` gefuehrt.
+///
+/// Ohne Normalisierung stuende im Bericht, was das Modell gerade schreibt -
+/// `HIGH`, `Harassment`, `critical` - und die Sortierung nach Schwere sowie
+/// die Zaehlung hoher Funde in der DM gingen daran vorbei.
+fn kategorie_normal(roh: &str) -> String {
+    let k = roh.trim().to_lowercase();
+    match k.as_str() {
+        "hate_speech_slur"
+        | "harassment"
+        | "threat_or_self_harm"
+        | "sexual_content"
+        | "discriminatory_speech" => k,
+        "" => "sonstiges".to_owned(),
+        _ => format!("sonstiges:{k}"),
+    }
+}
+
+/// `low|medium|high` aus einer Modellangabe; Unbekanntes faellt auf den
+/// Standard zurueck. `critical` gilt als `high`, nicht als niedrig.
+fn stufe_normal(roh: &str, standard: &str) -> String {
+    match roh.trim().to_lowercase().as_str() {
+        "low" | "niedrig" => "low".to_owned(),
+        "medium" | "mittel" => "medium".to_owned(),
+        "high" | "hoch" | "critical" | "kritisch" | "severe" => "high".to_owned(),
+        _ => standard.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -327,5 +385,80 @@ mod tests {
         .unwrap();
         let funde = zu_funden(&antwort, &[segment("s1", "text")]);
         assert_eq!(funde[0].sicherheit, "medium");
+    }
+}
+
+#[cfg(test)]
+mod tests_anonym {
+    use super::*;
+
+    fn segment(id: &str, text: &str) -> Segment {
+        Segment {
+            id: id.to_owned(),
+            start_sekunden: 0.0,
+            ende_sekunden: 10.0,
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn anfrage_nennt_weder_kanal_noch_sendung() {
+        let stapel = [segment(
+            "helmbombenricky-4711-t000600-s00001",
+            "harmloser Satz",
+        )];
+        let json = anfrage_json(&stapel);
+        assert!(
+            !json.contains("helmbombenricky") && !json.contains("4711"),
+            "Kanal oder Sendung stehen in der Anfrage: {json}"
+        );
+        assert!(json.contains("\"id\":\"s00001\""), "{json}");
+    }
+
+    #[test]
+    fn erfundene_ids_werden_gezaehlt_statt_verschluckt() {
+        let segmente = [segment("kanal-lauf-t000000-s00001", "text")];
+        let antwort = ModellAntwort {
+            findings: vec![
+                ModellFund {
+                    segment_id: "s00001".to_owned(),
+                    category: "harassment".to_owned(),
+                    severity: "high".to_owned(),
+                    confidence: String::new(),
+                    reason: "grund".to_owned(),
+                },
+                ModellFund {
+                    segment_id: "s09999".to_owned(),
+                    category: "harassment".to_owned(),
+                    severity: "high".to_owned(),
+                    confidence: String::new(),
+                    reason: "erfunden".to_owned(),
+                },
+            ],
+        };
+        let (funde, verworfen) = zu_funden_gezaehlt(&antwort, &segmente);
+        assert_eq!(funde.len(), 1);
+        assert_eq!(verworfen, 1);
+        assert_eq!(
+            funde[0].segment_id, "kanal-lauf-t000000-s00001",
+            "im Bericht steht wieder die echte ID"
+        );
+    }
+
+    #[test]
+    fn antwort_ohne_findings_ist_ein_fehler() {
+        // `{}` galt frueher als vollstaendige Pruefung ohne Funde.
+        assert!(serde_json::from_str::<ModellAntwort>("{}").is_err());
+        assert!(serde_json::from_str::<ModellAntwort>(r#"{"findings":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn schwere_wird_normalisiert() {
+        assert_eq!(stufe_normal("HIGH", "medium"), "high");
+        assert_eq!(stufe_normal("critical", "medium"), "high");
+        assert_eq!(stufe_normal("", "medium"), "medium");
+        assert_eq!(stufe_normal("voellig unbekannt", "medium"), "medium");
+        assert_eq!(kategorie_normal("Harassment"), "harassment");
+        assert_eq!(kategorie_normal("spam"), "sonstiges:spam");
     }
 }
