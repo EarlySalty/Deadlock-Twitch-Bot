@@ -11,15 +11,25 @@ use std::path::PathBuf;
 pub const KANAELE_ENV: &str = "STREAM_AUDIT_CHANNELS";
 /// Ablage fuer Berichte und Transkripte.
 pub const AUSGABE_ENV: &str = "STREAM_AUDIT_OUTPUT_DIR";
-/// Ob das Rohtranskript liegen bleibt. Standard: ja, sonst ist ein Fund im
-/// Bericht nicht mehr nachvollziehbar.
+/// Ob das Rohtranskript liegen bleibt. Standard: **nein**.
+///
+/// Die Coaching-Doku sagt zu, dass vollstaendige Transkripte nicht dauerhaft
+/// gespeichert werden. Ein Standard auf "behalten" haette diese Zusage still
+/// gebrochen: der Bericht traegt geschwaerzte Zitate und Hashes, das ist der
+/// Nachweis. Wer den Wortlaut fuer eine Sitzung braucht, schaltet es
+/// bewusst ein.
 pub const TRANSKRIPT_BEHALTEN_ENV: &str = "STREAM_AUDIT_KEEP_TRANSCRIPT";
+
+/// Aufbewahrungsdauer der Berichte in Tagen; 0 heisst unbegrenzt.
+pub const AUFBEWAHRUNG_ENV: &str = "STREAM_AUDIT_RETENTION_DAYS";
+pub const AUFBEWAHRUNG_STANDARD: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Konfiguration {
     pub kanaele: Vec<String>,
     pub ausgabe: PathBuf,
     pub transkript_behalten: bool,
+    pub aufbewahrung_tage: u64,
 }
 
 /// Trennt an Komma, Semikolon und Leerraum, normalisiert auf Kleinschreibung
@@ -63,8 +73,12 @@ impl Konfiguration {
                 .unwrap_or_else(|| PathBuf::from("data/stream_coaching_audits")),
             transkript_behalten: wahrheit(
                 &std::env::var(TRANSKRIPT_BEHALTEN_ENV).unwrap_or_default(),
-                true,
+                false,
             ),
+            aufbewahrung_tage: std::env::var(AUFBEWAHRUNG_ENV)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(AUFBEWAHRUNG_STANDARD),
         }
     }
 }
@@ -109,10 +123,12 @@ mod tests {
     }
 
     #[test]
-    fn transkript_wird_standardmaessig_behalten() {
-        assert!(wahrheit("", true));
-        assert!(!wahrheit("0", true));
-        assert!(!wahrheit("nein", true));
-        assert!(wahrheit("ja", true));
+    fn transkript_wird_standardmaessig_nicht_behalten() {
+        // Die Coaching-Doku sagt zu, dass vollstaendige Transkripte nicht
+        // dauerhaft liegen bleiben.
+        assert!(!wahrheit("", false));
+        assert!(wahrheit("1", false));
+        assert!(wahrheit("ja", false));
+        assert!(!wahrheit("nein", false));
     }
 }
