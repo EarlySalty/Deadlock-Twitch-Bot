@@ -44,8 +44,10 @@ const DEFAULT_WINDOW_POST_SECONDS: i64 = 10;
 const DEFAULT_CHAT_CONTEXT_LINES: i64 = 8;
 /// So weit zurück dürfen diese Chat-Zeilen liegen.
 const DEFAULT_CHAT_CONTEXT_MINUTES: i64 = 4;
-/// Rohdaten-Aufbewahrung (Samples bleiben unberührt).
-const DEFAULT_RETENTION_HOURS: i64 = 48;
+/// Aufbewahrung des Zeitstrahls (Samples bleiben unberührt). Eine Woche, weil
+/// Text billig ist und ein gebündelter Verlauf erst über mehrere Sitzungen
+/// hinweg etwas hergibt, das ein einzelnes Sample nicht zeigt.
+const DEFAULT_RETENTION_HOURS: i64 = 168;
 /// Capture-Länge je Aufnahmeblock.
 const DEFAULT_CAPTURE_SECONDS: i64 = 30;
 /// So viele Kanäle gleichzeitig aufnehmen.
@@ -166,6 +168,16 @@ pub struct LearnTranscriptSegment {
     pub text: String,
     pub engine: String,
     pub model: Option<String>,
+}
+
+/// Eine Zeile des gebündelten Zeitstrahls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineEntry {
+    pub ts: DateTime<Utc>,
+    /// `stream`, `chat` oder `own`.
+    pub kind: String,
+    pub author: Option<String>,
+    pub content: String,
 }
 
 /// Ein fertiges Stimulus/Response-Paar.
@@ -354,17 +366,17 @@ impl ReactionLearning {
         }
 
         if is_owner {
-            let now = Utc::now();
-            self.mark_hot(&channel, now);
+            self.mark_hot(&channel, Utc::now());
             if let Err(error) = self.touch_channel(&channel, channel_user_id).await {
                 tracing::warn!(%error, channel = %channel, "learn: Kanal-Upsert fehlgeschlagen");
             }
-            if let Err(error) = self.append_own_message(&channel, &login, &text, message_id).await {
-                tracing::warn!(%error, channel = %channel, "learn: eigene Nachricht nicht gespeichert");
-            }
         }
-        if let Err(error) = self.append_chat_line(&channel, &login, &text).await {
-            tracing::debug!(%error, channel = %channel, "learn: Chat-Puffer-Insert fehlgeschlagen");
+        // Eigene Zeilen stehen als 'own' im selben Zeitstrahl wie fremde. Sie
+        // sind Response UND Umgebung des nächsten Turns — zweimal speichern
+        // hiesse, sie beim Aufräumen zweimal treffen zu müssen.
+        let kind = if is_owner { "own" } else { "chat" };
+        if let Err(error) = self.append_chat_entry(&channel, kind, &login, &text, message_id).await {
+            tracing::warn!(%error, channel = %channel, kind, "learn: Timeline-Insert fehlgeschlagen");
         }
     }
 
@@ -390,17 +402,20 @@ impl ReactionLearning {
         Ok(())
     }
 
-    async fn append_own_message(
+    /// Hängt eine Chat-Zeile an den Zeitstrahl (`kind` = `chat` oder `own`).
+    async fn append_chat_entry(
         &self,
         channel_login: &str,
+        kind: &str,
         twitch_login: &str,
         content: &str,
         message_id: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            "INSERT INTO twitch_engagement_learn_messages \
-             (channel_login, twitch_login, content, message_id) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content, message_id) VALUES ($1, $2, $3, $4, $5)",
             channel_login,
+            kind,
             twitch_login,
             content,
             message_id
@@ -410,25 +425,10 @@ impl ReactionLearning {
         Ok(())
     }
 
-    async fn append_chat_line(
-        &self,
-        channel_login: &str,
-        twitch_login: &str,
-        content: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            "INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content) \
-             VALUES ($1, $2, $3)",
-            channel_login,
-            twitch_login,
-            content
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Hängt ein Whisper-Segment an (leerer Text → kein Insert).
+    /// Hängt ein Whisper-Segment an den Zeitstrahl (leerer Text → kein Insert).
+    ///
+    /// `ts` ist das Segment-ENDE, nicht der Anfang: dann war der Satz zu Ende
+    /// gesprochen, und genau darauf reagiert jemand.
     pub async fn append_transcript(
         &self,
         segment: &LearnTranscriptSegment,
@@ -438,12 +438,12 @@ impl ReactionLearning {
             return Ok(());
         }
         sqlx::query!(
-            "INSERT INTO twitch_engagement_learn_transcripts \
-             (channel_login, started_at, ended_at, text, engine, model) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, ts, started_at, content, engine, model) \
+             VALUES ($1, 'stream', $2, $3, $4, $5, $6)",
             &segment.channel_login,
-            segment.started_at,
             segment.ended_at,
+            segment.started_at,
             &text,
             &segment.engine,
             segment.model.as_deref()
@@ -475,8 +475,8 @@ impl ReactionLearning {
         let pending = sqlx::query!(
             r#"SELECT id AS "id!", channel_login AS "channel_login!", content AS "content!",
                       ts AS "ts!"
-               FROM twitch_engagement_learn_messages
-               WHERE mapped_at IS NULL AND ts <= $1
+               FROM twitch_engagement_learn_timeline
+               WHERE kind = 'own' AND mapped_at IS NULL AND ts <= $1
                ORDER BY ts LIMIT $2"#,
             ready_before,
             MAP_BATCH
@@ -519,7 +519,7 @@ impl ReactionLearning {
                 }
             }
             let _ = sqlx::query!(
-                "UPDATE twitch_engagement_learn_messages \
+                "UPDATE twitch_engagement_learn_timeline \
                  SET mapped_at = CURRENT_TIMESTAMP WHERE id = $1",
                 row.id
             )
@@ -536,10 +536,10 @@ impl ReactionLearning {
         to: DateTime<Utc>,
     ) -> Vec<(DateTime<Utc>, String)> {
         sqlx::query!(
-            r#"SELECT ended_at AS "ended_at!", text AS "text!"
-               FROM twitch_engagement_learn_transcripts
-               WHERE channel_login = $1 AND ended_at >= $2 AND ended_at <= $3
-               ORDER BY ended_at"#,
+            r#"SELECT ts AS "ts!", content AS "content!"
+               FROM twitch_engagement_learn_timeline
+               WHERE channel_login = $1 AND kind = 'stream' AND ts >= $2 AND ts <= $3
+               ORDER BY ts"#,
             channel_login,
             from,
             to
@@ -548,7 +548,7 @@ impl ReactionLearning {
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|r| (r.ended_at, r.text))
+        .map(|r| (r.ts, r.content))
         .collect()
     }
 
@@ -564,10 +564,13 @@ impl ReactionLearning {
             DEFAULT_CHAT_CONTEXT_MINUTES,
             1,
         );
+        // 'own' zählt mit: die eigene vorherige Zeile ist Teil des Verlaufs,
+        // auf den die nächste antwortet.
         let rows = sqlx::query!(
-            r#"SELECT twitch_login AS "twitch_login!", content AS "content!"
-               FROM twitch_engagement_learn_chat
-               WHERE channel_login = $1 AND ts < $2 AND ts >= $3
+            r#"SELECT COALESCE(author, '') AS "author!", content AS "content!"
+               FROM twitch_engagement_learn_timeline
+               WHERE channel_login = $1 AND kind IN ('chat', 'own')
+                 AND ts < $2 AND ts >= $3
                ORDER BY ts DESC LIMIT $4"#,
             channel_login,
             before,
@@ -577,7 +580,37 @@ impl ReactionLearning {
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        rows.into_iter().rev().map(|r| (r.twitch_login, r.content)).collect()
+        rows.into_iter().rev().map(|r| (r.author, r.content)).collect()
+    }
+
+    /// Der gebündelte Zeitstrahl eines Kanals, chronologisch. Für die Sichtung.
+    pub async fn timeline(
+        &self,
+        channel_login: &str,
+        since: DateTime<Utc>,
+        limit: i64,
+    ) -> Vec<TimelineEntry> {
+        let rows = sqlx::query!(
+            r#"SELECT ts AS "ts!", kind AS "kind!", author, content AS "content!"
+               FROM twitch_engagement_learn_timeline
+               WHERE channel_login = $1 AND ts >= $2
+               ORDER BY ts DESC LIMIT $3"#,
+            channel_login.trim().to_lowercase(),
+            since,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        rows.into_iter()
+            .rev()
+            .map(|r| TimelineEntry {
+                ts: r.ts,
+                kind: r.kind,
+                author: r.author.filter(|a| !a.is_empty()),
+                content: r.content,
+            })
+            .collect()
     }
 
     /// Die jüngsten Samples (für Sichtung und Few-Shot-Aufbau).
@@ -668,21 +701,27 @@ impl ReactionLearning {
         Some(profile)
     }
 
-    /// Räumt die Rohdaten auf. Samples und Kanal-Liste bleiben.
+    /// Räumt den Zeitstrahl auf. Samples und Kanal-Liste bleiben.
+    ///
+    /// Noch ungemappte eigene Nachrichten überleben unabhängig vom Alter: sie
+    /// zu löschen hiesse, eine Reaktion wegzuwerfen, bevor sie ausgewertet
+    /// wurde (etwa nach einem längeren Ausfall des Mappers).
     pub async fn trim(&self) -> u64 {
         let cutoff = Utc::now() - Duration::hours(retention_hours());
-        let mut removed = 0u64;
-        for statement in [
-            "DELETE FROM twitch_engagement_learn_chat WHERE ts < $1",
-            "DELETE FROM twitch_engagement_learn_transcripts WHERE created_at < $1",
-            "DELETE FROM twitch_engagement_learn_messages WHERE ts < $1 AND mapped_at IS NOT NULL",
-        ] {
-            match sqlx::query(statement).bind(cutoff).execute(&self.pool).await {
-                Ok(result) => removed += result.rows_affected(),
-                Err(error) => tracing::warn!(%error, "learn: Trim fehlgeschlagen"),
+        match sqlx::query!(
+            "DELETE FROM twitch_engagement_learn_timeline \
+             WHERE created_at < $1 AND NOT (kind = 'own' AND mapped_at IS NULL)",
+            cutoff
+        )
+        .execute(&self.pool)
+        .await
+        {
+            Ok(result) => result.rows_affected(),
+            Err(error) => {
+                tracing::warn!(%error, "learn: Trim fehlgeschlagen");
+                0
             }
         }
-        removed
     }
 }
 
@@ -802,17 +841,12 @@ mod tests {
                first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
                message_count BIGINT NOT NULL DEFAULT 0)",
-            "CREATE TABLE twitch_engagement_learn_messages (\
-               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, twitch_login TEXT NOT NULL, \
-               content TEXT NOT NULL, message_id TEXT, \
-               ts TIMESTAMPTZ NOT NULL DEFAULT NOW(), mapped_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_engagement_learn_chat (\
-               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, twitch_login TEXT NOT NULL, \
-               content TEXT NOT NULL, ts TIMESTAMPTZ NOT NULL DEFAULT NOW())",
-            "CREATE TABLE twitch_engagement_learn_transcripts (\
+            "CREATE TABLE twitch_engagement_learn_timeline (\
                id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
-               started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ NOT NULL, \
-               text TEXT NOT NULL, engine TEXT NOT NULL, model TEXT, \
+               kind TEXT NOT NULL CHECK (kind IN ('stream','chat','own')), \
+               ts TIMESTAMPTZ NOT NULL DEFAULT NOW(), started_at TIMESTAMPTZ, \
+               author TEXT, content TEXT NOT NULL, engine TEXT, model TEXT, \
+               message_id TEXT, mapped_at TIMESTAMPTZ, \
                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE twitch_engagement_reaction_samples (\
                id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
@@ -833,11 +867,11 @@ mod tests {
         let Some(pool) = make_pool("t_eng_learn_cold").await else { return };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         learn.observe("nani", None, "fremder", "hallo", None).await;
-        let chat: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_chat")
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(chat, 0, "kalter Kanal schreibt nichts weg");
+        assert_eq!(rows, 0, "kalter Kanal schreibt nichts weg");
         assert!(learn.hot_channels().is_empty());
     }
 
@@ -860,17 +894,55 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(user_id.as_deref(), Some("42"));
 
-        let own: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_messages")
-            .fetch_one(&pool)
+        // Beide Zeilen stehen in EINEM Zeitstrahl, unterschieden nur per kind.
+        let kinds: Vec<(String, String)> = sqlx::query_as(
+            "SELECT kind, content FROM twitch_engagement_learn_timeline ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            kinds,
+            vec![
+                ("own".to_string(), "wilder take".to_string()),
+                ("chat".to_string(), "haha ja".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn timeline_mischt_audio_und_chat_chronologisch() {
+        let Some(pool) = make_pool("t_eng_learn_timeline").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        let base = Utc::now() - Duration::minutes(3);
+        learn
+            .append_transcript(&LearnTranscriptSegment {
+                channel_login: "nani".to_string(),
+                started_at: base,
+                ended_at: base + Duration::seconds(20),
+                text: "und dann geh ich rein".to_string(),
+                engine: "whisper".to_string(),
+                model: Some("large-v3-turbo".to_string()),
+            })
             .await
             .unwrap();
-        assert_eq!(own, 1);
-        // Eigene UND fremde Zeile stehen im Umgebungs-Puffer.
-        let chat: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_chat")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(chat, 2);
+        // Chat-Zeilen landen mit NOW() im Strahl, also nach dem Segment.
+        learn.observe("nani", None, "owner", "wilder take", None).await;
+        learn.observe("nani", None, "fremder", "haha ja", None).await;
+
+        let entries = learn.timeline("Nani", base - Duration::minutes(1), 50).await;
+        let shape: Vec<(&str, Option<&str>, &str)> = entries
+            .iter()
+            .map(|e| (e.kind.as_str(), e.author.as_deref(), e.content.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("stream", None, "und dann geh ich rein"),
+                ("own", Some("owner"), "wilder take"),
+                ("chat", Some("fremder"), "haha ja"),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -880,17 +952,18 @@ mod tests {
         // Nachricht liegt weit genug zurück, damit sie fällig ist.
         let msg_ts = Utc::now() - Duration::minutes(5);
         sqlx::query(
-            "INSERT INTO twitch_engagement_learn_messages \
-             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','wilder take',$1)",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content, ts) \
+             VALUES ('nani','own','owner','wilder take',$1)",
         )
         .bind(msg_ts)
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_engagement_learn_transcripts \
-             (channel_login, started_at, ended_at, text, engine) \
-             VALUES ('nani', $1, $2, 'und dann geh ich da einfach rein', 'whisper')",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, started_at, ts, content, engine) \
+             VALUES ('nani','stream', $1, $2, 'und dann geh ich da einfach rein', 'whisper')",
         )
         .bind(msg_ts - Duration::seconds(40))
         .bind(msg_ts - Duration::seconds(20))
@@ -898,8 +971,9 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content, ts) \
-             VALUES ('nani','fremder','was macht der da',$1)",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content, ts) \
+             VALUES ('nani','chat','fremder','was macht der da',$1)",
         )
         .bind(msg_ts - Duration::seconds(10))
         .execute(&pool)
@@ -923,8 +997,8 @@ mod tests {
         let Some(pool) = make_pool("t_eng_learn_lag").await else { return };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         sqlx::query(
-            "INSERT INTO twitch_engagement_learn_messages \
-             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','zu frisch',NOW())",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content) VALUES ('nani','own','owner','zu frisch')",
         )
         .execute(&pool)
         .await
@@ -937,8 +1011,9 @@ mod tests {
         let Some(pool) = make_pool("t_eng_learn_nostream").await else { return };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         sqlx::query(
-            "INSERT INTO twitch_engagement_learn_messages \
-             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','ohne audio',$1)",
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content, ts) \
+             VALUES ('nani','own','owner','ohne audio',$1)",
         )
         .bind(Utc::now() - Duration::minutes(5))
         .execute(&pool)
@@ -968,18 +1043,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trim_raeumt_rohdaten_aber_nicht_samples() {
+    async fn trim_raeumt_den_zeitstrahl_aber_nicht_samples() {
         let Some(pool) = make_pool("t_eng_learn_trim").await else { return };
         let alt = Utc::now() - Duration::hours(retention_hours() + 1);
-        sqlx::query("INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content, ts) VALUES ('nani','a','alt',$1)")
-            .bind(alt).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_engagement_learn_transcripts (channel_login, started_at, ended_at, text, engine, created_at) VALUES ('nani',$1,$1,'alt','whisper',$1)")
-            .bind(alt).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_timeline \
+             (channel_login, kind, author, content, ts, created_at, mapped_at) VALUES \
+             ('nani','chat','a','alte fremde zeile',$1,$1,NULL), \
+             ('nani','stream',NULL,'altes segment',$1,$1,NULL), \
+             ('nani','own','owner','alt und gemappt',$1,$1,$1), \
+             ('nani','own','owner','alt und ungemappt',$1,$1,NULL)",
+        )
+        .bind(alt)
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO twitch_engagement_reaction_samples (channel_login, message_ts, my_message) VALUES ('nani',$1,'bleibt')")
             .bind(alt).execute(&pool).await.unwrap();
 
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
-        assert_eq!(learn.trim().await, 2);
+        assert_eq!(learn.trim().await, 3, "alles außer der ungemappten eigenen Zeile");
+        let rest: Vec<String> =
+            sqlx::query_scalar("SELECT content FROM twitch_engagement_learn_timeline")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rest, vec!["alt und ungemappt".to_string()]);
         assert_eq!(learn.sample_count().await, 1, "Samples überleben das Trimmen");
     }
 }

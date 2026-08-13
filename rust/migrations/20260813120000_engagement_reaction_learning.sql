@@ -27,52 +27,50 @@ CREATE TABLE IF NOT EXISTS public.twitch_engagement_learn_channels (
 CREATE INDEX IF NOT EXISTS idx_engagement_learn_channels_last_seen
     ON public.twitch_engagement_learn_channels (last_seen_at DESC);
 
--- Die eigenen Nachrichten = die Response-Seite. `mapped_at IS NULL` heißt:
--- wartet noch auf den Mapper.
-CREATE TABLE IF NOT EXISTS public.twitch_engagement_learn_messages (
+-- Der gebündelte Zeitstrahl eines lern-heißen Kanals: was gesagt wurde und was
+-- gleichzeitig im Chat stand, in EINER Tabelle statt in drei nebeneinander.
+--
+-- Getrennte Tabellen für Audio und Chat hätten bedeutet, dass die beiden Seiten
+-- erst im fertigen Sample zusammenfinden — also nur in den Sekunden rund um
+-- eine eigene Nachricht. Der Rest der Sitzung wäre in zwei Hälften zerfallen,
+-- die niemand mehr am Stück lesen kann. Hier liegt beides auf einer Zeitachse.
+--
+-- `kind`:
+--   'stream' — Whisper-Segment, `started_at` gesetzt, `author` leer
+--   'chat'   — fremde Chat-Zeile
+--   'own'    — Chat-Zeile des Owners; nur diese Sorte wird gemappt
+--
+-- `ts` ist immer der maßgebliche Zeitpunkt: bei Chat die Sendezeit, bei Audio
+-- das ENDE des Segments (dann war der Satz zu Ende gesprochen). So sortiert
+-- ein einziges ORDER BY die ganze Sitzung richtig.
+CREATE TABLE IF NOT EXISTS public.twitch_engagement_learn_timeline (
     id            BIGSERIAL PRIMARY KEY,
     channel_login TEXT NOT NULL,
-    twitch_login  TEXT NOT NULL,
-    content       TEXT NOT NULL,
-    message_id    TEXT,
+    kind          TEXT NOT NULL
+                  CHECK (kind IN ('stream', 'chat', 'own')),
     ts            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    mapped_at     TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_engagement_learn_messages_pending
-    ON public.twitch_engagement_learn_messages (ts)
-    WHERE mapped_at IS NULL;
-
--- Chat-Ringpuffer der lern-heißen Kanäle = die Umgebungs-Seite. Nötig, weil
--- `twitch_engagement_conversation` nur für engagement-aktive Partner-Kanäle
--- gefüllt wird.
-CREATE TABLE IF NOT EXISTS public.twitch_engagement_learn_chat (
-    id            BIGSERIAL PRIMARY KEY,
-    channel_login TEXT NOT NULL,
-    twitch_login  TEXT NOT NULL,
+    started_at    TIMESTAMPTZ,
+    author        TEXT,
     content       TEXT NOT NULL,
-    ts            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_engagement_learn_chat_channel_ts
-    ON public.twitch_engagement_learn_chat (channel_login, ts DESC);
-
--- Whisper-Segmente der lern-heißen Kanäle = die Stimulus-Seite.
-CREATE TABLE IF NOT EXISTS public.twitch_engagement_learn_transcripts (
-    id            BIGSERIAL PRIMARY KEY,
-    channel_login TEXT NOT NULL,
-    started_at    TIMESTAMPTZ NOT NULL,
-    ended_at      TIMESTAMPTZ NOT NULL,
-    text          TEXT NOT NULL,
-    engine        TEXT NOT NULL,
+    engine        TEXT,
     model         TEXT,
+    message_id    TEXT,
+    mapped_at     TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_engagement_learn_transcripts_channel_ended
-    ON public.twitch_engagement_learn_transcripts (channel_login, ended_at DESC);
+CREATE INDEX IF NOT EXISTS idx_engagement_learn_timeline_channel_ts
+    ON public.twitch_engagement_learn_timeline (channel_login, ts DESC);
 
--- Das fertige Stimulus/Response-Paar. Überlebt das Trimmen der Rohdaten.
+-- Der Arbeitsvorrat des Mappers: eigene Nachrichten, die noch kein Sample sind.
+CREATE INDEX IF NOT EXISTS idx_engagement_learn_timeline_pending
+    ON public.twitch_engagement_learn_timeline (ts)
+    WHERE kind = 'own' AND mapped_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_engagement_learn_timeline_created
+    ON public.twitch_engagement_learn_timeline (created_at);
+
+-- Das fertige Stimulus/Response-Paar. Überlebt das Trimmen des Zeitstrahls.
 -- `verdict` ist die manuelle Sichtung: 'good' = so soll die KI klingen,
 -- 'bad' = kein Vorbild, NULL = ungesichtet.
 CREATE TABLE IF NOT EXISTS public.twitch_engagement_reaction_samples (

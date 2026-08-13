@@ -68,10 +68,26 @@ ihre eigene Dauer nach hinten.
 | Tabelle | Inhalt | Aufbewahrung |
 |---|---|---|
 | `twitch_engagement_learn_channels` | Wo der Owner zuletzt geschrieben hat | dauerhaft |
-| `twitch_engagement_learn_messages` | Die eigenen Nachrichten, `mapped_at` als Marker | 48 h nach Mapping |
-| `twitch_engagement_learn_chat` | Chat-Puffer der heißen Kanäle | 48 h |
-| `twitch_engagement_learn_transcripts` | Whisper-Segmente der heißen Kanäle | 48 h |
+| `twitch_engagement_learn_timeline` | Der gebündelte Zeitstrahl: Stream-Ton, fremder Chat und eigene Zeilen | 7 Tage |
 | `twitch_engagement_reaction_samples` | Das fertige Stimulus/Response-Paar | dauerhaft |
+
+**Ein Zeitstrahl, nicht drei Töpfe.** Getrennte Tabellen für Audio und Chat
+hätten bedeutet, dass die beiden Seiten erst im fertigen Sample zusammenfinden,
+also nur in den Sekunden rund um eine eigene Nachricht. Der Rest der Sitzung
+wäre in zwei Hälften zerfallen, die niemand mehr am Stück lesen kann. In
+`twitch_engagement_learn_timeline` unterscheidet nur die Spalte `kind`
+(`stream` / `chat` / `own`), was woher kam.
+
+`ts` ist immer der maßgebliche Zeitpunkt: bei Chat die Sendezeit, bei Audio das
+**Ende** des Segments, weil dann der Satz zu Ende gesprochen war. Ein einziges
+`ORDER BY ts` sortiert damit die ganze Sitzung richtig. `started_at` hält
+zusätzlich den Segment-Beginn.
+
+Eigene Zeilen stehen nur einmal drin (`kind = 'own'`). Sie sind Response und
+zugleich Umgebung des nächsten Turns; der Chat-Kontext liest deshalb
+`kind IN ('chat','own')`. Beim Trimmen bleiben ungemappte eigene Zeilen
+unabhängig vom Alter erhalten, sonst würde ein längerer Mapper-Ausfall
+Reaktionen wegwerfen, bevor sie ausgewertet wurden.
 
 Getrennt von `twitch_engagement_stream_transcripts`: die operative Tabelle ist
 absichtlich flüchtig (60 min, 40 Segmente je Kanal) und läuft nur für
@@ -89,7 +105,7 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 | `ENGAGEMENT_LEARN_MAX_CHANNELS` | 2 | Gleichzeitig aufgenommene Kanäle |
 | `ENGAGEMENT_LEARN_WINDOW_PRE_SECONDS` | 45 | Transkript-Fenster vor der Nachricht |
 | `ENGAGEMENT_LEARN_WINDOW_POST_SECONDS` | 10 | Transkript-Fenster danach |
-| `ENGAGEMENT_LEARN_RETENTION_HOURS` | 48 | Aufbewahrung der Rohdaten |
+| `ENGAGEMENT_LEARN_RETENTION_HOURS` | 168 | Aufbewahrung des Zeitstrahls |
 | `ENGAGEMENT_PERSONA_MODE` | `veteran` | `rookie` schaltet auf die Neuling-Persona |
 
 **Transkription lokal:** `ops/stt-server/stt_server.py` hält ein
@@ -105,11 +121,22 @@ ignoriert. Ohne die Variable geht die Transkription an OpenAI und kostet Geld.
 `ops/learn-samples.sh` zeigt die Samples und nimmt das Urteil auf:
 
 ```
-DATABASE_URL=... ops/learn-samples.sh stats        # Fortschritt
-DATABASE_URL=... ops/learn-samples.sh list 20      # letzte Samples
-DATABASE_URL=... ops/learn-samples.sh show 42      # Audio + Chat + Reaktion
-DATABASE_URL=... ops/learn-samples.sh bad 42 43    # aus dem Lernmaterial nehmen
-DATABASE_URL=... ops/learn-samples.sh profile      # destilliertes Profil
+DATABASE_URL=... ops/learn-samples.sh stats           # Fortschritt
+DATABASE_URL=... ops/learn-samples.sh list 20         # letzte Samples
+DATABASE_URL=... ops/learn-samples.sh show 42         # Audio + Chat + Reaktion
+DATABASE_URL=... ops/learn-samples.sh bad 42 43       # aus dem Lernmaterial nehmen
+DATABASE_URL=... ops/learn-samples.sh timeline nani 30  # Verlauf am Stück
+DATABASE_URL=... ops/learn-samples.sh profile         # destilliertes Profil
+```
+
+`timeline` liest den gebündelten Zeitstrahl, eigene Zeilen mit `>>` markiert:
+
+```
+17:51:58 [STREAM] okay ich geh jetzt einfach mal rein da
+17:52:08    chatterA: nicht machen
+17:52:28 [STREAM] boah nee das war komplett dumm von mir
+17:52:33 >> earlysalty: wilder take
+17:52:38    chatterB: lol
 ```
 
 Als `bad` markierte Samples fallen aus Few-Shot und Destillation heraus. Das ist

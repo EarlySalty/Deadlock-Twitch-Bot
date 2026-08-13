@@ -12,6 +12,7 @@
 #   ops/learn-samples.sh reset ID [ID...]  Urteil zurücknehmen
 #   ops/learn-samples.sh stats             Fortschritt der Lernphase
 #   ops/learn-samples.sh profile           aktuelles destilliertes Profil
+#   ops/learn-samples.sh timeline KANAL [MIN]  Stream und Chat im Verlauf
 #
 # DATABASE_URL muss gesetzt sein (oder PG*-Variablen für psql).
 set -euo pipefail
@@ -90,6 +91,24 @@ stats)
           FROM twitch_engagement_reaction_samples
          GROUP BY channel_login ORDER BY count(*) DESC LIMIT 15"
     ;;
+timeline)
+    channel=${1:?Kanal fehlt}
+    minutes=${2:-30}
+    # Ein Strang aus Stream-Ton und Chat. '>>' markiert die eigenen Zeilen,
+    # damit man beim Durchlesen sofort sieht, was den Ausschlag gab.
+    psql_run -P pager=off -A -t -c "
+        SELECT to_char(ts, 'HH24:MI:SS') || ' '
+               || CASE kind
+                    WHEN 'stream' THEN '[STREAM] '
+                    WHEN 'own'    THEN '>> ' || COALESCE(author, '?') || ': '
+                    ELSE '   ' || COALESCE(author, '?') || ': '
+                  END
+               || content
+          FROM twitch_engagement_learn_timeline
+         WHERE channel_login = lower('${channel}')
+           AND ts >= now() - interval '${minutes} minutes'
+         ORDER BY ts"
+    ;;
 profile)
     psql_run -P pager=off -A -t -c "
         SELECT E'Stand ' || to_char(created_at, 'DD.MM.YYYY HH24:MI') || E':\n\n' || content
@@ -98,7 +117,7 @@ profile)
          ORDER BY created_at DESC LIMIT 1"
     ;;
 *)
-    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

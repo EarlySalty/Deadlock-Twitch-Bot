@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO twitch_engagement_learn_transcripts (channel_login, started_at, ended_at, text, engine, model) VALUES ($1, $2, $3, $4, $5, $6)",
+  "query": "INSERT INTO twitch_engagement_learn_timeline (channel_login, kind, ts, started_at, content, engine, model) VALUES ($1, 'stream', $2, $3, $4, $5, $6)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -15,5 +15,5 @@
     },
     "nullable": []
   },
-  "hash": "d9ef45019e6203bbe373238f6e3bc48af9faef1e837c2925618aecff031d5aee"
+  "hash": "e8f4ca43448acbc608bb909aca7537df5d96d9adc8c3748b9158d71a8bb3c6b8"
 }

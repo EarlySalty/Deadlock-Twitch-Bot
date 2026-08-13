@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(author, '') AS \"author!\", content AS \"content!\"\n               FROM twitch_engagement_learn_timeline\n               WHERE channel_login = $1 AND kind IN ('chat', 'own')\n                 AND ts < $2 AND ts >= $3\n               ORDER BY ts DESC LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "author!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      false
+    ]
+  },
+  "hash": "ddd78823c0f7d28cc1feb50632327de1f897836a6b2aadf11747f392b8f25f26"
+}
