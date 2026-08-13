@@ -403,6 +403,11 @@ impl ReactionLearning {
     }
 
     /// Hängt eine Chat-Zeile an den Zeitstrahl (`kind` = `chat` oder `own`).
+    ///
+    /// Dieselbe Nachricht kann zweimal ankommen: der EventSub-Hook und der
+    /// Lern-IRC-Reader überschneiden sich in Partner-Kanälen, die live Deadlock
+    /// streamen. Die Twitch-Message-ID ist in beiden Pfaden dieselbe, der
+    /// zweite Weg fällt darum still weg.
     async fn append_chat_entry(
         &self,
         channel_login: &str,
@@ -413,7 +418,8 @@ impl ReactionLearning {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "INSERT INTO twitch_engagement_learn_timeline \
-             (channel_login, kind, author, content, message_id) VALUES ($1, $2, $3, $4, $5)",
+             (channel_login, kind, author, content, message_id) VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (channel_login, message_id) WHERE message_id IS NOT NULL DO NOTHING",
             channel_login,
             kind,
             twitch_login,
@@ -848,6 +854,9 @@ mod tests {
                author TEXT, content TEXT NOT NULL, engine TEXT, model TEXT, \
                message_id TEXT, mapped_at TIMESTAMPTZ, \
                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE UNIQUE INDEX uq_engagement_learn_timeline_message \
+               ON twitch_engagement_learn_timeline (channel_login, message_id) \
+               WHERE message_id IS NOT NULL",
             "CREATE TABLE twitch_engagement_reaction_samples (\
                id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
                message_ts TIMESTAMPTZ NOT NULL, my_message TEXT NOT NULL, \
@@ -908,6 +917,30 @@ mod tests {
                 ("chat".to_string(), "haha ja".to_string()),
             ]
         );
+    }
+
+    /// EventSub-Hook und Lern-IRC-Reader sehen dieselbe Nachricht, sobald ein
+    /// Partner live Deadlock streamt. Ohne Dedup entstuenden daraus zwei
+    /// Zeitstrahl-Zeilen und am Ende zwei Samples fuer eine Reaktion.
+    #[tokio::test]
+    async fn dieselbe_nachricht_aus_zwei_quellen_zaehlt_einmal() {
+        let Some(pool) = make_pool("t_eng_learn_dedup").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        learn.observe("nani", Some("42"), "owner", "wilder take", Some("msg-1")).await;
+        // Zweiter Pfad, gleiche Twitch-Message-ID, minimal andere Formatierung.
+        learn.observe("nani", None, "owner", "wilder take", Some("msg-1")).await;
+        // Andere ID im selben Kanal bleibt eine eigene Zeile.
+        learn.observe("nani", None, "fremder", "haha", Some("msg-2")).await;
+        // Ohne ID (etwa aus einem Pfad ohne Tags) greift der Index nicht.
+        learn.observe("nani", None, "fremder", "ohne id", None).await;
+        learn.observe("nani", None, "fremder", "ohne id", None).await;
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 4, "einmal msg-1, einmal msg-2, zweimal ohne ID");
     }
 
     #[tokio::test]
