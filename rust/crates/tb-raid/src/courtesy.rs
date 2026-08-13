@@ -250,6 +250,46 @@ pub fn summarize(outcomes: &[CourtesyOutcome]) -> CourtesySummary {
     }
 }
 
+/// Mindestabstand zwischen zwei Erinnerungs-Whispers an denselben Streamer.
+///
+/// Wer ohnehin nicht schreibt, liest die Erinnerung vermutlich auch nicht.
+/// Eine mehr oder weniger ändert daran nichts, aber Dauerfeuer nach jedem
+/// einzelnen Raid wäre Spam. Einmal pro Woche ist die Erinnerung präsent,
+/// ohne lästig zu werden.
+pub const WHISPER_COOLDOWN_DAYS: i64 = 7;
+
+/// Entscheidet, ob nach diesem Raid eine Erinnerung rausgeht.
+///
+/// Drei Bedingungen, alle müssen zutreffen:
+///
+/// 1. **Dieser Raid war `Silent`.** Wer geschrieben hat, bekommt nie eine.
+/// 2. **Der Streamer ist auch sonst kein Schreiber.** Ein `Greeter` oder
+///    `Engaged`, der einmal vergisst oder gerade keine Lust hat, wird in Ruhe
+///    gelassen. Ohne Historie (`None`) geht die erste Erinnerung raus, das ist
+///    der freundliche Hinweis für Neue.
+/// 3. **Der Cooldown ist abgelaufen** ([`WHISPER_COOLDOWN_DAYS`]).
+///
+/// `Unknown` erfüllt Bedingung 1 nie und löst daher nie eine Erinnerung aus.
+pub fn should_remind(
+    outcome: CourtesyOutcome,
+    history_class: Option<CourtesyClass>,
+    days_since_last_whisper: Option<i64>,
+) -> bool {
+    if outcome != CourtesyOutcome::Classified(CourtesyClass::Silent) {
+        return false;
+    }
+    if matches!(
+        history_class,
+        Some(CourtesyClass::Greeter) | Some(CourtesyClass::Engaged)
+    ) {
+        return false;
+    }
+    match days_since_last_whisper {
+        Some(days) => days >= WHISPER_COOLDOWN_DAYS,
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +474,73 @@ mod tests {
         assert_eq!(summary.class, Some(CourtesyClass::Silent));
         assert_eq!(summary.wrote, 2);
         assert_eq!(summary.observed, 10);
+    }
+
+    // ─── should_remind ───────────────────────────────────────────────────────
+
+    #[test]
+    fn wer_geschrieben_hat_bekommt_nie_eine_erinnerung() {
+        for class in [CourtesyClass::Engaged, CourtesyClass::Greeter] {
+            assert!(!should_remind(
+                CourtesyOutcome::Classified(class),
+                Some(CourtesyClass::Silent),
+                Some(999)
+            ));
+        }
+    }
+
+    #[test]
+    fn ein_aussetzer_eines_schreibers_bleibt_ohne_erinnerung() {
+        // Der Nutzerfall: ein Grüßer vergisst es einmal. Das ist egal.
+        assert!(!should_remind(
+            CourtesyOutcome::Classified(CourtesyClass::Silent),
+            Some(CourtesyClass::Greeter),
+            Some(999)
+        ));
+        assert!(!should_remind(
+            CourtesyOutcome::Classified(CourtesyClass::Silent),
+            Some(CourtesyClass::Engaged),
+            None
+        ));
+    }
+
+    #[test]
+    fn dauerschweiger_bekommen_gedrosselt_eine_erinnerung() {
+        let silent = CourtesyOutcome::Classified(CourtesyClass::Silent);
+        // Noch nie eine bekommen → ja.
+        assert!(should_remind(silent, Some(CourtesyClass::Silent), None));
+        // Cooldown abgelaufen → ja.
+        assert!(should_remind(
+            silent,
+            Some(CourtesyClass::Silent),
+            Some(WHISPER_COOLDOWN_DAYS)
+        ));
+        // Cooldown läuft noch → nein, kein Dauerfeuer.
+        assert!(!should_remind(
+            silent,
+            Some(CourtesyClass::Silent),
+            Some(WHISPER_COOLDOWN_DAYS - 1)
+        ));
+        assert!(!should_remind(silent, Some(CourtesyClass::Silent), Some(0)));
+    }
+
+    #[test]
+    fn erster_stiller_raid_ohne_historie_bekommt_den_hinweis() {
+        assert!(should_remind(
+            CourtesyOutcome::Classified(CourtesyClass::Silent),
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn unknown_loest_nie_eine_erinnerung_aus() {
+        // Sonst würde ein Bot-Neustart Vorwürfe verschicken.
+        assert!(!should_remind(CourtesyOutcome::Unknown, None, None));
+        assert!(!should_remind(
+            CourtesyOutcome::Unknown,
+            Some(CourtesyClass::Silent),
+            Some(999)
+        ));
     }
 }
