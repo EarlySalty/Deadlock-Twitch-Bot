@@ -3139,6 +3139,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-stream-audit"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "tb-tips"
 version = "0.1.0"
 dependencies = [
