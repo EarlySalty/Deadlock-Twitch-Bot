@@ -141,6 +141,14 @@ impl Warteschlange {
         true
     }
 
+    /// Dateien aller wartenden Bloecke.
+    ///
+    /// Die Aufbewahrung braucht sie, um nicht genau die Aufnahme zu loeschen,
+    /// die gleich ausgewertet wird.
+    pub fn dateien(&self) -> Vec<String> {
+        self.eintraege.iter().map(|b| b.datei.clone()).collect()
+    }
+
     pub fn laenge(&self) -> usize {
         self.eintraege.len()
     }

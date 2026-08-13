@@ -4,8 +4,10 @@
 //! sexuelle Inhalte oder diskriminierende Aussagen ohne Reizwort brauchen ein
 //! Modell.
 //!
-//! Der Anbieter kommt aus [`tb_llm::selection::endpoint_chain`] unter dem
-//! Anwendungsfall `stream_audit`, nicht fest verdrahtet. Damit folgt das Audit
+//! Der Anbieter kommt aus `tb_llm::selection::endpoint_for` unter dem
+//! Anwendungsfall `stream_audit`, nicht fest verdrahtet. Das ist genau ein
+//! Anbieter, keine Kette: faellt er aus, bleibt es bei den Regelfunden, und
+//! der Bericht sagt es. Damit folgt das Audit
 //! derselben Konfiguration wie der Rest des Bots (`TB_LLM_PROVIDER_*`), und ein
 //! Anbieterwechsel passiert an einer Stelle statt in jedem Aufrufer.
 //!
