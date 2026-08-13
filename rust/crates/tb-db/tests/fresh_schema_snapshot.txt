@@ -755,6 +755,10 @@ twitch_global_settings|setting_key|text|NO|
 twitch_global_settings|setting_value|text|NO|
 twitch_global_settings|updated_at|text|NO|CURRENT_TIMESTAMP
 twitch_global_settings|updated_by|text|YES|
+twitch_greeted_chatters|chatter_id|text|YES|
+twitch_greeted_chatters|chatter_login|text|NO|
+twitch_greeted_chatters|greeted_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_greeted_chatters|streamer_login|text|NO|
 twitch_hype_train_events|duration_seconds|integer|YES|
 twitch_hype_train_events|ended_at|timestamp with time zone|YES|
 twitch_hype_train_events|event_phase|text|YES|'end'::text
