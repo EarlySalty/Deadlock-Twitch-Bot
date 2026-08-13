@@ -284,7 +284,9 @@ fn classify_decode_error(error: reqwest::Error) -> TranscribeError {
 /// hier nicht sauber zu lesen ist, gilt als auswaertig.
 fn host_is_loopback(url: &str) -> bool {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Der Rueckwaertsschraegstrich beendet die Autoritaet wie der normale;
+    // reqwest liest `http://evil.example\\@localhost/` als `evil.example`.
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
     let host_port = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);

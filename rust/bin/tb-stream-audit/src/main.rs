@@ -91,7 +91,7 @@ Stream-Audio dorthin zu senden.",
     }
 
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
-    liegengebliebenes_einreihen(&warteschlange).await;
+    liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
     let aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
@@ -164,9 +164,12 @@ fn arbeiter_ende_melden(name: &str, ergebnis: Result<(), tokio::task::JoinError>
 /// Erkannt werden die Capture-Verzeichnisse an ihrem Praefix; Kanal und
 /// Blocknummer sind aus dem Dateinamen nicht mehr rekonstruierbar, deshalb
 /// laufen sie als eigener Lauf "wiederaufnahme" mit fortlaufender Nummer.
-async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlange>>) {
+async fn liegengebliebenes_einreihen(
+    konfiguration: &Konfiguration,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
+) {
     let mut aufnahmen = Vec::new();
-    ts_dateien_sammeln(&aufnahme_wurzel(), &mut aufnahmen).await;
+    ts_dateien_sammeln(&aufnahme_wurzel(konfiguration), &mut aufnahmen).await;
 
     // Eigene Kennung je Neustart, sonst ueberschreibt die naechste
     // Wiederaufnahme die Berichte der vorigen. Sie greift nur, wenn der
@@ -357,8 +360,17 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
         frueherstens: 0,
+        nur_melden: false,
+        meldeversuche: 0,
     })
 }
+
+/// So oft darf ein sendender Kanal keinen Block liefern, bevor gemeldet wird.
+///
+/// Ein einzelner Fehlschlag ist der Normalfall am Sendungsende. Fuenf am
+/// Stueck bei einem Kanal, der laut Helix sendet, sind ein kaputtes
+/// streamlink - und ohne Meldung liefe das Audit still ins Leere.
+const MAX_STILLE_VERSUCHE: u32 = 5;
 
 /// Wie lange ein aufgegebener Block wartet, dessen Meldung nicht rausging.
 const MELDEPAUSE_SEKUNDEN: i64 = 30 * 60;
@@ -406,14 +418,17 @@ fn remote_stt_erlaubt() -> bool {
     )
 }
 
-/// Eigener Aufnahmeordner.
+/// Eigener Aufnahmeordner, neben der Ablage der Berichte.
 ///
 /// Der `AudioCapturer` legt ohne Zielangabe unter `/tmp/voice-reaction-*` ab,
 /// und dasselbe Praefix nutzen Reaction-Learning und Smalltalk. Wer dort
-/// aufraeumt, loescht fremde, womoeglich noch laufende Aufnahmen. Dieser
-/// Dienst bekommt deshalb sein eigenes Verzeichnis.
-fn aufnahme_wurzel() -> PathBuf {
-    std::env::temp_dir().join("stream-audit-captures")
+/// aufraeumt, loescht fremde, womoeglich noch laufende Aufnahmen.
+///
+/// Und nicht `/tmp`: Aufnahmen zu Funden bleiben absichtlich bis zum Ende der
+/// Aufbewahrungsfrist liegen. In einem Ordner, den das System beim Neustart
+/// oder per tmpfiles-Regel ausraeumt, waeren sie vorher weg.
+fn aufnahme_wurzel(konfiguration: &Konfiguration) -> PathBuf {
+    konfiguration.ausgabe.join("aufnahmen")
 }
 
 fn helix_aus_umgebung() -> Option<HelixClient> {
@@ -446,6 +461,12 @@ async fn aufnahme_schleife(
     // abbricht. Legte der Neustart den Stand neu an, finge der
     // Sechs-Stunden-Deckel jedes Mal von vorn an.
     let mut staende: std::collections::HashMap<String, plan::Aufnahme> = Default::default();
+    // Wie oft ein Kanal am Stueck nichts aufnehmen konnte, obwohl er sendet.
+    let mut fehlschlaege: std::collections::HashMap<String, u32> = Default::default();
+    // Schon gemeldete Dauerausfaelle, damit die DM nicht im Minutentakt kommt.
+    let mut gemeldet: std::collections::HashSet<String> = Default::default();
+    // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
+    let mut stau_gemeldet = false;
 
     loop {
         let sendungen = match helix
@@ -476,6 +497,29 @@ async fn aufnahme_schleife(
             };
             match handle.await {
                 Ok(zustand) => {
+                    // Ein Task, der ohne einen einzigen Block zurueckkommt,
+                    // heisst in aller Regel: der Stream ist vorbei. Er kann
+                    // aber auch heissen, dass streamlink fehlt oder kaputt ist
+                    // - und dann liefe das Audit still ins Leere.
+                    if zustand.bloecke == 0 {
+                        let zaehler = fehlschlaege.entry(kanal.clone()).or_default();
+                        *zaehler += 1;
+                        let anlaeufe = *zaehler;
+                        if anlaeufe >= MAX_STILLE_VERSUCHE && gemeldet.insert(kanal.clone()) {
+                            let text = format!(
+                                "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen \
+kommt keine Aufnahme zustande. streamlink pruefen."
+                            );
+                            if let Err(fehler) =
+                                dm_rohtext(&text, &format!("{kanal}-keine-aufnahme")).await
+                            {
+                                tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
+                            }
+                        }
+                    } else {
+                        fehlschlaege.remove(&kanal);
+                        gemeldet.remove(&kanal);
+                    }
                     if zustand.naechste_blocklaenge().is_none() {
                         tracing::info!(
                             kanal,
@@ -509,9 +553,22 @@ async fn aufnahme_schleife(
                 grenze = MAX_WARTESCHLANGE,
                 "Auswertung kommt nicht nach - keine neuen Aufnahmen"
             );
+            // Eine Pause heisst: Sendezeit wird nicht geprueft. Ohne Meldung
+            // sieht das hinterher aus wie ein sauberer Stream.
+            if !stau_gemeldet {
+                stau_gemeldet = true;
+                let text = format!(
+                    "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
+Dieser Abschnitt wird nicht geprueft."
+                );
+                if let Err(fehler) = dm_rohtext(&text, "rueckstand").await {
+                    tracing::error!(fehler, "Rueckstand nicht meldbar");
+                }
+            }
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
         }
+        stau_gemeldet = false;
 
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
@@ -553,7 +610,11 @@ async fn aufnahme_schleife(
                 staende.insert(kanal.clone(), zustand);
                 continue;
             }
-            let handle = tokio::spawn(kanal_aufnehmen(zustand, Arc::clone(&warteschlange)));
+            let handle = tokio::spawn(kanal_aufnehmen(
+                zustand,
+                konfiguration.clone(),
+                Arc::clone(&warteschlange),
+            ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
         }
@@ -571,6 +632,7 @@ async fn aufnahme_schleife(
 /// sonst waere der Deckel mit jedem streamlink-Fehler zurueckgesetzt.
 async fn kanal_aufnehmen(
     mut zustand: plan::Aufnahme,
+    konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
 ) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
@@ -591,11 +653,13 @@ async fn kanal_aufnehmen(
             continue;
         }
 
-        // Eigener Ordner je Block, mit dem Zettel darin, bevor aufgenommen wird.
-        let blockordner = aufnahme_wurzel()
+        // Der Versatz gilt ab jetzt - alles, was seit dem letzten Block an
+        // Pausen verging, zaehlt zur Sendungszeit.
+        let versatz = zustand.sendungssekunden();
+        let blockordner = aufnahme_wurzel(&konfiguration)
             .join(&kanal)
             .join(&zustand.lauf)
-            .join(format!("t{:06}", zustand.sendungssekunden()));
+            .join(format!("t{versatz:06}"));
         if let Err(fehler) = tokio::fs::create_dir_all(&blockordner).await {
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
             return zustand;
@@ -605,7 +669,7 @@ async fn kanal_aufnehmen(
             &kanal,
             &zustand.lauf,
             zustand.bloecke + 1,
-            zustand.sendungssekunden(),
+            versatz,
         )
         .await;
 
@@ -619,9 +683,10 @@ async fn kanal_aufnehmen(
             .await
         {
             Ok(aufgenommen) => {
-                let block = zustand.block_fertig(
+                let block = zustand.block_fertig_bei(
                     aufgenommen.media_path.to_string_lossy().to_string(),
                     aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
+                    versatz,
                 );
                 tracing::info!(
                     kanal,
@@ -736,7 +801,7 @@ async fn alte_aufnahmen_loeschen(
     let grenze = Duration::from_secs(tage.saturating_mul(24 * 60 * 60));
 
     let mut aufnahmen = Vec::new();
-    ts_dateien_sammeln(&aufnahme_wurzel(), &mut aufnahmen).await;
+    ts_dateien_sammeln(&aufnahme_wurzel(konfiguration), &mut aufnahmen).await;
     let eingereiht: std::collections::HashSet<String> =
         warteschlange.lock().await.dateien().into_iter().collect();
 
@@ -809,9 +874,6 @@ async fn auswertungs_schleife(
                 // sonst bleiben block.json und die leeren Ebenen fuer immer
                 // liegen.
                 if let Some(verzeichnis) = pfad.parent().and_then(Path::parent) {
-                    // Bleibt die Aufnahme liegen, wird sie nach dem naechsten
-                    // Neustart erneut ausgewertet und gemeldet. Das gehoert
-                    // ins Journal, nicht ins Nichts.
                     if let Err(fehler) = tokio::fs::remove_dir_all(verzeichnis).await {
                         tracing::warn!(
                             ?fehler,
@@ -821,12 +883,43 @@ async fn auswertungs_schleife(
                     }
                 }
             }
-            Err(fehler) => {
+            // Der Bericht steht, nur die Meldung fehlt. Wiederholt wird
+            // ausschliesslich die Meldung: eine zweite Auswertung koennte
+            // anders ausfallen und den frueheren Fund ueberschreiben.
+            Err(Auswertefehler::Meldung(fehler)) => {
+                let bezeichnung = block.bezeichnung();
+                let mut naechster = block.clone();
+                naechster.nur_melden = true;
+                naechster.meldeversuche += 1;
+                if naechster.meldeversuche >= plan::MAX_MELDEVERSUCHE {
+                    // Ewiges Kreisen ist keine Loesung: der Block haelt seine
+                    // Aufnahme aus der Aufbewahrung heraus und blockiert
+                    // irgendwann die Aufnahme selbst. Der Bericht liegt auf
+                    // der Platte, das Journal nennt ihn.
+                    tracing::error!(
+                        block = %bezeichnung,
+                        fehler,
+                        "Meldung nach {} Versuchen aufgegeben; Bericht liegt im Ausgabeordner",
+                        plan::MAX_MELDEVERSUCHE
+                    );
+                } else {
+                    let versuch = naechster.meldeversuche;
+                    warteschlange
+                        .lock()
+                        .await
+                        .spaeter_einreihen(naechster, MELDEPAUSE_SEKUNDEN);
+                    tracing::warn!(
+                        block = %bezeichnung,
+                        fehler,
+                        versuch,
+                        "Meldung fehlgeschlagen - nur die Meldung wird wiederholt"
+                    );
+                }
+            }
+            Err(Auswertefehler::Auswertung(fehler)) => {
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
-                let mut block_ohne_versuche = block.clone();
-                block_ohne_versuche.versuche = 0;
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -847,7 +940,6 @@ async fn auswertungs_schleife(
                     );
                     // Ein aufgegebener Block darf nicht nur im Journal stehen.
                     // Sonst hiesse "keine DM" hier faelschlich "sauber".
-                    let neu_starten = block_ohne_versuche.clone();
                     let text = format!(
                         "Coaching-Audit {}: Block {} nach {} Versuchen aufgegeben ({}). \
 Aufnahme liegt noch da.",
@@ -859,23 +951,28 @@ Aufnahme liegt noch da.",
                     if let Err(dm_fehler) =
                         dm_rohtext(&text, &format!("{bezeichnung}-aufgegeben")).await
                     {
-                        // Eine Aufgabe, die niemand erfaehrt, ist ein stiller
-                        // Ausfall. Der Block geht mit langer Pause zurueck in
-                        // die Warteschlange, statt hier zu verschwinden.
                         tracing::error!(
                             dm_fehler,
                             block = %bezeichnung,
-                            "Aufgabe nicht gemeldet - Block wartet auf einen neuen Anlauf"
+                            "Aufgabe konnte nicht gemeldet werden; Aufnahme liegt im \
+                        Aufnahmeordner und faellt unter die Aufbewahrungsfrist"
                         );
-                        warteschlange
-                            .lock()
-                            .await
-                            .spaeter_einreihen(neu_starten, MELDEPAUSE_SEKUNDEN);
                     }
                 }
             }
         }
     }
+}
+
+/// Warum ein Block nicht durchlief.
+///
+/// Die Trennung ist wichtig: eine gescheiterte Meldung darf nur die Meldung
+/// wiederholen. Eine zweite Auswertung liefe erneut durch Transkription und
+/// Modell, koennte anders ausfallen und den frueheren Fund ueberschreiben.
+#[derive(Debug)]
+enum Auswertefehler {
+    Auswertung(String),
+    Meldung(String),
 }
 
 /// Was nach der Auswertung mit der Aufnahme geschieht.
@@ -893,11 +990,29 @@ async fn block_auswerten(
     transkribierer: &OpenAiTranscriber,
     konfiguration: &Konfiguration,
     block: &plan::Block,
-) -> Result<Aufnahmeschicksal, String> {
+) -> Result<Aufnahmeschicksal, Auswertefehler> {
+    // Der Bericht steht schon, nur die Meldung fehlt. Ein zweiter Durchlauf
+    // durch Transkription und Modell koennte anders ausfallen - ein spaeteres
+    // "nichts gefunden" wuerde den frueheren Fund ueberschreiben und seine
+    // Aufnahme loeschen.
+    if block.nur_melden {
+        let bericht = bericht_lesen(konfiguration, block)
+            .await
+            .map_err(Auswertefehler::Auswertung)?;
+        dm_senden(&bericht, &block.bezeichnung())
+            .await
+            .map_err(Auswertefehler::Meldung)?;
+        return Ok(if bericht.funde.is_empty() && bericht.modell_geprueft {
+            Aufnahmeschicksal::Loeschen
+        } else {
+            Aufnahmeschicksal::Behalten(Box::new(bericht))
+        });
+    }
+
     let transkript = transkribierer
         .transcribe_clip(Path::new(&block.datei))
         .await
-        .map_err(|e| format!("Transkription: {e}"))?;
+        .map_err(|e| Auswertefehler::Auswertung(format!("Transkription: {e}")))?;
 
     let segmente = if transkript.segments.is_empty() {
         segmente_bauen(block, &transkript.text, transkript.duration_seconds)
@@ -941,14 +1056,18 @@ async fn block_auswerten(
         funde,
     };
 
-    schreiben(konfiguration, block, &bericht, &transkript.text).await?;
+    schreiben(konfiguration, block, &bericht, &transkript.text)
+        .await
+        .map_err(Auswertefehler::Auswertung)?;
     // Ein Fund, dessen Meldung nie ankam, ist kein erledigter Block. Schlaegt
     // die DM fehl, geht der Block zurueck in die Warteschlange statt die
     // Aufnahme zu loeschen - sonst verschwindet der einzige Hinweis still.
     // Der Idempotenzschluessel haengt an der Blockbezeichnung, nicht an der
     // Lauf-ID: die entsteht bei jedem Versuch neu, und der Broker koennte die
     // Wiederholung dann nicht als solche erkennen.
-    dm_senden(&bericht, &block.bezeichnung()).await?;
+    dm_senden(&bericht, &block.bezeichnung())
+        .await
+        .map_err(Auswertefehler::Meldung)?;
     // Geloescht wird nur, was sauber und vollstaendig geprueft war. Ein Fund
     // ohne Aufnahme waere eine Behauptung ohne Gegenprobe: das Transkript ist
     // standardmaessig weg, der Bericht zeigt nur den geschwaerzten Ausschnitt,
@@ -1149,6 +1268,21 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
     (raus, fehler_gesehen)
 }
 
+/// Liest einen schon geschriebenen Bericht wieder ein.
+async fn bericht_lesen(
+    konfiguration: &Konfiguration,
+    block: &plan::Block,
+) -> Result<Bericht, String> {
+    let pfad = konfiguration
+        .ausgabe
+        .join(&block.kanal)
+        .join(format!("{}.json", block.bezeichnung()));
+    let roh = tokio::fs::read_to_string(&pfad)
+        .await
+        .map_err(|e| format!("Bericht {} nicht lesbar: {e}", pfad.display()))?;
+    serde_json::from_str(&roh).map_err(|e| format!("Bericht unlesbar: {e}"))
+}
+
 /// Schreibt mit Modus 0600.
 ///
 /// Berichte nennen Zeit, Kanal und Kategorie eines moeglichen Vorfalls, das
@@ -1301,6 +1435,8 @@ mod tests {
             datei: "/tmp/egal.ts".to_owned(),
             versuche: 0,
             frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
         }
     }
 
@@ -1546,9 +1682,18 @@ mod tests {
     }
 
     #[test]
-    fn aufnahmewurzel_liegt_unter_eigenem_ordner() {
-        // Eigener Ordner, damit das Aufraeumen nie fremde Dateien in /tmp trifft.
-        let wurzel = aufnahme_wurzel();
-        assert!(wurzel.ends_with("stream-audit-captures"), "{wurzel:?}");
+    fn aufnahmen_liegen_dauerhaft_neben_den_berichten() {
+        // Nicht in /tmp: Aufnahmen zu Funden bleiben bis zum Ende der
+        // Aufbewahrungsfrist liegen und waeren dort beim naechsten Neustart
+        // oder durch eine tmpfiles-Regel weg.
+        let konfiguration = Konfiguration {
+            kanaele: Vec::new(),
+            ausgabe: PathBuf::from("/daten/audits"),
+            transkript_behalten: false,
+            aufbewahrung_tage: 30,
+        };
+        let wurzel = aufnahme_wurzel(&konfiguration);
+        assert_eq!(wurzel, PathBuf::from("/daten/audits/aufnahmen"));
+        assert!(!wurzel.starts_with(std::env::temp_dir()));
     }
 }
