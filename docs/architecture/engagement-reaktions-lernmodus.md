@@ -28,15 +28,24 @@ Tippen bringt, und welche zwanzig Momente davor es nicht getan haben.
    `channel:bot` liefert, gelernt aber gerade in fremden Kanälen wird. Sie hat
    keinen Sende-Transport und keine Verbindung zur Antwort-Pipeline.
 
-2. **Kanal heiß schalten.** Schreibt der Owner in einem Kanal, gilt der Kanal
-   für 45 Minuten als „lern-heiß". Erst ab da wird dort überhaupt etwas
-   gespeichert. Aus dreißig mitgelesenen Kanälen wird so der eine, in dem er
-   gerade sitzt. Alles andere fällt ohne DB-Zugriff durch (In-Memory-Map).
+2. **Aufnehmen, und zwar von Anfang an.** Zwei Sorten Kanäle werden
+   aufgezeichnet:
+   - **Partner mit eingeschaltetem Engagement**, sobald sie live Deadlock
+     streamen, unabhängig davon ob der Owner schon da ist. Taucht er später
+     auf, wäre der Verlauf davor sonst unwiederbringlich weg.
+   - **Fremde Kanäle ab der ersten eigenen Nachricht.** Früher geht es dort
+     nicht: dass er zuschaut, erfährt man erst durch seine Zeile.
 
-3. **Aufnehmen.** Für jeden heißen Kanal läuft ein eigener Capture-Task:
-   `streamlink` zieht Blöcke von 30 s, Whisper transkribiert. Ein Task pro
-   Kanal, nicht eine gemeinsame Runde, sonst entstünden Lücken genau dort, wo
-   reagiert wird.
+   Die Aufnahme endet, sobald der Stream offline geht (`twitch_live_state`),
+   sonst 45 Minuten nach der letzten eigenen Nachricht. In allen aufgenommenen
+   Kanälen läuft auch der Chat mit; sonst gäbe es Stream-Ton ohne den Chat, der
+   dazu lief. Kanäle, die weder aufgenommen werden noch den Owner gesehen
+   haben, fallen ohne DB-Zugriff durch (In-Memory-Maps) — aus dreißig
+   mitgelesenen Kanälen bleiben so die zwei, drei relevanten.
+
+3. **Ein Task pro Kanal**, nicht eine gemeinsame Runde: `streamlink` zieht
+   Blöcke von 30 s, Whisper transkribiert. Reihum wären die Lücken dazwischen
+   genau die Momente, auf die reagiert wird.
 
 4. **Koppeln.** Der Mapper verbindet jede eigene Nachricht mit dem
    Transkript-Fenster davor (-45 s bis +10 s) und den letzten acht Chat-Zeilen.
@@ -100,9 +109,9 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 | `ENGAGEMENT_LEARN_ENABLED` | aus | Schaltet Erfassung, Aufnahme, Mapping und Profil frei |
 | `ENGAGEMENT_LEARN_LOGIN` | `earlysalty` | Wessen Reaktionen gelernt werden |
 | `ENGAGEMENT_STT_BASE_URL` | `http://127.0.0.1:8791/v1/audio/transcriptions` | Whisper-Endpunkt (siehe unten) |
-| `ENGAGEMENT_LEARN_HOT_MINUTES` | 45 | Nachlauf eines heißen Kanals |
+| `ENGAGEMENT_LEARN_HOT_MINUTES` | 45 | Nachlauf in fremden Kanälen |
 | `ENGAGEMENT_LEARN_CAPTURE_SECONDS` | 30 | Länge eines Aufnahmeblocks |
-| `ENGAGEMENT_LEARN_MAX_CHANNELS` | 2 | Gleichzeitig aufgenommene Kanäle |
+| `ENGAGEMENT_LEARN_MAX_CHANNELS` | 3 | Gleichzeitig aufgenommene Kanäle |
 | `ENGAGEMENT_LEARN_WINDOW_PRE_SECONDS` | 45 | Transkript-Fenster vor der Nachricht |
 | `ENGAGEMENT_LEARN_WINDOW_POST_SECONDS` | 10 | Transkript-Fenster danach |
 | `ENGAGEMENT_LEARN_RETENTION_HOURS` | 168 | Aufbewahrung des Zeitstrahls |
@@ -164,9 +173,11 @@ Soul-Fragment, und der Bot gibt keine Tipps und korrigiert niemanden.
 
 ## 8. Grenzen
 
-- **Der erste Moment fehlt.** Die Aufnahme startet erst, wenn der Owner das
-  erste Mal geschrieben hat. Für diese eine Nachricht gibt es kein Audio; sie
-  wird als Sample ohne Stream-Kontext abgelegt (`has_stream_context = false`).
+- **In fremden Kanälen fehlt der erste Moment.** Dort startet die Aufnahme
+  erst mit der ersten eigenen Nachricht; für genau diese gibt es kein Audio,
+  sie wird als Sample ohne Stream-Kontext abgelegt (`has_stream_context = false`).
+  In Partner-Kanälen tritt das nicht auf, dort läuft die Aufnahme ab
+  Stream-Beginn.
 - **Nur deutsche Deadlock-Streams.** Die Kanalquelle des Lern-Readers hängt am
   Scout, der auf Kategorie Deadlock und Sprache `de` filtert. In einem Kanal
   außerhalb dieser Menge wird nur mitgelesen, wenn er ohnehin Partner ist.

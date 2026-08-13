@@ -352,7 +352,7 @@ async fn run_learn_capture(
     }
 }
 
-/// Nimmt einen Kanal am Stück auf, solange er lern-heiß ist.
+/// Nimmt einen Kanal am Stück auf, solange er aufgenommen werden soll.
 async fn learn_channel_loop(
     learn: Arc<ReactionLearning>,
     channel: String,
@@ -361,18 +361,21 @@ async fn learn_channel_loop(
 ) {
     let capturer = AudioCapturer::from_env();
     tracing::info!(channel = %channel, "learn-capture: Aufnahme gestartet");
-    while learn.is_channel_hot(&channel) {
+    while learn.should_capture(&channel).await {
         run_learn_capture(&learn, &channel, &capturer, &transcriber).await;
     }
     running.lock().unwrap_or_else(|p| p.into_inner()).remove(&channel);
-    tracing::info!(channel = %channel, "learn-capture: Kanal ausgekühlt, Aufnahme beendet");
+    tracing::info!(channel = %channel, "learn-capture: Aufnahme beendet (Stream aus oder ausgekühlt)");
 }
 
-/// Supervisor: startet je lern-heißem Kanal einen eigenen Aufnahme-Task.
+/// Supervisor: startet je aufzunehmendem Kanal einen eigenen Aufnahme-Task.
 ///
 /// Ein Task pro Kanal statt einer gemeinsamen Runde, weil die Blöcke sonst
 /// reihum liefen und jeder Kanal nur einen Bruchteil der Zeit aufgenommen
 /// würde. Genau die Lücken dazwischen wären die Momente, auf die reagiert wird.
+///
+/// Partner-Kanäle werden ab Stream-Beginn aufgenommen, nicht erst wenn der
+/// Owner auftaucht: taucht er später auf, ist der Verlauf davor sonst weg.
 pub async fn schedule_learn_capture(learn: Arc<ReactionLearning>) {
     learn.warm_cache().await;
     let running: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -383,7 +386,10 @@ pub async fn schedule_learn_capture(learn: Arc<ReactionLearning>) {
         }
         match &transcriber {
             Some(t) => {
-                for channel in learn.hot_channels() {
+                let channels = learn.capture_channels().await;
+                // Der Chat-Pfad schreibt in genau diesen Kanälen mit.
+                learn.set_recording(&channels);
+                for channel in channels {
                     {
                         let mut guard = running.lock().unwrap_or_else(|p| p.into_inner());
                         if !guard.insert(channel.clone()) {

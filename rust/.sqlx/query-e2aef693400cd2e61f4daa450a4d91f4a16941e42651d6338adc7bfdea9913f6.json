@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(streamer_login) AS \"login!\"\n               FROM twitch_live_state\n               WHERE LOWER(streamer_login) = ANY($1) AND COALESCE(is_live, 0) = 0",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e2aef693400cd2e61f4daa450a4d91f4a16941e42651d6338adc7bfdea9913f6"
+}
