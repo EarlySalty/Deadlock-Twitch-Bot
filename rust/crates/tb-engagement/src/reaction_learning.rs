@@ -24,7 +24,7 @@
 //! Ist der Kanal nicht lern-heiß und der Absender nicht der Owner, kostet der
 //! Aufruf einen Lookup in einer Map und sonst nichts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
@@ -51,7 +51,12 @@ const DEFAULT_RETENTION_HOURS: i64 = 168;
 /// Capture-Länge je Aufnahmeblock.
 const DEFAULT_CAPTURE_SECONDS: i64 = 30;
 /// So viele Kanäle gleichzeitig aufnehmen.
-const DEFAULT_MAX_CAPTURE_CHANNELS: usize = 2;
+///
+/// Die Grenze ist der Whisper-Dienst, nicht die Bandbreite: er verarbeitet
+/// Anfragen nacheinander und braucht rund 7 s je 30-Sekunden-Block. Drei
+/// Kanäle erzeugen alle 10 s eine Anfrage und lasten ihn damit gut aus; bei
+/// mehr stauen sich die Blöcke und der Zeitstrahl bekommt Löcher.
+const DEFAULT_MAX_CAPTURE_CHANNELS: usize = 3;
 /// Nachrichten erst mappen, wenn das Fenster danach transkribiert sein kann.
 const MAP_LAG_EXTRA_SECONDS: i64 = 45;
 /// Obergrenze je Mapper-Durchlauf.
@@ -256,6 +261,11 @@ pub struct ReactionLearning {
     enabled: bool,
     /// Kanal → letzte eigene Nachricht. Hält den Fast-Path DB-frei.
     hot: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// Kanäle, die gerade aufgenommen werden. Vom Capture-Supervisor gepflegt,
+    /// damit [`observe`](Self::observe) den Chat dieser Kanäle mitschreibt,
+    /// ohne pro Nachricht die Datenbank zu fragen. Ohne das gäbe es in
+    /// Partner-Kanälen Stream-Ton ohne den Chat, der dazu lief.
+    recording: Mutex<HashSet<String>>,
 }
 
 impl ReactionLearning {
@@ -265,6 +275,7 @@ impl ReactionLearning {
             owner_login: owner_login(),
             enabled: learn_enabled(),
             hot: Mutex::new(HashMap::new()),
+            recording: Mutex::new(HashSet::new()),
         }
     }
 
@@ -300,9 +311,93 @@ impl ReactionLearning {
         entries.into_iter().take(max_capture_channels()).map(|(c, _)| c).collect()
     }
 
+    /// Kanäle, die JETZT aufgenommen werden sollen.
+    ///
+    /// Zwei Quellen, und die erste ist die wichtigere:
+    /// - **Partner-Kanäle, die gerade live Deadlock streamen** — dort wird vom
+    ///   Stream-Anfang an aufgenommen, unabhängig davon, ob der Owner schon da
+    ///   ist. Nur so ist der Verlauf vollständig, wenn er später dazukommt.
+    /// - **Fremde Kanäle, in denen der Owner gesichtet wurde** — dort geht es
+    ///   nicht früher, weil man erst durch seine Nachricht erfährt, dass er
+    ///   zuschaut.
+    ///
+    /// Beide Sorten werden gegen `twitch_live_state` geprüft: ist der Stream
+    /// vorbei, endet die Aufnahme sofort, statt bis zum Ablauf der Nachlaufzeit
+    /// gegen einen toten Kanal zu laufen.
+    pub async fn capture_channels(&self) -> Vec<String> {
+        let seen = self.hot_channels();
+        let mut live = self.live_partner_channels().await;
+        for channel in seen {
+            if !live.contains(&channel) {
+                live.push(channel);
+            }
+        }
+        let online = self.filter_live(&live).await;
+        online.into_iter().take(max_capture_channels()).collect()
+    }
+
+    /// Partner-Kanäle mit eingeschaltetem Engagement, die live Deadlock streamen.
+    async fn live_partner_channels(&self) -> Vec<String> {
+        sqlx::query_scalar!(
+            r#"SELECT LOWER(s.channel_login) AS "channel_login!"
+               FROM twitch_engagement_settings s
+               JOIN twitch_live_state l
+                 ON LOWER(l.streamer_login) = LOWER(s.channel_login)
+               WHERE s.enabled = TRUE
+                 AND COALESCE(l.is_live, 0) <> 0
+                 AND LOWER(TRIM(COALESCE(l.last_game, ''))) = 'deadlock'"#
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Behält nur Kanäle, die laut `twitch_live_state` gerade live sind.
+    ///
+    /// Kanäle ohne Eintrag bleiben drin: der Scout kennt nur deutschsprachige
+    /// Deadlock-Streams, und ein Kanal, in dem der Owner nachweislich gerade
+    /// schreibt, soll nicht daran scheitern, dass er dort nicht gelistet ist.
+    async fn filter_live(&self, channels: &[String]) -> Vec<String> {
+        if channels.is_empty() {
+            return Vec::new();
+        }
+        let offline: Vec<String> = sqlx::query_scalar!(
+            r#"SELECT LOWER(streamer_login) AS "login!"
+               FROM twitch_live_state
+               WHERE LOWER(streamer_login) = ANY($1) AND COALESCE(is_live, 0) = 0"#,
+            channels
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        channels.iter().filter(|c| !offline.contains(c)).cloned().collect()
+    }
+
+    /// Soll dieser Kanal gerade aufgenommen werden? Prüft dieselben Quellen
+    /// wie [`capture_channels`], damit ein laufender Aufnahme-Task endet,
+    /// sobald der Stream aus ist oder der Kanal auskühlt.
+    pub async fn should_capture(&self, channel_login: &str) -> bool {
+        let channel = channel_login.trim().to_lowercase();
+        self.capture_channels().await.contains(&channel)
+    }
+
     /// Nimmt der Lernmodus diesen Kanal gerade auf?
     pub fn is_channel_hot(&self, channel_login: &str) -> bool {
         self.is_hot(&channel_login.trim().to_lowercase())
+    }
+
+    /// Merkt sich, welche Kanäle gerade aufgenommen werden. Nur so weiß der
+    /// Chat-Pfad, dass er dort mitschreiben soll, ohne die Datenbank zu fragen.
+    pub fn set_recording(&self, channels: &[String]) {
+        let mut recording = self.recording.lock().unwrap_or_else(|p| p.into_inner());
+        *recording = channels.iter().cloned().collect();
+    }
+
+    fn is_recording(&self, channel_login: &str) -> bool {
+        self.recording
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(channel_login)
     }
 
     fn is_hot(&self, channel_login: &str) -> bool {
@@ -361,7 +456,9 @@ impl ReactionLearning {
             return;
         }
         let is_owner = login == self.owner_login;
-        if !is_owner && !self.is_hot(&channel) {
+        // Fremde Zeilen zählen, wenn der Kanal aufgenommen wird — sonst gäbe es
+        // in Partner-Kanälen Stream-Ton ohne den Chat, der dazu lief.
+        if !is_owner && !self.is_hot(&channel) && !self.is_recording(&channel) {
             return;
         }
 
@@ -857,6 +954,11 @@ mod tests {
             "CREATE UNIQUE INDEX uq_engagement_learn_timeline_message \
                ON twitch_engagement_learn_timeline (channel_login, message_id) \
                WHERE message_id IS NOT NULL",
+            "CREATE TABLE twitch_engagement_settings (\
+               channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE)",
+            "CREATE TABLE twitch_live_state (\
+               twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, \
+               is_live INTEGER DEFAULT 0, last_game TEXT)",
             "CREATE TABLE twitch_engagement_reaction_samples (\
                id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
                message_ts TIMESTAMPTZ NOT NULL, my_message TEXT NOT NULL, \
@@ -941,6 +1043,85 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 4, "einmal msg-1, einmal msg-2, zweimal ohne ID");
+    }
+
+    /// Kern des Auftrags: bei Partnern laeuft die Aufnahme ab Stream-Beginn,
+    /// nicht erst wenn der Owner auftaucht. Sonst fehlt genau der Verlauf, der
+    /// erklaert, worauf er spaeter reagiert.
+    #[tokio::test]
+    async fn partner_wird_ohne_owner_aufgenommen_und_endet_mit_dem_stream() {
+        let Some(pool) = make_pool("t_eng_learn_capture").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES \
+             ('partner_live', TRUE), ('partner_offline', TRUE), ('partner_aus', FALSE), \
+             ('partner_anderes_spiel', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES \
+             ('1','partner_live',1,'Deadlock'), \
+             ('2','partner_offline',0,'Deadlock'), \
+             ('3','partner_aus',1,'Deadlock'), \
+             ('4','partner_anderes_spiel',1,'Dota 2')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        let channels = learn.capture_channels().await;
+        assert_eq!(channels, vec!["partner_live".to_string()]);
+        assert!(learn.should_capture("Partner_Live").await);
+        assert!(!learn.should_capture("partner_offline").await);
+    }
+
+    #[tokio::test]
+    async fn fremder_kanal_wird_ab_sichtung_aufgenommen_bis_der_stream_endet() {
+        let Some(pool) = make_pool("t_eng_learn_capture_fremd").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        // Kein Partner, kein Live-State-Eintrag: unbekannte Kanaele bleiben
+        // drin, sobald der Owner dort nachweislich schreibt.
+        learn.observe("fremd", None, "owner", "wilder take", Some("m1")).await;
+        assert_eq!(learn.capture_channels().await, vec!["fremd".to_string()]);
+
+        // Geht der Stream aus, endet die Aufnahme sofort statt nach Ablauf der
+        // Nachlaufzeit gegen einen toten Kanal weiterzulaufen.
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) \
+             VALUES ('9','fremd',0,'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(learn.capture_channels().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_aufgenommenen_kanaelen_wandert_auch_fremder_chat_mit() {
+        let Some(pool) = make_pool("t_eng_learn_recording").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        // Ohne Aufnahme-Markierung faellt die fremde Zeile weg.
+        learn.observe("partner", None, "chatter", "erste zeile", Some("m1")).await;
+        let before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(before, 0);
+
+        // Sobald der Supervisor den Kanal als aufgenommen meldet, laeuft der
+        // Chat mit — sonst gaebe es Stream-Ton ohne den zugehoerigen Chat.
+        learn.set_recording(&["partner".to_string()]);
+        learn.observe("partner", None, "chatter", "zweite zeile", Some("m2")).await;
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT kind, content FROM twitch_engagement_learn_timeline ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, vec![("chat".to_string(), "zweite zeile".to_string())]);
     }
 
     #[tokio::test]
