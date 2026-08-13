@@ -42,11 +42,21 @@ pub fn kanaele_lesen(roh: &str) -> Vec<String> {
             continue;
         }
         // Auch eine ganze URL soll gehen, damit niemand von Hand kuerzt.
-        let name = name
+        // Query und Fragment muessen weg: `...twitch.tv/ricky?foo=1` waere
+        // sonst der Login "ricky?foo=1" und die Aufnahme scheiterte still.
+        let ohne_anhang = name
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(&name)
+            .trim_end_matches('/');
+        let name = ohne_anhang
             .rsplit('/')
             .find(|s| !s.is_empty())
-            .unwrap_or(&name)
+            .unwrap_or(ohne_anhang)
             .to_owned();
+        if name.is_empty() {
+            continue;
+        }
         if !raus.contains(&name) {
             raus.push(name);
         }
@@ -118,6 +128,19 @@ mod tests {
         assert_eq!(
             kanaele_lesen("https://www.twitch.tv/skifahrertv"),
             vec!["skifahrertv"]
+        );
+    }
+
+    #[test]
+    fn url_mit_anhang_und_schraegstrich_ergibt_den_reinen_login() {
+        assert_eq!(
+            kanaele_lesen("https://www.twitch.tv/skifahrertv/?referrer=raid"),
+            vec!["skifahrertv"],
+            "Query und abschliessender Schraegstrich duerfen nicht im Login landen"
+        );
+        assert_eq!(
+            kanaele_lesen("https://www.twitch.tv/ricky#chat"),
+            vec!["ricky"]
         );
     }
 

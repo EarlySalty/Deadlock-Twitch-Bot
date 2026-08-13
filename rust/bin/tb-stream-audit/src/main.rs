@@ -184,7 +184,11 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
             Some(block) => block,
             None => {
                 ohne_zettel += 1;
-                ersatz.block_fertig(pfad.to_string_lossy().to_string(), 0)
+                // Eine Sekunde Abstand je Fund: sonst haetten alle zettellosen
+                // Aufnahmen Zeitversatz 0, damit dieselbe Bezeichnung,
+                // denselben Berichtsnamen und denselben Idempotenzschluessel -
+                // der zweite Bericht ueberschriebe den ersten.
+                ersatz.block_fertig(pfad.to_string_lossy().to_string(), 1)
             }
         };
         warteschlange.lock().await.einreihen(block);
@@ -220,7 +224,17 @@ async fn ts_dateien_sammeln(ordner: &Path, raus: &mut Vec<PathBuf>) {
                 continue;
             }
         };
-        while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+        loop {
+            let eintrag = match eintraege.next_entry().await {
+                Ok(Some(eintrag)) => eintrag,
+                Ok(None) => break,
+                Err(fehler) => {
+                    // Weiterlesen statt abbrechen: ein kaputter Eintrag darf
+                    // die restlichen Aufnahmen nicht verstecken.
+                    tracing::warn!(?fehler, ordner = ?aktuell, "Eintrag nicht lesbar");
+                    continue;
+                }
+            };
             let pfad = eintrag.path();
             match eintrag.file_type().await {
                 Ok(typ) if typ.is_dir() => zu_lesen.push(pfad),
@@ -285,6 +299,12 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         frueherstens: 0,
     })
 }
+
+/// Hoechststand der Warteschlange, ab dem keine neuen Aufnahmen mehr starten.
+///
+/// 36 Bloecke sind sechs Stunden Ton. Wer so weit zurueckhaengt, holt es nicht
+/// mehr auf; weiter aufzunehmen hiesse nur, die Platte vollzuschreiben.
+const MAX_WARTESCHLANGE: usize = 36;
 
 /// Wie lange die Sendung schon laeuft, aus `started_at` von Helix.
 ///
@@ -414,6 +434,22 @@ async fn aufnahme_schleife(
         // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
         staende.retain(|kanal, _| live.contains(kanal));
 
+        // Die Transkription ist langsamer als Echtzeit; drei gleichzeitige
+        // Kanaele fuellen die Warteschlange schneller, als ein Auswerter sie
+        // leert. Ohne Grenze waechst der Rueckstand und mit ihm die Platte.
+        // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
+        // laufende Bloecke laufen zu Ende.
+        let stau = warteschlange.lock().await.laenge();
+        if stau >= MAX_WARTESCHLANGE {
+            tracing::warn!(
+                stau,
+                grenze = MAX_WARTESCHLANGE,
+                "Auswertung kommt nicht nach - keine neuen Aufnahmen"
+            );
+            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
+            continue;
+        }
+
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
             let kanal = &kanal;
@@ -436,12 +472,17 @@ async fn aufnahme_schleife(
                 // ueber einen Neustart des Dienstes hinweg dieselbe, und der
                 // Zeitversatz macht die Zeiten im Bericht zu Sendungszeiten -
                 // "hoer dir Minute 12 an" trifft dann im VOD auch Minute 12.
-                let lauf = if sendung.id.trim().is_empty() {
-                    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
-                } else {
-                    sendung.id.trim().to_owned()
+                let basis = sendungssekunden(sendung);
+                let lauf = match (sendung.id.trim(), basis) {
+                    ("", _) => chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+                    // Ohne brauchbares started_at faengt der Versatz wieder bei
+                    // null an. Damit ein Neustart in derselben Sendung nicht
+                    // dieselben Berichtsnamen erzeugt, bekommt die Kennung dann
+                    // einen Zeitanhang.
+                    (id, 0) => format!("{id}-{}", chrono::Utc::now().timestamp()),
+                    (id, _) => id.to_owned(),
                 };
-                plan::Aufnahme::starten_bei(kanal.clone(), lauf, sendungssekunden(sendung))
+                plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis)
             });
             if zustand.naechste_blocklaenge().is_none() {
                 // Deckel erreicht: Stand behalten, damit er beim naechsten Takt
@@ -602,6 +643,58 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
     }
 }
 
+/// Loescht liegengebliebene Aufnahmen, die aelter als die Aufbewahrung sind.
+///
+/// Aufnahmen bleiben absichtlich liegen, wenn ein Fund drinsteht, die Pruefung
+/// unvollstaendig war oder ein Block aufgegeben wurde. Ohne diese Grenze waere
+/// "bleibt liegen" gleichbedeutend mit "fuer immer": eine Stunde Stream sind
+/// mehrere hundert Megabyte, und `.ts` ist die volle HLS-Spur, nicht nur Ton.
+///
+/// Was noch in der Warteschlange steht, wird nie geloescht - sonst zoege die
+/// Aufbewahrung einem wartenden Block die Datei unter den Fuessen weg.
+async fn alte_aufnahmen_loeschen(
+    konfiguration: &Konfiguration,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
+) {
+    let tage = konfiguration.aufbewahrung_tage;
+    if tage == 0 {
+        return;
+    }
+    let grenze = Duration::from_secs(tage.saturating_mul(24 * 60 * 60));
+
+    let mut aufnahmen = Vec::new();
+    ts_dateien_sammeln(&aufnahme_wurzel(), &mut aufnahmen).await;
+    let eingereiht: std::collections::HashSet<String> =
+        warteschlange.lock().await.dateien().into_iter().collect();
+
+    let mut geloescht = 0usize;
+    for pfad in aufnahmen {
+        if eingereiht.contains(&pfad.to_string_lossy().to_string()) {
+            continue;
+        }
+        let Ok(daten) = tokio::fs::metadata(&pfad).await else {
+            continue;
+        };
+        let Ok(alter) = daten
+            .modified()
+            .and_then(|m| m.elapsed().map_err(std::io::Error::other))
+        else {
+            continue;
+        };
+        if alter <= grenze {
+            continue;
+        }
+        let ziel = pfad.parent().unwrap_or(&pfad).to_path_buf();
+        match tokio::fs::remove_dir_all(&ziel).await {
+            Ok(()) => geloescht += 1,
+            Err(fehler) => tracing::warn!(?fehler, ordner = ?ziel, "Aufnahme nicht loeschbar"),
+        }
+    }
+    if geloescht > 0 {
+        tracing::info!(geloescht, tage, "alte Aufnahmen geloescht");
+    }
+}
+
 /// Arbeitet die Warteschlange ab, immer nur einen Block gleichzeitig.
 async fn auswertungs_schleife(
     transkribierer: OpenAiTranscriber,
@@ -615,6 +708,7 @@ async fn auswertungs_schleife(
         // Vorfaellen lagen unbegrenzt.
         if tokio::time::Instant::now() >= naechstes_aufraeumen {
             alte_berichte_loeschen(&konfiguration).await;
+            alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
             naechstes_aufraeumen =
                 tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
         }
@@ -627,9 +721,9 @@ async fn auswertungs_schleife(
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
             Ok(Aufnahmeschicksal::Behalten) => {
-                tracing::warn!(
+                tracing::info!(
                     block = %block.bezeichnung(),
-                    "Aufnahme bleibt liegen - der Bericht taugt nicht als Nachweis"
+                    "Aufnahme bleibt liegen - Fund oder unvollstaendige Pruefung"
                 );
             }
             Ok(Aufnahmeschicksal::Loeschen) => {
@@ -652,6 +746,7 @@ async fn auswertungs_schleife(
             }
             Err(fehler) => {
                 let bezeichnung = block.bezeichnung();
+                let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
@@ -671,6 +766,21 @@ async fn auswertungs_schleife(
                     Handpruefung liegen",
                         plan::MAX_VERSUCHE
                     );
+                    // Ein aufgegebener Block darf nicht nur im Journal stehen.
+                    // Sonst hiesse "keine DM" hier faelschlich "sauber".
+                    let text = format!(
+                        "Coaching-Audit {}: Block {} nach {} Versuchen aufgegeben ({}). \
+Aufnahme liegt noch da.",
+                        kanal,
+                        bezeichnung,
+                        plan::MAX_VERSUCHE,
+                        fehler
+                    );
+                    if let Err(dm_fehler) =
+                        dm_rohtext(&text, &format!("{bezeichnung}-aufgegeben")).await
+                    {
+                        tracing::error!(dm_fehler, "Aufgabe konnte nicht gemeldet werden");
+                    }
                 }
             }
         }
@@ -742,11 +852,17 @@ async fn block_auswerten(
     // Lauf-ID: die entsteht bei jedem Versuch neu, und der Broker koennte die
     // Wiederholung dann nicht als solche erkennen.
     dm_senden(&bericht, &block.bezeichnung()).await?;
-    Ok(if leer {
-        Aufnahmeschicksal::Behalten
-    } else {
-        Aufnahmeschicksal::Loeschen
-    })
+    // Geloescht wird nur, was sauber und vollstaendig geprueft war. Ein Fund
+    // ohne Aufnahme waere eine Behauptung ohne Gegenprobe: das Transkript ist
+    // standardmaessig weg, der Bericht zeigt nur den geschwaerzten Ausschnitt,
+    // und ob das VOD noch existiert, entscheidet der Kanal.
+    Ok(
+        if leer || !bericht.funde.is_empty() || !bericht.modell_geprueft {
+            Aufnahmeschicksal::Behalten
+        } else {
+            Aufnahmeschicksal::Loeschen
+        },
+    )
 }
 
 /// Teilt den Blocktext in Segmente und rechnet die Zeit ueber den Textanteil.
@@ -940,6 +1056,16 @@ async fn schreiben(
     nur_fuer_mich(&basis.with_extension("json"), json.as_bytes()).await?;
     if konfiguration.transkript_behalten {
         nur_fuer_mich(&basis.with_extension("txt"), transkript.as_bytes()).await?;
+    } else {
+        // Ein frueherer Lauf desselben Blocks kann den Wortlaut abgelegt
+        // haben, als der Schalter noch an war. Bliebe er liegen, stuende im
+        // neuen Bericht "nicht behalten", waehrend die Datei danebenliegt.
+        let alt = basis.with_extension("txt");
+        match tokio::fs::remove_file(&alt).await {
+            Ok(()) => tracing::info!(datei = ?alt, "altes Transkript entfernt"),
+            Err(fehler) if fehler.kind() == std::io::ErrorKind::NotFound => {}
+            Err(fehler) => tracing::warn!(?fehler, datei = ?alt, "altes Transkript bleibt liegen"),
+        }
     }
     tracing::info!(
         block = %block.bezeichnung(),
@@ -951,6 +1077,35 @@ async fn schreiben(
 
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
 /// nach dem ersten Abend Rauschen, das niemand mehr liest.
+/// Schickt eine freie Zeile an den Admin - fuer Meldungen, die kein Bericht
+/// sind, etwa einen endgueltig aufgegebenen Block.
+async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
+    let Some(token) = melden::broker_token() else {
+        return Err("kein Broker-Token".to_owned());
+    };
+    let anfrage = melden::anfrage(melden::empfaenger(), text);
+    let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+    match client
+        .post(&url)
+        .header("X-Internal-Token", token)
+        .header(
+            melden::IDEMPOTENZ_KOPF,
+            melden::idempotenz_schluessel(schluessel),
+        )
+        .json(&anfrage)
+        .send()
+        .await
+    {
+        Ok(antwort) if antwort.status().is_success() => Ok(()),
+        Ok(antwort) => Err(format!("DM abgelehnt: HTTP {}", antwort.status().as_u16())),
+        Err(fehler) => Err(format!("DM fehlgeschlagen: {fehler}")),
+    }
+}
+
 async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     // Ohne Funde gibt es nichts zu melden - je Block eine DM "alles ruhig"
     // waere bei drei Kanaelen im Zehnminutentakt nur noch Rauschen. Eine
@@ -1173,6 +1328,17 @@ mod tests {
             .expect("Zettel entfernen");
         assert!(zettel_lesen(&aufnahme).await.is_none());
         let _ = tokio::fs::remove_dir_all(&blockordner).await;
+    }
+
+    #[tokio::test]
+    async fn zettellose_aufnahmen_bekommen_verschiedene_namen() {
+        // Zwei liegengebliebene Aufnahmen ohne Zettel hatten frueher beide
+        // Zeitversatz 0 - gleiche Bezeichnung, gleicher Berichtsname, gleicher
+        // Idempotenzschluessel. Der zweite Bericht ueberschrieb den ersten.
+        let mut ersatz = plan::Aufnahme::starten("wiederaufnahme", "lauf");
+        let erster = ersatz.block_fertig("/tmp/a.ts", 1);
+        let zweiter = ersatz.block_fertig("/tmp/b.ts", 1);
+        assert_ne!(erster.bezeichnung(), zweiter.bezeichnung());
     }
 
     #[test]
