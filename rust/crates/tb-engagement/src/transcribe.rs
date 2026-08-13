@@ -13,7 +13,13 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-const DEFAULT_OPENAI_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
+/// Transkribiert wird lokal. `ops/stt-server` haelt ein Whisper-Modell im
+/// Speicher und spricht dieselbe Schnittstelle; der Default zeigt darum auf ihn
+/// und nicht nach draussen. Wer trotzdem OpenAI will, setzt
+/// `ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt — sonst geht nie
+/// Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
+/// `OPENAI_API_KEY` in der Umgebung steht.
+const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-1";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
@@ -56,25 +62,18 @@ impl OpenAiTranscriber {
     /// Aus Env: `OPENAI_WHISPER_MODEL` (Legacy, Default `whisper-1`) und
     /// `FFMPEG_BIN` (Default `ffmpeg`).
     ///
-    /// Endpunkt: `ENGAGEMENT_STT_BASE_URL` zeigt auf einen eigenen,
-    /// OpenAI-kompatiblen Dienst (`ops/stt-server`, lokales Whisper-Modell);
-    /// ohne die Variable geht es an die OpenAI-API. Der `OPENAI_API_KEY` ist
-    /// nur für OpenAI Pflicht — der lokale Dienst ignoriert den
-    /// `Authorization`-Header, und ohne diesen Fallback bräuchte ein rein
-    /// lokaler Betrieb trotzdem einen Fremd-Key. `None` heißt: kein Endpunkt
-    /// nutzbar (Python `TranscriberUnavailable`).
+    /// Endpunkt: [`DEFAULT_STT_URL`], also der lokale `ops/stt-server`.
+    /// `ENGAGEMENT_STT_BASE_URL` überschreibt ihn. Ein Key wird nur mitgeschickt,
+    /// wenn einer da ist; der lokale Dienst ignoriert den
+    /// `Authorization`-Header ohnehin, und ein fehlender `OPENAI_API_KEY` darf
+    /// die lokale Transkription nicht blockieren.
     pub fn from_env() -> Option<Self> {
-        let base_url = nonempty_env("ENGAGEMENT_STT_BASE_URL");
-        let api_key = match (nonempty_env("OPENAI_API_KEY"), &base_url) {
-            (Some(key), _) => key,
-            (None, Some(_)) => "local".to_string(),
-            (None, None) => return None,
-        };
         Some(Self {
-            api_key,
+            api_key: nonempty_env("OPENAI_API_KEY").unwrap_or_else(|| "local".to_string()),
             model: nonempty_env("OPENAI_WHISPER_MODEL")
                 .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            base_url: base_url.unwrap_or_else(|| DEFAULT_OPENAI_URL.to_string()),
+            base_url: nonempty_env("ENGAGEMENT_STT_BASE_URL")
+                .unwrap_or_else(|| DEFAULT_STT_URL.to_string()),
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
             http: reqwest::Client::builder()
                 .timeout(REQUEST_TIMEOUT)
@@ -246,6 +245,18 @@ mod tests {
 
     fn transcriber(base: &str) -> OpenAiTranscriber {
         transcriber_with_timeout(base, Duration::from_secs(60))
+    }
+
+    /// Stream-Audio darf nicht aus Versehen bei einem Fremdanbieter landen,
+    /// nur weil irgendwo ein `OPENAI_API_KEY` in der Umgebung steht. Ohne
+    /// explizite Konfiguration zeigt der Endpunkt auf localhost.
+    #[test]
+    fn default_endpunkt_ist_lokal() {
+        assert!(DEFAULT_STT_URL.starts_with("http://127.0.0.1:"));
+        if std::env::var("ENGAGEMENT_STT_BASE_URL").is_err() {
+            let t = OpenAiTranscriber::from_env().expect("Client baubar");
+            assert_eq!(t.base_url, DEFAULT_STT_URL);
+        }
     }
 
     fn transcriber_with_timeout(base: &str, timeout: Duration) -> OpenAiTranscriber {

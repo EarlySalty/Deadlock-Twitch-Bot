@@ -99,7 +99,7 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 |---|---|---|
 | `ENGAGEMENT_LEARN_ENABLED` | aus | Schaltet Erfassung, Aufnahme, Mapping und Profil frei |
 | `ENGAGEMENT_LEARN_LOGIN` | `earlysalty` | Wessen Reaktionen gelernt werden |
-| `ENGAGEMENT_STT_BASE_URL` | OpenAI | Eigener Whisper-Endpunkt (siehe unten) |
+| `ENGAGEMENT_STT_BASE_URL` | `http://127.0.0.1:8791/v1/audio/transcriptions` | Whisper-Endpunkt (siehe unten) |
 | `ENGAGEMENT_LEARN_HOT_MINUTES` | 45 | Nachlauf eines heißen Kanals |
 | `ENGAGEMENT_LEARN_CAPTURE_SECONDS` | 30 | Länge eines Aufnahmeblocks |
 | `ENGAGEMENT_LEARN_MAX_CHANNELS` | 2 | Gleichzeitig aufgenommene Kanäle |
@@ -108,13 +108,19 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 | `ENGAGEMENT_LEARN_RETENTION_HOURS` | 168 | Aufbewahrung des Zeitstrahls |
 | `ENGAGEMENT_PERSONA_MODE` | `veteran` | `rookie` schaltet auf die Neuling-Persona |
 
-**Transkription lokal:** `ops/stt-server/stt_server.py` hält ein
-`large-v3-turbo`-Modell im Speicher und spricht die OpenAI-Schnittstelle. Läuft
-auf `127.0.0.1:8791` ohne Authentifizierung, gehört also ausschließlich ans
-Loopback. Verdrahtet über
-`ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions`; ohne
-`OPENAI_API_KEY` wird dann ein Platzhalter geschickt, den der lokale Dienst
-ignoriert. Ohne die Variable geht die Transkription an OpenAI und kostet Geld.
+**Transkription läuft lokal, und zwar per Default.** `ops/stt-server/stt_server.py`
+hält ein `large-v3-turbo`-Modell im Speicher und spricht dieselbe Schnittstelle
+wie OpenAI; der eingebaute Endpunkt zeigt auf ihn. Es geht also kein
+Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
+`OPENAI_API_KEY` in der Umgebung steht. Wer OpenAI trotzdem will, setzt
+`ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt.
+
+Der Dienst hat keine Authentifizierung und bindet deshalb ausschließlich ans
+Loopback. Er läuft als User-Unit `deadlock-stt-server.service`
+(venv `~/stt-tools`, Port 8791, 8 Threads); Gesundheitscheck:
+`curl -s http://127.0.0.1:8791/health`. Läuft er nicht, schlägt die
+Transkription fehl und der Zeitstrahl bekommt für diese Minuten keine
+Stream-Zeilen — er weicht bewusst nicht nach außen aus.
 
 ## 6. Sichtung
 

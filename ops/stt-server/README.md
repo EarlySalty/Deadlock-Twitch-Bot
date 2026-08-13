@@ -13,17 +13,19 @@ STT_PORT=8791 .../stt-tools/bin/python ops/stt-server/stt_server.py
 curl -s http://127.0.0.1:8791/health
 ```
 
-Verdrahtet wird der Dienst über eine Env-Variable:
+Als systemd-User-Unit läuft er über `deadlock-stt-server.service` (venv
+`~/stt-tools`, Modell wird beim Start einmal geladen):
 
 ```
-ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
+systemctl --user status deadlock-stt-server
 ```
 
-Ist sie gesetzt, braucht `OpenAiTranscriber::from_env()` keinen
-`OPENAI_API_KEY` mehr und schickt einen Platzhalter, den dieser Dienst ohnehin
-ignoriert. Ohne die Variable geht jede Transkription an OpenAI und kostet Geld —
-für den Reaktions-Lernmodus, der stundenlang durchgehend aufnimmt, ist das der
-teure Weg.
+**Verdrahtung: keine nötig.** `OpenAiTranscriber::from_env()` zeigt per Default
+auf `http://127.0.0.1:8791/v1/audio/transcriptions`, also hierher. Ein
+`OPENAI_API_KEY` in der Umgebung ändert daran nichts, und ohne Key geht ein
+Platzhalter raus, den dieser Dienst ohnehin ignoriert. Stream-Audio verlässt die
+Maschine damit nie versehentlich. Wer OpenAI will, setzt
+`ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt.
 
 Der Dienst hat **keine Authentifizierung** und gehört deshalb ausschliesslich
 an `127.0.0.1`. Der Rust-Aufrufer schickt weiterhin einen `Authorization`-Header,

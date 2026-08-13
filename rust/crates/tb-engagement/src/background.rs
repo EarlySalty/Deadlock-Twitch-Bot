@@ -262,9 +262,9 @@ pub async fn schedule_channel_profile(pool: PgPool) {
 }
 
 /// Stream-Transkript-Loop (Port von `_run_stream_transcript_loop`): pro
-/// enabled Channel ein streamlink-Capture + OpenAI-Whisper-Transkription, dazu
-/// periodisches Trimmen. Aus (Env-Flag) oder ohne `OPENAI_API_KEY` → still im
-/// Poll-Takt warten und retryen.
+/// enabled Channel ein streamlink-Capture + Whisper-Transkription (lokal, siehe
+/// [`OpenAiTranscriber::from_env`]), dazu periodisches Trimmen. Aus (Env-Flag)
+/// oder ohne baubaren HTTP-Client → still im Poll-Takt warten und retryen.
 pub async fn schedule_stream_transcripts(pool: PgPool) {
     let capturer = AudioCapturer::from_env();
     let mut transcriber: Option<OpenAiTranscriber> = None;
@@ -284,9 +284,9 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
                         StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
                     }
                 }
-                None => tracing::debug!(
-                    "stream-transcripts: kein OPENAI_API_KEY — Transcriber nicht verfügbar"
-                ),
+                None => {
+                    tracing::debug!("stream-transcripts: Transcriber nicht verfügbar")
+                }
             }
         }
         jittered_sleep(transcript_poll_interval_seconds()).await;
@@ -398,9 +398,7 @@ pub async fn schedule_learn_capture(learn: Arc<ReactionLearning>) {
                     ));
                 }
             }
-            None => tracing::debug!(
-                "learn-capture: kein STT-Endpunkt (ENGAGEMENT_STT_BASE_URL/OPENAI_API_KEY)"
-            ),
+            None => tracing::warn!("learn-capture: HTTP-Client nicht baubar, keine Transkription"),
         }
         jittered_sleep(LEARN_SUPERVISOR_INTERVAL).await;
     }
