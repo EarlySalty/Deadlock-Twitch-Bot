@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_learn_timeline (channel_login, kind, author, content, message_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (channel_login, message_id) WHERE message_id IS NOT NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5587a9693882011065ce7ee5c742cadbbc5e395c24eb4acd13877ee78267dfc1"
+}
