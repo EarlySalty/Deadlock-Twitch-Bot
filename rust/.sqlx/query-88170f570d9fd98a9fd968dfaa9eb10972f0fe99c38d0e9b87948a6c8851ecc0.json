@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", channel_login AS \"channel_login!\", message_ts AS \"message_ts!\",\n                      my_message AS \"my_message!\", stream_context AS \"stream_context!\",\n                      chat_context AS \"chat_context!\",\n                      has_stream_context AS \"has_stream_context!\", verdict\n               FROM twitch_engagement_reaction_samples\n               WHERE (NOT $2 OR has_stream_context)\n                 AND (verdict IS NULL OR verdict <> 'bad')\n               ORDER BY message_ts DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "message_ts!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "my_message!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "stream_context!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "chat_context!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "has_stream_context!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "verdict",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "88170f570d9fd98a9fd968dfaa9eb10972f0fe99c38d0e9b87948a6c8851ecc0"
+}

@@ -1,0 +1,985 @@
+//! Reaktions-Lernmodus: aufzeichnen, WORAUF der Owner im Chat reagiert und WIE.
+//!
+//! Die KI bekommt ihren Grundgeschmack bisher aus einem handgepflegten
+//! Gold-Register in [`crate::style_examples`]. Dieses Modul ersetzt das Raten
+//! durch Beobachtung: jede eigene Chat-Nachricht wird mit dem Stream-Audio der
+//! Sekunden davor und den Chat-Zeilen davor zu einem Stimulus/Response-Paar
+//! verknüpft.
+//!
+//! Ablauf:
+//! 1. [`ReactionLearning::observe`] hängt an jeder eingehenden Chat-Nachricht,
+//!    noch vor allen Partner-/Engagement-Gates. Schreibt der Owner in einem
+//!    Kanal, wird der Kanal für [`hot_ttl_minutes`] „lern-heiß": ab da wandert
+//!    dort jede Chat-Zeile in den Lern-Puffer und die Audio-Aufnahme startet.
+//! 2. Der Capture-Loop in [`crate::background`] nimmt lern-heiße Kanäle
+//!    lückenlos auf und legt Whisper-Segmente ab.
+//! 3. [`ReactionLearning::map_pending`] koppelt beides: pro eigener Nachricht
+//!    das Transkript-Fenster davor plus die letzten Chat-Zeilen.
+//!
+//! Bewusst getrennt von [`crate::stream_transcripts`]: die operative Tabelle
+//! ist flüchtig (60 min) und läuft nur für engagement-aktive Partner-Kanäle,
+//! der Lernmodus braucht beliebige Kanäle und längere Haltbarkeit.
+//!
+//! Der schnelle Pfad zählt: `observe` läuft auf JEDER Chat-Nachricht des Bots.
+//! Ist der Kanal nicht lern-heiß und der Absender nicht der Owner, kostet der
+//! Aufruf einen Lookup in einer Map und sonst nichts.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use chrono::{DateTime, Duration, Utc};
+use sqlx::PgPool;
+
+use crate::minimax_chat::EngagementMinimaxClient;
+
+/// Default-Owner: der Chat-Account, dessen Reaktionen gelernt werden.
+const DEFAULT_OWNER_LOGIN: &str = "earlysalty";
+/// So lange nach der letzten eigenen Nachricht bleibt ein Kanal lern-heiß.
+const DEFAULT_HOT_TTL_MINUTES: i64 = 45;
+/// Transkript-Fenster vor der eigenen Nachricht.
+const DEFAULT_WINDOW_PRE_SECONDS: i64 = 45;
+/// Transkript-Fenster nach der eigenen Nachricht (der Streamer redet weiter).
+const DEFAULT_WINDOW_POST_SECONDS: i64 = 10;
+/// So viele Chat-Zeilen vor der eigenen Nachricht als Umgebung.
+const DEFAULT_CHAT_CONTEXT_LINES: i64 = 8;
+/// So weit zurück dürfen diese Chat-Zeilen liegen.
+const DEFAULT_CHAT_CONTEXT_MINUTES: i64 = 4;
+/// Rohdaten-Aufbewahrung (Samples bleiben unberührt).
+const DEFAULT_RETENTION_HOURS: i64 = 48;
+/// Capture-Länge je Aufnahmeblock.
+const DEFAULT_CAPTURE_SECONDS: i64 = 30;
+/// So viele Kanäle gleichzeitig aufnehmen.
+const DEFAULT_MAX_CAPTURE_CHANNELS: usize = 2;
+/// Nachrichten erst mappen, wenn das Fenster danach transkribiert sein kann.
+const MAP_LAG_EXTRA_SECONDS: i64 = 45;
+/// Obergrenze je Mapper-Durchlauf.
+const MAP_BATCH: i64 = 200;
+/// Kontext-Texte im Sample kappen.
+const MAX_CONTEXT_CHARS: usize = 2000;
+/// So viele Samples sieht die Destillation an.
+const DISTILL_SAMPLE_LIMIT: i64 = 60;
+/// Darunter lohnt sich kein Profil.
+const MIN_SAMPLES_FOR_PROFILE: usize = 15;
+/// Längere Modell-Antworten sind kein Profil mehr, sondern ein Aufsatz.
+const MAX_PROFILE_CHARS: usize = 1800;
+/// Kontext-Zeilen je Sample im Destillat-Prompt.
+const DISTILL_CONTEXT_CHARS: usize = 400;
+
+const PROFILE_SYS: &str = "Du analysierst das Chat-Verhalten einer einzelnen Person und \
+beschreibst es knapp und konkret. Keine Floskeln, keine Einleitung, keine Zusammenfassung \
+am Ende.";
+
+/// Rendert Samples als „Situation → Reaktion"-Blöcke für die Destillation.
+fn render_samples(samples: &[ReactionSample]) -> String {
+    samples
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, s)| {
+            let stream = truncate_chars(&s.stream_context, DISTILL_CONTEXT_CHARS);
+            let chat = truncate_chars(&s.chat_context, DISTILL_CONTEXT_CHARS);
+            let mut block = format!("--- {} ---\n", i + 1);
+            if !stream.is_empty() {
+                block.push_str(&format!("Streamer sagt gerade:\n{stream}\n"));
+            }
+            if !chat.is_empty() {
+                block.push_str(&format!("Chat davor:\n{chat}\n"));
+            }
+            block.push_str(&format!("ER SCHREIBT: {}", s.my_message));
+            block
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    text.chars().take(max).collect::<String>() + " …"
+}
+
+fn profile_user_prompt(samples: &str) -> String {
+    format!(
+        "Unten stehen echte Situationen aus Twitch-Chats und die Zeile, die eine bestimmte \
+         Person daraufhin geschrieben hat. Leite daraus ihr Reaktionsmuster ab.\n\n\
+         Schreib maximal 12 knappe Stichpunkte, aufgeteilt in:\n\
+         WORAUF ER REAGIERT: welche Art von Moment ihn zum Schreiben bringt.\n\
+         WORAUF NICHT: was in den Situationen offensichtlich vorkam, ohne dass er \
+         reagiert hat.\n\
+         WIE: Länge, Tonfall, typische Satzform, was er nie tut.\n\n\
+         Nur was du an den Beispielen wirklich siehst. Erfinde nichts dazu, und schreib \
+         keine allgemeinen Chat-Weisheiten hin.\n\n{samples}"
+    )
+}
+
+fn env_str(name: &str) -> Option<String> {
+    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn env_int(name: &str, default: i64, minimum: i64) -> i64 {
+    match env_str(name).and_then(|v| v.parse::<i64>().ok()) {
+        Some(v) => v.max(minimum),
+        None => default,
+    }
+}
+
+/// Lernmodus aktiv? Default aus — er nimmt Audio auf und muss bewusst an.
+pub fn learn_enabled() -> bool {
+    env_str("ENGAGEMENT_LEARN_ENABLED").as_deref() == Some("1")
+}
+
+/// Login, dessen Reaktionen gelernt werden (`ENGAGEMENT_LEARN_LOGIN`).
+pub fn owner_login() -> String {
+    env_str("ENGAGEMENT_LEARN_LOGIN")
+        .unwrap_or_else(|| DEFAULT_OWNER_LOGIN.to_string())
+        .to_lowercase()
+}
+
+/// Wie lange ein Kanal nach der letzten eigenen Nachricht lern-heiß bleibt.
+pub fn hot_ttl_minutes() -> i64 {
+    env_int("ENGAGEMENT_LEARN_HOT_MINUTES", DEFAULT_HOT_TTL_MINUTES, 1)
+}
+
+/// Capture-Länge je Aufnahmeblock (Sekunden).
+pub fn capture_seconds() -> i64 {
+    env_int("ENGAGEMENT_LEARN_CAPTURE_SECONDS", DEFAULT_CAPTURE_SECONDS, 10)
+}
+
+/// So viele lern-heiße Kanäle werden parallel aufgenommen.
+pub fn max_capture_channels() -> usize {
+    env_int("ENGAGEMENT_LEARN_MAX_CHANNELS", DEFAULT_MAX_CAPTURE_CHANNELS as i64, 1) as usize
+}
+
+/// Aufbewahrung der Rohdaten (Chat-Puffer, Transkripte) in Stunden.
+pub fn retention_hours() -> i64 {
+    env_int("ENGAGEMENT_LEARN_RETENTION_HOURS", DEFAULT_RETENTION_HOURS, 1)
+}
+
+/// Ein Whisper-Segment aus einem lern-heißen Kanal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LearnTranscriptSegment {
+    pub channel_login: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub text: String,
+    pub engine: String,
+    pub model: Option<String>,
+}
+
+/// Ein fertiges Stimulus/Response-Paar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionSample {
+    pub id: i64,
+    pub channel_login: String,
+    pub message_ts: DateTime<Utc>,
+    pub my_message: String,
+    pub stream_context: String,
+    pub chat_context: String,
+    pub has_stream_context: bool,
+    pub verdict: Option<String>,
+}
+
+fn normalize_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Kappt einen Kontext-Text auf [`MAX_CONTEXT_CHARS`], vom Anfang her (das
+/// Jüngste steht hinten und ist das Relevantere).
+fn cap_context(text: &str) -> String {
+    let len = text.chars().count();
+    if len <= MAX_CONTEXT_CHARS {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(len - MAX_CONTEXT_CHARS).collect();
+    match tail.split_once('\n') {
+        Some((_, rest)) => rest.to_string(),
+        None => tail,
+    }
+}
+
+/// Baut den Stream-Kontext: eine Zeile je Segment, chronologisch, mit dem
+/// Sekunden-Versatz zur eigenen Nachricht (negativ = davor gesagt).
+pub fn build_stream_context(
+    segments: &[(DateTime<Utc>, String)],
+    message_ts: DateTime<Utc>,
+) -> String {
+    let lines: Vec<String> = segments
+        .iter()
+        .filter_map(|(ended_at, text)| {
+            let text = normalize_ws(text);
+            if text.is_empty() {
+                return None;
+            }
+            let offset = (*ended_at - message_ts).num_seconds();
+            Some(format!("[{offset:+}s] {text}"))
+        })
+        .collect();
+    cap_context(&lines.join("\n"))
+}
+
+/// Baut den Chat-Kontext: `login: text` je Zeile, chronologisch.
+pub fn build_chat_context(lines: &[(String, String)]) -> String {
+    let rendered: Vec<String> = lines
+        .iter()
+        .filter_map(|(login, content)| {
+            let content = normalize_ws(content);
+            if content.is_empty() {
+                None
+            } else {
+                Some(format!("{login}: {content}"))
+            }
+        })
+        .collect();
+    cap_context(&rendered.join("\n"))
+}
+
+/// Erfassung und Verknüpfung der eigenen Chat-Reaktionen.
+pub struct ReactionLearning {
+    pool: PgPool,
+    owner_login: String,
+    /// Einmal beim Start gelesen: [`observe`](Self::observe) hängt im heißen
+    /// Chat-Pfad und darf nicht pro Nachricht die Env befragen.
+    enabled: bool,
+    /// Kanal → letzte eigene Nachricht. Hält den Fast-Path DB-frei.
+    hot: Mutex<HashMap<String, DateTime<Utc>>>,
+}
+
+impl ReactionLearning {
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            owner_login: owner_login(),
+            enabled: learn_enabled(),
+            hot: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Setzt Owner-Login und schaltet die Erfassung scharf (Tests).
+    pub fn with_owner(mut self, login: &str) -> Self {
+        self.owner_login = login.to_lowercase();
+        self.enabled = true;
+        self
+    }
+
+    /// Läuft der Lernmodus?
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn owner_login(&self) -> &str {
+        &self.owner_login
+    }
+
+    fn ttl(&self) -> Duration {
+        Duration::minutes(hot_ttl_minutes())
+    }
+
+    /// Kanäle, die gerade aufgenommen werden sollen: jüngste eigene Nachricht
+    /// zuerst, auf [`max_capture_channels`] begrenzt.
+    pub fn hot_channels(&self) -> Vec<String> {
+        let cutoff = Utc::now() - self.ttl();
+        let mut hot = self.hot.lock().unwrap_or_else(|p| p.into_inner());
+        hot.retain(|_, seen| *seen >= cutoff);
+        let mut entries: Vec<(String, DateTime<Utc>)> =
+            hot.iter().map(|(c, t)| (c.clone(), *t)).collect();
+        entries.sort_by_key(|(_, seen)| std::cmp::Reverse(*seen));
+        entries.into_iter().take(max_capture_channels()).map(|(c, _)| c).collect()
+    }
+
+    /// Nimmt der Lernmodus diesen Kanal gerade auf?
+    pub fn is_channel_hot(&self, channel_login: &str) -> bool {
+        self.is_hot(&channel_login.trim().to_lowercase())
+    }
+
+    fn is_hot(&self, channel_login: &str) -> bool {
+        let cutoff = Utc::now() - self.ttl();
+        self.hot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(channel_login)
+            .is_some_and(|seen| *seen >= cutoff)
+    }
+
+    fn mark_hot(&self, channel_login: &str, at: DateTime<Utc>) {
+        self.hot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(channel_login.to_string(), at);
+    }
+
+    /// Lädt noch heiße Kanäle nach einem Neustart zurück in den Cache.
+    pub async fn warm_cache(&self) {
+        let cutoff = Utc::now() - self.ttl();
+        let rows = sqlx::query!(
+            r#"SELECT channel_login AS "channel_login!", last_seen_at AS "last_seen_at!"
+               FROM twitch_engagement_learn_channels
+               WHERE last_seen_at >= $1"#,
+            cutoff
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        for row in rows {
+            self.mark_hot(&row.channel_login, row.last_seen_at);
+        }
+    }
+
+    /// Hook für jede eingehende Chat-Nachricht, vor allen Engagement-Gates.
+    ///
+    /// Owner-Nachricht → Kanal wird lern-heiß, Nachricht wird als Response
+    /// vorgemerkt. Fremde Nachricht in einem heißen Kanal → Umgebungs-Puffer.
+    /// Alles andere → no-op ohne DB-Zugriff.
+    pub async fn observe(
+        &self,
+        channel_login: &str,
+        channel_user_id: Option<&str>,
+        twitch_login: &str,
+        content: &str,
+        message_id: Option<&str>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let channel = channel_login.trim().to_lowercase();
+        let login = twitch_login.trim().to_lowercase();
+        let text = normalize_ws(content);
+        if channel.is_empty() || login.is_empty() || text.is_empty() {
+            return;
+        }
+        let is_owner = login == self.owner_login;
+        if !is_owner && !self.is_hot(&channel) {
+            return;
+        }
+
+        if is_owner {
+            let now = Utc::now();
+            self.mark_hot(&channel, now);
+            if let Err(error) = self.touch_channel(&channel, channel_user_id).await {
+                tracing::warn!(%error, channel = %channel, "learn: Kanal-Upsert fehlgeschlagen");
+            }
+            if let Err(error) = self.append_own_message(&channel, &login, &text, message_id).await {
+                tracing::warn!(%error, channel = %channel, "learn: eigene Nachricht nicht gespeichert");
+            }
+        }
+        if let Err(error) = self.append_chat_line(&channel, &login, &text).await {
+            tracing::debug!(%error, channel = %channel, "learn: Chat-Puffer-Insert fehlgeschlagen");
+        }
+    }
+
+    async fn touch_channel(
+        &self,
+        channel_login: &str,
+        channel_user_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "INSERT INTO twitch_engagement_learn_channels \
+             (channel_login, channel_user_id, message_count) \
+             VALUES ($1, $2, 1) \
+             ON CONFLICT (channel_login) DO UPDATE SET \
+               last_seen_at = CURRENT_TIMESTAMP, \
+               message_count = twitch_engagement_learn_channels.message_count + 1, \
+               channel_user_id = COALESCE(EXCLUDED.channel_user_id, \
+                                          twitch_engagement_learn_channels.channel_user_id)",
+            channel_login,
+            channel_user_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn append_own_message(
+        &self,
+        channel_login: &str,
+        twitch_login: &str,
+        content: &str,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "INSERT INTO twitch_engagement_learn_messages \
+             (channel_login, twitch_login, content, message_id) VALUES ($1, $2, $3, $4)",
+            channel_login,
+            twitch_login,
+            content,
+            message_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn append_chat_line(
+        &self,
+        channel_login: &str,
+        twitch_login: &str,
+        content: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content) \
+             VALUES ($1, $2, $3)",
+            channel_login,
+            twitch_login,
+            content
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Hängt ein Whisper-Segment an (leerer Text → kein Insert).
+    pub async fn append_transcript(
+        &self,
+        segment: &LearnTranscriptSegment,
+    ) -> Result<(), sqlx::Error> {
+        let text = normalize_ws(&segment.text);
+        if text.is_empty() {
+            return Ok(());
+        }
+        sqlx::query!(
+            "INSERT INTO twitch_engagement_learn_transcripts \
+             (channel_login, started_at, ended_at, text, engine, model) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &segment.channel_login,
+            segment.started_at,
+            segment.ended_at,
+            &text,
+            &segment.engine,
+            segment.model.as_deref()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Verknüpft fällige eigene Nachrichten mit ihrem Kontext. Liefert die
+    /// Anzahl neu entstandener Samples.
+    pub async fn map_pending(&self) -> u64 {
+        let pre = Duration::seconds(env_int(
+            "ENGAGEMENT_LEARN_WINDOW_PRE_SECONDS",
+            DEFAULT_WINDOW_PRE_SECONDS,
+            1,
+        ));
+        let post = Duration::seconds(env_int(
+            "ENGAGEMENT_LEARN_WINDOW_POST_SECONDS",
+            DEFAULT_WINDOW_POST_SECONDS,
+            0,
+        ));
+        // Erst mappen, wenn das Fenster nach der Nachricht aufgenommen UND
+        // transkribiert sein kann. Sonst entstünde ein Sample ohne die zweite
+        // Hälfte seines Kontexts, und ein zweiter Versuch gibt es nicht.
+        let lag = post + Duration::seconds(capture_seconds() + MAP_LAG_EXTRA_SECONDS);
+        let ready_before = Utc::now() - lag;
+
+        let pending = sqlx::query!(
+            r#"SELECT id AS "id!", channel_login AS "channel_login!", content AS "content!",
+                      ts AS "ts!"
+               FROM twitch_engagement_learn_messages
+               WHERE mapped_at IS NULL AND ts <= $1
+               ORDER BY ts LIMIT $2"#,
+            ready_before,
+            MAP_BATCH
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut created = 0u64;
+        for row in pending {
+            let stream = self
+                .load_stream_window(&row.channel_login, row.ts - pre, row.ts + post)
+                .await;
+            let stream_context = build_stream_context(&stream, row.ts);
+            let chat = self.load_chat_window(&row.channel_login, row.ts).await;
+            let chat_context = build_chat_context(&chat);
+
+            let inserted = sqlx::query!(
+                "INSERT INTO twitch_engagement_reaction_samples \
+                 (channel_login, message_ts, my_message, stream_context, chat_context, \
+                  has_stream_context) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT ON CONSTRAINT twitch_engagement_reaction_samples_unique \
+                 DO NOTHING",
+                &row.channel_login,
+                row.ts,
+                &row.content,
+                &stream_context,
+                &chat_context,
+                !stream_context.is_empty()
+            )
+            .execute(&self.pool)
+            .await;
+
+            match inserted {
+                Ok(result) => created += result.rows_affected(),
+                Err(error) => {
+                    tracing::warn!(%error, channel = %row.channel_login, "learn: Sample-Insert fehlgeschlagen");
+                    continue; // mapped_at offen lassen, nächster Lauf versucht es erneut
+                }
+            }
+            let _ = sqlx::query!(
+                "UPDATE twitch_engagement_learn_messages \
+                 SET mapped_at = CURRENT_TIMESTAMP WHERE id = $1",
+                row.id
+            )
+            .execute(&self.pool)
+            .await;
+        }
+        created
+    }
+
+    async fn load_stream_window(
+        &self,
+        channel_login: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Vec<(DateTime<Utc>, String)> {
+        sqlx::query!(
+            r#"SELECT ended_at AS "ended_at!", text AS "text!"
+               FROM twitch_engagement_learn_transcripts
+               WHERE channel_login = $1 AND ended_at >= $2 AND ended_at <= $3
+               ORDER BY ended_at"#,
+            channel_login,
+            from,
+            to
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.ended_at, r.text))
+        .collect()
+    }
+
+    async fn load_chat_window(
+        &self,
+        channel_login: &str,
+        before: DateTime<Utc>,
+    ) -> Vec<(String, String)> {
+        let lines =
+            env_int("ENGAGEMENT_LEARN_CHAT_LINES", DEFAULT_CHAT_CONTEXT_LINES, 1);
+        let minutes = env_int(
+            "ENGAGEMENT_LEARN_CHAT_MINUTES",
+            DEFAULT_CHAT_CONTEXT_MINUTES,
+            1,
+        );
+        let rows = sqlx::query!(
+            r#"SELECT twitch_login AS "twitch_login!", content AS "content!"
+               FROM twitch_engagement_learn_chat
+               WHERE channel_login = $1 AND ts < $2 AND ts >= $3
+               ORDER BY ts DESC LIMIT $4"#,
+            channel_login,
+            before,
+            before - Duration::minutes(minutes),
+            lines
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        rows.into_iter().rev().map(|r| (r.twitch_login, r.content)).collect()
+    }
+
+    /// Die jüngsten Samples (für Sichtung und Few-Shot-Aufbau).
+    pub async fn recent_samples(&self, limit: i64, only_with_stream: bool) -> Vec<ReactionSample> {
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", channel_login AS "channel_login!", message_ts AS "message_ts!",
+                      my_message AS "my_message!", stream_context AS "stream_context!",
+                      chat_context AS "chat_context!",
+                      has_stream_context AS "has_stream_context!", verdict
+               FROM twitch_engagement_reaction_samples
+               WHERE (NOT $2 OR has_stream_context)
+                 AND (verdict IS NULL OR verdict <> 'bad')
+               ORDER BY message_ts DESC LIMIT $1"#,
+            limit,
+            only_with_stream
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        rows.into_iter()
+            .map(|r| ReactionSample {
+                id: r.id,
+                channel_login: r.channel_login,
+                message_ts: r.message_ts,
+                my_message: r.my_message,
+                stream_context: r.stream_context,
+                chat_context: r.chat_context,
+                has_stream_context: r.has_stream_context,
+                verdict: r.verdict,
+            })
+            .collect()
+    }
+
+    /// Wie viele Samples es insgesamt gibt (Fortschritt der Lernphase).
+    pub async fn sample_count(&self) -> i64 {
+        sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM twitch_engagement_reaction_samples"#
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0)
+    }
+
+    /// Destilliert aus den gesammelten Samples ein Reaktionsprofil und legt es
+    /// als Soul-Eintrag `reaction_profile` ab. `None`, wenn zu wenig Material
+    /// da ist oder das Modell nichts Brauchbares liefert.
+    ///
+    /// Das Profil beantwortet die Frage, die einzelne Stil-Zeilen nicht
+    /// beantworten können: nicht WIE geschrieben wird, sondern WORAUF hin.
+    pub async fn distill_profile(
+        &self,
+        minimax: &EngagementMinimaxClient,
+    ) -> Option<String> {
+        let samples = self.recent_samples(DISTILL_SAMPLE_LIMIT, true).await;
+        if samples.len() < MIN_SAMPLES_FOR_PROFILE {
+            tracing::debug!(
+                have = samples.len(),
+                need = MIN_SAMPLES_FOR_PROFILE,
+                "learn-profile: noch zu wenig Samples"
+            );
+            return None;
+        }
+        let rendered = render_samples(&samples);
+        let raw = minimax
+            .raw_completion(PROFILE_SYS, &profile_user_prompt(&rendered), 2000, 0.4)
+            .await
+            .ok()?;
+        let profile = crate::minimax_chat::strip_think(&raw).trim().to_string();
+        if profile.is_empty() || profile.chars().count() > MAX_PROFILE_CHARS {
+            tracing::warn!(len = profile.chars().count(), "learn-profile: Antwort unbrauchbar");
+            return None;
+        }
+        if let Err(error) = sqlx::query!(
+            "INSERT INTO twitch_engagement_soul (kind, content) VALUES ('reaction_profile', $1)",
+            &profile
+        )
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%error, "learn-profile: Profil nicht gespeichert");
+            return None;
+        }
+        tracing::info!(
+            samples = samples.len(),
+            len = profile.chars().count(),
+            "learn-profile: neues Reaktionsprofil"
+        );
+        Some(profile)
+    }
+
+    /// Räumt die Rohdaten auf. Samples und Kanal-Liste bleiben.
+    pub async fn trim(&self) -> u64 {
+        let cutoff = Utc::now() - Duration::hours(retention_hours());
+        let mut removed = 0u64;
+        for statement in [
+            "DELETE FROM twitch_engagement_learn_chat WHERE ts < $1",
+            "DELETE FROM twitch_engagement_learn_transcripts WHERE created_at < $1",
+            "DELETE FROM twitch_engagement_learn_messages WHERE ts < $1 AND mapped_at IS NOT NULL",
+        ] {
+            match sqlx::query(statement).bind(cutoff).execute(&self.pool).await {
+                Ok(result) => removed += result.rows_affected(),
+                Err(error) => tracing::warn!(%error, "learn: Trim fehlgeschlagen"),
+            }
+        }
+        removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    fn ts(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000 + secs, 0).unwrap()
+    }
+
+    #[test]
+    fn stream_context_zeigt_versatz() {
+        let msg = ts(100);
+        let segments = vec![
+            (ts(70), "der geht da rein".to_string()),
+            (ts(95), "  boah   was  ".to_string()),
+            (ts(105), "".to_string()), // leer → raus
+        ];
+        let out = build_stream_context(&segments, msg);
+        assert_eq!(out, "[-30s] der geht da rein\n[-5s] boah was");
+    }
+
+    #[test]
+    fn stream_context_leer_bleibt_leer() {
+        assert_eq!(build_stream_context(&[], ts(0)), "");
+        assert_eq!(build_stream_context(&[(ts(0), "   ".to_string())], ts(0)), "");
+    }
+
+    #[test]
+    fn chat_context_rendert_login_und_text() {
+        let lines = vec![
+            ("chatterA".to_string(), "lol".to_string()),
+            ("chatterB".to_string(), "  was war das  ".to_string()),
+            ("chatterC".to_string(), "  ".to_string()), // leer → raus
+        ];
+        assert_eq!(build_chat_context(&lines), "chatterA: lol\nchatterB: was war das");
+    }
+
+    #[test]
+    fn kontext_wird_gekappt() {
+        let long = "x".repeat(MAX_CONTEXT_CHARS + 500);
+        let capped = cap_context(&format!("erste zeile\n{long}"));
+        assert!(capped.chars().count() <= MAX_CONTEXT_CHARS);
+        assert!(!capped.contains("erste zeile"));
+    }
+
+    fn sample(msg: &str, stream: &str, chat: &str) -> ReactionSample {
+        ReactionSample {
+            id: 1,
+            channel_login: "nani".to_string(),
+            message_ts: ts(0),
+            my_message: msg.to_string(),
+            stream_context: stream.to_string(),
+            chat_context: chat.to_string(),
+            has_stream_context: !stream.is_empty(),
+            verdict: None,
+        }
+    }
+
+    #[test]
+    fn samples_werden_chronologisch_gerendert() {
+        // recent_samples liefert neueste zuerst — im Prompt soll die Zeitachse
+        // wieder vorwärts laufen, sonst liest das Modell die Entwicklung falsch.
+        let samples = vec![
+            sample("das neuere", "streamer neu", ""),
+            sample("das aeltere", "streamer alt", "chatter: hi"),
+        ];
+        let out = render_samples(&samples);
+        assert!(out.find("das aeltere").unwrap() < out.find("das neuere").unwrap());
+        assert!(out.contains("Streamer sagt gerade:\nstreamer alt"));
+        assert!(out.contains("Chat davor:\nchatter: hi"));
+        assert!(out.contains("ER SCHREIBT: das neuere"));
+        // Fehlender Chat-Kontext erzeugt keine leere Überschrift.
+        assert_eq!(out.matches("Chat davor:").count(), 1);
+    }
+
+    #[test]
+    fn lange_kontexte_werden_im_prompt_gekuerzt() {
+        let long = "wort ".repeat(500);
+        let out = render_samples(&[sample("kurz", &long, "")]);
+        assert!(out.contains('…'));
+        assert!(out.chars().count() < long.chars().count());
+    }
+
+    #[test]
+    fn profil_prompt_fragt_nach_dem_nicht_reagieren() {
+        let prompt = profile_user_prompt("--- 1 ---\nER SCHREIBT: hi");
+        assert!(prompt.contains("WORAUF NICHT"));
+        assert!(prompt.contains("ER SCHREIBT: hi"));
+    }
+
+    #[test]
+    fn owner_default_und_env() {
+        // Ohne gesetzte Env greift der Default.
+        if std::env::var("ENGAGEMENT_LEARN_LOGIN").is_err() {
+            assert_eq!(owner_login(), DEFAULT_OWNER_LOGIN);
+        }
+        if std::env::var("ENGAGEMENT_LEARN_ENABLED").is_err() {
+            assert!(!learn_enabled(), "Lernmodus ist standardmäßig aus");
+        }
+    }
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        for statement in [
+            "CREATE TABLE twitch_engagement_learn_channels (\
+               channel_login TEXT PRIMARY KEY, channel_user_id TEXT, \
+               first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+               last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+               message_count BIGINT NOT NULL DEFAULT 0)",
+            "CREATE TABLE twitch_engagement_learn_messages (\
+               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, twitch_login TEXT NOT NULL, \
+               content TEXT NOT NULL, message_id TEXT, \
+               ts TIMESTAMPTZ NOT NULL DEFAULT NOW(), mapped_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_engagement_learn_chat (\
+               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, twitch_login TEXT NOT NULL, \
+               content TEXT NOT NULL, ts TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE twitch_engagement_learn_transcripts (\
+               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
+               started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ NOT NULL, \
+               text TEXT NOT NULL, engine TEXT NOT NULL, model TEXT, \
+               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE twitch_engagement_reaction_samples (\
+               id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
+               message_ts TIMESTAMPTZ NOT NULL, my_message TEXT NOT NULL, \
+               stream_context TEXT NOT NULL DEFAULT '', chat_context TEXT NOT NULL DEFAULT '', \
+               has_stream_context BOOLEAN NOT NULL DEFAULT FALSE, verdict TEXT, \
+               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+               CONSTRAINT twitch_engagement_reaction_samples_unique \
+                 UNIQUE (channel_login, message_ts, my_message))",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn fremde_nachricht_in_kaltem_kanal_wird_ignoriert() {
+        let Some(pool) = make_pool("t_eng_learn_cold").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        learn.observe("nani", None, "fremder", "hallo", None).await;
+        let chat: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_chat")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(chat, 0, "kalter Kanal schreibt nichts weg");
+        assert!(learn.hot_channels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn owner_macht_kanal_heiss_und_fremde_landen_im_puffer() {
+        let Some(pool) = make_pool("t_eng_learn_hot").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        learn.observe("Nani", Some("42"), "Owner", "wilder take", Some("m1")).await;
+        learn.observe("nani", None, "fremder", "haha ja", None).await;
+
+        assert_eq!(learn.hot_channels(), vec!["nani".to_string()]);
+        let (login, count, user_id): (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT channel_login, message_count, channel_user_id \
+             FROM twitch_engagement_learn_channels",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(login, "nani");
+        assert_eq!(count, 1);
+        assert_eq!(user_id.as_deref(), Some("42"));
+
+        let own: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_messages")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(own, 1);
+        // Eigene UND fremde Zeile stehen im Umgebungs-Puffer.
+        let chat: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_chat")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(chat, 2);
+    }
+
+    #[tokio::test]
+    async fn mapper_baut_sample_aus_transkript_und_chat() {
+        let Some(pool) = make_pool("t_eng_learn_map").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        // Nachricht liegt weit genug zurück, damit sie fällig ist.
+        let msg_ts = Utc::now() - Duration::minutes(5);
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_messages \
+             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','wilder take',$1)",
+        )
+        .bind(msg_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_transcripts \
+             (channel_login, started_at, ended_at, text, engine) \
+             VALUES ('nani', $1, $2, 'und dann geh ich da einfach rein', 'whisper')",
+        )
+        .bind(msg_ts - Duration::seconds(40))
+        .bind(msg_ts - Duration::seconds(20))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content, ts) \
+             VALUES ('nani','fremder','was macht der da',$1)",
+        )
+        .bind(msg_ts - Duration::seconds(10))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(learn.map_pending().await, 1);
+        let sample = &learn.recent_samples(10, false).await[0];
+        assert_eq!(sample.my_message, "wilder take");
+        assert!(sample.has_stream_context);
+        assert!(sample.stream_context.contains("einfach rein"));
+        assert!(sample.stream_context.contains("[-20s]"));
+        assert_eq!(sample.chat_context, "fremder: was macht der da");
+
+        // Zweiter Lauf erzeugt nichts Neues (mapped_at gesetzt).
+        assert_eq!(learn.map_pending().await, 0);
+    }
+
+    #[tokio::test]
+    async fn mapper_wartet_auf_das_fenster_nach_der_nachricht() {
+        let Some(pool) = make_pool("t_eng_learn_lag").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_messages \
+             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','zu frisch',NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(learn.map_pending().await, 0, "frische Nachricht wartet noch");
+    }
+
+    #[tokio::test]
+    async fn sample_ohne_stream_context_wird_markiert() {
+        let Some(pool) = make_pool("t_eng_learn_nostream").await else { return };
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_messages \
+             (channel_login, twitch_login, content, ts) VALUES ('nani','owner','ohne audio',$1)",
+        )
+        .bind(Utc::now() - Duration::minutes(5))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(learn.map_pending().await, 1);
+        let all = learn.recent_samples(10, false).await;
+        assert!(!all[0].has_stream_context);
+        // Filter auf „nur mit Audio" blendet es aus.
+        assert!(learn.recent_samples(10, true).await.is_empty());
+        assert_eq!(learn.sample_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn warm_cache_holt_heisse_kanaele_zurueck() {
+        let Some(pool) = make_pool("t_eng_learn_warm").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_learn_channels (channel_login, last_seen_at) \
+             VALUES ('frisch', NOW()), ('alt', NOW() - INTERVAL '10 hours')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let learn = ReactionLearning::new(pool).with_owner("owner");
+        learn.warm_cache().await;
+        assert_eq!(learn.hot_channels(), vec!["frisch".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn trim_raeumt_rohdaten_aber_nicht_samples() {
+        let Some(pool) = make_pool("t_eng_learn_trim").await else { return };
+        let alt = Utc::now() - Duration::hours(retention_hours() + 1);
+        sqlx::query("INSERT INTO twitch_engagement_learn_chat (channel_login, twitch_login, content, ts) VALUES ('nani','a','alt',$1)")
+            .bind(alt).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_engagement_learn_transcripts (channel_login, started_at, ended_at, text, engine, created_at) VALUES ('nani',$1,$1,'alt','whisper',$1)")
+            .bind(alt).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_engagement_reaction_samples (channel_login, message_ts, my_message) VALUES ('nani',$1,'bleibt')")
+            .bind(alt).execute(&pool).await.unwrap();
+
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        assert_eq!(learn.trim().await, 2);
+        assert_eq!(learn.sample_count().await, 1, "Samples überleben das Trimmen");
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_soul (kind, content) VALUES ('reaction_profile', $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3e015d5ba14f4296379b3f21477df60da0e9762e673ab6bd77fd8c759e237eba"
+}
