@@ -1,10 +1,9 @@
 //! Aufnahmeplan und Warteschlange.
 //!
-//! Aufnehmen und Auswerten sind getrennt. Die Aufnahme laeuft mit, solange ein
-//! Kanal sendet, und schneidet in Bloecke; transkribiert wird danach, ein Block
-//! nach dem anderen. Auf einer Maschine ohne GPU teilen sich sonst drei
-//! parallele Streams dieselben Kerne wie das Modell, und der Rueckstand waechst
-//! schneller, als er abgebaut wird.
+//! Aufnehmen und Auswerten sind getrennt: aufgenommen wird parallel je Kanal,
+//! ausgewertet seriell aus einer gemeinsamen Warteschlange. Ohne GPU teilten
+//! sich drei gleichzeitig transkribierte Streams dieselben Kerne wie das
+//! Modell, und der Rueckstand waechst schneller, als er abgebaut wird.
 //!
 //! Diese Datei enthaelt bewusst keine Prozesse und kein Netz, nur die
 //! Entscheidungen: welcher Block als naechstes drankommt, wann ein Kanal als
@@ -29,6 +28,10 @@ pub const LIVE_PRUEFUNG_SEKUNDEN: u64 = 60;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub kanal: String,
+    /// Kennung der Sendung, aus der dieser Block stammt. Ohne sie
+    /// ueberschreibt der naechste Stream desselben Kanals die Berichte des
+    /// vorigen - gleicher Kanal, gleiche Blocknummer, gleicher Dateiname.
+    pub lauf: String,
     /// Laufende Nummer innerhalb der Sendung, ab 1.
     pub nummer: u32,
     /// Sekunden seit Beginn der Sendung, an denen dieser Block anfaengt.
@@ -37,10 +40,10 @@ pub struct Block {
 }
 
 impl Block {
-    /// Name im Bericht: Kanal und Blocknummer, dreistellig, damit die
+    /// Name im Bericht: Kanal, Sendung und Blocknummer. Dreistellig, damit die
     /// Sortierung nach Name auch der Reihenfolge entspricht.
     pub fn bezeichnung(&self) -> String {
-        format!("{}-block{:03}", self.kanal, self.nummer)
+        format!("{}-{}-block{:03}", self.kanal, self.lauf, self.nummer)
     }
 
     /// Segment-ID-Praefix fuer diesen Block.
@@ -93,14 +96,16 @@ impl Warteschlange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Aufnahme {
     pub kanal: String,
+    pub lauf: String,
     pub bloecke: u32,
     pub aufgenommen_sekunden: u64,
 }
 
 impl Aufnahme {
-    pub fn starten(kanal: impl Into<String>) -> Self {
+    pub fn starten(kanal: impl Into<String>, lauf: impl Into<String>) -> Self {
         Self {
             kanal: kanal.into(),
+            lauf: lauf.into(),
             bloecke: 0,
             aufgenommen_sekunden: 0,
         }
@@ -124,6 +129,7 @@ impl Aufnahme {
         self.aufgenommen_sekunden += dauer_sekunden;
         Block {
             kanal: self.kanal.clone(),
+            lauf: self.lauf.clone(),
             nummer: self.bloecke,
             versatz_sekunden: versatz,
             datei: datei.into(),
@@ -142,6 +148,7 @@ mod tests {
             .map(|n| {
                 Block {
                     kanal: "kanal".to_owned(),
+                    lauf: "L1".to_owned(),
                     nummer: *n,
                     versatz_sekunden: 0,
                     datei: "x.ts".to_owned(),
@@ -152,7 +159,11 @@ mod tests {
         namen.sort();
         assert_eq!(
             namen,
-            vec!["kanal-block001", "kanal-block002", "kanal-block010"]
+            vec![
+                "kanal-L1-block001",
+                "kanal-L1-block002",
+                "kanal-L1-block010"
+            ]
         );
     }
 
@@ -162,6 +173,7 @@ mod tests {
         for n in 1..=3 {
             w.einreihen(Block {
                 kanal: "a".to_owned(),
+                lauf: "L1".to_owned(),
                 nummer: n,
                 versatz_sekunden: 0,
                 datei: format!("{n}.ts"),
@@ -181,6 +193,7 @@ mod tests {
         for (i, kanal) in ["a", "b", "c", "a"].iter().enumerate() {
             w.einreihen(Block {
                 kanal: (*kanal).to_owned(),
+                lauf: "L1".to_owned(),
                 nummer: i as u32 + 1,
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
@@ -198,6 +211,7 @@ mod tests {
         for kanal in ["a", "b", "a"] {
             w.einreihen(Block {
                 kanal: kanal.to_owned(),
+                lauf: "L1".to_owned(),
                 nummer: 1,
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
@@ -210,7 +224,7 @@ mod tests {
 
     #[test]
     fn erster_block_hat_versatz_null_und_nummer_eins() {
-        let mut a = Aufnahme::starten("kanal");
+        let mut a = Aufnahme::starten("kanal", "L1");
         let block = a.block_fertig("a.ts", BLOCK_SEKUNDEN);
         assert_eq!(block.nummer, 1);
         assert_eq!(block.versatz_sekunden, 0);
@@ -218,7 +232,7 @@ mod tests {
 
     #[test]
     fn versatz_waechst_mit_der_tatsaechlichen_dauer() {
-        let mut a = Aufnahme::starten("kanal");
+        let mut a = Aufnahme::starten("kanal", "L1");
         a.block_fertig("a.ts", 600);
         // Zweiter Block bricht frueh ab, etwa weil der Stream endete.
         let zweiter = a.block_fertig("b.ts", 120);
@@ -230,28 +244,28 @@ mod tests {
     #[test]
     fn blocklaenge_ist_normal_der_volle_block() {
         assert_eq!(
-            Aufnahme::starten("k").naechste_blocklaenge(),
+            Aufnahme::starten("k", "L1").naechste_blocklaenge(),
             Some(BLOCK_SEKUNDEN)
         );
     }
 
     #[test]
     fn letzter_block_wird_am_deckel_gekuerzt() {
-        let mut a = Aufnahme::starten("k");
+        let mut a = Aufnahme::starten("k", "L1");
         a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG - 90;
         assert_eq!(a.naechste_blocklaenge(), Some(90));
     }
 
     #[test]
     fn am_deckel_wird_nicht_weiter_aufgenommen() {
-        let mut a = Aufnahme::starten("k");
+        let mut a = Aufnahme::starten("k", "L1");
         a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG;
         assert_eq!(a.naechste_blocklaenge(), None);
     }
 
     #[test]
     fn ueberschreitung_kippt_nicht_ins_negative() {
-        let mut a = Aufnahme::starten("k");
+        let mut a = Aufnahme::starten("k", "L1");
         a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG + 500;
         assert_eq!(a.naechste_blocklaenge(), None);
     }
@@ -260,10 +274,11 @@ mod tests {
     fn segment_id_enthaelt_kanal_und_block() {
         let block = Block {
             kanal: "deadlockgermany".to_owned(),
+            lauf: "L1".to_owned(),
             nummer: 3,
             versatz_sekunden: 1200,
             datei: "x.ts".to_owned(),
         };
-        assert_eq!(block.segment_id(7), "deadlockgermany-block003-s00007");
+        assert_eq!(block.segment_id(7), "deadlockgermany-L1-block003-s00007");
     }
 }
