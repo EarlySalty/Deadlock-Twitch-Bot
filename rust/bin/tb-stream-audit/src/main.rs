@@ -12,11 +12,15 @@
 //!
 //! # Warum aufnehmen und danach auswerten
 //!
-//! Aufnahme und Transkription laufen nicht gleichzeitig. Die Maschine hat keine
-//! GPU; drei parallel transkribierte Streams wuerden sich dieselben Kerne
-//! teilen wie das Modell, und der Rueckstand waechst schneller, als er abgebaut
-//! wird. Aufnehmen ist billig, also nimmt der Dienst in Bloecken auf und
-//! arbeitet die Warteschlange danach der Reihe nach ab.
+//! Aufgenommen wird **parallel**, je sendendem Kanal ein eigener Task.
+//! Nacheinander waere jeder von drei Kanaelen nur ein Drittel der Zeit in
+//! Aufnahme, und ein Audit, das zwei Drittel des Streams nie sieht, meldet
+//! "keine Funde" - das liest sich wie "sauber".
+//!
+//! Transkribiert wird dagegen **seriell**, ein Block nach dem anderen aus einer
+//! gemeinsamen Warteschlange. Die Maschine hat keine GPU; drei gleichzeitig
+//! transkribierte Streams teilten sich dieselben Kerne wie das Modell. Aufnehmen
+//! kostet fast nichts, transkribieren viel - deshalb die Trennung.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -103,15 +107,21 @@ fn helix_aus_umgebung() -> Option<HelixClient> {
     HelixClient::new(HelixConfig::new(id, secret)).ok()
 }
 
-/// Prueft im Takt, wer sendet, und nimmt von jedem sendenden Kanal einen Block
-/// auf. Aufnahmen laufen nebeneinander, Auswertung nicht.
+/// Prueft im Takt, wer sendet, und haelt je sendendem Kanal eine eigene
+/// Aufnahmeschleife am Laufen.
+///
+/// Die Aufnahmen muessen **nebeneinander** laufen. Nacheinander waere jeder von
+/// drei Kanaelen nur ein Drittel der Zeit in Aufnahme, und ein Audit, das zwei
+/// Drittel des Streams nie sieht, meldet "keine Funde", was wie "sauber"
+/// aussieht. Aufnehmen kostet fast nichts; teuer ist die Transkription, und die
+/// bleibt seriell hinter der Warteschlange.
 async fn aufnahme_schleife(
     helix: HelixClient,
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
 ) {
-    let capturer = AudioCapturer::from_env();
-    let mut laufend: std::collections::HashMap<String, plan::Aufnahme> = Default::default();
+    let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+        Default::default();
 
     loop {
         let live = match helix
@@ -129,45 +139,69 @@ async fn aufnahme_schleife(
             }
         };
 
-        // Wer nicht mehr sendet, beginnt beim naechsten Mal wieder bei Block 1.
-        laufend.retain(|kanal, _| live.contains(kanal));
+        // Beendete Aufnahmen aufraeumen: wer neu sendet, faengt wieder bei
+        // Block 1 an und bekommt eine neue Lauf-Kennung.
+        laufend.retain(|_, handle| !handle.is_finished());
 
         for kanal in &live {
-            let zustand = laufend
-                .entry(kanal.clone())
-                .or_insert_with(|| plan::Aufnahme::starten(kanal.clone()));
-            let Some(laenge) = zustand.naechste_blocklaenge() else {
-                tracing::info!(kanal, "Aufnahmedeckel erreicht");
+            if laufend.contains_key(kanal) {
                 continue;
-            };
-
-            match capturer
-                .capture(
-                    kanal,
-                    laenge,
-                    tb_engagement::audio_capture::DEFAULT_QUALITY,
-                    None,
-                )
-                .await
-            {
-                Ok(aufgenommen) => {
-                    let block = zustand.block_fertig(
-                        aufgenommen.media_path.to_string_lossy().to_string(),
-                        aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
-                    );
-                    tracing::info!(
-                        kanal,
-                        block = block.nummer,
-                        sekunden = aufgenommen.actual_duration_seconds,
-                        "Block aufgenommen"
-                    );
-                    warteschlange.lock().await.einreihen(block);
-                }
-                Err(fehler) => tracing::warn!(kanal, ?fehler, "Aufnahme fehlgeschlagen"),
             }
+            let handle = tokio::spawn(kanal_aufnehmen(kanal.clone(), Arc::clone(&warteschlange)));
+            laufend.insert(kanal.clone(), handle);
+            tracing::info!(kanal, "Aufnahme gestartet");
         }
 
         tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
+    }
+}
+
+/// Nimmt einen Kanal in Bloecken auf, bis der Stream endet oder der Deckel
+/// greift. Laeuft als eigener Task, damit mehrere Kanaele sich nicht
+/// gegenseitig blockieren.
+async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschlange>>) {
+    let capturer = AudioCapturer::from_env();
+    // Eine Kennung je Sendung. Ohne sie ueberschreibt der naechste Stream
+    // desselben Kanals die Berichte des vorigen.
+    let lauf = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let mut zustand = plan::Aufnahme::starten(kanal.clone(), lauf);
+
+    loop {
+        let Some(laenge) = zustand.naechste_blocklaenge() else {
+            tracing::info!(kanal, "Aufnahmedeckel erreicht");
+            return;
+        };
+
+        match capturer
+            .capture(
+                &kanal,
+                laenge,
+                tb_engagement::audio_capture::DEFAULT_QUALITY,
+                None,
+            )
+            .await
+        {
+            Ok(aufgenommen) => {
+                let block = zustand.block_fertig(
+                    aufgenommen.media_path.to_string_lossy().to_string(),
+                    aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
+                );
+                tracing::info!(
+                    kanal,
+                    block = block.nummer,
+                    sekunden = aufgenommen.actual_duration_seconds,
+                    "Block aufgenommen"
+                );
+                warteschlange.lock().await.einreihen(block);
+            }
+            Err(fehler) => {
+                // Ein Fehlschlag heisst in aller Regel: der Stream ist vorbei.
+                // Dann endet dieser Task, und die Aufsicht startet ihn neu,
+                // sobald der Kanal wieder sendet.
+                tracing::info!(kanal, ?fehler, "Aufnahme beendet");
+                return;
+            }
+        }
     }
 }
 
@@ -237,9 +271,19 @@ async fn block_auswerten(
     Ok(())
 }
 
-/// Teilt den Blocktext gleichmaessig in Segmente. Whisper liefert hier einen
-/// Text am Stueck; der Zeitbezug im Bericht ist damit auf das Segmentraster
-/// genau, was fuer "hoer dir Minute 12 an" reicht.
+/// Teilt den Blocktext in Segmente und rechnet die Zeit ueber den Textanteil.
+///
+/// Whisper liefert hier einen Text am Stueck ohne eigene Zeitmarken. Die Zeit
+/// eines Segments wird deshalb linear aus seinem Anteil an der Gesamtlaenge
+/// geschaetzt: Segmentgrenze bei 40 Prozent des Textes heisst 40 Prozent der
+/// Blockdauer. Das ist eine Naeherung, aber eine ehrliche - sie stimmt an den
+/// Blockgrenzen exakt und driftet dazwischen hoechstens um die Laenge einer
+/// Sprechpause. Fuer "hoer dir Minute 12 an" reicht das.
+///
+/// Frueher stand hier `teil.len()` als Endzeit-Faktor. Das ist die Byte-Laenge
+/// des Segments multipliziert mit Sekunden-pro-Satz, also eine Zahl ohne
+/// Bedeutung: ein Segment mit 200 Zeichen bekam 200 Zeiteinheiten und ragte
+/// weit ueber das Blockende hinaus.
 fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
     let saetze: Vec<&str> = text
         .split_inclusive(['.', '!', '?'])
@@ -249,23 +293,34 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
     if saetze.is_empty() {
         return Vec::new();
     }
-    let je_segment = (SEGMENT_SEKUNDEN / dauer.max(1.0) * saetze.len() as f64).ceil() as usize;
-    let je_segment = je_segment.max(1);
 
-    saetze
-        .chunks(je_segment)
-        .enumerate()
-        .map(|(i, teil)| {
-            let anteil = dauer / saetze.len().max(1) as f64;
-            let start = block.versatz_sekunden as f64 + i as f64 * je_segment as f64 * anteil;
-            Segment {
-                id: block.segment_id(i + 1),
-                start_sekunden: start,
-                ende_sekunden: start + teil.len() as f64 * anteil,
-                text: teil.join(" "),
-            }
-        })
-        .collect()
+    let dauer = dauer.max(0.0);
+    let gesamt_zeichen: f64 = saetze.iter().map(|s| s.chars().count() as f64).sum();
+    let gesamt_zeichen = gesamt_zeichen.max(1.0);
+
+    // Ziel: ungefaehr SEGMENT_SEKUNDEN je Segment, aber nie weniger als ein Satz.
+    let saetze_je_segment = if dauer <= 0.0 {
+        saetze.len()
+    } else {
+        ((SEGMENT_SEKUNDEN / dauer) * saetze.len() as f64).ceil() as usize
+    };
+    let saetze_je_segment = saetze_je_segment.clamp(1, saetze.len());
+
+    let mut raus = Vec::new();
+    let mut zeichen_bisher = 0f64;
+    for (i, teil) in saetze.chunks(saetze_je_segment).enumerate() {
+        let zeichen_im_teil: f64 = teil.iter().map(|s| s.chars().count() as f64).sum();
+        let start = block.versatz_sekunden as f64 + dauer * (zeichen_bisher / gesamt_zeichen);
+        zeichen_bisher += zeichen_im_teil;
+        let ende = block.versatz_sekunden as f64 + dauer * (zeichen_bisher / gesamt_zeichen);
+        raus.push(Segment {
+            id: block.segment_id(i + 1),
+            start_sekunden: start,
+            ende_sekunden: ende,
+            text: teil.join(" "),
+        });
+    }
+    raus
 }
 
 /// Modellfunde ueber den im Bot konfigurierten Anbieter. Faellt der Aufruf aus,
