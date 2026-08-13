@@ -149,6 +149,14 @@ impl Warteschlange {
         self.eintraege.iter().map(|b| b.datei.clone()).collect()
     }
 
+    /// Reiht einen Block mit fester Pause wieder ein, ohne Versuche zu
+    /// zaehlen. Fuer den Fall, dass die Meldung eines aufgegebenen Blocks
+    /// nicht rausging - der Block darf nicht einfach verschwinden.
+    pub fn spaeter_einreihen(&mut self, mut block: Block, pause_sekunden: i64) {
+        block.frueherstens = chrono::Utc::now().timestamp() + pause_sekunden;
+        self.eintraege.push_back(block);
+    }
+
     pub fn laenge(&self) -> usize {
         self.eintraege.len()
     }

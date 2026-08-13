@@ -179,7 +179,12 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
     let mut gefunden = 0usize;
     let mut ohne_zettel = 0usize;
 
+    let mut schon_fertig = 0usize;
     for pfad in aufnahmen {
+        if bereits_ausgewertet(&pfad).await {
+            schon_fertig += 1;
+            continue;
+        }
         let block = match zettel_lesen(&pfad).await {
             Some(block) => block,
             None => {
@@ -199,6 +204,12 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
         tracing::warn!(
             ohne_zettel,
             "Aufnahmen ohne Zettel gefunden - Kanal und Zeitversatz sind fuer sie verloren"
+        );
+    }
+    if schon_fertig > 0 {
+        tracing::info!(
+            schon_fertig,
+            "aufbewahrte Aufnahmen uebersprungen - bereits ausgewertet"
         );
     }
     if gefunden > 0 {
@@ -248,6 +259,15 @@ async fn ts_dateien_sammeln(ordner: &Path, raus: &mut Vec<PathBuf>) {
 /// Dateiname des Zettels neben der Aufnahme.
 const ZETTEL: &str = "block.json";
 
+/// Marke im Blockordner: dieser Block ist ausgewertet, die Aufnahme liegt nur
+/// noch als Beleg da.
+///
+/// Ohne sie reiht der naechste Start jede aufbewahrte Aufnahme erneut ein. Der
+/// zweite Lauf schriebe denselben Bericht neu - moeglicherweise ohne den
+/// Modellfund von damals - und loeschte danach genau den Beleg, der absichtlich
+/// aufgehoben wurde.
+const FERTIG: &str = "ausgewertet.json";
+
 /// Legt Kanal, Lauf, Blocknummer und Zeitversatz in den Blockordner, **bevor**
 /// die Aufnahme laeuft.
 ///
@@ -276,6 +296,46 @@ async fn zettel_schreiben(
     }
 }
 
+/// Traegt die Marke, dass dieser Block ausgewertet ist.
+async fn fertig_markieren(aufnahme: &Path, bericht: &Bericht) {
+    let Some(blockordner) = aufnahme.parent().and_then(Path::parent) else {
+        return;
+    };
+    let inhalt = serde_json::json!({
+        "lauf_id": bericht.lauf_id,
+        "erstellt_am": bericht.erstellt_am,
+        "funde": bericht.funde.len(),
+        "modell_geprueft": bericht.modell_geprueft,
+    });
+    if let Err(fehler) =
+        nur_fuer_mich(&blockordner.join(FERTIG), inhalt.to_string().as_bytes()).await
+    {
+        tracing::warn!(
+            fehler,
+            "Marke nicht geschrieben - die Aufnahme laeuft nach einem Neustart erneut"
+        );
+    }
+}
+
+/// Wurde dieser Block schon ausgewertet?
+async fn bereits_ausgewertet(aufnahme: &Path) -> bool {
+    let Some(capture) = aufnahme.parent() else {
+        return false;
+    };
+    if tokio::fs::try_exists(capture.join(FERTIG))
+        .await
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    match capture.parent() {
+        Some(blockordner) => tokio::fs::try_exists(blockordner.join(FERTIG))
+            .await
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
 /// Liest den Zettel zu einer liegengebliebenen Aufnahme.
 ///
 /// Der Zettel liegt im Blockordner, die Aufnahme eine Ebene tiefer im
@@ -299,6 +359,9 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         frueherstens: 0,
     })
 }
+
+/// Wie lange ein aufgegebener Block wartet, dessen Meldung nicht rausging.
+const MELDEPAUSE_SEKUNDEN: i64 = 30 * 60;
 
 /// Hoechststand der Warteschlange, ab dem keine neuen Aufnahmen mehr starten.
 ///
@@ -518,6 +581,16 @@ async fn kanal_aufnehmen(
             return zustand;
         };
 
+        // Auch eine laufende Aufnahme muss auf den Rueckstand sehen. Die
+        // Pruefung in der Aufsicht verhindert nur neue Tasks; ein Kanal, der
+        // seit Stunden aufnimmt, schriebe sonst weiter auf die Platte,
+        // waehrend die Auswertung nicht hinterherkommt.
+        if warteschlange.lock().await.laenge() >= MAX_WARTESCHLANGE {
+            tracing::warn!(kanal, "Rueckstand zu gross - Aufnahme pausiert");
+            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
+            continue;
+        }
+
         // Eigener Ordner je Block, mit dem Zettel darin, bevor aufgenommen wird.
         let blockordner = aufnahme_wurzel()
             .join(&kanal)
@@ -720,7 +793,8 @@ async fn auswertungs_schleife(
         };
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
-            Ok(Aufnahmeschicksal::Behalten) => {
+            Ok(Aufnahmeschicksal::Behalten(bericht)) => {
+                fertig_markieren(Path::new(&block.datei), &bericht).await;
                 tracing::info!(
                     block = %block.bezeichnung(),
                     "Aufnahme bleibt liegen - Fund oder unvollstaendige Pruefung"
@@ -731,7 +805,10 @@ async fn auswertungs_schleife(
                 // Fehler loescht, vernichtet bei einem Aussetzer der
                 // Transkription den einzigen Beleg, den es je gab.
                 let pfad = PathBuf::from(&block.datei);
-                if let Some(verzeichnis) = pfad.parent() {
+                // Der Blockordner, nicht nur das Capture-Verzeichnis darin:
+                // sonst bleiben block.json und die leeren Ebenen fuer immer
+                // liegen.
+                if let Some(verzeichnis) = pfad.parent().and_then(Path::parent) {
                     // Bleibt die Aufnahme liegen, wird sie nach dem naechsten
                     // Neustart erneut ausgewertet und gemeldet. Das gehoert
                     // ins Journal, nicht ins Nichts.
@@ -748,6 +825,8 @@ async fn auswertungs_schleife(
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
+                let mut block_ohne_versuche = block.clone();
+                block_ohne_versuche.versuche = 0;
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -768,6 +847,7 @@ async fn auswertungs_schleife(
                     );
                     // Ein aufgegebener Block darf nicht nur im Journal stehen.
                     // Sonst hiesse "keine DM" hier faelschlich "sauber".
+                    let neu_starten = block_ohne_versuche.clone();
                     let text = format!(
                         "Coaching-Audit {}: Block {} nach {} Versuchen aufgegeben ({}). \
 Aufnahme liegt noch da.",
@@ -779,7 +859,18 @@ Aufnahme liegt noch da.",
                     if let Err(dm_fehler) =
                         dm_rohtext(&text, &format!("{bezeichnung}-aufgegeben")).await
                     {
-                        tracing::error!(dm_fehler, "Aufgabe konnte nicht gemeldet werden");
+                        // Eine Aufgabe, die niemand erfaehrt, ist ein stiller
+                        // Ausfall. Der Block geht mit langer Pause zurueck in
+                        // die Warteschlange, statt hier zu verschwinden.
+                        tracing::error!(
+                            dm_fehler,
+                            block = %bezeichnung,
+                            "Aufgabe nicht gemeldet - Block wartet auf einen neuen Anlauf"
+                        );
+                        warteschlange
+                            .lock()
+                            .await
+                            .spaeter_einreihen(neu_starten, MELDEPAUSE_SEKUNDEN);
                     }
                 }
             }
@@ -788,13 +879,14 @@ Aufnahme liegt noch da.",
 }
 
 /// Was nach der Auswertung mit der Aufnahme geschieht.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum Aufnahmeschicksal {
-    /// Alles ausgewertet und gemeldet - die Aufnahme kann weg.
+    /// Alles ausgewertet, nichts gefunden - die Aufnahme kann weg.
     Loeschen,
-    /// Ausgewertet, aber das Ergebnis ist nicht vertrauenswuerdig. Die
-    /// Aufnahme bleibt liegen, damit noch jemand hineinhoeren kann.
-    Behalten,
+    /// Ausgewertet, aber es gibt etwas nachzuhoeren: ein Fund, eine
+    /// unvollstaendige Pruefung oder ein leeres Transkript. Die Aufnahme
+    /// bleibt liegen und wird als ausgewertet markiert.
+    Behalten(Box<Bericht>),
 }
 
 async fn block_auswerten(
@@ -807,7 +899,11 @@ async fn block_auswerten(
         .await
         .map_err(|e| format!("Transkription: {e}"))?;
 
-    let segmente = segmente_bauen(block, &transkript.text, transkript.duration_seconds);
+    let segmente = if transkript.segments.is_empty() {
+        segmente_bauen(block, &transkript.text, transkript.duration_seconds)
+    } else {
+        segmente_aus_whisper(block, &transkript.segments)
+    };
     // Ein leerer Block ist keine ruhige Stunde, sondern ein unklarer Befund:
     // stille Passage oder ausgefallene Transkription, von aussen nicht zu
     // unterscheiden. Er wird gemeldet, und die Aufnahme bleibt liegen.
@@ -837,6 +933,7 @@ async fn block_auswerten(
         modell: transkript.model.clone(),
         transkription_lokal: tb_stream_audit::llm::ist_lokal(&stt_basis_url()),
         anbieter: endpunkt.provider.to_owned(),
+        llm_modell: endpunkt.model.clone(),
         transkript_behalten: konfiguration.transkript_behalten,
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
@@ -858,14 +955,59 @@ async fn block_auswerten(
     // und ob das VOD noch existiert, entscheidet der Kanal.
     Ok(
         if leer || !bericht.funde.is_empty() || !bericht.modell_geprueft {
-            Aufnahmeschicksal::Behalten
+            Aufnahmeschicksal::Behalten(Box::new(bericht))
         } else {
             Aufnahmeschicksal::Loeschen
         },
     )
 }
 
+/// Baut Segmente aus den Zeitstempeln, die Whisper selbst geliefert hat.
+///
+/// Das ist der genaue Weg: die Zeiten stehen an den Woertern, nicht an ihrer
+/// Laenge. Mehrere Whisper-Abschnitte werden zu einem Segment gebuendelt,
+/// damit das Modell Kontext ueber Satzgrenzen sieht - aber nur bis
+/// `SEGMENT_SEKUNDEN`.
+fn segmente_aus_whisper(
+    block: &plan::Block,
+    abschnitte: &[tb_engagement::transcribe::TranscriptSegment],
+) -> Vec<Segment> {
+    let versatz = block.versatz_sekunden as f64;
+    let mut raus: Vec<Segment> = Vec::new();
+    let mut offen: Option<Segment> = None;
+
+    for abschnitt in abschnitte {
+        let start = versatz + abschnitt.start_seconds.max(0.0);
+        let ende = versatz + abschnitt.end_seconds.max(abschnitt.start_seconds);
+        match offen.as_mut() {
+            Some(segment) if ende - segment.start_sekunden <= SEGMENT_SEKUNDEN => {
+                segment.ende_sekunden = ende;
+                segment.text.push(' ');
+                segment.text.push_str(&abschnitt.text);
+            }
+            _ => {
+                if let Some(fertig) = offen.take() {
+                    raus.push(fertig);
+                }
+                offen = Some(Segment {
+                    id: block.segment_id(raus.len() + 1),
+                    start_sekunden: start,
+                    ende_sekunden: ende,
+                    text: abschnitt.text.clone(),
+                });
+            }
+        }
+    }
+    if let Some(fertig) = offen {
+        raus.push(fertig);
+    }
+    raus
+}
+
 /// Teilt den Blocktext in Segmente und rechnet die Zeit ueber den Textanteil.
+///
+/// Nur der Rueckfallweg: er greift, wenn die Transkription keine eigenen
+/// Zeitstempel liefert.
 ///
 /// Whisper liefert hier einen Text am Stueck ohne eigene Zeitmarken. Die Zeit
 /// eines Segments wird deshalb linear aus seinem Anteil an der Gesamtlaenge
@@ -1339,6 +1481,68 @@ mod tests {
         let erster = ersatz.block_fertig("/tmp/a.ts", 1);
         let zweiter = ersatz.block_fertig("/tmp/b.ts", 1);
         assert_ne!(erster.bezeichnung(), zweiter.bezeichnung());
+    }
+
+    #[tokio::test]
+    async fn ausgewertete_aufnahme_wird_nicht_erneut_eingereiht() {
+        // Aufbewahrte Aufnahmen sind Belege, keine offenen Bloecke. Ohne die
+        // Marke liefe der naechste Start sie erneut aus - der zweite Bericht
+        // ueberschriebe den ersten und koennte den Beleg loeschen.
+        let blockordner =
+            std::env::temp_dir().join(format!("stream-audit-fertig-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&blockordner).await;
+        let capture = blockordner.join("capture-xyz");
+        tokio::fs::create_dir_all(&capture).await.expect("Ordner");
+        let aufnahme = capture.join("audio.ts");
+        tokio::fs::write(&aufnahme, b"ton")
+            .await
+            .expect("schreiben");
+
+        assert!(!bereits_ausgewertet(&aufnahme).await);
+
+        let bericht = Bericht {
+            lauf_id: "20260813T120000Z-ricky".to_owned(),
+            erstellt_am: "2026-08-13T12:00:00Z".to_owned(),
+            quelle: "live, Block 1".to_owned(),
+            kanal: "ricky".to_owned(),
+            transkription: "openai_api".to_owned(),
+            modell: "large-v3-turbo-ct2".to_owned(),
+            transkription_lokal: true,
+            anbieter: "fireworks".to_owned(),
+            llm_modell: "irgendein-modell".to_owned(),
+            transkript_behalten: false,
+            segmente: 3,
+            modell_geprueft: true,
+            modell_hinweis: String::new(),
+            funde: Vec::new(),
+        };
+        fertig_markieren(&aufnahme, &bericht).await;
+        assert!(bereits_ausgewertet(&aufnahme).await);
+        let _ = tokio::fs::remove_dir_all(&blockordner).await;
+    }
+
+    #[test]
+    fn whisper_zeitstempel_schlagen_die_schaetzung() {
+        // Die Schaetzung ueber den Textanteil verschiebt sich bei
+        // Sprechpausen; die Zeiten von Whisper stehen an den Woertern.
+        let block = block(600);
+        let abschnitte = vec![
+            tb_engagement::transcribe::TranscriptSegment {
+                start_seconds: 0.0,
+                end_seconds: 4.0,
+                text: "kurzer Satz.".to_owned(),
+            },
+            tb_engagement::transcribe::TranscriptSegment {
+                start_seconds: 480.0,
+                end_seconds: 495.0,
+                text: "und viel spaeter noch einer.".to_owned(),
+            },
+        ];
+        let segmente = segmente_aus_whisper(&block, &abschnitte);
+        assert_eq!(segmente.len(), 2, "acht Minuten Pause trennen die Segmente");
+        assert_eq!(segmente[0].start_sekunden, 600.0);
+        assert_eq!(segmente[1].start_sekunden, 1080.0);
+        assert_eq!(segmente[1].ende_sekunden, 1095.0);
     }
 
     #[test]
