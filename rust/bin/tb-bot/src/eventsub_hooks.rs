@@ -25,8 +25,9 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, export_log_description, export_log_title, should_export, CommandRunner,
-        ExportTargets, TokioCommandRunner, VodExportError, VodExportReport, TARGET_LOGIN,
+        export_latest_vod, export_log_description, export_log_title, format_bytes,
+        format_duration, should_export, CommandRunner, ExportTargets, TokioCommandRunner,
+        VodExportError, VodExportReport, TARGET_LOGIN,
     },
 };
 use tb_monitoring::{
@@ -173,22 +174,22 @@ impl VodExportOfflineHandler {
                 tracing::error!(%error, "VOD-Export: Discord-Log fehlgeschlagen");
             }
 
-            // Der Caster-Chat bekommt denselben Report plus den Freigabelink.
-            // Im Admin-Log bleibt der Link bewusst draußen — dort lesen mehr
-            // Leute mit, als Zugriff auf das VOD haben sollen.
-            if let Err(error) = relay
-                .send_alert_embed(SendAlertEmbed {
-                    channel_id: VOD_EXPORT_CASTER_CHANNEL_ID,
-                    content: result
-                        .as_ref()
-                        .ok()
-                        .map(|report| vod_export_channel_content(&report.link)),
-                    embed: vod_export_log_embed(&result, elapsed_seconds, dm_delivered),
-                    allowed_role_ids: Vec::new(),
-                })
-                .await
-            {
-                tracing::error!(%error, "VOD-Export: Caster-Chat-Post fehlgeschlagen");
+            // Der Caster-Chat bekommt nur den fertigen Export: Link plus
+            // Kennzahlen. Abbrüche bleiben im Admin-Log — ihr Grundtext trägt
+            // rohes yt-dlp/rclone-stderr samt lokaler Pfade, und `NoVod` nach
+            // einem Restream ist gar kein Fehler, sondern Normalbetrieb.
+            if let Ok(report) = &result {
+                if let Err(error) = relay
+                    .send_alert_embed(SendAlertEmbed {
+                        channel_id: VOD_EXPORT_CASTER_CHANNEL_ID,
+                        content: Some(vod_export_channel_content(&report.link)),
+                        embed: vod_export_caster_embed(report),
+                        allowed_role_ids: Vec::new(),
+                    })
+                    .await
+                {
+                    tracing::error!(%error, "VOD-Export: Caster-Chat-Post fehlgeschlagen");
+                }
             }
         });
     }
@@ -212,6 +213,22 @@ fn vod_export_log_embed(
 /// der klickbare Link.
 fn vod_export_channel_content(link: &str) -> String {
     format!("VOD vom letzten {TARGET_LOGIN}-Stream: {link}")
+}
+
+/// Embed für den Caster-Chat: nur Kennzahlen des fertigen Exports. Bewusst nicht
+/// `vod_export_log_embed` — dessen Fehlertext trägt rohes Prozess-stderr und
+/// interne Pfade, die in einen Team-Channel nichts verloren haben.
+fn vod_export_caster_embed(report: &VodExportReport) -> Value {
+    serde_json::json!({
+        "title": export_log_title(true),
+        "description": format!(
+            "Kanal: {TARGET_LOGIN}\nVOD: {vod_id}\nStreamlaenge: {dauer}\nGroesse: {groesse}",
+            vod_id = report.vod_id,
+            dauer = format_duration(report.duration_seconds),
+            groesse = format_bytes(report.size_bytes),
+        ),
+        "color": 0x2E_CC71,
+    })
 }
 
 fn vod_export_dm_content(link: &str) -> String {
@@ -1375,7 +1392,27 @@ mod vod_export_tests {
             super::VOD_EXPORT_CASTER_CHANNEL_ID,
             super::VOD_EXPORT_LOG_CHANNEL_ID
         );
-        assert_eq!(super::VOD_EXPORT_CASTER_CHANNEL_ID, 1_474_543_558_793_887_937);
+    }
+
+    #[test]
+    fn caster_embed_traegt_kennzahlen_aber_kein_prozess_stderr() {
+        let report = tb_highlight::vod_export::VodExportReport {
+            vod_id: "987".to_string(),
+            link: "https://share.example/987".to_string(),
+            duration_seconds: 3 * 60 * 60 + 25 * 60,
+            size_bytes: 9_942_383_597,
+        };
+
+        let embed = super::vod_export_caster_embed(&report);
+        let text = embed["description"].as_str().expect("description");
+
+        assert!(text.contains("987"), "{text}");
+        assert!(text.contains("3h 25m"), "{text}");
+        assert!(text.contains("9.26 GB"), "{text}");
+        // Der Link steht als Nachrichtentext daneben, nicht im Embed — und der
+        // Fehlerzweig mit rohem stderr erreicht diesen Kanal gar nicht erst.
+        assert!(!text.contains("share.example"), "{text}");
+        assert_eq!(embed["title"], "VOD-Export erfolgreich");
     }
 }
 

@@ -117,15 +117,29 @@ fn resolve_yt_dlp_path(
     ]
     .into_iter()
     .flatten()
-    .find(|kandidat| kandidat.is_file())
+    .find(|kandidat| ist_ausfuehrbar(kandidat))
     // systemd-PATH enthält ~/.local/bin nicht, deshalb erst die beiden festen Orte.
     .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp"))
+}
+
+/// Ein Rest-venv kann eine yt-dlp-Datei ohne x-Bit hinterlassen. Die würde sonst
+/// gegen ein funktionierendes `~/.local/bin/yt-dlp` gewinnen und denselben
+/// Startfehler erzeugen, den diese Suche beheben soll.
+fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(pfad)
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 fn yt_dlp_path() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref())
+    let pfad = resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref());
+    // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
+    // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
+    tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgeloest");
+    pfad
 }
 
 fn watch_one_shot_task(task: &'static str, handle: tokio::task::JoinHandle<()>) {
@@ -2193,8 +2207,15 @@ mod tests {
     }
 
     fn lege_datei_an(pfad: &Path) {
+        lege_datei_an_mit_modus(pfad, 0o755);
+    }
+
+    fn lege_datei_an_mit_modus(pfad: &Path, modus: u32) {
+        use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(pfad.parent().expect("Elternpfad")).expect("Elternverzeichnis");
         std::fs::write(pfad, b"#!/bin/sh\n").expect("Testdatei");
+        std::fs::set_permissions(pfad, std::fs::Permissions::from_mode(modus))
+            .expect("Testrechte");
     }
 
     #[test]
@@ -2230,6 +2251,20 @@ mod tests {
         let cwd = temp_bin("home-cwd");
         std::fs::create_dir_all(&cwd).expect("leeres cwd");
         let home = temp_bin("home-dir");
+        lege_datei_an(&home.join(".local/bin/yt-dlp"));
+
+        let pfad = super::resolve_yt_dlp_path(None, &cwd, Some(&home));
+
+        assert_eq!(pfad, home.join(".local/bin/yt-dlp"));
+    }
+
+    #[test]
+    fn yt_dlp_pfad_ueberspringt_datei_ohne_x_bit() {
+        // Ein Rest-venv mit nicht ausführbarer Datei darf das installierte
+        // yt-dlp nicht verdrängen — sonst bleibt der Startfehler derselbe.
+        let cwd = temp_bin("kein-x-cwd");
+        lege_datei_an_mit_modus(&cwd.join(".venv/bin/yt-dlp"), 0o644);
+        let home = temp_bin("kein-x-home");
         lege_datei_an(&home.join(".local/bin/yt-dlp"));
 
         let pfad = super::resolve_yt_dlp_path(None, &cwd, Some(&home));

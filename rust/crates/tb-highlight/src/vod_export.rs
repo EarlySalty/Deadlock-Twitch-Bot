@@ -46,8 +46,10 @@ pub fn export_log_title(success: bool) -> &'static str {
 }
 
 /// Beschreibungstext fuer den Discord-Log-Channel — **jeder** Ausgang wird
-/// gemeldet, Erfolg wie Abbruch. Der Freigabelink bleibt bewusst draussen: er
-/// oeffnet dauerhaft ein privates VOD und gehoert nur in die DM.
+/// gemeldet, Erfolg wie Abbruch. Der Freigabelink bleibt in diesem Text bewusst
+/// draussen: er oeffnet dauerhaft ein privates VOD. Er wird nur dort ausgegeben,
+/// wo alle Mitlesenden das VOD ohnehin sehen duerfen — in der DM und im
+/// Caster-Chat, beide Male als eigener Nachrichtentext neben diesem Embed.
 pub fn export_log_description(
     result: &Result<VodExportReport, VodExportError>,
     elapsed_seconds: i64,
@@ -93,7 +95,7 @@ fn truncate_chars(text: &str, limit: usize) -> String {
     format!("{gekuerzt}… [gekuerzt]")
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let bytes_f = bytes as f64;
     if bytes < 1024 {
@@ -111,7 +113,7 @@ fn format_bytes(bytes: u64) -> String {
     format!("{:.2} TB", bytes_f / (KB * KB * KB * KB))
 }
 
-fn format_duration(seconds: i64) -> String {
+pub fn format_duration(seconds: i64) -> String {
     let seconds = seconds.max(0);
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;

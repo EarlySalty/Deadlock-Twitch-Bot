@@ -237,7 +237,8 @@ pub fn start(
         return inactive_runtime(supervisor, store, "discord_unavailable");
     };
     let capturer = MemoryAudioCapturer::new(
-        nonempty_env("YTDLP_BIN").unwrap_or_else(|| "yt-dlp".to_owned()),
+        nonempty_env("YTDLP_BIN")
+            .unwrap_or_else(|| crate::yt_dlp_path().to_string_lossy().into_owned()),
         nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_owned()),
     );
     spawn_processor(supervisor, store.clone(), capturer, transcriber, reviewer);
