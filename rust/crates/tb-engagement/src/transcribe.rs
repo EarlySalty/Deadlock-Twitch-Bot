@@ -32,6 +32,22 @@ pub struct TranscriptionResult {
     pub duration_seconds: f64,
     pub engine: String,
     pub model: String,
+    /// Zeitstempel aus der `verbose_json`-Antwort, falls der Dienst welche
+    /// liefert.
+    ///
+    /// Ohne sie muessen Aufrufer die Zeit aus dem Textanteil schaetzen - eine
+    /// Naeherung, die bei Sprechpausen um Minuten danebenliegt. Angefragt
+    /// werden sie ohnehin (`timestamp_granularities[]=segment`); frueher
+    /// wurden sie nur weggeworfen.
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// Ein Abschnitt mit eigener Zeit, so wie Whisper ihn liefert.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptSegment {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub text: String,
 }
 
 /// Klassifizierter Whisper-Fehler ohne Provider-Body, Request oder Secret.
@@ -206,11 +222,31 @@ impl OpenAiTranscriber {
             .get("duration")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
+        let segments = payload
+            .get("segments")
+            .and_then(serde_json::Value::as_array)
+            .map(|roh| {
+                roh.iter()
+                    .filter_map(|eintrag| {
+                        let text = eintrag.get("text")?.as_str()?.trim().to_string();
+                        if text.is_empty() {
+                            return None;
+                        }
+                        Some(TranscriptSegment {
+                            start_seconds: eintrag.get("start")?.as_f64()?,
+                            end_seconds: eintrag.get("end")?.as_f64()?,
+                            text,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,
             engine: "openai_api".to_string(),
             model: model.to_string(),
+            segments,
         })
     }
 }

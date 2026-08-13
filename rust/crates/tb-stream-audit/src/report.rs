@@ -26,6 +26,10 @@ pub struct Bericht {
     /// STT-Endpunkt schlicht falsch war.
     pub transkription_lokal: bool,
     pub anbieter: String,
+    /// Modell des Sprachmodells. `modell` traegt das Whisper-Modell; ohne
+    /// dieses Feld waere aus dem Bericht nicht mehr zu erkennen, wer eine
+    /// Einschaetzung abgegeben hat.
+    pub llm_modell: String,
     /// Ob das Rohtranskript auf der Platte bleibt. Der Bericht sagt es
     /// ausdruecklich, damit niemand raten muss, wo Wortlaut liegt.
     pub transkript_behalten: bool,
@@ -92,8 +96,13 @@ pub fn markdown(bericht: &Bericht) -> String {
             }
         ),
         format!(
-            "- Bewertung: {}{}",
+            "- Bewertung: {} ({}){}",
             bericht.anbieter,
+            if bericht.llm_modell.is_empty() {
+                "Modell unbekannt"
+            } else {
+                &bericht.llm_modell
+            },
             if bericht.modell_geprueft {
                 String::new()
             } else {
@@ -227,6 +236,7 @@ mod tests {
             modell: "large-v3-turbo".to_owned(),
             transkription_lokal: true,
             anbieter: "fireworks".to_owned(),
+            llm_modell: "testmodell".to_owned(),
             transkript_behalten: true,
             segmente: 12,
             modell_geprueft: true,
