@@ -53,18 +53,28 @@ pub struct OpenAiTranscriber {
 }
 
 impl OpenAiTranscriber {
-    /// Aus Env: `OPENAI_API_KEY` (Pflicht), `OPENAI_WHISPER_MODEL` (Legacy,
-    /// Default `whisper-1`) und `FFMPEG_BIN` (Default `ffmpeg`). `None` ohne
-    /// API-Key (Python `_OpenAIWhisperEngine` wirft dann
-    /// `TranscriberUnavailable`). Der neue RAM-Pfad bleibt fest auf
-    /// `whisper-1`.
+    /// Aus Env: `OPENAI_WHISPER_MODEL` (Legacy, Default `whisper-1`) und
+    /// `FFMPEG_BIN` (Default `ffmpeg`).
+    ///
+    /// Endpunkt: `ENGAGEMENT_STT_BASE_URL` zeigt auf einen eigenen,
+    /// OpenAI-kompatiblen Dienst (`ops/stt-server`, lokales Whisper-Modell);
+    /// ohne die Variable geht es an die OpenAI-API. Der `OPENAI_API_KEY` ist
+    /// nur für OpenAI Pflicht — der lokale Dienst ignoriert den
+    /// `Authorization`-Header, und ohne diesen Fallback bräuchte ein rein
+    /// lokaler Betrieb trotzdem einen Fremd-Key. `None` heißt: kein Endpunkt
+    /// nutzbar (Python `TranscriberUnavailable`).
     pub fn from_env() -> Option<Self> {
-        let api_key = nonempty_env("OPENAI_API_KEY")?;
+        let base_url = nonempty_env("ENGAGEMENT_STT_BASE_URL");
+        let api_key = match (nonempty_env("OPENAI_API_KEY"), &base_url) {
+            (Some(key), _) => key,
+            (None, Some(_)) => "local".to_string(),
+            (None, None) => return None,
+        };
         Some(Self {
             api_key,
             model: nonempty_env("OPENAI_WHISPER_MODEL")
                 .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            base_url: DEFAULT_OPENAI_URL.to_string(),
+            base_url: base_url.unwrap_or_else(|| DEFAULT_OPENAI_URL.to_string()),
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
             http: reqwest::Client::builder()
                 .timeout(REQUEST_TIMEOUT)
