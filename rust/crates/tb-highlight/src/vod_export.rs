@@ -1,6 +1,8 @@
 use std::{path::Path, process::Stdio};
 
 use async_trait::async_trait;
+use chrono::DateTime;
+use chrono_tz::Europe::Berlin;
 use thiserror::Error;
 
 use crate::{
@@ -12,6 +14,10 @@ pub const TARGET_LOGIN: &str = "dach_lock";
 /// Standardziel im Google Drive. Storj war auf Dauer zu teuer; der rclone-Remote
 /// `gdrive:` traegt das OAuth-Token, hier steht nur der Ordner darunter.
 pub const DEFAULT_REMOTE_BASE: &str = "gdrive:Deadlock/Twitch-VODs";
+/// Rueckfallordner, wenn der Zeitstempel des VOD nicht in ein Datum aufloest.
+/// Der Export soll dann trotzdem laufen — eine Datei im falschen Ordner ist
+/// besser als ein Abbruch nach einem mehrstuendigen Download.
+const UNKNOWN_DATE_FOLDER: &str = "ohne-datum";
 /// Ein Archiv-VOD gilt nur als "der gerade beendete Stream", wenn sein
 /// geschätztes Ende (`created_at` + `duration`) höchstens so weit vom
 /// `stream.offline`-Zeitpunkt abweicht. Deckt Twitchs eigene
@@ -260,7 +266,7 @@ pub async fn export_latest_vod(
     let upload_result = run_checked(
         runner,
         targets.rclone_path,
-        &rclone_copy_args(&local_path, targets.remote_base, vod_id),
+        &rclone_copy_args(&local_path, targets.remote_base, vod_id, started_at),
     )
     .await;
     let cleanup_result = std::fs::remove_file(&local_path);
@@ -277,7 +283,7 @@ pub async fn export_latest_vod(
     let link_output = run_checked(
         runner,
         targets.rclone_path,
-        &rclone_link_args(targets.remote_base, vod_id),
+        &rclone_link_args(targets.remote_base, vod_id, started_at),
     )
     .await?;
     let link = link_output
@@ -311,27 +317,42 @@ fn yt_dlp_args(vod_id: &str, output_path: &Path) -> Vec<String> {
     ]
 }
 
-fn remote_object_path(remote_base: &str, vod_id: &str) -> String {
+/// Ordnername fuer einen Streamtag. Twitch liefert `created_at` in UTC — ein
+/// Stream, der um 01:30 Berliner Zeit anfaengt, gehoert in den Ordner dieses
+/// Tages und nicht in den des UTC-Vortags.
+fn stream_date_folder(started_at_unix: i64) -> String {
+    DateTime::from_timestamp(started_at_unix, 0)
+        .map(|dt| dt.with_timezone(&Berlin).format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| UNKNOWN_DATE_FOLDER.to_string())
+}
+
+fn remote_object_path(remote_base: &str, vod_id: &str, started_at_unix: i64) -> String {
     format!(
-        "{}/{TARGET_LOGIN}/{vod_id}.mp4",
-        remote_base.trim_end_matches('/')
+        "{}/{ordner}/{vod_id}.mp4",
+        remote_base.trim_end_matches('/'),
+        ordner = stream_date_folder(started_at_unix)
     )
 }
 
-fn rclone_copy_args(local_path: &Path, remote_base: &str, vod_id: &str) -> Vec<String> {
+fn rclone_copy_args(
+    local_path: &Path,
+    remote_base: &str,
+    vod_id: &str,
+    started_at_unix: i64,
+) -> Vec<String> {
     vec![
         "copyto".to_string(),
         local_path.to_string_lossy().into_owned(),
-        remote_object_path(remote_base, vod_id),
+        remote_object_path(remote_base, vod_id, started_at_unix),
     ]
 }
 
 /// Kein `--expire`: Google Drive kennt keine ablaufenden Freigabelinks. Der Link bleibt
 /// gueltig, bis die Datei geloescht oder die Freigabe entzogen wird.
-fn rclone_link_args(remote_base: &str, vod_id: &str) -> Vec<String> {
+fn rclone_link_args(remote_base: &str, vod_id: &str, started_at_unix: i64) -> Vec<String> {
     vec![
         "link".to_string(),
-        remote_object_path(remote_base, vod_id),
+        remote_object_path(remote_base, vod_id, started_at_unix),
     ]
 }
 
@@ -514,26 +535,45 @@ mod tests {
         let local = Path::new("/tmp/987.mp4");
 
         assert_eq!(
-            remote_object_path(DEFAULT_REMOTE_BASE, "987"),
-            "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"
+            remote_object_path(DEFAULT_REMOTE_BASE, "987", FRESH_CREATED_AT_UNIX),
+            "gdrive:Deadlock/Twitch-VODs/2024-01-01/987.mp4"
         );
         // Ein abschliessender Schraegstrich in der Konfiguration darf den Pfad nicht doppeln.
         assert_eq!(
-            remote_object_path("gdrive:Deadlock/Twitch-VODs/", "987"),
-            "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"
+            remote_object_path("gdrive:Deadlock/Twitch-VODs/", "987", FRESH_CREATED_AT_UNIX),
+            "gdrive:Deadlock/Twitch-VODs/2024-01-01/987.mp4"
         );
         assert_eq!(
-            rclone_copy_args(local, DEFAULT_REMOTE_BASE, "987"),
+            rclone_copy_args(local, DEFAULT_REMOTE_BASE, "987", FRESH_CREATED_AT_UNIX),
             vec![
                 "copyto",
                 "/tmp/987.mp4",
-                "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4",
+                "gdrive:Deadlock/Twitch-VODs/2024-01-01/987.mp4",
             ]
         );
         // Drive kennt kein Ablaufdatum — mit --expire bricht rclone den Aufruf ab.
         assert_eq!(
-            rclone_link_args(DEFAULT_REMOTE_BASE, "987"),
-            vec!["link", "gdrive:Deadlock/Twitch-VODs/dach_lock/987.mp4"]
+            rclone_link_args(DEFAULT_REMOTE_BASE, "987", FRESH_CREATED_AT_UNIX),
+            vec!["link", "gdrive:Deadlock/Twitch-VODs/2024-01-01/987.mp4"]
+        );
+    }
+
+    #[test]
+    fn nachtstream_landet_im_ordner_des_berliner_tages() {
+        // 2026-08-09T23:30:00Z ist in Berlin bereits der 10.08. um 01:30 —
+        // ein Nachtstream gehoert in den Ordner des Tages, an dem er
+        // tatsaechlich lief, nicht in den des UTC-Vortags.
+        assert_eq!(stream_date_folder(1_786_318_200), "2026-08-10");
+        // Winterzeit (+1): 21:30Z ist noch derselbe Tag.
+        assert_eq!(stream_date_folder(1_766_957_400), "2025-12-28");
+    }
+
+    #[test]
+    fn unbrauchbarer_zeitstempel_bricht_den_export_nicht_ab() {
+        assert_eq!(stream_date_folder(i64::MAX), UNKNOWN_DATE_FOLDER);
+        assert_eq!(
+            remote_object_path(DEFAULT_REMOTE_BASE, "987", i64::MAX),
+            "gdrive:Deadlock/Twitch-VODs/ohne-datum/987.mp4"
         );
     }
 
@@ -650,9 +690,23 @@ mod tests {
         assert!(!calls[0].1.iter().any(|arg| arg == "--download-sections"));
         assert_eq!(
             calls[1].1,
-            rclone_copy_args(&temp_dir.join("987.mp4"), DEFAULT_REMOTE_BASE, "987")
+            rclone_copy_args(
+                &temp_dir.join("987.mp4"),
+                DEFAULT_REMOTE_BASE,
+                "987",
+                FRESH_CREATED_AT_UNIX
+            )
         );
-        assert_eq!(calls[2].1, rclone_link_args(DEFAULT_REMOTE_BASE, "987"));
+        assert_eq!(
+            calls[2].1,
+            rclone_link_args(DEFAULT_REMOTE_BASE, "987", FRESH_CREATED_AT_UNIX)
+        );
+        // Der Pfad kommt aus dem Streamdatum, nicht aus einem Kanalordner.
+        assert!(
+            calls[1].1[2].ends_with("/2024-01-01/987.mp4"),
+            "Datumsordner fehlt: {}",
+            calls[1].1[2]
+        );
 
         std::fs::remove_dir_all(temp_dir).expect("temp cleanup");
     }
