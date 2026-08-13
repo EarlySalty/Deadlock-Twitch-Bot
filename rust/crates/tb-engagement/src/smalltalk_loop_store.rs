@@ -5,6 +5,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::minimax_chat::TestModeRejectReason;
+use crate::stream_transcripts::StreamTranscriptSegment;
 
 pub const SESSION_DURATION: Duration = Duration::minutes(60);
 pub const CHANNEL_COOLDOWN: Duration = Duration::hours(24);
@@ -76,10 +77,23 @@ pub struct ReportSession {
     pub last_provider_error: Option<String>,
 }
 
+/// Ein lokal transkribierter Stream-Abschnitt aus der Sitzung.
+#[derive(Clone, Debug)]
+pub struct SmalltalkTranscript {
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub text: String,
+    pub engine: String,
+    pub model: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SmalltalkReport {
     pub session: ReportSession,
     pub messages: Vec<SmalltalkMessage>,
+    /// Stream-Ton der Sitzung, chronologisch. Ohne ihn ist nicht zu beurteilen,
+    /// ob eine Nachricht zum Moment gepasst hat oder nur zum Chat.
+    pub transcripts: Vec<SmalltalkTranscript>,
 }
 
 #[derive(Clone, Debug)]
@@ -530,6 +544,45 @@ impl SmalltalkLoopStore {
         }
     }
 
+    /// Legt einen lokal transkribierten Stream-Abschnitt an der offenen
+    /// Sitzung dieses Kanals ab. `false`, wenn keine Sitzung offen ist: dann
+    /// gehoert der Ton zu keinem Test und wird nicht aufbewahrt.
+    ///
+    /// Leerer Text wird verworfen statt gespeichert. Whisper liefert fuer
+    /// stille oder reine Spielsound-Bloecke nichts, und eine Zeile ohne Text
+    /// saehe in der Auswertung wie ein Abschnitt ohne Inhalt aus.
+    pub async fn record_transcript(
+        &self,
+        channel_login: &str,
+        segment: &StreamTranscriptSegment,
+    ) -> Result<bool, StoreError> {
+        let text = segment
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let session_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO twitch_smalltalk_transcripts
+                (session_id, channel_login, started_at, ended_at, text, engine, model)
+             SELECT id, channel_login, $2, $3, $4, $5, $6
+             FROM twitch_smalltalk_sessions
+             WHERE ended_at IS NULL AND LOWER(channel_login) = LOWER($1)
+             RETURNING session_id",
+        )
+        .bind(channel_login)
+        .bind(segment.started_at)
+        .bind(segment.ended_at.max(segment.started_at))
+        .bind(&text)
+        .bind(&segment.engine)
+        .bind(segment.model.as_deref())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(session_id.is_some())
+    }
+
     pub async fn record_provider_error(
         &self,
         channel_login: &str,
@@ -652,6 +705,29 @@ impl SmalltalkLoopStore {
                     },
                 )
                 .collect();
+            let transcripts = sqlx::query_as::<
+                _,
+                (DateTime<Utc>, DateTime<Utc>, String, String, Option<String>),
+            >(
+                "SELECT started_at, ended_at, text, engine, model
+                 FROM twitch_smalltalk_transcripts
+                 WHERE session_id = $1
+                 ORDER BY ended_at, id",
+            )
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(
+                |(started_at, ended_at, text, engine, model)| SmalltalkTranscript {
+                    started_at,
+                    ended_at,
+                    text,
+                    engine,
+                    model: model.filter(|model| !model.is_empty()),
+                },
+            )
+            .collect();
             claimed.push(ClaimedReport {
                 claim_id,
                 report: SmalltalkReport {
@@ -666,6 +742,7 @@ impl SmalltalkLoopStore {
                         last_provider_error,
                     },
                     messages,
+                    transcripts,
                 },
             });
         }

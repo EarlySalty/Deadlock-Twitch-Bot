@@ -48,8 +48,13 @@ const LEARN_TRIM_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const LEARN_PROFILE_INTERVAL: f64 = 6.0 * 60.0 * 60.0;
 const AI_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Stream-Transkription ist nach Grillme Block 19 standardmäßig AUS.
-/// Ein späterer, bewusst gewählter Nicht-OpenAI-Weg kann denselben Gate nutzen.
+/// Stream-Transkription über ALLE aktiven Channels ist standardmäßig AUS
+/// (Grillme Block 19). Der Grund ist inzwischen nicht mehr der Anbieter, denn
+/// transkribiert wird lokal, sondern die Dauerlast: jeder aktive Channel würde
+/// rund um die Uhr einen Whisper-Lauf pro Poll erzeugen.
+///
+/// Zeitlich begrenzte Aufnahmen hängen deshalb nicht an diesem Gate, sondern an
+/// ihrem eigenen Anlass, siehe Lernmodus und Smalltalk-Testsitzung.
 fn stream_transcripts_enabled() -> bool {
     match std::env::var("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED") {
         Ok(v) => v.trim() == "1",
@@ -144,6 +149,30 @@ async fn run_transcribe_capture(
     capturer: &AudioCapturer,
     transcriber: &OpenAiTranscriber,
 ) {
+    let Some(segment) = capture_transcript_segment(channel, capturer, transcriber).await else {
+        return;
+    };
+    if let Err(error) = StreamTranscripts::new(pool.clone()).append_segment(&segment).await {
+        tracing::warn!(
+            %error,
+            channel,
+            "stream-transcripts: Segment konnte nicht gespeichert werden"
+        );
+    }
+}
+
+/// Nimmt einen Block Stream-Audio auf und transkribiert ihn lokal. `None`, wenn
+/// Capture, Transkription oder Text ausfallen; alles davon ist best-effort und
+/// ein stiller Block ist ein normales Ergebnis, kein Fehler.
+///
+/// Getrennt vom Schreiben, weil derselbe Block an mehreren Stellen gebraucht
+/// wird: der Prompt-Ringpuffer will ihn, die Smalltalk-Auswertung will ihn
+/// dauerhaft, und keiner der beiden soll dafür eine zweite Aufnahme fahren.
+pub async fn capture_transcript_segment(
+    channel: &str,
+    capturer: &AudioCapturer,
+    transcriber: &OpenAiTranscriber,
+) -> Option<StreamTranscriptSegment> {
     let capture = match capturer
         .capture(channel, transcript_capture_seconds().max(0) as u64, &transcript_quality(), None)
         .await
@@ -151,7 +180,7 @@ async fn run_transcribe_capture(
         Ok(c) => c,
         Err(error) => {
             tracing::debug!(channel, %error, "stream-transcript: Capture fehlgeschlagen");
-            return;
+            return None;
         }
     };
     let transcription = transcriber.transcribe_clip(&capture.media_path).await;
@@ -160,13 +189,13 @@ async fn run_transcribe_capture(
         Ok(r) => r,
         Err(error) => {
             tracing::debug!(channel, %error, "stream-transcript: Transkription fehlgeschlagen");
-            return;
+            return None;
         }
     };
 
     let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
-        return;
+        return None;
     }
     // Dauer: Modell → Capture-Ist → Capture-Soll (Python `or`-Kette).
     let duration = if result.duration_seconds > 0.0 {
@@ -178,21 +207,14 @@ async fn run_transcribe_capture(
     };
     let ended_at = Utc::now();
     let started_at = ended_at - chrono::Duration::seconds(duration.max(1.0) as i64);
-    let segment = StreamTranscriptSegment {
+    Some(StreamTranscriptSegment {
         channel_login: channel.to_string(),
         started_at,
         ended_at,
         text,
         engine: result.engine,
         model: Some(result.model).filter(|m| !m.is_empty()),
-    };
-    if let Err(error) = StreamTranscripts::new(pool.clone()).append_segment(&segment).await {
-        tracing::warn!(
-            %error,
-            channel,
-            "stream-transcripts: Segment konnte nicht gespeichert werden"
-        );
-    }
+    })
 }
 
 fn ai_client() -> EngagementMinimaxClient {

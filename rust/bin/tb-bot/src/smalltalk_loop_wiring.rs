@@ -7,9 +7,13 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use tb_config::BrokerConfig;
+use tb_engagement::audio_capture::AudioCapturer;
+use tb_engagement::background::capture_transcript_segment;
 use tb_engagement::smalltalk_loop_store::{
-    ClaimedReport, SmalltalkLoopStore, SmalltalkReport, StoreError,
+    ClaimedReport, SmalltalkLoopStore, SmalltalkReport, SmalltalkTranscript, StoreError,
 };
+use tb_engagement::stream_transcripts::StreamTranscripts;
+use tb_engagement::transcribe::OpenAiTranscriber;
 use tb_transport_discord::{
     BrokerRelay, DeleteMessage, DiscordBackend, DiscordError, SendRichMessage,
 };
@@ -17,8 +21,16 @@ use tb_transport_discord::{
 use crate::task_supervisor::TaskSupervisor;
 
 const LOOP_INTERVAL: Duration = Duration::from_secs(5);
+/// Takt der Ton-Aufnahme. Ein Block dauert selbst schon
+/// `ENGAGEMENT_TRANSCRIPT_CAPTURE_SECONDS`, der Takt ist also nur die Pause
+/// zwischen zwei Bloecken und die Wartezeit, bis eine neue Sitzung aufgegriffen
+/// wird.
+const TRANSCRIPT_INTERVAL: Duration = Duration::from_secs(5);
 const DISCORD_INTERVAL: Duration = Duration::from_secs(30);
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Wie weit ein Ton-Abschnitt vor einer Nachricht liegen darf, um in der
+/// Auswertung als ihr Kontext zu gelten.
+const TRANSCRIPT_CONTEXT_WINDOW: chrono::Duration = chrono::Duration::minutes(3);
 const DISCORD_BATCH_LIMIT: i64 = 20;
 const RETENTION_BATCH_LIMIT: i64 = 20;
 const DEFAULT_REVIEW_GUILD_ID: i64 = 1_289_721_245_281_292_288;
@@ -52,6 +64,9 @@ const SMALLTALK_DISCORD_COPY_JSON: &str = r#"{
   "rejection_reasons": "Verworfen nach Grund",
   "provider_errors": "Provider-Fehler",
   "last_provider_error": "Letzter Provider-Fehler",
+  "transcripts": "Stream-Ton (lokal transkribiert)",
+  "transcripts_missing": "nicht erfasst",
+  "transcript_context": "Stream davor",
   "trigger": "Auslöser",
   "generated_text": "Erzeugter Text",
   "result": "Ergebnis",
@@ -125,6 +140,9 @@ struct DiscordCopy {
     rejection_reasons: String,
     provider_errors: String,
     last_provider_error: String,
+    transcripts: String,
+    transcripts_missing: String,
+    transcript_context: String,
     trigger: String,
     generated_text: String,
     result: String,
@@ -164,6 +182,9 @@ impl DiscordCopy {
             &copy.rejection_reasons,
             &copy.provider_errors,
             &copy.last_provider_error,
+            &copy.transcripts,
+            &copy.transcripts_missing,
+            &copy.transcript_context,
             &copy.trigger,
             &copy.generated_text,
             &copy.result,
@@ -234,7 +255,7 @@ pub fn start(
     pool: PgPool,
     broker: &BrokerConfig,
 ) -> SmalltalkLoopRuntime {
-    let store = SmalltalkLoopStore::new(pool);
+    let store = SmalltalkLoopStore::new(pool.clone());
     let config = SmalltalkConfig::from_env();
     let copy = DiscordCopy::configured();
     let discord: Option<Arc<dyn DiscordBackend>> = match BrokerRelay::new(broker) {
@@ -276,6 +297,7 @@ pub fn start(
     };
 
     spawn_loop(supervisor, store.clone());
+    spawn_transcript_capture(supervisor, store.clone(), pool);
     tracing::info!(
         event = "smalltalk_loop.started",
         guild_id = DEFAULT_REVIEW_GUILD_ID,
@@ -315,6 +337,86 @@ fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore) {
             tick.tick().await;
             if let Err(error) = process_once(&store, Utc::now()).await {
                 tracing::warn!(event = "smalltalk_loop.process_failed", %error);
+            }
+        }
+    });
+}
+
+/// Nimmt den Stream der laufenden Sitzung in Bloecken auf und transkribiert ihn
+/// lokal.
+///
+/// Zwei Ablagen, ein Mitschnitt: der Ringpuffer
+/// (`twitch_engagement_stream_transcripts`) fuettert den Prompt, damit der Bot
+/// ueberhaupt weiss, wovon der Streamer gerade redet; die Sitzungsablage
+/// (`twitch_smalltalk_transcripts`) bleibt bis zur Auswertung liegen, weil der
+/// Ringpuffer nach einer Stunde getrimmt wird und eine Sitzung genau so lange
+/// dauert.
+///
+/// Aufgenommen wird nur, solange eine Sitzung offen ist, und nur gegen einen
+/// Endpunkt auf dieser Maschine. Zeigt `ENGAGEMENT_STT_BASE_URL` nach draussen,
+/// wird gar nicht aufgenommen: fremder Stream-Ton geht an keinen Fremdanbieter,
+/// und ein Test ohne Ton ist besser als einer, der Daten abgibt.
+fn spawn_transcript_capture(supervisor: &TaskSupervisor, store: SmalltalkLoopStore, pool: PgPool) {
+    supervisor.spawn("smalltalk_loop_transcripts", async move {
+        let capturer = AudioCapturer::from_env();
+        let transcripts = StreamTranscripts::new(pool);
+        let mut transcriber: Option<OpenAiTranscriber> = None;
+        let mut remote_warned = false;
+        let mut tick = tokio::time::interval(TRANSCRIPT_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let session = match store.active_session().await {
+                Ok(Some(session)) => session,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(event = "smalltalk_loop.transcript_session_failed", %error);
+                    continue;
+                }
+            };
+            if transcriber.is_none() {
+                transcriber = OpenAiTranscriber::from_env();
+            }
+            let Some(transcriber) = &transcriber else {
+                tracing::warn!(event = "smalltalk_loop.transcriber_unavailable");
+                continue;
+            };
+            if !transcriber.is_local() {
+                if !remote_warned {
+                    remote_warned = true;
+                    tracing::warn!(
+                        event = "smalltalk_loop.transcript_skipped",
+                        reason = "stt_endpoint_not_local",
+                    );
+                }
+                continue;
+            }
+            let channel = session.channel_login.clone();
+            let Some(segment) = capture_transcript_segment(&channel, &capturer, transcriber).await
+            else {
+                continue;
+            };
+            if let Err(error) = transcripts.append_segment(&segment).await {
+                tracing::warn!(
+                    event = "smalltalk_loop.transcript_context_failed",
+                    %error,
+                    channel = %channel,
+                );
+            }
+            match store.record_transcript(&channel, &segment).await {
+                Ok(true) => tracing::debug!(
+                    event = "smalltalk_loop.transcript_recorded",
+                    session_id = %session.id,
+                    channel = %channel,
+                ),
+                // Sitzung endete waehrend der Aufnahme: der Block gehoert zu
+                // keinem Test mehr und wird nicht aufbewahrt.
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    event = "smalltalk_loop.transcript_store_failed",
+                    %error,
+                    channel = %channel,
+                ),
             }
         }
     });
@@ -507,12 +609,27 @@ fn build_discord_card(
         .as_deref()
         .map(clean)
         .unwrap_or_else(|| "-".to_string());
+    let transcript_summary = if report.transcripts.is_empty() {
+        copy.transcripts_missing.clone()
+    } else {
+        let sekunden: i64 = report
+            .transcripts
+            .iter()
+            .map(|segment| (segment.ended_at - segment.started_at).num_seconds().max(0))
+            .sum();
+        format!(
+            "{} Abschnitte, {} min",
+            report.transcripts.len(),
+            sekunden / 60
+        )
+    };
     let mut displays = vec![format!(
         "**{title}**\n{channel_label}: #{channel}\n{session_label}: `{session_id}`\
 \n{duration_label}: {duration}s\n{viewers_label}: {viewers}\n{end_label}: `{end_reason}`\
 \n{generated_label}: {generated}\n{would_send_label}: {would_send}\
 \n{rejected_label}: {rejected}\n{provider_errors_label}: {provider_errors}\
-\n{last_provider_error_label}: {last_provider_error}\n{reasons_label}:\n{reason_summary}",
+\n{last_provider_error_label}: {last_provider_error}\
+\n{transcripts_label}: {transcript_summary}\n{reasons_label}:\n{reason_summary}",
         title = copy.title,
         channel_label = copy.channel,
         channel = clean(&report.session.channel_login),
@@ -529,6 +646,7 @@ fn build_discord_card(
         provider_errors_label = copy.provider_errors,
         provider_errors = report.session.provider_error_count,
         last_provider_error_label = copy.last_provider_error,
+        transcripts_label = copy.transcripts,
         reasons_label = copy.rejection_reasons,
     )];
     for message in &report.messages {
@@ -540,7 +658,7 @@ fn build_discord_card(
             ("rejected", None) => copy.result_rejected.clone(),
             _ => clean(&message.outcome),
         };
-        displays.push(format!(
+        let mut display = format!(
             "**{}**\n{}\n**{}**\n{}\n**{}**\n{}",
             copy.trigger,
             clean(&message.trigger_text),
@@ -548,7 +666,17 @@ fn build_discord_card(
             clean(&message.generated_text),
             copy.result,
             result
-        ));
+        );
+        // Der Chat-Auslöser allein sagt nicht, ob die Antwort zum Moment
+        // gepasst hat. Erst der Ton daneben macht das beurteilbar.
+        if let Some(context) = transcript_context(&report.transcripts, message.generated_at) {
+            display.push_str(&format!(
+                "\n**{}**\n{}",
+                copy.transcript_context,
+                clean(context)
+            ));
+        }
+        displays.push(display);
     }
     // Lieber ein Report, der ankommt und sagt was fehlt, als ein
     // vollstaendiger, den Discord ablehnt und der nach drei Versuchen
@@ -589,6 +717,25 @@ fn build_discord_card(
         allowed_role_ids: vec![],
         view_spec: None,
     })
+}
+
+/// Der Stream-Ton, der zu einer erzeugten Nachricht gehoert: der juengste
+/// Abschnitt, der vor ihr begonnen hat und hoechstens
+/// [`TRANSCRIPT_CONTEXT_WINDOW`] vorher endete.
+///
+/// Aelteres wird nicht gezeigt: ein Ausschnitt von vor zehn Minuten erklaert
+/// die Nachricht nicht, sondern legt einen Zusammenhang nahe, den es nicht gab.
+fn transcript_context(
+    transcripts: &[SmalltalkTranscript],
+    generated_at: chrono::DateTime<Utc>,
+) -> Option<&str> {
+    transcripts
+        .iter()
+        .rfind(|segment| {
+            segment.started_at <= generated_at
+                && generated_at - segment.ended_at <= TRANSCRIPT_CONTEXT_WINDOW
+        })
+        .map(|segment| segment.text.as_str())
 }
 
 fn clean(value: &str) -> String {
@@ -693,6 +840,7 @@ mod tests {
                     reject_reason: None,
                 })
                 .collect(),
+            transcripts: vec![],
         };
 
         let copy_text = DiscordCopy::test_copy();
@@ -738,6 +886,7 @@ mod tests {
                 last_provider_error: None,
             },
             messages: vec![],
+            transcripts: vec![],
         };
 
         let payload =
@@ -786,6 +935,7 @@ mod tests {
                     reject_reason: Some("offer_or_link".to_string()),
                 },
             ],
+            transcripts: vec![],
         };
 
         let payload =
@@ -797,5 +947,111 @@ mod tests {
         assert!(text.contains("wo spielt ihr"));
         assert!(text.contains("Angebot oder Link"));
         assert!(text.contains("http"));
+    }
+
+    /// Ohne den Stream-Ton ist eine Nachricht nicht zu beurteilen: sie kann zum
+    /// Chat passen und zum Moment trotzdem daneben liegen. Die Karte zeigt
+    /// deshalb den Abschnitt, der zur Nachricht gehoert, und nur den.
+    #[test]
+    fn discord_karte_zeigt_den_stream_ton_zur_nachricht() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 13, 20, 0, 0).unwrap();
+        let report = SmalltalkReport {
+            session: ReportSession {
+                id: Uuid::nil(),
+                channel_login: "kandidat".to_string(),
+                started_at: now,
+                ended_at: now + ChronoDuration::minutes(60),
+                end_reason: "session_timeout".to_string(),
+                viewer_count: Some(9),
+                provider_error_count: 0,
+                last_provider_error: None,
+            },
+            messages: vec![SmalltalkMessage {
+                generated_at: now + ChronoDuration::minutes(30),
+                generated_text: "der ult kam echt spaet".to_string(),
+                trigger_text: "gg".to_string(),
+                outcome: "would_send".to_string(),
+                reject_reason: None,
+            }],
+            transcripts: vec![
+                SmalltalkTranscript {
+                    started_at: now,
+                    ended_at: now + ChronoDuration::seconds(45),
+                    text: "viel zu alt fuer den kontext".to_string(),
+                    engine: "openai_api".to_string(),
+                    model: Some("whisper-1".to_string()),
+                },
+                SmalltalkTranscript {
+                    started_at: now + ChronoDuration::minutes(29),
+                    ended_at: now + ChronoDuration::minutes(29) + ChronoDuration::seconds(45),
+                    text: "ich haette den ult frueher zuenden muessen".to_string(),
+                    engine: "openai_api".to_string(),
+                    model: Some("whisper-1".to_string()),
+                },
+                SmalltalkTranscript {
+                    started_at: now + ChronoDuration::minutes(40),
+                    ended_at: now + ChronoDuration::minutes(40) + ChronoDuration::seconds(45),
+                    text: "das kam erst nach der nachricht".to_string(),
+                    engine: "openai_api".to_string(),
+                    model: Some("whisper-1".to_string()),
+                },
+            ],
+        };
+
+        let copy_text = DiscordCopy::test_copy();
+        let payload = build_discord_card(&report, 123, &copy_text).expect("Discord-Karte");
+        let components = payload.components.expect("Components");
+        let zusammenfassung = components[0]["components"][0]["content"]
+            .as_str()
+            .expect("Zusammenfassung");
+        let nachricht = components[0]["components"][1]["content"]
+            .as_str()
+            .expect("Nachricht");
+
+        assert!(
+            zusammenfassung.contains(&copy_text.transcripts)
+                && zusammenfassung.contains("3 Abschnitte"),
+            "die Sitzung muss ausweisen, wie viel Ton erfasst wurde: {zusammenfassung}"
+        );
+        assert!(
+            nachricht.contains("ich haette den ult frueher zuenden muessen"),
+            "der Abschnitt vor der Nachricht gehoert dazu: {nachricht}"
+        );
+        assert!(
+            !nachricht.contains("viel zu alt")
+                && !nachricht.contains("das kam erst nach der nachricht"),
+            "weder alter noch spaeterer Ton darf einen Zusammenhang vortaeuschen: {nachricht}"
+        );
+    }
+
+    /// Eine Sitzung ohne Ton ist ein Ergebnis, kein Anlass, das Feld
+    /// wegzulassen: sonst saehe "STT war aus" wie "der Streamer schwieg" aus.
+    #[test]
+    fn discord_karte_weist_fehlenden_stream_ton_aus() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 13, 20, 0, 0).unwrap();
+        let report = SmalltalkReport {
+            session: ReportSession {
+                id: Uuid::nil(),
+                channel_login: "kandidat".to_string(),
+                started_at: now,
+                ended_at: now + ChronoDuration::minutes(20),
+                end_reason: "stream_ended".to_string(),
+                viewer_count: None,
+                provider_error_count: 0,
+                last_provider_error: None,
+            },
+            messages: vec![],
+            transcripts: vec![],
+        };
+
+        let copy_text = DiscordCopy::test_copy();
+        let payload = build_discord_card(&report, 123, &copy_text).expect("Discord-Karte");
+        let text = payload.components.expect("Components")[0]["components"][0]["content"]
+            .as_str()
+            .expect("Kartentext")
+            .to_string();
+
+        assert!(text.contains(&copy_text.transcripts));
+        assert!(text.contains(&copy_text.transcripts_missing));
     }
 }
