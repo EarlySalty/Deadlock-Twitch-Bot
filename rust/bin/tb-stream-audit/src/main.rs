@@ -111,6 +111,9 @@ Stream-Audio dorthin zu senden.",
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Abbruch angefordert");
         }
+        _ = abschaltsignal() => {
+            tracing::info!("SIGTERM erhalten, beende");
+        }
         ergebnis = aufnahme => {
             arbeiter_ende_melden("Aufnahmeschleife", ergebnis);
             std::process::exit(1);
@@ -120,6 +123,22 @@ Stream-Audio dorthin zu senden.",
             std::process::exit(1);
         }
     }
+}
+
+/// Wartet auf SIGTERM.
+///
+/// systemd stoppt mit SIGTERM, nicht mit Ctrl-C. Ohne diesen Zweig endet der
+/// Prozess erst im Kill nach der Stoppfrist - mitten in einer Aufnahme und
+/// ohne Chance, sauber aufzuhoeren.
+async fn abschaltsignal() {
+    let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    else {
+        // Ohne Signalbehandlung nie fertig werden, sonst gilt der select-Zweig
+        // sofort als erfuellt und der Dienst beendet sich beim Start.
+        std::future::pending::<()>().await;
+        return;
+    };
+    signal.recv().await;
 }
 
 /// Schreibt ins Journal, warum ein Arbeiter endete - mit Panik-Text, falls es
@@ -146,10 +165,9 @@ fn arbeiter_ende_melden(name: &str, ergebnis: Result<(), tokio::task::JoinError>
 /// Blocknummer sind aus dem Dateinamen nicht mehr rekonstruierbar, deshalb
 /// laufen sie als eigener Lauf "wiederaufnahme" mit fortlaufender Nummer.
 async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlange>>) {
-    let wurzel = aufnahme_wurzel();
-    let Ok(mut eintraege) = tokio::fs::read_dir(&wurzel).await else {
-        return;
-    };
+    let mut aufnahmen = Vec::new();
+    ts_dateien_sammeln(&aufnahme_wurzel(), &mut aufnahmen).await;
+
     // Eigene Kennung je Neustart, sonst ueberschreibt die naechste
     // Wiederaufnahme die Berichte der vorigen. Sie greift nur, wenn der
     // Zettel fehlt.
@@ -161,31 +179,16 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
     let mut gefunden = 0usize;
     let mut ohne_zettel = 0usize;
 
-    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
-        let mut dateien = match tokio::fs::read_dir(eintrag.path()).await {
-            Ok(dateien) => dateien,
-            Err(fehler) => {
-                // Weitermachen statt abbrechen: ein unlesbarer Ordner darf
-                // nicht alle folgenden Aufnahmen mitnehmen.
-                tracing::warn!(?fehler, ordner = ?eintrag.path(), "Ordner nicht lesbar");
-                continue;
+    for pfad in aufnahmen {
+        let block = match zettel_lesen(&pfad).await {
+            Some(block) => block,
+            None => {
+                ohne_zettel += 1;
+                ersatz.block_fertig(pfad.to_string_lossy().to_string(), 0)
             }
         };
-        while let Ok(Some(datei)) = dateien.next_entry().await {
-            let pfad = datei.path();
-            if pfad.extension().and_then(|e| e.to_str()) != Some("ts") {
-                continue;
-            }
-            let block = match zettel_lesen(&pfad).await {
-                Some(block) => block,
-                None => {
-                    ohne_zettel += 1;
-                    ersatz.block_fertig(pfad.to_string_lossy().to_string(), 0)
-                }
-            };
-            warteschlange.lock().await.einreihen(block);
-            gefunden += 1;
-        }
+        warteschlange.lock().await.einreihen(block);
+        gefunden += 1;
     }
 
     if ohne_zettel > 0 {
@@ -194,45 +197,83 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
             "Aufnahmen ohne Zettel gefunden - Kanal und Zeitversatz sind fuer sie verloren"
         );
     }
-
     if gefunden > 0 {
         tracing::info!(gefunden, "liegengebliebene Aufnahmen wieder eingereiht");
+    }
+}
+
+/// Sammelt `.ts`-Dateien unterhalb eines Ordners.
+///
+/// Die Aufnahmen liegen inzwischen mehrere Ebenen tief
+/// (`<kanal>/<lauf>/t<versatz>/<capture>/audio.ts`). Ein unlesbarer Ordner
+/// beendet die Suche nicht - sonst nimmt eine kaputte Ecke alle folgenden
+/// Aufnahmen mit.
+async fn ts_dateien_sammeln(ordner: &Path, raus: &mut Vec<PathBuf>) {
+    let mut zu_lesen = vec![ordner.to_path_buf()];
+    while let Some(aktuell) = zu_lesen.pop() {
+        let mut eintraege = match tokio::fs::read_dir(&aktuell).await {
+            Ok(eintraege) => eintraege,
+            Err(fehler) => {
+                if aktuell != ordner {
+                    tracing::warn!(?fehler, ordner = ?aktuell, "Ordner nicht lesbar");
+                }
+                continue;
+            }
+        };
+        while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+            let pfad = eintrag.path();
+            match eintrag.file_type().await {
+                Ok(typ) if typ.is_dir() => zu_lesen.push(pfad),
+                Ok(_) if pfad.extension().and_then(|e| e.to_str()) == Some("ts") => raus.push(pfad),
+                _ => {}
+            }
+        }
     }
 }
 
 /// Dateiname des Zettels neben der Aufnahme.
 const ZETTEL: &str = "block.json";
 
-/// Legt Kanal, Lauf, Blocknummer und Zeitversatz neben die Aufnahme.
+/// Legt Kanal, Lauf, Blocknummer und Zeitversatz in den Blockordner, **bevor**
+/// die Aufnahme laeuft.
 ///
-/// Das Capture-Verzeichnis heisst nach einem Zufallswert; aus dem Pfad
-/// allein ist nach einem Neustart nicht mehr zu erkennen, von wem die
-/// Aufnahme stammt und an welcher Stelle der Sendung sie sass. Ohne den
-/// Zettel liefe jede Wiederaufnahme unter dem Kanalnamen "wiederaufnahme"
-/// und mit Zeitversatz 0 - ein Bericht, der niemanden mehr zuordnet.
-async fn zettel_schreiben(block: &plan::Block) {
-    let Some(verzeichnis) = Path::new(&block.datei).parent() else {
-        return;
-    };
+/// Das Capture-Verzeichnis darunter heisst nach einem Zufallswert; aus dem
+/// Pfad allein ist nach einem Neustart nicht zu erkennen, von wem die Aufnahme
+/// stammt und an welcher Stelle der Sendung sie sass. Ein Stopp durch systemd
+/// trifft mitten in die zehn Minuten - wer den Zettel erst danach schreibt,
+/// laesst genau die angebrochene Aufnahme ohne Zuordnung zurueck.
+async fn zettel_schreiben(
+    blockordner: &Path,
+    kanal: &str,
+    lauf: &str,
+    nummer: u32,
+    versatz_sekunden: u64,
+) {
     let inhalt = serde_json::json!({
-        "kanal": block.kanal,
-        "lauf": block.lauf,
-        "nummer": block.nummer,
-        "versatz_sekunden": block.versatz_sekunden,
-        "datei": block.datei,
+        "kanal": kanal,
+        "lauf": lauf,
+        "nummer": nummer,
+        "versatz_sekunden": versatz_sekunden,
     });
     if let Err(fehler) =
-        nur_fuer_mich(&verzeichnis.join(ZETTEL), inhalt.to_string().as_bytes()).await
+        nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await
     {
         tracing::warn!(fehler, "Zettel nicht geschrieben");
     }
 }
 
-/// Liest den Zettel neben einer liegengebliebenen Aufnahme.
+/// Liest den Zettel zu einer liegengebliebenen Aufnahme.
+///
+/// Der Zettel liegt im Blockordner, die Aufnahme eine Ebene tiefer im
+/// Capture-Verzeichnis; gesucht wird deshalb in beiden.
 async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
-    let roh = tokio::fs::read_to_string(aufnahme.parent()?.join(ZETTEL))
-        .await
-        .ok()?;
+    let capture = aufnahme.parent()?;
+    let roh = match tokio::fs::read_to_string(capture.join(ZETTEL)).await {
+        Ok(roh) => roh,
+        Err(_) => tokio::fs::read_to_string(capture.parent()?.join(ZETTEL))
+            .await
+            .ok()?,
+    };
     let json: serde_json::Value = serde_json::from_str(&roh).ok()?;
     Some(plan::Block {
         kanal: json["kanal"].as_str()?.to_owned(),
@@ -241,6 +282,7 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         versatz_sekunden: json["versatz_sekunden"].as_u64()?,
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
+        frueherstens: 0,
     })
 }
 
@@ -378,6 +420,17 @@ async fn aufnahme_schleife(
             if laufend.contains_key(kanal) {
                 continue;
             }
+            // Ein Zustand aus einer anderen Sendung darf nicht weiterlaufen:
+            // Endet ein Stream und startet zwischen zwei Takten neu, erbte die
+            // neue Sendung sonst Lauf-Kennung, Zeitversatz und Deckel der
+            // alten.
+            let passend = staende
+                .get(kanal)
+                .map(|z| z.lauf == sendung.id.trim())
+                .unwrap_or(false);
+            if !passend {
+                staende.remove(kanal);
+            }
             let zustand = staende.remove(kanal).unwrap_or_else(|| {
                 // Kennung und Startzeit kommen von Twitch. Die Stream-ID ist
                 // ueber einen Neustart des Dienstes hinweg dieselbe, und der
@@ -424,17 +477,30 @@ async fn kanal_aufnehmen(
             return zustand;
         };
 
-        let wurzel = aufnahme_wurzel();
-        if let Err(fehler) = tokio::fs::create_dir_all(&wurzel).await {
+        // Eigener Ordner je Block, mit dem Zettel darin, bevor aufgenommen wird.
+        let blockordner = aufnahme_wurzel()
+            .join(&kanal)
+            .join(&zustand.lauf)
+            .join(format!("t{:06}", zustand.sendungssekunden()));
+        if let Err(fehler) = tokio::fs::create_dir_all(&blockordner).await {
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
             return zustand;
         }
+        zettel_schreiben(
+            &blockordner,
+            &kanal,
+            &zustand.lauf,
+            zustand.bloecke + 1,
+            zustand.sendungssekunden(),
+        )
+        .await;
+
         match capturer
             .capture(
                 &kanal,
                 laenge,
                 tb_engagement::audio_capture::DEFAULT_QUALITY,
-                Some(&wurzel),
+                Some(&blockordner),
             )
             .await
         {
@@ -443,7 +509,6 @@ async fn kanal_aufnehmen(
                     aufgenommen.media_path.to_string_lossy().to_string(),
                     aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
                 );
-                zettel_schreiben(&block).await;
                 tracing::info!(
                     kanal,
                     block = block.nummer,
@@ -463,9 +528,6 @@ async fn kanal_aufnehmen(
     }
 }
 
-/// Grundpause vor einer Wiederholung, mit dem Versuch multipliziert.
-const WIEDERHOLUNGS_PAUSE_SEKUNDEN: u64 = 120;
-
 /// Wie oft die Aufbewahrung greift.
 const AUFRAEUM_TAKT_SEKUNDEN: u64 = 60 * 60;
 
@@ -479,7 +541,9 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
     if tage == 0 {
         return;
     }
-    let grenze = Duration::from_secs(tage * 24 * 60 * 60);
+    // saturating: eine absurd grosse Zahl in der Konfiguration soll nicht
+    // ueberlaufen und aus "sehr lange" ein "sofort loeschen" machen.
+    let grenze = Duration::from_secs(tage.saturating_mul(24 * 60 * 60));
     // Berichte liegen unter <ausgabe>/<kanal>/. Ein Aufraeumen, das nur die
     // oberste Ebene liest, findet keinen einzigen davon.
     let mut ordner = vec![konfiguration.ausgabe.clone()];
@@ -562,25 +626,36 @@ async fn auswertungs_schleife(
         };
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
-            Ok(()) => {
+            Ok(Aufnahmeschicksal::Behalten) => {
+                tracing::warn!(
+                    block = %block.bezeichnung(),
+                    "Aufnahme bleibt liegen - der Bericht taugt nicht als Nachweis"
+                );
+            }
+            Ok(Aufnahmeschicksal::Loeschen) => {
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
                 // Fehler loescht, vernichtet bei einem Aussetzer der
                 // Transkription den einzigen Beleg, den es je gab.
                 let pfad = PathBuf::from(&block.datei);
                 if let Some(verzeichnis) = pfad.parent() {
-                    let _ = tokio::fs::remove_dir_all(verzeichnis).await;
+                    // Bleibt die Aufnahme liegen, wird sie nach dem naechsten
+                    // Neustart erneut ausgewertet und gemeldet. Das gehoert
+                    // ins Journal, nicht ins Nichts.
+                    if let Err(fehler) = tokio::fs::remove_dir_all(verzeichnis).await {
+                        tracing::warn!(
+                            ?fehler,
+                            ordner = ?verzeichnis,
+                            "Aufnahme nicht geloescht - sie laeuft nach einem Neustart erneut"
+                        );
+                    }
                 }
             }
             Err(fehler) => {
                 let bezeichnung = block.bezeichnung();
                 let versuch = block.versuche + 1;
-                // Ohne Pause sind die drei Versuche in Sekunden verbraucht.
-                // Der haeufigste Grund ist ein STT-Dienst, der gerade neu
-                // startet - der braucht laenger als drei Anlaeufe am Stueck.
-                tokio::time::sleep(Duration::from_secs(
-                    WIEDERHOLUNGS_PAUSE_SEKUNDEN * u64::from(versuch),
-                ))
-                .await;
+                // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
+                // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
+                // mit an, wegen eines Blocks, der gerade nicht geht.
                 if warteschlange.lock().await.erneut_versuchen(block) {
                     tracing::warn!(
                         block = %bezeichnung,
@@ -602,28 +677,43 @@ async fn auswertungs_schleife(
     }
 }
 
+/// Was nach der Auswertung mit der Aufnahme geschieht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Aufnahmeschicksal {
+    /// Alles ausgewertet und gemeldet - die Aufnahme kann weg.
+    Loeschen,
+    /// Ausgewertet, aber das Ergebnis ist nicht vertrauenswuerdig. Die
+    /// Aufnahme bleibt liegen, damit noch jemand hineinhoeren kann.
+    Behalten,
+}
+
 async fn block_auswerten(
     transkribierer: &OpenAiTranscriber,
     konfiguration: &Konfiguration,
     block: &plan::Block,
-) -> Result<(), String> {
+) -> Result<Aufnahmeschicksal, String> {
     let transkript = transkribierer
         .transcribe_clip(Path::new(&block.datei))
         .await
         .map_err(|e| format!("Transkription: {e}"))?;
 
     let segmente = segmente_bauen(block, &transkript.text, transkript.duration_seconds);
-    if segmente.is_empty() {
-        // Frueher endete der Block hier ohne Bericht, und die Aufnahme wurde
-        // danach geloescht. Es blieb nichts zurueck, das belegt haette, dass
-        // ueberhaupt jemand hingesehen hat - ein stiller Ausfall der
-        // Transkription sah aus wie eine ruhige Stunde.
-        tracing::info!(block = %block.bezeichnung(), "kein Text im Block");
+    // Ein leerer Block ist keine ruhige Stunde, sondern ein unklarer Befund:
+    // stille Passage oder ausgefallene Transkription, von aussen nicht zu
+    // unterscheiden. Er wird gemeldet, und die Aufnahme bleibt liegen.
+    let leer = segmente.is_empty();
+    if leer {
+        tracing::warn!(block = %block.bezeichnung(), "kein Text im Block");
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
-    let (modell_funde, modell_hinweis) = modellfunde(&segmente).await;
+    let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
+    let modell_hinweis = if leer {
+        Some("Transkription lieferte keinen Text; nichts geprueft".to_owned())
+    } else {
+        modell_fehler
+    };
     let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
@@ -648,8 +738,15 @@ async fn block_auswerten(
     // Ein Fund, dessen Meldung nie ankam, ist kein erledigter Block. Schlaegt
     // die DM fehl, geht der Block zurueck in die Warteschlange statt die
     // Aufnahme zu loeschen - sonst verschwindet der einzige Hinweis still.
-    dm_senden(&bericht).await?;
-    Ok(())
+    // Der Idempotenzschluessel haengt an der Blockbezeichnung, nicht an der
+    // Lauf-ID: die entsteht bei jedem Versuch neu, und der Broker koennte die
+    // Wiederholung dann nicht als solche erkennen.
+    dm_senden(&bericht, &block.bezeichnung()).await?;
+    Ok(if leer {
+        Aufnahmeschicksal::Behalten
+    } else {
+        Aufnahmeschicksal::Loeschen
+    })
 }
 
 /// Teilt den Blocktext in Segmente und rechnet die Zeit ueber den Textanteil.
@@ -742,7 +839,10 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             "response_format": {"type": "json_object"},
         });
         let antwort = client
-            .post(format!("{}/chat/completions", endpunkt.base_url))
+            .post(format!(
+                "{}/chat/completions",
+                endpunkt.base_url.trim_end_matches('/')
+            ))
             .bearer_auth(&schluessel)
             .json(&anfrage)
             .send()
@@ -769,7 +869,19 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             continue;
         };
         match serde_json::from_str::<llm::ModellAntwort>(json) {
-            Ok(geparst) => raus.extend(llm::zu_funden(&geparst, stapel)),
+            Ok(geparst) => {
+                let (funde, verworfen) = llm::zu_funden_gezaehlt(&geparst, stapel);
+                if verworfen > 0 {
+                    // Erfundene Segment-IDs heissen: die Antwort passt nicht
+                    // zur Anfrage. Das darf nicht als saubere Pruefung
+                    // durchgehen.
+                    tracing::warn!(verworfen, "Modellfunde mit unbekannter Segment-ID");
+                    fehler_gesehen.get_or_insert_with(|| {
+                        format!("{verworfen} Modellfunde mit unbekannter Segment-ID verworfen")
+                    });
+                }
+                raus.extend(funde);
+            }
             Err(fehler) => {
                 tracing::warn!(?fehler, "Modellantwort unlesbar");
                 fehler_gesehen.get_or_insert_with(|| "Modellantwort unlesbar".to_owned());
@@ -839,7 +951,7 @@ async fn schreiben(
 
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
 /// nach dem ersten Abend Rauschen, das niemand mehr liest.
-async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
+async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     // Ohne Funde gibt es nichts zu melden - je Block eine DM "alles ruhig"
     // waere bei drei Kanaelen im Zehnminutentakt nur noch Rauschen. Eine
     // Ausnahme: lief der Modellschritt nicht, ist Stille irrefuehrend, denn
@@ -864,7 +976,7 @@ async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
         // der Broker erkennt die Wiederholung daran.
         .header(
             melden::IDEMPOTENZ_KOPF,
-            melden::idempotenz_schluessel(&bericht.lauf_id),
+            melden::idempotenz_schluessel(schluessel),
         )
         .json(&anfrage)
         .send()
@@ -891,6 +1003,7 @@ mod tests {
             versatz_sekunden: versatz,
             datei: "/tmp/egal.ts".to_owned(),
             versuche: 0,
+            frueherstens: 0,
         }
     }
 
@@ -1025,41 +1138,41 @@ mod tests {
         // Ohne Zettel liefe jede wiederaufgenommene Datei als Kanal
         // "wiederaufnahme" mit Zeitversatz 0 durch - der Bericht ordnete
         // dann niemandem etwas zu.
-        let ordner =
+        let blockordner =
             std::env::temp_dir().join(format!("stream-audit-zettel-{}", std::process::id()));
-        let _ = tokio::fs::remove_dir_all(&ordner).await;
-        tokio::fs::create_dir_all(&ordner).await.expect("Ordner");
-        let aufnahme = ordner.join("audio.ts");
+        let _ = tokio::fs::remove_dir_all(&blockordner).await;
+        // Die Aufnahme liegt eine Ebene tiefer, so wie streamlink sie ablegt.
+        let capture = blockordner.join("capture-abc123");
+        tokio::fs::create_dir_all(&capture).await.expect("Ordner");
+        let aufnahme = capture.join("audio.ts");
         tokio::fs::write(&aufnahme, b"nicht wirklich audio")
             .await
             .expect("schreiben");
 
-        let quelle = plan::Block {
-            kanal: "helmbombenricky".to_owned(),
-            lauf: "20260813T120000Z".to_owned(),
-            nummer: 7,
-            versatz_sekunden: 3600,
-            datei: aufnahme.to_string_lossy().to_string(),
-            versuche: 2,
-        };
-        zettel_schreiben(&quelle).await;
+        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600).await;
 
         let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
         assert_eq!(gelesen.kanal, "helmbombenricky");
-        assert_eq!(gelesen.lauf, "20260813T120000Z");
+        assert_eq!(gelesen.lauf, "4711");
         assert_eq!(gelesen.nummer, 7);
         assert_eq!(gelesen.versatz_sekunden, 3600);
         assert_eq!(
             gelesen.versuche, 0,
             "Versuche zaehlen nach dem Neustart neu"
         );
+        assert_eq!(gelesen.datei, aufnahme.to_string_lossy());
+
+        // Die rekursive Suche findet die Aufnahme trotz der Zwischenebene.
+        let mut gefunden = Vec::new();
+        ts_dateien_sammeln(&blockordner, &mut gefunden).await;
+        assert_eq!(gefunden, vec![aufnahme.clone()]);
 
         // Ohne Zettel gibt es nichts zu lesen, und der Aufrufer faellt zurueck.
-        tokio::fs::remove_file(ordner.join("block.json"))
+        tokio::fs::remove_file(blockordner.join("block.json"))
             .await
             .expect("Zettel entfernen");
         assert!(zettel_lesen(&aufnahme).await.is_none());
-        let _ = tokio::fs::remove_dir_all(&ordner).await;
+        let _ = tokio::fs::remove_dir_all(&blockordner).await;
     }
 
     #[test]

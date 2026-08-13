@@ -40,7 +40,15 @@ pub struct Block {
     /// Wie oft die Auswertung dieses Blocks schon fehlschlug.
     #[doc(hidden)]
     pub versuche: u32,
+    /// Unix-Zeit, vor der dieser Block nicht wieder drankommt.
+    #[doc(hidden)]
+    pub frueherstens: i64,
 }
+
+/// Grundpause vor der Wiederholung, mit dem Versuch multipliziert. Der
+/// haeufigste Grund fuer einen Fehlschlag ist ein STT-Dienst, der gerade neu
+/// startet; der braucht laenger als drei Anlaeufe am Stueck.
+pub const PAUSE_SEKUNDEN: i64 = 120;
 
 /// So oft wird ein Block nach einem Fehlschlag erneut eingereiht. Ein
 /// Aussetzer der Transkription darf die einzige Aufnahme nicht verbrennen,
@@ -48,10 +56,15 @@ pub struct Block {
 pub const MAX_VERSUCHE: u32 = 3;
 
 impl Block {
-    /// Name im Bericht: Kanal, Sendung und Blocknummer. Dreistellig, damit die
-    /// Sortierung nach Name auch der Reihenfolge entspricht.
+    /// Name im Bericht: Kanal, Sendung und Sekunde in der Sendung.
+    ///
+    /// Frueher stand hier die laufende Blocknummer. Startete der Dienst
+    /// mitten in derselben Sendung neu, begann sie wieder bei 1 - und die
+    /// neuen Berichte ueberschrieben die alten unter demselben Namen. Der
+    /// Zeitversatz ist innerhalb einer Sendung eindeutig und sortiert
+    /// nebenbei richtig.
     pub fn bezeichnung(&self) -> String {
-        format!("{}-{}-block{:03}", self.kanal, self.lauf, self.nummer)
+        format!("{}-{}-t{:06}", self.kanal, self.lauf, self.versatz_sekunden)
     }
 
     /// Segment-ID-Praefix fuer diesen Block.
@@ -70,6 +83,13 @@ pub struct Warteschlange {
     eintraege: VecDeque<Block>,
 }
 
+/// Mindestlaenge eines Blocks.
+///
+/// Der `AudioCapturer` lehnt alles unter fuenf Sekunden ab. Ein Restblock von
+/// zwei Sekunden waere also kein Block, sondern eine Aufnahme, die jede
+/// Minute neu startet und jedes Mal scheitert.
+pub const MIND_BLOCK_SEKUNDEN: u64 = 5;
+
 impl Warteschlange {
     pub fn new() -> Self {
         Self::default()
@@ -79,8 +99,21 @@ impl Warteschlange {
         self.eintraege.push_back(block);
     }
 
+    /// Naechster faelliger Block.
+    ///
+    /// Ein Block, der nach einem Fehlschlag wartet, blockiert die anderen
+    /// nicht: er wird uebersprungen, bis seine Wartezeit um ist.
     pub fn naechster(&mut self) -> Option<Block> {
-        self.eintraege.pop_front()
+        self.naechster_um(chrono::Utc::now().timestamp())
+    }
+
+    /// Wie [`Warteschlange::naechster`], aber mit vorgegebener Uhrzeit.
+    pub fn naechster_um(&mut self, jetzt: i64) -> Option<Block> {
+        let stelle = self
+            .eintraege
+            .iter()
+            .position(|b| b.frueherstens <= jetzt)?;
+        self.eintraege.remove(stelle)
     }
 
     /// Reiht einen fehlgeschlagenen Block hinten wieder ein, bis die Versuche
@@ -89,11 +122,21 @@ impl Warteschlange {
     ///
     /// Gibt `false` zurueck, wenn aufgegeben wurde - dann bleibt die Aufnahme
     /// liegen und muss von Hand angesehen werden.
-    pub fn erneut_versuchen(&mut self, mut block: Block) -> bool {
+    pub fn erneut_versuchen(&mut self, block: Block) -> bool {
+        self.erneut_versuchen_um(block, chrono::Utc::now().timestamp())
+    }
+
+    /// Wie [`Warteschlange::erneut_versuchen`], aber mit vorgegebener Uhrzeit.
+    ///
+    /// Die Pause steht am Block, nicht im Arbeiter. Ein Schlaf im Arbeiter
+    /// haette alle anderen Kanaele mit angehalten - wegen eines Blocks, der
+    /// gerade nicht geht.
+    pub fn erneut_versuchen_um(&mut self, mut block: Block, jetzt: i64) -> bool {
         block.versuche += 1;
         if block.versuche >= MAX_VERSUCHE {
             return false;
         }
+        block.frueherstens = jetzt + (PAUSE_SEKUNDEN * i64::from(block.versuche));
         self.eintraege.push_back(block);
         true
     }
@@ -163,7 +206,7 @@ impl Aufnahme {
     pub fn naechste_blocklaenge(&self) -> Option<u64> {
         let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.sendungssekunden());
         match rest {
-            0 => None,
+            r if r < MIND_BLOCK_SEKUNDEN => None,
             r if r < BLOCK_SEKUNDEN => Some(r),
             _ => Some(BLOCK_SEKUNDEN),
         }
@@ -181,6 +224,7 @@ impl Aufnahme {
             versatz_sekunden: versatz,
             datei: datei.into(),
             versuche: 0,
+            frueherstens: 0,
         }
     }
 }
@@ -190,17 +234,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bezeichnung_sortiert_nach_nummer() {
-        let mut namen: Vec<_> = [10u32, 2, 1]
+    fn bezeichnung_sortiert_nach_sendungszeit() {
+        let mut namen: Vec<_> = [6000u64, 1200, 600]
             .iter()
-            .map(|n| {
+            .map(|sekunde| {
                 Block {
                     kanal: "kanal".to_owned(),
                     lauf: "L1".to_owned(),
-                    nummer: *n,
-                    versatz_sekunden: 0,
+                    nummer: 1,
+                    versatz_sekunden: *sekunde,
                     datei: "x.ts".to_owned(),
                     versuche: 0,
+                    frueherstens: 0,
                 }
                 .bezeichnung()
             })
@@ -208,11 +253,7 @@ mod tests {
         namen.sort();
         assert_eq!(
             namen,
-            vec![
-                "kanal-L1-block001",
-                "kanal-L1-block002",
-                "kanal-L1-block010"
-            ]
+            vec!["kanal-L1-t000600", "kanal-L1-t001200", "kanal-L1-t006000"]
         );
     }
 
@@ -227,6 +268,7 @@ mod tests {
                 versatz_sekunden: 0,
                 datei: format!("{n}.ts"),
                 versuche: 0,
+                frueherstens: 0,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -248,6 +290,7 @@ mod tests {
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
                 versuche: 0,
+                frueherstens: 0,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -267,6 +310,7 @@ mod tests {
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
                 versuche: 0,
+                frueherstens: 0,
             });
         }
         assert_eq!(w.kanal_verwerfen("a"), 2);
@@ -281,10 +325,12 @@ mod tests {
         let erster = a.block_fertig("1.ts", 60);
         let zweiter = a.block_fertig("2.ts", 60);
         w.einreihen(zweiter);
-        assert!(w.erneut_versuchen(erster));
-        // Der kaputte Block blockiert die anderen nicht.
-        assert_eq!(w.naechster().unwrap().datei, "2.ts");
-        assert_eq!(w.naechster().unwrap().datei, "1.ts");
+        assert!(w.erneut_versuchen_um(erster, 1000));
+        // Der wartende Block blockiert die anderen nicht: der gesunde kommt
+        // sofort, der kaputte erst nach seiner Pause.
+        assert_eq!(w.naechster_um(1000).unwrap().datei, "2.ts");
+        assert!(w.naechster_um(1000).is_none(), "Pause laeuft noch");
+        assert_eq!(w.naechster_um(1000 + PAUSE_SEKUNDEN).unwrap().datei, "1.ts");
     }
 
     #[test]
@@ -292,9 +338,11 @@ mod tests {
         let mut w = Warteschlange::new();
         let mut a = Aufnahme::starten("k", "L1");
         let mut block = a.block_fertig("1.ts", 60);
+        let mut jetzt = 1000;
         for _ in 0..MAX_VERSUCHE - 1 {
-            assert!(w.erneut_versuchen(block.clone()));
-            block = w.naechster().unwrap();
+            assert!(w.erneut_versuchen_um(block.clone(), jetzt));
+            jetzt += PAUSE_SEKUNDEN * i64::from(MAX_VERSUCHE);
+            block = w.naechster_um(jetzt).unwrap();
         }
         assert!(!w.erneut_versuchen(block));
         assert!(w.ist_leer());
@@ -357,8 +405,9 @@ mod tests {
             versatz_sekunden: 1200,
             datei: "x.ts".to_owned(),
             versuche: 0,
+            frueherstens: 0,
         };
-        assert_eq!(block.segment_id(7), "deadlockgermany-L1-block003-s00007");
+        assert_eq!(block.segment_id(7), "deadlockgermany-L1-t001200-s00007");
     }
 }
 
