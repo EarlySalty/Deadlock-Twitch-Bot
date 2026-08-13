@@ -54,11 +54,20 @@ pub fn kanaele_lesen(roh: &str) -> Vec<String> {
     raus
 }
 
+/// Nur bekannte Ja-Werte gelten als wahr.
+///
+/// Frueher war jeder unbekannte Wert wahr. Ein Tippfehler wie `flase` hiess
+/// damit "Rohtranskripte fremder Menschen behalten" - genau die Richtung, in
+/// die ein Vertipper nicht kippen darf.
 fn wahrheit(roh: &str, standard: bool) -> bool {
     match roh.trim().to_lowercase().as_str() {
         "" => standard,
+        "1" | "true" | "on" | "yes" | "ja" => true,
         "0" | "false" | "off" | "no" | "nein" => false,
-        _ => true,
+        andere => {
+            tracing::warn!(wert = andere, "unbekannter Schalterwert, nehme Standard");
+            standard
+        }
     }
 }
 

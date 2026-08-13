@@ -80,14 +80,21 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
 /// Doppelte Funde zusammenfassen: derselbe Wortlaut im selben Segment ist ein
 /// Fund, auch wenn Regel und Modell ihn beide melden. Der Regel-Erkenner
 /// gewinnt, weil er reproduzierbar ist.
+/// Fasst denselben Fund aus beiden Erkennern zusammen; die Regel gewinnt.
+///
+/// Zusammengefasst wird ueber Segment und Kategorie, nicht ueber den Hash:
+/// ein Regelfund hasht seinen Ausschnitt, ein Modellfund das ganze Segment.
+/// Genau derselbe Vorfall hatte damit zwei verschiedene Hashes und stand
+/// zweimal im Bericht - die Zusammenfassung griff nur, wenn beide Funde aus
+/// derselben Quelle stammten.
 pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
     funde.sort_by(|a, b| {
         a.segment_id
             .cmp(&b.segment_id)
-            .then_with(|| a.zitat_hash.cmp(&b.zitat_hash))
+            .then_with(|| a.kategorie.cmp(&b.kategorie))
             .then_with(|| (a.erkenner != "regel").cmp(&(b.erkenner != "regel")))
     });
-    funde.dedup_by(|a, b| a.segment_id == b.segment_id && a.zitat_hash == b.zitat_hash);
+    funde.dedup_by(|a, b| a.segment_id == b.segment_id && a.kategorie == b.kategorie);
     funde
 }
 
@@ -135,14 +142,40 @@ mod tests {
 
     #[test]
     fn gleicher_fund_aus_zwei_erkennern_wird_zusammengefasst() {
-        let mut a = regelfunde(&[segment("s1", "du schwuchtel")]);
-        let mut b = a.clone();
-        b[0].erkenner = "modell".to_owned();
-        a.append(&mut b);
-        assert_eq!(a.len(), 2);
-        let zusammen = funde_zusammenfassen(a);
+        // Der Modellfund entsteht wie im Betrieb: er belegt das ganze Segment,
+        // der Regelfund nur seinen Ausschnitt. Die Hashes sind deshalb
+        // verschieden - zusammengefasst wird trotzdem.
+        let mut funde = regelfunde(&[segment("s1", "du schwuchtel")]);
+        let ganzes_segment = "irgendwas davor du schwuchtel und noch etwas danach";
+        funde.push(Fund {
+            segment_id: funde[0].segment_id.clone(),
+            start_sekunden: funde[0].start_sekunden,
+            ende_sekunden: funde[0].ende_sekunden,
+            kategorie: funde[0].kategorie.clone(),
+            schwere: funde[0].schwere.clone(),
+            erkenner: "modell".to_owned(),
+            sicherheit: "medium".to_owned(),
+            begruendung: "Modellbegruendung".to_owned(),
+            zitat_redigiert: rules::redact_text(ganzes_segment),
+            zitat_hash: rules::evidence_hash(ganzes_segment),
+        });
+        assert_ne!(
+            funde[0].zitat_hash, funde[1].zitat_hash,
+            "die Belege unterscheiden sich - genau darum ging der Fehler"
+        );
+        let zusammen = funde_zusammenfassen(funde);
         assert_eq!(zusammen.len(), 1);
         assert_eq!(zusammen[0].erkenner, "regel", "Regel gewinnt gegen Modell");
+    }
+
+    #[test]
+    fn zwei_kategorien_im_selben_segment_bleiben_getrennt() {
+        let funde = regelfunde(&[segment("s1", "du schwuchtel, kill yourself")]);
+        assert_eq!(
+            funde_zusammenfassen(funde).len(),
+            2,
+            "Beleidigung und Drohung sind zwei Befunde, kein doppelter"
+        );
     }
 
     #[test]
