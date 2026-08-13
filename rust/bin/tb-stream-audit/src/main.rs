@@ -151,13 +151,15 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
         return;
     };
     // Eigene Kennung je Neustart, sonst ueberschreibt die naechste
-    // Wiederaufnahme die Berichte der vorigen.
+    // Wiederaufnahme die Berichte der vorigen. Sie greift nur, wenn der
+    // Zettel fehlt.
     let lauf = format!(
         "wiederaufnahme-{}",
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     );
-    let mut zustand = plan::Aufnahme::starten("wiederaufnahme", lauf);
+    let mut ersatz = plan::Aufnahme::starten("wiederaufnahme", lauf);
     let mut gefunden = 0usize;
+    let mut ohne_zettel = 0usize;
 
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
         let Ok(mut dateien) = tokio::fs::read_dir(eintrag.path()).await else {
@@ -168,15 +170,72 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
             if pfad.extension().and_then(|e| e.to_str()) != Some("ts") {
                 continue;
             }
-            let block = zustand.block_fertig(pfad.to_string_lossy().to_string(), 0);
+            let block = match zettel_lesen(&pfad).await {
+                Some(block) => block,
+                None => {
+                    ohne_zettel += 1;
+                    ersatz.block_fertig(pfad.to_string_lossy().to_string(), 0)
+                }
+            };
             warteschlange.lock().await.einreihen(block);
             gefunden += 1;
         }
     }
 
+    if ohne_zettel > 0 {
+        tracing::warn!(
+            ohne_zettel,
+            "Aufnahmen ohne Zettel gefunden - Kanal und Zeitversatz sind fuer sie verloren"
+        );
+    }
+
     if gefunden > 0 {
         tracing::info!(gefunden, "liegengebliebene Aufnahmen wieder eingereiht");
     }
+}
+
+/// Dateiname des Zettels neben der Aufnahme.
+const ZETTEL: &str = "block.json";
+
+/// Legt Kanal, Lauf, Blocknummer und Zeitversatz neben die Aufnahme.
+///
+/// Das Capture-Verzeichnis heisst nach einem Zufallswert; aus dem Pfad
+/// allein ist nach einem Neustart nicht mehr zu erkennen, von wem die
+/// Aufnahme stammt und an welcher Stelle der Sendung sie sass. Ohne den
+/// Zettel liefe jede Wiederaufnahme unter dem Kanalnamen "wiederaufnahme"
+/// und mit Zeitversatz 0 - ein Bericht, der niemanden mehr zuordnet.
+async fn zettel_schreiben(block: &plan::Block) {
+    let Some(verzeichnis) = Path::new(&block.datei).parent() else {
+        return;
+    };
+    let inhalt = serde_json::json!({
+        "kanal": block.kanal,
+        "lauf": block.lauf,
+        "nummer": block.nummer,
+        "versatz_sekunden": block.versatz_sekunden,
+        "datei": block.datei,
+    });
+    if let Err(fehler) =
+        nur_fuer_mich(&verzeichnis.join(ZETTEL), inhalt.to_string().as_bytes()).await
+    {
+        tracing::warn!(fehler, "Zettel nicht geschrieben");
+    }
+}
+
+/// Liest den Zettel neben einer liegengebliebenen Aufnahme.
+async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
+    let roh = tokio::fs::read_to_string(aufnahme.parent()?.join(ZETTEL))
+        .await
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&roh).ok()?;
+    Some(plan::Block {
+        kanal: json["kanal"].as_str()?.to_owned(),
+        lauf: json["lauf"].as_str()?.to_owned(),
+        nummer: json["nummer"].as_u64()? as u32,
+        versatz_sekunden: json["versatz_sekunden"].as_u64()?,
+        datei: aufnahme.to_string_lossy().to_string(),
+        versuche: 0,
+    })
 }
 
 /// Umgebungsschalter fuer einen STT-Endpunkt ausserhalb dieses Rechners.
@@ -348,6 +407,7 @@ async fn kanal_aufnehmen(
                     aufgenommen.media_path.to_string_lossy().to_string(),
                     aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
                 );
+                zettel_schreiben(&block).await;
                 tracing::info!(
                     kanal,
                     block = block.nummer,
@@ -381,30 +441,49 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
         return;
     }
     let grenze = Duration::from_secs(tage * 24 * 60 * 60);
-    let Ok(mut eintraege) = tokio::fs::read_dir(&konfiguration.ausgabe).await else {
+    // Berichte liegen unter <ausgabe>/<kanal>/. Ein Aufraeumen, das nur die
+    // oberste Ebene liest, findet keinen einzigen davon.
+    let mut ordner = vec![konfiguration.ausgabe.clone()];
+    let Ok(mut oben) = tokio::fs::read_dir(&konfiguration.ausgabe).await else {
         return;
     };
-    let mut geloescht = 0usize;
-    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
-        let pfad = eintrag.path();
-        let endung = pfad
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default();
-        if !matches!(endung, "md" | "json" | "txt") {
-            continue;
+    while let Ok(Some(eintrag)) = oben.next_entry().await {
+        if eintrag
+            .file_type()
+            .await
+            .map(|typ| typ.is_dir())
+            .unwrap_or(false)
+        {
+            ordner.push(eintrag.path());
         }
-        let Ok(daten) = eintrag.metadata().await else {
+    }
+
+    let mut geloescht = 0usize;
+    for ordner in ordner {
+        let Ok(mut eintraege) = tokio::fs::read_dir(&ordner).await else {
             continue;
         };
-        let Ok(alter) = daten
-            .modified()
-            .and_then(|m| m.elapsed().map_err(std::io::Error::other))
-        else {
-            continue;
-        };
-        if alter > grenze && tokio::fs::remove_file(&pfad).await.is_ok() {
-            geloescht += 1;
+        while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+            let pfad = eintrag.path();
+            let endung = pfad
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            if !matches!(endung, "md" | "json" | "txt") {
+                continue;
+            }
+            let Ok(daten) = eintrag.metadata().await else {
+                continue;
+            };
+            let Ok(alter) = daten
+                .modified()
+                .and_then(|m| m.elapsed().map_err(std::io::Error::other))
+            else {
+                continue;
+            };
+            if alter > grenze && tokio::fs::remove_file(&pfad).await.is_ok() {
+                geloescht += 1;
+            }
         }
     }
     if geloescht > 0 {
@@ -481,8 +560,11 @@ async fn block_auswerten(
 
     let segmente = segmente_bauen(block, &transkript.text, transkript.duration_seconds);
     if segmente.is_empty() {
+        // Frueher endete der Block hier ohne Bericht, und die Aufnahme wurde
+        // danach geloescht. Es blieb nichts zurueck, das belegt haette, dass
+        // ueberhaupt jemand hingesehen hat - ein stiller Ausfall der
+        // Transkription sah aus wie eine ruhige Stunde.
         tracing::info!(block = %block.bezeichnung(), "kein Text im Block");
-        return Ok(());
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
@@ -846,6 +928,77 @@ mod tests {
         alte_berichte_loeschen(&unbegrenzt).await;
         assert!(alt.exists(), "bei 0 Tagen darf nichts geloescht werden");
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
+    }
+
+    #[tokio::test]
+    async fn aufbewahrung_erreicht_auch_die_kanalordner() {
+        // Berichte liegen unter <ausgabe>/<kanal>/; ein Aufraeumen nur auf
+        // oberster Ebene loeschte nie einen einzigen.
+        let wurzel =
+            std::env::temp_dir().join(format!("stream-audit-kanalordner-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+        let kanalordner = wurzel.join("testkanal");
+        tokio::fs::create_dir_all(&kanalordner)
+            .await
+            .expect("Ordner");
+        let alt = kanalordner.join("alt.json");
+        tokio::fs::write(&alt, b"{}").await.expect("schreiben");
+        mtime_setzen(
+            &alt,
+            std::time::SystemTime::now() - Duration::from_secs(40 * 24 * 60 * 60),
+        );
+
+        alte_berichte_loeschen(&Konfiguration {
+            kanaele: Vec::new(),
+            ausgabe: wurzel.clone(),
+            transkript_behalten: false,
+            aufbewahrung_tage: 30,
+        })
+        .await;
+        assert!(!alt.exists(), "Bericht im Kanalordner muss weg sein");
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+    }
+
+    #[tokio::test]
+    async fn zettel_erhaelt_kanal_und_zeitversatz() {
+        // Ohne Zettel liefe jede wiederaufgenommene Datei als Kanal
+        // "wiederaufnahme" mit Zeitversatz 0 durch - der Bericht ordnete
+        // dann niemandem etwas zu.
+        let ordner =
+            std::env::temp_dir().join(format!("stream-audit-zettel-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&ordner).await;
+        tokio::fs::create_dir_all(&ordner).await.expect("Ordner");
+        let aufnahme = ordner.join("audio.ts");
+        tokio::fs::write(&aufnahme, b"nicht wirklich audio")
+            .await
+            .expect("schreiben");
+
+        let quelle = plan::Block {
+            kanal: "helmbombenricky".to_owned(),
+            lauf: "20260813T120000Z".to_owned(),
+            nummer: 7,
+            versatz_sekunden: 3600,
+            datei: aufnahme.to_string_lossy().to_string(),
+            versuche: 2,
+        };
+        zettel_schreiben(&quelle).await;
+
+        let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
+        assert_eq!(gelesen.kanal, "helmbombenricky");
+        assert_eq!(gelesen.lauf, "20260813T120000Z");
+        assert_eq!(gelesen.nummer, 7);
+        assert_eq!(gelesen.versatz_sekunden, 3600);
+        assert_eq!(
+            gelesen.versuche, 0,
+            "Versuche zaehlen nach dem Neustart neu"
+        );
+
+        // Ohne Zettel gibt es nichts zu lesen, und der Aufrufer faellt zurueck.
+        tokio::fs::remove_file(ordner.join("block.json"))
+            .await
+            .expect("Zettel entfernen");
+        assert!(zettel_lesen(&aufnahme).await.is_none());
+        let _ = tokio::fs::remove_dir_all(&ordner).await;
     }
 
     #[test]

@@ -42,4 +42,9 @@ if [[ "${DL_INFISICAL_READY:-0}" != "1" ]]; then
   exec "$INFISICAL_LOADER" --profile all -- "$0" "$@"
 fi
 
+# Der Service-Token hat hier seine Aufgabe erfuellt. Bliebe er exportiert,
+# stuende er in der Umgebung des Audits - und damit in der jedes von ihm
+# gestarteten streamlink-Prozesses, lesbar in /proc.
+unset INFISICAL_SERVICE_TOKEN
+
 exec "$ROOT_DIR/rust/target/release/tb-stream-audit" "$@"
