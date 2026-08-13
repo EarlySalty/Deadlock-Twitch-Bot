@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(s.channel_login) AS \"channel_login!\"\n               FROM twitch_engagement_settings s\n               JOIN twitch_live_state l\n                 ON LOWER(l.streamer_login) = LOWER(s.channel_login)\n               WHERE s.enabled = TRUE\n                 AND COALESCE(l.is_live, 0) <> 0\n                 AND LOWER(TRIM(COALESCE(l.last_game, ''))) = 'deadlock'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f2db0526ecddf3b9a3e9365cda741009a4b32b5c229ae96c73822859615b3890"
+}

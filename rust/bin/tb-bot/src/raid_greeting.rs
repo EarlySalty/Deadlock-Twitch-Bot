@@ -39,8 +39,9 @@ pub trait CourtesyRecorder: Send + Sync {
 /// ohne Datenbank testbar bleibt.
 #[async_trait::async_trait]
 pub trait AliasResolver: Send + Sync {
-    /// Alle Accounts derselben Person. `None` = keine Zweit-Accounts bekannt.
-    async fn group_for(&self, user_id: &str, login: &str) -> Option<AliasGroup>;
+    /// Alle Accounts derselben Person, gesucht über die Twitch-User-ID.
+    /// `None` = keine Zweit-Accounts bekannt.
+    async fn group_for(&self, user_id: &str) -> Option<AliasGroup>;
 }
 
 /// Postgres-Implementierung über den [`AliasStore`].
@@ -56,8 +57,8 @@ impl DbAliasResolver {
 
 #[async_trait::async_trait]
 impl AliasResolver for DbAliasResolver {
-    async fn group_for(&self, user_id: &str, login: &str) -> Option<AliasGroup> {
-        match self.store.group_for(user_id, login).await {
+    async fn group_for(&self, user_id: &str) -> Option<AliasGroup> {
+        match self.store.group_for(user_id).await {
             Ok(group) => group,
             Err(error) => {
                 tracing::warn!(%error, "Zweit-Accounts nicht auflösbar");
@@ -276,7 +277,7 @@ impl RaidGreetingMonitor {
                             || item
                                 .alias_group
                                 .as_ref()
-                                .is_some_and(|group| group.contains(chatter_id, &chatter_login)))
+                                .is_some_and(|group| group.contains(chatter_id)))
                 })
                 .map(|(key, _)| key.clone())
         };
@@ -676,14 +677,7 @@ impl RaidGreetingMonitorPort for RaidGreetingMonitor {
         // Einmal beim Start auflösen: `observe_chat` läuft danach synchron im
         // Chat-Strom und darf keine Datenbank anfassen.
         let alias_group = match &self.aliases {
-            Some(resolver) => {
-                resolver
-                    .group_for(
-                        &registration.from_broadcaster_id,
-                        &registration.from_broadcaster_login,
-                    )
-                    .await
-            }
+            Some(resolver) => resolver.group_for(&registration.from_broadcaster_id).await,
             None => None,
         };
         if let Some(group) = &alias_group {
@@ -1510,7 +1504,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AliasResolver for FakeAliases {
-        async fn group_for(&self, _user_id: &str, _login: &str) -> Option<AliasGroup> {
+        async fn group_for(&self, _user_id: &str) -> Option<AliasGroup> {
             self.group.clone()
         }
     }
@@ -1519,7 +1513,7 @@ mod tests {
     /// "raider_zweit" (ID from2).
     fn alias_group() -> AliasGroup {
         AliasGroup {
-            person_key: "raider".to_string(),
+            person_key: "from1".to_string(),
             user_ids: vec!["from1".to_string(), "from2".to_string()],
             logins: vec!["raider".to_string(), "raider_zweit".to_string()],
             primary_user_id: Some("from1".to_string()),

@@ -14,13 +14,19 @@
 use sqlx::PgPool;
 
 /// Alle Accounts einer Person.
+///
+/// **Identität hängt ausschließlich an der Twitch-User-ID.** Logins sind bei
+/// Twitch nicht dauerhaft: gibt jemand seinen Namen auf, kann ihn ein Fremder
+/// übernehmen, und ein Namens-Match würde diesen Fremden als Zweit-Account
+/// durchgehen lassen. Die IDs bleiben dagegen für immer an einem Konto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AliasGroup {
-    /// Klammer über die Accounts, praktisch der Login des Hauptaccounts.
+    /// Klammer über die Accounts: die Twitch-User-ID des Hauptaccounts.
     pub person_key: String,
     /// Twitch-User-IDs aller Accounts.
     pub user_ids: Vec<String>,
-    /// Logins aller Accounts, klein geschrieben.
+    /// Logins aller Accounts zum Zeitpunkt des Eintrags, klein geschrieben.
+    /// Nur für Logs und Anzeige, **nie** für die Zuordnung.
     pub logins: Vec<String>,
     /// Account, an den Whispers gehen. `None` = keiner als Haupt markiert,
     /// dann bleibt es beim raidenden Account.
@@ -28,13 +34,11 @@ pub struct AliasGroup {
 }
 
 impl AliasGroup {
-    /// Ob dieser Account zur Gruppe gehört. Vergleicht ID und Login, weil je
-    /// nach Ereignis mal das eine, mal das andere bekannt ist.
-    pub fn contains(&self, user_id: &str, login: &str) -> bool {
+    /// Ob dieser Account zur Gruppe gehört. Vergleicht **nur** die
+    /// Twitch-User-ID; ein leerer oder unbekannter Wert gehört nie dazu.
+    pub fn contains(&self, user_id: &str) -> bool {
         let user_id = user_id.trim();
-        let login = login.trim().trim_start_matches('@').to_lowercase();
-        (!user_id.is_empty() && self.user_ids.iter().any(|id| id == user_id))
-            || (!login.is_empty() && self.logins.contains(&login))
+        !user_id.is_empty() && self.user_ids.iter().any(|id| id == user_id)
     }
 }
 
@@ -48,19 +52,14 @@ impl AliasStore {
         Self { pool }
     }
 
-    /// Sucht die Alias-Gruppe eines Accounts. `None` = der Account hat keine
-    /// eingetragenen Zweit-Accounts, dann gilt er wie bisher als er selbst.
+    /// Sucht die Alias-Gruppe eines Accounts anhand seiner Twitch-User-ID.
+    /// `None` = keine Zweit-Accounts eingetragen, dann gilt der Account wie
+    /// bisher als er selbst.
     ///
-    /// Die Suche geht über ID **oder** Login, weil je nach Ereignis nur eins
-    /// davon vorliegt.
-    pub async fn group_for(
-        &self,
-        user_id: &str,
-        login: &str,
-    ) -> Result<Option<AliasGroup>, sqlx::Error> {
+    /// Bewusst keine Login-Suche: siehe [`AliasGroup`].
+    pub async fn group_for(&self, user_id: &str) -> Result<Option<AliasGroup>, sqlx::Error> {
         let user_id = user_id.trim();
-        let login = login.trim().trim_start_matches('@').to_lowercase();
-        if user_id.is_empty() && login.is_empty() {
+        if user_id.is_empty() {
             return Ok(None);
         }
 
@@ -73,13 +72,12 @@ impl AliasStore {
             FROM twitch_streamer_aliases
             WHERE person_key = (
                 SELECT person_key FROM twitch_streamer_aliases
-                WHERE twitch_user_id = $1 OR LOWER(twitch_login) = $2
+                WHERE twitch_user_id = $1
                 LIMIT 1
             )
             ORDER BY is_primary DESC, twitch_login
             "#,
             user_id,
-            login,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -103,6 +101,10 @@ impl AliasStore {
 
     /// Trägt einen Account unter einem `person_key` ein oder verschiebt ihn
     /// dorthin. Idempotent.
+    ///
+    /// `person_key` ist die Twitch-User-ID des Hauptaccounts, kein Login.
+    /// `twitch_login` wird nur mitgeführt, damit Logs und Dashboard lesbar
+    /// bleiben; für die Zuordnung zählt er nicht.
     pub async fn upsert(
         &self,
         twitch_user_id: &str,
@@ -124,7 +126,7 @@ impl AliasStore {
             "#,
             twitch_user_id.trim(),
             twitch_login.trim().trim_start_matches('@').to_lowercase(),
-            person_key.trim().to_lowercase(),
+            person_key.trim(),
             is_primary,
             note,
         )
@@ -150,44 +152,38 @@ mod tests {
     use super::*;
 
     fn group() -> AliasGroup {
+        // denoshock (993954638) streamt, inderwoche (93677289) schreibt mit.
         AliasGroup {
-            person_key: "denoshick".to_string(),
-            user_ids: vec!["111".to_string(), "222".to_string()],
-            logins: vec!["denoshick".to_string(), "denoshick2".to_string()],
-            primary_user_id: Some("111".to_string()),
+            person_key: "993954638".to_string(),
+            user_ids: vec!["993954638".to_string(), "93677289".to_string()],
+            logins: vec!["denoshock".to_string(), "inderwoche".to_string()],
+            primary_user_id: Some("993954638".to_string()),
         }
     }
 
     #[test]
-    fn gruppe_erkennt_beide_accounts_per_id() {
-        assert!(group().contains("111", ""));
-        assert!(group().contains("222", ""));
-        assert!(!group().contains("333", ""));
+    fn gruppe_erkennt_beide_accounts_an_der_id() {
+        assert!(group().contains("993954638"));
+        assert!(group().contains("93677289"));
+        assert!(!group().contains("333"));
     }
 
     #[test]
-    fn gruppe_erkennt_beide_accounts_per_login() {
-        assert!(group().contains("", "denoshick"));
-        assert!(group().contains("", "denoshick2"));
-        assert!(!group().contains("", "jemand_anders"));
+    fn logins_zaehlen_nie_als_identitaet() {
+        // Twitch gibt aufgegebene Namen wieder frei. Ein Namens-Match würde
+        // den nächsten Inhaber als Zweit-Account durchgehen lassen.
+        assert!(!group().contains("inderwoche"));
+        assert!(!group().contains("denoshock"));
     }
 
     #[test]
-    fn login_vergleich_ignoriert_schreibweise_und_mention() {
-        assert!(group().contains("", "@DenoShick2"));
-        assert!(group().contains("", "  DENOSHICK  "));
+    fn leere_id_matcht_nie() {
+        assert!(!group().contains(""));
+        assert!(!group().contains("   "));
     }
 
     #[test]
-    fn leere_angaben_matchen_nie() {
-        assert!(!group().contains("", ""));
-        assert!(!group().contains("  ", " @ "));
-    }
-
-    #[test]
-    fn eine_passende_angabe_reicht() {
-        // Twitch liefert je nach Ereignis mal nur die ID, mal nur den Login.
-        assert!(group().contains("222", "voellig_fremder_login"));
-        assert!(group().contains("999", "denoshick"));
+    fn umgebender_leerraum_stoert_die_id_nicht() {
+        assert!(group().contains("  93677289 "));
     }
 }
