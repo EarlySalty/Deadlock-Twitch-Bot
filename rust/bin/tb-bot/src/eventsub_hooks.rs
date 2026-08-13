@@ -26,7 +26,7 @@ use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
         export_latest_vod, export_log_description, export_log_title, should_export, CommandRunner,
-        ExportTargets, TokioCommandRunner, VodExportError, VodExportReport,
+        ExportTargets, TokioCommandRunner, VodExportError, VodExportReport, TARGET_LOGIN,
     },
 };
 use tb_monitoring::{
@@ -57,6 +57,8 @@ const VOD_EXPORT_DISCORD_USER_ID: u64 = 279_971_744_964_542_464;
 /// Admin-/Log-Channel, identisch mit `TOKEN_ERROR_CHANNEL_ID` — jeder
 /// Export-Lauf meldet sich dort, Erfolg wie Abbruch.
 const VOD_EXPORT_LOG_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
+/// 📹-caster-chat: hier bekommen die Caster den fertigen VOD-Link.
+const VOD_EXPORT_CASTER_CHANNEL_ID: i64 = 1_474_543_558_793_887_937;
 const VOD_EXPORT_DELAY: Duration = Duration::from_secs(180);
 
 pub struct VodExportOfflineHandler {
@@ -159,17 +161,34 @@ impl VodExportOfflineHandler {
             }
 
             let elapsed_seconds = started.elapsed().as_secs() as i64;
-            let embed = vod_export_log_embed(&result, elapsed_seconds, dm_delivered);
             if let Err(error) = relay
                 .send_alert_embed(SendAlertEmbed {
                     channel_id: VOD_EXPORT_LOG_CHANNEL_ID,
                     content: None,
-                    embed,
+                    embed: vod_export_log_embed(&result, elapsed_seconds, dm_delivered),
                     allowed_role_ids: Vec::new(),
                 })
                 .await
             {
                 tracing::error!(%error, "VOD-Export: Discord-Log fehlgeschlagen");
+            }
+
+            // Der Caster-Chat bekommt denselben Report plus den Freigabelink.
+            // Im Admin-Log bleibt der Link bewusst draußen — dort lesen mehr
+            // Leute mit, als Zugriff auf das VOD haben sollen.
+            if let Err(error) = relay
+                .send_alert_embed(SendAlertEmbed {
+                    channel_id: VOD_EXPORT_CASTER_CHANNEL_ID,
+                    content: result
+                        .as_ref()
+                        .ok()
+                        .map(|report| vod_export_channel_content(&report.link)),
+                    embed: vod_export_log_embed(&result, elapsed_seconds, dm_delivered),
+                    allowed_role_ids: Vec::new(),
+                })
+                .await
+            {
+                tracing::error!(%error, "VOD-Export: Caster-Chat-Post fehlgeschlagen");
             }
         });
     }
@@ -187,6 +206,12 @@ fn vod_export_log_embed(
         "description": export_log_description(result, elapsed_seconds, dm_delivered),
         "color": if success { 0x2E_CC71 } else { 0xE7_4C3C },
     })
+}
+
+/// Text für den Caster-Chat. Kennzahlen stehen im Embed daneben, hier zählt nur
+/// der klickbare Link.
+fn vod_export_channel_content(link: &str) -> String {
+    format!("VOD vom letzten {TARGET_LOGIN}-Stream: {link}")
 }
 
 fn vod_export_dm_content(link: &str) -> String {
@@ -1326,7 +1351,7 @@ mod outgoing_raid_tests {
 
 #[cfg(test)]
 mod vod_export_tests {
-    use super::vod_export_dm_content;
+    use super::{vod_export_channel_content, vod_export_dm_content};
 
     #[test]
     fn dm_text_enthaelt_link_und_gueltigkeit() {
@@ -1334,6 +1359,23 @@ mod vod_export_tests {
 
         assert!(content.contains("https://share.example/vod"));
         assert!(content.contains("Drive"));
+    }
+
+    #[test]
+    fn caster_chat_text_traegt_den_link_und_den_kanal() {
+        let content = vod_export_channel_content("https://share.example/vod");
+
+        assert!(content.contains("https://share.example/vod"), "{content}");
+        assert!(content.contains("dach_lock"), "{content}");
+    }
+
+    #[test]
+    fn caster_chat_ist_nicht_der_admin_log() {
+        assert_ne!(
+            super::VOD_EXPORT_CASTER_CHANNEL_ID,
+            super::VOD_EXPORT_LOG_CHANNEL_ID
+        );
+        assert_eq!(super::VOD_EXPORT_CASTER_CHANNEL_ID, 1_474_543_558_793_887_937);
     }
 }
 
