@@ -94,7 +94,13 @@ pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
             .then_with(|| a.kategorie.cmp(&b.kategorie))
             .then_with(|| (a.erkenner != "regel").cmp(&(b.erkenner != "regel")))
     });
-    funde.dedup_by(|a, b| a.segment_id == b.segment_id && a.kategorie == b.kategorie);
+    // Zusammengefasst wird nur ueber die Erkennergrenze hinweg. Zwei
+    // Regelfunde derselben Kategorie in einem Segment sind zwei Vorfaelle -
+    // etwa zwei verschiedene Beleidigungen - und duerfen nicht zu einem
+    // werden.
+    funde.dedup_by(|a, b| {
+        a.segment_id == b.segment_id && a.kategorie == b.kategorie && a.erkenner != b.erkenner
+    });
     funde
 }
 
@@ -166,6 +172,15 @@ mod tests {
         let zusammen = funde_zusammenfassen(funde);
         assert_eq!(zusammen.len(), 1);
         assert_eq!(zusammen[0].erkenner, "regel", "Regel gewinnt gegen Modell");
+    }
+
+    #[test]
+    fn zwei_regelfunde_derselben_kategorie_bleiben_zwei() {
+        // Zwei verschiedene Beleidigungen im selben Segment sind zwei
+        // Vorfaelle; einer davon darf nicht verschwinden.
+        let funde = regelfunde(&[segment("s1", "du schwuchtel und du faggot")]);
+        assert_eq!(funde.len(), 2);
+        assert_eq!(funde_zusammenfassen(funde).len(), 2);
     }
 
     #[test]
