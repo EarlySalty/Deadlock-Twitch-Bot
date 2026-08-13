@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_streamer_aliases\n                (twitch_user_id, twitch_login, person_key, is_primary, note)\n            VALUES ($1, $2, $3, $4, $5)\n            ON CONFLICT (twitch_user_id) DO UPDATE SET\n                twitch_login = EXCLUDED.twitch_login,\n                person_key   = EXCLUDED.person_key,\n                is_primary   = EXCLUDED.is_primary,\n                note         = EXCLUDED.note\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1cbd4ff19f9a7e42eae9ed1ac5e3a2aed8955e7784b183b02331df4569a86dd"
+}

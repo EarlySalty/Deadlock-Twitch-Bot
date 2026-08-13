@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use tb_chat::types::{ChatMessageEvent, SendOutcome};
 use tb_chat::ChatApi;
 use tb_monitoring::{LiveStateStore, WriteStats};
+use tb_raid::alias_store::{AliasGroup, AliasStore};
 use tb_raid::courtesy::{classify, should_remind, CourtesyClass, CourtesyOutcome, CourtesySummary};
 use tb_raid::courtesy_store::{CourtesyEvent, CourtesyStore, ObservationSource};
 use tb_raid::{RaidGreetingMonitorPort, RaidGreetingRegistration};
@@ -32,6 +33,38 @@ pub trait CourtesyRecorder: Send + Sync {
     async fn last_whisper_at(&self, from_broadcaster_id: &str) -> Option<DateTime<Utc>>;
     /// Hält die Beobachtung fest.
     async fn record(&self, event: CourtesyEvent);
+}
+
+/// Löst Zweit-Accounts eines Streamers auf. Als Trait, damit der Monitor
+/// ohne Datenbank testbar bleibt.
+#[async_trait::async_trait]
+pub trait AliasResolver: Send + Sync {
+    /// Alle Accounts derselben Person. `None` = keine Zweit-Accounts bekannt.
+    async fn group_for(&self, user_id: &str, login: &str) -> Option<AliasGroup>;
+}
+
+/// Postgres-Implementierung über den [`AliasStore`].
+pub struct DbAliasResolver {
+    store: AliasStore,
+}
+
+impl DbAliasResolver {
+    pub fn new(store: AliasStore) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait::async_trait]
+impl AliasResolver for DbAliasResolver {
+    async fn group_for(&self, user_id: &str, login: &str) -> Option<AliasGroup> {
+        match self.store.group_for(user_id, login).await {
+            Ok(group) => group,
+            Err(error) => {
+                tracing::warn!(%error, "Zweit-Accounts nicht auflösbar");
+                None
+            }
+        }
+    }
 }
 
 /// Postgres-Implementierung über den [`CourtesyStore`].
@@ -109,6 +142,10 @@ struct PendingGreeting {
     probe_started_at: Instant,
     /// Zeitpunkt des Raid-Starts für die gespeicherte Beobachtung.
     started_at: DateTime<Utc>,
+    /// Zweit-Accounts desselben Menschen. Eine Nachricht von einem davon
+    /// zählt als seine — sonst wirft der Bot jemandem Schweigen vor, der
+    /// gerade von seinem anderen Kanal aus schreibt.
+    alias_group: Option<AliasGroup>,
     /// Nachrichten des Raiders im Zielchat, die über EventSub hereinkamen.
     /// Das Fenster läuft bis zum Ende durch: für die Einstufung zählt nicht
     /// nur **ob**, sondern **wie viel** geschrieben wurde.
@@ -163,6 +200,7 @@ pub struct RaidGreetingMonitor {
     probe: Option<Arc<dyn RaidTargetChatProbe>>,
     live: Option<Arc<dyn RaidTargetLiveProbe>>,
     courtesy: Option<Arc<dyn CourtesyRecorder>>,
+    aliases: Option<Arc<dyn AliasResolver>>,
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
@@ -174,6 +212,7 @@ impl RaidGreetingMonitor {
             probe,
             live: None,
             courtesy: None,
+            aliases: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
@@ -194,6 +233,13 @@ impl RaidGreetingMonitor {
         self
     }
 
+    /// Erkennt Zweit-Accounts, damit eine Begrüßung vom anderen Kanal des
+    /// Streamers zählt und nicht als Schweigen durchgeht.
+    pub fn with_aliases(mut self, aliases: Arc<dyn AliasResolver>) -> Self {
+        self.aliases = Some(aliases);
+        self
+    }
+
     #[cfg(test)]
     fn with_window(
         chat: Arc<dyn ChatApi>,
@@ -205,6 +251,7 @@ impl RaidGreetingMonitor {
             probe,
             live: None,
             courtesy: None,
+            aliases: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window,
         }
@@ -225,7 +272,11 @@ impl RaidGreetingMonitor {
                 .find(|(_, item)| {
                     item.to_broadcaster_id == target_id
                         && (item.from_broadcaster_id == chatter_id
-                            || item.from_broadcaster_login == chatter_login)
+                            || item.from_broadcaster_login == chatter_login
+                            || item
+                                .alias_group
+                                .as_ref()
+                                .is_some_and(|group| group.contains(chatter_id, &chatter_login)))
                 })
                 .map(|(key, _)| key.clone())
         };
@@ -311,13 +362,21 @@ impl RaidGreetingMonitor {
             );
         }
 
+        // Die Alias-Gruppe wandert mit: derselbe Mensch raidet, nur das Ziel
+        // hat gewechselt. Ein erneutes Auflösen wäre hier auch nicht möglich,
+        // weil `channel.moderate` synchron verarbeitet wird.
+        let alias_group = stale.into_iter().find_map(|item| item.alias_group);
+
         // Quellchat-Hinweis bewusst nicht erneut senden — er ist beim Start schon raus.
-        if let Some(pending) = self.register(RaidGreetingRegistration {
-            from_broadcaster_id: from_id,
-            from_broadcaster_login: from_login,
-            to_broadcaster_id: to_id,
-            to_broadcaster_login: to_login,
-        }) {
+        if let Some(pending) = self.register(
+            RaidGreetingRegistration {
+                from_broadcaster_id: from_id,
+                from_broadcaster_login: from_login,
+                to_broadcaster_id: to_id,
+                to_broadcaster_login: to_login,
+            },
+            alias_group,
+        ) {
             self.spawn_deadline(pending.key);
         }
     }
@@ -379,7 +438,11 @@ impl RaidGreetingMonitor {
         }
     }
 
-    fn register(&self, registration: RaidGreetingRegistration) -> Option<PendingGreeting> {
+    fn register(
+        &self,
+        registration: RaidGreetingRegistration,
+        alias_group: Option<AliasGroup>,
+    ) -> Option<PendingGreeting> {
         let from_broadcaster_id = registration.from_broadcaster_id.trim().to_string();
         let to_broadcaster_id = registration.to_broadcaster_id.trim().to_string();
         if from_broadcaster_id.is_empty() || to_broadcaster_id.is_empty() {
@@ -402,6 +465,7 @@ impl RaidGreetingMonitor {
             probe_watched,
             probe_started_at,
             started_at: Utc::now(),
+            alias_group,
             eventsub_writes: Vec::new(),
         };
         self.pending
@@ -568,11 +632,16 @@ async fn target_stream_ended(live: &Option<Arc<dyn RaidTargetLiveProbe>>, login:
 }
 
 /// Schickt die Erinnerung und meldet, ob sie rausging.
+///
+/// Ziel ist der als Haupt markierte Account der Person, falls es einen gibt:
+/// ein selten genutzter Zweitaccount sieht die Whisper womöglich nie.
 async fn send_reminder(chat: &Arc<dyn ChatApi>, item: &PendingGreeting) -> bool {
-    match chat
-        .send_whisper(&item.from_broadcaster_id, WHISPER_REMINDER)
-        .await
-    {
+    let target_id = item
+        .alias_group
+        .as_ref()
+        .and_then(|group| group.primary_user_id.as_deref())
+        .unwrap_or(&item.from_broadcaster_id);
+    match chat.send_whisper(target_id, WHISPER_REMINDER).await {
         Ok(true) => {
             tracing::info!(
                 from = %item.from_broadcaster_login,
@@ -604,7 +673,28 @@ async fn send_reminder(chat: &Arc<dyn ChatApi>, item: &PendingGreeting) -> bool 
 #[async_trait::async_trait]
 impl RaidGreetingMonitorPort for RaidGreetingMonitor {
     async fn raid_started(&self, registration: RaidGreetingRegistration) {
-        let Some(pending) = self.register(registration) else {
+        // Einmal beim Start auflösen: `observe_chat` läuft danach synchron im
+        // Chat-Strom und darf keine Datenbank anfassen.
+        let alias_group = match &self.aliases {
+            Some(resolver) => {
+                resolver
+                    .group_for(
+                        &registration.from_broadcaster_id,
+                        &registration.from_broadcaster_login,
+                    )
+                    .await
+            }
+            None => None,
+        };
+        if let Some(group) = &alias_group {
+            tracing::debug!(
+                person = %group.person_key,
+                accounts = group.logins.len(),
+                "Raider hat bekannte Zweit-Accounts, Begrüßung zählt von jedem"
+            );
+        }
+
+        let Some(pending) = self.register(registration, alias_group) else {
             tracing::info!(
                 whisper = false,
                 reason = "invalid_raid_registration",
@@ -1410,5 +1500,120 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
 
         assert_eq!(fake.whispers.lock().unwrap().len(), 1);
+    }
+
+    // ─── Zweit-Accounts ──────────────────────────────────────────────────────
+
+    struct FakeAliases {
+        group: Option<AliasGroup>,
+    }
+
+    #[async_trait::async_trait]
+    impl AliasResolver for FakeAliases {
+        async fn group_for(&self, _user_id: &str, _login: &str) -> Option<AliasGroup> {
+            self.group.clone()
+        }
+    }
+
+    /// Zwei Accounts derselben Person: "raider" (Haupt, ID from1) und
+    /// "raider_zweit" (ID from2).
+    fn alias_group() -> AliasGroup {
+        AliasGroup {
+            person_key: "raider".to_string(),
+            user_ids: vec!["from1".to_string(), "from2".to_string()],
+            logins: vec!["raider".to_string(), "raider_zweit".to_string()],
+            primary_user_id: Some("from1".to_string()),
+        }
+    }
+
+    fn monitor_with_aliases(
+        chat: Arc<dyn ChatApi>,
+        recorder: Arc<FakeRecorder>,
+        group: Option<AliasGroup>,
+    ) -> RaidGreetingMonitor {
+        let recorder: Arc<dyn CourtesyRecorder> = recorder;
+        let aliases: Arc<dyn AliasResolver> = Arc::new(FakeAliases { group });
+        RaidGreetingMonitor::with_window(
+            chat,
+            Some(Arc::new(FakeProbe::with_stats(WriteStats::default()))),
+            Duration::from_millis(5),
+        )
+        .with_courtesy(recorder)
+        .with_aliases(aliases)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn begruessung_vom_zweit_account_zaehlt() {
+        // Der denoshick-Fall: geraidet hat der eine Account, hallo sagt der
+        // Mensch von seinem anderen. Das ist kein Schweigen.
+        let fake = Arc::new(FakeChatApi::default());
+        let recorder = Arc::new(FakeRecorder::new(Some(CourtesyClass::Silent), None));
+        let monitor = monitor_with_aliases(fake.clone(), recorder.clone(), Some(alias_group()));
+
+        monitor.raid_started(registration()).await;
+        let mut event = chat_event("hey, viel spass euch");
+        event.chatter_user_id = "from2".into();
+        event.chatter_user_login = "raider_zweit".into();
+        monitor.observe_chat(&event);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(recorder.classes(), vec!["greeter"]);
+        assert!(
+            fake.whispers.lock().unwrap().is_empty(),
+            "keine Erinnerung an jemanden, der gerade begrüßt hat"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ohne_mapping_bleibt_der_zweit_account_ein_fremder() {
+        // Gegenprobe: ohne Eintrag kann der Bot die Verbindung nicht kennen.
+        let fake = Arc::new(FakeChatApi::default());
+        let recorder = Arc::new(FakeRecorder::new(Some(CourtesyClass::Silent), None));
+        let monitor = monitor_with_aliases(fake.clone(), recorder.clone(), None);
+
+        monitor.raid_started(registration()).await;
+        let mut event = chat_event("hey, viel spass euch");
+        event.chatter_user_id = "from2".into();
+        event.chatter_user_login = "raider_zweit".into();
+        monitor.observe_chat(&event);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(recorder.classes(), vec!["silent"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fremder_chatter_zaehlt_auch_mit_mapping_nicht() {
+        let fake = Arc::new(FakeChatApi::default());
+        let recorder = Arc::new(FakeRecorder::new(Some(CourtesyClass::Silent), None));
+        let monitor = monitor_with_aliases(fake.clone(), recorder.clone(), Some(alias_group()));
+
+        monitor.raid_started(registration()).await;
+        let mut event = chat_event("hi");
+        event.chatter_user_id = "voellig_fremd".into();
+        event.chatter_user_login = "irgendwer".into();
+        monitor.observe_chat(&event);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(recorder.classes(), vec!["silent"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn erinnerung_geht_an_den_hauptaccount() {
+        // Geraidet hat der Zweitaccount, die Whisper geht trotzdem an den
+        // Hauptaccount: den liest die Person auch.
+        let fake = Arc::new(FakeChatApi::default());
+        let recorder = Arc::new(FakeRecorder::new(Some(CourtesyClass::Silent), None));
+        let group = AliasGroup {
+            primary_user_id: Some("from_haupt".to_string()),
+            ..alias_group()
+        };
+        let monitor = monitor_with_aliases(fake.clone(), recorder.clone(), Some(group));
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        let whispers = fake.whispers.lock().unwrap();
+        assert_eq!(whispers.len(), 1);
+        assert_eq!(whispers[0].0, "from_haupt");
     }
 }

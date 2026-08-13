@@ -812,13 +812,20 @@ async fn main() {
                 Arc::new(raid_greeting::DbCourtesyRecorder::new(
                     tb_raid::courtesy_store::CourtesyStore::new(pool.clone()),
                 ));
+            // Zweit-Accounts: eine Begrüßung vom anderen Kanal derselben
+            // Person zählt, und Erinnerungen gehen an den Hauptaccount.
+            let aliases: Arc<dyn raid_greeting::AliasResolver> =
+                Arc::new(raid_greeting::DbAliasResolver::new(
+                    tb_raid::alias_store::AliasStore::new(pool.clone()),
+                ));
             Arc::new(
                 raid_greeting::RaidGreetingMonitor::new(
                     h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
                     probe,
                 )
                 .with_live_probe(live_probe)
-                .with_courtesy(courtesy),
+                .with_courtesy(courtesy)
+                .with_aliases(aliases),
             )
         });
 

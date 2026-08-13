@@ -27,6 +27,7 @@
 //!
 //! Alle 6a (RaidAuth-Fundament). Plan: `docs/plans/2026-06-09-schritt-6-raid.md`.
 
+pub mod alias_store;
 pub mod arrival_confirmation;
 pub mod arrival_runtime;
 pub mod arrival_tracking_store;
