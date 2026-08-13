@@ -3152,6 +3152,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-stream-audit-bin"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde_json",
+ "tb-engagement",
+ "tb-llm",
+ "tb-stream-audit",
+ "tb-transport-twitch",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tb-tips"
 version = "0.1.0"
 dependencies = [
