@@ -18,9 +18,10 @@ keine Sanktionen und postet nichts öffentlich.
 - Die Aufnahme wird auf demselben Rechner in Text umgewandelt. Der Ton
   verlässt die Maschine nicht.
 - Das Transkript läuft zweistufig durch die Prüfung: zuerst drei feste Regeln
-  für eindeutige Fälle, danach ein Modellschritt für alles, was kein Reizwort
-  hat. An das Modell gehen geschwärzte Ausschnitte mit anonymer Nummer — nicht
-  der Kanalname, nicht die Stream-ID.
+  für eindeutige Fälle, danach ein Modellschritt, der das **ganze** Transkript
+  des Blocks sieht — nicht nur die Stellen ohne Reizwort. An das Modell gehen
+  geschwärzte Ausschnitte mit anonymer Nummer, nicht der Kanalname und nicht
+  die Stream-ID.
 - Pro Block entsteht ein Protokoll auf der Platte und, wenn es etwas zu melden
   gibt, eine kurze private Nachricht an den Admin.
 - Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
