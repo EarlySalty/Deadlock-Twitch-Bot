@@ -34,6 +34,8 @@ pub mod auth_writer;
 pub mod auto_raid_pipeline;
 pub mod bot_oauth;
 pub mod candidate_selection;
+pub mod courtesy;
+pub mod courtesy_store;
 pub mod eligibility;
 pub mod external_recruitment_store;
 pub mod manual_suppression;

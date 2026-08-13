@@ -30,9 +30,16 @@
 //! | internal_sent_raids_30d       | INTEGER            | i32                 |
 //! | internal_received_raids_7d    | INTEGER            | i32                 |
 //! | internal_received_raids_30d   | INTEGER            | i32                 |
+//! | courtesy_score                | DOUBLE PRECISION   | f64                 |
+//! | courtesy_class                | TEXT               | Option\<String\>    |
+//! | courtesy_observed             | INTEGER            | i32                 |
 //!
 //! Flags (`is_live`, `is_new_partner_preferred`) sind **INTEGER**, nicht BOOLEAN.
 //! Timestamps (`current_started_at`, `last_computed_at`) sind **TEXT**.
+//!
+//! Die `courtesy_*`-Spalten kamen mit `20260813150000_raid_courtesy.sql` dazu
+//! und sind in Altzeilen möglicherweise NULL — die SELECTs fangen das per
+//! COALESCE ab (Default: voller Wert, kein Abzug).
 
 use sqlx::PgPool;
 
@@ -67,6 +74,13 @@ pub struct PartnerRaidScoreRow {
     pub internal_sent_raids_30d: i32,
     pub internal_received_raids_7d: i32,
     pub internal_received_raids_30d: i32,
+    /// Anteil eigener Raids mit Nachricht im Zielchat, gegen 1.0 geshrinkt.
+    /// 1.0 = schreibt immer oder keine Historie, 0.0 = schweigt stets.
+    pub courtesy_score: f64,
+    /// Matching-Klasse: 'engaged' | 'greeter' | 'silent', NULL ohne Historie.
+    pub courtesy_class: Option<String>,
+    /// Anzahl auswertbarer Raids hinter `courtesy_score`.
+    pub courtesy_observed: i32,
 }
 
 /// Schreibeingabe für `upsert` — alle Felder einer vollständig berechneten Zeile.
@@ -98,6 +112,10 @@ pub struct PartnerRaidScoreUpsert {
     pub internal_received_raids_7d: i32,
     pub today_received_raids: i32,
     pub last_computed_at: String,
+    /// Siehe [`PartnerRaidScoreRow::courtesy_score`].
+    pub courtesy_score: f64,
+    pub courtesy_class: Option<String>,
+    pub courtesy_observed: i32,
 }
 
 /// Lesezugriff auf `twitch_partner_raid_scores`.
@@ -130,7 +148,10 @@ impl ScoreStore {
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
                    internal_sent_raids_30d, internal_received_raids_7d,
-                   internal_received_raids_30d
+                   internal_received_raids_30d,
+                   COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
+                   courtesy_class,
+                   COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = $1
             "#,
@@ -163,7 +184,10 @@ impl ScoreStore {
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
                    internal_sent_raids_30d, internal_received_raids_7d,
-                   internal_received_raids_30d
+                   internal_received_raids_30d,
+                   COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
+                   courtesy_class,
+                   COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = ANY($1)
             "#,
@@ -196,7 +220,10 @@ impl ScoreStore {
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
                    internal_sent_raids_30d, internal_received_raids_7d,
-                   internal_received_raids_30d
+                   internal_received_raids_30d,
+                   COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
+                   courtesy_class,
+                   COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
             FROM twitch_partner_raid_scores
             WHERE twitch_user_id = ANY($1) AND COALESCE(is_live, 0) = 1
             "#,
@@ -235,13 +262,16 @@ impl ScoreStore {
                 internal_received_raids_30d,
                 internal_received_raids_7d,
                 today_received_raids,
-                last_computed_at
+                last_computed_at,
+                courtesy_score,
+                courtesy_class,
+                courtesy_observed
             ) VALUES (
                 $1,  $2,  $3,  $4,  $5,
                 $6,  $7,  $8,  $9,  $10,
                 $11, $12, $13, $14, $15,
                 $16, $17, $18, $19, $20,
-                $21, $22
+                $21, $22, $23, $24, $25
             )
             ON CONFLICT (twitch_user_id) DO UPDATE SET
                 twitch_login                    = EXCLUDED.twitch_login,
@@ -264,7 +294,10 @@ impl ScoreStore {
                 internal_received_raids_30d     = EXCLUDED.internal_received_raids_30d,
                 internal_received_raids_7d      = EXCLUDED.internal_received_raids_7d,
                 today_received_raids            = EXCLUDED.today_received_raids,
-                last_computed_at                = EXCLUDED.last_computed_at
+                last_computed_at                = EXCLUDED.last_computed_at,
+                courtesy_score                  = EXCLUDED.courtesy_score,
+                courtesy_class                  = EXCLUDED.courtesy_class,
+                courtesy_observed               = EXCLUDED.courtesy_observed
             WHERE EXCLUDED.last_computed_at >= twitch_partner_raid_scores.last_computed_at
             "#,
         )
@@ -290,6 +323,9 @@ impl ScoreStore {
         .bind(row.internal_received_raids_7d)
         .bind(row.today_received_raids)
         .bind(&row.last_computed_at)
+        .bind(row.courtesy_score)
+        .bind(row.courtesy_class.as_deref())
+        .bind(row.courtesy_observed)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -307,8 +343,9 @@ mod tests {
     /// Muster: schema-pro-Test (wie in `tb-monitoring/tests/hermetic.rs`).
     /// Parallele Tests kollidieren nicht, da jedes Schema einmalig benannt ist.
     async fn setup_db(schema: &str) -> sqlx::PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
 
         // Zunächst ohne search_path verbinden, um das Schema anzulegen.
         let admin = sqlx::PgPool::connect(&url)
@@ -365,7 +402,10 @@ mod tests {
                 fairness_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 internal_sent_raids_30d         INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_7d      INTEGER NOT NULL DEFAULT 0,
-                internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0
+                internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0,
+                courtesy_score                  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                courtesy_class                  TEXT,
+                courtesy_observed               INTEGER NOT NULL DEFAULT 0
             )
             "#,
         )
@@ -398,6 +438,9 @@ mod tests {
             internal_received_raids_30d: 1,
             internal_received_raids_7d: 2,
             today_received_raids: 0,
+            courtesy_score: 1.0,
+            courtesy_class: None,
+            courtesy_observed: 0,
             last_computed_at: "2026-06-09T20:00:00+00:00".to_string(),
         }
     }

@@ -3,7 +3,10 @@
 //! Port von `bot/raid/partner_scores.py` — die Formeln werden 1:1 übernommen.
 //! Jede Funktion ist zustandslos und voll unit-testbar ohne Datenbankverbindung.
 //!
-//! Konstanten entsprechen denen in `partner_scores.py` (Z. 19–31):
+//! Konstanten entsprechen denen in `partner_scores.py` (Z. 19–31), mit einer
+//! bewussten Abweichung: der Base-Score hat mit dem Courtesy-Anteil eine dritte
+//! Säule bekommen (siehe [`crate::courtesy`]). Readiness und Fairness geben
+//! dafür gemeinsam 10 % ab und behalten ihr Verhältnis von 65:35.
 //!
 //! ```text
 //! LOOKBACK_DAYS               = 45
@@ -15,8 +18,9 @@
 //! DEFAULT_RAID_BOOST_MULTIPLIER = 1.0
 //! READINESS_DURATION_WEIGHT   = 0.6
 //! READINESS_TIME_WEIGHT       = 0.4
-//! FINAL_READINESS_WEIGHT      = 0.65
-//! FINAL_FAIRNESS_WEIGHT       = 0.35
+//! FINAL_READINESS_WEIGHT      = 0.585   (vorher 0.65)
+//! FINAL_FAIRNESS_WEIGHT       = 0.315   (vorher 0.35)
+//! COURTESY_WEIGHT             = 0.10    (neu)
 //! FAIRNESS_BALANCE_DIVISOR    = 20.0
 //! FAIRNESS_RECEIVED_7D_THRESHOLD = 5.0
 //! ```
@@ -36,9 +40,12 @@ pub const DEFAULT_RAID_BOOST_MULTIPLIER: f64 = 1.0;
 const READINESS_DURATION_WEIGHT: f64 = 0.6;
 const READINESS_TIME_WEIGHT: f64 = 0.4;
 
-// Gewichtungskonstanten für Final-Score (Python Z. 28–29).
-const FINAL_READINESS_WEIGHT: f64 = 0.65;
-const FINAL_FAIRNESS_WEIGHT: f64 = 0.35;
+// Gewichtungskonstanten für Final-Score. Die ursprünglichen 0.65/0.35 (Python
+// Z. 28–29) sind proportional heruntergerechnet, damit der Courtesy-Anteil
+// (`courtesy::COURTESY_WEIGHT`, 10 %) daneben Platz hat. Das Verhältnis von
+// Readiness zu Fairness bleibt dadurch unverändert bei 65:35.
+const FINAL_READINESS_WEIGHT: f64 = 0.585;
+const FINAL_FAIRNESS_WEIGHT: f64 = 0.315;
 
 // Fairness-Parameter (Python Z. 30–31).
 const FAIRNESS_BALANCE_DIVISOR: f64 = 20.0;
@@ -75,6 +82,10 @@ pub struct ScoringInputs {
     pub internal_received_raids_7d: i64,
     /// Raids heute (Berlin-Zeit) schon empfangen.
     pub today_received_raids: i64,
+    /// Courtesy-Score aus [`crate::courtesy::summarize`]: Anteil der eigenen
+    /// Raids, nach denen der Streamer im Zielchat etwas geschrieben hat.
+    /// `1.0` = schreibt immer oder noch keine Historie, `0.0` = schweigt stets.
+    pub courtesy_score: f64,
 }
 
 /// Vorhandene (gecachte) Score-Werte eines Partners aus der vorigen
@@ -109,7 +120,10 @@ pub struct ScoreComponents {
     pub readiness_score: f64,
     /// Fairness = Balance der gegenseitigen Raids + Recency-Strafe.
     pub fairness_score: f64,
-    /// Base = readiness * 0.65 + fairness * 0.35 (vor Multiplikatoren).
+    /// Courtesy = Anteil eigener Raids mit Nachricht im Zielchat.
+    pub courtesy_score: f64,
+    /// Base = readiness * 0.585 + fairness * 0.315 + courtesy * 0.10
+    /// (vor Multiplikatoren).
     pub base_score: f64,
     /// New-Partner-Multiplikator (1.0 .. 1.25, sinkt mit jeder erhaltenen Raid).
     pub new_partner_multiplier: f64,
@@ -235,14 +249,23 @@ pub fn compute_fairness_score(
     round_score(balance_30d * 0.5 + received_7d_penalty * 0.3 + today_penalty * 0.2)
 }
 
-/// Base-Score (Pre-Boost) = readiness * 0.65 + fairness * 0.35.
+/// Base-Score (Pre-Boost) = readiness * 0.585 + fairness * 0.315 + courtesy * 0.10.
 ///
-/// Python `_combine_preboost_score` (Z. 282–286):
-/// ```python
-/// return round_score(readiness_score * 0.65 + fairness_score * 0.35)
-/// ```
-pub fn compute_base_score(readiness_score: f64, fairness_score: f64) -> f64 {
-    round_score(readiness_score * FINAL_READINESS_WEIGHT + fairness_score * FINAL_FAIRNESS_WEIGHT)
+/// Erweitert das ursprüngliche `readiness * 0.65 + fairness * 0.35` (Python
+/// `_combine_preboost_score`, Z. 282–286) um den Courtesy-Anteil aus
+/// [`crate::courtesy`]. Readiness und Fairness behalten ihr Verhältnis
+/// zueinander, geben aber gemeinsam 10 % ab.
+///
+/// `courtesy_score` ist ein reiner Malus für belegtes Schweigen nach eigenen
+/// Raids: wer schreibt und wer keine Historie hat, steht bei 1.0 und verliert
+/// nichts. Nur wer wiederholt schweigend weiterzieht, rutscht Richtung 0.0 und
+/// verliert damit bis zu 10 Prozentpunkte Base-Score.
+pub fn compute_base_score(readiness_score: f64, fairness_score: f64, courtesy_score: f64) -> f64 {
+    round_score(
+        readiness_score * FINAL_READINESS_WEIGHT
+            + fairness_score * FINAL_FAIRNESS_WEIGHT
+            + clamp01(courtesy_score) * crate::courtesy::COURTESY_WEIGHT,
+    )
 }
 
 /// New-Partner-Multiplikator: linear von 1.25 (0 Raids) auf 1.0 (>= 10 Raids).
@@ -325,6 +348,10 @@ pub fn compute_scores_with_cache(
                 time_pattern_score: round_score(cache.time_pattern_score),
                 readiness_score: round_score(cache.readiness_score),
                 fairness_score: round_score(cache.fairness_score),
+                // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand:
+                // der aktuelle Wert gilt weiter, auch wenn base/final aus dem
+                // Cache stammen.
+                courtesy_score: round_score(clamp01(inputs.courtesy_score)),
                 base_score: round_score(cache.base_score),
                 new_partner_multiplier,
                 raid_boost_multiplier,
@@ -349,7 +376,8 @@ pub fn compute_scores_with_cache(
         inputs.internal_received_raids_7d,
         inputs.today_received_raids,
     );
-    let base_score = compute_base_score(readiness_score, fairness_score);
+    let courtesy_score = round_score(clamp01(inputs.courtesy_score));
+    let base_score = compute_base_score(readiness_score, fairness_score, courtesy_score);
     let final_score =
         compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
 
@@ -358,6 +386,7 @@ pub fn compute_scores_with_cache(
         time_pattern_score,
         readiness_score,
         fairness_score,
+        courtesy_score,
         base_score,
         new_partner_multiplier,
         raid_boost_multiplier,
@@ -534,9 +563,30 @@ mod tests {
 
     #[test]
     fn base_score_gewichtung_korrekt() {
-        // readiness=0.6, fairness=0.68 → 0.6*0.65 + 0.68*0.35 = 0.39+0.238 = 0.628
-        let score = compute_base_score(0.6, 0.68);
-        assert_eq!(score, round_score(0.628));
+        // readiness=0.6, fairness=0.68, courtesy=1.0 (schreibt immer)
+        // → 0.6*0.585 + 0.68*0.315 + 1.0*0.10 = 0.351 + 0.2142 + 0.10 = 0.6652
+        let score = compute_base_score(0.6, 0.68, 1.0);
+        assert_eq!(score, round_score(0.6652));
+    }
+
+    #[test]
+    fn base_score_courtesy_kostet_hoechstens_zehn_punkte() {
+        // Derselbe Partner einmal als Dauerschreiber, einmal als Dauerschweiger:
+        // der Unterschied ist exakt das Courtesy-Gewicht.
+        let schreiber = compute_base_score(0.6, 0.68, 1.0);
+        let schweiger = compute_base_score(0.6, 0.68, 0.0);
+        assert_eq!(
+            round_score(schreiber - schweiger),
+            round_score(crate::courtesy::COURTESY_WEIGHT)
+        );
+    }
+
+    #[test]
+    fn base_score_clampt_courtesy_ausserhalb_des_bereichs() {
+        let oben = compute_base_score(0.6, 0.68, 5.0);
+        let unten = compute_base_score(0.6, 0.68, -2.0);
+        assert_eq!(oben, compute_base_score(0.6, 0.68, 1.0));
+        assert_eq!(unten, compute_base_score(0.6, 0.68, 0.0));
     }
 
     // ─── compute_scores (Integrationstest) ───────────────────────────────────
@@ -559,10 +609,11 @@ mod tests {
         //   7d_penalty         = clamp(1 - 2/5)    = 0.6
         //   today_penalty      = 1/1               = 1.0
         //   fairness           = 0.6*0.5+0.6*0.3+1.0*0.2 = 0.68
-        //   base               = 0.6*0.65+0.68*0.35 = 0.628
+        //   courtesy           = 1.0 (schreibt immer / keine Historie)
+        //   base               = 0.6*0.585+0.68*0.315+1.0*0.10 = 0.6652
         //   new_mult           = 1.25 - 5*0.025 = 1.125
         //   boost_mult         = 1.0
-        //   final              = 0.628 * 1.125 * 1.0 = 0.7065
+        //   final              = 0.6652 * 1.125 * 1.0 = 0.74835
         let inputs = ScoringInputs {
             avg_duration_sec: 7200,
             current_uptime_sec: 3600,
@@ -576,6 +627,7 @@ mod tests {
             internal_received_raids_30d: 1,
             internal_received_raids_7d: 2,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let result = compute_scores(&inputs);
 
@@ -583,10 +635,11 @@ mod tests {
         assert_eq!(result.time_pattern_score, 0.75);
         assert_eq!(result.readiness_score, 0.6);
         assert_eq!(result.fairness_score, round_score(0.68));
-        assert_eq!(result.base_score, round_score(0.628));
+        assert_eq!(result.base_score, round_score(0.6652));
+        assert_eq!(result.courtesy_score, 1.0);
         assert_eq!(result.new_partner_multiplier, round_score(1.125));
         assert_eq!(result.raid_boost_multiplier, 1.0);
-        assert_eq!(result.final_score, round_score(0.628 * 1.125));
+        assert_eq!(result.final_score, round_score(0.6652 * 1.125));
         assert!(result.is_new_partner_preferred);
     }
 
@@ -602,9 +655,10 @@ mod tests {
         //   time_pattern_score = 0.5 (nicht reliable)
         //   readiness          = 0.5
         //   fairness           = 0.5*0.5+1.0*0.3+1.0*0.2 = 0.75
-        //   base               = 0.5*0.65+0.75*0.35 = 0.5875
+        //   courtesy           = 1.0
+        //   base               = 0.5*0.585+0.75*0.315+1.0*0.10 = 0.62875
         //   new_mult           = 1.0 (>= 10 Raids)
-        //   final              = 0.5875
+        //   final              = 0.62875
         let inputs = ScoringInputs {
             avg_duration_sec: 0,
             current_uptime_sec: 0,
@@ -618,6 +672,7 @@ mod tests {
             internal_received_raids_30d: 5,
             internal_received_raids_7d: 0,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let result = compute_scores(&inputs);
 
@@ -625,10 +680,49 @@ mod tests {
         assert_eq!(result.time_pattern_score, NEUTRAL_SCORE);
         assert_eq!(result.readiness_score, 0.5);
         assert_eq!(result.fairness_score, 0.75);
-        assert_eq!(result.base_score, round_score(0.5875));
+        assert_eq!(result.base_score, round_score(0.62875));
         assert_eq!(result.new_partner_multiplier, 1.0);
         assert!(!result.is_new_partner_preferred);
-        assert_eq!(result.final_score, round_score(0.5875));
+        assert_eq!(result.final_score, round_score(0.62875));
+    }
+
+    #[test]
+    fn compute_scores_dauerschweiger_verliert_genau_das_courtesy_gewicht() {
+        // Zwei identische Partner, einziger Unterschied ist die Raid-Etikette.
+        // Der Schweiger muss exakt COURTESY_WEIGHT im Base-Score verlieren,
+        // nicht mehr und nicht weniger.
+        let schreiber = ScoringInputs {
+            avg_duration_sec: 7200,
+            current_uptime_sec: 3600,
+            duration_history_reliable: true,
+            is_live: true,
+            time_pattern_score_base: 0.75,
+            time_pattern_reliable: true,
+            received_successful_raids_total: 15,
+            raid_boost_enabled: false,
+            internal_sent_raids_30d: 3,
+            internal_received_raids_30d: 1,
+            internal_received_raids_7d: 2,
+            today_received_raids: 0,
+            courtesy_score: 1.0,
+        };
+        let schweiger = ScoringInputs {
+            courtesy_score: 0.0,
+            ..schreiber.clone()
+        };
+
+        let gut = compute_scores(&schreiber);
+        let schlecht = compute_scores(&schweiger);
+
+        // Alle übrigen Komponenten sind identisch.
+        assert_eq!(gut.readiness_score, schlecht.readiness_score);
+        assert_eq!(gut.fairness_score, schlecht.fairness_score);
+        // Der Abstand ist genau das Courtesy-Gewicht.
+        assert_eq!(
+            round_score(gut.base_score - schlecht.base_score),
+            round_score(crate::courtesy::COURTESY_WEIGHT)
+        );
+        assert!(gut.final_score > schlecht.final_score);
     }
 
     #[test]
@@ -647,17 +741,18 @@ mod tests {
             internal_received_raids_30d: 5,
             internal_received_raids_7d: 0,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let result = compute_scores(&inputs);
         assert_eq!(result.raid_boost_multiplier, 1.15);
-        assert_eq!(result.final_score, round_score(round_score(0.5875) * 1.15));
+        assert_eq!(result.final_score, round_score(round_score(0.62875) * 1.15));
     }
 
     #[test]
     fn compute_scores_edge_maximale_fairness_strafe() {
         // sent=0, received=10, received_7d=8, today=3 → fairness=0.05 (Minimum)
         // live=false → duration=0.5, time=0.5, readiness=0.5
-        // base = 0.5*0.65 + 0.05*0.35 = 0.325 + 0.0175 = 0.3425
+        // base = 0.5*0.585 + 0.05*0.315 + 1.0*0.10 = 0.2925 + 0.01575 + 0.1
         let inputs = ScoringInputs {
             avg_duration_sec: 0,
             current_uptime_sec: 0,
@@ -671,10 +766,14 @@ mod tests {
             internal_received_raids_30d: 10,
             internal_received_raids_7d: 8,
             today_received_raids: 3,
+            courtesy_score: 1.0,
         };
         let result = compute_scores(&inputs);
         assert_eq!(result.fairness_score, round_score(0.05));
-        assert_eq!(result.base_score, round_score(0.5 * 0.65 + 0.05 * 0.35));
+        assert_eq!(
+            result.base_score,
+            round_score(0.5 * 0.585 + 0.05 * 0.315 + 0.10)
+        );
     }
 
     // ─── P2.41: offline-mit-Cache erhält den vorigen Live-Score ──────────────
@@ -697,6 +796,7 @@ mod tests {
             internal_received_raids_30d: 0,
             internal_received_raids_7d: 0,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let cache = CachedScores {
             duration_score: 0.83,
@@ -739,6 +839,7 @@ mod tests {
             internal_received_raids_30d: 0,
             internal_received_raids_7d: 0,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let result = compute_scores_with_cache(&inputs, None);
         assert_eq!(result.duration_score, NEUTRAL_SCORE);
@@ -764,6 +865,7 @@ mod tests {
             internal_received_raids_30d: 1,
             internal_received_raids_7d: 2,
             today_received_raids: 0,
+            courtesy_score: 1.0,
         };
         let cache = CachedScores {
             duration_score: 0.1,

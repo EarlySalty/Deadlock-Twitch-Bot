@@ -580,7 +580,18 @@ mod tests {
                  current_uptime_sec INTEGER, duration_score DOUBLE PRECISION, time_pattern_score DOUBLE PRECISION, \
                  readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION, base_score DOUBLE PRECISION, \
                  final_score DOUBLE PRECISION, today_received_raids INTEGER, last_computed_at TEXT, \
-                 internal_sent_raids_30d INTEGER, internal_received_raids_7d INTEGER, internal_received_raids_30d INTEGER)",
+                 internal_sent_raids_30d INTEGER, internal_received_raids_7d INTEGER, internal_received_raids_30d INTEGER, \
+                 courtesy_score DOUBLE PRECISION DEFAULT 1.0, courtesy_class TEXT, \
+                 courtesy_observed INTEGER DEFAULT 0)",
+            // Der Score-Refresh faltet die Raid-Etikette mit in den Base-Score.
+            "CREATE TABLE twitch_raid_courtesy_events (id BIGSERIAL PRIMARY KEY, \
+                 raid_history_id BIGINT, from_broadcaster_id TEXT NOT NULL, \
+                 from_broadcaster_login TEXT NOT NULL, to_broadcaster_id TEXT NOT NULL, \
+                 to_broadcaster_login TEXT NOT NULL, observed_from TIMESTAMPTZ NOT NULL, \
+                 observed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+                 courtesy_class TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0, \
+                 message_span_sec INTEGER NOT NULL DEFAULT 0, observation_source TEXT, \
+                 unknown_reason TEXT, whisper_sent BOOLEAN NOT NULL DEFAULT FALSE)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }

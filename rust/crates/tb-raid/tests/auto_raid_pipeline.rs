@@ -114,7 +114,10 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             fairness_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             internal_sent_raids_30d INTEGER NOT NULL DEFAULT 0,
             internal_received_raids_7d INTEGER NOT NULL DEFAULT 0,
-            internal_received_raids_30d INTEGER NOT NULL DEFAULT 0 )",
+            internal_received_raids_30d INTEGER NOT NULL DEFAULT 0,
+            courtesy_score DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+            courtesy_class TEXT,
+            courtesy_observed INTEGER NOT NULL DEFAULT 0 )",
     ] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
     }

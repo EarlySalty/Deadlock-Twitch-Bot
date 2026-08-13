@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT MAX(observed_at) AS \"last_at?\"\n            FROM twitch_raid_courtesy_events\n            WHERE from_broadcaster_id = $1\n              AND whisper_sent\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f7e3162c367374ef8fda094a2ee0871817ffc12534e79250366e025cabe39489"
+}

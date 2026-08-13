@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT courtesy_class AS \"courtesy_class!\"\n            FROM twitch_raid_courtesy_events\n            WHERE from_broadcaster_id = $1\n            ORDER BY observed_at DESC\n            LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "courtesy_class!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cfb937265ee6883e018112e7f85770bee6a047538193d8b5480a851835b6f808"
+}

@@ -16,6 +16,7 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use sqlx::PgPool;
+use tb_raid::courtesy_store::CourtesyStore;
 use tb_raid::{compute_scores, PartnerRaidScoreUpsert, ScoreStore, ScoringInputs};
 
 /// Anzahl Tage Lookback für Sessions (identisch zu Python LOOKBACK_DAYS = 45, Z. 19).
@@ -133,12 +134,7 @@ fn boost_active(row: &BoostFlagRaw, now: DateTime<Utc>) -> bool {
     if row.raid_boost_enabled.unwrap_or(0) != 0 {
         return true;
     }
-    let plan_name = row
-        .plan_name
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
+    let plan_name = row.plan_name.as_deref().unwrap_or("").trim().to_lowercase();
     if legacy_plan_name_has_raid_priority(&plan_name) {
         return true;
     }
@@ -170,12 +166,18 @@ fn boost_active(row: &BoostFlagRaw, now: DateTime<Utc>) -> bool {
 pub struct ScoreRefreshResolver {
     pool: PgPool,
     score_store: ScoreStore,
+    courtesy_store: CourtesyStore,
 }
 
 impl ScoreRefreshResolver {
     pub fn new(pool: PgPool) -> Self {
         let score_store = ScoreStore::new(pool.clone());
-        Self { pool, score_store }
+        let courtesy_store = CourtesyStore::new(pool.clone());
+        Self {
+            pool,
+            score_store,
+            courtesy_store,
+        }
     }
 
     /// Berechnet Scores für alle übergebenen Partner-IDs und schreibt sie in die DB.
@@ -234,6 +236,7 @@ impl ScoreRefreshResolver {
         let partner_user_ids: &[(String, String)] = &gated_pairs;
 
         let ids: Vec<&str> = partner_user_ids.iter().map(|(id, _)| id.as_str()).collect();
+        let owned_ids: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
         let logins: Vec<&str> = partner_user_ids.iter().map(|(_, l)| l.as_str()).collect();
 
         // 1. Alle Datenquellen laden — Reihenfolge entspricht Python _refresh_scores_for_ids
@@ -246,6 +249,17 @@ impl ScoreRefreshResolver {
         // ein nicht-live Partner mit vorhandenem Cache behält seine Score-
         // Komponenten (einfrieren statt mit NEUTRAL neu berechnen).
         let cached_scores = self.score_store.load_many(&ids).await?;
+        // Raid-Etikette je Partner: wie oft er nach eigenen Raids im Zielchat
+        // etwas geschrieben hat. Fehlt ein Eintrag, greift der Default (voller
+        // Wert, kein Abzug) — fehlende Daten dürfen niemanden kosten.
+        let courtesy_by_id = self
+            .courtesy_store
+            .summaries_for(&owned_ids, now)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "Courtesy-Historie nicht ladbar — Scores ohne Etikette-Anteil");
+                std::collections::HashMap::new()
+            });
 
         let lookback_cutoff = now - chrono::Duration::days(LOOKBACK_DAYS);
         let mut upserts = Vec::with_capacity(partner_user_ids.len());
@@ -271,6 +285,11 @@ impl ScoreRefreshResolver {
                 .map(|b| boost_active(b, now))
                 .unwrap_or(false);
 
+            let courtesy = courtesy_by_id
+                .get(user_id.as_str())
+                .copied()
+                .unwrap_or_default();
+
             let inputs = build_scoring_inputs(&PartnerBuildCtx {
                 live_row,
                 sessions: &sessions,
@@ -279,6 +298,7 @@ impl ScoreRefreshResolver {
                 raid_boost_enabled: boost,
                 now,
                 lookback_cutoff,
+                courtesy_score: courtesy.score,
             });
 
             let scores = compute_scores(&inputs);
@@ -348,6 +368,11 @@ impl ScoreRefreshResolver {
                 internal_received_raids_7d: metrics.received_7d as i32,
                 today_received_raids: inputs.today_received_raids as i32,
                 last_computed_at: now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+                // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand:
+                // auch im eingefrorenen Offline-Zweig gilt der frische Wert.
+                courtesy_score: courtesy.score,
+                courtesy_class: courtesy.class.map(|class| class.as_str().to_string()),
+                courtesy_observed: courtesy.observed as i32,
             };
 
             upserts.push(upsert);
@@ -369,6 +394,8 @@ struct PartnerBuildCtx<'a> {
     raid_boost_enabled: bool,
     now: DateTime<Utc>,
     lookback_cutoff: DateTime<Utc>,
+    /// Anteil eigener Raids mit Nachricht im Zielchat (1.0 = kein Abzug).
+    courtesy_score: f64,
 }
 
 /// Berechnet `ScoringInputs` aus den Rohdaten eines einzelnen Partners.
@@ -383,6 +410,7 @@ fn build_scoring_inputs(ctx: &PartnerBuildCtx<'_>) -> ScoringInputs {
         raid_boost_enabled,
         now,
         lookback_cutoff,
+        courtesy_score: _,
     } = ctx;
     let live_row = *live_row;
     let now = *now;
@@ -435,6 +463,7 @@ fn build_scoring_inputs(ctx: &PartnerBuildCtx<'_>) -> ScoringInputs {
         internal_received_raids_30d: metrics.received_30d,
         internal_received_raids_7d: metrics.received_7d,
         today_received_raids: today_received_raids as i64,
+        courtesy_score: ctx.courtesy_score,
     }
 }
 
@@ -818,7 +847,10 @@ mod tests {
         // Großschreibung wird wie in Python vor dem Lookup normalisiert.
         assert!(boost_active(&boost_row(0, "Bundle", "", None), now));
         assert!(boost_active(&boost_row(0, "raid_boost", "", None), now));
-        assert!(boost_active(&boost_row(0, "chat_quiet_bundle", "", None), now));
+        assert!(boost_active(
+            &boost_row(0, "chat_quiet_bundle", "", None),
+            now
+        ));
         // Pläne ohne raid.priority-Entitlement:
         assert!(!boost_active(&boost_row(0, "werbefrei", "", None), now));
         assert!(!boost_active(&boost_row(0, "analysis", "", None), now));
@@ -829,7 +861,10 @@ mod tests {
     fn boost_aus_manuellem_plan_override() {
         let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
         // Ohne Ablauf: aktiv.
-        assert!(boost_active(&boost_row(0, "", "bundle_komplett", None), now));
+        assert!(boost_active(
+            &boost_row(0, "", "bundle_komplett", None),
+            now
+        ));
         // Zukunft: aktiv; Vergangenheit: abgelaufen.
         assert!(boost_active(
             &boost_row(0, "", "bundle_komplett", Some("2026-12-31T00:00:00+00:00")),
@@ -840,7 +875,10 @@ mod tests {
             now
         ));
         // Plan ohne raid.priority bleibt aus, auch wenn aktiv.
-        assert!(!boost_active(&boost_row(0, "", "analysis_dashboard", None), now));
+        assert!(!boost_active(
+            &boost_row(0, "", "analysis_dashboard", None),
+            now
+        ));
     }
 
     #[test]
@@ -963,16 +1001,33 @@ mod tests {
         // Knapp innerhalb: genau auf der Grenze (>= cutoff → soll enthalten sein)
         let s_grenze = make_session("alice", lookback_cutoff, Some(3600));
         // Knapp außerhalb: eine Sekunde vor der Grenze (soll herausgefiltert werden)
-        let s_aussen = make_session("alice", lookback_cutoff - chrono::Duration::seconds(1), Some(3600));
+        let s_aussen = make_session(
+            "alice",
+            lookback_cutoff - chrono::Duration::seconds(1),
+            Some(3600),
+        );
         // Normal innerhalb
         let s_innen = make_session("alice", now - chrono::Duration::days(1), Some(3600));
 
         let all = [&s_grenze, &s_aussen, &s_innen];
-        let recent: Vec<_> = all.iter().filter(|s| s.started_at >= lookback_cutoff).collect();
+        let recent: Vec<_> = all
+            .iter()
+            .filter(|s| s.started_at >= lookback_cutoff)
+            .collect();
 
-        assert_eq!(recent.len(), 2, "Grenz-Session und innere Session sollen enthalten sein");
-        assert!(recent.iter().any(|s| s.started_at == lookback_cutoff), "Grenz-Session (>=) muss drin sein");
-        assert!(!recent.iter().any(|s| s.started_at == s_aussen.started_at), "Session außerhalb muss raus");
+        assert_eq!(
+            recent.len(),
+            2,
+            "Grenz-Session und innere Session sollen enthalten sein"
+        );
+        assert!(
+            recent.iter().any(|s| s.started_at == lookback_cutoff),
+            "Grenz-Session (>=) muss drin sein"
+        );
+        assert!(
+            !recent.iter().any(|s| s.started_at == s_aussen.started_at),
+            "Session außerhalb muss raus"
+        );
     }
 
     #[test]
@@ -999,8 +1054,9 @@ mod tests {
     #[cfg(feature = "integration")]
     async fn setup_test_db(schema: &str) -> PgPool {
         use std::str::FromStr;
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         // Schema anlegen über eine Admin-Verbindung …
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
@@ -1130,7 +1186,10 @@ mod tests {
                 internal_received_raids_30d  INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_7d   INTEGER NOT NULL DEFAULT 0,
                 today_received_raids         INTEGER NOT NULL DEFAULT 0,
-                last_computed_at             TEXT NOT NULL DEFAULT ''
+                last_computed_at             TEXT NOT NULL DEFAULT '',
+                courtesy_score               DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                courtesy_class               TEXT,
+                courtesy_observed            INTEGER NOT NULL DEFAULT 0
             )
             "#,
         )

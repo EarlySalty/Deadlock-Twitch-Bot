@@ -1,0 +1,166 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id, twitch_login, avg_duration_sec,\n                   time_pattern_score_base, received_successful_raids_total,\n                   is_new_partner_preferred, new_partner_multiplier,\n                   raid_boost_multiplier, is_live, current_started_at,\n                   current_uptime_sec, duration_score, time_pattern_score,\n                   base_score, final_score, today_received_raids,\n                   last_computed_at, readiness_score, fairness_score,\n                   internal_sent_raids_30d, internal_received_raids_7d,\n                   internal_received_raids_30d,\n                   COALESCE(courtesy_score, 1.0) AS \"courtesy_score!\",\n                   courtesy_class,\n                   COALESCE(courtesy_observed, 0) AS \"courtesy_observed!\"\n            FROM twitch_partner_raid_scores\n            WHERE twitch_user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_duration_sec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "time_pattern_score_base",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "received_successful_raids_total",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_new_partner_preferred",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "new_partner_multiplier",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "raid_boost_multiplier",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_live",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "current_started_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "current_uptime_sec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "duration_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "time_pattern_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "base_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 14,
+        "name": "final_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "today_received_raids",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "last_computed_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "readiness_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 18,
+        "name": "fairness_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 19,
+        "name": "internal_sent_raids_30d",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 20,
+        "name": "internal_received_raids_7d",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 21,
+        "name": "internal_received_raids_30d",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 22,
+        "name": "courtesy_score!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 23,
+        "name": "courtesy_class",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "courtesy_observed!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "3064b0bed03ed41074bda5d7cf75a00351fb9521b1b580efde5a7df1586fc1e9"
+}
