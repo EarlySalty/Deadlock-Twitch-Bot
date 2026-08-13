@@ -15,8 +15,8 @@ WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
 Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
 Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
 
-# Transkription bleibt lokal. Zeigt diese URL woandershin, verlaesst
-# Stream-Audio den Rechner; das Programm warnt beim Start davor.
+# Transkription bleibt lokal. Zeigt diese URL woandershin, bricht der Start ab;
+# nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
 Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
 Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
 
