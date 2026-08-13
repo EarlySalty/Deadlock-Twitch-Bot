@@ -190,7 +190,10 @@ pub fn zu_funden(antwort: &ModellAntwort, segmente: &[Segment]) -> Vec<Fund> {
                 } else {
                     treffer.confidence.clone()
                 },
-                begruendung: treffer.reason.clone(),
+                // Die Begruendung kommt vom Modell und zitiert gern das,
+                // was es beanstandet. Ohne Schwaerzung stuende genau der
+                // Wortlaut im Bericht, den der Beleg daneben verdeckt.
+                begruendung: crate::rules::redact_text(&treffer.reason),
                 zitat_redigiert: crate::rules::redact_text(&segment.text),
                 zitat_hash: crate::rules::evidence_hash(&segment.text),
             })
