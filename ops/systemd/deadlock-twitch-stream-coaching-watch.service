@@ -21,6 +21,15 @@ Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcription
 Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
 
 Environment=RUST_LOG=info
+
+# Berichte nennen Zeit und Kategorie moeglicher Vorfaelle, Transkripte den
+# vollen Wortlaut fremder Menschen. Der Prozess schreibt selbst mit 0600;
+# UMask deckt zusaetzlich die angelegten Verzeichnisse ab.
+UMask=0077
+
+# Der Modellschritt schickt nur geschwaerzte Ausschnitte, und nur an einen
+# Anbieter auf diesem Rechner. Fuer einen fremden Anbieter waere
+# STREAM_AUDIT_ALLOW_REMOTE_LLM=1 noetig - bewusst nicht gesetzt.
 EnvironmentFile=-%h/.config/deadlock/bots.env
 LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
 

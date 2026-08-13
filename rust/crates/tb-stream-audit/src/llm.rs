@@ -11,8 +11,17 @@
 //!
 //! # Was an das Modell geht
 //!
-//! Nur die Segmenttexte. Kein Kanalname, keine Zuschauer, keine Steam- oder
-//! Discord-IDs. Das Modell soll Aussagen bewerten, nicht Personen.
+//! Nur **redigierte** Segmenttexte. Kein Kanalname, keine Zuschauer, keine
+//! Steam- oder Discord-IDs. Das Modell soll Aussagen bewerten, nicht Personen.
+//!
+//! Der Rohwortlaut geht nie hinaus. Ein Transkript fremder Streamer ist deren
+//! Sprache, nicht unsere; sie geht an einen fremden Anbieter nur geschwaerzt
+//! und nur, wenn das ausdruecklich erlaubt wurde. Ohne Erlaubnis bleibt es bei
+//! den Regelfunden, und der Bericht sagt das (siehe `report::Bericht`).
+//!
+//! Die Erlaubnis steuert [`fernes_modell_erlaubt`]: ein Anbieter auf localhost
+//! gilt immer als erlaubt, alles andere nur mit
+//! `STREAM_AUDIT_ALLOW_REMOTE_LLM=1`.
 
 use serde::Deserialize;
 
@@ -59,7 +68,31 @@ pub fn stapel(segmente: &[Segment]) -> Vec<&[Segment]> {
     segmente.chunks(SEGMENTE_JE_ANFRAGE).collect()
 }
 
-/// Die Nutzlast einer Anfrage: nur ID, Zeitfenster und Text.
+/// Umgebungsschalter fuer einen Anbieter ausserhalb dieses Rechners.
+pub const REMOTE_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_LLM";
+
+/// Darf dieser Anbieter Transkriptausschnitte sehen?
+///
+/// Localhost immer. Alles andere nur mit ausdruecklicher Erlaubnis: es geht um
+/// die Sprache fremder Menschen, und die verlaesst den Rechner nicht, weil
+/// zufaellig ein API-Schluessel in der Umgebung liegt.
+pub fn fernes_modell_erlaubt(base_url: &str) -> bool {
+    let lokal = base_url.contains("//127.0.0.1")
+        || base_url.contains("//localhost")
+        || base_url.contains("//[::1]");
+    if lokal {
+        return true;
+    }
+    matches!(
+        std::env::var(REMOTE_ERLAUBT_ENV).unwrap_or_default().trim(),
+        "1" | "true" | "ja" | "yes"
+    )
+}
+
+/// Die Nutzlast einer Anfrage: nur ID, Zeitfenster und **redigierter** Text.
+///
+/// Die Redaktion laeuft hier und nicht beim Aufrufer, damit kein zweiter
+/// Aufrufer sie vergessen kann.
 pub fn anfrage_json(stapel: &[Segment]) -> String {
     let eintraege: Vec<_> = stapel
         .iter()
@@ -68,7 +101,7 @@ pub fn anfrage_json(stapel: &[Segment]) -> String {
                 "id": s.id,
                 "start_seconds": (s.start_sekunden * 100.0).round() / 100.0,
                 "end_seconds": (s.ende_sekunden * 100.0).round() / 100.0,
-                "text": s.text,
+                "text": crate::rules::redact_text(&s.text),
             })
         })
         .collect();
@@ -167,6 +200,33 @@ mod tests {
         let eintrag = &json["segments"][0];
         let felder: Vec<_> = eintrag.as_object().unwrap().keys().cloned().collect();
         assert_eq!(felder, vec!["end_seconds", "id", "start_seconds", "text"]);
+    }
+
+    #[test]
+    fn anfrage_enthaelt_keinen_rohwortlaut() {
+        // Der eigentliche Datenschutz-Vertrag dieses Moduls.
+        let json = anfrage_json(&[segment("s1", "du schwuchtel jetzt reicht es")]);
+        assert!(!json.to_lowercase().contains("schwuchtel"));
+        assert!(json.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn localhost_gilt_immer_als_erlaubt() {
+        assert!(fernes_modell_erlaubt("http://127.0.0.1:8791/v1"));
+        assert!(fernes_modell_erlaubt("http://localhost:1234/v1"));
+    }
+
+    #[test]
+    fn fremder_anbieter_braucht_ausdrueckliche_erlaubnis() {
+        std::env::remove_var(REMOTE_ERLAUBT_ENV);
+        assert!(!fernes_modell_erlaubt(
+            "https://api.fireworks.ai/inference/v1"
+        ));
+        std::env::set_var(REMOTE_ERLAUBT_ENV, "1");
+        assert!(fernes_modell_erlaubt(
+            "https://api.fireworks.ai/inference/v1"
+        ));
+        std::env::remove_var(REMOTE_ERLAUBT_ENV);
     }
 
     #[test]
