@@ -28,20 +28,31 @@ Tippen bringt, und welche zwanzig Momente davor es nicht getan haben.
    `channel:bot` liefert, gelernt aber gerade in fremden Kanälen wird. Sie hat
    keinen Sende-Transport und keine Verbindung zur Antwort-Pipeline.
 
-2. **Aufnehmen, und zwar von Anfang an.** Zwei Sorten Kanäle werden
-   aufgezeichnet:
-   - **Partner mit eingeschaltetem Engagement**, sobald sie live Deadlock
-     streamen, unabhängig davon ob der Owner schon da ist. Taucht er später
-     auf, wäre der Verlauf davor sonst unwiederbringlich weg.
-   - **Fremde Kanäle ab der ersten eigenen Nachricht.** Früher geht es dort
-     nicht: dass er zuschaut, erfährt man erst durch seine Zeile.
+2. **Aufnehmen, mit klarer Rangfolge.** Transkription kostet dauerhaft CPU,
+   also läuft sie nicht überall, sondern dort, wo sie etwas bringt:
+   - **Wo der Owner ist, hat Vorrang.** Sobald er irgendwo schreibt, wird
+     genau dieser Kanal aufgezeichnet (bis zu `MAX_CHANNELS`, falls er in
+     mehreren unterwegs ist). Alles andere pausiert.
+   - **Ist er nirgends, läuft genau ein Kanal mit**: der mit dem lebendigsten
+     Chat unter den live Deadlock-Partnern. Das ist Anschauungsmaterial dafür,
+     wie ein gut laufender Chat funktioniert, und Vorbereitung auf künftige
+     Streamer. Alle Partner rund um die Uhr zu transkribieren würde die
+     Maschine auslasten, ohne dass dabei eine einzige eigene Reaktion entsteht.
+     `ENGAGEMENT_LEARN_IDLE_CHANNELS=0` schaltet auch das ab.
+
+   „Lebendig" misst der Lern-IRC-Reader selbst: Chat-Zeilen je Kanal in den
+   letzten 10 Minuten, im Speicher, ohne Datenbank. Kanäle ganz ohne Aktivität
+   werden nie aufgenommen.
 
    Die Aufnahme endet, sobald der Stream offline geht (`twitch_live_state`),
    sonst 45 Minuten nach der letzten eigenen Nachricht. In allen aufgenommenen
    Kanälen läuft auch der Chat mit; sonst gäbe es Stream-Ton ohne den Chat, der
-   dazu lief. Kanäle, die weder aufgenommen werden noch den Owner gesehen
-   haben, fallen ohne DB-Zugriff durch (In-Memory-Maps) — aus dreißig
-   mitgelesenen Kanälen bleiben so die zwei, drei relevanten.
+   dazu lief. Alle übrigen Nachrichten kosten nur einen Map-Zugriff und werden
+   verworfen.
+
+   **In fremden Kanälen** startet die Aufnahme erst mit der ersten eigenen
+   Nachricht. Früher geht es dort nicht: dass der Owner zuschaut, erfährt man
+   ausschließlich dadurch, dass er schreibt.
 
 3. **Ein Task pro Kanal**, nicht eine gemeinsame Runde: `streamlink` zieht
    Blöcke von 30 s, Whisper transkribiert. Reihum wären die Lücken dazwischen
@@ -111,7 +122,8 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 | `ENGAGEMENT_STT_BASE_URL` | `http://127.0.0.1:8791/v1/audio/transcriptions` | Whisper-Endpunkt (siehe unten) |
 | `ENGAGEMENT_LEARN_HOT_MINUTES` | 45 | Nachlauf in fremden Kanälen |
 | `ENGAGEMENT_LEARN_CAPTURE_SECONDS` | 30 | Länge eines Aufnahmeblocks |
-| `ENGAGEMENT_LEARN_MAX_CHANNELS` | 3 | Gleichzeitig aufgenommene Kanäle |
+| `ENGAGEMENT_LEARN_MAX_CHANNELS` | 3 | Kanäle mit Owner-Anwesenheit gleichzeitig |
+| `ENGAGEMENT_LEARN_IDLE_CHANNELS` | 1 | Mitlaufende Kanäle, wenn der Owner nirgends ist (`0` = aus) |
 | `ENGAGEMENT_LEARN_WINDOW_PRE_SECONDS` | 45 | Transkript-Fenster vor der Nachricht |
 | `ENGAGEMENT_LEARN_WINDOW_POST_SECONDS` | 10 | Transkript-Fenster danach |
 | `ENGAGEMENT_LEARN_RETENTION_HOURS` | 168 | Aufbewahrung des Zeitstrahls |

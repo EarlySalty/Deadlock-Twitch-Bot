@@ -50,13 +50,24 @@ const DEFAULT_CHAT_CONTEXT_MINUTES: i64 = 4;
 const DEFAULT_RETENTION_HOURS: i64 = 168;
 /// Capture-Länge je Aufnahmeblock.
 const DEFAULT_CAPTURE_SECONDS: i64 = 30;
-/// So viele Kanäle gleichzeitig aufnehmen.
+/// So viele Kanäle gleichzeitig aufnehmen, wenn der Owner unterwegs ist.
 ///
 /// Die Grenze ist der Whisper-Dienst, nicht die Bandbreite: er verarbeitet
 /// Anfragen nacheinander und braucht rund 7 s je 30-Sekunden-Block. Drei
 /// Kanäle erzeugen alle 10 s eine Anfrage und lasten ihn damit gut aus; bei
 /// mehr stauen sich die Blöcke und der Zeitstrahl bekommt Löcher.
 const DEFAULT_MAX_CAPTURE_CHANNELS: usize = 3;
+/// So viele Kanäle laufen mit, wenn der Owner NIRGENDS ist.
+///
+/// Bewusst einer statt aller Partner: rund um die Uhr mehrere Kanäle zu
+/// transkribieren lastet die Maschine dauerhaft aus, ohne dass dabei eine
+/// einzige eigene Reaktion entsteht. Einer reicht, um mitzubekommen, wie ein
+/// gut laufender Chat funktioniert. `0` schaltet den Leerlauf-Fall ab.
+const DEFAULT_IDLE_CAPTURE_CHANNELS: usize = 1;
+/// Zeitfenster der Aktivitätsmessung.
+const ACTIVITY_WINDOW_MINUTES: i64 = 10;
+/// Obergrenze der gemerkten Zeitstempel je Kanal.
+const ACTIVITY_MAX_STAMPS: usize = 400;
 /// Nachrichten erst mappen, wenn das Fenster danach transkribiert sein kann.
 const MAP_LAG_EXTRA_SECONDS: i64 = 45;
 /// Obergrenze je Mapper-Durchlauf.
@@ -157,6 +168,11 @@ pub fn capture_seconds() -> i64 {
 /// So viele lern-heiße Kanäle werden parallel aufgenommen.
 pub fn max_capture_channels() -> usize {
     env_int("ENGAGEMENT_LEARN_MAX_CHANNELS", DEFAULT_MAX_CAPTURE_CHANNELS as i64, 1) as usize
+}
+
+/// So viele Kanäle laufen mit, wenn der Owner nirgends gesichtet wurde.
+pub fn idle_capture_channels() -> usize {
+    env_int("ENGAGEMENT_LEARN_IDLE_CHANNELS", DEFAULT_IDLE_CAPTURE_CHANNELS as i64, 0) as usize
 }
 
 /// Aufbewahrung der Rohdaten (Chat-Puffer, Transkripte) in Stunden.
@@ -261,6 +277,9 @@ pub struct ReactionLearning {
     enabled: bool,
     /// Kanal → letzte eigene Nachricht. Hält den Fast-Path DB-frei.
     hot: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// Chat-Zeitstempel je Kanal für die Aktivitätsmessung. Beantwortet im
+    /// Leerlauf die Frage, welcher Kanal überhaupt einen lebendigen Chat hat.
+    activity: Mutex<HashMap<String, Vec<DateTime<Utc>>>>,
     /// Kanäle, die gerade aufgenommen werden. Vom Capture-Supervisor gepflegt,
     /// damit [`observe`](Self::observe) den Chat dieser Kanäle mitschreibt,
     /// ohne pro Nachricht die Datenbank zu fragen. Ohne das gäbe es in
@@ -275,6 +294,7 @@ impl ReactionLearning {
             owner_login: owner_login(),
             enabled: learn_enabled(),
             hot: Mutex::new(HashMap::new()),
+            activity: Mutex::new(HashMap::new()),
             recording: Mutex::new(HashSet::new()),
         }
     }
@@ -325,15 +345,73 @@ impl ReactionLearning {
     /// vorbei, endet die Aufnahme sofort, statt bis zum Ablauf der Nachlaufzeit
     /// gegen einen toten Kanal zu laufen.
     pub async fn capture_channels(&self) -> Vec<String> {
-        let seen = self.hot_channels();
-        let mut live = self.live_partner_channels().await;
-        for channel in seen {
-            if !live.contains(&channel) {
-                live.push(channel);
+        let seen = self.filter_live(&self.hot_channels()).await;
+        if !seen.is_empty() {
+            return seen.into_iter().take(max_capture_channels()).collect();
+        }
+        // Leerlauf: der Owner ist nirgends. Statt alle Partner-Kanäle
+        // durchlaufen zu lassen (was den Whisper-Dienst rund um die Uhr
+        // auslastet, ohne dass eine einzige eigene Reaktion dabei entsteht)
+        // läuft nur der lebendigste Kanal mit — als Anschauungsmaterial dafür,
+        // wie ein gut laufender Deadlock-Chat aussieht.
+        let idle_slots = idle_capture_channels();
+        if idle_slots == 0 {
+            return Vec::new();
+        }
+        let candidates = self.filter_live(&self.live_partner_channels().await).await;
+        self.busiest(&candidates).into_iter().take(idle_slots).collect()
+    }
+
+    /// Sortiert Kanäle nach Chat-Aktivität der letzten Minuten, lebendigste
+    /// zuerst. Kanäle ohne gemessene Aktivität fallen raus: bei ihnen gäbe es
+    /// nichts zu beobachten.
+    fn busiest(&self, channels: &[String]) -> Vec<String> {
+        let cutoff = Utc::now() - Duration::minutes(ACTIVITY_WINDOW_MINUTES);
+        let activity = self.activity.lock().unwrap_or_else(|p| p.into_inner());
+        let mut scored: Vec<(String, usize)> = channels
+            .iter()
+            .map(|c| {
+                let count = activity
+                    .get(c)
+                    .map(|stamps| stamps.iter().filter(|t| **t >= cutoff).count())
+                    .unwrap_or(0);
+                (c.clone(), count)
+            })
+            .filter(|(_, count)| *count > 0)
+            .collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(c, _)| c).collect()
+    }
+
+    /// Zählt eine Chat-Zeile für die Aktivitätsmessung. Läuft für JEDEN Kanal,
+    /// den der Bot mitliest, auch für nicht aufgenommene — sonst wüsste man im
+    /// Leerlauf nicht, welcher Kanal überhaupt lebendig ist.
+    fn note_activity(&self, channel_login: &str, at: DateTime<Utc>) {
+        let cutoff = at - Duration::minutes(ACTIVITY_WINDOW_MINUTES);
+        let mut activity = self.activity.lock().unwrap_or_else(|p| p.into_inner());
+        let stamps = activity.entry(channel_login.to_string()).or_default();
+        stamps.push(at);
+        if stamps.len() > ACTIVITY_MAX_STAMPS {
+            stamps.retain(|t| *t >= cutoff);
+            // Auch danach noch voll: sehr lebendiger Kanal, jüngste behalten.
+            if stamps.len() > ACTIVITY_MAX_STAMPS {
+                let drop = stamps.len() - ACTIVITY_MAX_STAMPS;
+                stamps.drain(..drop);
             }
         }
-        let online = self.filter_live(&live).await;
-        online.into_iter().take(max_capture_channels()).collect()
+    }
+
+    /// Chat-Zeilen je Kanal im Aktivitätsfenster (Diagnose).
+    pub fn activity_snapshot(&self) -> Vec<(String, usize)> {
+        let cutoff = Utc::now() - Duration::minutes(ACTIVITY_WINDOW_MINUTES);
+        let activity = self.activity.lock().unwrap_or_else(|p| p.into_inner());
+        let mut out: Vec<(String, usize)> = activity
+            .iter()
+            .map(|(c, stamps)| (c.clone(), stamps.iter().filter(|t| **t >= cutoff).count()))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
     }
 
     /// Partner-Kanäle mit eingeschaltetem Engagement, die live Deadlock streamen.
@@ -455,6 +533,12 @@ impl ReactionLearning {
         if channel.is_empty() || login.is_empty() || text.is_empty() {
             return;
         }
+        // Aktivität zählt für JEDEN mitgelesenen Kanal, auch für die nicht
+        // aufgenommenen: im Leerlauf entscheidet genau diese Messung, welcher
+        // Chat lebendig genug ist, um ihn anzuschauen.
+        let now = Utc::now();
+        self.note_activity(&channel, now);
+
         let is_owner = login == self.owner_login;
         // Fremde Zeilen zählen, wenn der Kanal aufgenommen wird — sonst gäbe es
         // in Partner-Kanälen Stream-Ton ohne den Chat, der dazu lief.
@@ -463,7 +547,7 @@ impl ReactionLearning {
         }
 
         if is_owner {
-            self.mark_hot(&channel, Utc::now());
+            self.mark_hot(&channel, now);
             if let Err(error) = self.touch_channel(&channel, channel_user_id).await {
                 tracing::warn!(%error, channel = %channel, "learn: Kanal-Upsert fehlgeschlagen");
             }
@@ -1045,16 +1129,17 @@ mod tests {
         assert_eq!(count, 4, "einmal msg-1, einmal msg-2, zweimal ohne ID");
     }
 
-    /// Kern des Auftrags: bei Partnern laeuft die Aufnahme ab Stream-Beginn,
-    /// nicht erst wenn der Owner auftaucht. Sonst fehlt genau der Verlauf, der
-    /// erklaert, worauf er spaeter reagiert.
+    /// Im Leerlauf laeuft genau EIN Kanal mit, und zwar der mit dem
+    /// lebendigsten Chat. Alle Partner dauerhaft zu transkribieren wuerde die
+    /// Maschine rund um die Uhr auslasten, ohne dass eine eigene Reaktion
+    /// dabei entsteht.
     #[tokio::test]
-    async fn partner_wird_ohne_owner_aufgenommen_und_endet_mit_dem_stream() {
+    async fn ohne_owner_laeuft_nur_der_lebendigste_kanal() {
         let Some(pool) = make_pool("t_eng_learn_capture").await else { return };
         sqlx::query(
             "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES \
-             ('partner_live', TRUE), ('partner_offline', TRUE), ('partner_aus', FALSE), \
-             ('partner_anderes_spiel', TRUE)",
+             ('partner_live', TRUE), ('partner_still', TRUE), ('partner_offline', TRUE), \
+             ('partner_aus', FALSE), ('partner_anderes_spiel', TRUE)",
         )
         .execute(&pool)
         .await
@@ -1062,19 +1147,79 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES \
              ('1','partner_live',1,'Deadlock'), \
-             ('2','partner_offline',0,'Deadlock'), \
-             ('3','partner_aus',1,'Deadlock'), \
-             ('4','partner_anderes_spiel',1,'Dota 2')",
+             ('2','partner_still',1,'Deadlock'), \
+             ('3','partner_offline',0,'Deadlock'), \
+             ('4','partner_aus',1,'Deadlock'), \
+             ('5','partner_anderes_spiel',1,'Dota 2')",
         )
         .execute(&pool)
         .await
         .unwrap();
 
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
-        let channels = learn.capture_channels().await;
-        assert_eq!(channels, vec!["partner_live".to_string()]);
+        // Ohne jede gemessene Aktivität gibt es nichts zu beobachten.
+        assert!(learn.capture_channels().await.is_empty());
+
+        // partner_still bekommt eine Zeile, partner_live drei.
+        let now = Utc::now();
+        learn.note_activity("partner_still", now);
+        for _ in 0..3 {
+            learn.note_activity("partner_live", now);
+        }
+        assert_eq!(learn.capture_channels().await, vec!["partner_live".to_string()]);
         assert!(learn.should_capture("Partner_Live").await);
+        assert!(!learn.should_capture("partner_still").await, "nur einer im Leerlauf");
         assert!(!learn.should_capture("partner_offline").await);
+    }
+
+    /// Sobald der Owner irgendwo schreibt, zaehlt nur noch sein Kanal — auch
+    /// wenn woanders deutlich mehr los ist.
+    #[tokio::test]
+    async fn owner_verdraengt_den_leerlauf_kanal() {
+        let Some(pool) = make_pool("t_eng_learn_prio").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('grosser', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) \
+             VALUES ('1','grosser',1,'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
+        let now = Utc::now();
+        for _ in 0..50 {
+            learn.note_activity("grosser", now);
+        }
+        assert_eq!(learn.capture_channels().await, vec!["grosser".to_string()]);
+
+        // Owner taucht in einem kleinen fremden Kanal auf.
+        learn.observe("kleiner", None, "owner", "wilder take", Some("m1")).await;
+        assert_eq!(learn.capture_channels().await, vec!["kleiner".to_string()]);
+    }
+
+    /// Die Aktivitätsmessung selbst braucht keine Datenbank, `connect_lazy`
+    /// verlangt aber eine Tokio-Laufzeit — daher `tokio::test`.
+    #[tokio::test]
+    async fn aktivitaet_altert_aus_dem_fenster() {
+        let learn = ReactionLearning {
+            pool: PgPool::connect_lazy("postgres://localhost/x").unwrap(),
+            owner_login: "owner".to_string(),
+            enabled: true,
+            hot: Mutex::new(HashMap::new()),
+            activity: Mutex::new(HashMap::new()),
+            recording: Mutex::new(HashSet::new()),
+        };
+        let now = Utc::now();
+        learn.note_activity("alt", now - Duration::minutes(ACTIVITY_WINDOW_MINUTES + 1));
+        learn.note_activity("frisch", now);
+        let snapshot = learn.activity_snapshot();
+        assert_eq!(snapshot, vec![("frisch".to_string(), 1)]);
+        assert_eq!(learn.busiest(&["alt".to_string(), "frisch".to_string()]), vec!["frisch"]);
     }
 
     #[tokio::test]
