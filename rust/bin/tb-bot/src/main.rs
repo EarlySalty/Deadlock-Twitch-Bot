@@ -93,6 +93,41 @@ fn opt_in_enabled(name: &str) -> bool {
     optional_env_bool(name, false)
 }
 
+/// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
+/// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
+///
+/// Der Pfad war fest aus dem Arbeitsverzeichnis plus `.venv/bin/yt-dlp` gebaut. Der
+/// Deploy-Baum hat kein venv mehr, also zeigte er ins Leere und jeder Aufruf starb mit
+/// "No such file or directory" statt auf ein installiertes yt-dlp auszuweichen.
+fn resolve_yt_dlp_path(
+    env_override: Option<String>,
+    cwd: &std::path::Path,
+    home: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    if let Some(pfad) = env_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|wert| !wert.is_empty())
+    {
+        return std::path::PathBuf::from(pfad);
+    }
+    [
+        Some(cwd.join(".venv/bin/yt-dlp")),
+        home.map(|home| home.join(".local/bin/yt-dlp")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|kandidat| kandidat.is_file())
+    // systemd-PATH enthält ~/.local/bin nicht, deshalb erst die beiden festen Orte.
+    .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp"))
+}
+
+fn yt_dlp_path() -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref())
+}
+
 fn watch_one_shot_task(task: &'static str, handle: tokio::task::JoinHandle<()>) {
     tokio::spawn(async move {
         if let Err(error) = handle.await {
@@ -789,9 +824,7 @@ async fn main() {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| tb_highlight::vod_export::DEFAULT_REMOTE_BASE.to_string());
-        let yt_dlp_path = std::env::current_dir()
-            .unwrap_or_default()
-            .join(".venv/bin/yt-dlp");
+        let yt_dlp_path = yt_dlp_path();
         let api: Arc<dyn tb_highlight::twitch_vod::TwitchVodApi> = Arc::new(HelixVodSource {
             helix: helix_client,
         });
@@ -1450,7 +1483,7 @@ async fn main() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
                 cwd.join("tools/boon"),
-                cwd.join(".venv/bin/yt-dlp"),
+                yt_dlp_path(),
             );
             let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
                 pool.clone(),
@@ -1509,16 +1542,15 @@ async fn main() {
         match tb_crypto::FieldCipher::from_env() {
             Ok(cipher) => {
                 let cipher = Arc::new(cipher);
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let upload_creds = tb_social_media::credentials::CredentialManager::new(
                     pool.clone(),
                     cipher.clone(),
                 );
-                // yt-dlp wie beim Highlight-Clipper aus dem venv (systemd-PATH
-                // enthält ~/.local/bin nicht); clips_dir = Python-Default data/clips.
+                // yt-dlp wie beim Highlight-Clipper über resolve_yt_dlp_path;
+                // clips_dir = Python-Default data/clips.
                 let upload =
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
-                        .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
+                        .with_yt_dlp(yt_dlp_path().to_string_lossy().into_owned());
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
 
                 let refresh_oauth =
@@ -2151,6 +2183,69 @@ async fn subscription_maintenance_loop(
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+
+    use std::path::{Path, PathBuf};
+
+    fn temp_bin(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tb-ytdlp-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("Testverzeichnis");
+        dir
+    }
+
+    fn lege_datei_an(pfad: &Path) {
+        std::fs::create_dir_all(pfad.parent().expect("Elternpfad")).expect("Elternverzeichnis");
+        std::fs::write(pfad, b"#!/bin/sh\n").expect("Testdatei");
+    }
+
+    #[test]
+    fn yt_dlp_pfad_bevorzugt_env_ueber_alles() {
+        let cwd = temp_bin("env-cwd");
+        lege_datei_an(&cwd.join(".venv/bin/yt-dlp"));
+
+        let pfad = super::resolve_yt_dlp_path(Some("/opt/yt-dlp".to_string()), &cwd, None);
+
+        assert_eq!(pfad, PathBuf::from("/opt/yt-dlp"));
+    }
+
+    #[test]
+    fn yt_dlp_pfad_nimmt_venv_nur_wenn_die_datei_existiert() {
+        let mit_venv = temp_bin("venv-da");
+        lege_datei_an(&mit_venv.join(".venv/bin/yt-dlp"));
+        let ohne_venv = temp_bin("venv-weg");
+        std::fs::create_dir_all(&ohne_venv).expect("leeres cwd");
+
+        assert_eq!(
+            super::resolve_yt_dlp_path(None, &mit_venv, None),
+            mit_venv.join(".venv/bin/yt-dlp")
+        );
+        // Der Deploy-Baum hat kein venv: hier darf kein toter Pfad entstehen.
+        assert_eq!(
+            super::resolve_yt_dlp_path(None, &ohne_venv, None),
+            PathBuf::from("yt-dlp")
+        );
+    }
+
+    #[test]
+    fn yt_dlp_pfad_faellt_auf_home_local_bin_zurueck() {
+        let cwd = temp_bin("home-cwd");
+        std::fs::create_dir_all(&cwd).expect("leeres cwd");
+        let home = temp_bin("home-dir");
+        lege_datei_an(&home.join(".local/bin/yt-dlp"));
+
+        let pfad = super::resolve_yt_dlp_path(None, &cwd, Some(&home));
+
+        assert_eq!(pfad, home.join(".local/bin/yt-dlp"));
+    }
+
+    #[test]
+    fn yt_dlp_pfad_ignoriert_leeres_env() {
+        let cwd = temp_bin("leer-cwd");
+        std::fs::create_dir_all(&cwd).expect("leeres cwd");
+
+        let pfad = super::resolve_yt_dlp_path(Some("   ".to_string()), &cwd, None);
+
+        assert_eq!(pfad, PathBuf::from("yt-dlp"));
+    }
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use sqlx::PgPool;

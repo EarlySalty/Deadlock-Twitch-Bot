@@ -75,7 +75,8 @@ export CREW_GUARD_MODEL="${CREW_GUARD_MODEL:-gpt-5.4-mini}"
 export RICKY_SHADOW_REVIEW_ENABLED="${RICKY_SHADOW_REVIEW_ENABLED:-1}"
 export RICKY_SHADOW_REVIEW_CHANNEL_ID="${RICKY_SHADOW_REVIEW_CHANNEL_ID:-1374364800817303632}"
 export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECONDS:-20}"
-export RICKY_SHADOW_REVIEW_YTDLP_BIN="${RICKY_SHADOW_REVIEW_YTDLP_BIN:-$ROOT_DIR/.venv/bin/yt-dlp}"
+# Kein venv-Default mehr: der Deploy-Baum hat keins, der Pfad zeigte ins Leere.
+# Ohne diese Variable sucht der Bot selbst (venv, ~/.local/bin, PATH).
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}"
 export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}"

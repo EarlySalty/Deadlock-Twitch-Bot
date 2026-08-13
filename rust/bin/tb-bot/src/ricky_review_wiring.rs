@@ -492,7 +492,7 @@ impl LiveAudioReviewer {
             capturer: MemoryAudioCapturer::new(
                 nonempty_env("RICKY_SHADOW_REVIEW_YTDLP_BIN")
                     .or_else(|| nonempty_env("YTDLP_BIN"))
-                    .unwrap_or_else(|| "yt-dlp".to_owned()),
+                    .unwrap_or_else(|| crate::yt_dlp_path().to_string_lossy().into_owned()),
                 nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_owned()),
             ),
             transcriber: OpenAiTranscriber::from_env(),
@@ -1265,13 +1265,18 @@ mod tests {
             r#"export RICKY_SHADOW_REVIEW_ENABLED="${RICKY_SHADOW_REVIEW_ENABLED:-1}""#,
             r#"export RICKY_SHADOW_REVIEW_CHANNEL_ID="${RICKY_SHADOW_REVIEW_CHANNEL_ID:-1374364800817303632}""#,
             r#"export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECONDS:-20}""#,
-            r#"export RICKY_SHADOW_REVIEW_YTDLP_BIN="${RICKY_SHADOW_REVIEW_YTDLP_BIN:-$ROOT_DIR/.venv/bin/yt-dlp}""#,
             r#"export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}""#,
             r#"export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}""#,
             r#"export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}""#,
         ] {
             assert!(SERVICE_WRAPPER.contains(expected), "fehlt: {expected}");
         }
+        // Der Deploy-Baum hat kein venv: ein venv-Default überschreibt die
+        // Pfadsuche des Bots mit einem Pfad, den es dort nicht gibt.
+        assert!(
+            !SERVICE_WRAPPER.contains(".venv/bin/yt-dlp"),
+            "venv-Default für yt-dlp ist zurück"
+        );
     }
 
     #[tokio::test]
