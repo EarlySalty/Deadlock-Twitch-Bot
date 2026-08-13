@@ -12,6 +12,9 @@
 //! - Begrüßung ist pro Kanal abschaltbar (`streamer_plans.greeting_reply_enabled`,
 //!   Dashboard → Verwaltung). Default an; DB-Fehler lässt sie an, damit ein
 //!   Ausfall den Bot nicht stumm schaltet. Die Release-Antwort hängt nicht daran.
+//! - Begrüßung höchstens einmal pro Chatter und Stream
+//!   (`twitch_greeted_chatters`): wer zweimal "hi" schreibt, bekommt keinen
+//!   zweiten Gruß. Der kanalweite Cooldown allein reichte dafür nicht.
 //! - Release-Frage: nur wenn Deadlock live läuft — der Verweis auf `!invite`
 //!   ist sonst wertlos, weil der Befehl selbst live-gegated ist.
 //! - Cooldowns: pro Kanal, damit ein Gruß-Sturm nicht zum Bot-Monolog wird.
@@ -32,6 +35,11 @@ use crate::types::{ChatMessageEvent, SendOutcome};
 const GREETING_COOLDOWN: Duration = Duration::from_secs(600);
 /// Cooldown für Release-Antworten pro Kanal.
 const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Ersatzfenster für die Ein-Gruß-pro-Stream-Regel, wenn keine offene Session
+/// existiert: der Bot grüßt auch im Offline-Chat zurück, und ohne Session gibt
+/// es keinen Streamstart, gegen den sich der letzte Gruß messen ließe.
+const GREETING_OFFLINE_WINDOW_HOURS: i32 = 6;
 
 // Rückgruß, keine Begrüßung: der Bot weiß nicht, ob jemand neu ist — "willkommen
 // im Chat" an einen Stammgast liest sich falsch.
@@ -155,6 +163,80 @@ impl StandardReplies {
         })
     }
 
+    /// Hat dieser Chatter im laufenden Stream schon einen Gruß bekommen?
+    ///
+    /// Maßstab ist der Start der offenen Session; ohne Session (Offline-Chat)
+    /// ein Ersatzfenster. DB-Fehler heißt „noch nicht" — ein Ausfall darf den
+    /// Bot nicht stumm schalten, dann lieber ein Gruß zu viel.
+    ///
+    /// Geschlüsselt wird über `broadcaster_user_login`, nicht über das
+    /// Log-Label `channel_login`: nur der Login trifft
+    /// `twitch_stream_sessions.streamer_login`.
+    async fn already_greeted(&self, event: &ChatMessageEvent, channel_login: &str) -> bool {
+        sqlx::query_scalar(
+            "SELECT EXISTS ( \
+                 SELECT 1 \
+                   FROM twitch_greeted_chatters g \
+                  WHERE g.streamer_login = $1 \
+                    AND g.chatter_login = $2 \
+                    AND g.greeted_at >= COALESCE( \
+                          (SELECT s.started_at::text::TIMESTAMPTZ \
+                             FROM twitch_stream_sessions s \
+                            WHERE LOWER(s.streamer_login) = LOWER($1) \
+                              AND s.ended_at IS NULL \
+                            ORDER BY s.started_at DESC \
+                            LIMIT 1), \
+                          NOW() - make_interval(hours => $3)))",
+        )
+        .bind(event.broadcaster_user_login.to_lowercase())
+        .bind(event.chatter_user_login.to_lowercase())
+        .bind(GREETING_OFFLINE_WINDOW_HOURS)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            warn!(
+                channel = channel_login,
+                chatter = %event.chatter_user_login,
+                %error,
+                "Gruß-Merker nicht lesbar — Gruß läuft durch"
+            );
+            false
+        })
+    }
+
+    /// Schreibt den Gruß-Merker fort. Läuft erst nach dem tatsächlichen Senden:
+    /// ein von Twitch verworfener Gruß darf den einen Gruß pro Stream nicht
+    /// verbrauchen. Ein zweiter Gruß desselben Chatters kann in der Zwischenzeit
+    /// nicht durchrutschen, weil der Kanal-Cooldown schon vorher belegt ist.
+    async fn mark_greeted(&self, event: &ChatMessageEvent, channel_login: &str) {
+        let chatter_id: Option<&str> = if event.chatter_user_id.is_empty() {
+            None
+        } else {
+            Some(&event.chatter_user_id)
+        };
+        if let Err(error) = sqlx::query(
+            "INSERT INTO twitch_greeted_chatters AS g \
+                 (streamer_login, chatter_login, chatter_id, greeted_at) \
+             VALUES ($1, $2, $3, NOW()) \
+             ON CONFLICT (streamer_login, chatter_login) DO UPDATE \
+                SET greeted_at = NOW(), \
+                    chatter_id = COALESCE(EXCLUDED.chatter_id, g.chatter_id)",
+        )
+        .bind(event.broadcaster_user_login.to_lowercase())
+        .bind(event.chatter_user_login.to_lowercase())
+        .bind(chatter_id)
+        .execute(&self.pool)
+        .await
+        {
+            warn!(
+                channel = channel_login,
+                chatter = %event.chatter_user_login,
+                %error,
+                "Gruß-Merker nicht geschrieben — Chatter kann erneut begrüßt werden"
+            );
+        }
+    }
+
     /// Antwortet, wenn ein Muster trifft und der Kanal-Cooldown frei ist.
     /// Gibt zurück, ob gesendet wurde.
     pub async fn maybe_respond(
@@ -174,6 +256,17 @@ impl StandardReplies {
                 channel = channel_login,
                 chatter = %event.chatter_user_login,
                 "Gruß unterdrückt: Begrüßung im Dashboard deaktiviert"
+            );
+            return false;
+        }
+        // Ein Gruß pro Chatter und Stream — ebenfalls vor dem Cooldown, damit
+        // ein unterdrückter Doppelgruß den Kanal nicht für zehn Minuten sperrt
+        // und den nächsten Chatter mitverschluckt.
+        if kind == StandardReply::Greeting && self.already_greeted(event, channel_login).await {
+            info!(
+                channel = channel_login,
+                chatter = %event.chatter_user_login,
+                "Gruß unterdrückt: in diesem Stream schon begrüßt"
             );
             return false;
         }
@@ -198,7 +291,12 @@ impl StandardReplies {
             .send_message(&event.broadcaster_user_id, &message)
             .await
         {
-            Ok(SendOutcome::Sent) => true,
+            Ok(SendOutcome::Sent) => {
+                if kind == StandardReply::Greeting {
+                    self.mark_greeted(event, channel_login).await;
+                }
+                true
+            }
             Ok(outcome) => {
                 self.release(channel_login, kind, previous);
                 warn!(
@@ -265,7 +363,8 @@ mod tests {
             .expect("lazy pool")
     }
 
-    /// Frisches Schema mit `streamer_plans` für die Toggle-Tests. `None`, wenn
+    /// Frisches Schema mit `streamer_plans`, `twitch_greeted_chatters` und
+    /// `twitch_stream_sessions` für die Toggle- und Ein-Gruß-Tests. `None`, wenn
     /// keine Test-DB gesetzt ist (`eval "$(rust/scripts/test_db.sh env)"`).
     async fn plans_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
@@ -292,14 +391,31 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query(
+        for ddl in [
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
              greeting_reply_enabled INTEGER DEFAULT 1 NOT NULL)",
+            "CREATE TABLE twitch_greeted_chatters (streamer_login TEXT NOT NULL, \
+             chatter_login TEXT NOT NULL, chatter_id TEXT, \
+             greeted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+             PRIMARY KEY (streamer_login, chatter_login))",
+            "CREATE TABLE twitch_stream_sessions (id BIGINT PRIMARY KEY, streamer_login TEXT, \
+             started_at TIMESTAMPTZ DEFAULT now(), ended_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    /// Offene Session, damit „ein Gruß pro Stream" am Streamstart hängt und
+    /// nicht am Offline-Ersatzfenster.
+    async fn open_session(pool: &PgPool) {
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (1, 'streamer1', NOW() - INTERVAL '1 hour', NULL)",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-        Some(pool)
     }
 
     async fn set_greeting_flag(pool: &PgPool, flag: i32) {
@@ -380,6 +496,13 @@ mod tests {
                 fragments: vec![],
             },
             ..Default::default()
+        }
+    }
+
+    fn event_von(chatter: &str, text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            chatter_user_login: chatter.to_string(),
+            ..event(text)
         }
     }
 
@@ -635,6 +758,78 @@ mod tests {
         let Some(pool) = plans_pool("t_greeting_ohne_zeile").await else {
             panic!("TB_TEST_DATABASE_URL fehlt — Toggle-Test braucht die Test-DB");
         };
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool);
+        assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert_eq!(api.messages().len(), 1);
+    }
+
+    /// Der Merker liegt in der DB, nicht im Prozess: eine zweite Instanz steht
+    /// für den Neustart des Bots mitten im Stream.
+    #[tokio::test]
+    async fn zweiter_gruss_desselben_chatters_bleibt_aus() {
+        let Some(pool) = plans_pool("t_greeting_einmal").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Ein-Gruß-Test braucht die Test-DB");
+        };
+        open_session(&pool).await;
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool.clone());
+        assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
+
+        let nach_neustart = StandardReplies::new(api.clone(), pool);
+        assert!(
+            !nach_neustart
+                .maybe_respond(&event("moin"), "ch1", false)
+                .await
+        );
+        assert_eq!(api.messages().len(), 1, "nur ein Gruß pro Stream");
+    }
+
+    /// Ein unterdrückter Doppelgruß darf den Kanal-Cooldown nicht belegen,
+    /// sonst verschluckt er den nächsten Chatter gleich mit.
+    #[tokio::test]
+    async fn unterdrueckter_doppelgruss_sperrt_den_naechsten_chatter_nicht() {
+        let Some(pool) = plans_pool("t_greeting_kein_cooldown").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Ein-Gruß-Test braucht die Test-DB");
+        };
+        open_session(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_greeted_chatters (streamer_login, chatter_login, greeted_at) \
+             VALUES ('streamer1', 'neuling',NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = MockApi::new();
+        let replies = StandardReplies::new(api.clone(), pool);
+        assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert!(
+            replies
+                .maybe_respond(&event_von("zweiter", "moin"), "ch1", false)
+                .await
+        );
+        assert_eq!(api.messages().len(), 1);
+        assert!(api.messages()[0].starts_with("@zweiter"));
+    }
+
+    /// Der Merker gilt nur für den laufenden Stream: liegt er davor, wird im
+    /// neuen Stream wieder gegrüßt.
+    #[tokio::test]
+    async fn gruss_aus_dem_vorigen_stream_blockiert_nicht() {
+        let Some(pool) = plans_pool("t_greeting_neuer_stream").await else {
+            panic!("TB_TEST_DATABASE_URL fehlt — Ein-Gruß-Test braucht die Test-DB");
+        };
+        open_session(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_greeted_chatters (streamer_login, chatter_login, greeted_at) \
+             VALUES ('streamer1', 'neuling',NOW() - INTERVAL '2 hours')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let api = MockApi::new();
         let replies = StandardReplies::new(api.clone(), pool);
