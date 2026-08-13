@@ -10,9 +10,12 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor, PgPool};
 use tb_engagement::minimax_chat::TestModeRejectReason;
 use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
+use tb_engagement::stream_transcripts::StreamTranscriptSegment;
 
 const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
+const TRANSCRIPT_MIGRATION: &str =
+    include_str!("../../../migrations/20260813220000_twitch_smalltalk_transcripts.sql");
 
 /// `twitch_engagement_settings` wird laut Vertrag kleingeschrieben befuellt
 /// und exakt gelesen (`auto_off.rs`, `gate::load_settings`). Eine abweichend
@@ -306,6 +309,82 @@ async fn erzeugte_nachricht_wird_unabhaengig_vom_filter_genau_einmal_gespeichert
     );
 }
 
+/// Der Stream-Ton gehoert zur Sitzung, nicht zum Ringpuffer: der wird nach
+/// einer Stunde getrimmt, eine Sitzung dauert genau so lange, und ausgewertet
+/// wird erst danach. Aufbewahrt wird nur, was waehrend einer offenen Sitzung
+/// aufgenommen wurde.
+#[tokio::test]
+async fn stream_ton_haengt_an_der_offenen_sitzung_und_liegt_dem_report_bei() {
+    let Some(pool) = test_pool("smalltalk_loop_transcripts").await else {
+        return;
+    };
+    seed_candidate(&pool, "tonkanal", "1", None).await;
+    let store = SmalltalkLoopStore::new(pool.clone());
+    let now = Utc::now();
+    let session = store
+        .start_next_session(now)
+        .await
+        .expect("Sitzung starten")
+        .expect("Sitzung");
+
+    let segment = |text: &str, versatz: i64| StreamTranscriptSegment {
+        channel_login: session.channel_login.clone(),
+        started_at: now + Duration::seconds(versatz),
+        ended_at: now + Duration::seconds(versatz + 45),
+        text: text.to_string(),
+        engine: "openai_api".to_string(),
+        model: Some("whisper-1".to_string()),
+    };
+
+    assert!(store
+        .record_transcript(&session.channel_login, &segment("der ult war zu spaet", 0))
+        .await
+        .expect("Ton speichern"));
+    assert!(
+        !store
+            .record_transcript(&session.channel_login, &segment("   ", 60))
+            .await
+            .expect("leerer Ton"),
+        "eine stille Passage ist kein Abschnitt und wird nicht abgelegt"
+    );
+    assert!(
+        !store
+            .record_transcript("fremdkanal", &segment("gehoert nicht dazu", 60))
+            .await
+            .expect("fremder Kanal"),
+        "Ton aus einem Kanal ohne offene Sitzung gehoert zu keinem Test"
+    );
+
+    store
+        .close_active_session("session_timeout", now + Duration::minutes(60))
+        .await
+        .expect("Sitzung beenden");
+
+    assert!(
+        !store
+            .record_transcript(&session.channel_login, &segment("nach dem ende", 3600))
+            .await
+            .expect("Ton nach Sitzungsende"),
+        "nach dem Ende laeuft kein Test mehr, dessen Ton aufzubewahren waere"
+    );
+
+    let claimed = store
+        .claim_reports(5, Utc::now())
+        .await
+        .expect("Report claimen");
+    let report = claimed
+        .into_iter()
+        .find(|claimed| claimed.report.session.id == session.id)
+        .expect("Report der Sitzung");
+    let texte: Vec<String> = report
+        .report
+        .transcripts
+        .iter()
+        .map(|segment| segment.text.clone())
+        .collect();
+    assert_eq!(texte, vec!["der ult war zu spaet".to_string()]);
+}
+
 #[tokio::test]
 async fn jede_beendete_sitzung_wird_mit_nachrichten_oder_providerfehler_geclaimt() {
     let Some(pool) = test_pool("smalltalk_loop_reports").await else {
@@ -497,6 +576,9 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
     pool.execute(MIGRATION)
         .await
         .expect("Smalltalk-Migration ausführen");
+    pool.execute(TRANSCRIPT_MIGRATION)
+        .await
+        .expect("Transkript-Migration ausführen");
     Some(pool)
 }
 

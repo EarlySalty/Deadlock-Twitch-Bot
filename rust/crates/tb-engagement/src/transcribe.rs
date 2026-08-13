@@ -83,6 +83,17 @@ impl OpenAiTranscriber {
         })
     }
 
+    /// Zeigt der Endpunkt auf diese Maschine?
+    ///
+    /// Der Smalltalk-Testmodus nimmt fremde Streams auf. Dieser Ton darf den
+    /// Rechner nicht verlassen, auch nicht, wenn jemand
+    /// `ENGAGEMENT_STT_BASE_URL` fuer einen anderen Zweck nach draussen zeigen
+    /// laesst. Der Aufrufer prueft das vor der ersten Aufnahme und laesst es
+    /// dann lieber ganz.
+    pub fn is_local(&self) -> bool {
+        host_is_loopback(&self.base_url)
+    }
+
     /// Setzt den API-Endpoint (Tests).
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into();
@@ -223,6 +234,33 @@ fn classify_decode_error(error: reqwest::Error) -> TranscribeError {
     }
 }
 
+/// Zeigt eine URL auf einen Loopback-Host? Im Zweifel `false`: eine URL, die
+/// hier nicht sauber zu lesen ist, gilt als auswaertig.
+fn host_is_loopback(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host_port.strip_prefix('[') {
+        Some(after) => after.split(']').next().unwrap_or_default(),
+        None => host_port.split(':').next().unwrap_or_default(),
+    }
+    .trim()
+    .to_ascii_lowercase();
+
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return v4.is_loopback();
+    }
+    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+        return v6.is_loopback();
+    }
+    false
+}
+
 /// Env-Var nur wenn gesetzt UND nicht leer.
 fn nonempty_env(var: &str) -> Option<String> {
     std::env::var(var)
@@ -256,6 +294,32 @@ mod tests {
         if std::env::var("ENGAGEMENT_STT_BASE_URL").is_err() {
             let t = OpenAiTranscriber::from_env().expect("Client baubar");
             assert_eq!(t.base_url, DEFAULT_STT_URL);
+        }
+    }
+
+    /// Der Smalltalk-Testmodus nimmt fremde Streams auf und fragt vorher, ob
+    /// der Endpunkt auf dieser Maschine liegt. Die Antwort muss im Zweifel
+    /// "nein" sein: eine falsch gelesene URL wuerde fremden Ton nach draussen
+    /// tragen, ein zu Unrecht abgelehnter Endpunkt kostet nur Ton.
+    #[test]
+    fn nur_loopback_gilt_als_lokal() {
+        for lokal in [
+            "http://127.0.0.1:8791/v1/audio/transcriptions",
+            "http://localhost:8791/v1/audio/transcriptions",
+            "http://127.5.5.5:8791/v1/audio/transcriptions",
+            "http://[::1]:8791/v1/audio/transcriptions",
+            "http://stt.localhost/v1/audio/transcriptions",
+        ] {
+            assert!(host_is_loopback(lokal), "{lokal} liegt auf dieser Maschine");
+        }
+        for fremd in [
+            "https://api.openai.com/v1/audio/transcriptions",
+            "http://127.0.0.1.example.com/v1/audio/transcriptions",
+            "http://user@example.com/v1/audio/transcriptions",
+            "http://10.0.0.5:8791/v1/audio/transcriptions",
+            "",
+        ] {
+            assert!(!host_is_loopback(fremd), "{fremd} ist auswaertig");
         }
     }
 
