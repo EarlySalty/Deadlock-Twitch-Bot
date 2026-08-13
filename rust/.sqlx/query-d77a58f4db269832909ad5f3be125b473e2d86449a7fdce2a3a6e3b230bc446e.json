@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT my_message AS \"my_message!\"\n               FROM twitch_engagement_reaction_samples\n               WHERE verdict IS NULL OR verdict <> 'bad'\n               ORDER BY message_ts DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "my_message!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d77a58f4db269832909ad5f3be125b473e2d86449a7fdce2a3a6e3b230bc446e"
+}

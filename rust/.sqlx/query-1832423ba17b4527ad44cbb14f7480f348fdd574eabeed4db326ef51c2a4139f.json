@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel_login AS \"channel_login!\", last_seen_at AS \"last_seen_at!\"\n               FROM twitch_engagement_learn_channels\n               WHERE last_seen_at >= $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_seen_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1832423ba17b4527ad44cbb14f7480f348fdd574eabeed4db326ef51c2a4139f"
+}

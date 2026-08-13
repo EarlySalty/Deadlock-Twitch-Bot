@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ts AS \"ts!\", content AS \"content!\"\n               FROM twitch_engagement_learn_timeline\n               WHERE channel_login = $1 AND kind = 'stream' AND ts >= $2 AND ts <= $3\n               ORDER BY ts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ts!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b5119358d844f3afd22a5aaa5839f9182ce03ea8e2399344c65e1bacc0a2bee9"
+}

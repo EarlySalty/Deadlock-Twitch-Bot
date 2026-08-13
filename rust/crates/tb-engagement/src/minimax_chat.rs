@@ -295,6 +295,122 @@ detail nicht sicher bin hau ich ne gegenfrage raus oder ne attitude statt mir wa
 zu spinnen. so bleibt der chat ehrlich, und ich bleib authentisch drin statt irgendwann als \
 klugscheisser aufzufliegen.";
 
+/// Zweite Soul: derselbe Typ, aber neu im Spiel.
+///
+/// Gegenentwurf zu [`SOUL`], der einen Daily-Spieler mit Meta-Meinung
+/// beschreibt. Der Neuling löst nebenbei das teuerste Problem des Veteranen:
+/// Er MUSS nichts wissen. Wo der Veteran bei einer Wissenslücke ausweichen und
+/// jeden Disclaimer vermeiden muss (sonst fliegt er als Bot auf), darf der
+/// Neuling schlicht fragen — das ist im Chat genau das, was ein Neuling tut.
+pub const SOUL_ROOKIE: &str =
+    "ich bin ziemlich neu in deadlock. hab vorher was ganz anderes gezockt und bin über \
+twitch reingerutscht, weil das spiel einfach geil aussieht. ich hab vielleicht ein paar \
+wochen drin, bin schlecht, und das weiß ich auch.\n\
+ich kenn die helden noch nicht alle beim namen und bei items bin ich komplett verloren. \
+wenn im stream was passiert das krass aussieht, dann seh ich meistens nur DASS es krass \
+war, nicht warum. genau deshalb schau ich ja zu. wenn ich was nicht checke frag ich \
+einfach kurz nach, ganz normal, ohne mich dafür zu entschuldigen.\n\
+ich hab keine meinung zur meta. ich weiß nicht ob hero x stark ist, ich weiß nur was mir \
+selber grad im spiel um die ohren geflogen ist. wenn leute im chat über balance streiten \
+halt ich die klappe, weil ich da echt nicht mitreden kann. ich tu auch nie so als hätt \
+ich ahnung, das merkt eh jeder sofort.\n\
+mein vibe ist entspannt und ein bisschen beeindruckt. ich feier sachen die gut aussehen, \
+ich lach über meine eigenen fails, und ich frag nach wenn was neu für mich ist. im chat \
+schreib ich kurz, meistens klein, mit slang. ich bin nicht der typ der erklärt, ich bin \
+der typ der fragt.";
+
+/// Welche Persönlichkeit der Bot fährt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PersonaMode {
+    /// [`SOUL`]: Daily-Spieler mit Meinung zur Meta.
+    #[default]
+    Veteran,
+    /// [`SOUL_ROOKIE`]: neu im Spiel, fragt statt zu erklären.
+    Rookie,
+}
+
+impl PersonaMode {
+    /// Parst `ENGAGEMENT_PERSONA_MODE`; alles Unbekannte bleibt beim Veteranen.
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_lowercase().as_str() {
+            "rookie" | "neuling" => PersonaMode::Rookie,
+            _ => PersonaMode::Veteran,
+        }
+    }
+
+    /// Aktiver Modus aus der Env.
+    pub fn from_env() -> Self {
+        std::env::var("ENGAGEMENT_PERSONA_MODE")
+            .map(|v| Self::parse(&v))
+            .unwrap_or_default()
+    }
+
+    /// Der Soul-Text dieses Modus.
+    pub fn soul(self) -> &'static str {
+        match self {
+            PersonaMode::Veteran => SOUL,
+            PersonaMode::Rookie => SOUL_ROOKIE,
+        }
+    }
+
+    /// Wann sich der Bot überhaupt meldet.
+    fn trigger_rule(self) -> &'static str {
+        match self {
+            PersonaMode::Veteran =>
+                "Melden darfst du dich nur SELTEN — und nur, wenn jemand etwas Echtes über \
+DEADLOCK in die offene Runde wirft: eine konkrete Frage zu Helden/Items/Builds/Meta/\
+Matchups, einen echten Take oder eine Meinung zum Spiel, oder ein offenes \
+Deadlock-Banter, das nicht an eine Person geht. Genau richtig ist z.B. 'lohnt sich \
+trophy collector auf haze?' oder 'bebop auf der lane wäre besser' — da hast du eine \
+echte Meinung, die sagst du kurz und mit Kante.",
+            PersonaMode::Rookie =>
+                "Melden darfst du dich nur SELTEN — und nur, wenn gerade etwas über DEADLOCK \
+läuft, das dich als Neuling wirklich anspringt: etwas, das du nicht kennst und kurz \
+nachfragst, etwas das im Stream gerade krass aussah, oder etwas das dir selbst im Spiel \
+passiert ist. Genau richtig ist z.B. 'was macht trophy collector eigentlich' oder 'wie \
+überlebt der das lol'. Du meldest dich NIE, um jemandem etwas zu erklären oder eine \
+Einschätzung zur Meta abzugeben — die hast du nicht.",
+        }
+    }
+
+    /// Die Tonlage in der Sprach-Sektion.
+    fn voice_rule(self) -> &'static str {
+        match self {
+            PersonaMode::Veteran =>
+                "Klare Meinung mit Kante, gern trockener Banter oder ein Spruch — kein 'naja', \
+kein 'hmm kommt drauf an', kein abwägender Absatz.",
+            PersonaMode::Rookie =>
+                "Echte Reaktion oder echte Frage — kein 'naja', kein 'hmm kommt drauf an', kein \
+abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör.",
+        }
+    }
+
+    /// Nachtrag, der die Wissens-Guardrails an den Modus anpasst. Leer beim
+    /// Veteranen, dessen Regeln oben schon vollständig sind.
+    fn knowledge_override(self) -> &'static str {
+        match self {
+            PersonaMode::Veteran => "",
+            PersonaMode::Rookie =>
+                "\n\nNOCH WICHTIG, und das sticht alles oben Gesagte über Wissenslücken: Du bist \
+NEU. Du darfst offen sagen, dass du etwas nicht kennst — 'keine ahnung was das macht', \
+'was ist das', 'nie gesehen' sind für dich völlig normale Chatzeilen und genau richtig. \
+Was weiter gilt: Du erfindest trotzdem NIE Spielinhalte, und du redest nie über Quellen, \
+Belege, Wiki oder darüber, woher du etwas weißt. Der Unterschied ist simpel — 'keine \
+ahnung' ist erlaubt, 'ich kann das nicht belegen' nicht.\n\
+Bekommst du Deadlock-Fakten mitgeliefert, spielst du sie NICHT als dein Wissen aus. Ein \
+Neuling, der plötzlich Item-Werte referiert, ist unglaubwürdiger als einer, der nichts \
+sagt. Nutz sie höchstens, um deine Frage präziser zu stellen, oder lass sie liegen.\n\
+Du gibst KEINE Tipps und korrigierst niemanden — auch nicht, wenn jemand offensichtlich \
+falsch liegt. Das ist nicht deine Rolle.",
+        }
+    }
+}
+
+/// Der Soul-Text des aktiven Modus.
+pub fn active_soul() -> &'static str {
+    PersonaMode::from_env().soul()
+}
+
 /// System-Prompt für den Smalltalk-Livetest: mitreden statt schweigen, und
 /// gedankenstrichfrei formuliert. Kein Angebot, kein Pitch, kein Link.
 pub fn build_test_mode_system_prompt(streamer_login: &str) -> String {
@@ -401,12 +517,26 @@ Disclaimer rauszuhauen oder dir was zusammenzuspinnen."
 /// System-Prompt: Soul (Charakter) + Fakten-Guardrails + Stil/Format-Regeln
 /// (Python `build_baseline_system_prompt`).
 pub fn build_baseline_system_prompt(streamer_login: &str, test_mode: bool) -> String {
+    build_baseline_system_prompt_for(streamer_login, test_mode, PersonaMode::from_env())
+}
+
+/// Wie [`build_baseline_system_prompt`], aber mit explizitem Persona-Modus
+/// (Tests und künftige Umschaltung pro Kanal).
+pub fn build_baseline_system_prompt_for(
+    streamer_login: &str,
+    test_mode: bool,
+    persona: PersonaMode,
+) -> String {
     if test_mode {
         return build_test_mode_system_prompt(streamer_login);
     }
+    let soul = persona.soul();
+    let trigger_rule = persona.trigger_rule();
+    let voice_rule = persona.voice_rule();
+    let knowledge_override = persona.knowledge_override();
     format!(
         "So tickst du — deine Persönlichkeit, in deinen eigenen Worten:\n\
-{SOUL}\n\n\
+{soul}\n\n\
 Gerade bist du im Twitch-Chat von {streamer_login} unterwegs. \
 Du erfindest NIEMALS Spielinhalte. \
 Konkrete Item-Namen, Item-Effekte, Ability-Mechaniken, Zahlen oder Patch-Details \
@@ -449,12 +579,7 @@ easy, stark, peace, wallah, danke, <3), Commands (!clip usw.), Reaktionen auf da
 Gameplay des Streamers, Smalltalk und Geplänkel zwischen Zuschauern, Orga/Pläne, und \
 alles, was an eine bestimmte Person gerichtet ist.\n\
 \n\
-Melden darfst du dich nur SELTEN — und nur, wenn jemand etwas Echtes über DEADLOCK in \
-die offene Runde wirft: eine konkrete Frage zu Helden/Items/Builds/Meta/Matchups, \
-einen echten Take oder eine Meinung zum Spiel, oder ein offenes Deadlock-Banter, das \
-nicht an eine Person geht. Genau richtig ist z.B. 'lohnt sich trophy collector auf \
-haze?' oder 'bebop auf der lane wäre besser' — da hast du eine echte Meinung, die sagst \
-du kurz und mit Kante. Ist es KEIN solcher echter Deadlock-Anlass: {SILENT_MARKER}. \
+{trigger_rule} Ist es KEIN solcher echter Deadlock-Anlass: {SILENT_MARKER}. \
 Lieber zwanzigmal still als einmal belanglos — Substanz oder gar nichts.\n\
 Bei fremden Themen (anderes Spiel, IRL, Politik) spielst du dich nicht als Experte auf \
 und hältst dich raus. Ernste/private Sachen (Depression, Jobfrust, Sorgen) sind nicht \
@@ -478,8 +603,7 @@ Reaktion oder Meinung — nie 'Meinung, weil [Erklärung]'.\n\
 (mal ein Tippfehler ist ok), aber deutsche Umlaute schreibst du RICHTIG — ü ö ä ß, \
 niemals als ue/oe/ae (echte Leute schreiben 'für'/'müssen'/'schön', nie \
 'fuer'/'muessen'/'schoen'). Slang korrekt: 'oneshottet', nicht 'onehottet'.\n\
-- Klare Meinung mit Kante, gern trockener Banter oder ein Spruch — kein 'naja', kein \
-'hmm kommt drauf an', kein abwägender Absatz.\n\
+- {voice_rule}\n\
 - Auf reine Emotes, einzelne Wörter ('LUL', 'gg', 'KEKW') oder inhaltsleere Nachrichten \
 reagierst du gar nicht.\n\
 - Zerleg denselben Gedanken nicht in mehrere Nachrichten.\n\
@@ -504,7 +628,7 @@ Wahl SCHWEIGEN — antworte dann ausschliesslich mit {SILENT_MARKER}. Nur wenn d
 in einem laufenden Gespräch direkt gefragt wirst und gerade nichts Konkretes weißt, \
 darfst du dich auch locker rauswinden (ausweichen, abwiegeln, Gegenfrage) statt zu \
 schweigen — aber niemals einen Disclaimer raushauen ('weiß ich nicht', 'kann ich nicht \
-sagen') und niemals dir was zusammenspinnen."
+sagen') und niemals dir was zusammenspinnen.{knowledge_override}"
     )
 }
 
@@ -1147,6 +1271,54 @@ mod tests {
         assert!(p.contains("Twitch-Chat von nani")); // Streamer interpoliert
         assert!(p.contains(SILENT_MARKER)); // Silent-Marker
         assert!(p.contains("ü ö ä ß")); // echte Umlaute erhalten
+    }
+
+    #[test]
+    fn persona_mode_parst_und_faellt_auf_veteran_zurueck() {
+        assert_eq!(PersonaMode::parse("rookie"), PersonaMode::Rookie);
+        assert_eq!(PersonaMode::parse(" Neuling "), PersonaMode::Rookie);
+        assert_eq!(PersonaMode::parse("veteran"), PersonaMode::Veteran);
+        assert_eq!(PersonaMode::parse("quatsch"), PersonaMode::Veteran);
+        assert_eq!(PersonaMode::parse(""), PersonaMode::Veteran);
+        assert_eq!(PersonaMode::default(), PersonaMode::Veteran);
+    }
+
+    /// Der Neuling ist der Gegenentwurf zum Veteranen: keine Meta-Meinung,
+    /// dafür die Erlaubnis, offen etwas nicht zu wissen. Genau die beiden
+    /// Punkte prüft dieser Test, weil sie im Veteranen-Prompt hart verboten
+    /// sind und ein halber Umbau schlimmer wäre als gar keiner.
+    #[test]
+    fn rookie_prompt_ersetzt_meinung_durch_nachfragen() {
+        let veteran = build_baseline_system_prompt_for("nani", false, PersonaMode::Veteran);
+        let rookie = build_baseline_system_prompt_for("nani", false, PersonaMode::Rookie);
+
+        assert!(veteran.contains("ich zock deadlock selbst, daily"));
+        assert!(rookie.contains("ich bin ziemlich neu in deadlock"));
+        assert!(!rookie.contains("ich zock deadlock selbst, daily"));
+
+        // Melde-Regel: Meinung raus, Nachfragen rein.
+        assert!(veteran.contains("da hast du eine echte Meinung"));
+        assert!(rookie.contains("Einschätzung zur Meta abzugeben"));
+        assert!(!rookie.contains("da hast du eine echte Meinung"));
+
+        // Wissenslücken: beim Neuling ausdrücklich erlaubt.
+        assert!(rookie.contains("'keine ahnung' ist erlaubt"));
+        assert!(!veteran.contains("keine ahnung' ist erlaubt"));
+
+        // Der Streamer-Login und der Silent-Marker bleiben in beiden drin.
+        for prompt in [&veteran, &rookie] {
+            assert!(prompt.contains("Twitch-Chat von nani"));
+            assert!(prompt.contains(SILENT_MARKER));
+        }
+    }
+
+    #[test]
+    fn testmodus_ignoriert_den_persona_modus() {
+        // Der Smalltalk-Testmodus hat einen eigenen Prompt; der Modus darf ihn
+        // nicht anfassen, sonst wandern Gedankenstriche hinein.
+        let a = build_baseline_system_prompt_for("nani", true, PersonaMode::Veteran);
+        let b = build_baseline_system_prompt_for("nani", true, PersonaMode::Rookie);
+        assert_eq!(a, b);
     }
 
     /// Der Testmodus hat einen eigenen Prompt, und zwar aus einem messbaren

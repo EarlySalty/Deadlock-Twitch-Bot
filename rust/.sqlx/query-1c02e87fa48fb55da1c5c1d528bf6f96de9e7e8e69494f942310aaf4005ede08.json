@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_engagement_learn_channels (channel_login, channel_user_id, message_count) VALUES ($1, $2, 1) ON CONFLICT (channel_login) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP, message_count = twitch_engagement_learn_channels.message_count + 1, channel_user_id = COALESCE(EXCLUDED.channel_user_id, twitch_engagement_learn_channels.channel_user_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c02e87fa48fb55da1c5c1d528bf6f96de9e7e8e69494f942310aaf4005ede08"
+}

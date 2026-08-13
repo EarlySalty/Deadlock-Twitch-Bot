@@ -52,8 +52,10 @@ use tb_chat::{
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
+use tb_engagement::learn_irc_reader::LearnIrcReader;
 use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
 use tb_engagement::pipeline::EngagementPipeline;
+use tb_engagement::reaction_learning::ReactionLearning;
 use tb_engagement::sender_auth::SenderAuthStore;
 use tb_engagement::stealth_sender::StealthSender;
 use tb_engagement::types::IncomingMessage;
@@ -869,6 +871,25 @@ pub async fn build_runtime(
     }
     tb_engagement::background::spawn_all(pool.clone());
 
+    // Reaktions-Lernmodus: zeichnet auf, worauf der Owner im Chat reagiert und
+    // wie. Hängt bewusst NICHT an der Engagement-Pipeline, sondern an jeder
+    // eingehenden Chat-Nachricht — gelernt wird gerade in den fremden Kanälen,
+    // in denen die Pipeline nichts tun darf. Ohne `ENGAGEMENT_LEARN_ENABLED=1`
+    // laufen weder Aufnahme noch Mapping.
+    let reaction_learning = Arc::new(ReactionLearning::new(pool.clone()));
+    tb_engagement::background::spawn_learn_jobs(Arc::clone(&reaction_learning));
+    if reaction_learning.enabled() {
+        // Zweiter, anonymer Mitleser für Kanäle ohne `channel:bot`-Grant. Der
+        // EventSub-Pfad oben sieht nur Partner-Kanäle; genau die fremden Kanäle
+        // fehlen dort, in denen gelernt werden soll.
+        let learn_reader =
+            LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
+        supervisor.spawn("engagement_learn_irc_reader", async move {
+            learn_reader.run().await;
+            future::pending::<()>().await;
+        });
+    }
+
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
@@ -897,6 +918,7 @@ pub async fn build_runtime(
             telemetry: TelemetryStore::new(pool.clone()),
             subscriptions: Arc::clone(&subscriptions_cell),
             raid_greeting,
+            reaction_learning,
         }),
         token_manager,
         promos,
@@ -1255,6 +1277,9 @@ struct ChatHooks {
     /// `has_sub`-Checker ⇒ `return True`).
     subscriptions: Arc<OnceLock<Arc<SubscriptionManager>>>,
     raid_greeting: Option<Arc<RaidGreetingMonitor>>,
+    /// Reaktions-Lernmodus: sieht jede Chat-Nachricht, auch aus Kanälen ohne
+    /// Partner-Status. Ist der Modus aus, verwirft er sie sofort.
+    reaction_learning: Arc<ReactionLearning>,
 }
 
 /// Source-Self-Unraid: der Kanal-Inhaber zieht seinen eigenen Raid zurück.
@@ -1284,6 +1309,34 @@ fn source_self_unraid(event: &Value) -> Option<(String, String)> {
 }
 
 impl ChatHooks {
+    /// Reicht die Nachricht an den Reaktions-Lernmodus weiter.
+    ///
+    /// Bewusst vor dem Partner-Gate und ohne `.await` im Chat-Pfad: gelernt
+    /// wird gerade dort, wo die Engagement-Pipeline abbricht, und ein
+    /// DB-Insert darf die Nachrichtenverarbeitung nicht ausbremsen.
+    fn spawn_reaction_learning(&self, event: &ChatMessageEvent) {
+        if !self.reaction_learning.enabled() || event.chatter_user_id == self.bot_user_id {
+            return;
+        }
+        let learn = Arc::clone(&self.reaction_learning);
+        let channel_login = event.broadcaster_user_login.to_lowercase();
+        let channel_user_id = event.broadcaster_user_id.clone();
+        let chatter_login = event.chatter_user_login.clone();
+        let content = event.message.text.clone();
+        let message_id = event.message_id.clone();
+        tokio::spawn(async move {
+            learn
+                .observe(
+                    &channel_login,
+                    Some(&channel_user_id),
+                    &chatter_login,
+                    &content,
+                    Some(&message_id),
+                )
+                .await;
+        });
+    }
+
     /// Spawnt die Engagement-Verarbeitung für autorisierte EventSub-Partner.
     fn spawn_engagement(&self, event: &ChatMessageEvent) {
         // Eigene (zentrale) Bot-Nachrichten überspringen.
@@ -1519,6 +1572,7 @@ impl EventSubHooks for ChatHooks {
                 if let Some(monitor) = &self.raid_greeting {
                     monitor.observe_chat(&chat_event);
                 }
+                self.spawn_reaction_learning(&chat_event);
                 if self.pipeline.handle(&chat_event).await {
                     self.spawn_engagement(&chat_event);
                 }

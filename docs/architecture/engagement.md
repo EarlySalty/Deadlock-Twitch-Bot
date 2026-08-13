@@ -75,7 +75,14 @@ Abgrenzung: Das eigentliche Senden/Empfangen läuft über [chat.md](chat.md); `e
 
 ### Grounding & Stil
 - `deadlock_wiki.py` / `deadlock_patches.py` — Spiel-/Patch-Fakten als Guardrails (gegen Halluzination).
-- `soul_store.py` — Charakter/„Soul“. `style_examples.py` — echte Chat-Beispiele als Few-Shot-Stil. `match_context.py` / `stream_transcripts.py` — Spiel-/Stream-Kontext. `sender_auth.py` — OAuth des Sende-Accounts (eigene Identität, nicht der Mod-Bot).
+- `soul_store.py` — Charakter/„Soul”. `style_examples.py` — echte Chat-Beispiele als Few-Shot-Stil. `match_context.py` / `stream_transcripts.py` — Spiel-/Stream-Kontext. `sender_auth.py` — OAuth des Sende-Accounts (eigene Identität, nicht der Mod-Bot).
+
+### Reaktions-Lernmodus (Rust, seit 2026-08-13)
+Zeichnet auf, worauf der Owner im fremden Chat reagiert, und speist Stil und
+Reaktionsprofil daraus statt aus dem handgepflegten Gold-Register. Eigener
+anonymer IRC-Mitleser, eigene Tabellen, eigene Whisper-Aufnahme; dazu ein
+zweiter Persona-Modus („Neuling”). Details:
+[engagement-reaktions-lernmodus.md](engagement-reaktions-lernmodus.md).
 
 ## 6. Datenbank & externe Schnittstellen
 

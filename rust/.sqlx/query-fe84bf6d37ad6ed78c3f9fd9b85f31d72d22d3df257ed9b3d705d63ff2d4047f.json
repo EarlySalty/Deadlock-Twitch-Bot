@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT streamer_login AS \"streamer_login!\"\n           FROM twitch_live_state\n           WHERE COALESCE(is_live, 0) <> 0 AND LOWER(TRIM(COALESCE(last_game, ''))) = 'deadlock'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fe84bf6d37ad6ed78c3f9fd9b85f31d72d22d3df257ed9b3d705d63ff2d4047f"
+}

@@ -7,7 +7,9 @@
 //! ist best-effort. Der Stream-Transkript-Loop (Audio-Capture + Whisper-STT)
 //! folgt separat, sobald das STT-Subsystem in Rust existiert.
 
+use std::collections::HashSet;
 use std::future::Future;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -18,6 +20,10 @@ use crate::channel_background::ChannelBackground;
 use crate::global_sentiment::GlobalSentiment;
 use crate::match_context::MatchContext;
 use crate::minimax_chat::EngagementMinimaxClient;
+use crate::reaction_learning::{
+    capture_seconds as learn_capture_seconds, learn_enabled, LearnTranscriptSegment,
+    ReactionLearning,
+};
 use crate::soul_store::SoulStore;
 use crate::stream_transcripts::{
     transcript_capture_seconds, transcript_poll_interval_seconds, transcript_quality,
@@ -35,6 +41,11 @@ const GLOBAL_SENTIMENT_INTERVAL: f64 = 20.0 * 60.0;
 const SOUL_ANCHOR_INTERVAL: f64 = 3.0 * 60.0 * 60.0;
 const CHANNEL_PROFILE_INTERVAL: f64 = 4.0 * 60.0 * 60.0;
 const TRANSCRIPT_TRIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// Wie oft der Lern-Supervisor nach neuen heißen Kanälen schaut.
+const LEARN_SUPERVISOR_INTERVAL: f64 = 15.0;
+const LEARN_MAPPER_INTERVAL: f64 = 60.0;
+const LEARN_TRIM_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const LEARN_PROFILE_INTERVAL: f64 = 6.0 * 60.0 * 60.0;
 const AI_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Stream-Transkription ist nach Grillme Block 19 standardmäßig AUS.
@@ -251,9 +262,9 @@ pub async fn schedule_channel_profile(pool: PgPool) {
 }
 
 /// Stream-Transkript-Loop (Port von `_run_stream_transcript_loop`): pro
-/// enabled Channel ein streamlink-Capture + OpenAI-Whisper-Transkription, dazu
-/// periodisches Trimmen. Aus (Env-Flag) oder ohne `OPENAI_API_KEY` → still im
-/// Poll-Takt warten und retryen.
+/// enabled Channel ein streamlink-Capture + Whisper-Transkription (lokal, siehe
+/// [`OpenAiTranscriber::from_env`]), dazu periodisches Trimmen. Aus (Env-Flag)
+/// oder ohne baubaren HTTP-Client → still im Poll-Takt warten und retryen.
 pub async fn schedule_stream_transcripts(pool: PgPool) {
     let capturer = AudioCapturer::from_env();
     let mut transcriber: Option<OpenAiTranscriber> = None;
@@ -273,13 +284,167 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
                         StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
                     }
                 }
-                None => tracing::debug!(
-                    "stream-transcripts: kein OPENAI_API_KEY — Transcriber nicht verfügbar"
-                ),
+                None => {
+                    tracing::debug!("stream-transcripts: Transcriber nicht verfügbar")
+                }
             }
         }
         jittered_sleep(transcript_poll_interval_seconds()).await;
     }
+}
+
+// ---- Reaktions-Lernmodus ----------------------------------------------------
+
+/// Nimmt einen Block Audio auf und legt das Whisper-Segment im Lern-Archiv ab.
+///
+/// Anders als [`run_transcribe_capture`] wird die Segmentzeit aus dem
+/// Capture-Start gerechnet, nicht aus dem Zeitpunkt nach der Transkription: das
+/// Mapping stellt Nachricht und Stream-Moment sekundengenau gegenüber, und die
+/// Whisper-Laufzeit würde jedes Segment sonst um ihre eigene Dauer nach hinten
+/// verschieben.
+async fn run_learn_capture(
+    learn: &ReactionLearning,
+    channel: &str,
+    capturer: &AudioCapturer,
+    transcriber: &OpenAiTranscriber,
+) {
+    let started_at = Utc::now();
+    let capture = match capturer
+        .capture(channel, learn_capture_seconds().max(0) as u64, &transcript_quality(), None)
+        .await
+    {
+        Ok(c) => c,
+        Err(error) => {
+            tracing::debug!(channel, %error, "learn-capture: Capture fehlgeschlagen");
+            return;
+        }
+    };
+    let transcription = transcriber.transcribe_clip(&capture.media_path).await;
+    capture.cleanup().await;
+    let result = match transcription {
+        Ok(r) => r,
+        Err(error) => {
+            tracing::debug!(channel, %error, "learn-capture: Transkription fehlgeschlagen");
+            return;
+        }
+    };
+    let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return; // stille oder reine Spielsound-Passage
+    }
+    let duration = if result.duration_seconds > 0.0 {
+        result.duration_seconds
+    } else if capture.actual_duration_seconds > 0.0 {
+        capture.actual_duration_seconds
+    } else {
+        capture.requested_duration_seconds as f64
+    };
+    let segment = LearnTranscriptSegment {
+        channel_login: channel.to_string(),
+        started_at,
+        ended_at: started_at + chrono::Duration::seconds(duration.max(1.0) as i64),
+        text,
+        engine: result.engine,
+        model: Some(result.model).filter(|m| !m.is_empty()),
+    };
+    if let Err(error) = learn.append_transcript(&segment).await {
+        tracing::warn!(%error, channel, "learn-capture: Segment nicht gespeichert");
+    }
+}
+
+/// Nimmt einen Kanal am Stück auf, solange er lern-heiß ist.
+async fn learn_channel_loop(
+    learn: Arc<ReactionLearning>,
+    channel: String,
+    transcriber: Arc<OpenAiTranscriber>,
+    running: Arc<Mutex<HashSet<String>>>,
+) {
+    let capturer = AudioCapturer::from_env();
+    tracing::info!(channel = %channel, "learn-capture: Aufnahme gestartet");
+    while learn.is_channel_hot(&channel) {
+        run_learn_capture(&learn, &channel, &capturer, &transcriber).await;
+    }
+    running.lock().unwrap_or_else(|p| p.into_inner()).remove(&channel);
+    tracing::info!(channel = %channel, "learn-capture: Kanal ausgekühlt, Aufnahme beendet");
+}
+
+/// Supervisor: startet je lern-heißem Kanal einen eigenen Aufnahme-Task.
+///
+/// Ein Task pro Kanal statt einer gemeinsamen Runde, weil die Blöcke sonst
+/// reihum liefen und jeder Kanal nur einen Bruchteil der Zeit aufgenommen
+/// würde. Genau die Lücken dazwischen wären die Momente, auf die reagiert wird.
+pub async fn schedule_learn_capture(learn: Arc<ReactionLearning>) {
+    learn.warm_cache().await;
+    let running: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    let mut transcriber: Option<Arc<OpenAiTranscriber>> = None;
+    loop {
+        if transcriber.is_none() {
+            transcriber = OpenAiTranscriber::from_env().map(Arc::new);
+        }
+        match &transcriber {
+            Some(t) => {
+                for channel in learn.hot_channels() {
+                    {
+                        let mut guard = running.lock().unwrap_or_else(|p| p.into_inner());
+                        if !guard.insert(channel.clone()) {
+                            continue; // läuft schon
+                        }
+                    }
+                    tokio::spawn(learn_channel_loop(
+                        Arc::clone(&learn),
+                        channel,
+                        Arc::clone(t),
+                        Arc::clone(&running),
+                    ));
+                }
+            }
+            None => tracing::warn!("learn-capture: HTTP-Client nicht baubar, keine Transkription"),
+        }
+        jittered_sleep(LEARN_SUPERVISOR_INTERVAL).await;
+    }
+}
+
+/// Mappt fällige eigene Nachrichten auf ihren Kontext und räumt Rohdaten auf.
+pub async fn schedule_learn_mapper(learn: Arc<ReactionLearning>) {
+    let mut last_trim: Option<Instant> = None;
+    loop {
+        let created = learn.map_pending().await;
+        if created > 0 {
+            let total = learn.sample_count().await;
+            tracing::info!(created, total, "learn-mapper: neue Reaktions-Samples");
+        }
+        if last_trim.is_none_or(|t| t.elapsed() >= LEARN_TRIM_INTERVAL) {
+            last_trim = Some(Instant::now());
+            learn.trim().await;
+        }
+        jittered_sleep(LEARN_MAPPER_INTERVAL).await;
+    }
+}
+
+/// Destilliert periodisch das Reaktionsprofil aus den gesammelten Samples.
+pub async fn schedule_learn_profile(learn: Arc<ReactionLearning>) {
+    let minimax = ai_client();
+    loop {
+        // Erst warten: direkt nach dem Start gibt es garantiert nichts Neues
+        // zu destillieren, und ein Lauf kostet einen Modell-Call.
+        jittered_sleep(LEARN_PROFILE_INTERVAL).await;
+        learn.distill_profile(&minimax).await;
+    }
+}
+
+/// Startet die Loops des Lernmodus. No-op, wenn er aus ist.
+pub fn spawn_learn_jobs(learn: Arc<ReactionLearning>) {
+    if !learn_enabled() {
+        tracing::info!("Engagement-Reaktions-Lernmodus deaktiviert");
+        return;
+    }
+    tracing::info!(
+        owner = %learn.owner_login(),
+        "Engagement-Reaktions-Lernmodus aktiv (Aufnahme, Mapping, Profil)"
+    );
+    spawn_logged("engagement_learn_capture", schedule_learn_capture(Arc::clone(&learn)));
+    spawn_logged("engagement_learn_mapper", schedule_learn_mapper(Arc::clone(&learn)));
+    spawn_logged("engagement_learn_profile", schedule_learn_profile(learn));
 }
 
 /// Spawnt alle acht Background-Loops als tokio-Tasks (Python `ensure_started`).

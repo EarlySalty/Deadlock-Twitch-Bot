@@ -21,6 +21,10 @@ const MIN_LEN: usize = 8;
 const MAX_LEN: usize = 100;
 const MAX_SAME_STARTER: usize = 2;
 const CACHE_TTL: Duration = Duration::from_secs(600);
+/// Ab so vielen brauchbaren gelernten Zeilen ersetzen sie das feste Register.
+const MIN_LEARNED_GOLD: usize = 4;
+/// So viele gelernte Zeilen werden gezogen (vor der Qualitätsfilterung).
+const LEARNED_POOL_LIMIT: i64 = 60;
 
 /// Kuratierter Stil-Fallback (DE/EN gemischt, klein, Slang, kurz) für kalte Channels.
 const SEED_EXAMPLES: &[&str] = &[
@@ -44,6 +48,11 @@ const SEED_EXAMPLES: &[&str] = &[
 ];
 
 /// Gold-Standard (EarlySalty-Register) — IMMER zuerst, damit der Bot kurz/trocken bleibt.
+///
+/// Handverlesener Startwert. Sobald der Reaktions-Lernmodus genug echte eigene
+/// Zeilen gesammelt hat, ersetzen die ihn (siehe [`load_learned_gold`]) — dann
+/// steht im Prompt, was wirklich geschrieben wurde, statt was mal für typisch
+/// gehalten wurde.
 const GOLD_EXAMPLES: &[&str] = &[
     "wilder take",
     "haha legit",
@@ -130,8 +139,18 @@ fn select_examples(texts: &[String], max_n: usize) -> Vec<String> {
 
 /// Setzt die finale Beispiel-Liste zusammen: Gold (erste [`GOLD_KEEP`]) zuerst,
 /// dann channel-eigene, dann Seeds — dedupliziert, bis [`MAX_EXAMPLES`].
-fn assemble_examples(channel_examples: &[String]) -> Vec<String> {
-    let gold: Vec<String> = GOLD_EXAMPLES.iter().take(GOLD_KEEP).map(|s| s.to_string()).collect();
+///
+/// Gold sind die gelernten eigenen Zeilen, sobald genug davon brauchbar sind
+/// ([`MIN_LEARNED_GOLD`]); darunter bleibt es beim festen Register, weil eine
+/// zu dünne Stichprobe den Ton nicht trägt.
+fn assemble_examples_with_gold(channel_examples: &[String], learned: &[String]) -> Vec<String> {
+    let usable: Vec<String> =
+        learned.iter().map(|s| normalize_ws(s)).filter(|s| is_good_example(s)).collect();
+    let gold: Vec<String> = if usable.len() >= MIN_LEARNED_GOLD {
+        usable.into_iter().take(GOLD_KEEP).collect()
+    } else {
+        GOLD_EXAMPLES.iter().take(GOLD_KEEP).map(|s| s.to_string()).collect()
+    };
     let seed: Vec<String> = SEED_EXAMPLES.iter().map(|s| s.to_string()).collect();
     let sources: [&[String]; 3] = [&gold, channel_examples, &seed];
 
@@ -171,6 +190,16 @@ fn build_fragment(examples: &[String]) -> String {
     )
 }
 
+/// Rahmt das destillierte Reaktionsprofil ein.
+fn build_profile_fragment(profile: &str) -> String {
+    format!(
+        "Und so entscheidest du, OB du überhaupt schreibst. Das hier ist aus echten \
+         beobachteten Reaktionen destilliert, nicht ausgedacht — halt dich daran, \
+         besonders an das, worauf NICHT reagiert wird:\n{}",
+        profile.trim()
+    )
+}
+
 /// Few-Shot-Stilblock-Provider mit 10min-Cache.
 pub struct StyleExamples {
     pool: PgPool,
@@ -199,6 +228,38 @@ impl StyleExamples {
         .collect()
     }
 
+    /// Eigene Chat-Zeilen aus dem Reaktions-Lernmodus, jüngste zuerst.
+    /// Als `bad` gesichtete Samples bleiben draußen.
+    async fn load_learned_gold(&self, limit: i64) -> Vec<String> {
+        sqlx::query_scalar!(
+            r#"SELECT my_message AS "my_message!"
+               FROM twitch_engagement_reaction_samples
+               WHERE verdict IS NULL OR verdict <> 'bad'
+               ORDER BY message_ts DESC LIMIT $1"#,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect()
+    }
+
+    /// Das destillierte Reaktionsprofil, falls eines vorliegt.
+    async fn load_reaction_profile(&self) -> Option<String> {
+        sqlx::query_scalar!(
+            r#"SELECT content AS "content!" FROM twitch_engagement_soul
+               WHERE kind = 'reaction_profile'
+               ORDER BY created_at DESC LIMIT 1"#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+    }
+
     /// Few-Shot-Stilblock pro Channel; 10min gecacht. Nie leer (Gold + Seeds).
     pub async fn build_style_fragment(&self, channel_login: &str) -> String {
         {
@@ -210,8 +271,15 @@ impl StyleExamples {
             }
         }
         let texts = self.load_user_turns(channel_login, POOL_LIMIT).await;
-        let examples = assemble_examples(&select_examples(&texts, MAX_EXAMPLES));
-        let fragment = build_fragment(&examples);
+        let learned = self.load_learned_gold(LEARNED_POOL_LIMIT).await;
+        let examples = assemble_examples_with_gold(
+            &select_examples(&texts, MAX_EXAMPLES),
+            &learned,
+        );
+        let mut fragment = build_fragment(&examples);
+        if let Some(profile) = self.load_reaction_profile().await {
+            fragment.push_str(&format!("\n\n{}", build_profile_fragment(&profile)));
+        }
         {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
             cache.insert(channel_login.to_string(), (Instant::now(), fragment.clone()));
@@ -254,12 +322,56 @@ mod tests {
     #[test]
     fn assemble_gold_zuerst_und_max() {
         let channel = vec!["der dive war komplett wild".to_string()];
-        let out = assemble_examples(&channel);
+        let out = assemble_examples_with_gold(&channel, &[]);
         assert_eq!(out.len(), MAX_EXAMPLES);
         // Erste GOLD_KEEP sind Gold-Zeilen.
         assert_eq!(out[0], "wilder take");
         // Channel-Zeile ist nach den Gold-Zeilen drin.
         assert!(out.contains(&"der dive war komplett wild".to_string()));
+    }
+
+    #[test]
+    fn gelernte_zeilen_verdraengen_das_feste_register() {
+        let channel = vec!["der dive war komplett wild".to_string()];
+        let learned: Vec<String> = vec![
+            "boah der hat gecampt".to_string(),
+            "ne das war luck".to_string(),
+            "warum baut der das".to_string(),
+            "sowas hab ich nie".to_string(),
+        ];
+        let out = assemble_examples_with_gold(&channel, &learned);
+        assert_eq!(out[0], "boah der hat gecampt", "gelernt steht vorn");
+        assert!(!out.contains(&"wilder take".to_string()), "festes Gold ist raus");
+    }
+
+    #[test]
+    fn zu_wenige_gelernte_zeilen_lassen_das_register_stehen() {
+        // Drei brauchbare Zeilen liegen unter MIN_LEARNED_GOLD.
+        let learned: Vec<String> =
+            vec!["boah der hat gecampt".into(), "ne das war luck".into(), "warum baut der das".into()];
+        let out = assemble_examples_with_gold(&[], &learned);
+        assert_eq!(out[0], "wilder take");
+    }
+
+    #[test]
+    fn unbrauchbare_gelernte_zeilen_zaehlen_nicht_mit() {
+        // 4 Zeilen, aber nur 2 überstehen den Qualitätsfilter (Command, Link).
+        let learned: Vec<String> = vec![
+            "boah der hat gecampt".into(),
+            "!clip das eben".into(),
+            "schau http://x.de an".into(),
+            "ne das war luck".into(),
+        ];
+        let out = assemble_examples_with_gold(&[], &learned);
+        assert_eq!(out[0], "wilder take", "unter der Schwelle bleibt das Register");
+    }
+
+    #[test]
+    fn profil_fragment_warnt_vor_dem_nicht_reagieren() {
+        let frag = build_profile_fragment("  WORAUF: dives  ");
+        assert!(frag.contains("WORAUF: dives"));
+        assert!(frag.contains("worauf NICHT reagiert wird"));
+        assert!(!frag.contains("  WORAUF"), "Whitespace ist getrimmt");
     }
 
     #[test]
