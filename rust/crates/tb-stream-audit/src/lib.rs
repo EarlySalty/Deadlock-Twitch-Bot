@@ -23,6 +23,7 @@
 //! zwar mit denselben Mustern, die sie gefunden haben.
 
 pub mod llm;
+pub mod plan;
 pub mod report;
 pub mod rules;
 
