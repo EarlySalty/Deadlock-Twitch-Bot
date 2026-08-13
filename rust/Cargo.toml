@@ -22,6 +22,7 @@ members = [
     "crates/tb-knowledge",
     "crates/tb-tips",
     "crates/tb-llm",
+    "crates/tb-stream-audit",
     "bin/tb-dashboard",
     "bin/tb-bot",
 ]
