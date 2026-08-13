@@ -1,0 +1,35 @@
+[Unit]
+Description=Deadlock Twitch authorized stream coaching audit (live)
+After=network-online.target deadlock-stt-server.service
+Wants=network-online.target
+# Ohne den lokalen STT-Dienst laeuft die Warteschlange voll, ohne dass ein
+# einziger Block ausgewertet wird. Lieber gar nicht starten.
+Requires=deadlock-stt-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
+
+# Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
+# in der Unit sichtbar sein.
+Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
+Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
+
+# Transkription bleibt lokal. Zeigt diese URL woandershin, verlaesst
+# Stream-Audio den Rechner; das Programm warnt beim Start davor.
+Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
+Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
+
+Environment=RUST_LOG=info
+EnvironmentFile=-%h/.config/deadlock/bots.env
+LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
+
+# Secrets kommen ueber denselben Infisical-Wrapper wie beim Twitch-Bot; der
+# Service-Token liegt in systemd-Credentials, nicht in der Umgebung.
+ExecStart=%h/repos/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
