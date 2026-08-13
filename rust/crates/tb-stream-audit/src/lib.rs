@@ -41,7 +41,7 @@ pub struct Segment {
 
 /// Ein Fund. `zitat_roh` bleibt bewusst aussen vor: der Bericht traegt nur die
 /// geschwaerzte Fassung und den Hash des Originals.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fund {
     pub segment_id: String,
     pub start_sekunden: f64,

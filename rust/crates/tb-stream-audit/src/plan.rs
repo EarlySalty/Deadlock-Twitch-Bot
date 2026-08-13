@@ -43,7 +43,22 @@ pub struct Block {
     /// Unix-Zeit, vor der dieser Block nicht wieder drankommt.
     #[doc(hidden)]
     pub frueherstens: i64,
+    /// Bericht liegt schon auf der Platte, es fehlt nur die Meldung.
+    ///
+    /// Ein zweiter Durchlauf durch Transkription und Modell koennte anders
+    /// ausfallen als der erste - und ein spaeteres "nichts gefunden" wuerde
+    /// den frueheren Fund ueberschreiben und seine Aufnahme loeschen.
+    #[doc(hidden)]
+    pub nur_melden: bool,
+    /// Wie oft die Meldung dieses Blocks schon scheiterte.
+    #[doc(hidden)]
+    pub meldeversuche: u32,
 }
+
+/// So oft wird versucht, einen Block zu melden, dessen Bericht schon steht.
+/// Danach bleibt es beim Journal - sonst kreist der Block bei kaputtem Broker
+/// endlos und haelt seine Aufnahme aus der Aufbewahrung heraus.
+pub const MAX_MELDEVERSUCHE: u32 = 5;
 
 /// Grundpause vor der Wiederholung, mit dem Versuch multipliziert. Der
 /// haeufigste Grund fuer einen Fehlschlag ist ein STT-Dienst, der gerade neu
@@ -188,6 +203,13 @@ pub struct Aufnahme {
     /// einem Neustart des Dienstes faengt die Zaehlung erneut bei null an,
     /// samt Sechs-Stunden-Deckel.
     pub versatz_basis: u64,
+    /// Unix-Zeit, zu der diese Aufnahme angelegt wurde.
+    ///
+    /// Die Sendungszeit laeuft an der Uhr, nicht an der Summe der
+    /// Blocklaengen: zwischen zwei Bloecken liegen Pausen - Rueckstau,
+    /// Neustart eines abgebrochenen streamlink, Wartetakte. Wer sie nicht
+    /// mitzaehlt, zeigt spaeter auf die falsche Stelle im VOD.
+    pub gestartet_um: i64,
 }
 
 impl Aufnahme {
@@ -207,11 +229,25 @@ impl Aufnahme {
             bloecke: 0,
             aufgenommen_sekunden: 0,
             versatz_basis,
+            gestartet_um: chrono::Utc::now().timestamp(),
         }
     }
 
-    /// Wie weit die Sendung an dieser Stelle gelaufen ist.
+    /// Wie weit die Sendung jetzt gelaufen ist - nach der Uhr.
     pub fn sendungssekunden(&self) -> u64 {
+        self.sendungssekunden_um(chrono::Utc::now().timestamp())
+    }
+
+    /// Wie [`Aufnahme::sendungssekunden`], mit vorgegebener Uhrzeit.
+    pub fn sendungssekunden_um(&self, jetzt: i64) -> u64 {
+        self.versatz_basis + (jetzt - self.gestartet_um).max(0) as u64
+    }
+
+    /// Wie weit die Sendung nach der Summe der Bloecke gelaufen waere.
+    ///
+    /// Nur fuer den Wiederaufnahme-Pfad, in dem es keine laufende Sendung und
+    /// keine Uhr gibt, an der sich etwas messen liesse.
+    pub fn gezaehlte_sekunden(&self) -> u64 {
         self.versatz_basis + self.aufgenommen_sekunden
     }
 
@@ -220,7 +256,12 @@ impl Aufnahme {
     /// Der Deckel zaehlt Sendungszeit, nicht Aufnahmezeit. Ein Neustart des
     /// Dienstes in Stunde sieben faengt damit nicht wieder von vorn an.
     pub fn naechste_blocklaenge(&self) -> Option<u64> {
-        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.sendungssekunden());
+        self.naechste_blocklaenge_um(chrono::Utc::now().timestamp())
+    }
+
+    /// Wie [`Aufnahme::naechste_blocklaenge`], mit vorgegebener Uhrzeit.
+    pub fn naechste_blocklaenge_um(&self, jetzt: i64) -> Option<u64> {
+        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.sendungssekunden_um(jetzt));
         match rest {
             r if r < MIND_BLOCK_SEKUNDEN => None,
             r if r < BLOCK_SEKUNDEN => Some(r),
@@ -230,7 +271,19 @@ impl Aufnahme {
 
     /// Aufgenommenen Block verbuchen und den Warteschlangen-Eintrag bauen.
     pub fn block_fertig(&mut self, datei: impl Into<String>, dauer_sekunden: u64) -> Block {
-        let versatz = self.sendungssekunden();
+        let versatz = self.gezaehlte_sekunden();
+        self.block_fertig_bei(datei, dauer_sekunden, versatz)
+    }
+
+    /// Wie [`Aufnahme::block_fertig`], aber mit dem Versatz, der beim Start
+    /// dieses Blocks galt. Der Live-Pfad nimmt diesen Weg, weil zwischen zwei
+    /// Bloecken Zeit vergeht, die keine Aufnahme ist.
+    pub fn block_fertig_bei(
+        &mut self,
+        datei: impl Into<String>,
+        dauer_sekunden: u64,
+        versatz: u64,
+    ) -> Block {
         self.bloecke += 1;
         self.aufgenommen_sekunden += dauer_sekunden;
         Block {
@@ -241,6 +294,8 @@ impl Aufnahme {
             datei: datei.into(),
             versuche: 0,
             frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
         }
     }
 }
@@ -262,6 +317,8 @@ mod tests {
                     datei: "x.ts".to_owned(),
                     versuche: 0,
                     frueherstens: 0,
+                    nur_melden: false,
+                    meldeversuche: 0,
                 }
                 .bezeichnung()
             })
@@ -285,6 +342,8 @@ mod tests {
                 datei: format!("{n}.ts"),
                 versuche: 0,
                 frueherstens: 0,
+                nur_melden: false,
+                meldeversuche: 0,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -307,6 +366,8 @@ mod tests {
                 datei: "x.ts".to_owned(),
                 versuche: 0,
                 frueherstens: 0,
+                nur_melden: false,
+                meldeversuche: 0,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -327,6 +388,8 @@ mod tests {
                 datei: "x.ts".to_owned(),
                 versuche: 0,
                 frueherstens: 0,
+                nur_melden: false,
+                meldeversuche: 0,
             });
         }
         assert_eq!(w.kanal_verwerfen("a"), 2);
@@ -393,23 +456,33 @@ mod tests {
 
     #[test]
     fn letzter_block_wird_am_deckel_gekuerzt() {
-        let mut a = Aufnahme::starten("k", "L1");
-        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG - 90;
-        assert_eq!(a.naechste_blocklaenge(), Some(90));
+        // Der Deckel zaehlt Sendungszeit an der Uhr: hier ist die Sendung
+        // seit MAX minus 90 Sekunden am Laufen.
+        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG - 90);
+        assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), Some(90));
     }
 
     #[test]
     fn am_deckel_wird_nicht_weiter_aufgenommen() {
-        let mut a = Aufnahme::starten("k", "L1");
-        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG;
-        assert_eq!(a.naechste_blocklaenge(), None);
+        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG);
+        assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), None);
+    }
+
+    #[test]
+    fn pausen_zaehlen_zur_sendungszeit() {
+        // Zwischen zwei Bloecken vergeht Zeit, die keine Aufnahme ist:
+        // Rueckstau, Wartetakte, ein abgebrochener streamlink. Frueher zaehlte
+        // nur die Summe der Blocklaengen, und jeder spaetere Zeitstempel zeigte
+        // im VOD auf die falsche Stelle.
+        let a = Aufnahme::starten_bei("k", "L1", 0);
+        assert_eq!(a.sendungssekunden_um(a.gestartet_um + 1800), 1800);
+        assert_eq!(a.gezaehlte_sekunden(), 0, "aufgenommen wurde noch nichts");
     }
 
     #[test]
     fn ueberschreitung_kippt_nicht_ins_negative() {
-        let mut a = Aufnahme::starten("k", "L1");
-        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG + 500;
-        assert_eq!(a.naechste_blocklaenge(), None);
+        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG + 500);
+        assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), None);
     }
 
     #[test]
@@ -422,6 +495,8 @@ mod tests {
             datei: "x.ts".to_owned(),
             versuche: 0,
             frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
         };
         assert_eq!(block.segment_id(7), "deadlockgermany-L1-t001200-s00007");
     }

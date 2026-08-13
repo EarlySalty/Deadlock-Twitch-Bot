@@ -110,8 +110,12 @@ pub fn ist_lokal(base_url: &str) -> bool {
 /// Host-Anteil einer URL, ohne Schema, Benutzerinfo und Port.
 fn host_aus_url(base_url: &str) -> Option<String> {
     let ohne_schema = base_url.split("://").nth(1)?;
+    // Der Rueckwaertsschraegstrich beendet die Autoritaet genauso wie der
+    // normale: reqwest liest `http://evil.example\\@localhost/` als Host
+    // `evil.example`. Wer ihn hier nicht trennt, haelt genau diese URL fuer
+    // localhost und laesst Audio nach draussen.
     let autoritaet = ohne_schema
-        .split(['/', '?', '#'])
+        .split(['/', '\\', '?', '#'])
         .next()
         .filter(|s| !s.is_empty())?;
     // Benutzerinfo abschneiden: `user@host` und der Trick `localhost@evil`.
@@ -462,5 +466,20 @@ mod tests_anonym {
         assert_eq!(stufe_normal("voellig unbekannt", "medium"), "medium");
         assert_eq!(kategorie_normal("Harassment"), "harassment");
         assert_eq!(kategorie_normal("spam"), "sonstiges:spam");
+    }
+}
+
+#[cfg(test)]
+mod tests_host {
+    use super::*;
+
+    #[test]
+    fn rueckwaertsschraegstrich_taeuscht_kein_localhost_vor() {
+        // reqwest verbindet sich hier zu evil.example, nicht zu localhost.
+        assert!(!ist_lokal("http://evil.example\\@localhost/v1"));
+        assert!(!ist_lokal("http://evil.example\\@127.0.0.1/v1"));
+        assert!(ist_lokal("http://127.0.0.1:8791/v1/audio/transcriptions"));
+        assert!(ist_lokal("http://localhost:8791/v1"));
+        assert!(!ist_lokal("http://user@evil.example/v1"));
     }
 }

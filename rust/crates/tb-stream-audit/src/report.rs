@@ -8,12 +8,15 @@
 //! Der Hash kann ein vorgelegtes Zitat bestaetigen, aber keines herstellen.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Fund;
 
 /// Kopfdaten eines Laufs.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize`, weil ein Bericht, dessen Meldung nicht rausging, spaeter
+/// erneut gemeldet wird - aus der Datei, nicht aus einer zweiten Auswertung.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bericht {
     pub lauf_id: String,
     pub erstellt_am: String,
@@ -176,12 +179,20 @@ pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
         }
     } else {
         let hoch = bericht.funde.iter().filter(|f| f.schwere == "high").count();
+        // Der Hinweis auf den ausgefallenen Modellschritt gehoert auch hierhin:
+        // Funde heissen sonst "das war alles", obwohl nur die Regeln liefen.
+        let unvollstaendig = if bericht.modell_geprueft {
+            String::new()
+        } else {
+            format!(" Modellschritt lief nicht ({}).", bericht.modell_hinweis)
+        };
         format!(
-            "Coaching-Audit {}: {} Funde, davon {} hoch ({} Segmente).",
+            "Coaching-Audit {}: {} Funde, davon {} hoch ({} Segmente).{}",
             bericht.kanal,
             bericht.funde.len(),
             hoch,
-            bericht.segmente
+            bericht.segmente,
+            unvollstaendig
         )
     };
 
@@ -352,5 +363,19 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert_eq!(lauf_id(jetzt, "testkanal"), "20260813T200000Z-testkanal");
+    }
+
+    #[test]
+    fn dm_mit_funden_nennt_den_ausgefallenen_modellschritt() {
+        // Funde plus Stille ueber den Modellschritt liest sich wie "das war
+        // alles", obwohl nur die Regeln geprueft haben.
+        let mut b = bericht(vec![fund("high", 12.0, "harassment")]);
+        b.modell_geprueft = false;
+        b.modell_hinweis = "Modellaufruf fehlgeschlagen".to_owned();
+        let text = dm_text(&b, 5);
+        assert!(
+            text.contains("Modellschritt lief nicht"),
+            "unerwartet: {text}"
+        );
     }
 }
