@@ -77,16 +77,43 @@ pub const REMOTE_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_LLM";
 /// die Sprache fremder Menschen, und die verlaesst den Rechner nicht, weil
 /// zufaellig ein API-Schluessel in der Umgebung liegt.
 pub fn fernes_modell_erlaubt(base_url: &str) -> bool {
-    let lokal = base_url.contains("//127.0.0.1")
-        || base_url.contains("//localhost")
-        || base_url.contains("//[::1]");
-    if lokal {
+    if ist_lokal(base_url) {
         return true;
     }
     matches!(
         std::env::var(REMOTE_ERLAUBT_ENV).unwrap_or_default().trim(),
         "1" | "true" | "ja" | "yes"
     )
+}
+
+/// Zeigt die URL auf diesen Rechner?
+///
+/// Der Host wird herausgeschnitten und **vollstaendig** verglichen. Ein
+/// Teilstring-Test wuerde `https://localhost.angreifer.example/` als lokal
+/// durchwinken und damit Transkript und API-Schluessel dorthin schicken.
+pub fn ist_lokal(base_url: &str) -> bool {
+    let Some(host) = host_aus_url(base_url) else {
+        return false;
+    };
+    matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+/// Host-Anteil einer URL, ohne Schema, Benutzerinfo und Port.
+fn host_aus_url(base_url: &str) -> Option<String> {
+    let ohne_schema = base_url.split("://").nth(1)?;
+    let autoritaet = ohne_schema
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|s| !s.is_empty())?;
+    // Benutzerinfo abschneiden: `user@host` und der Trick `localhost@evil`.
+    let host_port = autoritaet.rsplit('@').next()?;
+    // IPv6 in Klammern behaelt seine Klammern, sonst am Doppelpunkt kuerzen.
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().map(|h| format!("[{h}]"))?
+    } else {
+        host_port.split(':').next()?.to_owned()
+    };
+    Some(host.to_lowercase())
 }
 
 /// Die Nutzlast einer Anfrage: nur ID, Zeitfenster und **redigierter** Text.
@@ -214,6 +241,32 @@ mod tests {
     fn localhost_gilt_immer_als_erlaubt() {
         assert!(fernes_modell_erlaubt("http://127.0.0.1:8791/v1"));
         assert!(fernes_modell_erlaubt("http://localhost:1234/v1"));
+    }
+
+    #[test]
+    fn aehnlich_aussehende_hosts_gelten_nicht_als_lokal() {
+        // Genau die Faelle, die ein Teilstring-Test durchwinken wuerde.
+        for url in [
+            "https://localhost.angreifer.example/v1",
+            "https://127.0.0.1.evil.example/v1",
+            "https://evil.example/?x=//127.0.0.1",
+            "https://localhost@evil.example/v1",
+            "https://not-localhost/v1",
+        ] {
+            assert!(!ist_lokal(url), "faelschlich lokal: {url}");
+        }
+    }
+
+    #[test]
+    fn echte_lokale_adressen_werden_erkannt() {
+        for url in [
+            "http://127.0.0.1:8791/v1/audio/transcriptions",
+            "http://localhost:1234/v1",
+            "http://[::1]:8080/v1",
+            "HTTP://LOCALHOST:9/v1",
+        ] {
+            assert!(ist_lokal(url), "nicht als lokal erkannt: {url}");
+        }
     }
 
     #[test]

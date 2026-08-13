@@ -37,7 +37,15 @@ pub struct Block {
     /// Sekunden seit Beginn der Sendung, an denen dieser Block anfaengt.
     pub versatz_sekunden: u64,
     pub datei: String,
+    /// Wie oft die Auswertung dieses Blocks schon fehlschlug.
+    #[doc(hidden)]
+    pub versuche: u32,
 }
+
+/// So oft wird ein Block nach einem Fehlschlag erneut eingereiht. Ein
+/// Aussetzer der Transkription darf die einzige Aufnahme nicht verbrennen,
+/// ein dauerhaft kaputter Block aber auch nicht ewig kreisen.
+pub const MAX_VERSUCHE: u32 = 3;
 
 impl Block {
     /// Name im Bericht: Kanal, Sendung und Blocknummer. Dreistellig, damit die
@@ -73,6 +81,21 @@ impl Warteschlange {
 
     pub fn naechster(&mut self) -> Option<Block> {
         self.eintraege.pop_front()
+    }
+
+    /// Reiht einen fehlgeschlagenen Block hinten wieder ein, bis die Versuche
+    /// aufgebraucht sind. Hinten, damit ein kaputter Block die anderen nicht
+    /// blockiert.
+    ///
+    /// Gibt `false` zurueck, wenn aufgegeben wurde - dann bleibt die Aufnahme
+    /// liegen und muss von Hand angesehen werden.
+    pub fn erneut_versuchen(&mut self, mut block: Block) -> bool {
+        block.versuche += 1;
+        if block.versuche >= MAX_VERSUCHE {
+            return false;
+        }
+        self.eintraege.push_back(block);
+        true
     }
 
     pub fn laenge(&self) -> usize {
@@ -133,6 +156,7 @@ impl Aufnahme {
             nummer: self.bloecke,
             versatz_sekunden: versatz,
             datei: datei.into(),
+            versuche: 0,
         }
     }
 }
@@ -152,6 +176,7 @@ mod tests {
                     nummer: *n,
                     versatz_sekunden: 0,
                     datei: "x.ts".to_owned(),
+                    versuche: 0,
                 }
                 .bezeichnung()
             })
@@ -177,6 +202,7 @@ mod tests {
                 nummer: n,
                 versatz_sekunden: 0,
                 datei: format!("{n}.ts"),
+                versuche: 0,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -197,6 +223,7 @@ mod tests {
                 nummer: i as u32 + 1,
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
+                versuche: 0,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -215,11 +242,38 @@ mod tests {
                 nummer: 1,
                 versatz_sekunden: 0,
                 datei: "x.ts".to_owned(),
+                versuche: 0,
             });
         }
         assert_eq!(w.kanal_verwerfen("a"), 2);
         assert_eq!(w.laenge(), 1);
         assert_eq!(w.naechster().unwrap().kanal, "b");
+    }
+
+    #[test]
+    fn fehlgeschlagener_block_kommt_hinten_wieder_rein() {
+        let mut w = Warteschlange::new();
+        let mut a = Aufnahme::starten("k", "L1");
+        let erster = a.block_fertig("1.ts", 60);
+        let zweiter = a.block_fertig("2.ts", 60);
+        w.einreihen(zweiter);
+        assert!(w.erneut_versuchen(erster));
+        // Der kaputte Block blockiert die anderen nicht.
+        assert_eq!(w.naechster().unwrap().datei, "2.ts");
+        assert_eq!(w.naechster().unwrap().datei, "1.ts");
+    }
+
+    #[test]
+    fn nach_drei_versuchen_wird_aufgegeben() {
+        let mut w = Warteschlange::new();
+        let mut a = Aufnahme::starten("k", "L1");
+        let mut block = a.block_fertig("1.ts", 60);
+        for _ in 0..MAX_VERSUCHE - 1 {
+            assert!(w.erneut_versuchen(block.clone()));
+            block = w.naechster().unwrap();
+        }
+        assert!(!w.erneut_versuchen(block));
+        assert!(w.ist_leer());
     }
 
     #[test]
@@ -278,6 +332,7 @@ mod tests {
             nummer: 3,
             versatz_sekunden: 1200,
             datei: "x.ts".to_owned(),
+            versuche: 0,
         };
         assert_eq!(block.segment_id(7), "deadlockgermany-L1-block003-s00007");
     }
