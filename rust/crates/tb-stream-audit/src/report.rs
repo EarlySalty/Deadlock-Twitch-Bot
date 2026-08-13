@@ -19,6 +19,10 @@ pub struct Bericht {
     pub kanal: String,
     pub transkription: String,
     pub modell: String,
+    /// Lief die Transkription auf diesem Rechner? Frueher stand hier fest
+    /// "lokal" im Bericht - eine Herkunftsangabe, die bei einem entfernten
+    /// STT-Endpunkt schlicht falsch war.
+    pub transkription_lokal: bool,
     pub anbieter: String,
     /// Ob das Rohtranskript auf der Platte bleibt. Der Bericht sagt es
     /// ausdruecklich, damit niemand raten muss, wo Wortlaut liegt.
@@ -76,8 +80,14 @@ pub fn markdown(bericht: &Bericht) -> String {
         format!("- Erstellt: {}", bericht.erstellt_am),
         format!("- Quelle: {}", bericht.quelle),
         format!(
-            "- Transkription: {} ({}), lokal",
-            bericht.transkription, bericht.modell
+            "- Transkription: {} ({}), {}",
+            bericht.transkription,
+            bericht.modell,
+            if bericht.transkription_lokal {
+                "lokal"
+            } else {
+                "ENTFERNT - Audio hat den Rechner verlassen"
+            }
         ),
         format!(
             "- Bewertung: {}{}",
@@ -213,6 +223,7 @@ mod tests {
             kanal: "testkanal".to_owned(),
             transkription: "faster-whisper".to_owned(),
             modell: "large-v3-turbo".to_owned(),
+            transkription_lokal: true,
             anbieter: "fireworks".to_owned(),
             transkript_behalten: true,
             segmente: 12,
@@ -287,6 +298,15 @@ mod tests {
         assert!(text.contains("01:02:05"));
         assert!(text.contains("hate_speech_slur"));
         assert!(text.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn entfernte_transkription_wird_als_solche_ausgewiesen() {
+        let mut b = bericht(vec![]);
+        b.transkription_lokal = false;
+        let text = markdown(&b);
+        assert!(text.contains("ENTFERNT"));
+        assert!(!text.contains("), lokal"));
     }
 
     #[test]

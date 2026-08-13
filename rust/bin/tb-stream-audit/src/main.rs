@@ -72,10 +72,22 @@ async fn main() {
         tracing::error!("Transkription nicht konfiguriert; ENGAGEMENT_STT_BASE_URL setzen");
         std::process::exit(2);
     };
-    if !transkribierer.is_local() {
-        tracing::warn!(
-            "Transkription zeigt nicht auf localhost - Stream-Audio verlaesst den Rechner"
+    // Rohes Stream-Audio ist die Sprache fremder Menschen. Ein entfernter
+    // STT-Endpunkt ist deshalb kein Fall fuer eine Warnung, die im Journal
+    // untergeht, sondern fuer einen Abbruch. Die Unit setzt die URL auf
+    // localhost; eine EnvironmentFile koennte sie ueberschreiben, und genau
+    // das faengt diese Pruefung ab.
+    let transkription_lokal = tb_stream_audit::llm::ist_lokal(&stt_basis_url());
+    if !transkription_lokal && !remote_stt_erlaubt() {
+        tracing::error!(
+            "Transkription zeigt auf einen fremden Rechner. {}=1 setzen, um rohes \
+Stream-Audio dorthin zu senden.",
+            REMOTE_STT_ERLAUBT_ENV
         );
+        std::process::exit(2);
+    }
+    if !transkription_lokal {
+        tracing::warn!("Transkription laeuft entfernt - ausdruecklich erlaubt");
     }
 
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
@@ -91,10 +103,35 @@ async fn main() {
         Arc::clone(&warteschlange),
     ));
 
+    // Beide Schleifen laufen endlos. Endet eine, ist der Dienst kaputt - er
+    // wuerde sonst als leere Huelle weiterlaufen und nie wieder etwas
+    // auswerten. Der Ausstiegscode muss ungleich 0 sein, sonst greift
+    // Restart=on-failure in der Unit nicht.
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => tracing::info!("Abbruch angefordert"),
-        _ = aufnahme => tracing::error!("Aufnahmeschleife beendet"),
-        _ = auswertung => tracing::error!("Auswertungsschleife beendet"),
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Abbruch angefordert");
+        }
+        ergebnis = aufnahme => {
+            arbeiter_ende_melden("Aufnahmeschleife", ergebnis);
+            std::process::exit(1);
+        }
+        ergebnis = auswertung => {
+            arbeiter_ende_melden("Auswertungsschleife", ergebnis);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Schreibt ins Journal, warum ein Arbeiter endete - mit Panik-Text, falls es
+/// eine Panik war. Ohne diese Unterscheidung steht dort nur "beendet" und der
+/// eigentliche Fehler ist verloren.
+fn arbeiter_ende_melden(name: &str, ergebnis: Result<(), tokio::task::JoinError>) {
+    match ergebnis {
+        Ok(()) => tracing::error!(arbeiter = name, "Arbeiter unerwartet beendet"),
+        Err(fehler) if fehler.is_panic() => {
+            tracing::error!(arbeiter = name, ?fehler, "Arbeiter mit Panik beendet")
+        }
+        Err(fehler) => tracing::error!(arbeiter = name, ?fehler, "Arbeiter abgebrochen"),
     }
 }
 
@@ -109,18 +146,20 @@ async fn main() {
 /// Blocknummer sind aus dem Dateinamen nicht mehr rekonstruierbar, deshalb
 /// laufen sie als eigener Lauf "wiederaufnahme" mit fortlaufender Nummer.
 async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlange>>) {
-    let wurzel = std::env::temp_dir();
+    let wurzel = aufnahme_wurzel();
     let Ok(mut eintraege) = tokio::fs::read_dir(&wurzel).await else {
         return;
     };
-    let mut zustand = plan::Aufnahme::starten("wiederaufnahme", "wiederaufnahme");
+    // Eigene Kennung je Neustart, sonst ueberschreibt die naechste
+    // Wiederaufnahme die Berichte der vorigen.
+    let lauf = format!(
+        "wiederaufnahme-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+    );
+    let mut zustand = plan::Aufnahme::starten("wiederaufnahme", lauf);
     let mut gefunden = 0usize;
 
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
-        let name = eintrag.file_name().to_string_lossy().to_string();
-        if !name.starts_with("voice-reaction-") {
-            continue;
-        }
         let Ok(mut dateien) = tokio::fs::read_dir(eintrag.path()).await else {
             continue;
         };
@@ -138,6 +177,32 @@ async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlan
     if gefunden > 0 {
         tracing::info!(gefunden, "liegengebliebene Aufnahmen wieder eingereiht");
     }
+}
+
+/// Umgebungsschalter fuer einen STT-Endpunkt ausserhalb dieses Rechners.
+const REMOTE_STT_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_STT";
+
+fn stt_basis_url() -> String {
+    std::env::var("ENGAGEMENT_STT_BASE_URL").unwrap_or_default()
+}
+
+fn remote_stt_erlaubt() -> bool {
+    matches!(
+        std::env::var(REMOTE_STT_ERLAUBT_ENV)
+            .unwrap_or_default()
+            .trim(),
+        "1" | "true" | "ja" | "yes"
+    )
+}
+
+/// Eigener Aufnahmeordner.
+///
+/// Der `AudioCapturer` legt ohne Zielangabe unter `/tmp/voice-reaction-*` ab,
+/// und dasselbe Praefix nutzen Reaction-Learning und Smalltalk. Wer dort
+/// aufraeumt, loescht fremde, womoeglich noch laufende Aufnahmen. Dieser
+/// Dienst bekommt deshalb sein eigenes Verzeichnis.
+fn aufnahme_wurzel() -> PathBuf {
+    std::env::temp_dir().join("stream-audit-captures")
 }
 
 fn helix_aus_umgebung() -> Option<HelixClient> {
@@ -163,8 +228,10 @@ async fn aufnahme_schleife(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
 ) {
-    let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+    let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<bool>> =
         Default::default();
+    // Kanaele, die in dieser Sendung ihren Aufnahmedeckel erreicht haben.
+    let mut gedeckelt: std::collections::HashSet<String> = Default::default();
 
     loop {
         let live = match helix
@@ -182,12 +249,36 @@ async fn aufnahme_schleife(
             }
         };
 
-        // Beendete Aufnahmen aufraeumen: wer neu sendet, faengt wieder bei
-        // Block 1 an und bekommt eine neue Lauf-Kennung.
-        laufend.retain(|_, handle| !handle.is_finished());
+        // Beendete Tasks einsammeln und merken, wer wegen des Deckels aufhoerte.
+        let fertige: Vec<String> = laufend
+            .iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(kanal, _)| kanal.clone())
+            .collect();
+        for kanal in fertige {
+            let Some(handle) = laufend.remove(&kanal) else {
+                continue;
+            };
+            match handle.await {
+                Ok(true) => {
+                    gedeckelt.insert(kanal.clone());
+                    tracing::info!(
+                        kanal,
+                        "Aufnahmedeckel erreicht, kein Neustart in dieser Sendung"
+                    );
+                }
+                Ok(false) => {}
+                Err(fehler) => tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt"),
+            }
+        }
+
+        // Der Deckel faellt erst, wenn der Kanal offline war. Wuerde er bei
+        // jedem Takt zuruecksetzen, waere die Sechs-Stunden-Grenze wirkungslos:
+        // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
+        gedeckelt.retain(|kanal| live.contains(kanal));
 
         for kanal in &live {
-            if laufend.contains_key(kanal) {
+            if laufend.contains_key(kanal) || gedeckelt.contains(kanal) {
                 continue;
             }
             let handle = tokio::spawn(kanal_aufnehmen(kanal.clone(), Arc::clone(&warteschlange)));
@@ -202,7 +293,9 @@ async fn aufnahme_schleife(
 /// Nimmt einen Kanal in Bloecken auf, bis der Stream endet oder der Deckel
 /// greift. Laeuft als eigener Task, damit mehrere Kanaele sich nicht
 /// gegenseitig blockieren.
-async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschlange>>) {
+/// Gibt `true` zurueck, wenn der Aufnahmedeckel griff - dann startet die
+/// Aufsicht diesen Kanal nicht neu, solange er sendet.
+async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschlange>>) -> bool {
     let capturer = AudioCapturer::from_env();
     // Eine Kennung je Sendung. Ohne sie ueberschreibt der naechste Stream
     // desselben Kanals die Berichte des vorigen.
@@ -211,16 +304,20 @@ async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschl
 
     loop {
         let Some(laenge) = zustand.naechste_blocklaenge() else {
-            tracing::info!(kanal, "Aufnahmedeckel erreicht");
-            return;
+            return true;
         };
 
+        let wurzel = aufnahme_wurzel();
+        if let Err(fehler) = tokio::fs::create_dir_all(&wurzel).await {
+            tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
+            return false;
+        }
         match capturer
             .capture(
                 &kanal,
                 laenge,
                 tb_engagement::audio_capture::DEFAULT_QUALITY,
-                None,
+                Some(&wurzel),
             )
             .await
         {
@@ -242,7 +339,7 @@ async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschl
                 // Dann endet dieser Task, und die Aufsicht startet ihn neu,
                 // sobald der Kanal wieder sendet.
                 tracing::info!(kanal, ?fehler, "Aufnahme beendet");
-                return;
+                return false;
             }
         }
     }
@@ -272,11 +369,24 @@ async fn auswertungs_schleife(
                 }
             }
             Err(fehler) => {
-                tracing::warn!(
-                    block = %block.bezeichnung(),
-                    fehler,
-                    "Auswertung fehlgeschlagen, Aufnahme bleibt liegen"
-                );
+                let bezeichnung = block.bezeichnung();
+                let versuch = block.versuche + 1;
+                if warteschlange.lock().await.erneut_versuchen(block) {
+                    tracing::warn!(
+                        block = %bezeichnung,
+                        fehler,
+                        versuch,
+                        "Auswertung fehlgeschlagen, erneut eingereiht"
+                    );
+                } else {
+                    tracing::error!(
+                        block = %bezeichnung,
+                        fehler,
+                        "Auswertung nach {} Versuchen aufgegeben; Aufnahme bleibt zur \
+                    Handpruefung liegen",
+                        plan::MAX_VERSUCHE
+                    );
+                }
             }
         }
     }
@@ -312,6 +422,7 @@ async fn block_auswerten(
         kanal: block.kanal.clone(),
         transkription: transkript.engine.clone(),
         modell: transkript.model.clone(),
+        transkription_lokal: tb_stream_audit::llm::ist_lokal(&stt_basis_url()),
         anbieter: endpunkt.provider.to_owned(),
         transkript_behalten: konfiguration.transkript_behalten,
         segmente: segmente.len(),
@@ -321,7 +432,10 @@ async fn block_auswerten(
     };
 
     schreiben(konfiguration, block, &bericht, &transkript.text).await?;
-    dm_senden(&bericht).await;
+    // Ein Fund, dessen Meldung nie ankam, ist kein erledigter Block. Schlaegt
+    // die DM fehl, geht der Block zurueck in die Warteschlange statt die
+    // Aufnahme zu loeschen - sonst verschwindet der einzige Hinweis still.
+    dm_senden(&bericht).await?;
     Ok(())
 }
 
@@ -512,13 +626,12 @@ async fn schreiben(
 
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
 /// nach dem ersten Abend Rauschen, das niemand mehr liest.
-async fn dm_senden(bericht: &Bericht) {
+async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
     if bericht.funde.is_empty() {
-        return;
+        return Ok(());
     }
     let Some(token) = melden::broker_token() else {
-        tracing::warn!("kein Broker-Token, DM entfaellt");
-        return;
+        return Err("kein Broker-Token, Fund waere unbemerkt geblieben".to_owned());
     };
     let anfrage = melden::anfrage(&melden::empfaenger(), &report::dm_text(bericht, 5));
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
@@ -533,8 +646,85 @@ async fn dm_senden(bericht: &Bericht) {
         .send()
         .await
     {
-        Ok(antwort) if antwort.status().is_success() => tracing::info!("DM zugestellt"),
-        Ok(antwort) => tracing::warn!(status = antwort.status().as_u16(), "DM abgelehnt"),
-        Err(fehler) => tracing::warn!(?fehler, "DM fehlgeschlagen"),
+        Ok(antwort) if antwort.status().is_success() => {
+            tracing::info!("DM zugestellt");
+            Ok(())
+        }
+        Ok(antwort) => Err(format!("DM abgelehnt: HTTP {}", antwort.status().as_u16())),
+        Err(fehler) => Err(format!("DM fehlgeschlagen: {fehler}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(versatz: u64) -> plan::Block {
+        plan::Block {
+            kanal: "testkanal".to_owned(),
+            lauf: "lauf1".to_owned(),
+            nummer: 1,
+            versatz_sekunden: versatz,
+            datei: "/tmp/egal.ts".to_owned(),
+            versuche: 0,
+        }
+    }
+
+    #[test]
+    fn segmente_bleiben_innerhalb_der_blockdauer() {
+        // Der alte Fehler: `teil.len()` als Zeitfaktor liess Segmente weit
+        // ueber das Blockende hinausragen.
+        let text = "Ein Satz. Noch einer! Und ein dritter? ".repeat(20);
+        let segmente = segmente_bauen(&block(600), &text, 600.0);
+        assert!(!segmente.is_empty());
+        for s in &segmente {
+            assert!(s.start_sekunden >= 600.0, "Start liegt vor dem Blockanfang");
+            assert!(
+                s.ende_sekunden <= 1200.0 + 0.001,
+                "Segment ragt ueber das Blockende: {}",
+                s.ende_sekunden
+            );
+        }
+        let letztes = segmente.last().expect("mindestens ein Segment");
+        assert!(
+            (letztes.ende_sekunden - 1200.0).abs() < 0.001,
+            "das letzte Segment muss am Blockende enden"
+        );
+    }
+
+    #[test]
+    fn segmente_laufen_lueckenlos_vorwaerts() {
+        let segmente = segmente_bauen(&block(0), "A. B. C. D. E. F.", 60.0);
+        let mut vorher = 0.0;
+        for s in &segmente {
+            assert!(
+                s.start_sekunden >= vorher - 0.001,
+                "Segmente laufen rueckwaerts"
+            );
+            assert!(s.ende_sekunden >= s.start_sekunden);
+            vorher = s.ende_sekunden;
+        }
+    }
+
+    #[test]
+    fn leerer_text_ergibt_keine_segmente() {
+        assert!(segmente_bauen(&block(0), "   \n  ", 600.0).is_empty());
+    }
+
+    #[test]
+    fn dauer_null_faellt_nicht_auseinander() {
+        // Ein Block ohne bekannte Dauer darf keine NaN-Zeiten liefern.
+        let segmente = segmente_bauen(&block(0), "Ein Satz. Zwei Satz.", 0.0);
+        assert_eq!(segmente.len(), 1);
+        for s in &segmente {
+            assert!(s.start_sekunden.is_finite() && s.ende_sekunden.is_finite());
+        }
+    }
+
+    #[test]
+    fn aufnahmewurzel_liegt_unter_eigenem_ordner() {
+        // Eigener Ordner, damit das Aufraeumen nie fremde Dateien in /tmp trifft.
+        let wurzel = aufnahme_wurzel();
+        assert!(wurzel.ends_with("stream-audit-captures"), "{wurzel:?}");
     }
 }
