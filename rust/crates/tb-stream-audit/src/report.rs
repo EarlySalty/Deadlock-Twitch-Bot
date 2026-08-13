@@ -24,6 +24,13 @@ pub struct Bericht {
     /// ausdruecklich, damit niemand raten muss, wo Wortlaut liegt.
     pub transkript_behalten: bool,
     pub segmente: usize,
+    /// Ob der Modellschritt vollstaendig durchlief. Faellt er aus, stuende
+    /// sonst "keine Auffaelligkeiten" im Bericht, obwohl nie jemand
+    /// hingeschaut hat - Stille laesst sich nicht von Sauberkeit
+    /// unterscheiden.
+    pub modell_geprueft: bool,
+    /// Grund, falls der Modellschritt ausfiel oder uebersprungen wurde.
+    pub modell_hinweis: String,
     pub funde: Vec<Fund>,
 }
 
@@ -72,7 +79,15 @@ pub fn markdown(bericht: &Bericht) -> String {
             "- Transkription: {} ({}), lokal",
             bericht.transkription, bericht.modell
         ),
-        format!("- Bewertung: {}", bericht.anbieter),
+        format!(
+            "- Bewertung: {}{}",
+            bericht.anbieter,
+            if bericht.modell_geprueft {
+                String::new()
+            } else {
+                format!(" — NICHT GELAUFEN: {}", bericht.modell_hinweis)
+            }
+        ),
         format!("- Segmente: {}", bericht.segmente),
         format!(
             "- Rohtranskript behalten: {}",
@@ -86,7 +101,14 @@ pub fn markdown(bericht: &Bericht) -> String {
     ];
 
     if bericht.funde.is_empty() {
-        zeilen.push("Keine Auffaelligkeiten.".to_owned());
+        zeilen.push(if bericht.modell_geprueft {
+            "Keine Auffaelligkeiten.".to_owned()
+        } else {
+            format!(
+                "Keine Regelfunde. **Der Modellschritt lief nicht** ({}), diese Seite ist daher NICHT vollstaendig geprueft.",
+                bericht.modell_hinweis
+            )
+        });
         zeilen.push(String::new());
         return zeilen.join("\n");
     }
@@ -120,10 +142,17 @@ pub fn markdown(bericht: &Bericht) -> String {
 /// abgeschnittene Liste liest sich wie eine vollstaendige.
 pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
     let kopf = if bericht.funde.is_empty() {
-        format!(
-            "Coaching-Audit {}: keine Auffaelligkeiten ({} Segmente).",
-            bericht.kanal, bericht.segmente
-        )
+        if bericht.modell_geprueft {
+            format!(
+                "Coaching-Audit {}: keine Auffaelligkeiten ({} Segmente).",
+                bericht.kanal, bericht.segmente
+            )
+        } else {
+            format!(
+                "Coaching-Audit {}: keine Regelfunde, aber Modellschritt lief nicht ({}). Nicht vollstaendig geprueft.",
+                bericht.kanal, bericht.modell_hinweis
+            )
+        }
     } else {
         let hoch = bericht.funde.iter().filter(|f| f.schwere == "high").count();
         format!(
@@ -187,6 +216,8 @@ mod tests {
             anbieter: "fireworks".to_owned(),
             transkript_behalten: true,
             segmente: 12,
+            modell_geprueft: true,
+            modell_hinweis: String::new(),
             funde,
         }
     }
@@ -217,6 +248,30 @@ mod tests {
     fn gleiche_schwere_nach_zeit() {
         let sortierte = sortiert(vec![fund("high", 900.0, "a"), fund("high", 30.0, "b")]);
         assert_eq!(sortierte[0].start_sekunden, 30.0);
+    }
+
+    fn bericht_ohne_modell(funde: Vec<Fund>) -> Bericht {
+        let mut b = bericht(funde);
+        b.modell_geprueft = false;
+        b.modell_hinweis = "kein Schluessel".to_owned();
+        b
+    }
+
+    #[test]
+    fn ausgefallener_modellschritt_faellt_im_bericht_auf() {
+        // Ohne diesen Hinweis liest sich ein leerer Bericht wie "sauber",
+        // obwohl der halbe Pruefpfad nie gelaufen ist.
+        let text = markdown(&bericht_ohne_modell(vec![]));
+        assert!(text.contains("NICHT GELAUFEN"));
+        assert!(text.contains("NICHT vollstaendig geprueft"));
+        assert!(!text.contains("Keine Auffaelligkeiten."));
+    }
+
+    #[test]
+    fn ausgefallener_modellschritt_steht_auch_in_der_dm() {
+        let text = dm_text(&bericht_ohne_modell(vec![]), 3);
+        assert!(text.contains("Modellschritt lief nicht"));
+        assert!(!text.contains("keine Auffaelligkeiten"));
     }
 
     #[test]
