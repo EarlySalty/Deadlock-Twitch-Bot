@@ -79,6 +79,7 @@ async fn main() {
     }
 
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
+    liegengebliebenes_einreihen(&warteschlange).await;
     let aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
@@ -94,6 +95,48 @@ async fn main() {
         _ = tokio::signal::ctrl_c() => tracing::info!("Abbruch angefordert"),
         _ = aufnahme => tracing::error!("Aufnahmeschleife beendet"),
         _ = auswertung => tracing::error!("Auswertungsschleife beendet"),
+    }
+}
+
+/// Nimmt Aufnahmen wieder auf, die ein frueherer Lauf nicht mehr auswerten
+/// konnte.
+///
+/// Die Warteschlange lebt im Speicher. Ohne diesen Schritt waere jeder
+/// Neustart ein stiller Verlust: die Aufnahmen lägen weiter auf der Platte,
+/// wuerden aber nie ausgewertet und nie geloescht.
+///
+/// Erkannt werden die Capture-Verzeichnisse an ihrem Praefix; Kanal und
+/// Blocknummer sind aus dem Dateinamen nicht mehr rekonstruierbar, deshalb
+/// laufen sie als eigener Lauf "wiederaufnahme" mit fortlaufender Nummer.
+async fn liegengebliebenes_einreihen(warteschlange: &Arc<Mutex<plan::Warteschlange>>) {
+    let wurzel = std::env::temp_dir();
+    let Ok(mut eintraege) = tokio::fs::read_dir(&wurzel).await else {
+        return;
+    };
+    let mut zustand = plan::Aufnahme::starten("wiederaufnahme", "wiederaufnahme");
+    let mut gefunden = 0usize;
+
+    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+        let name = eintrag.file_name().to_string_lossy().to_string();
+        if !name.starts_with("voice-reaction-") {
+            continue;
+        }
+        let Ok(mut dateien) = tokio::fs::read_dir(eintrag.path()).await else {
+            continue;
+        };
+        while let Ok(Some(datei)) = dateien.next_entry().await {
+            let pfad = datei.path();
+            if pfad.extension().and_then(|e| e.to_str()) != Some("ts") {
+                continue;
+            }
+            let block = zustand.block_fertig(pfad.to_string_lossy().to_string(), 0);
+            warteschlange.lock().await.einreihen(block);
+            gefunden += 1;
+        }
+    }
+
+    if gefunden > 0 {
+        tracing::info!(gefunden, "liegengebliebene Aufnahmen wieder eingereiht");
     }
 }
 
@@ -218,15 +261,23 @@ async fn auswertungs_schleife(
             continue;
         };
 
-        if let Err(fehler) = block_auswerten(&transkribierer, &konfiguration, &block).await {
-            tracing::warn!(block = %block.bezeichnung(), fehler, "Auswertung fehlgeschlagen");
-        }
-
-        // Aufnahme wegräumen, sobald sie ausgewertet ist. Wer den Wortlaut
-        // braucht, liest das Transkript; das Rohvideo waere nur Plattenlast.
-        let pfad = PathBuf::from(&block.datei);
-        if let Some(verzeichnis) = pfad.parent() {
-            let _ = tokio::fs::remove_dir_all(verzeichnis).await;
+        match block_auswerten(&transkribierer, &konfiguration, &block).await {
+            Ok(()) => {
+                // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
+                // Fehler loescht, vernichtet bei einem Aussetzer der
+                // Transkription den einzigen Beleg, den es je gab.
+                let pfad = PathBuf::from(&block.datei);
+                if let Some(verzeichnis) = pfad.parent() {
+                    let _ = tokio::fs::remove_dir_all(verzeichnis).await;
+                }
+            }
+            Err(fehler) => {
+                tracing::warn!(
+                    block = %block.bezeichnung(),
+                    fehler,
+                    "Auswertung fehlgeschlagen, Aufnahme bleibt liegen"
+                );
+            }
         }
     }
 }
@@ -248,7 +299,8 @@ async fn block_auswerten(
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
-    funde.extend(modellfunde(&segmente).await);
+    let (modell_funde, modell_hinweis) = modellfunde(&segmente).await;
+    funde.extend(modell_funde);
     let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
@@ -263,6 +315,8 @@ async fn block_auswerten(
         anbieter: endpunkt.provider.to_owned(),
         transkript_behalten: konfiguration.transkript_behalten,
         segmente: segmente.len(),
+        modell_geprueft: modell_hinweis.is_none(),
+        modell_hinweis: modell_hinweis.unwrap_or_default(),
         funde,
     };
 
@@ -326,11 +380,23 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
 /// Modellfunde ueber den im Bot konfigurierten Anbieter. Faellt der Aufruf aus,
 /// bleibt es bei den Regelfunden - ein Audit ohne Modell ist duenner, aber
 /// besser als keines.
-async fn modellfunde(segmente: &[Segment]) -> Vec<tb_stream_audit::Fund> {
+async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Option<String>) {
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
+    if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
+        return (
+            Vec::new(),
+            Some(format!(
+                "Anbieter {} liegt ausserhalb dieses Rechners; {}=1 setzen, um Transkriptausschnitte dorthin zu senden",
+                endpunkt.provider,
+                llm::REMOTE_ERLAUBT_ENV
+            )),
+        );
+    }
     let Some(schluessel) = endpunkt.api_key.clone() else {
-        tracing::info!("kein Schluessel fuer {}, nur Regelfunde", endpunkt.provider);
-        return Vec::new();
+        return (
+            Vec::new(),
+            Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
+        );
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -338,6 +404,7 @@ async fn modellfunde(segmente: &[Segment]) -> Vec<tb_stream_audit::Fund> {
         .unwrap_or_default();
 
     let mut raus = Vec::new();
+    let mut fehler_gesehen: Option<String> = None;
     for stapel in llm::stapel(segmente) {
         let anfrage = serde_json::json!({
             "model": endpunkt.model,
@@ -357,6 +424,7 @@ async fn modellfunde(segmente: &[Segment]) -> Vec<tb_stream_audit::Fund> {
             Ok(r) => r.text().await.unwrap_or_default(),
             Err(fehler) => {
                 tracing::warn!(?fehler, "Modellaufruf fehlgeschlagen");
+                fehler_gesehen.get_or_insert_with(|| "Modellaufruf fehlgeschlagen".to_owned());
                 continue;
             }
         };
@@ -370,14 +438,46 @@ async fn modellfunde(segmente: &[Segment]) -> Vec<tb_stream_audit::Fund> {
             .unwrap_or_default();
         let Some(json) = llm::json_objekt_ausschneiden(&inhalt) else {
             tracing::warn!("Modellantwort ohne JSON");
+            fehler_gesehen.get_or_insert_with(|| "Modellantwort ohne JSON".to_owned());
             continue;
         };
         match serde_json::from_str::<llm::ModellAntwort>(json) {
             Ok(geparst) => raus.extend(llm::zu_funden(&geparst, stapel)),
-            Err(fehler) => tracing::warn!(?fehler, "Modellantwort unlesbar"),
+            Err(fehler) => {
+                tracing::warn!(?fehler, "Modellantwort unlesbar");
+                fehler_gesehen.get_or_insert_with(|| "Modellantwort unlesbar".to_owned());
+            }
         }
     }
-    raus
+    (raus, fehler_gesehen)
+}
+
+/// Schreibt mit Modus 0600.
+///
+/// Berichte nennen Zeit, Kanal und Kategorie eines moeglichen Vorfalls, das
+/// Transkript enthaelt den vollen Wortlaut fremder Menschen. Beides ist nichts
+/// fuer die Standardrechte, die systemd sonst vergibt.
+async fn nur_fuer_mich(pfad: &Path, inhalt: &[u8]) -> Result<(), String> {
+    // tokio::fs::OpenOptions bringt `mode()` selbst mit; der std-Trait waere
+    // hier ein ungenutzter Import.
+    use tokio::io::AsyncWriteExt;
+
+    let mut datei = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(pfad)
+        .await
+        .map_err(|e| format!("{}: {e}", pfad.display()))?;
+    datei
+        .write_all(inhalt)
+        .await
+        .map_err(|e| format!("{}: {e}", pfad.display()))?;
+    datei
+        .flush()
+        .await
+        .map_err(|e| format!("{}: {e}", pfad.display()))
 }
 
 async fn schreiben(
@@ -392,17 +492,15 @@ async fn schreiben(
         .map_err(|e| format!("Ausgabeverzeichnis: {e}"))?;
     let basis = verzeichnis.join(block.bezeichnung());
 
-    tokio::fs::write(basis.with_extension("md"), report::markdown(bericht))
-        .await
-        .map_err(|e| format!("Bericht: {e}"))?;
     let json = serde_json::to_string_pretty(bericht).map_err(|e| format!("JSON: {e}"))?;
-    tokio::fs::write(basis.with_extension("json"), json)
-        .await
-        .map_err(|e| format!("JSON schreiben: {e}"))?;
+    nur_fuer_mich(
+        &basis.with_extension("md"),
+        report::markdown(bericht).as_bytes(),
+    )
+    .await?;
+    nur_fuer_mich(&basis.with_extension("json"), json.as_bytes()).await?;
     if konfiguration.transkript_behalten {
-        tokio::fs::write(basis.with_extension("txt"), transkript)
-            .await
-            .map_err(|e| format!("Transkript: {e}"))?;
+        nur_fuer_mich(&basis.with_extension("txt"), transkript.as_bytes()).await?;
     }
     tracing::info!(
         block = %block.bezeichnung(),
