@@ -11,6 +11,7 @@ thiserror   = { workspace = true }
 regex       = { workspace = true }
 async-trait = { workspace = true }
 chrono     = { workspace = true }
+chrono-tz  = { workspace = true }
 tokio      = { workspace = true, features = ["process", "time"] }
 sqlx       = { workspace = true }
 bzip2-rs   = "0.1"
