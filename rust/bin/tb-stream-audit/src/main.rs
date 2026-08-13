@@ -228,10 +228,13 @@ async fn aufnahme_schleife(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
 ) {
-    let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<bool>> =
+    let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<plan::Aufnahme>> =
         Default::default();
-    // Kanaele, die in dieser Sendung ihren Aufnahmedeckel erreicht haben.
-    let mut gedeckelt: std::collections::HashSet<String> = Default::default();
+    // Aufnahmestand je Kanal. Er lebt hier und nicht im Task, weil ein Task
+    // auch mitten in der Sendung enden kann - etwa wenn streamlink kurz
+    // abbricht. Legte der Neustart den Stand neu an, finge der
+    // Sechs-Stunden-Deckel jedes Mal von vorn an.
+    let mut staende: std::collections::HashMap<String, plan::Aufnahme> = Default::default();
 
     loop {
         let live = match helix
@@ -249,7 +252,7 @@ async fn aufnahme_schleife(
             }
         };
 
-        // Beendete Tasks einsammeln und merken, wer wegen des Deckels aufhoerte.
+        // Beendete Tasks einsammeln und ihren Aufnahmestand zurueckholen.
         let fertige: Vec<String> = laufend
             .iter()
             .filter(|(_, handle)| handle.is_finished())
@@ -260,28 +263,45 @@ async fn aufnahme_schleife(
                 continue;
             };
             match handle.await {
-                Ok(true) => {
-                    gedeckelt.insert(kanal.clone());
-                    tracing::info!(
-                        kanal,
-                        "Aufnahmedeckel erreicht, kein Neustart in dieser Sendung"
-                    );
+                Ok(zustand) => {
+                    if zustand.naechste_blocklaenge().is_none() {
+                        tracing::info!(
+                            kanal,
+                            sekunden = zustand.aufgenommen_sekunden,
+                            "Aufnahmedeckel erreicht, kein Neustart in dieser Sendung"
+                        );
+                    }
+                    staende.insert(kanal.clone(), zustand);
                 }
-                Ok(false) => {}
+                // Eine Panik kostet den Stand dieses Kanals. Das ist die
+                // sichere Richtung: der naechste Start faengt bei 0 an, aber
+                // der Prozess laeuft weiter und die anderen Kanaele bleiben.
                 Err(fehler) => tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt"),
             }
         }
 
-        // Der Deckel faellt erst, wenn der Kanal offline war. Wuerde er bei
+        // Der Stand faellt erst, wenn der Kanal offline war. Wuerde er bei
         // jedem Takt zuruecksetzen, waere die Sechs-Stunden-Grenze wirkungslos:
         // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
-        gedeckelt.retain(|kanal| live.contains(kanal));
+        staende.retain(|kanal, _| live.contains(kanal));
 
         for kanal in &live {
-            if laufend.contains_key(kanal) || gedeckelt.contains(kanal) {
+            if laufend.contains_key(kanal) {
                 continue;
             }
-            let handle = tokio::spawn(kanal_aufnehmen(kanal.clone(), Arc::clone(&warteschlange)));
+            let zustand = staende.remove(kanal).unwrap_or_else(|| {
+                // Eine Kennung je Sendung. Ohne sie ueberschreibt der naechste
+                // Stream desselben Kanals die Berichte des vorigen.
+                let lauf = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+                plan::Aufnahme::starten(kanal.clone(), lauf)
+            });
+            if zustand.naechste_blocklaenge().is_none() {
+                // Deckel erreicht: Stand behalten, damit er beim naechsten Takt
+                // nicht als "neue Sendung" durchgeht.
+                staende.insert(kanal.clone(), zustand);
+                continue;
+            }
+            let handle = tokio::spawn(kanal_aufnehmen(zustand, Arc::clone(&warteschlange)));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
         }
@@ -293,24 +313,26 @@ async fn aufnahme_schleife(
 /// Nimmt einen Kanal in Bloecken auf, bis der Stream endet oder der Deckel
 /// greift. Laeuft als eigener Task, damit mehrere Kanaele sich nicht
 /// gegenseitig blockieren.
-/// Gibt `true` zurueck, wenn der Aufnahmedeckel griff - dann startet die
-/// Aufsicht diesen Kanal nicht neu, solange er sendet.
-async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschlange>>) -> bool {
+///
+/// Der Aufnahmestand kommt von der Aufsicht und geht an sie zurueck. Endet
+/// dieser Task mitten in einer Sendung, setzt der naechste genau dort auf -
+/// sonst waere der Deckel mit jedem streamlink-Fehler zurueckgesetzt.
+async fn kanal_aufnehmen(
+    mut zustand: plan::Aufnahme,
+    warteschlange: Arc<Mutex<plan::Warteschlange>>,
+) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
-    // Eine Kennung je Sendung. Ohne sie ueberschreibt der naechste Stream
-    // desselben Kanals die Berichte des vorigen.
-    let lauf = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let mut zustand = plan::Aufnahme::starten(kanal.clone(), lauf);
+    let kanal = zustand.kanal.clone();
 
     loop {
         let Some(laenge) = zustand.naechste_blocklaenge() else {
-            return true;
+            return zustand;
         };
 
         let wurzel = aufnahme_wurzel();
         if let Err(fehler) = tokio::fs::create_dir_all(&wurzel).await {
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
-            return false;
+            return zustand;
         }
         match capturer
             .capture(
@@ -339,9 +361,54 @@ async fn kanal_aufnehmen(kanal: String, warteschlange: Arc<Mutex<plan::Warteschl
                 // Dann endet dieser Task, und die Aufsicht startet ihn neu,
                 // sobald der Kanal wieder sendet.
                 tracing::info!(kanal, ?fehler, "Aufnahme beendet");
-                return false;
+                return zustand;
             }
         }
+    }
+}
+
+/// Wie oft die Aufbewahrung greift.
+const AUFRAEUM_TAKT_SEKUNDEN: u64 = 60 * 60;
+
+/// Loescht Berichte, die aelter als `STREAM_AUDIT_RETENTION_DAYS` sind.
+///
+/// `0` heisst unbegrenzt. Gelesen wird die Aenderungszeit der Datei; ein
+/// nicht lesbarer Zeitstempel laesst die Datei liegen - im Zweifel behalten,
+/// nicht raten und loeschen.
+async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
+    let tage = konfiguration.aufbewahrung_tage;
+    if tage == 0 {
+        return;
+    }
+    let grenze = Duration::from_secs(tage * 24 * 60 * 60);
+    let Ok(mut eintraege) = tokio::fs::read_dir(&konfiguration.ausgabe).await else {
+        return;
+    };
+    let mut geloescht = 0usize;
+    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+        let pfad = eintrag.path();
+        let endung = pfad
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if !matches!(endung, "md" | "json" | "txt") {
+            continue;
+        }
+        let Ok(daten) = eintrag.metadata().await else {
+            continue;
+        };
+        let Ok(alter) = daten
+            .modified()
+            .and_then(|m| m.elapsed().map_err(std::io::Error::other))
+        else {
+            continue;
+        };
+        if alter > grenze && tokio::fs::remove_file(&pfad).await.is_ok() {
+            geloescht += 1;
+        }
+    }
+    if geloescht > 0 {
+        tracing::info!(geloescht, tage, "alte Berichte geloescht");
     }
 }
 
@@ -351,7 +418,17 @@ async fn auswertungs_schleife(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
 ) {
+    let mut naechstes_aufraeumen = tokio::time::Instant::now();
     loop {
+        // Aufbewahrung war bisher nur eine Zahl in der Konfiguration. Eine
+        // Grenze, die nichts loescht, ist keine - Berichte mit moeglichen
+        // Vorfaellen lagen unbegrenzt.
+        if tokio::time::Instant::now() >= naechstes_aufraeumen {
+            alte_berichte_loeschen(&konfiguration).await;
+            naechstes_aufraeumen =
+                tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
+        }
+
         let naechster = warteschlange.lock().await.naechster();
         let Some(block) = naechster else {
             tokio::time::sleep(Duration::from_secs(15)).await;
@@ -627,7 +704,11 @@ async fn schreiben(
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
 /// nach dem ersten Abend Rauschen, das niemand mehr liest.
 async fn dm_senden(bericht: &Bericht) -> Result<(), String> {
-    if bericht.funde.is_empty() {
+    // Ohne Funde gibt es nichts zu melden - je Block eine DM "alles ruhig"
+    // waere bei drei Kanaelen im Zehnminutentakt nur noch Rauschen. Eine
+    // Ausnahme: lief der Modellschritt nicht, ist Stille irrefuehrend, denn
+    // dann hat nur die Regelpruefung hingesehen.
+    if bericht.funde.is_empty() && bericht.modell_geprueft {
         return Ok(());
     }
     let Some(token) = melden::broker_token() else {
@@ -719,6 +800,52 @@ mod tests {
         for s in &segmente {
             assert!(s.start_sekunden.is_finite() && s.ende_sekunden.is_finite());
         }
+    }
+
+    fn mtime_setzen(pfad: &Path, zeit: std::time::SystemTime) {
+        let datei = std::fs::File::options()
+            .write(true)
+            .open(pfad)
+            .expect("Datei zum Zeitstempeln");
+        datei
+            .set_times(std::fs::FileTimes::new().set_modified(zeit))
+            .expect("Aenderungszeit setzen");
+    }
+
+    #[tokio::test]
+    async fn aufbewahrung_loescht_alte_berichte_und_laesst_neue() {
+        let wurzel =
+            std::env::temp_dir().join(format!("stream-audit-aufbewahrung-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+        tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
+        let alt = wurzel.join("alt.md");
+        let neu = wurzel.join("neu.md");
+        tokio::fs::write(&alt, b"alt").await.expect("schreiben");
+        tokio::fs::write(&neu, b"neu").await.expect("schreiben");
+        // Aenderungszeit 40 Tage zurueckdrehen.
+        let vor_40_tagen = std::time::SystemTime::now() - Duration::from_secs(40 * 24 * 60 * 60);
+        mtime_setzen(&alt, vor_40_tagen);
+
+        let konfiguration = Konfiguration {
+            kanaele: Vec::new(),
+            ausgabe: wurzel.clone(),
+            transkript_behalten: false,
+            aufbewahrung_tage: 30,
+        };
+        alte_berichte_loeschen(&konfiguration).await;
+        assert!(!alt.exists(), "40 Tage alter Bericht muss weg sein");
+        assert!(neu.exists(), "frischer Bericht muss bleiben");
+
+        // 0 heisst unbegrenzt: nichts wird geloescht.
+        tokio::fs::write(&alt, b"alt").await.expect("schreiben");
+        mtime_setzen(&alt, vor_40_tagen);
+        let unbegrenzt = Konfiguration {
+            aufbewahrung_tage: 0,
+            ..konfiguration
+        };
+        alte_berichte_loeschen(&unbegrenzt).await;
+        assert!(alt.exists(), "bei 0 Tagen darf nichts geloescht werden");
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
     }
 
     #[test]
