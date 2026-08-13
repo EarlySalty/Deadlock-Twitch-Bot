@@ -12,7 +12,7 @@
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient};
+use crate::minimax_chat::{strip_think, EngagementMinimaxClient, PersonaMode};
 
 /// So viele jüngste Anker in den Prompt.
 const MAX_ANCHORS: i64 = 5;
@@ -35,14 +35,35 @@ trocken und knapp wie immer. Kipp diese Begeisterung NICHT 1:1 raus, kein Gehype
 kein Schwall — eine ruhige, beiläufige Zeile reicht. Beziehe dich nur auf Helden/\
 Abilities, die hier vorkommen.";
 
+/// Vorspann im Neuling-Modus: derselbe Zweck, aber ohne die Einladung, daraus
+/// eine Meinung zu ziehen — die hat ein Neuling nicht.
+const SOUL_INTRO_ROOKIE: &str = "Noch was zu dir — aber WICHTIG: das hier ist dein Gedächtnis, nicht dein \
+Chat-Ton und erst recht kein Fachwissen. Es sind Sachen, die dir als Neuling \
+aufgefallen sind. Greif sie höchstens beiläufig auf, wenn es gerade passt, und \
+bleib im Chat kurz und normal. Leite daraus KEINE Einschätzung zum Spiel ab und \
+tu nicht so, als würdest du dadurch etwas verstehen.";
+
 /// Baut das Soul-Extension-Fragment aus Hero-Takes + Ankern (reiner Port der
 /// Assembly in `get_soul_extension_fragment`). Leer, wenn nichts da.
 pub fn build_soul_fragment(takes: Option<&str>, anchors: &[String]) -> String {
-    let takes = takes.filter(|t| !t.is_empty());
+    build_soul_fragment_for(takes, anchors, PersonaMode::from_env())
+}
+
+/// Wie [`build_soul_fragment`], mit explizitem Persona-Modus. Im
+/// Neuling-Modus fallen die Hero-Vorlieben weg: kuratierte Hero-Meinungen sind
+/// genau das, was ein Neuling nicht hat.
+pub fn build_soul_fragment_for(
+    takes: Option<&str>,
+    anchors: &[String],
+    persona: PersonaMode,
+) -> String {
+    let rookie = persona == PersonaMode::Rookie;
+    let takes = takes.filter(|t| !t.is_empty()).filter(|_| !rookie);
     if takes.is_none() && anchors.is_empty() {
         return String::new();
     }
-    let mut parts: Vec<String> = vec![SOUL_INTRO.to_string()];
+    let intro = if rookie { SOUL_INTRO_ROOKIE } else { SOUL_INTRO };
+    let mut parts: Vec<String> = vec![intro.to_string()];
     if let Some(t) = takes {
         parts.push(format!("Deine Hero-Vorlieben:\n{t}"));
     }
@@ -263,6 +284,25 @@ mod tests {
         let both = build_soul_fragment(Some("mag Haze"), &["combo war nice".to_string()]);
         assert!(both.contains("Deine Hero-Vorlieben"));
         assert!(both.contains("- combo war nice"));
+    }
+
+    /// Hero-Takes sind kuratierte Meinungen — genau das, was ein Neuling nicht
+    /// hat. Im Rookie-Modus fallen sie weg, die Anker bleiben.
+    #[test]
+    fn rookie_fragment_laesst_hero_takes_weg() {
+        let anchors = vec!["combo war nice".to_string()];
+        let rookie = build_soul_fragment_for(Some("mag Haze"), &anchors, PersonaMode::Rookie);
+        assert!(!rookie.contains("mag Haze"));
+        assert!(!rookie.contains("Hero-Vorlieben"));
+        assert!(rookie.contains("- combo war nice"));
+        assert!(rookie.contains("kein Fachwissen"));
+
+        // Nur Takes und Rookie-Modus: nichts bleibt übrig.
+        assert_eq!(build_soul_fragment_for(Some("mag Haze"), &[], PersonaMode::Rookie), "");
+
+        // Veteran bleibt unberührt.
+        let veteran = build_soul_fragment_for(Some("mag Haze"), &anchors, PersonaMode::Veteran);
+        assert!(veteran.contains("Deine Hero-Vorlieben:\nmag Haze"));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
