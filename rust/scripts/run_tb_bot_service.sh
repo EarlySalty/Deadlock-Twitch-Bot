@@ -80,6 +80,9 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 # ops/stt-server (Default-Endpunkt 127.0.0.1:8791); es geht kein Stream-Audio
 # an einen Fremdanbieter. Sichtung: ops/learn-samples.sh
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
+# streamlink liegt im venv, nicht im System-PATH. Ohne diesen Pfad findet der
+# Capturer nichts und der Zeitstrahl bekommt nur Chat, keinen Stream-Ton.
+export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/home/nathanael/stt-tools/bin/streamlink}"
 # Kein venv-Default mehr: der Deploy-Baum hat keins, der Pfad zeigte ins Leere.
 # Ohne diese Variable sucht der Bot selbst (venv, ~/.local/bin, PATH).
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
