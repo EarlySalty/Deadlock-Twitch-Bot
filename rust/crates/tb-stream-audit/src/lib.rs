@@ -7,11 +7,12 @@
 //!
 //! # Ablauf
 //!
-//! Aufnehmen, dann abarbeiten - nicht beides gleichzeitig. Die Aufnahme laeuft
-//! mit, solange ein Kanal sendet, und schneidet in Bloecke; transkribiert wird
-//! danach, ein Block nach dem anderen. Auf einer Maschine ohne GPU ist das der
-//! Unterschied zwischen "laeuft" und "kommt nicht hinterher": drei parallele
-//! Streams wuerden sich sonst dieselben CPU-Kerne teilen wie das Modell.
+//! Aufgenommen wird parallel, je sendendem Kanal ein eigener Task, und in
+//! Bloecke geschnitten. Ausgewertet wird seriell, ein Block nach dem anderen.
+//! Auf einer Maschine ohne GPU ist das der Unterschied zwischen "laeuft" und
+//! "kommt nicht hinterher": drei gleichzeitig transkribierte Streams teilten
+//! sich dieselben CPU-Kerne wie das Modell. Aufnehmen dagegen kostet fast
+//! nichts, und wer seriell aufnimmt, verpasst zwei Drittel jedes Streams.
 //!
 //! Bloecke statt eines Mitschnitts am Stueck, weil das Modell darauf ausgelegt
 //! ist und ein abgebrochener Stream so nur den letzten Block kostet.
