@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use sqlx::Row;
-use tb_monitoring::{IrcLurkerTracker, TrackMode};
+use tb_monitoring::{IrcLurkerTracker, TrackMode, WriteStats};
 
 use crate::raid_greeting::RaidTargetChatProbe;
 use crate::task_supervisor::TaskSupervisor;
@@ -57,8 +57,8 @@ impl RaidTargetChatProbe for IrcLurkerTracker {
         self.unwatch_raid_channel(channel);
     }
 
-    fn has_written(&self, channel: &str, nick: &str, since: Instant) -> Option<bool> {
-        self.has_written_since(channel, nick, since)
+    fn write_stats(&self, channel: &str, nick: &str, since: Instant) -> Option<WriteStats> {
+        self.write_stats_since(channel, nick, since)
     }
 }
 

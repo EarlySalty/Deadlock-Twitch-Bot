@@ -31,6 +31,7 @@ use tb_observability::{
 use crate::candidate_selection::{
     is_retryable_raid_error, is_soft_avoided_fallback_login, FairnessCandidate, FOLLOWERS_UNKNOWN,
 };
+use crate::courtesy::CourtesyClass;
 use crate::outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
 use crate::partner_roster::OnlineCandidate;
 use crate::pending_raids::{PendingRaid, PendingRaidStore};
@@ -487,6 +488,21 @@ impl AutoRaidPipeline {
             None => HashSet::new(),
         };
 
+        // Courtesy-Klasse des raidenden Streamers: sie steuert, zu welcher Art
+        // Ziel er bevorzugt geschickt wird. Sie steht NICHT in `scores` — dort
+        // liegen nur die live Kandidaten, und wer raidet ist gerade offline
+        // gegangen. Darum eine eigene Abfrage; schlägt sie fehl, bleibt es beim
+        // reinen Score-Pfad.
+        let raider_class: Option<CourtesyClass> = match self.scores.load(&req.broadcaster_id).await
+        {
+            Ok(row) => row
+                .and_then(|row| crate::courtesy_store::parse_class(row.courtesy_class.as_deref())),
+            Err(error) => {
+                tracing::debug!(%error, "Courtesy-Klasse des Raiders nicht ladbar");
+                None
+            }
+        };
+
         let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
@@ -502,6 +518,7 @@ impl AutoRaidPipeline {
                 .resolve_target(
                     req,
                     &scores,
+                    raider_class,
                     &boost_logins,
                     &blacklist_ids,
                     &blacklist_logins,
@@ -737,6 +754,8 @@ impl AutoRaidPipeline {
         &self,
         req: &AutoRaidRequest,
         scores: &HashMap<String, PartnerRaidScoreRow>,
+        // Courtesy-Klasse des raidenden Streamers (Matching-Präferenz).
+        raider_class: Option<CourtesyClass>,
         boost_logins: &HashSet<String>,
         blacklist_ids: &HashSet<String>,
         blacklist_logins: &HashSet<String>,
@@ -789,6 +808,7 @@ impl AutoRaidPipeline {
             blacklist_ids,
             blacklist_logins,
             exclude_ids,
+            raider_class,
         );
         if partner.stats.cache_misses > 0 || partner.stats.stale_not_live > 0 {
             tracing::info!(

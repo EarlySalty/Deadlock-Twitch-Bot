@@ -75,7 +75,36 @@ async fn create_schema(pool: &PgPool) {
             fairness_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             internal_sent_raids_30d         INTEGER NOT NULL DEFAULT 0,
             internal_received_raids_7d      INTEGER NOT NULL DEFAULT 0,
-            internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0
+            internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0,
+            courtesy_score                  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+            courtesy_class                  TEXT,
+            courtesy_observed               INTEGER NOT NULL DEFAULT 0
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Raid-Etikette: der Refresher faltet die Ereignisse je Partner zum
+    // Courtesy-Anteil des Base-Scores.
+    sqlx::query(
+        r#"
+        CREATE TABLE twitch_raid_courtesy_events (
+            id                     BIGSERIAL PRIMARY KEY,
+            raid_history_id        BIGINT,
+            from_broadcaster_id    TEXT NOT NULL,
+            from_broadcaster_login TEXT NOT NULL,
+            to_broadcaster_id      TEXT NOT NULL,
+            to_broadcaster_login   TEXT NOT NULL,
+            observed_from          TIMESTAMPTZ NOT NULL,
+            observed_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            courtesy_class         TEXT NOT NULL,
+            message_count          INTEGER NOT NULL DEFAULT 0,
+            message_span_sec       INTEGER NOT NULL DEFAULT 0,
+            observation_source     TEXT,
+            unknown_reason         TEXT,
+            whisper_sent           BOOLEAN NOT NULL DEFAULT FALSE
         )
         "#,
     )
@@ -238,8 +267,10 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     .unwrap();
     assert_eq!(off_live, 0);
     assert_eq!(off_today, 0);
-    // Offline neuer Partner: fairness(0,0,0,0)=0.75, base=0.5875, *1.25 new-mult.
-    let expected_final = ((0.5875_f64 * 1.25) * 1e6).round() / 1e6;
+    // Offline neuer Partner: fairness(0,0,0,0)=0.75, courtesy=1.0 (keine
+    // Etikette-Historie, also kein Abzug),
+    // base = 0.5*0.585 + 0.75*0.315 + 1.0*0.10 = 0.62875, davon *1.25 new-mult.
+    let expected_final = ((0.62875_f64 * 1.25) * 1e6).round() / 1e6;
     assert!(
         (off_final - expected_final).abs() < 1e-6,
         "offline final_score Formel"

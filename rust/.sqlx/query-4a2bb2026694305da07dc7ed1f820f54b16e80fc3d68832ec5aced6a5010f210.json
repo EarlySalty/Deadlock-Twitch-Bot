@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_raid_courtesy_events (\n                raid_history_id, from_broadcaster_id, from_broadcaster_login,\n                to_broadcaster_id, to_broadcaster_login, observed_from,\n                courtesy_class, message_count, message_span_sec,\n                observation_source, unknown_reason, whisper_sent\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n            ON CONFLICT (raid_history_id) WHERE raid_history_id IS NOT NULL\n            DO NOTHING\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4a2bb2026694305da07dc7ed1f820f54b16e80fc3d68832ec5aced6a5010f210"
+}

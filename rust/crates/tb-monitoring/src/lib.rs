@@ -65,7 +65,7 @@ pub use inbox_runtime::{
     InboxHandler, InboxRuntime, InboxRuntimeHandle,
 };
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
-pub use irc_lurker::{record_presence_ticks, IrcLurkerTracker, TrackMode};
+pub use irc_lurker::{record_presence_ticks, IrcLurkerTracker, TrackMode, WriteStats};
 pub use live_state::{
     FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, OfflineSourceState,
     SnapshotEntry, TrackedStreamer,

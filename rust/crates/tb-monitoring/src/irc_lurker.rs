@@ -348,6 +348,38 @@ struct RaidWatch {
     owns_tracking: bool,
 }
 
+/// Obergrenze der gepufferten Schreib-Zeitstempel je Kanal und Nick. Für die
+/// Einstufung eines Raiders reichen wenige; der Deckel hält den Puffer eines
+/// 24/7-Prozesses klein. Beim Überlauf fallen die ältesten heraus, der Zähler
+/// ist dann nach unten begrenzt — für die Einstufung unschädlich, weil ab drei
+/// Nachrichten ohnehin die höchste Klasse erreicht ist.
+const MAX_TRACKED_WRITES_PER_NICK: usize = 32;
+
+/// Schreib-Zeitstempel je Kanal und Nick, gedeckelt auf
+/// [`MAX_TRACKED_WRITES_PER_NICK`] Einträge.
+type WritersByChannel = HashMap<String, HashMap<String, Vec<Instant>>>;
+
+/// Schreib-Statistik eines Nicks in einem beobachteten Raid-Ziel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteStats {
+    /// Anzahl beobachteter Nachrichten im Betrachtungszeitraum.
+    pub count: u32,
+    /// Zeitpunkt der ersten Nachricht, `None` bei `count == 0`.
+    pub first_at: Option<Instant>,
+    /// Zeitpunkt der letzten Nachricht, `None` bei `count == 0`.
+    pub last_at: Option<Instant>,
+}
+
+impl WriteStats {
+    /// Zeitspanne zwischen erster und letzter Nachricht.
+    pub fn span(&self) -> Duration {
+        match (self.first_at, self.last_at) {
+            (Some(first), Some(last)) => last.saturating_duration_since(first),
+            _ => Duration::ZERO,
+        }
+    }
+}
+
 /// Experimenteller IRC-Lurker-Tracker. Erst nach `run()` aktiv; `track_channel`
 /// kann jederzeit (auch vor `run`) Kanäle setzen.
 pub struct IrcLurkerTracker {
@@ -363,7 +395,7 @@ pub struct IrcLurkerTracker {
     partner_channels: Arc<Mutex<HashSet<String>>>,
     category_channels: Arc<Mutex<HashSet<String>>>,
     chatters: Arc<Mutex<HashMap<String, HashSet<String>>>>,
-    writers: Arc<Mutex<HashMap<String, HashMap<String, Instant>>>>,
+    writers: Arc<Mutex<WritersByChannel>>,
     raid_watches: Arc<Mutex<HashMap<String, RaidWatch>>>,
     connected_since: Arc<Mutex<Option<Instant>>>,
     ready_channels: Arc<Mutex<HashSet<String>>>,
@@ -538,6 +570,19 @@ impl IrcLurkerTracker {
     }
 
     pub fn has_written_since(&self, channel: &str, nick: &str, since: Instant) -> Option<bool> {
+        Some(self.write_stats_since(channel, nick, since)?.count > 0)
+    }
+
+    /// Zählt die Nachrichten des Nicks im Kanal ab `since` und liefert dazu die
+    /// Zeitstempel der ersten und letzten. `None` = die Beobachtung ist nicht
+    /// aussagefähig (nicht verbunden oder Kanal nie bereit) — der Aufrufer darf
+    /// daraus **nicht** auf Schweigen schließen.
+    pub fn write_stats_since(
+        &self,
+        channel: &str,
+        nick: &str,
+        since: Instant,
+    ) -> Option<WriteStats> {
         let channel = normalize_channel(channel);
         let connected = lock_or_recover(&self.connected_since, "connected_since")
             .is_some_and(|connected_at| connected_at <= since);
@@ -546,12 +591,26 @@ impl IrcLurkerTracker {
             return None;
         }
         let nick = nick.trim().to_lowercase();
-        Some(
-            lock_or_recover(&self.writers, "writers")
-                .get(&channel)
-                .and_then(|writers| writers.get(&nick))
-                .is_some_and(|written_at| *written_at >= since),
-        )
+        let writers = lock_or_recover(&self.writers, "writers");
+        let stamps = writers
+            .get(&channel)
+            .and_then(|writers| writers.get(&nick))
+            .map(|stamps| stamps.as_slice())
+            .unwrap_or_default();
+        let mut relevant = stamps.iter().filter(|stamp| **stamp >= since).copied();
+        let Some(first_at) = relevant.next() else {
+            return Some(WriteStats::default());
+        };
+        let mut stats = WriteStats {
+            count: 1,
+            first_at: Some(first_at),
+            last_at: Some(first_at),
+        };
+        for stamp in relevant {
+            stats.count += 1;
+            stats.last_at = Some(stamp);
+        }
+        Some(stats)
     }
 
     fn record_privmsg(&self, msg: &str) -> bool {
@@ -566,10 +625,19 @@ impl IrcLurkerTracker {
         // ponytail: Schreiber nur für aktive Raid-Ziele puffern; sonst wüchse die
         // writers-Map für dauerhaft getrackte Kanäle je Schreiber unbegrenzt (24/7-Prozess).
         if lock_or_recover(&self.raid_watches, "raid_watches").contains_key(&channel) {
-            lock_or_recover(&self.writers, "writers")
+            let mut writers = lock_or_recover(&self.writers, "writers");
+            let stamps = writers
                 .entry(channel)
                 .or_default()
-                .insert(nick.to_lowercase(), Instant::now());
+                .entry(nick.to_lowercase())
+                .or_default();
+            stamps.push(Instant::now());
+            // Nur die jüngsten Zeitstempel behalten; für die Einstufung reichen
+            // sie, und ein Vielschreiber darf den Puffer nicht sprengen.
+            if stamps.len() > MAX_TRACKED_WRITES_PER_NICK {
+                let overflow = stamps.len() - MAX_TRACKED_WRITES_PER_NICK;
+                stamps.drain(..overflow);
+            }
         }
         true
     }

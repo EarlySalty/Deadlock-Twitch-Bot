@@ -28,6 +28,8 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use sqlx::PgPool;
 
+use crate::courtesy::CourtesySummary;
+use crate::courtesy_store::CourtesyStore;
 use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
     compute_base_score, compute_fairness_score, compute_final_score,
@@ -88,6 +90,10 @@ pub struct ScoreBuildInput {
     pub raid_boost_enabled: bool,
     pub live_state: LiveState,
     pub existing_cache: Option<ExistingCache>,
+    /// Zusammenfassung der eigenen Raid-Etikette dieses Partners
+    /// (aus `CourtesyStore::summaries_for`). Ohne Historie liefert
+    /// `CourtesySummary::default()` den vollen Wert ohne Abzug.
+    pub courtesy: CourtesySummary,
 }
 
 /// `value.astimezone(UTC).isoformat(timespec="seconds")` — Python `_iso_utc`.
@@ -202,7 +208,7 @@ pub fn build_score_upsert(
         readiness_score = compute_readiness_score(duration_score, time_pattern_score);
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
-        base_score = compute_base_score(readiness_score, fairness_score);
+        base_score = compute_base_score(readiness_score, fairness_score, input.courtesy.score);
         final_score =
             compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     } else if let Some(cache) = &input.existing_cache {
@@ -231,7 +237,7 @@ pub fn build_score_upsert(
         readiness_score = compute_readiness_score(duration_score, time_pattern_score);
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
-        base_score = compute_base_score(readiness_score, fairness_score);
+        base_score = compute_base_score(readiness_score, fairness_score, input.courtesy.score);
         final_score =
             compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     }
@@ -259,6 +265,11 @@ pub fn build_score_upsert(
         internal_received_raids_7d: received_7d.max(0) as i32,
         today_received_raids: today_received_raids as i32,
         last_computed_at: iso_utc_seconds(now_utc),
+        // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand: der Wert
+        // wird in allen drei Zweigen frisch übernommen, auch im Cache-Pfad.
+        courtesy_score: round_score(input.courtesy.score),
+        courtesy_class: input.courtesy.class.map(|class| class.as_str().to_string()),
+        courtesy_observed: input.courtesy.observed as i32,
     }
 }
 
@@ -279,12 +290,18 @@ struct PartnerRow {
 pub struct PartnerScoreRefresher {
     pool: PgPool,
     store: ScoreStore,
+    courtesy: CourtesyStore,
 }
 
 impl PartnerScoreRefresher {
     pub fn new(pool: PgPool) -> Self {
         let store = ScoreStore::new(pool.clone());
-        Self { pool, store }
+        let courtesy = CourtesyStore::new(pool.clone());
+        Self {
+            pool,
+            store,
+            courtesy,
+        }
     }
 
     /// Refresht alle AKTIVEN Partner (Python `refresh_all_partner_scores`).
@@ -336,6 +353,10 @@ impl PartnerScoreRefresher {
         let raid_boost_enabled = self.load_boost_flag(&partner.twitch_user_id).await?;
         let live_state = self.load_live_state(&partner.twitch_user_id).await?;
         let existing_cache = self.load_existing_cache(&partner.twitch_user_id).await?;
+        let courtesy = self
+            .courtesy
+            .summary_for(&partner.twitch_user_id, now_utc)
+            .await?;
         Ok(ScoreBuildInput {
             twitch_user_id: partner.twitch_user_id.clone(),
             twitch_login: partner.twitch_login.clone(),
@@ -345,6 +366,7 @@ impl PartnerScoreRefresher {
             raid_boost_enabled,
             live_state,
             existing_cache,
+            courtesy,
         })
     }
 
@@ -557,6 +579,7 @@ mod tests {
             raid_boost_enabled: false,
             live_state: LiveState::default(),
             existing_cache: None,
+            courtesy: CourtesySummary::default(),
         }
     }
 
@@ -571,12 +594,40 @@ mod tests {
         assert_eq!(upsert.is_new_partner_preferred, 1);
         assert!((upsert.duration_score - 0.5).abs() < 1e-9);
         assert!((upsert.fairness_score - 0.75).abs() < 1e-9);
-        // new_partner_multiplier = 1.25 (0 Raids); base=0.5*0.65+0.75*0.35=0.5875.
+        // new_partner_multiplier = 1.25 (0 Raids); courtesy = 1.0 ohne Historie;
+        // base = 0.5*0.585 + 0.75*0.315 + 1.0*0.10 = 0.62875.
         assert!((upsert.new_partner_multiplier - 1.25).abs() < 1e-9);
-        assert!((upsert.base_score - round_score(0.5875)).abs() < 1e-9);
-        assert!((upsert.final_score - round_score(0.5875 * 1.25)).abs() < 1e-9);
+        assert!((upsert.base_score - round_score(0.62875)).abs() < 1e-9);
+        assert!((upsert.final_score - round_score(0.62875 * 1.25)).abs() < 1e-9);
         assert_eq!(upsert.last_computed_at, "2026-06-21T12:00:00+00:00");
         assert!(upsert.current_started_at.is_none());
+        // Ohne Etikette-Historie kein Abzug und keine Matching-Klasse.
+        assert!((upsert.courtesy_score - 1.0).abs() < 1e-9);
+        assert_eq!(upsert.courtesy_class, None);
+        assert_eq!(upsert.courtesy_observed, 0);
+    }
+
+    #[test]
+    fn build_dauerschweiger_verliert_das_courtesy_gewicht() {
+        use crate::courtesy::{CourtesyClass, CourtesyOutcome};
+
+        let now = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
+        let mut input = base_input("uid_still");
+        input.courtesy =
+            crate::courtesy::summarize(&[CourtesyOutcome::Classified(CourtesyClass::Silent); 10]);
+        let upsert = build_score_upsert(&input, now);
+
+        // Klasse landet in der Zeile, damit das Matching sie lesen kann.
+        assert_eq!(upsert.courtesy_class.as_deref(), Some("silent"));
+        assert_eq!(upsert.courtesy_observed, 10);
+        // Und der Score liegt unter dem des Streamers ohne Historie.
+        let unbescholten = build_score_upsert(&base_input("uid_off"), now);
+        assert!(
+            upsert.base_score < unbescholten.base_score,
+            "{} muss unter {} liegen",
+            upsert.base_score,
+            unbescholten.base_score
+        );
     }
 
     #[test]

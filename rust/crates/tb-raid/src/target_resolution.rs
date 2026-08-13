@@ -21,9 +21,10 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Value};
 
 use crate::candidate_selection::{
-    is_soft_avoided_fallback_login, select_by_score, select_fairest, FairnessCandidate,
-    ScoredCandidate, SelectionReason, FOLLOWERS_UNKNOWN,
+    is_soft_avoided_fallback_login, select_by_score_matched, select_fairest, FairnessCandidate,
+    ScoredCandidate, SelectionReason, SelectionResult, FOLLOWERS_UNKNOWN,
 };
+use crate::courtesy::CourtesyClass;
 use crate::partner_roster::OnlineCandidate;
 use crate::score_store::PartnerRaidScoreRow;
 
@@ -150,13 +151,20 @@ fn fairness_target_stream_data(candidate: &FairnessCandidate) -> Value {
     )
 }
 
-/// Partner-Pfad: filtert + joint den Score-Cache und wählt per `select_by_score`.
+/// Partner-Pfad: filtert + joint den Score-Cache und wählt per
+/// `select_by_score_matched`.
+///
+/// `raider_class` ist die Courtesy-Klasse des Streamers, der gerade raidet
+/// (aus seiner eigenen Score-Zeile). Sie bevorzugt Ziele, die sich nach
+/// eigenen Raids genauso verhalten; ist keins verfügbar, entscheidet wie
+/// bisher allein der Score. `None` = keine Historie, kein Vorfilter.
 pub fn resolve_partner_target(
     partners: &[OnlineCandidate],
     scores: &HashMap<String, PartnerRaidScoreRow>,
     blacklist_ids: &HashSet<String>,
     blacklist_logins: &HashSet<String>,
     exclude_ids: &HashSet<String>,
+    raider_class: Option<CourtesyClass>,
 ) -> PartnerResolution {
     let mut stats = PartnerResolutionStats::default();
     let mut scored: Vec<ScoredCandidate> = Vec::new();
@@ -204,11 +212,24 @@ pub fn resolve_partner_target(
                 .unwrap_or_else(|| STARTED_AT_SENTINEL.to_string()),
             raid_boost_multiplier: row.raid_boost_multiplier,
             new_partner_multiplier: row.new_partner_multiplier,
+            courtesy_class: crate::courtesy_store::parse_class(row.courtesy_class.as_deref()),
         });
     }
 
     let candidates_count = stats.considered as i32;
-    let selection = select_by_score(&scored);
+    let selection = select_by_score_matched(&scored, raider_class).map(|matched| {
+        if let Some(class) = matched.matched_class {
+            tracing::debug!(
+                ziel = %matched.candidate.user_login,
+                klasse = %class.as_str(),
+                "Raid-Ziel über die Courtesy-Klasse vorgefiltert"
+            );
+        }
+        SelectionResult {
+            candidate: matched.candidate,
+            reason: matched.reason,
+        }
+    });
     PartnerResolution {
         reason: selection.as_ref().map(|s| s.reason.clone()),
         target: selection.map(|s| {
@@ -382,6 +403,9 @@ mod tests {
             internal_sent_raids_30d: 0,
             internal_received_raids_7d: 0,
             internal_received_raids_30d: 0,
+            courtesy_score: 1.0,
+            courtesy_class: None,
+            courtesy_observed: 0,
         }
     }
 
@@ -415,6 +439,7 @@ mod tests {
             &blacklist_ids,
             &blacklist_logins,
             &exclude,
+            None,
         );
         let target = res.target.unwrap();
         assert_eq!(target.user_login, "ziel");
@@ -439,7 +464,7 @@ mod tests {
         .into();
         let (bl_ids, bl_logins, excl) = sets();
 
-        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
+        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl, None);
         assert_eq!(res.stats.cache_misses, 1);
         assert_eq!(res.stats.stale_not_live, 1);
         assert_eq!(res.stats.considered, 3);
@@ -456,7 +481,7 @@ mod tests {
         .into();
         let (bl_ids, bl_logins, excl) = sets();
 
-        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
+        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl, None);
         assert_eq!(res.target.unwrap().user_login, "gross");
         assert_eq!(res.reason, Some(SelectionReason::HighestFinalScore));
     }
@@ -474,7 +499,7 @@ mod tests {
         .into();
         let (bl_ids, bl_logins, excl) = sets();
 
-        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
+        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl, None);
         let target = res.target.unwrap();
 
         assert_eq!(
@@ -499,7 +524,7 @@ mod tests {
         let scores = HashMap::new();
         let (bl_ids, bl_logins, excl) = sets();
 
-        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl);
+        let res = resolve_partner_target(&partners, &scores, &bl_ids, &bl_logins, &excl, None);
         assert!(res.target.is_none());
         assert_eq!(res.stats.considered, 0, "korrupte Identität vorgefiltert");
     }

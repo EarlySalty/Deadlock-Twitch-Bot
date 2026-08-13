@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT twitch_user_id, twitch_login, avg_duration_sec,\n                   time_pattern_score_base, received_successful_raids_total,\n                   is_new_partner_preferred, new_partner_multiplier,\n                   raid_boost_multiplier, is_live, current_started_at,\n                   current_uptime_sec, duration_score, time_pattern_score,\n                   base_score, final_score, today_received_raids,\n                   last_computed_at, readiness_score, fairness_score,\n                   internal_sent_raids_30d, internal_received_raids_7d,\n                   internal_received_raids_30d\n            FROM twitch_partner_raid_scores\n            WHERE twitch_user_id = ANY($1)\n            ",
+  "query": "\n            SELECT twitch_user_id, twitch_login, avg_duration_sec,\n                   time_pattern_score_base, received_successful_raids_total,\n                   is_new_partner_preferred, new_partner_multiplier,\n                   raid_boost_multiplier, is_live, current_started_at,\n                   current_uptime_sec, duration_score, time_pattern_score,\n                   base_score, final_score, today_received_raids,\n                   last_computed_at, readiness_score, fairness_score,\n                   internal_sent_raids_30d, internal_received_raids_7d,\n                   internal_received_raids_30d,\n                   COALESCE(courtesy_score, 1.0) AS \"courtesy_score!\",\n                   courtesy_class,\n                   COALESCE(courtesy_observed, 0) AS \"courtesy_observed!\"\n            FROM twitch_partner_raid_scores\n            WHERE twitch_user_id = ANY($1) AND COALESCE(is_live, 0) = 1\n            ",
   "describe": {
     "columns": [
       {
@@ -112,6 +112,21 @@
         "ordinal": 21,
         "name": "internal_received_raids_30d",
         "type_info": "Int4"
+      },
+      {
+        "ordinal": 22,
+        "name": "courtesy_score!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 23,
+        "name": "courtesy_class",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "courtesy_observed!",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -141,8 +156,11 @@
       false,
       false,
       false,
-      false
+      false,
+      null,
+      true,
+      null
     ]
   },
-  "hash": "7e8ff0595c35d765de5f073af7933d5f77ece1cb80149b1bdac97064018e435e"
+  "hash": "a2d37f16ee4992f00a0c1d94fc86b77580fa4f9f615f6d6d16c8e7e56b35015f"
 }

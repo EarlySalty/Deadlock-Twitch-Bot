@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id AS \"twitch_user_id!\",\n                   LOWER(twitch_login) AS \"twitch_login!\",\n                   person_key AS \"person_key!\",\n                   is_primary AS \"is_primary!\"\n            FROM twitch_streamer_aliases\n            WHERE person_key = (\n                SELECT person_key FROM twitch_streamer_aliases\n                WHERE twitch_user_id = $1\n                LIMIT 1\n            )\n            ORDER BY is_primary DESC, twitch_login\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "person_key!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_primary!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "cfe52c6eaffd9bab97e89bf32561328e092520ea6a0668132027b2af9f86a0b7"
+}

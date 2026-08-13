@@ -14,6 +14,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::courtesy::CourtesyClass;
+
 // ---------------------------------------------------------------------------
 // Konstanten (identisch zu Python)
 // ---------------------------------------------------------------------------
@@ -73,6 +75,10 @@ pub struct ScoredCandidate {
     pub raid_boost_multiplier: f64,
     /// New-Partner-Multiplikator (nur für Logging).
     pub new_partner_multiplier: f64,
+    /// Wie sich dieser Kanal nach eigenen Raids im Zielchat verhält
+    /// (`twitch_partner_raid_scores.courtesy_class`). `None` = noch keine
+    /// auswertbare Historie, dann matcht er zu jeder Klasse.
+    pub courtesy_class: Option<CourtesyClass>,
 }
 
 /// Ein ungewerteter Kandidat für `select_fairest`.
@@ -270,6 +276,86 @@ pub fn select_by_score<'a>(candidates: &'a [ScoredCandidate]) -> Option<Selectio
 }
 
 // ---------------------------------------------------------------------------
+// select_by_score_matched (Courtesy-Matching vor dem Score)
+// ---------------------------------------------------------------------------
+
+/// Ergebnis von [`select_by_score_matched`] samt Information, ob das
+/// Klassen-Matching gegriffen hat.
+#[derive(Debug)]
+pub struct MatchedSelection<'a> {
+    pub candidate: &'a ScoredCandidate,
+    pub reason: SelectionReason,
+    /// Klasse, auf die vorgefiltert wurde. `None` = kein Vorfilter aktiv.
+    pub matched_class: Option<CourtesyClass>,
+}
+
+/// Wählt ein Raid-Ziel und bevorzugt dabei Kanäle, die sich nach eigenen Raids
+/// so verhalten wie der raidende Streamer selbst.
+///
+/// **Die Klasse geht dem Score vor.** Wer sich im Zielchat unterhält, soll bei
+/// jemandem landen, der das ebenfalls tut, auch wenn ein anderer Kanal den
+/// höheren Score hätte. Grüßer landen bei Grüßern, Schweiger bei Schweigern.
+/// So trifft jeder auf sein eigenes Verhalten, statt dass ein Gesprächiger in
+/// einem stummen Chat steht.
+///
+/// Der Vorfilter ist eine **Präferenz, keine Pflicht**: gibt es kein Ziel der
+/// passenden Klasse, läuft die Auswahl ganz normal über alle Kandidaten. Ein
+/// Raid fällt nie aus, nur weil die Klasse nicht besetzt ist.
+///
+/// Kandidaten ohne eigene Historie (`courtesy_class == None`) passen zu jeder
+/// Klasse — fehlende Daten dürfen niemanden aus der Auswahl drängen.
+///
+/// `raider_class = None` (der raidende Streamer hat selbst keine Historie)
+/// überspringt den Vorfilter vollständig.
+pub fn select_by_score_matched<'a>(
+    candidates: &'a [ScoredCandidate],
+    raider_class: Option<CourtesyClass>,
+) -> Option<MatchedSelection<'a>> {
+    let Some(raider_class) = raider_class else {
+        let result = select_by_score(candidates)?;
+        return Some(MatchedSelection {
+            candidate: result.candidate,
+            reason: result.reason,
+            matched_class: None,
+        });
+    };
+
+    let same_class: Vec<ScoredCandidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .courtesy_class
+                .is_none_or(|class| class == raider_class)
+        })
+        .cloned()
+        .collect();
+
+    // Nur vorfiltern, wenn dabei etwas übrig bleibt und der Filter überhaupt
+    // etwas ausschließt — sonst ist es der normale Pfad.
+    if !same_class.is_empty() && same_class.len() < candidates.len() {
+        if let Some(result) = select_by_score(&same_class) {
+            // Der Gewinner stammt aus einer Kopie; die Referenz muss auf die
+            // Original-Liste zeigen, damit der Aufrufer die Lebensdauer behält.
+            let winner = candidates
+                .iter()
+                .find(|candidate| candidate.user_id == result.candidate.user_id)?;
+            return Some(MatchedSelection {
+                candidate: winner,
+                reason: result.reason,
+                matched_class: Some(raider_class),
+            });
+        }
+    }
+
+    let result = select_by_score(candidates)?;
+    Some(MatchedSelection {
+        candidate: result.candidate,
+        reason: result.reason,
+        matched_class: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // select_fairest
 // ---------------------------------------------------------------------------
 
@@ -362,7 +448,13 @@ mod tests {
             started_at: "2026-06-09T12:00:00Z".to_string(),
             raid_boost_multiplier: 1.0,
             new_partner_multiplier: 1.0,
+            courtesy_class: None,
         }
+    }
+
+    fn with_class(mut candidate: ScoredCandidate, class: CourtesyClass) -> ScoredCandidate {
+        candidate.courtesy_class = Some(class);
+        candidate
     }
 
     fn make_fairness(user_id: &str, viewer_count: i32, followers_total: i32) -> FairnessCandidate {
@@ -649,5 +741,108 @@ mod tests {
             result.user_id, "uid_bekannt",
             "bekannte Follower-Zahl gewinnt gegen unbekannten Sentinel"
         );
+    }
+
+    // -- Courtesy-Matching --------------------------------------------------
+
+    #[test]
+    fn gleiche_klasse_schlaegt_den_hoeheren_score() {
+        // Der Kern der Regel: ein Vielschreiber landet beim Vielschreiber,
+        // auch wenn ein Schweiger deutlich besser bewertet ist.
+        let candidates = vec![
+            with_class(make_scored("uid_silent", 0.95, 0), CourtesyClass::Silent),
+            with_class(make_scored("uid_engaged", 0.40, 0), CourtesyClass::Engaged),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Engaged)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_engaged");
+        assert_eq!(result.matched_class, Some(CourtesyClass::Engaged));
+    }
+
+    #[test]
+    fn gruesser_landen_bei_gruessern() {
+        let candidates = vec![
+            with_class(make_scored("uid_engaged", 0.95, 0), CourtesyClass::Engaged),
+            with_class(make_scored("uid_greeter", 0.30, 0), CourtesyClass::Greeter),
+            with_class(make_scored("uid_silent", 0.90, 0), CourtesyClass::Silent),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Greeter)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_greeter");
+    }
+
+    #[test]
+    fn schweiger_landen_bei_schweigern() {
+        let candidates = vec![
+            with_class(make_scored("uid_engaged", 0.95, 0), CourtesyClass::Engaged),
+            with_class(make_scored("uid_silent", 0.20, 0), CourtesyClass::Silent),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Silent)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_silent");
+    }
+
+    #[test]
+    fn ohne_passende_klasse_laeuft_die_auswahl_ganz_normal() {
+        // Kein Engaged-Ziel verfügbar: der Raid fällt nicht aus, es gewinnt
+        // wie bisher der beste Score.
+        let candidates = vec![
+            with_class(make_scored("uid_silent", 0.95, 0), CourtesyClass::Silent),
+            with_class(make_scored("uid_greeter", 0.40, 0), CourtesyClass::Greeter),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Engaged)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_silent");
+        assert_eq!(result.matched_class, None);
+    }
+
+    #[test]
+    fn innerhalb_der_klasse_entscheidet_weiter_der_score() {
+        let candidates = vec![
+            with_class(make_scored("uid_schwach", 0.30, 0), CourtesyClass::Engaged),
+            with_class(make_scored("uid_stark", 0.85, 0), CourtesyClass::Engaged),
+            with_class(make_scored("uid_silent", 0.99, 0), CourtesyClass::Silent),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Engaged)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_stark");
+    }
+
+    #[test]
+    fn kandidaten_ohne_historie_passen_zu_jeder_klasse() {
+        // Fehlende Daten dürfen niemanden aus der Auswahl drängen.
+        let candidates = vec![
+            with_class(make_scored("uid_silent", 0.95, 0), CourtesyClass::Silent),
+            make_scored("uid_neu", 0.50, 0),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Engaged)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_neu");
+        assert_eq!(result.matched_class, Some(CourtesyClass::Engaged));
+    }
+
+    #[test]
+    fn raider_ohne_historie_matcht_wie_bisher_rein_ueber_den_score() {
+        let candidates = vec![
+            with_class(make_scored("uid_silent", 0.95, 0), CourtesyClass::Silent),
+            with_class(make_scored("uid_engaged", 0.40, 0), CourtesyClass::Engaged),
+        ];
+        let result = select_by_score_matched(&candidates, None).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_silent");
+        assert_eq!(result.matched_class, None);
+    }
+
+    #[test]
+    fn daily_cap_gilt_auch_innerhalb_der_klasse() {
+        // Der Vorfilter hebelt die bestehende Rotation nicht aus.
+        let candidates = vec![
+            with_class(
+                make_scored("uid_voll", 0.95, DAILY_RAID_SOFT_CAP),
+                CourtesyClass::Engaged,
+            ),
+            with_class(make_scored("uid_frei", 0.60, 0), CourtesyClass::Engaged),
+        ];
+        let result = select_by_score_matched(&candidates, Some(CourtesyClass::Engaged)).unwrap();
+        assert_eq!(result.candidate.user_id, "uid_frei");
+    }
+
+    #[test]
+    fn leere_kandidatenliste_bleibt_none() {
+        assert!(select_by_score_matched(&[], Some(CourtesyClass::Engaged)).is_none());
+        assert!(select_by_score_matched(&[], None).is_none());
     }
 }
