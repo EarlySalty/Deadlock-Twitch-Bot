@@ -122,22 +122,46 @@ pub struct Aufnahme {
     pub lauf: String,
     pub bloecke: u32,
     pub aufgenommen_sekunden: u64,
+    /// Sekunden, die die Sendung schon lief, als diese Aufnahme begann.
+    ///
+    /// Ohne sie sind alle Zeiten im Bericht relativ zum Aufnahmebeginn. Wer
+    /// dann "Minute 12" im VOD sucht, sucht an der falschen Stelle - und nach
+    /// einem Neustart des Dienstes faengt die Zaehlung erneut bei null an,
+    /// samt Sechs-Stunden-Deckel.
+    pub versatz_basis: u64,
 }
 
 impl Aufnahme {
     pub fn starten(kanal: impl Into<String>, lauf: impl Into<String>) -> Self {
+        Self::starten_bei(kanal, lauf, 0)
+    }
+
+    /// Wie [`Aufnahme::starten`], aber mitten in einer laufenden Sendung.
+    pub fn starten_bei(
+        kanal: impl Into<String>,
+        lauf: impl Into<String>,
+        versatz_basis: u64,
+    ) -> Self {
         Self {
             kanal: kanal.into(),
             lauf: lauf.into(),
             bloecke: 0,
             aufgenommen_sekunden: 0,
+            versatz_basis,
         }
+    }
+
+    /// Wie weit die Sendung an dieser Stelle gelaufen ist.
+    pub fn sendungssekunden(&self) -> u64 {
+        self.versatz_basis + self.aufgenommen_sekunden
     }
 
     /// Wie lang der naechste Block werden darf. `None` heisst: Deckel erreicht,
     /// nicht weiter aufnehmen.
+    /// Der Deckel zaehlt Sendungszeit, nicht Aufnahmezeit. Ein Neustart des
+    /// Dienstes in Stunde sieben faengt damit nicht wieder von vorn an.
     pub fn naechste_blocklaenge(&self) -> Option<u64> {
-        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.aufgenommen_sekunden);
+        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.sendungssekunden());
         match rest {
             0 => None,
             r if r < BLOCK_SEKUNDEN => Some(r),
@@ -147,7 +171,7 @@ impl Aufnahme {
 
     /// Aufgenommenen Block verbuchen und den Warteschlangen-Eintrag bauen.
     pub fn block_fertig(&mut self, datei: impl Into<String>, dauer_sekunden: u64) -> Block {
-        let versatz = self.aufgenommen_sekunden;
+        let versatz = self.sendungssekunden();
         self.bloecke += 1;
         self.aufgenommen_sekunden += dauer_sekunden;
         Block {
@@ -335,5 +359,31 @@ mod tests {
             versuche: 0,
         };
         assert_eq!(block.segment_id(7), "deadlockgermany-L1-block003-s00007");
+    }
+}
+
+#[cfg(test)]
+mod tests_versatz {
+    use super::*;
+
+    #[test]
+    fn zeiten_zaehlen_ab_sendungsbeginn() {
+        // Der Dienst startet mitten im Stream: eine Stunde lief schon.
+        let mut zustand = Aufnahme::starten_bei("ricky", "42", 3600);
+        let block = zustand.block_fertig("/tmp/a.ts", BLOCK_SEKUNDEN);
+        assert_eq!(block.versatz_sekunden, 3600);
+        let zweiter = zustand.block_fertig("/tmp/b.ts", BLOCK_SEKUNDEN);
+        assert_eq!(zweiter.versatz_sekunden, 3600 + BLOCK_SEKUNDEN);
+    }
+
+    #[test]
+    fn deckel_zaehlt_sendungszeit() {
+        // Neustart in Stunde sieben: es wird nicht noch einmal aufgenommen.
+        let spaet = Aufnahme::starten_bei("ricky", "42", MAX_SEKUNDEN_JE_SENDUNG + 60);
+        assert_eq!(spaet.naechste_blocklaenge(), None);
+
+        // Kurz vor dem Deckel bleibt nur der Rest.
+        let knapp = Aufnahme::starten_bei("ricky", "42", MAX_SEKUNDEN_JE_SENDUNG - 120);
+        assert_eq!(knapp.naechste_blocklaenge(), Some(120));
     }
 }

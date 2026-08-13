@@ -68,6 +68,16 @@ impl OpenAiTranscriber {
     /// `Authorization`-Header ohnehin, und ein fehlender `OPENAI_API_KEY` darf
     /// die lokale Transkription nicht blockieren.
     pub fn from_env() -> Option<Self> {
+        Self::from_env_with_timeout(REQUEST_TIMEOUT)
+    }
+
+    /// Wie [`OpenAiTranscriber::from_env`], aber mit eigener Zeitgrenze.
+    ///
+    /// 60 Sekunden passen zu kurzen Reaktions-Clips. Wer einen Zehn-Minuten-
+    /// Block schickt, braucht mehr: das lokale Whisper laeuft auf der CPU
+    /// deutlich langsamer als Echtzeit, und eine zu knappe Grenze bricht
+    /// jeden langen Block ab, statt ihn zu transkribieren.
+    pub fn from_env_with_timeout(timeout: Duration) -> Option<Self> {
         Some(Self {
             api_key: nonempty_env("OPENAI_API_KEY").unwrap_or_else(|| "local".to_string()),
             model: nonempty_env("OPENAI_WHISPER_MODEL")
@@ -76,7 +86,7 @@ impl OpenAiTranscriber {
                 .unwrap_or_else(|| DEFAULT_STT_URL.to_string()),
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
             http: reqwest::Client::builder()
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(timeout)
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok()?,
