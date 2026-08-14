@@ -149,8 +149,12 @@ async fn arbeiter_abraeumen(
     // Wartestellen und beenden sich selbst, sodass eine laufende Aufnahme ihre
     // Zwischendateien noch wegraeumen kann.
     abbruch.store(true, std::sync::atomic::Ordering::Relaxed);
-    let frist = Duration::from_secs(10);
-    warten_oder_abbrechen("Aufnahmeschleife", aufnahme, frist).await;
+    // Eine laufende Transkription raeumt ihre WAV-Datei erst weg, wenn die
+    // Anfrage zurueckkommt. Ein Abbruch nach zehn Sekunden liess sie liegen -
+    // rohes Audio ausserhalb jeder Aufbewahrung. Zwei Minuten Ton sind in
+    // deutlich weniger als einer Minute durch.
+    let frist = Duration::from_secs(60);
+    warten_oder_abbrechen("Aufnahmeschleife", aufnahme, Duration::from_secs(10)).await;
     warten_oder_abbrechen("Auswertungsschleife", auswertung, frist).await;
 }
 
@@ -518,9 +522,9 @@ const MAX_MELDEVERSUCHE_LANG: u32 = 12;
 
 /// Hoechststand der Warteschlange, ab dem keine neuen Aufnahmen mehr starten.
 ///
-/// 36 Bloecke sind sechs Stunden Ton. Wer so weit zurueckhaengt, holt es nicht
+/// 180 Bloecke sind sechs Stunden Ton. Wer so weit zurueckhaengt, holt es nicht
 /// mehr auf; weiter aufzunehmen hiesse nur, die Platte vollzuschreiben.
-const MAX_WARTESCHLANGE: usize = 36;
+const MAX_WARTESCHLANGE: usize = 180;
 
 /// Wie lange die Sendung schon laeuft, aus `started_at` von Helix.
 ///
@@ -1033,6 +1037,12 @@ fn blockordner_von(wurzel: &Path, aufnahme: &Path) -> Option<PathBuf> {
 /// der Dienst einen Ausgabeordner mit auf, den sich jemand mit anderen Daten
 /// teilt.
 fn ist_berichtsname(stamm: &str) -> bool {
+    // Die Vorgaengerfassung schrieb `stream-audit-<zeitstempel>` in denselben
+    // Ordner, mit unmaskierten Belegen. Ohne diese Zeile laegen die fuer immer
+    // dort.
+    if stamm.starts_with("stream-audit-") || stamm.starts_with("stream_coaching_audit-") {
+        return true;
+    }
     match stamm.rsplit_once("-t") {
         Some((rest, ziffern)) => {
             !rest.is_empty() && !ziffern.is_empty() && ziffern.chars().all(|c| c.is_ascii_digit())

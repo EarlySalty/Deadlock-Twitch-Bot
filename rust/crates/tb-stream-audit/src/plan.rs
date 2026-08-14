@@ -12,10 +12,15 @@
 
 use std::collections::VecDeque;
 
-/// Blocklaenge der Aufnahme. Der Wert kommt aus der Python-Fassung
-/// (`DEFAULT_CHUNK_SECONDS`) und passt zu dem, was das Modell am Stueck gut
-/// verarbeitet.
-pub const BLOCK_SEKUNDEN: u64 = 10 * 60;
+/// Blocklaenge der Aufnahme.
+///
+/// Zwei Minuten, nicht zehn: der lokale STT-Dienst ist derselbe, den Reaktionen
+/// und Smalltalk benutzen, und er arbeitet eine Anfrage nach der anderen ab.
+/// Ein Zehn-Minuten-Block haette ihn rund zwei Minuten belegt - laenger als die
+/// Zeitgrenze der anderen Aufrufer, die dann reihenweise abgebrochen waeren.
+/// Zwei Minuten Ton sind in etwa einer halben Minute transkribiert, und
+/// dazwischen kommt jeder andere Aufrufer dran.
+pub const BLOCK_SEKUNDEN: u64 = 2 * 60;
 
 /// Obergrenze je Kanal und Sendung, aus `MAX_LIVE_SECONDS`. Ohne Deckel laeuft
 /// ein Dauerstream die Platte voll.
