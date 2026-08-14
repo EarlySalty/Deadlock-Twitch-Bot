@@ -27,7 +27,7 @@ Audit, das darauf baut, faellt still aus.
 |----------|-----------|
 | **Laeuft als** | `deadlock-twitch-stream-coaching-watch.service` (systemd, Rust-Binaerprogramm). |
 | **Nutzt** | `tb-transport-twitch` (Helix: wer sendet, `started_at`), `tb-engagement::audio_capture` (streamlink), `tb-engagement::transcribe` (lokaler STT-Dienst), `tb-llm::selection` (Anbieterwahl `stream_audit`), Master-Broker (`/internal/master/v1/discord/send-dm`). |
-| **Daten** | `STREAM_AUDIT_OUTPUT_DIR` — Berichte als `.md`/`.json` je Kanal, Aufnahmen unter `aufnahmen/<kanal>/<stream-id>/t<sekunde>/`. |
+| **Daten** | `STREAM_AUDIT_OUTPUT_DIR` — Berichte als `.md`/`.json` je Kanal, Aufnahmen unter `aufnahmen/<kanal>/<stream-id>/t<sekunde>-b<nummer>/<capture>/`. |
 | **Externe Dienste** | Twitch (Helix, HLS), der Anbieter aus der Twitch-Bot-Konfiguration fuer den Modellschritt. Transkription bleibt lokal. |
 | **Secret-Namen** | `TWITCH_CLIENT_ID`/`_SECRET`, Broker-Token, Anbieter-Key aus `tb-llm`. |
 
@@ -78,6 +78,14 @@ Audit, das darauf baut, faellt still aus.
 | Helix antwortet nicht | Nach fuenf Anlaeufen eine DM. Laufende Aufnahmen laufen weiter; nur neue Kanaele werden nicht erkannt und beendete nicht aufgeraeumt. |
 | Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
 | Schleife stirbt | Prozess endet mit Code 1, `Restart=on-failure` greift. |
+
+## 7. Stolperfallen
+
+- `FFMPEG_BIN` bleibt auf `/usr/bin/ffmpeg` gepinnt. Der systemd-Benutzer-PATH
+  stellt `~/.local/bin` nach vorn, und der statische Build dort segfaultet mit
+  leerem stderr - dann scheitert jeder Block an der Tonspur.
+- Der Ausgabeordner gehoert diesem Dienst allein: die Aufbewahrung loescht dort
+  Berichte nach Namensmuster und Aufnahmen nach Ordnerform.
 
 ## 6. Datenschutz
 
