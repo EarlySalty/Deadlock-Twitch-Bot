@@ -6,6 +6,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Archive,
   Cog,
   Film,
   HardDrive,
@@ -30,9 +31,11 @@ import {
   discardClip,
   fetchAutoApproveSettings,
   fetchClips,
+  fetchVodArchiveSettings,
   fetchStreamerLayout,
   saveStreamerLayout,
   saveAutoApproveSettings,
+  saveVodArchiveSettings,
   setClipLayoutOverride,
   uploadClip,
 } from '@/api/socialMedia';
@@ -44,6 +47,8 @@ import {
   type SocialClip,
   type SocialPlatform,
   type StreamerLayoutResponse,
+  type VodArchivePrivacy,
+  type VodArchiveSettings,
 } from '@/types/socialMedia';
 
 interface SocialMediaProps {
@@ -130,6 +135,16 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     },
   });
 
+  const vodArchiveQuery = useQuery<VodArchiveSettings, Error>({
+    queryKey: ['social-media', 'vod-archive-settings'],
+    queryFn: () => fetchVodArchiveSettings(),
+    enabled: !!streamer,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
   const isForbidden =
     layoutQuery.error instanceof SocialMediaForbiddenError ||
     clipsQuery.error instanceof SocialMediaForbiddenError ||
@@ -183,6 +198,14 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     mutationFn: (payload: AutoApproveSettings) => saveAutoApproveSettings(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'auto-approve-settings'] });
+    },
+  });
+
+  const vodArchiveMutation = useMutation({
+    mutationFn: (payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) =>
+      saveVodArchiveSettings(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'vod-archive-settings'] });
     },
   });
 
@@ -324,6 +347,14 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
             isSaving={autoApproveMutation.isPending}
             error={autoApproveMutation.error as Error | null}
             onChange={(nextSettings) => autoApproveMutation.mutate(nextSettings)}
+          />
+
+          <VodArchiveCard
+            settings={vodArchiveQuery.data ?? null}
+            isLoading={vodArchiveQuery.isLoading}
+            isSaving={vodArchiveMutation.isPending}
+            error={vodArchiveMutation.error as Error | null}
+            onChange={(next) => vodArchiveMutation.mutate(next)}
           />
 
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
@@ -679,6 +710,90 @@ function AutoApproveCard({
           </label>
         ))}
       </div>
+      {error && <div className="text-xs text-danger">{error.message}</div>}
+    </div>
+  );
+}
+
+/**
+ * VOD-Archiv: Twitch-Aufzeichnungen automatisch sichern und auf YouTube
+ * spiegeln. Der Download laeuft auch ohne YouTube-Verbindung, deshalb steht
+ * hier nur ein Schalter und die Sichtbarkeit der Uploads.
+ */
+function VodArchiveCard({
+  settings,
+  isLoading,
+  isSaving,
+  error,
+  onChange,
+}: {
+  settings: VodArchiveSettings | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: Error | null;
+  onChange: (next: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) => void;
+}) {
+  const enabled = settings?.enabled ?? false;
+  const privacy = settings?.privacy ?? 'private';
+  const options = settings?.privacy_options ?? ['private', 'unlisted', 'public'];
+  const labels: Record<VodArchivePrivacy, string> = {
+    private: 'Privat',
+    unlisted: 'Nicht gelistet',
+    public: 'Öffentlich',
+  };
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Archive className="w-4 h-4 text-orange" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">VOD-Archiv</h3>
+        {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+      </div>
+      <p className="text-sm text-text-secondary">
+        Twitch-VODs werden zweimal täglich geladen und auf YouTube hochgeladen. Über 11,5 Stunden
+        wird verlustfrei geschnitten, weil YouTube bei 12 Stunden dichtmacht.
+      </p>
+
+      <label className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3">
+        <span className="text-sm font-semibold text-white">Automatisch sichern</span>
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={isLoading || isSaving}
+          onChange={(event) => onChange({ enabled: event.target.checked, privacy })}
+          className="h-4 w-4 accent-orange"
+        />
+      </label>
+
+      <div className="space-y-2">
+        <div className="text-xs uppercase tracking-[0.14em] text-text-secondary">
+          Sichtbarkeit auf YouTube
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              disabled={isLoading || isSaving}
+              onClick={() => onChange({ enabled, privacy: option })}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                privacy === option
+                  ? 'border-orange text-white bg-orange/15'
+                  : 'border-border text-text-secondary hover:text-white'
+              }`}
+            >
+              {labels[option]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {settings?.privacy_forced && (
+        <div className="text-xs text-warning">
+          Solange das Google-API-Projekt nicht auditiert ist, stellt YouTube jeden Upload auf
+          privat, unabhängig von dieser Wahl.
+        </div>
+      )}
       {error && <div className="text-xs text-danger">{error.message}</div>}
     </div>
   );

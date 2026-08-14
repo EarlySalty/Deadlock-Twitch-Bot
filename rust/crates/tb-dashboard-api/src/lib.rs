@@ -293,6 +293,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/admin/settings/auto-approve",
             get(social_media::auto_approve_get_handler).put(social_media::auto_approve_put_handler),
         )
+        .route(
+            "/social-media/api/admin/settings/vod-archive",
+            get(social_media::vod_archive_get_handler).put(social_media::vod_archive_put_handler),
+        )
         // Enrichment-Detail, Clip-Analytics, Report-Liste (Admin, lesend).
         .route(
             "/social-media/api/admin/clips/:clip_db_id/enrichment",

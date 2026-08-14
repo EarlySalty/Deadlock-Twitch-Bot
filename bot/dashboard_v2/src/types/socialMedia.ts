@@ -108,6 +108,16 @@ export interface AutoApproveSettings {
   instagram: boolean;
 }
 
+export type VodArchivePrivacy = 'private' | 'unlisted' | 'public';
+
+export interface VodArchiveSettings {
+  enabled: boolean;
+  privacy: VodArchivePrivacy;
+  privacy_options: VodArchivePrivacy[];
+  /** YouTube erzwingt private, solange das Google-Projekt nicht auditiert ist. */
+  privacy_forced: boolean;
+}
+
 export interface ClipEnrichment {
   clip_db_id: number;
   transcript_raw: string | null;

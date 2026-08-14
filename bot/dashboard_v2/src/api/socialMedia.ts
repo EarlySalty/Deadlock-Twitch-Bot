@@ -15,6 +15,7 @@ import type {
   UploadResponse,
   VocabEntry,
   VocabListResponse,
+  VodArchiveSettings,
 } from '@/types/socialMedia';
 
 const ADMIN_PREFIX = '/social-media/api/admin';
@@ -256,6 +257,20 @@ export async function saveAutoApproveSettings(
   payload: AutoApproveSettings,
 ): Promise<AutoApproveSettings> {
   return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchVodArchiveSettings(): Promise<VodArchiveSettings> {
+  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`);
+}
+
+export async function saveVodArchiveSettings(
+  payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>,
+): Promise<VodArchiveSettings> {
+  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

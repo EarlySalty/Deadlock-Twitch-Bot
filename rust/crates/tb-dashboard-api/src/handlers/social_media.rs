@@ -64,8 +64,9 @@ use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::scheduler::next_free_slot;
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::settings::{
-    coerce_bool, get_auto_approve_settings, get_posting_schedule, set_auto_approve_settings,
-    AutoApprove, PostingSchedule,
+    coerce_bool, get_auto_approve_settings, get_posting_schedule, get_vod_archive_settings,
+    set_auto_approve_settings, set_vod_archive_settings, AutoApprove, PostingSchedule,
+    VodArchiveSettings, VOD_ARCHIVE_PRIVACY_VALUES,
 };
 use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
@@ -2669,6 +2670,81 @@ pub async fn auto_approve_put_handler(
     }
 }
 
+/// `GET /social-media/api/admin/settings/vod-archive` — VOD-Archiv lesen.
+///
+/// Wie bei Auto-Approve darf jeder mit Social-Media-Zugriff lesen, gesetzt wird
+/// nur vom Admin. `privacy_forced` sagt der Oberfläche, dass YouTube ohne
+/// auditiertes API-Projekt jeden Upload auf `private` zurückdreht, egal was
+/// hier steht.
+pub async fn vod_archive_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if let Err(e) = require_sm_access(&auth, &pool, None).await {
+        return e;
+    }
+    let s = get_vod_archive_settings(&pool).await;
+    Json(json!({
+        "enabled": s.enabled,
+        "privacy": s.privacy,
+        "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
+        "privacy_forced": true,
+    }))
+    .into_response()
+}
+
+/// `PUT /social-media/api/admin/settings/vod-archive` — VOD-Archiv setzen (Admin).
+pub async fn vod_archive_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: String,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    // Fehlende Sichtbarkeit bleibt beim bisherigen Wert, statt still auf einen
+    // Default zu springen — ein Toggle-Klick darf die Sichtbarkeit nicht ändern.
+    let bisher = get_vod_archive_settings(&pool).await;
+    let privacy = payload
+        .get("privacy")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or(bisher.privacy);
+    if !VOD_ARCHIVE_PRIVACY_VALUES.contains(&privacy.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_privacy", "allowed": VOD_ARCHIVE_PRIVACY_VALUES })),
+        )
+            .into_response();
+    }
+    let values = VodArchiveSettings {
+        enabled: payload.get("enabled").map(coerce_bool).unwrap_or(false),
+        privacy,
+    };
+    let actor = editor_user_id(&auth);
+    match set_vod_archive_settings(&pool, values, actor.as_deref()).await {
+        Ok(r) => Json(json!({
+            "enabled": r.enabled,
+            "privacy": r.privacy,
+            "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
+            "privacy_forced": true,
+        }))
+        .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response(),
+    }
+}
+
 /// Öffentliche Dashboard-Origin für die OAuth-Redirect-URIs. Konfigurierbar
 /// (`SOCIAL_MEDIA_PUBLIC_ORIGIN`), Default = Python-Fallback. (Statt Pythons
 /// Request-Header-Ableitung — gleicher Effekt: die bei den Plattformen
@@ -4340,6 +4416,76 @@ mod tests {
             .await
             .status(),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn vod_archiv_einstellung() {
+        let Some(pool) = make_pool("t_dash_sm_vod").await else {
+            return;
+        };
+
+        // Default: aus und privat, weil das Google-Projekt nicht auditiert ist.
+        let resp = vod_archive_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["privacy"], "private");
+        assert_eq!(v["privacy_forced"], true);
+
+        // Einschalten mit Sichtbarkeit.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["privacy"], "unlisted");
+
+        // Toggle ohne privacy behaelt die bisherige Sichtbarkeit.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"enabled\":false}".into(),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["privacy"], "unlisted");
+
+        // Unbekannte Sichtbarkeit wird abgewiesen, nicht still ersetzt.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Der abgewiesene Aufruf darf nichts geaendert haben.
+        let resp = vod_archive_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
+        // Kaputtes JSON → 400, Partner darf nicht schreiben.
+        assert_eq!(
+            vod_archive_put_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                "kein json".into()
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            vod_archive_put_handler(
+                partner("nani"),
+                State(pool.clone()),
+                "{\"enabled\":true}".into()
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
         );
     }
 
