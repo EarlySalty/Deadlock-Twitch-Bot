@@ -72,7 +72,7 @@ Audit, das darauf baut, faellt still aus.
 |------|-----------|
 | Transkription scheitert | Drei Versuche mit 2 und 4 Minuten Pause; danach DM "aufgegeben", Aufnahme bleibt liegen. |
 | DM scheitert | Nur die Meldung wird wiederholt: vier Anlaeufe im Abstand von 30 Minuten, danach sechsstuendlich bis zum zwoelften; danach bleibt `meldung_offen.json` liegen, das der stuendliche Aufraeumtakt wieder aufgreift. |
-| Modellschritt faellt aus | Bericht und DM sagen "NICHT GELAUFEN"; Aufnahme bleibt liegen. |
+| Modellschritt faellt aus | Der Bericht sagt "NICHT GELAUFEN", die Aufnahme bleibt liegen. Gemeldet wird gedrosselt: beim ersten betroffenen Block und danach bei jedem zwanzigsten. |
 | Block ohne gesprochenes Wort | Normalfall, keine Meldung, Aufnahme weg. Ab 20 stummen Bloecken am Stueck je Kanal: DM bei jedem Vielfachen, und die Aufnahmen bleiben liegen. |
 | streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
 | Helix antwortet nicht | Nach fuenf Anlaeufen eine DM. Laufende Aufnahmen laufen weiter; nur neue Kanaele werden nicht erkannt und beendete nicht aufgeraeumt. |
