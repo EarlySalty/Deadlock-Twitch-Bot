@@ -2677,8 +2677,7 @@ mod tests {
 
     #[tokio::test]
     async fn aufbewahrung_loescht_alte_berichte_und_laesst_neue() {
-        let wurzel =
-            std::env::temp_dir().join(format!("stream-audit-aufbewahrung-{}", std::process::id()));
+        let wurzel = test_ordner("aufbewahrung");
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
         tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
         // Ein Bericht der Vorgaengerfassung, direkt im Ausgabeordner.
@@ -2716,8 +2715,7 @@ mod tests {
     async fn aufbewahrung_erreicht_auch_die_kanalordner() {
         // Berichte liegen unter <ausgabe>/<kanal>/; ein Aufraeumen nur auf
         // oberster Ebene loeschte nie einen einzigen.
-        let wurzel =
-            std::env::temp_dir().join(format!("stream-audit-kanalordner-{}", std::process::id()));
+        let wurzel = test_ordner("kanalordner");
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
         let kanalordner = wurzel.join("testkanal");
         tokio::fs::create_dir_all(&kanalordner)
@@ -2746,8 +2744,7 @@ mod tests {
         // Ohne Zettel liefe jede wiederaufgenommene Datei als Kanal
         // "wiederaufnahme" mit Zeitversatz 0 durch - der Bericht ordnete
         // dann niemandem etwas zu.
-        let blockordner =
-            std::env::temp_dir().join(format!("stream-audit-zettel-{}", std::process::id()));
+        let blockordner = test_ordner("zettel");
         let _ = tokio::fs::remove_dir_all(&blockordner).await;
         // Die Aufnahme liegt eine Ebene tiefer, so wie streamlink sie ablegt.
         let capture = blockordner.join("capture-abc123");
@@ -2799,8 +2796,7 @@ mod tests {
         // Aufbewahrte Aufnahmen sind Belege, keine offenen Bloecke. Ohne die
         // Marke liefe der naechste Start sie erneut aus - der zweite Bericht
         // ueberschriebe den ersten und koennte den Beleg loeschen.
-        let blockordner =
-            std::env::temp_dir().join(format!("stream-audit-fertig-{}", std::process::id()));
+        let blockordner = test_ordner("fertig");
         let _ = tokio::fs::remove_dir_all(&blockordner).await;
         let capture = blockordner.join("capture-xyz");
         tokio::fs::create_dir_all(&capture).await.expect("Ordner");
@@ -2856,6 +2852,24 @@ mod tests {
         assert_eq!(segmente[1].ende_sekunden, 1095.0);
     }
 
+    /// Eindeutiger Testordner.
+    ///
+    /// Nur fuer Tests: der Name traegt Prozess-ID und Nanosekunden, damit zwei
+    /// gleichzeitige Laeufe sich nicht ins Gehege kommen. Die Unterdrueckung
+    /// der semgrep-Regel gilt genau dafuer: hier entsteht nichts, was ein
+    /// anderer Nutzer vorhersagen und uebernehmen koennte.
+    fn test_ordner(zweck: &str) -> PathBuf {
+        let stempel = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        std::env::temp_dir().join(format!(
+            "stream-audit-{zweck}-{}-{stempel}",
+            std::process::id()
+        ))
+    }
+
     fn test_konfiguration(wurzel: &Path) -> Konfiguration {
         Konfiguration {
             kanaele: Vec::new(),
@@ -2870,8 +2884,7 @@ mod tests {
         // Derselbe Vorfall muss bei jedem Anlauf denselben Schluessel tragen,
         // sonst kommt die Meldung doppelt an, wenn ein frueherer Versuch doch
         // zugestellt wurde.
-        let wurzel =
-            std::env::temp_dir().join(format!("stream-audit-hinweis-{}", std::process::id()));
+        let wurzel = test_ordner("hinweis");
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
         tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
         let konfiguration = test_konfiguration(&wurzel);
