@@ -805,12 +805,14 @@ function PlatformConnectionsCard({
                 <div className="text-xs text-text-secondary truncate">
                   {connected
                     ? status?.expired
-                      ? 'Zugang abgelaufen, bitte neu verbinden'
+                      ? // Der Zugang gilt schon eine Stunde vor Ablauf als
+                        // erneuerungsbeduerftig und wird selbst nachgezogen.
+                        `${status?.username ?? 'verbunden'} · Zugang wird erneuert`
                       : (status?.username ?? 'verbunden')
                     : 'nicht verbunden'}
                 </div>
               </div>
-              {connected && !status?.expired ? (
+              {connected ? (
                 <button
                   type="button"
                   disabled={isDisconnecting}

@@ -55,7 +55,7 @@ use tb_social_media::layout::{
 };
 use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
-use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
+use tb_social_media::rendering::{render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
@@ -79,21 +79,6 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::resolve_streamer_scope;
 
-/// HTML-Escape (`&`, `<`, `>`, `"`, `'`) — mirror von Pythons `html.escape(..., quote=True)`.
-fn html_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
 
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
@@ -117,21 +102,6 @@ pub async fn privacy_handler() -> Html<String> {
     Html(render_privacy())
 }
 
-/// Reine Render-Logik der Index-Seite (testbar ohne HTTP).
-fn render_index(auth: &DashboardAuthLevel) -> Result<String, Response> {
-    // Index nutzt den Scope ohne `requested` → Partner bekommt eigenen Login,
-    // Admin/Localhost `None`, None-Auth → 401.
-    let streamer = resolve_streamer_scope(auth, None, false)?;
-    let label = html_escape(
-        &streamer
-            .as_ref()
-            .map(|s| format!("@{s}"))
-            .unwrap_or_else(|| "nicht gesetzt".to_string()),
-    );
-    let data = html_escape(streamer.as_deref().unwrap_or(""));
-    Ok(render_dashboard(&label, &data))
-}
-
 /// Twitch-Login-Redirect-Ziel der unauthentifizierten HTML-Index-Seite
 /// (B15-FIX-index-redirect / finding social_media-2).
 const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
@@ -145,10 +115,9 @@ pub async fn index_handler(auth: DashboardAuthLevel) -> Response {
     if matches!(auth, DashboardAuthLevel::None) {
         return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
     }
-    match render_index(&auth) {
-        Ok(html) => Html(html).into_response(),
-        Err(resp) => resp,
-    }
+    // Die alte HTML-Seite ist abgeloest. Bestehende Links landen auf der SPA,
+    // statt ins Leere zu laufen.
+    axum::response::Redirect::to("/social-media-admin").into_response()
 }
 
 /// `?streamer=` (für scope-gefilterte Endpoints).
@@ -3134,12 +3103,6 @@ mod tests {
     }
 
     #[test]
-    fn html_escape_zeichen() {
-        assert_eq!(html_escape("a&b<c>\"'"), "a&amp;b&lt;c&gt;&quot;&#x27;");
-        assert_eq!(html_escape("nani_123"), "nani_123");
-    }
-
-    #[test]
     fn mp4_mime_erkennung_und_allowlist() {
         // B15-FIX: ftyp-Box an Offset 4 + Major-Brand → MIME.
         let mp4 = b"\x00\x00\x00\x18ftypisom....";
@@ -3210,18 +3173,6 @@ mod tests {
         assert!(resolve_streamer_scope(&DashboardAuthLevel::admin(), None, true).is_err());
         // None-Auth → Fehler (401).
         assert!(resolve_streamer_scope(&DashboardAuthLevel::None, None, false).is_err());
-    }
-
-    #[test]
-    fn index_render_label() {
-        // Admin → „nicht gesetzt".
-        let html = render_index(&DashboardAuthLevel::admin()).unwrap();
-        assert!(html.contains("nicht gesetzt"));
-        // Partner → @login (kleingeschrieben).
-        let html = render_index(&partner("Nani")).unwrap();
-        assert!(html.contains("@nani"));
-        // None → Fehler.
-        assert!(render_index(&DashboardAuthLevel::None).is_err());
     }
 
     #[tokio::test]
