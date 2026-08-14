@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield, Film } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
+import { useT } from '@/context/LanguageContext';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
@@ -22,6 +23,7 @@ import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfi
  * gemountet, ist Admin-only und liefert dieselbe React-Bundle-Auslieferung.
  */
 export function SocialMediaAdminDashboard() {
+  const t = useT();
   const [streamer, setStreamer] = useState<string>('');
   const hasAutoSetStreamer = useRef(false);
 
@@ -113,7 +115,7 @@ export function SocialMediaAdminDashboard() {
       return (
         <div className={`${base} bg-warning/10 border-warning/30 text-warning`}>
           <Sparkles className="w-4 h-4" />
-          <span>Demo-Daten</span>
+          <span>{t('Demo-Daten')}</span>
         </div>
       );
     }
@@ -121,7 +123,7 @@ export function SocialMediaAdminDashboard() {
       return (
         <div className={`${base} bg-error/10 border-error/30 text-error`}>
           <ShieldAlert className="w-4 h-4" />
-          <span>Nicht authentifiziert</span>
+          <span>{t('Nicht authentifiziert')}</span>
         </div>
       );
     }
@@ -129,7 +131,7 @@ export function SocialMediaAdminDashboard() {
       return (
         <div className={`${base} bg-success/10 border-success/30 text-success`}>
           <Wifi className="w-4 h-4" />
-          <span>Localhost (Admin)</span>
+          <span>{t('Localhost (Admin)')}</span>
         </div>
       );
     }
@@ -137,14 +139,14 @@ export function SocialMediaAdminDashboard() {
       return (
         <div className={`${base} bg-primary/10 border-primary/30 text-primary`}>
           <ShieldCheck className="w-4 h-4" />
-          <span>Admin</span>
+          <span>{t('Admin')}</span>
         </div>
       );
     }
     return (
       <div className={`${base} bg-accent/10 border-accent/30 text-accent`}>
         <Shield className="w-4 h-4" />
-        <span>Partner</span>
+        <span>{t('Partner')}</span>
       </div>
     );
   };
@@ -163,10 +165,10 @@ export function SocialMediaAdminDashboard() {
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] font-bold text-primary/90">
-                {isAdminView ? 'Admin-Tooling' : 'Clip-Pipeline'}
+                {isAdminView ? t('Admin-Tooling') : t('Clip-Pipeline')}
               </div>
               <h1 className="display-font font-extrabold text-white text-xl md:text-2xl tracking-tight leading-tight">
-                Social-Media-Pipeline
+                {t('Social-Media-Pipeline')}
               </h1>
             </div>
           </div>
@@ -180,8 +182,8 @@ export function SocialMediaAdminDashboard() {
                 disabled={accessMutation.isPending}
                 title={
                   selectedGranted
-                    ? 'Freigabe für diesen Streamer entziehen'
-                    : 'Diesen Streamer für das eigene Social-Media-Dashboard freischalten'
+                    ? t('Freigabe für diesen Streamer entziehen')
+                    : t('Diesen Streamer für das eigene Social-Media-Dashboard freischalten')
                 }
                 className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
                   selectedGranted
@@ -189,7 +191,7 @@ export function SocialMediaAdminDashboard() {
                     : 'border-border bg-background/80 text-text-secondary hover:text-white'
                 }`}
               >
-                {selectedGranted ? 'Freigegeben' : 'Freigeben'}
+                {selectedGranted ? t('Freigegeben') : t('Freigeben')}
               </button>
             )}
             {isAdminView && (
@@ -202,7 +204,7 @@ export function SocialMediaAdminDashboard() {
                 disabled={loadingStreamers}
                 className="rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
               >
-                <option value="">— Streamer wählen —</option>
+                <option value="">{t('— Streamer wählen —')}</option>
                 {streamers.map((channel) => (
                   <option key={channel.login} value={channel.login.toLowerCase()}>
                     {channel.login}
@@ -214,7 +216,7 @@ export function SocialMediaAdminDashboard() {
               href="/analyse"
               className="text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
-              ← Analyse-Dashboard
+              {t('← Analyse-Dashboard')}
             </a>
             <AuthBadge />
           </div>
@@ -233,26 +235,27 @@ export function SocialMediaAdminDashboard() {
             <SocialMedia streamer={streamer} />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
-              Zugriff wird geprüft…
+              {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
             <SocialMedia streamer={access.streamer ?? streamer} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />
-              <h2 className="text-xl font-bold text-white mb-2">Noch nicht freigeschaltet</h2>
+              <h2 className="text-xl font-bold text-white mb-2">{t('Noch nicht freigeschaltet')}</h2>
               <p className="text-text-secondary">
-                Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei
-                EarlySalty, wenn du deine Clips hier aufbereiten möchtest.
+                {t(
+                  'Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty, wenn du deine Clips hier aufbereiten möchtest.',
+                )}
               </p>
             </div>
           )}
         </PlanProvider>
         {loadingStreamers && (
-          <div className="mt-4 text-xs text-text-secondary">Lade Streamer-Liste…</div>
+          <div className="mt-4 text-xs text-text-secondary">{t('Lade Streamer-Liste…')}</div>
         )}
         {!loadingStreamers && streamers.length === 0 && authStatus?.isAdmin && (
-          <div className="mt-4 text-xs text-text-secondary">Keine Streamer gefunden.</div>
+          <div className="mt-4 text-xs text-text-secondary">{t('Keine Streamer gefunden.')}</div>
         )}
       </div>
     </div>

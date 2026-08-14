@@ -21,8 +21,11 @@ import {
   Pencil,
   Wand2,
   SlidersHorizontal,
+  Languages,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { LayoutEditor } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
@@ -60,6 +63,9 @@ interface SocialMediaProps {
   streamer: string;
 }
 
+/** Deutscher Text als Schluessel: ohne Uebersetzung bleibt er einfach stehen. */
+type Translate = (text: string, params?: Record<string, string | number>) => string;
+
 const STATUS_LABELS: Record<ClipStatus, { label: string; tone: 'orange' | 'teal' | 'success' | 'warning' | 'danger' | 'muted' }> = {
   pending: { label: 'Wartend', tone: 'muted' },
   enriched: { label: 'Aufbereitet', tone: 'teal' },
@@ -83,16 +89,16 @@ const TONE_BADGE: Record<string, string> = {
   muted: 'bg-bg/60 text-text-secondary border-border',
 };
 
-function formatRetention(retentionUntil: string | null): string {
+function formatRetention(retentionUntil: string | null, t: Translate): string {
   if (!retentionUntil) return '—';
   const target = new Date(retentionUntil);
   const now = new Date();
   const ms = target.getTime() - now.getTime();
   const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-  if (days < 0) return 'überfällig';
-  if (days === 0) return 'heute';
-  if (days === 1) return 'morgen';
-  return `${days} Tage`;
+  if (days < 0) return t('überfällig');
+  if (days === 0) return t('heute');
+  if (days === 1) return t('morgen');
+  return t('{days} Tage', { days });
 }
 
 type EditMode = 'layout' | 'enrichment';
@@ -100,6 +106,7 @@ type SocialMediaView = 'pipeline' | 'analytics' | 'settings';
 
 export function SocialMedia({ streamer }: SocialMediaProps) {
   const queryClient = useQueryClient();
+  const t = useT();
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
   const [editingClip, setEditingClip] = useState<{ id: number; mode: EditMode } | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>('pipeline');
@@ -281,10 +288,11 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
         <ShieldAlert className="w-12 h-12 text-danger mx-auto mb-4" />
-        <h2 className="text-2xl font-bold text-white mb-2">Noch nicht freigeschaltet</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">{t('Noch nicht freigeschaltet')}</h2>
         <p className="text-text-secondary">
-          Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty,
-          wenn du deine Clips hier aufbereiten möchtest.
+          {t(
+            'Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty, wenn du deine Clips hier aufbereiten möchtest.',
+          )}
         </p>
       </div>
     );
@@ -294,9 +302,9 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
         <Film className="w-12 h-12 text-text-secondary mx-auto mb-4" />
-        <h2 className="text-2xl font-bold text-white mb-2">Streamer auswählen</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">{t('Streamer auswählen')}</h2>
         <p className="text-text-secondary">
-          Wähle oben einen Streamer aus, um Layouts, Clips und Uploads zu verwalten.
+          {t('Wähle oben einen Streamer aus, um Layouts, Clips und Uploads zu verwalten.')}
         </p>
       </div>
     );
@@ -325,7 +333,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
               }`}
             >
               <Icon className="w-4 h-4" />
-              {label}
+              {t(label)}
             </button>
           );
         })}
@@ -357,37 +365,42 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
             error={vodArchiveMutation.error as Error | null}
             onChange={(next) => vodArchiveMutation.mutate(next)}
           />
+          <LanguageCard />
         </div>
       ) : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <KpiCard
-              title="Clips in Pipeline"
+              title={t('Clips in Pipeline')}
               value={stats.total}
               icon={Film}
               color="purple"
-              subValue={statusFilter === 'all' ? 'alle Stati' : STATUS_LABELS[statusFilter]?.label}
+              subValue={
+                statusFilter === 'all'
+                  ? t('alle Stati')
+                  : t(STATUS_LABELS[statusFilter]?.label ?? '')
+              }
             />
             <KpiCard
-              title="Heute veröffentlicht"
+              title={t('Heute veröffentlicht')}
               value={stats.publishedToday}
               icon={CheckCircle2}
               color="green"
-              subValue="über alle Plattformen"
+              subValue={t('über alle Plattformen')}
             />
             <KpiCard
-              title="Manuelle Uploads"
+              title={t('Manuelle Uploads')}
               value={stats.manualUploads}
               icon={HardDrive}
               color="yellow"
-              subValue="MP4-Drops aus dem Editor"
+              subValue={t('MP4-Drops aus dem Editor')}
             />
             <KpiCard
-              title="Nächste Retention"
-              value={formatRetention(stats.nextRetention)}
+              title={t('Nächste Retention')}
+              value={formatRetention(stats.nextRetention, t)}
               icon={Clock}
               color="blue"
-              subValue="14-Tage-Lifecycle"
+              subValue={t('14-Tage-Lifecycle')}
             />
           </div>
 
@@ -402,16 +415,18 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                   initialLayout={layoutForEditor}
                   isSaving={saveLayoutMutation.isPending}
                   onSave={(layout) => saveLayoutMutation.mutate(layout)}
-                  saveLabel={`Default für ${streamer} speichern`}
+                  saveLabel={t('Default für {streamer} speichern', { streamer })}
                 />
               )}
               {saveLayoutMutation.isError && (
                 <div className="text-xs text-danger px-3">
-                  Speichern fehlgeschlagen: {(saveLayoutMutation.error as Error).message}
+                  {t('Speichern fehlgeschlagen: {message}', {
+                    message: (saveLayoutMutation.error as Error).message,
+                  })}
                 </div>
               )}
               {saveLayoutMutation.isSuccess && (
-                <div className="text-xs text-success px-3">Layout gespeichert.</div>
+                <div className="text-xs text-success px-3">{t('Layout gespeichert.')}</div>
               )}
             </div>
 
@@ -427,11 +442,13 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <h3 className="text-lg font-bold text-white inline-flex items-center gap-2">
-                <Layers3 className="w-5 h-5 text-orange" /> Pipeline
+                <Layers3 className="w-5 h-5 text-orange" /> {t('Pipeline')}
               </h3>
               <StatusFilter value={statusFilter} onChange={setStatusFilter} />
               <div className="ml-auto text-xs text-text-secondary">
-                {clipsQuery.isFetching ? 'Aktualisiere…' : `${clipsQuery.data?.items.length ?? 0} Treffer`}
+                {clipsQuery.isFetching
+                  ? t('Aktualisiere…')
+                  : t('{count} Treffer', { count: clipsQuery.data?.items.length ?? 0 })}
               </div>
             </div>
 
@@ -442,9 +459,11 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
             ) : (clipsQuery.data?.items ?? []).length === 0 ? (
               <div className="panel-card rounded-2xl p-12 text-center">
                 <AlertCircle className="w-10 h-10 text-text-secondary mx-auto mb-3" />
-                <p className="text-white font-bold mb-1">Keine Clips für diesen Filter</p>
+                <p className="text-white font-bold mb-1">{t('Keine Clips für diesen Filter')}</p>
                 <p className="text-sm text-text-secondary">
-                  Sobald neue Twitch-Clips eingehen oder du eine MP4 hochlädst, erscheinen sie hier.
+                  {t(
+                    'Sobald neue Twitch-Clips eingehen oder du eine MP4 hochlädst, erscheinen sie hier.',
+                  )}
                 </p>
               </div>
             ) : (
@@ -460,7 +479,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                       onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
                       onCloseEditor={() => setEditingClip(null)}
                       onDiscard={() => {
-                        if (window.confirm(`Clip "${clip.title}" verwerfen?`)) {
+                        if (window.confirm(t('Clip "{title}" verwerfen?', { title: clip.title }))) {
                           discardMutation.mutate(clip.clip_db_id);
                         }
                       }}
@@ -497,6 +516,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
 }
 
 function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefaultLayout: boolean }) {
+  const t = useT();
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -508,26 +528,26 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
       <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-5">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-bold text-orange/90 px-2.5 py-1 rounded-full bg-orange/12 border border-orange/30">
-            <Sparkles className="w-3.5 h-3.5" /> Admin-Tooling · Social Media 2.0
+            <Sparkles className="w-3.5 h-3.5" /> {t('Admin-Tooling · Social Media 2.0')}
           </div>
           <h1 className="display-font font-extrabold text-white mt-3 text-3xl md:text-4xl tracking-tight">
-            Cross-Posting-Pipeline für{' '}
+            {t('Cross-Posting-Pipeline für')}{' '}
             <span className="bg-gradient-to-r from-orange to-teal bg-clip-text text-transparent">
               {streamer}
             </span>
           </h1>
           <p className="text-text-secondary mt-2 max-w-2xl text-sm md:text-base">
-            Twitch-Clips werden automatisch eingesammelt, vertikal aufbereitet und für YT Shorts /
-            TikTok / Reels vorbereitet. Layouts pro Streamer als Default, pro Clip override-bar,
-            14-Tage-Retention.
+            {t(
+              'Twitch-Clips werden automatisch eingesammelt, vertikal aufbereitet und für YT Shorts / TikTok / Reels vorbereitet. Layouts pro Streamer als Default, pro Clip override-bar, 14-Tage-Retention.',
+            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-3 text-xs">
           <HeroBadge tone="orange" icon={Film}>
-            {isDefaultLayout ? 'Layout: Repo-Default aktiv' : 'Layout: Streamer-Default'}
+            {isDefaultLayout ? t('Layout: Repo-Default aktiv') : t('Layout: Streamer-Default')}
           </HeroBadge>
           <HeroBadge tone="teal" icon={Calendar}>
-            Phase 3 · Analytics + LLM-Reports
+            {t('Phase 3 · Analytics + LLM-Reports')}
           </HeroBadge>
         </div>
       </div>
@@ -560,6 +580,7 @@ function StatusFilter({
   value: ClipStatus | 'all';
   onChange: (next: ClipStatus | 'all') => void;
 }) {
+  const t = useT();
   const items: Array<{ id: ClipStatus | 'all'; label: string }> = [
     { id: 'pending', label: 'Wartend' },
     { id: 'enriched', label: 'Aufbereitet' },
@@ -583,7 +604,7 @@ function StatusFilter({
                 : 'text-text-secondary hover:text-white'
             }`}
           >
-            {item.label}
+            {t(item.label)}
           </button>
         );
       })}
@@ -600,6 +621,7 @@ interface UploadCardProps {
 }
 
 function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSuccess }: UploadCardProps) {
+  const t = useT();
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -607,7 +629,7 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
     if (!files || files.length === 0) return;
     const file = files[0];
     if (!file.type.startsWith('video/') && !file.name.toLowerCase().endsWith('.mp4')) {
-      alert('Bitte eine MP4-Datei wählen.');
+      alert(t('Bitte eine MP4-Datei wählen.'));
       return;
     }
     onUpload(file);
@@ -624,7 +646,9 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
         <Upload className="w-4 h-4 text-teal" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">MP4 hochladen</h3>
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          {t('MP4 hochladen')}
+        </h3>
       </div>
 
       <div
@@ -656,17 +680,20 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
           onChange={(e) => handleFiles(e.target.files)}
         />
         <Film className="w-8 h-8 text-teal mx-auto mb-2" />
-        <p className="text-sm font-bold text-white">MP4 hier ablegen</p>
-        <p className="text-xs text-text-secondary mt-1">oder klicken zum Auswählen · max 200 MB</p>
+        <p className="text-sm font-bold text-white">{t('MP4 hier ablegen')}</p>
+        <p className="text-xs text-text-secondary mt-1">
+          {t('oder klicken zum Auswählen · max 200 MB')}
+        </p>
         <p className="text-[11px] text-text-secondary mt-3 leading-relaxed">
-          Datei wird unter <code className="font-mono text-orange">data/clips/uploads/{streamer}/</code> abgelegt
-          und automatisch das Streamer-Default-Layout angewendet.
+          {t('Datei wird unter')}{' '}
+          <code className="font-mono text-orange">data/clips/uploads/{streamer}/</code>{' '}
+          {t('abgelegt und automatisch das Streamer-Default-Layout angewendet.')}
         </p>
       </div>
 
       {isUploading && (
         <div className="flex items-center gap-2 text-xs text-teal">
-          <Loader2 className="w-4 h-4 animate-spin" /> Upload läuft…
+          <Loader2 className="w-4 h-4 animate-spin" /> {t('Upload läuft…')}
         </div>
       )}
       {uploadError && (
@@ -674,16 +701,16 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
       )}
       {uploadSuccess && !isUploading && (
         <div className="text-xs text-success inline-flex items-center gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5" /> Upload erfolgreich. Clip ist in der Pipeline.
+          <CheckCircle2 className="w-3.5 h-3.5" /> {t('Upload erfolgreich. Clip ist in der Pipeline.')}
         </div>
       )}
 
       <div className="border-t border-border pt-3 space-y-2 text-[11px] text-text-secondary">
         <div className="flex items-center gap-1.5">
-          <Calendar className="w-3 h-3" /> Retention: 14 Tage ab Erstellung
+          <Calendar className="w-3 h-3" /> {t('Retention: 14 Tage ab Erstellung')}
         </div>
         <div className="flex items-center gap-1.5">
-          <Layers3 className="w-3 h-3" /> Auto-Apply: Streamer-Default-Layout
+          <Layers3 className="w-3 h-3" /> {t('Auto-Apply: Streamer-Default-Layout')}
         </div>
       </div>
     </div>
@@ -703,6 +730,7 @@ function AutoApproveCard({
   error: Error | null;
   onChange: (next: AutoApproveSettings) => void;
 }) {
+  const t = useT();
   const updateSetting = (platform: keyof AutoApproveSettings, checked: boolean) => {
     onChange({
       ...settings,
@@ -715,13 +743,14 @@ function AutoApproveCard({
       <div className="flex items-center gap-2">
         <Cog className="w-4 h-4 text-orange" />
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          Auto-Approve
+          {t('Auto-Approve')}
         </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
       <p className="text-sm text-text-secondary">
-        Plattformen mit aktivem Toggle werden nach einer Freigabe automatisch mit in die Queue
-        gelegt, auch wenn im Approval-DM kein Häkchen gesetzt wurde.
+        {t(
+          'Plattformen mit aktivem Toggle werden nach einer Freigabe automatisch mit in die Queue gelegt, auch wenn im Approval-DM kein Häkchen gesetzt wurde.',
+        )}
       </p>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {([
@@ -733,7 +762,7 @@ function AutoApproveCard({
             key={platform}
             className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
           >
-            <span className="text-sm font-semibold text-white">{label}</span>
+            <span className="text-sm font-semibold text-white">{t(label)}</span>
             <input
               type="checkbox"
               checked={settings[platform]}
@@ -778,6 +807,7 @@ function PlatformConnectionsCard({
   onDisconnect: (platform: string) => void;
   isDisconnecting: boolean;
 }) {
+  const t = useT();
   const known = ['youtube', 'tiktok', 'instagram'];
   const byName = new Map(platforms.map((p) => [p.platform, p]));
 
@@ -785,7 +815,9 @@ function PlatformConnectionsCard({
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
         <ExternalLink className="w-4 h-4 text-orange" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">Verbindungen</h3>
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          {t('Verbindungen')}
+        </h3>
         {isLoading && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
 
@@ -805,7 +837,7 @@ function PlatformConnectionsCard({
                 <div className="text-xs text-text-secondary truncate">
                   {/* Der Ablauf des Zugangs wird selbst nachgezogen und ist
                       deshalb keine Meldung wert. */}
-                  {connected ? (status?.username ?? 'verbunden') : 'nicht verbunden'}
+                  {connected ? (status?.username ?? t('verbunden')) : t('nicht verbunden')}
                 </div>
               </div>
               {connected ? (
@@ -815,14 +847,14 @@ function PlatformConnectionsCard({
                   onClick={() => onDisconnect(platform)}
                   className="rounded-xl border border-border px-3 py-1.5 text-sm font-semibold text-text-secondary hover:text-white disabled:opacity-40"
                 >
-                  Trennen
+                  {t('Trennen')}
                 </button>
               ) : (
                 <a
                   href={oauthStartUrl(platform, streamer)}
                   className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white"
                 >
-                  Verbinden
+                  {t('Verbinden')}
                 </a>
               )}
             </div>
@@ -848,13 +880,14 @@ function VodArchiveCard({
   error: Error | null;
   onChange: (next: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) => void;
 }) {
+  const t = useT();
   const enabled = settings?.enabled ?? false;
   const privacy = settings?.privacy ?? 'private';
   const options = settings?.privacy_options ?? ['private', 'unlisted', 'public'];
   const labels: Record<VodArchivePrivacy, string> = {
-    private: 'Privat',
-    unlisted: 'Nicht gelistet',
-    public: 'Öffentlich',
+    private: t('Privat'),
+    unlisted: t('Nicht gelistet'),
+    public: t('Öffentlich'),
   };
 
   return (
@@ -862,12 +895,12 @@ function VodArchiveCard({
       <div className="flex items-center gap-2">
         <Archive className="w-4 h-4 text-orange" />
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          VOD-Archiv · {settings?.streamer_login ?? streamer}
+          {t('VOD-Archiv')} · {settings?.streamer_login ?? streamer}
         </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
       <label className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3">
-        <span className="text-sm font-semibold text-white">Automatisch sichern</span>
+        <span className="text-sm font-semibold text-white">{t('Automatisch sichern')}</span>
         <input
           type="checkbox"
           checked={enabled}
@@ -879,11 +912,11 @@ function VodArchiveCard({
 
       <div className="space-y-2">
         <div className="text-xs uppercase tracking-[0.14em] text-text-secondary">
-          Sichtbarkeit auf YouTube
+          {t('Sichtbarkeit auf YouTube')}
           {settings?.privacy_forced && (
             <span className="normal-case tracking-normal text-warning">
               {' '}
-              · YouTube erzwingt privat, bis das Google-Projekt auditiert ist
+              {t('· YouTube erzwingt privat, bis das Google-Projekt auditiert ist')}
             </span>
           )}
         </div>
@@ -911,6 +944,48 @@ function VodArchiveCard({
   );
 }
 
+/**
+ * Sprache der Oberflaeche. Steht bewusst neben den anderen Schaltern in den
+ * Einstellungen und nicht im Kopf: es ist eine Einstellung, die man einmal
+ * setzt. Die Wahl liegt im Browser (localStorage) und gilt fuer alle Routen
+ * dieses Dashboards, ein Datenbankfeld braucht es dafuer nicht.
+ */
+function LanguageCard() {
+  const { language, setLanguage, t } = useLanguage();
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Languages className="w-4 h-4 text-orange" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">{t('Sprache')}</h3>
+      </div>
+      <p className="text-sm text-text-secondary">
+        {t(
+          'Gilt für dieses Dashboard in diesem Browser. Nicht übersetzte Stellen bleiben auf Deutsch.',
+        )}
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {LANGUAGES.map((option: Language) => (
+          <button
+            key={option}
+            type="button"
+            lang={option}
+            aria-pressed={language === option}
+            onClick={() => setLanguage(option)}
+            className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              language === option
+                ? 'border-orange text-white bg-orange/15'
+                : 'border-border text-text-secondary hover:text-white'
+            }`}
+          >
+            {LANGUAGE_LABELS[option]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface ClipCardProps {
   clip: SocialClip;
   editingMode: EditMode | null;
@@ -934,8 +1009,9 @@ function ClipCard({
   onApprovalDecision,
   approvalPending,
 }: ClipCardProps) {
+  const { t, locale } = useLanguage();
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
-  const sourceLabel = clip.source_kind === 'manual_upload' ? 'Upload' : 'Twitch';
+  const sourceLabel = clip.source_kind === 'manual_upload' ? t('Upload') : t('Twitch');
   const enrichmentTopHashtags = clip.enrichment_summary?.top_hashtags ?? [];
   const enrichmentStatus = clip.enrichment_status;
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
@@ -975,14 +1051,14 @@ function ClipCard({
         )}
         <div className="absolute top-2 left-2 flex items-center gap-2">
           <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${TONE_BADGE[status.tone]}`}>
-            {status.label}
+            {t(status.label)}
           </span>
           <span className="text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border bg-bg/70 text-white border-border">
             {sourceLabel}
           </span>
         </div>
         <div className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 text-[10px] font-mono text-white/90 bg-black/55 px-1.5 py-0.5 rounded">
-          <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until)}
+          <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until, t)}
         </div>
       </div>
 
@@ -990,11 +1066,12 @@ function ClipCard({
         <div className="space-y-1">
           <h4 className="font-bold text-white line-clamp-2">{clip.title}</h4>
           <p className="text-xs text-text-secondary">
-            {clip.streamer_login} · {(clip.duration_seconds ?? 0).toFixed(0)}s · {(clip.view_count ?? 0).toLocaleString('de-DE')} Views
+            {clip.streamer_login} · {(clip.duration_seconds ?? 0).toFixed(0)}s ·{' '}
+            {t('{views} Views', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
           </p>
           {clip.layout_override && (
             <p className="text-[11px] text-orange inline-flex items-center gap-1">
-              <Pencil className="w-3 h-3" /> Override aktiv
+              <Pencil className="w-3 h-3" /> {t('Override aktiv')}
             </p>
           )}
         </div>
@@ -1016,12 +1093,12 @@ function ClipCard({
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.14em] font-bold text-orange">
-                Approval
+                {t('Approval')}
               </p>
               <p className="text-xs text-text-secondary">
                 {clip.approval?.state
-                  ? `Status: ${clip.approval.state}`
-                  : 'Wird nach abgeschlossenem Enrichment per DM freigegeben.'}
+                  ? t('Status: {state}', { state: clip.approval.state })
+                  : t('Wird nach abgeschlossenem Enrichment per DM freigegeben.')}
               </p>
             </div>
             {approvalPending && <Loader2 className="w-4 h-4 text-orange animate-spin" />}
@@ -1053,7 +1130,7 @@ function ClipCard({
               disabled={approvalPending}
               className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-success/15 text-success border border-success/30 hover:bg-success/20 disabled:opacity-50"
             >
-              <CheckCircle2 className="w-3.5 h-3.5" /> Posten
+              <CheckCircle2 className="w-3.5 h-3.5" /> {t('Posten')}
             </button>
             <button
               type="button"
@@ -1064,7 +1141,7 @@ function ClipCard({
               disabled={approvalPending}
               className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-warning/15 text-warning border border-warning/30 hover:bg-warning/20 disabled:opacity-50"
             >
-              <Pencil className="w-3.5 h-3.5" /> Bearbeiten
+              <Pencil className="w-3.5 h-3.5" /> {t('Bearbeiten')}
             </button>
             <button
               type="button"
@@ -1072,7 +1149,7 @@ function ClipCard({
               disabled={approvalPending}
               className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-danger/12 text-danger border border-danger/30 hover:bg-danger/20 disabled:opacity-50"
             >
-              <Trash2 className="w-3.5 h-3.5" /> Skip
+              <Trash2 className="w-3.5 h-3.5" /> {t('Skip')}
             </button>
           </div>
         </div>
@@ -1085,7 +1162,7 @@ function ClipCard({
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-white"
             >
-              <ExternalLink className="w-3.5 h-3.5" /> Original
+              <ExternalLink className="w-3.5 h-3.5" /> {t('Original')}
             </a>
           )}
           <button
@@ -1094,7 +1171,7 @@ function ClipCard({
             disabled={clip.status === 'discarded' || !!clip.discarded_at}
             className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold text-danger hover:text-danger px-2 py-1.5 rounded-lg hover:bg-danger/10 transition disabled:opacity-30"
           >
-            <Trash2 className="w-3.5 h-3.5" /> Verwerfen
+            <Trash2 className="w-3.5 h-3.5" /> {t('Verwerfen')}
           </button>
           <button
             type="button"
@@ -1105,7 +1182,7 @@ function ClipCard({
                 : 'bg-teal/10 text-teal border-teal/30 hover:bg-teal/20'
             }`}
           >
-            <Wand2 className="w-3.5 h-3.5" /> Metadaten
+            <Wand2 className="w-3.5 h-3.5" /> {t('Metadaten')}
             {enrichmentStatus && enrichmentStatus !== 'done' && (
               <span className="text-[9px] uppercase tracking-[0.14em] opacity-80">
                 · {enrichmentStatus}
@@ -1121,7 +1198,7 @@ function ClipCard({
                 : 'bg-orange/15 text-orange border-orange/30 hover:bg-orange/25'
             }`}
           >
-            <Pencil className="w-3.5 h-3.5" /> Layout
+            <Pencil className="w-3.5 h-3.5" /> {t('Layout')}
           </button>
         </div>
       </div>
@@ -1130,8 +1207,8 @@ function ClipCard({
         <div className="border-t border-border p-4 bg-bg/30">
           <LayoutEditor
             initialLayout={clip.effective_layout}
-            saveLabel="Override speichern"
-            resetLabel="Schließen"
+            saveLabel={t('Override speichern')}
+            resetLabel={t('Schließen')}
             onSave={(layout) => {
               onSaveOverride(layout);
               onCloseEditor();
@@ -1143,14 +1220,14 @@ function ClipCard({
               <button
                 type="button"
                 onClick={() => {
-                  if (window.confirm('Override entfernen und Streamer-Default verwenden?')) {
+                  if (window.confirm(t('Override entfernen und Streamer-Default verwenden?'))) {
                     onResetOverride();
                     onCloseEditor();
                   }
                 }}
                 className="text-xs text-text-secondary hover:text-white"
               >
-                Override entfernen → Streamer-Default
+                {t('Override entfernen → Streamer-Default')}
               </button>
             </div>
           )}
