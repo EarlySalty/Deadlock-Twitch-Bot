@@ -50,7 +50,9 @@ im Deadlock-Docs-Korpus.
   sondern eine Akte mit Modus 0600. Die DM traegt weder Zitat noch Hash.
 - Das Rohtranskript bleibt nur mit `STREAM_AUDIT_KEEP_TRANSCRIPT=1` liegen.
   Aufnahmen mit Fund bleiben liegen, saubere Bloecke werden geloescht. Sie
-  liegen unter `STREAM_AUDIT_OUTPUT_DIR/aufnahmen`, nicht in `/tmp`.
+  liegen unter `STREAM_AUDIT_OUTPUT_DIR/aufnahmen`, nicht in `/tmp`. Die
+  aufbewahrte `.ts`-Datei ist die vollstaendige HLS-Spur mit **Bild und Ton** -
+  geprueft wird nur der Ton, aufbewahrt wird beides.
 - Dateien mit Modus `0600`, Verzeichnisse ueber `UMask=0077`.
 - Voice-to-Text und Modell koennen irren. Jede Fundstelle ist ein Verdacht und
   muss von Hand geprueft werden.

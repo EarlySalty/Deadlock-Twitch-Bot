@@ -42,6 +42,9 @@ ExecStart=%h/repos/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
 
 Restart=on-failure
 RestartSec=30
+# Eine laufende Transkription raeumt ihre WAV-Datei erst weg, wenn die Anfrage
+# zurueckkommt. Der Dienst braucht dafuer nach SIGTERM etwas Zeit.
+TimeoutStopSec=90
 
 [Install]
 WantedBy=default.target
