@@ -30,7 +30,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 
-use crate::minimax_chat::EngagementMinimaxClient;
+use crate::llm_chat::EngagementLlmClient;
 
 /// Default-Owner: der Chat-Account, dessen Reaktionen gelernt werden.
 const DEFAULT_OWNER_LOGIN: &str = "earlysalty";
@@ -882,7 +882,7 @@ impl ReactionLearning {
     ///
     /// Das Profil beantwortet die Frage, die einzelne Stil-Zeilen nicht
     /// beantworten können: nicht WIE geschrieben wird, sondern WORAUF hin.
-    pub async fn distill_profile(&self, minimax: &EngagementMinimaxClient) -> Option<String> {
+    pub async fn distill_profile(&self, minimax: &EngagementLlmClient) -> Option<String> {
         let samples = self.recent_samples(DISTILL_SAMPLE_LIMIT, true).await;
         if samples.len() < MIN_SAMPLES_FOR_PROFILE {
             tracing::debug!(
@@ -897,7 +897,7 @@ impl ReactionLearning {
             .raw_completion(PROFILE_SYS, &profile_user_prompt(&rendered), 2000, 0.4)
             .await
             .ok()?;
-        let profile = crate::minimax_chat::strip_think(&raw).trim().to_string();
+        let profile = crate::llm_chat::strip_think(&raw).trim().to_string();
         if profile.is_empty() || profile.chars().count() > MAX_PROFILE_CHARS {
             tracing::warn!(
                 len = profile.chars().count(),

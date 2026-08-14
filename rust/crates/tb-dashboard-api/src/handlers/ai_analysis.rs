@@ -27,7 +27,7 @@ use tb_analytics::ai_analysis::{
 };
 use tb_analytics::ai_history::save_analysis;
 use tb_engagement::claude_chat::ClaudeClient;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 const MAX_USER_CONTEXT_CHARS: usize = 2000;
 
@@ -155,7 +155,7 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             "ai-analysis",
         ))
     } else {
-        let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         let raw = client
             .raw_completion("", prompt, 60000, 0.5)
             .await

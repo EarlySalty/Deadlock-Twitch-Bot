@@ -18,12 +18,12 @@
 //! 999/111). Ohne `TB_TEST_DATABASE_URL`: Skip.
 
 use sqlx::postgres::PgPoolOptions;
-use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn client_for(server: &MockServer) -> EngagementMinimaxClient {
-    EngagementMinimaxClient::new(
+fn client_for(server: &MockServer) -> EngagementLlmClient {
+    EngagementLlmClient::new(
         Some("test-key".to_string()),
         Some(server.uri()),
         Some("MiniMax-M3".to_string()),

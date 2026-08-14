@@ -19,8 +19,8 @@ use crate::gate;
 use crate::global_sentiment::{self, GlobalSentiment};
 use crate::lurker_signal::{lurker_hint_to_prompt_fragment, LurkerSignal};
 use crate::match_context::MatchContext;
-use crate::minimax_chat::{
-    build_baseline_system_prompt, sanitize_test_mode_text, ChatMessage, EngagementMinimaxClient,
+use crate::llm_chat::{
+    build_baseline_system_prompt, sanitize_test_mode_text, ChatMessage, EngagementLlmClient,
     GenerateError,
 };
 use crate::persona::Persona;
@@ -112,7 +112,7 @@ pub struct EngagementPipeline {
     pool: PgPool,
     conversation: ConversationBuffer,
     rhythm: RhythmGuard,
-    minimax: EngagementMinimaxClient,
+    minimax: EngagementLlmClient,
     wiki: DeadlockWiki,
     stats: DeadlockStats,
     patches: DeadlockPatches,
@@ -133,7 +133,7 @@ impl EngagementPipeline {
     /// injiziert (Tests/Defaults); die DB-Provider entstehen aus dem Pool.
     pub fn new(
         pool: PgPool,
-        minimax: EngagementMinimaxClient,
+        minimax: EngagementLlmClient,
         wiki: DeadlockWiki,
         stats: DeadlockStats,
         patches: DeadlockPatches,
@@ -160,7 +160,7 @@ impl EngagementPipeline {
     }
 
     /// Wie [`Self::new`], aber mit den produktiven HTTP-Endpunkten.
-    pub fn with_defaults(pool: PgPool, minimax: EngagementMinimaxClient) -> Self {
+    pub fn with_defaults(pool: PgPool, minimax: EngagementLlmClient) -> Self {
         Self::new(
             pool,
             minimax,
@@ -685,7 +685,7 @@ mod tests {
 
     /// Pipeline mit bogus-HTTP-Providern (fail fast → leere Fragmente).
     fn pipeline_with(pool: PgPool, minimax_uri: &str) -> EngagementPipeline {
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(minimax_uri.to_string()),
             Some("MiniMax-M3".to_string()),
@@ -818,7 +818,7 @@ mod tests {
     async fn spoke_voller_pfad() {
         // Ledger auf Temp umbiegen, damit der MiniMax-Call den echten Usage-Ledger
         // nicht anfasst (greift nur, wenn dieser DB-Test überhaupt läuft).
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_spoke").await else {
             return;
         };
@@ -863,7 +863,7 @@ mod tests {
     /// user-Turn), damit der Live-Kontext nicht verfälscht wird.
     #[tokio::test]
     async fn shadow_erzeugt_aber_sendet_nicht() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_shadow").await else {
             return;
         };
@@ -913,7 +913,7 @@ mod tests {
     /// vom Twitch-Sendepfad getrennt: `response_text` ist immer leer.
     #[tokio::test]
     async fn testmodus_fremdkanal_erzeugt_aber_sendet_nicht() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_test").await else {
             return;
         };
@@ -982,7 +982,7 @@ mod tests {
 
     #[tokio::test]
     async fn testmodus_speichert_verworfenen_text_mit_grund() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_test_rejected").await else {
             return;
         };

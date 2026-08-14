@@ -406,7 +406,7 @@ mod tests {
     fn feste_beispiele_erfuellen_den_sanitizer_vertrag() {
         for example in GOLD_EXAMPLES.iter().chain(SEED_EXAMPLES) {
             assert_eq!(
-                crate::minimax_chat::sanitize_chat_text(example, 120).as_deref(),
+                crate::llm_chat::sanitize_chat_text(example, 120).as_deref(),
                 Some(*example),
                 "ungueltiges Beispiel: {example}"
             );

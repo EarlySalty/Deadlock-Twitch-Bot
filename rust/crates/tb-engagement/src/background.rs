@@ -19,7 +19,7 @@ use crate::audio_capture::AudioCapturer;
 use crate::channel_background::ChannelBackground;
 use crate::global_sentiment::GlobalSentiment;
 use crate::match_context::MatchContext;
-use crate::minimax_chat::EngagementMinimaxClient;
+use crate::llm_chat::EngagementLlmClient;
 use crate::reaction_learning::{
     capture_seconds as learn_capture_seconds, learn_enabled, LearnTranscriptSegment,
     ReactionLearning,
@@ -108,7 +108,7 @@ async fn jittered_sleep(base_sec: f64) {
 
 // ---- run-once-Funktionen (eine Loop-Iteration, testbar) ---------------------
 
-async fn run_thread_extractor_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
+async fn run_thread_extractor_once(pool: &PgPool, minimax: &EngagementLlmClient) {
     let threads = Threads::new(pool.clone());
     for (channel, _steam) in load_enabled_channels(pool).await {
         threads.extract_threads(&channel, minimax, 6, 80).await;
@@ -128,19 +128,19 @@ async fn run_auto_closer_once(pool: &PgPool) {
     Threads::new(pool.clone()).auto_close_stale().await;
 }
 
-async fn run_global_sentiment_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
+async fn run_global_sentiment_once(pool: &PgPool, minimax: &EngagementLlmClient) {
     GlobalSentiment::new(pool.clone())
         .rebuild_global_sentiment(minimax)
         .await;
 }
 
-async fn run_soul_anchor_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
+async fn run_soul_anchor_once(pool: &PgPool, minimax: &EngagementLlmClient) {
     SoulStore::new(pool.clone())
         .reflect_and_store_anchor(minimax)
         .await;
 }
 
-async fn run_channel_profile_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
+async fn run_channel_profile_once(pool: &PgPool, minimax: &EngagementLlmClient) {
     ChannelBackground::new(pool.clone())
         .rebuild_all_channel_profiles(minimax)
         .await;
@@ -231,15 +231,15 @@ pub async fn capture_transcript_segment(
     })
 }
 
-fn ai_client() -> EngagementMinimaxClient {
-    EngagementMinimaxClient::new(None, None, None, Some(AI_TIMEOUT))
+fn ai_client() -> EngagementLlmClient {
+    EngagementLlmClient::new(None, None, None, Some(AI_TIMEOUT))
 }
 
 // ---- Endlos-Loops -----------------------------------------------------------
 
 /// Thread-Extractor (alle 15min, pro enabled Channel).
 pub async fn schedule_thread_extractor(pool: PgPool) {
-    let minimax = EngagementMinimaxClient::new(None, None, None, None);
+    let minimax = EngagementLlmClient::new(None, None, None, None);
     loop {
         run_thread_extractor_once(&pool, &minimax).await;
         jittered_sleep(THREAD_EXTRACTOR_INTERVAL).await;

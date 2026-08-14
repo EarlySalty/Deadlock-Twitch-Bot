@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
@@ -123,11 +123,11 @@ pub trait LfgJudge: Send + Sync {
 }
 
 pub struct MiniMaxLfgJudge {
-    client: EngagementMinimaxClient,
+    client: EngagementLlmClient,
 }
 
 impl MiniMaxLfgJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
@@ -743,7 +743,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
 
     #[test]
     fn parse_lfg_verdict_liefert_yes_mit_confidence() {
@@ -764,7 +764,7 @@ mod tests {
 
     #[tokio::test]
     async fn minimax_lfg_judge_ohne_provider_liefert_provider_error() {
-        let judge = MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+        let judge = MiniMaxLfgJudge::new(EngagementLlmClient::new(
             None,
             Some("http://127.0.0.1:1".to_string()),
             None,

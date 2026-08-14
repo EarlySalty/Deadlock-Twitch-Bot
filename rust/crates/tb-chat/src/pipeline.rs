@@ -1774,7 +1774,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2180,7 +2180,7 @@ mod tests {
                 pool.clone(),
                 "bot-id".to_string(),
                 Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
@@ -2198,7 +2198,7 @@ mod tests {
                     pool.clone(),
                 )),
                 Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 None,
                 None,
@@ -2370,7 +2370,7 @@ mod tests {
                 pool.clone(),
                 "bot-id".to_string(),
                 Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),

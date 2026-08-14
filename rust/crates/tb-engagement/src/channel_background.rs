@@ -9,7 +9,7 @@
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient};
+use crate::llm_chat::{strip_think, EngagementLlmClient};
 
 const POOL_LIMIT: i64 = 200;
 const MIN_MSGS: usize = 15;
@@ -136,7 +136,7 @@ impl ChannelBackground {
     pub async fn rebuild_channel_profile(
         &self,
         channel_login: &str,
-        minimax: &EngagementMinimaxClient,
+        minimax: &EngagementLlmClient,
     ) -> Option<String> {
         let lines = self.channel_msgs(channel_login, POOL_LIMIT).await;
         if lines.len() < MIN_MSGS {
@@ -169,7 +169,7 @@ impl ChannelBackground {
     }
 
     /// Baut die Profile aller Channels mit genug Daten neu; liefert die Anzahl.
-    pub async fn rebuild_all_channel_profiles(&self, minimax: &EngagementMinimaxClient) -> i64 {
+    pub async fn rebuild_all_channel_profiles(&self, minimax: &EngagementLlmClient) -> i64 {
         let channels = self.channels_with_data(MIN_MSGS as i64).await;
         let mut n = 0;
         for ch in channels {
@@ -270,7 +270,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),
@@ -294,7 +294,7 @@ mod tests {
         };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('nani','user','nur eine lange nachricht')")
             .execute(&pool).await.unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),

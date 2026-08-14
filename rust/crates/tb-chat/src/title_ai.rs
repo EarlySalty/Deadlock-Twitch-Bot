@@ -537,7 +537,7 @@ fn pentest_disable_rate_limits() -> bool {
         .unwrap_or(false)
 }
 
-async fn minimax_chat_completion(
+async fn llm_chat_completion(
     base_url: &str,
     api_key: &str,
     model: &str,
@@ -620,7 +620,7 @@ pub async fn generate_title_with(
         ratio,
         live_state,
     );
-    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.35, 2000)
+    let completion = llm_chat_completion(base_url, api_key, model, &prompt, 0.35, 2000)
         .await
         .map_err(GenerateTitleError::Http)?;
     tb_llm::ledger::record(
@@ -794,7 +794,7 @@ pub async fn generate_insight_with(
         return None;
     }
     let prompt = build_insight_prompt(history, period_label);
-    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.5, 1500)
+    let completion = llm_chat_completion(base_url, api_key, model, &prompt, 0.5, 1500)
         .await
         .ok()?;
     tb_llm::ledger::record(

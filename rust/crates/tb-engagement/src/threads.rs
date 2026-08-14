@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use crate::llm_chat::{ChatMessage, EngagementLlmClient};
 
 const EXTRACTOR_SYSTEM_PROMPT: &str =
     "Du bist ein Konversations-Analyst für einen Twitch-Chat. Lies die folgenden \
@@ -262,7 +262,7 @@ impl Threads {
     pub async fn extract_threads(
         &self,
         channel_login: &str,
-        minimax: &EngagementMinimaxClient,
+        minimax: &EngagementLlmClient,
         hours: i32,
         limit: i64,
     ) -> i64 {
@@ -567,7 +567,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),

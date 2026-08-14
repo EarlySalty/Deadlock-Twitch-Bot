@@ -1,7 +1,7 @@
 //! Geschichtete Soul: dynamische Erweiterungen unter dem statischen Kern-Soul
 //! (Port von `bot/engagement/soul_store.py`).
 //!
-//! Der Kern-Soul ist eine Konstante in [`crate::minimax_chat::SOUL`]. Hier kommen
+//! Der Kern-Soul ist eine Konstante in [`crate::llm_chat::SOUL`]. Hier kommen
 //! die wachsenden Teile dazu, persistiert in `twitch_engagement_soul`:
 //! `hero_takes` (kuratierte Hero-Vorlieben = Meinung, nicht Ton) und `anchor`
 //! (selbst-gemerkte Notizen). [`SoulStore::get_soul_extension_fragment`] baut
@@ -12,7 +12,7 @@
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient, PersonaMode};
+use crate::llm_chat::{strip_think, EngagementLlmClient, PersonaMode};
 
 /// So viele jüngste Anker in den Prompt.
 const MAX_ANCHORS: i64 = 5;
@@ -253,7 +253,7 @@ impl SoulStore {
     /// per-Message. Liefert den neuen Anker oder None.
     pub async fn reflect_and_store_anchor(
         &self,
-        minimax: &EngagementMinimaxClient,
+        minimax: &EngagementLlmClient,
     ) -> Option<String> {
         let rows = self.recent_convo(REFLECT_TURNS).await;
         if rows.len() < REFLECT_MIN_TURNS {
@@ -428,7 +428,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),
@@ -457,7 +457,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),

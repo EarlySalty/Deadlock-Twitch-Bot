@@ -27,7 +27,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use tb_knowledge::{assemble_grounding, KnowledgeBase, Namespace};
 
 // ── Konstanten (1:1 self_explainer.py / routes_self_explainer.py) ──────────────
@@ -285,7 +285,7 @@ fn knowledge_base() -> &'static KnowledgeBase {
 }
 
 async fn minimax_generate(facts: &str, question_clean: &str) -> Option<String> {
-    let client = EngagementMinimaxClient::new(None, None, None, None);
+    let client = EngagementLlmClient::new(None, None, None, None);
     let history = [ChatMessage {
         role: "user".to_string(),
         content: question_clean.to_string(),

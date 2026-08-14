@@ -15,7 +15,7 @@ use tb_chat::conversation_scam::{
 };
 use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
@@ -819,7 +819,7 @@ async fn chat_unban_overturn_entfernt_ai_globalban_aber_keinen_manuellen() {
     let pool = pool_or_skip!("tb_conversation_scam_chat_unban_globalban");
     let commands = ScamGuardCommands::new(
         pool.clone(),
-        EngagementMinimaxClient::new(None, None, None, None),
+        EngagementLlmClient::new(None, None, None, None),
     );
 
     let ai_id: i64 = sqlx::query_scalar(

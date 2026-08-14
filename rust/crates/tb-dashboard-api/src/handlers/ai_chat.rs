@@ -21,7 +21,7 @@ use crate::ai_state::{chat_session_key, ChatSession, AI_MODEL_MINIMAX, AI_MODEL_
 use crate::auth::level::DashboardAuthLevel;
 use tb_analytics::ai_analysis::{extract_text_response, plan_ai_model};
 use tb_engagement::claude_chat::ClaudeClient;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 fn json_err(status: StatusCode, body: Value) -> Response {
     (status, Json(body)).into_response()
@@ -95,7 +95,7 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, St
         let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
         messages.extend(history);
         messages.push(json!({ "role": "user", "content": message }));
-        let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         // raw_text bereits getrimmt (= extract_text_response auf String).
         client
             .messages_completion(Value::Array(messages), 4000, 0.5)

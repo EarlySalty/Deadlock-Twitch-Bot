@@ -1,5 +1,5 @@
 //! Engagement-spezifischer MiniMax-M3-Client (Port von
-//! `bot/engagement/minimax_chat.py`).
+//! `bot/engagement/llm_chat.py`).
 //!
 //! Slice 3a (hier): die I/O-freien Teile — Nachrichten-/Antwort-Typen,
 //! Text-Sanitizing, die Antwort-Nachbearbeitung ([`process_response_text`]:
@@ -659,15 +659,15 @@ impl std::fmt::Display for GenerateError {
 impl std::error::Error for GenerateError {}
 
 /// Async-Client für MiniMax M3 über den OpenAI-kompatiblen `/chat/completions`-
-/// Endpunkt (Port von `EngagementMinimaxClient`).
-pub struct EngagementMinimaxClient {
+/// Endpunkt (Port von `EngagementLlmClient`).
+pub struct EngagementLlmClient {
     api_key: Option<String>,
     base_url: String,
     model: String,
     timeout: Duration,
 }
 
-impl EngagementMinimaxClient {
+impl EngagementLlmClient {
     /// Baut den Client. Explizite Parameter gewinnen immer; sonst entscheidet
     /// die gemeinsame Provider-Auswahl ([`tb_llm::endpoint_for`]) über Anbieter,
     /// Adresse, Modell und Key — heute Fireworks/DeepSeek, solange ein
@@ -1006,8 +1006,8 @@ mod tests {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn client_for(server: &MockServer) -> EngagementMinimaxClient {
-        EngagementMinimaxClient::new(
+    fn client_for(server: &MockServer) -> EngagementLlmClient {
+        EngagementLlmClient::new(
             Some("test-key".to_string()),
             Some(server.uri()),
             Some("MiniMax-M3".to_string()),
@@ -1044,7 +1044,7 @@ mod tests {
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
 
-        let client = EngagementMinimaxClient::new(None, None, None, None);
+        let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.api_key.as_deref(), Some("fireworks-key"));
         assert!(
             client.base_url.contains("fireworks.ai"),
@@ -1069,7 +1069,7 @@ mod tests {
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
         std::env::set_var("ENGAGEMENT_MINIMAX_MODEL", "MiniMax-M3");
 
-        let client = EngagementMinimaxClient::new(None, None, None, None);
+        let client = EngagementLlmClient::new(None, None, None, None);
         assert!(
             client.model.contains("deepseek"),
             "MiniMax-Modell an der Fireworks-Adresse: {}",
@@ -1079,7 +1079,7 @@ mod tests {
         // Auf MiniMax zurueckgeschaltet gilt die Variable weiterhin.
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
-        let client = EngagementMinimaxClient::new(None, None, None, None);
+        let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.model, "MiniMax-M3");
         clear_provider_env();
     }
@@ -1090,7 +1090,7 @@ mod tests {
         clear_provider_env();
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
-        let client = EngagementMinimaxClient::new(None, None, None, None);
+        let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
         assert_eq!(client.base_url, DEFAULT_BASE_URL);
         assert_eq!(client.model, DEFAULT_MODEL);
@@ -1105,7 +1105,7 @@ mod tests {
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
 
-        let client = EngagementMinimaxClient::new(None, None, None, None);
+        let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
         assert_eq!(client.base_url, DEFAULT_BASE_URL);
         clear_provider_env();
@@ -1435,7 +1435,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_ohne_key_unavailable() {
-        let client = EngagementMinimaxClient::new(
+        let client = EngagementLlmClient::new(
             Some(String::new()), // leer → kein Key (Env hier ignoriert)
             Some("http://127.0.0.1:1".to_string()),
             Some("MiniMax-M3".to_string()),

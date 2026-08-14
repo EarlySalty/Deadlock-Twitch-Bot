@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::minimax_chat::TestModeRejectReason;
+use crate::llm_chat::TestModeRejectReason;
 use crate::stream_transcripts::StreamTranscriptSegment;
 
 pub const SESSION_DURATION: Duration = Duration::minutes(60);

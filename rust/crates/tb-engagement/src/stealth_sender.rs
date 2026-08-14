@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use crate::minimax_chat::sanitize_chat_text;
+use crate::llm_chat::sanitize_chat_text;
 use crate::sender_auth::SenderAuthStore;
 
 const DEFAULT_HELIX_URL: &str = "https://api.twitch.tv/helix/chat/messages";

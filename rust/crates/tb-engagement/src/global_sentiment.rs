@@ -9,7 +9,7 @@
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient};
+use crate::llm_chat::{strip_think, EngagementLlmClient};
 
 const POOL_LIMIT: i64 = 250;
 const POOL_MAX_AGE_HOURS: i32 = 336; // 14 Tage Backstop
@@ -128,7 +128,7 @@ impl GlobalSentiment {
     /// (Hintergrund-Job). Liefert den Text oder None.
     pub async fn rebuild_global_sentiment(
         &self,
-        minimax: &EngagementMinimaxClient,
+        minimax: &EngagementLlmClient,
     ) -> Option<String> {
         let lines = self.load_pooled().await;
         if lines.len() < MIN_MSGS_TO_BUILD {
@@ -243,7 +243,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("MiniMax-M3".to_string()),
@@ -268,7 +268,7 @@ mod tests {
         };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('a','user','eine lange nachricht')")
             .execute(&pool).await.unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let minimax = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),

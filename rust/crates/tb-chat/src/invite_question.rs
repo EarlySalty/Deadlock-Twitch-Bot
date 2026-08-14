@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
@@ -377,11 +377,11 @@ pub trait InviteQuestionInviteUrlPort: Send + Sync {
 }
 
 pub struct MiniMaxInviteQuestionJudge {
-    client: EngagementMinimaxClient,
+    client: EngagementLlmClient,
 }
 
 impl MiniMaxInviteQuestionJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
@@ -1230,7 +1230,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2397,7 +2397,7 @@ mod tests {
             .await;
 
         let judge = Arc::new(MiniMaxInviteQuestionJudge::new(
-            EngagementMinimaxClient::new(
+            EngagementLlmClient::new(
                 Some("test-key".to_string()),
                 Some(server.uri()),
                 Some("MiniMax-M3".to_string()),

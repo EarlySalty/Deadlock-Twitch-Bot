@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use unicode_normalization::UnicodeNormalization;
@@ -453,11 +453,11 @@ pub trait ScamJudge: Send + Sync {
 }
 
 pub struct MiniMaxScamJudge {
-    client: EngagementMinimaxClient,
+    client: EngagementLlmClient,
 }
 
 impl MiniMaxScamJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
@@ -1264,11 +1264,11 @@ pub struct StoredVerdict {
 /// `!unban`. Hält eigene DB-/MiniMax-Zugriffe, unabhängig vom Live-Detektor.
 pub struct ScamGuardCommands {
     pool: PgPool,
-    client: EngagementMinimaxClient,
+    client: EngagementLlmClient,
 }
 
 impl ScamGuardCommands {
-    pub fn new(pool: PgPool, client: EngagementMinimaxClient) -> Self {
+    pub fn new(pool: PgPool, client: EngagementLlmClient) -> Self {
         Self { pool, client }
     }
 
@@ -1529,7 +1529,7 @@ pub async fn load_learnings(pool: &PgPool) -> Result<Option<String>, String> {
 /// Ein Durchlauf des Self-Learning-Jobs: Korpus laden, von MiniMax destillieren
 /// lassen, Ergebnis ablegen. Best-effort — Fehler werden geloggt, nicht
 /// propagiert; zu dünne Datenlage wird übersprungen (keine Überschreibung).
-pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxClient) {
+pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementLlmClient) {
     let corpus = fetch_learning_corpus(pool, LEARNINGS_SAMPLE_LIMIT).await;
     if corpus.total() < LEARNINGS_MIN_SAMPLES {
         debug!(
@@ -1558,7 +1558,7 @@ pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxCl
 /// Endlos-Loop: einmal nach `initial_delay_secs`, danach alle 6 Stunden.
 pub async fn schedule_scam_learnings(pool: PgPool, initial_delay_secs: u64) {
     tokio::time::sleep(Duration::from_secs(initial_delay_secs)).await;
-    let client = EngagementMinimaxClient::new(None, None, None, None);
+    let client = EngagementLlmClient::new(None, None, None, None);
     loop {
         run_scam_learnings_once(&pool, &client).await;
         tokio::time::sleep(SCAM_LEARNINGS_INTERVAL).await;
@@ -1933,7 +1933,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2197,7 +2197,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = EngagementMinimaxClient::new(
+        let client = EngagementLlmClient::new(
             Some("test-key".to_string()),
             Some(server.uri()),
             Some("MiniMax-M3".to_string()),
@@ -2242,7 +2242,7 @@ mod tests {
     async fn live_minimax_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         let judge: Arc<dyn ScamJudge> = Arc::new(MiniMaxScamJudge::new(
-            EngagementMinimaxClient::new(None, None, None, None),
+            EngagementLlmClient::new(None, None, None, None),
         ));
         let settings = GuardSettings::default();
         let enforcement_threshold = effective_scam_enforcement_threshold(&settings, Some(0));
@@ -2693,7 +2693,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
     async fn live_judge_baseline_gemeldeter_recon_smalltalk() {
-        let judge = MiniMaxScamJudge::new(EngagementMinimaxClient::new(None, None, None, None));
+        let judge = MiniMaxScamJudge::new(EngagementLlmClient::new(None, None, None, None));
         let enforcement_threshold =
             effective_scam_enforcement_threshold(&GuardSettings::default(), Some(0));
         let mut would_ban = 0usize;

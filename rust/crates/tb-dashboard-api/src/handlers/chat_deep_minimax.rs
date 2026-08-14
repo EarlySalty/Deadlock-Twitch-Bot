@@ -21,7 +21,7 @@ use crate::auth::level::DashboardAuthLevel;
 use tb_analytics::chat_deep_minimax::{
     build_deep_prompt, extract_json_object, fetch_session_messages,
 };
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 /// Python setzt kein `max_tokens` (MiniMax-Server-Default). Der Engagement-
 /// Client verlangt einen Wert → großzügig, damit das kleine Antwort-JSON
@@ -108,7 +108,7 @@ pub async fn chat_deep_minimax_handler(
 
     let prompt = build_deep_prompt(&messages);
     // Wie Python: einzelne User-Message, temperature 0.1, 240s-Timeout.
-    let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+    let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
     match client
         .raw_completion("", &prompt, MAX_DEEP_TOKENS, 0.1)
         .await
