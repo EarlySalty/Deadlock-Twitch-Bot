@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Pencil,
   Wand2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
@@ -91,7 +92,7 @@ function formatRetention(retentionUntil: string | null): string {
 }
 
 type EditMode = 'layout' | 'enrichment';
-type SocialMediaView = 'pipeline' | 'analytics';
+type SocialMediaView = 'pipeline' | 'analytics' | 'settings';
 
 export function SocialMedia({ streamer }: SocialMediaProps) {
   const queryClient = useQueryClient();
@@ -136,8 +137,8 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
   });
 
   const vodArchiveQuery = useQuery<VodArchiveSettings, Error>({
-    queryKey: ['social-media', 'vod-archive-settings'],
-    queryFn: () => fetchVodArchiveSettings(),
+    queryKey: ['social-media', 'vod-archive-settings', streamer],
+    queryFn: () => fetchVodArchiveSettings(streamer),
     enabled: !!streamer,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -203,9 +204,11 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
 
   const vodArchiveMutation = useMutation({
     mutationFn: (payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) =>
-      saveVodArchiveSettings(payload),
+      saveVodArchiveSettings(streamer, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'vod-archive-settings'] });
+      queryClient.invalidateQueries({
+        queryKey: ['social-media', 'vod-archive-settings', streamer],
+      });
     },
   });
 
@@ -286,6 +289,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
         {[
           { id: 'pipeline' as const, label: 'Pipeline', Icon: Layers3 },
           { id: 'analytics' as const, label: 'Analytics', Icon: BarChart3 },
+          { id: 'settings' as const, label: 'Einstellungen', Icon: SlidersHorizontal },
         ].map(({ id, label, Icon }) => {
           const active = activeView === id;
           return (
@@ -308,6 +312,24 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
 
       {activeView === 'analytics' ? (
         <AnalyticsTab streamer={streamer} clips={clipsQuery.data?.items ?? []} />
+      ) : activeView === 'settings' ? (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <AutoApproveCard
+            settings={autoApproveQuery.data ?? { youtube: false, tiktok: false, instagram: false }}
+            isLoading={autoApproveQuery.isLoading}
+            isSaving={autoApproveMutation.isPending}
+            error={autoApproveMutation.error as Error | null}
+            onChange={(nextSettings) => autoApproveMutation.mutate(nextSettings)}
+          />
+          <VodArchiveCard
+            streamer={streamer}
+            settings={vodArchiveQuery.data ?? null}
+            isLoading={vodArchiveQuery.isLoading}
+            isSaving={vodArchiveMutation.isPending}
+            error={vodArchiveMutation.error as Error | null}
+            onChange={(next) => vodArchiveMutation.mutate(next)}
+          />
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -340,22 +362,6 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
               subValue="14-Tage-Lifecycle"
             />
           </div>
-
-          <AutoApproveCard
-            settings={autoApproveQuery.data ?? { youtube: false, tiktok: false, instagram: false }}
-            isLoading={autoApproveQuery.isLoading}
-            isSaving={autoApproveMutation.isPending}
-            error={autoApproveMutation.error as Error | null}
-            onChange={(nextSettings) => autoApproveMutation.mutate(nextSettings)}
-          />
-
-          <VodArchiveCard
-            settings={vodArchiveQuery.data ?? null}
-            isLoading={vodArchiveQuery.isLoading}
-            isSaving={vodArchiveMutation.isPending}
-            error={vodArchiveMutation.error as Error | null}
-            onChange={(next) => vodArchiveMutation.mutate(next)}
-          />
 
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
             <div className="space-y-4">
@@ -719,14 +725,19 @@ function AutoApproveCard({
  * VOD-Archiv: Twitch-Aufzeichnungen automatisch sichern und auf YouTube
  * spiegeln. Der Download laeuft auch ohne YouTube-Verbindung, deshalb steht
  * hier nur ein Schalter und die Sichtbarkeit der Uploads.
+ *
+ * Gilt immer fuer den gerade gewaehlten Kanal, deshalb steht er in der
+ * Ueberschrift: die Seite zeigt je nach Auswahl unterschiedliche Schalter.
  */
 function VodArchiveCard({
+  streamer,
   settings,
   isLoading,
   isSaving,
   error,
   onChange,
 }: {
+  streamer: string;
   settings: VodArchiveSettings | null;
   isLoading: boolean;
   isSaving: boolean;
@@ -746,14 +757,11 @@ function VodArchiveCard({
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
         <Archive className="w-4 h-4 text-orange" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">VOD-Archiv</h3>
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          VOD-Archiv · {settings?.streamer_login ?? streamer}
+        </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
-      <p className="text-sm text-text-secondary">
-        Twitch-VODs werden zweimal täglich geladen und auf YouTube hochgeladen. Über 11,5 Stunden
-        wird verlustfrei geschnitten, weil YouTube bei 12 Stunden dichtmacht.
-      </p>
-
       <label className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3">
         <span className="text-sm font-semibold text-white">Automatisch sichern</span>
         <input
@@ -768,19 +776,25 @@ function VodArchiveCard({
       <div className="space-y-2">
         <div className="text-xs uppercase tracking-[0.14em] text-text-secondary">
           Sichtbarkeit auf YouTube
+          {settings?.privacy_forced && (
+            <span className="normal-case tracking-normal text-warning">
+              {' '}
+              · YouTube erzwingt privat, bis das Google-Projekt auditiert ist
+            </span>
+          )}
         </div>
         <div className="grid grid-cols-3 gap-2">
           {options.map((option) => (
             <button
               key={option}
               type="button"
-              disabled={isLoading || isSaving}
+              disabled={isLoading || isSaving || settings?.privacy_forced}
               onClick={() => onChange({ enabled, privacy: option })}
               className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
                 privacy === option
                   ? 'border-orange text-white bg-orange/15'
                   : 'border-border text-text-secondary hover:text-white'
-              }`}
+              } disabled:opacity-40 disabled:hover:text-text-secondary`}
             >
               {labels[option]}
             </button>
@@ -788,12 +802,6 @@ function VodArchiveCard({
         </div>
       </div>
 
-      {settings?.privacy_forced && (
-        <div className="text-xs text-warning">
-          Solange das Google-API-Projekt nicht auditiert ist, stellt YouTube jeden Upload auf
-          privat, unabhängig von dieser Wahl.
-        </div>
-      )}
       {error && <div className="text-xs text-danger">{error.message}</div>}
     </div>
   );

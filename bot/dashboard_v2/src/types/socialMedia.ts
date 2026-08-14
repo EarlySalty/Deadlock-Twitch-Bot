@@ -111,6 +111,8 @@ export interface AutoApproveSettings {
 export type VodArchivePrivacy = 'private' | 'unlisted' | 'public';
 
 export interface VodArchiveSettings {
+  /** Kanal, zu dem die Einstellung gehoert. Das Archiv laeuft je Streamer. */
+  streamer_login: string;
   enabled: boolean;
   privacy: VodArchivePrivacy;
   privacy_options: VodArchivePrivacy[];

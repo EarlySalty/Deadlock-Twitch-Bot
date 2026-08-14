@@ -64,12 +64,15 @@ use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::scheduler::next_free_slot;
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::settings::{
-    coerce_bool, get_auto_approve_settings, get_posting_schedule, get_vod_archive_settings,
-    set_auto_approve_settings, set_vod_archive_settings, AutoApprove, PostingSchedule,
-    VodArchiveSettings, VOD_ARCHIVE_PRIVACY_VALUES,
+    coerce_bool, get_auto_approve_settings, get_posting_schedule, set_auto_approve_settings,
+    AutoApprove, PostingSchedule,
 };
 use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
+use tb_social_media::vod_archive::{
+    get_vod_archive_settings, set_vod_archive_settings, VodArchiveSettings,
+    VOD_ARCHIVE_PRIVACY_VALUES,
+};
 use tb_social_media::{ClipFetchService, ClipRepository, HelixClipSource};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
@@ -2670,38 +2673,79 @@ pub async fn auto_approve_put_handler(
     }
 }
 
-/// `GET /social-media/api/admin/settings/vod-archive` — VOD-Archiv lesen.
+/// Löst den Streamer eines VOD-Archiv-Aufrufs auf.
 ///
-/// Wie bei Auto-Approve darf jeder mit Social-Media-Zugriff lesen, gesetzt wird
-/// nur vom Admin. `privacy_forced` sagt der Oberfläche, dass YouTube ohne
-/// auditiertes API-Projekt jeden Upload auf `private` zurückdreht, egal was
-/// hier steht.
-pub async fn vod_archive_get_handler(
-    auth: DashboardAuthLevel,
-    State(pool): State<PgPool>,
-) -> Response {
-    if let Err(e) = require_sm_access(&auth, &pool, None).await {
-        return e;
+/// Sicherheitskern dieses Endpoints: gearbeitet wird ausschließlich mit dem
+/// Scope aus [`require_sm_access`], nie mit dem angefragten Login. Für einen
+/// Partner ist der Scope immer der eigene Kanal, ein fremder `streamer_login`
+/// führt vorher schon zu 403. Ein Admin muss den Kanal benennen, „alle" gibt es
+/// hier nicht: das Archiv ist eine Entscheidung je Kanal.
+#[allow(clippy::result_large_err)]
+async fn vod_archive_scope(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    requested: Option<&str>,
+) -> Result<String, Response> {
+    let scope = require_sm_access(auth, pool, requested).await?;
+    let Some(login) = scope else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "streamer_login is required" })),
+        )
+            .into_response());
+    };
+    let slug = normalize_safe_slug(Some(&login), "streamer_login")?.to_lowercase();
+    if !ensure_streamer_exists(pool, &slug).await {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_streamer" })),
+        )
+            .into_response());
     }
-    let s = get_vod_archive_settings(&pool).await;
-    Json(json!({
+    Ok(slug)
+}
+
+fn vod_archive_json(s: &VodArchiveSettings) -> Value {
+    json!({
+        "streamer_login": s.streamer_login,
         "enabled": s.enabled,
         "privacy": s.privacy,
         "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
         "privacy_forced": true,
-    }))
+    })
+}
+
+/// `GET /social-media/api/admin/settings/vod-archive?streamer_login=` —
+/// VOD-Archiv eines Streamers lesen.
+///
+/// `privacy_forced` sagt der Oberfläche, dass YouTube ohne auditiertes
+/// API-Projekt jeden Upload auf `private` zurückdreht, egal was hier steht.
+pub async fn vod_archive_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerLoginQuery>,
+) -> Response {
+    let slug = match vod_archive_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    Json(vod_archive_json(
+        &get_vod_archive_settings(&pool, &slug).await,
+    ))
     .into_response()
 }
 
-/// `PUT /social-media/api/admin/settings/vod-archive` — VOD-Archiv setzen (Admin).
+/// `PUT /social-media/api/admin/settings/vod-archive` — VOD-Archiv eines
+/// Streamers setzen.
+///
+/// Bewusst `require_sm_access` statt `require_admin`: wer überhaupt ins
+/// Social-Media-Dashboard kommt, ist freigeschaltet und darf sein eigenes
+/// Archiv schalten. Geschrieben wird nur der Kanal aus dem Scope.
 pub async fn vod_archive_put_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
-    }
     let payload: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => return invalid_json(),
@@ -2709,9 +2753,23 @@ pub async fn vod_archive_put_handler(
     if !payload.is_object() {
         return invalid_payload();
     }
+    let slug = match vod_archive_scope(
+        &auth,
+        &pool,
+        payload.get("streamer_login").and_then(Value::as_str),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &slug).await {
+        return guard_response;
+    }
     // Fehlende Sichtbarkeit bleibt beim bisherigen Wert, statt still auf einen
     // Default zu springen — ein Toggle-Klick darf die Sichtbarkeit nicht ändern.
-    let bisher = get_vod_archive_settings(&pool).await;
+    let bisher = get_vod_archive_settings(&pool, &slug).await;
     let privacy = payload
         .get("privacy")
         .and_then(Value::as_str)
@@ -2725,18 +2783,13 @@ pub async fn vod_archive_put_handler(
             .into_response();
     }
     let values = VodArchiveSettings {
+        streamer_login: slug,
         enabled: payload.get("enabled").map(coerce_bool).unwrap_or(false),
         privacy,
     };
     let actor = editor_user_id(&auth);
-    match set_vod_archive_settings(&pool, values, actor.as_deref()).await {
-        Ok(r) => Json(json!({
-            "enabled": r.enabled,
-            "privacy": r.privacy,
-            "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
-            "privacy_forced": true,
-        }))
-        .into_response(),
+    match set_vod_archive_settings(&pool, &values, actor.as_deref()).await {
+        Ok(r) => Json(vod_archive_json(&r)).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "db" })),
@@ -3247,6 +3300,7 @@ mod tests {
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -4424,30 +4478,55 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_vod").await else {
             return;
         };
+        for login in ["earlysalty", "nani"] {
+            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+                .bind(login)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let frage = |login: &str| StreamerLoginQuery {
+            streamer_login: Some(login.to_string()),
+        };
 
         // Default: aus und privat, weil das Google-Projekt nicht auditiert ist.
-        let resp = vod_archive_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("earlysalty")),
+        )
+        .await;
         let v = body_json(resp).await;
         assert_eq!(v["enabled"], false);
         assert_eq!(v["privacy"], "private");
         assert_eq!(v["privacy_forced"], true);
+        assert_eq!(v["streamer_login"], "earlysalty");
 
         // Einschalten mit Sichtbarkeit.
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
         )
         .await;
         let v = body_json(resp).await;
         assert_eq!(v["enabled"], true);
         assert_eq!(v["privacy"], "unlisted");
 
+        // Der zweite Kanal bleibt davon unberuehrt.
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("nani")),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
         // Toggle ohne privacy behaelt die bisherige Sichtbarkeit.
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"enabled\":false}".into(),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":false}".into(),
         )
         .await;
         let v = body_json(resp).await;
@@ -4458,15 +4537,20 @@ mod tests {
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Der abgewiesene Aufruf darf nichts geaendert haben.
-        let resp = vod_archive_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("earlysalty")),
+        )
+        .await;
         assert_eq!(body_json(resp).await["enabled"], false);
 
-        // Kaputtes JSON → 400, Partner darf nicht schreiben.
+        // Kaputtes JSON → 400, fehlender Kanal → 400, unbekannter Kanal → 404.
         assert_eq!(
             vod_archive_put_handler(
                 DashboardAuthLevel::admin(),
@@ -4479,9 +4563,94 @@ mod tests {
         );
         assert_eq!(
             vod_archive_put_handler(
-                partner("nani"),
+                DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 "{\"enabled\":true}".into()
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            vod_archive_get_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(frage("gibtsnicht"))
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Der sicherheitsrelevante Kern: ein freigeschalteter Partner darf sein
+    /// eigenes Archiv schalten, aber unter keinen Umstaenden ein fremdes.
+    #[tokio::test]
+    async fn partner_schaltet_nur_den_eigenen_kanal() {
+        let Some(pool) = make_pool("t_dash_sm_vod_partner").await else {
+            return;
+        };
+        for login in ["earlysalty", "nani"] {
+            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+                .bind(login)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Eigener Kanal: geht.
+        let resp = vod_archive_put_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            "{\"streamer_login\":\"nani\",\"enabled\":true}".into(),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], true);
+
+        // Fremder Kanal: 403, und der fremde Schalter bleibt aus.
+        let resp = vod_archive_put_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("earlysalty".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
+        // Ohne Angabe faellt der Partner auf den eigenen Kanal zurueck, nie auf
+        // einen fremden.
+        let resp = vod_archive_get_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: None,
+            }),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["streamer_login"], "nani");
+        assert_eq!(v["enabled"], true);
+
+        // Ein nicht freigeschalteter Partner kommt gar nicht erst durch.
+        assert_eq!(
+            vod_archive_put_handler(
+                sm_partner("earlysalty"),
+                State(pool.clone()),
+                "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into()
             )
             .await
             .status(),

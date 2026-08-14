@@ -15,8 +15,6 @@ pub const KEY_AUTO_APPROVE_YOUTUBE: &str = "auto_approve_youtube";
 pub const KEY_AUTO_APPROVE_TIKTOK: &str = "auto_approve_tiktok";
 pub const KEY_AUTO_APPROVE_INSTAGRAM: &str = "auto_approve_instagram";
 pub const KEY_POSTING_SCHEDULE: &str = "posting_schedule";
-pub const KEY_VOD_ARCHIVE_ENABLED: &str = "vod_archive_enabled";
-pub const KEY_VOD_ARCHIVE_PRIVACY: &str = "vod_archive_privacy";
 pub const KEY_FORMS_CONTACT_EMAIL: &str = "forms_contact_email";
 pub const KEY_FORMS_SUBMIT_ENABLED: &str = "forms_submit_enabled";
 pub const DEFAULT_FORMS_CONTACT_EMAIL: &str = "deadlockclips.dl@mailinator.com";
@@ -176,73 +174,6 @@ pub async fn set_posting_schedule(
         pool,
         KEY_POSTING_SCHEDULE,
         &serde_json::json!(&values),
-        updated_by,
-    )
-    .await?;
-    Ok(values)
-}
-
-/// Gueltige Sichtbarkeiten fuer den VOD-Upload. Solange das Google-Projekt
-/// nicht auditiert ist, erzwingt YouTube ohnehin `private` und setzt alles
-/// andere still zurueck; die Wahl bleibt trotzdem hier, damit sie nach dem
-/// Audit ohne Codeaenderung greift.
-pub const VOD_ARCHIVE_PRIVACY_VALUES: [&str; 3] = ["private", "unlisted", "public"];
-pub const DEFAULT_VOD_ARCHIVE_PRIVACY: &str = "private";
-
-/// Einstellung des VOD-Archivs: laeuft es, und wie sichtbar sind die Uploads.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VodArchiveSettings {
-    pub enabled: bool,
-    pub privacy: String,
-}
-
-impl Default for VodArchiveSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            privacy: DEFAULT_VOD_ARCHIVE_PRIVACY.to_string(),
-        }
-    }
-}
-
-/// Liest die VOD-Archiv-Einstellung. Ein unbekannter Sichtbarkeitswert faellt
-/// auf `private` zurueck statt den Upload zu verweigern.
-pub async fn get_vod_archive_settings(pool: &PgPool) -> VodArchiveSettings {
-    let privacy = get_setting(pool, KEY_VOD_ARCHIVE_PRIVACY)
-        .await
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .filter(|value| VOD_ARCHIVE_PRIVACY_VALUES.contains(&value.as_str()))
-        .unwrap_or_else(|| DEFAULT_VOD_ARCHIVE_PRIVACY.to_string());
-    VodArchiveSettings {
-        enabled: get_bool(pool, KEY_VOD_ARCHIVE_ENABLED).await,
-        privacy,
-    }
-}
-
-/// Setzt die VOD-Archiv-Einstellung. Ungueltige Sichtbarkeit wird abgewiesen,
-/// damit kein Tippfehler stillschweigend ein VOD oeffentlich stellt.
-pub async fn set_vod_archive_settings(
-    pool: &PgPool,
-    values: VodArchiveSettings,
-    updated_by: Option<&str>,
-) -> Result<VodArchiveSettings, sqlx::Error> {
-    if !VOD_ARCHIVE_PRIVACY_VALUES.contains(&values.privacy.as_str()) {
-        return Err(sqlx::Error::Protocol(format!(
-            "unbekannte Sichtbarkeit: {}",
-            values.privacy
-        )));
-    }
-    set_setting(
-        pool,
-        KEY_VOD_ARCHIVE_ENABLED,
-        &Value::Bool(values.enabled),
-        updated_by,
-    )
-    .await?;
-    set_setting(
-        pool,
-        KEY_VOD_ARCHIVE_PRIVACY,
-        &Value::String(values.privacy.clone()),
         updated_by,
     )
     .await?;

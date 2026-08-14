@@ -263,17 +263,22 @@ export async function saveAutoApproveSettings(
   });
 }
 
-export async function fetchVodArchiveSettings(): Promise<VodArchiveSettings> {
-  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`);
+/** Das VOD-Archiv haengt am Streamer, nicht am Dashboard: immer mit Kanal. */
+export async function fetchVodArchiveSettings(
+  streamerLogin: string,
+): Promise<VodArchiveSettings> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive${qs}`);
 }
 
 export async function saveVodArchiveSettings(
+  streamerLogin: string,
   payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>,
 ): Promise<VodArchiveSettings> {
   return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ streamer_login: streamerLogin, ...payload }),
   });
 }
 
