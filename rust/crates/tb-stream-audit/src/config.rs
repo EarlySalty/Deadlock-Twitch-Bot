@@ -81,6 +81,27 @@ fn wahrheit(roh: &str, standard: bool) -> bool {
     }
 }
 
+/// Aufbewahrung in Tagen. Ein unbrauchbarer Wert faellt auf den Standard
+/// zurueck - aber nicht still: sonst weicht die tatsaechliche Aufbewahrung von
+/// dem ab, was jemand eingestellt zu haben glaubt.
+fn aufbewahrung_lesen(roh: &str) -> u64 {
+    let roh = roh.trim();
+    if roh.is_empty() {
+        return AUFBEWAHRUNG_STANDARD;
+    }
+    match roh.parse::<u64>() {
+        Ok(tage) => tage,
+        Err(_) => {
+            tracing::warn!(
+                wert = roh,
+                standard = AUFBEWAHRUNG_STANDARD,
+                "unbrauchbarer Wert fuer die Aufbewahrung, nehme den Standard"
+            );
+            AUFBEWAHRUNG_STANDARD
+        }
+    }
+}
+
 impl Konfiguration {
     pub fn from_env() -> Self {
         Self {
@@ -94,10 +115,9 @@ impl Konfiguration {
                 &std::env::var(TRANSKRIPT_BEHALTEN_ENV).unwrap_or_default(),
                 false,
             ),
-            aufbewahrung_tage: std::env::var(AUFBEWAHRUNG_ENV)
-                .ok()
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(AUFBEWAHRUNG_STANDARD),
+            aufbewahrung_tage: aufbewahrung_lesen(
+                &std::env::var(AUFBEWAHRUNG_ENV).unwrap_or_default(),
+            ),
         }
     }
 }
@@ -162,5 +182,14 @@ mod tests {
         assert!(wahrheit("1", false));
         assert!(wahrheit("ja", false));
         assert!(!wahrheit("nein", false));
+    }
+
+    #[test]
+    fn unbrauchbare_aufbewahrung_faellt_auf_den_standard() {
+        assert_eq!(aufbewahrung_lesen(""), AUFBEWAHRUNG_STANDARD);
+        assert_eq!(aufbewahrung_lesen("dreissig"), AUFBEWAHRUNG_STANDARD);
+        assert_eq!(aufbewahrung_lesen("-5"), AUFBEWAHRUNG_STANDARD);
+        assert_eq!(aufbewahrung_lesen("7"), 7);
+        assert_eq!(aufbewahrung_lesen(" 0 "), 0, "0 heisst unbegrenzt");
     }
 }
