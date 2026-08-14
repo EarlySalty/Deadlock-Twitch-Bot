@@ -230,7 +230,10 @@ impl OpenAiTranscriber {
         // Entweder alle Zeitstempel oder keine. Einzelne fehlerhafte Eintraege
         // wegzuwerfen hiesse: der Aufrufer haelt die Liste fuer vollstaendig,
         // und genau die weggeworfene Stelle wird nie geprueft.
-        let segments = match payload.get("segments").and_then(serde_json::Value::as_array) {
+        let segments = match payload
+            .get("segments")
+            .and_then(serde_json::Value::as_array)
+        {
             Some(roh) => {
                 let mut gelesen = Vec::with_capacity(roh.len());
                 let mut unvollstaendig = false;
@@ -266,11 +269,21 @@ impl OpenAiTranscriber {
             }
             None => Vec::new(),
         };
+        // Der lokale Dienst ignoriert das angefragte Modell und nennt in der
+        // Antwort, was er wirklich geladen hat. Steht dort etwas, gilt das -
+        // sonst behauptet der Bericht "whisper-1", wo large-v3-turbo lief.
+        let genutztes_modell = payload
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(model)
+            .to_string();
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,
             engine: "openai_api".to_string(),
-            model: model.to_string(),
+            model: genutztes_modell,
             segments,
         })
     }
@@ -621,5 +634,72 @@ mod tests {
 
         assert_eq!(err, TranscribeError::Unavailable);
         assert!(server.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_segmente {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn antwort_mit(payload: serde_json::Value) -> TranscriptionResult {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+            .mount(&server)
+            .await;
+        let transcriber = OpenAiTranscriber {
+            api_key: "local".into(),
+            model: "whisper-1".into(),
+            base_url: format!("{}/v1/audio/transcriptions", server.uri()),
+            ffmpeg_bin: "ffmpeg".into(),
+            http: reqwest::Client::new(),
+        };
+        transcriber
+            .transcribe_bytes(b"nicht wirklich wav".to_vec())
+            .await
+            .expect("Antwort")
+    }
+
+    #[tokio::test]
+    async fn zeitstempel_werden_uebernommen() {
+        let ergebnis = antwort_mit(serde_json::json!({
+            "text": "Erster Satz. Zweiter Satz.",
+            "duration": 12.0,
+            "model": "large-v3-turbo-ct2",
+            "segments": [
+                {"start": 0.0, "end": 4.0, "text": "Erster Satz."},
+                {"start": 4.0, "end": 12.0, "text": "Zweiter Satz."}
+            ]
+        }))
+        .await;
+        assert_eq!(ergebnis.segments.len(), 2);
+        assert_eq!(ergebnis.segments[1].start_seconds, 4.0);
+        assert_eq!(
+            ergebnis.model, "large-v3-turbo-ct2",
+            "der Bericht nennt das Modell, das wirklich lief"
+        );
+    }
+
+    #[tokio::test]
+    async fn unvollstaendige_zeitstempel_ergeben_gar_keine() {
+        // Sonst haelt der Aufrufer die Liste fuer vollstaendig, und die Stelle
+        // ohne Zeit wird nie geprueft.
+        let ergebnis = antwort_mit(serde_json::json!({
+            "text": "Erster Satz. Zweiter Satz.",
+            "duration": 12.0,
+            "segments": [
+                {"start": 0.0, "end": 4.0, "text": "Erster Satz."},
+                {"text": "Zweiter Satz ohne Zeit."}
+            ]
+        }))
+        .await;
+        assert!(
+            ergebnis.segments.is_empty(),
+            "es gilt der Volltext, nicht die halbe Liste"
+        );
+        assert!(!ergebnis.text.is_empty());
     }
 }
