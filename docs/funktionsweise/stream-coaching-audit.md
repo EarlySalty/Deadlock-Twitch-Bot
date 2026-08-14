@@ -54,10 +54,12 @@ keine Sanktionen und postet nichts öffentlich.
   und muss am echten Kontext geprüft werden.
 - Geprüft wird nur gesprochene Sprache. Bild, Einblendungen und Chat sind nicht
   Gegenstand.
-- Keine Meldung heißt in aller Regel: nichts gefunden. Gemeldet wird zusätzlich,
-  wenn der Modellschritt ausfiel, das Transkript leer blieb, ein Block
-  aufgegeben wurde, die Aufnahme wegen Rückstands pausiert oder die
-  Twitch-Abfrage scheitert. Nimmt Discord über Stunden keine Nachricht an,
+- Keine Meldung heißt in aller Regel: nichts gefunden. Ein Abschnitt ohne
+  gesprochenes Wort (Musik, Spielton, Pause) ist normal und wird nicht
+  gemeldet; bleiben aber 20 Abschnitte am Stück stumm, meldet sich der Dienst.
+  Gemeldet wird außerdem, wenn der Modellschritt ausfiel, ein Block aufgegeben
+  wurde, die Aufnahme wegen Rückstands pausiert oder die Twitch-Abfrage
+  scheitert. Nimmt Discord über Stunden keine Nachricht an,
   bleibt der Befund im Protokoll auf der Platte stehen und wird weiter
   angeboten — dann ist Stille kein Beweis für einen ruhigen Stream.
 - An Blockgrenzen kann eine Äußerung ungünstig fallen. Die Zeitstempel im
