@@ -76,8 +76,7 @@ fn mention_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Gruppe 1: optionaler Nicht-Wort-Char vor @; Gruppe 2: der eigentliche Login
     RE.get_or_init(|| {
-        Regex::new(r"(?:^|[^\w])@([A-Za-z0-9_]{3,25})\b")
-            .expect("MENTION_RE ist konstant")
+        Regex::new(r"(?:^|[^\w])@([A-Za-z0-9_]{3,25})\b").expect("MENTION_RE ist konstant")
     })
 }
 
@@ -131,10 +130,7 @@ pub trait MentionResolver: Send + Sync {
 
     /// Löst Logins via Helix auf. Rückgabe: (gefundene Logins, lookup_ok).
     /// Port von `_resolve_existing_twitch_users` (moderation.py Z. 358–427).
-    async fn resolve_existing(
-        &self,
-        logins: &[&str],
-    ) -> (HashSet<String>, bool);
+    async fn resolve_existing(&self, logins: &[&str]) -> (HashSet<String>, bool);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +181,10 @@ pub async fn score_mention_patterns(
     let normalized_host = normalized_host.trim_start_matches(['#', '@']);
 
     // Schritt 2: Host-Mention-Bonus (moderation.py Z. 449–451)
-    if allow_host_bonus && !normalized_host.is_empty() && mentions.contains(&normalized_host.to_string()) {
+    if allow_host_bonus
+        && !normalized_host.is_empty()
+        && mentions.contains(&normalized_host.to_string())
+    {
         hits += 1;
         reasons.push("Muster: @host mention".to_string());
     }
@@ -239,7 +238,10 @@ pub async fn score_mention_patterns(
         // Lookup klappte, Mentions existieren nicht auf Twitch → verdächtig
         hits += 1;
         reasons.push("Muster: @unknown mention".to_string());
-    } else if unresolved.iter().any(|m| looks_like_random_mention_token(m)) {
+    } else if unresolved
+        .iter()
+        .any(|m| looks_like_random_mention_token(m))
+    {
         // Fallback-Heuristik (moderation.py Z. 474–476)
         hits += 1;
         reasons.push("Muster: @ + random chars (fallback)".to_string());
@@ -400,7 +402,9 @@ mod tests {
         let (reasons, score) =
             score_mention_patterns("komm auf @Abc123Xyz", "host", false, &r).await;
         assert_eq!(score, 1);
-        assert!(reasons.iter().any(|r| r == "Muster: @ + random chars (fallback)"));
+        assert!(reasons
+            .iter()
+            .any(|r| r == "Muster: @ + random chars (fallback)"));
     }
 
     #[tokio::test]
@@ -409,7 +413,10 @@ mod tests {
         let r = TestResolver::new(vec![], vec![], true);
         let (reasons, score) =
             score_mention_patterns("hey @streamer1 schau", "streamer1", false, &r).await;
-        assert!(!reasons.iter().any(|r| r == "Muster: @host mention"), "Score: {score}");
+        assert!(
+            !reasons.iter().any(|r| r == "Muster: @host mention"),
+            "Score: {score}"
+        );
     }
 
     #[tokio::test]
@@ -426,8 +433,7 @@ mod tests {
     async fn bekannter_chatter_wird_herausgefiltert() {
         // mention ist bekannter Chatter → kein Signal
         let r = TestResolver::new(vec![("host1", "friendlyuser")], vec![], true);
-        let (_, score) =
-            score_mention_patterns("hey @friendlyuser", "host1", false, &r).await;
+        let (_, score) = score_mention_patterns("hey @friendlyuser", "host1", false, &r).await;
         assert_eq!(score, 0);
     }
 

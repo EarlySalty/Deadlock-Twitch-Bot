@@ -614,8 +614,9 @@ mod tests {
     use std::str::FromStr;
 
     async fn setup(schema: &str) -> PgPool {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

@@ -104,7 +104,11 @@ fn normalize_ws(s: &str) -> String {
 fn starter_of(text: &str) -> String {
     text.split_whitespace()
         .next()
-        .map(|w| w.to_lowercase().trim_end_matches(['.', ',', '!', '?']).to_string())
+        .map(|w| {
+            w.to_lowercase()
+                .trim_end_matches(['.', ',', '!', '?'])
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -144,12 +148,19 @@ fn select_examples(texts: &[String], max_n: usize) -> Vec<String> {
 /// ([`MIN_LEARNED_GOLD`]); darunter bleibt es beim festen Register, weil eine
 /// zu dünne Stichprobe den Ton nicht trägt.
 fn assemble_examples_with_gold(channel_examples: &[String], learned: &[String]) -> Vec<String> {
-    let usable: Vec<String> =
-        learned.iter().map(|s| normalize_ws(s)).filter(|s| is_good_example(s)).collect();
+    let usable: Vec<String> = learned
+        .iter()
+        .map(|s| normalize_ws(s))
+        .filter(|s| is_good_example(s))
+        .collect();
     let gold: Vec<String> = if usable.len() >= MIN_LEARNED_GOLD {
         usable.into_iter().take(GOLD_KEEP).collect()
     } else {
-        GOLD_EXAMPLES.iter().take(GOLD_KEEP).map(|s| s.to_string()).collect()
+        GOLD_EXAMPLES
+            .iter()
+            .take(GOLD_KEEP)
+            .map(|s| s.to_string())
+            .collect()
     };
     let seed: Vec<String> = SEED_EXAMPLES.iter().map(|s| s.to_string()).collect();
     let sources: [&[String]; 3] = [&gold, channel_examples, &seed];
@@ -180,7 +191,11 @@ fn build_fragment(examples: &[String]) -> String {
     if examples.is_empty() {
         return String::new();
     }
-    let lines = examples.iter().map(|e| format!("- {e}")).collect::<Vec<_>>().join("\n");
+    let lines = examples
+        .iter()
+        .map(|e| format!("- {e}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "So schreiben echte Leute hier — kurz, trocken, mit Banter, oft nur ein paar Wörter. \
          Ahme NUR Schreibweise, Ton und Länge nach (Kleinschreibung/Slang wie üblich, knapp, \
@@ -208,7 +223,10 @@ pub struct StyleExamples {
 
 impl StyleExamples {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, cache: Mutex::new(HashMap::new()) }
+        Self {
+            pool,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn load_user_turns(&self, channel_login: &str, limit: i64) -> Vec<String> {
@@ -272,17 +290,18 @@ impl StyleExamples {
         }
         let texts = self.load_user_turns(channel_login, POOL_LIMIT).await;
         let learned = self.load_learned_gold(LEARNED_POOL_LIMIT).await;
-        let examples = assemble_examples_with_gold(
-            &select_examples(&texts, MAX_EXAMPLES),
-            &learned,
-        );
+        let examples =
+            assemble_examples_with_gold(&select_examples(&texts, MAX_EXAMPLES), &learned);
         let mut fragment = build_fragment(&examples);
         if let Some(profile) = self.load_reaction_profile().await {
             fragment.push_str(&format!("\n\n{}", build_profile_fragment(&profile)));
         }
         {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            cache.insert(channel_login.to_string(), (Instant::now(), fragment.clone()));
+            cache.insert(
+                channel_login.to_string(),
+                (Instant::now(), fragment.clone()),
+            );
         }
         fragment
     }
@@ -341,14 +360,20 @@ mod tests {
         ];
         let out = assemble_examples_with_gold(&channel, &learned);
         assert_eq!(out[0], "boah der hat gecampt", "gelernt steht vorn");
-        assert!(!out.contains(&"wilder take".to_string()), "festes Gold ist raus");
+        assert!(
+            !out.contains(&"wilder take".to_string()),
+            "festes Gold ist raus"
+        );
     }
 
     #[test]
     fn zu_wenige_gelernte_zeilen_lassen_das_register_stehen() {
         // Drei brauchbare Zeilen liegen unter MIN_LEARNED_GOLD.
-        let learned: Vec<String> =
-            vec!["boah der hat gecampt".into(), "ne das war luck".into(), "warum baut der das".into()];
+        let learned: Vec<String> = vec![
+            "boah der hat gecampt".into(),
+            "ne das war luck".into(),
+            "warum baut der das".into(),
+        ];
         let out = assemble_examples_with_gold(&[], &learned);
         assert_eq!(out[0], "wilder take");
     }
@@ -363,7 +388,10 @@ mod tests {
             "ne das war luck".into(),
         ];
         let out = assemble_examples_with_gold(&[], &learned);
-        assert_eq!(out[0], "wilder take", "unter der Schwelle bleibt das Register");
+        assert_eq!(
+            out[0], "wilder take",
+            "unter der Schwelle bleibt das Register"
+        );
     }
 
     #[test]
@@ -387,12 +415,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -406,7 +450,9 @@ mod tests {
 
     #[tokio::test]
     async fn style_fragment_enthaelt_gold_und_channel() {
-        let Some(pool) = make_pool("t_eng_style").await else { return };
+        let Some(pool) = make_pool("t_eng_style").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES \
              ('nani','user','der dive war komplett wild heute')",

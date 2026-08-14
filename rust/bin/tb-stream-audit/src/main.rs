@@ -150,13 +150,23 @@ async fn arbeiter_abraeumen(
     // Zwischendateien noch wegraeumen kann.
     abbruch.store(true, std::sync::atomic::Ordering::Relaxed);
     let frist = Duration::from_secs(10);
-    let aufnahme_fertig = tokio::time::timeout(frist, aufnahme).await;
-    if aufnahme_fertig.is_err() {
-        tracing::warn!("Aufnahmeschleife reagiert nicht - Abbruch");
-    }
-    let auswertung_fertig = tokio::time::timeout(frist, auswertung).await;
-    if auswertung_fertig.is_err() {
-        tracing::warn!("Auswertungsschleife reagiert nicht - Abbruch");
+    warten_oder_abbrechen("Aufnahmeschleife", aufnahme, frist).await;
+    warten_oder_abbrechen("Auswertungsschleife", auswertung, frist).await;
+}
+
+/// Wartet auf einen Arbeiter und bricht ihn nach der Frist wirklich ab.
+///
+/// Eine abgelaufene `timeout` allein legt den Handle nur weg; die Aufgabe
+/// laeuft dann bis zum Ende des Prozesses weiter.
+async fn warten_oder_abbrechen(
+    name: &str,
+    mut handle: tokio::task::JoinHandle<()>,
+    frist: Duration,
+) {
+    if tokio::time::timeout(frist, &mut handle).await.is_err() {
+        tracing::warn!(arbeiter = name, "reagiert nicht - wird abgebrochen");
+        handle.abort();
+        let _ = handle.await;
     }
 }
 
@@ -345,6 +355,67 @@ async fn zettel_schreiben(
         nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await
     {
         tracing::warn!(fehler, "Zettel nicht geschrieben");
+    }
+}
+
+/// Dateiname der Marke fuer eine noch offene Meldung.
+const MELDUNG_OFFEN: &str = "meldung_offen.json";
+
+/// Haelt fest, dass zu diesem Block noch eine Meldung aussteht.
+async fn meldung_offen_markieren(aufnahme: &Path) {
+    let Some(blockordner) = aufnahme.parent().and_then(Path::parent) else {
+        return;
+    };
+    if let Err(fehler) = nur_fuer_mich(&blockordner.join(MELDUNG_OFFEN), b"{}").await {
+        tracing::error!(fehler, "Marke fuer offene Meldung nicht schreibbar");
+    }
+}
+
+/// Nimmt die Marke wieder weg.
+async fn meldung_erledigt(aufnahme: &Path) {
+    let Some(blockordner) = aufnahme.parent().and_then(Path::parent) else {
+        return;
+    };
+    let _ = tokio::fs::remove_file(blockordner.join(MELDUNG_OFFEN)).await;
+}
+
+/// Sucht Bloecke mit offener Meldung und reiht sie wieder ein.
+///
+/// Laeuft im Aufraeumtakt. Ohne diesen Weg endet eine Meldung, die der Broker
+/// stundenlang nicht annimmt, im Nichts - und "keine DM" hiesse dann
+/// faelschlich "nichts gefunden".
+async fn offene_meldungen_einreihen(
+    konfiguration: &Konfiguration,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
+) {
+    let mut aufnahmen = Vec::new();
+    ts_dateien_sammeln(&aufnahme_wurzel(konfiguration), &mut aufnahmen).await;
+    let eingereiht: std::collections::HashSet<String> =
+        warteschlange.lock().await.dateien().into_iter().collect();
+
+    let mut wieder = 0usize;
+    for pfad in aufnahmen {
+        if eingereiht.contains(&pfad.to_string_lossy().to_string()) {
+            continue;
+        }
+        let Some(blockordner) = pfad.parent().and_then(Path::parent) else {
+            continue;
+        };
+        if !tokio::fs::try_exists(blockordner.join(MELDUNG_OFFEN))
+            .await
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(mut block) = zettel_lesen(&pfad).await else {
+            continue;
+        };
+        block.nur_melden = true;
+        warteschlange.lock().await.einreihen(block);
+        wieder += 1;
+    }
+    if wieder > 0 {
+        tracing::info!(wieder, "offene Meldungen erneut eingereiht");
     }
 }
 
@@ -993,6 +1064,7 @@ async fn auswertungs_schleife(
         if tokio::time::Instant::now() >= naechstes_aufraeumen {
             alte_berichte_loeschen(&konfiguration).await;
             alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
+            offene_meldungen_einreihen(&konfiguration, &warteschlange).await;
             naechstes_aufraeumen =
                 tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
         }
@@ -1005,6 +1077,7 @@ async fn auswertungs_schleife(
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
             Ok(Aufnahmeschicksal::Behalten(bericht)) => {
+                meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
                 tracing::info!(
                     block = %block.bezeichnung(),
@@ -1012,6 +1085,7 @@ async fn auswertungs_schleife(
                 );
             }
             Ok(Aufnahmeschicksal::Loeschen) => {
+                meldung_erledigt(Path::new(&block.datei)).await;
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
                 // Fehler loescht, vernichtet bei einem Aussetzer der
                 // Transkription den einzigen Beleg, den es je gab.
@@ -1038,6 +1112,11 @@ async fn auswertungs_schleife(
                 naechster.nur_melden = true;
                 naechster.meldeversuche += 1;
                 if naechster.meldeversuche >= MAX_MELDEVERSUCHE_LANG {
+                    // Die Marke bleibt auf der Platte: der stuendliche
+                    // Aufraeumtakt findet sie und reiht die Meldung erneut
+                    // ein. Ohne sie waere ein Fund still verloren, sobald der
+                    // Block die Warteschlange verlaesst.
+                    meldung_offen_markieren(Path::new(&block.datei)).await;
                     // Irgendwann ist Schluss, sonst haelt der Block seine
                     // Aufnahme dauerhaft aus der Aufbewahrung heraus. Der
                     // Bericht liegt auf der Platte; der naechste Start des
@@ -1587,9 +1666,12 @@ async fn broker_antwort_pruefen(antwort: reqwest::Response) -> Result<(), String
     }
     let json: serde_json::Value = serde_json::from_str(&roh)
         .map_err(|fehler| format!("Broker-Antwort kein JSON: {fehler}"))?;
+    // Ausdrueckliches `ok: true` oder gar nichts - alles dazwischen (`{}`,
+    // `ok: "yes"`, ein Fehlerobjekt) beweist keine Zustellung und darf die
+    // Wiederholung nicht beenden.
     match json.get("ok").and_then(serde_json::Value::as_bool) {
-        Some(false) => Err(format!("Broker meldet ok=false: {roh}")),
-        _ => Ok(()),
+        Some(true) => Ok(()),
+        _ => Err(format!("Broker bestaetigt die Zustellung nicht: {roh}")),
     }
 }
 

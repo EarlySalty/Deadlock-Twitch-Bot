@@ -137,11 +137,17 @@ impl EngagementIrcReader {
             }
         };
         let (rd, mut wr) = stream.into_split();
-        if let Err(error) = wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes()).await {
+        if let Err(error) = wr
+            .write_all(format!("NICK {ANON_NICK}\r\n").as_bytes())
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: NICK-Handshake fehlgeschlagen");
             return None;
         }
-        if let Err(error) = wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n").await {
+        if let Err(error) = wr
+            .write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: CAP-Handshake fehlgeschlagen");
             return None;
         }
@@ -269,7 +275,10 @@ async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
 /// Sitzungsende wieder zurueck. Ohne PART bliebe der Reader im fremden Kanal
 /// und laese dort weiter mit, obwohl keine Sitzung mehr laeuft, und bei
 /// stuendlicher Rotation summierten sich die Joins.
-fn channel_delta(current: &HashSet<String>, latest: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+fn channel_delta(
+    current: &HashSet<String>,
+    latest: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
     let to_join = latest.difference(current).cloned().collect();
     let to_part = current.difference(latest).cloned().collect();
     (to_join, to_part)

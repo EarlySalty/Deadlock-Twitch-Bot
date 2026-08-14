@@ -25,9 +25,9 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, export_log_description, export_log_title, format_bytes,
-        format_duration, should_export, CommandRunner, ExportTargets, TokioCommandRunner,
-        VodExportError, VodExportReport, TARGET_LOGIN,
+        export_latest_vod, export_log_description, export_log_title, format_bytes, format_duration,
+        should_export, CommandRunner, ExportTargets, TokioCommandRunner, VodExportError,
+        VodExportReport, TARGET_LOGIN,
     },
 };
 use tb_monitoring::{
@@ -47,10 +47,10 @@ use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutco
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
-use crate::raid_greeting::OutgoingRaidSink;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
 };
+use crate::raid_greeting::OutgoingRaidSink;
 use crate::reauth_reminder::ReauthReminder;
 use crate::score_refresh::ScoreRefreshResolver;
 
@@ -1294,7 +1294,8 @@ mod outgoing_raid_tests {
             Some("spammer")
         );
         assert_eq!(
-            moderate_target(&json!({"action": "timeout", "timeout": {"user_login": "x"}})).as_deref(),
+            moderate_target(&json!({"action": "timeout", "timeout": {"user_login": "x"}}))
+                .as_deref(),
             Some("x")
         );
         // Actions ohne Nutzer-Bezug (z. B. emoteonly) liefern nichts — die
@@ -1321,7 +1322,11 @@ mod outgoing_raid_tests {
             Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
         );
 
-        observer.handle("1186925760", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+        observer.handle(
+            "1186925760",
+            "earlysalty",
+            &raid_event("dead_eye_nika", "224208315"),
+        );
 
         assert!(suppression
             .lock()
@@ -1360,7 +1365,11 @@ mod outgoing_raid_tests {
             Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
         );
 
-        observer.handle("  ", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+        observer.handle(
+            "  ",
+            "earlysalty",
+            &raid_event("dead_eye_nika", "224208315"),
+        );
 
         assert!(sink.retargeted.lock().unwrap().is_empty());
     }
@@ -1503,8 +1512,9 @@ mod arrival_dedupe_tests {
     }
 
     async fn setup_db(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::PgPool::connect(&url).await.unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)

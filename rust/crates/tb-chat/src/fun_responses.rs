@@ -117,7 +117,11 @@ impl FunResponses {
 
         let reply = self.pick_reply();
         // Fehler beim Senden werden weiter ignoriert (bot.py Z. 874), aber nicht verschluckt.
-        if let Err(error) = self.api.send_message(&event.broadcaster_user_id, reply).await {
+        if let Err(error) = self
+            .api
+            .send_message(&event.broadcaster_user_id, reply)
+            .await
+        {
             tracing::warn!(
                 %error,
                 broadcaster_id = %event.broadcaster_user_id,
@@ -168,7 +172,9 @@ mod tests {
 
     impl MockApi {
         fn new() -> Arc<Self> {
-            Arc::new(Self { sent: Mutex::new(vec![]) })
+            Arc::new(Self {
+                sent: Mutex::new(vec![]),
+            })
         }
         fn messages(&self) -> Vec<(String, String)> {
             self.sent.lock().unwrap().clone()
@@ -177,18 +183,47 @@ mod tests {
 
     #[async_trait]
     impl ChatApi for MockApi {
-        async fn send_message(&self, broadcaster_id: &str, message: &str) -> Result<SendOutcome, String> {
-            self.sent.lock().unwrap().push((broadcaster_id.to_string(), message.to_string()));
+        async fn send_message(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+        ) -> Result<SendOutcome, String> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((broadcaster_id.to_string(), message.to_string()));
             Ok(SendOutcome::Sent)
         }
-        async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> { Ok(true) }
-        async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> { Ok(BanOutcome::Banned) }
-        async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<BanOutcome, String> { Ok(BanOutcome::Banned) }
-        async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> { Ok(true) }
-        async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> { Ok(true) }
-        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> { Ok(None) }
-        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> { Ok(None) }
-        async fn bot_user_id(&self) -> String { "bot123".to_string() }
+        async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Banned)
+        }
+        async fn timeout_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<BanOutcome, String> {
+            Ok(BanOutcome::Banned)
+        }
+        async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Ok(None)
+        }
+        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        async fn bot_user_id(&self) -> String {
+            "bot123".to_string()
+        }
     }
 
     fn make_event(text: &str) -> ChatMessageEvent {
@@ -200,7 +235,10 @@ mod tests {
             chatter_user_login: "user1".to_string(),
             chatter_user_name: "User1".to_string(),
             message_id: "m1".to_string(),
-            message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
+            message: ChatMessageBody {
+                text: text.to_string(),
+                fragments: vec![],
+            },
             badges: vec![],
             color: String::new(),
             ..Default::default()
@@ -211,7 +249,8 @@ mod tests {
     async fn danke_trigger_sendet_antwort() {
         let api = MockApi::new();
         let fun = FunResponses::new(api.clone(), true);
-        fun.maybe_respond(&make_event("danke fürs zuschauen"), "ch1").await;
+        fun.maybe_respond(&make_event("danke fürs zuschauen"), "ch1")
+            .await;
         assert_eq!(api.messages().len(), 1);
     }
 
@@ -227,7 +266,8 @@ mod tests {
     async fn url_in_nachricht_unterdrückt_antwort() {
         let api = MockApi::new();
         let fun = FunResponses::new(api.clone(), true);
-        fun.maybe_respond(&make_event("danke https://example.com"), "ch1").await;
+        fun.maybe_respond(&make_event("danke https://example.com"), "ch1")
+            .await;
         assert!(api.messages().is_empty());
     }
 
@@ -243,7 +283,8 @@ mod tests {
     async fn kein_trigger_sendet_nichts() {
         let api = MockApi::new();
         let fun = FunResponses::new(api.clone(), true);
-        fun.maybe_respond(&make_event("schöner stream heute"), "ch1").await;
+        fun.maybe_respond(&make_event("schöner stream heute"), "ch1")
+            .await;
         assert!(api.messages().is_empty());
     }
 
@@ -272,8 +313,12 @@ mod tests {
         for trigger in &["danke", "thanks", "thx", "merci", "ty"] {
             let api = MockApi::new();
             let fun = FunResponses::new(api.clone(), true);
-            fun.maybe_respond(&make_event(&format!("hey {trigger}")), "ch_x").await;
-            assert!(!api.messages().is_empty(), "Trigger '{trigger}' löste keine Antwort aus");
+            fun.maybe_respond(&make_event(&format!("hey {trigger}")), "ch_x")
+                .await;
+            assert!(
+                !api.messages().is_empty(),
+                "Trigger '{trigger}' löste keine Antwort aus"
+            );
         }
     }
 

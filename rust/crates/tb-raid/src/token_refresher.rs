@@ -363,11 +363,7 @@ impl RaidTokenRefresher {
             // Refresh-Token entschlüsseln; ohne ihn ist kein Refresh möglich.
             let enc_v = i64::from(row.enc_version.unwrap_or(1));
             let refresh_aad = aad::raid_auth("refresh_token", &user_id, enc_v);
-            let refresh_token = match row
-                .refresh_token_enc
-                .as_deref()
-                .filter(|b| !b.is_empty())
-            {
+            let refresh_token = match row.refresh_token_enc.as_deref().filter(|b| !b.is_empty()) {
                 Some(blob) => match self.cipher.decrypt_field(blob, &refresh_aad) {
                     Ok(token) if !token.is_empty() => Some(token),
                     Ok(_) => None,
@@ -382,8 +378,7 @@ impl RaidTokenRefresher {
                 },
                 None => None,
             };
-            let Some(refresh_token) = refresh_token
-            else {
+            let Some(refresh_token) = refresh_token else {
                 tracing::warn!(
                     user = %mask(&user_id),
                     "Hintergrund-Refresh übersprungen: kein entschlüsselbarer Refresh-Token"

@@ -38,7 +38,10 @@ pub fn lurker_hint_to_prompt_fragment(hints: &[LurkerHint]) -> String {
     ];
     for h in hints {
         if h.top_threads.is_empty() {
-            lines.push(format!("  - {} (kein konkreter Faden bekannt)", h.twitch_login));
+            lines.push(format!(
+                "  - {} (kein konkreter Faden bekannt)",
+                h.twitch_login
+            ));
         } else {
             let summaries = h
                 .top_threads
@@ -61,7 +64,10 @@ pub struct LurkerSignal {
 
 impl LurkerSignal {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, cache: Mutex::new(HashMap::new()) }
+        Self {
+            pool,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Stammgäste, die aktuell still sind (conversation-buffer-basiert), je mit
@@ -111,7 +117,9 @@ impl LurkerSignal {
         let mut hints = Vec::new();
         for row in rows {
             let user_id = row.twitch_user_id;
-            let top_threads = threads.load_open_threads_for_user(&user_id, channel_login, 2).await;
+            let top_threads = threads
+                .load_open_threads_for_user(&user_id, channel_login, 2)
+                .await;
             hints.push(LurkerHint {
                 twitch_user_id: user_id,
                 twitch_login: row.twitch_login.unwrap_or_default(),
@@ -168,12 +176,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, twitch_user_id TEXT, \
@@ -198,7 +222,9 @@ mod tests {
 
     #[tokio::test]
     async fn erkennt_stillen_stammgast() {
-        let Some(pool) = make_pool("t_eng_lurker").await else { return };
+        let Some(pool) = make_pool("t_eng_lurker").await else {
+            return;
+        };
         // Stammgast 'alice': 3 Msgs, alle > 10 Min alt (still).
         // 'bob': hat gerade gepostet (kein Lurker).
         // 'carol': nur 1 Msg (kein Stammgast).
@@ -225,7 +251,9 @@ mod tests {
         .unwrap();
 
         let ls = LurkerSignal::new(pool);
-        let hints = ls.known_regulars_currently_lurking("nani", 3, 30, 10, 5).await;
+        let hints = ls
+            .known_regulars_currently_lurking("nani", 3, 30, 10, 5)
+            .await;
         // Nur alice: Stammgast (3 >= 3) + still (kein Post < 10min). bob postete grad, carol zu wenig.
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].twitch_login, "alice");

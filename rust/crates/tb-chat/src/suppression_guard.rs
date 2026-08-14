@@ -85,7 +85,11 @@ impl SuppressionGuardChatApi {
             suppression,
             manual_opt_out,
             source: source.into().trim().to_lowercase(),
-            target_login: target_login.into().trim().trim_start_matches('#').to_lowercase(),
+            target_login: target_login
+                .into()
+                .trim()
+                .trim_start_matches('#')
+                .to_lowercase(),
         }
     }
 
@@ -207,26 +211,15 @@ impl ChatApi for SuppressionGuardChatApi {
             .await
     }
 
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String> {
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String> {
         self.inner.unban_user(broadcaster_id, target_user_id).await
     }
 
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String> {
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
         self.inner.delete_message(broadcaster_id, message_id).await
     }
 
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String> {
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
         self.inner.user_created_at(user_id).await
     }
 
@@ -323,11 +316,7 @@ mod tests {
         }
     }
 
-    fn guard(
-        inner: Arc<MockApi>,
-        opt_out: bool,
-        muted: bool,
-    ) -> SuppressionGuardChatApi {
+    fn guard(inner: Arc<MockApi>, opt_out: bool, muted: bool) -> SuppressionGuardChatApi {
         SuppressionGuardChatApi::new(
             inner,
             Arc::new(FixedSuppression(muted)),
@@ -344,7 +333,9 @@ mod tests {
 
         let outcome = api.send_message("bid", "text").await;
 
-        assert!(matches!(outcome, Ok(SendOutcome::Dropped { ref code, .. }) if code == "outbound_suppressed"));
+        assert!(
+            matches!(outcome, Ok(SendOutcome::Dropped { ref code, .. }) if code == "outbound_suppressed")
+        );
         assert_eq!(inner.message_calls.load(Ordering::SeqCst), 0);
     }
 

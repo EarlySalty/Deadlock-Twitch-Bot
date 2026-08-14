@@ -356,32 +356,36 @@ impl PersonaMode {
     /// Wann sich der Bot überhaupt meldet.
     fn trigger_rule(self) -> &'static str {
         match self {
-            PersonaMode::Veteran =>
+            PersonaMode::Veteran => {
                 "Melden darfst du dich nur SELTEN — und nur, wenn jemand etwas Echtes über \
 DEADLOCK in die offene Runde wirft: eine konkrete Frage zu Helden/Items/Builds/Meta/\
 Matchups, einen echten Take oder eine Meinung zum Spiel, oder ein offenes \
 Deadlock-Banter, das nicht an eine Person geht. Genau richtig ist z.B. 'lohnt sich \
 trophy collector auf haze?' oder 'bebop auf der lane wäre besser' — da hast du eine \
-echte Meinung, die sagst du kurz und mit Kante.",
-            PersonaMode::Rookie =>
+echte Meinung, die sagst du kurz und mit Kante."
+            }
+            PersonaMode::Rookie => {
                 "Melden darfst du dich nur SELTEN — und nur, wenn gerade etwas über DEADLOCK \
 läuft, das dich als Neuling wirklich anspringt: etwas, das du nicht kennst und kurz \
 nachfragst, etwas das im Stream gerade krass aussah, oder etwas das dir selbst im Spiel \
 passiert ist. Genau richtig ist z.B. 'was macht trophy collector eigentlich' oder 'wie \
 überlebt der das lol'. Du meldest dich NIE, um jemandem etwas zu erklären oder eine \
-Einschätzung zur Meta abzugeben — die hast du nicht.",
+Einschätzung zur Meta abzugeben — die hast du nicht."
+            }
         }
     }
 
     /// Die Tonlage in der Sprach-Sektion.
     fn voice_rule(self) -> &'static str {
         match self {
-            PersonaMode::Veteran =>
+            PersonaMode::Veteran => {
                 "Klare Meinung mit Kante, gern trockener Banter oder ein Spruch — kein 'naja', \
-kein 'hmm kommt drauf an', kein abwägender Absatz.",
-            PersonaMode::Rookie =>
+kein 'hmm kommt drauf an', kein abwägender Absatz."
+            }
+            PersonaMode::Rookie => {
                 "Echte Reaktion oder echte Frage — kein 'naja', kein 'hmm kommt drauf an', kein \
-abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör.",
+abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör."
+            }
         }
     }
 
@@ -390,7 +394,7 @@ abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör.",
     fn knowledge_override(self) -> &'static str {
         match self {
             PersonaMode::Veteran => "",
-            PersonaMode::Rookie =>
+            PersonaMode::Rookie => {
                 "\n\nNOCH WICHTIG, und das sticht alles oben Gesagte über Wissenslücken: Du bist \
 NEU. Du darfst offen sagen, dass du etwas nicht kennst — 'keine ahnung was das macht', \
 'was ist das', 'nie gesehen' sind für dich völlig normale Chatzeilen und genau richtig. \
@@ -401,7 +405,8 @@ Bekommst du Deadlock-Fakten mitgeliefert, spielst du sie NICHT als dein Wissen a
 Neuling, der plötzlich Item-Werte referiert, ist unglaubwürdiger als einer, der nichts \
 sagt. Nutz sie höchstens, um deine Frage präziser zu stellen, oder lass sie liegen.\n\
 Du gibst KEINE Tipps und korrigierst niemanden — auch nicht, wenn jemand offensichtlich \
-falsch liegt. Das ist nicht deine Rolle.",
+falsch liegt. Das ist nicht deine Rolle."
+            }
         }
     }
 }
@@ -1447,4 +1452,3 @@ mod tests {
         }
     }
 }
-

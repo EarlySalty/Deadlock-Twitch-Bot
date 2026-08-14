@@ -194,7 +194,9 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
         // Ausgang hier bewusst verworfen: dieser Pfad (Deautorisierung) ist
         // best-effort und hat keinen Aufrufer, der ihn melden könnte. Wer den
         // Ausgang braucht, nutzt `revoke_streamer_role_detailed`.
-        let _ = self.revoke_streamer_role_detailed(discord_user_id, reason).await;
+        let _ = self
+            .revoke_streamer_role_detailed(discord_user_id, reason)
+            .await;
     }
 }
 
@@ -206,11 +208,7 @@ impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
         <Self as DiscordDirectoryPort>::grant_streamer_role(self, discord_user_id, reason).await
     }
 
-    async fn revoke_streamer_role(
-        &self,
-        discord_user_id: &str,
-        reason: &str,
-    ) -> RoleRevokeOutcome {
+    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) -> RoleRevokeOutcome {
         self.revoke_streamer_role_detailed(discord_user_id, reason)
             .await
     }
@@ -270,9 +268,8 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
                 Err(error)
             }
             Err(e) => {
-                let error = format!(
-                    "Error adding bot as moderator in channel {broadcaster_id}: {e}"
-                );
+                let error =
+                    format!("Error adding bot as moderator in channel {broadcaster_id}: {e}");
                 tracing::error!("{error}");
                 Err(error)
             }

@@ -630,10 +630,7 @@ mod grace_tests {
         // Das channel.moderate-Event trifft mitten im Grace-Fenster ein.
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            observer
-                .lock()
-                .unwrap()
-                .mark("1186925760", 180.0, None);
+            observer.lock().unwrap().mark("1186925760", 180.0, None);
         });
 
         assert!(manual_raid_won_the_race(&suppression, "1186925760", grace).await);

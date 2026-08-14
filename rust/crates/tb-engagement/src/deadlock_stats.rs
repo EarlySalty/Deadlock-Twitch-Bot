@@ -101,7 +101,11 @@ pub fn build_stats_index(heroes: &[Value], stats: &[Value]) -> HashMap<String, H
 
     let mut out = HashMap::new();
     for r in &rows {
-        let Some(name) = r.get("hero_id").and_then(as_i64_flex).and_then(|hid| id_to_name.get(&hid).cloned()) else {
+        let Some(name) = r
+            .get("hero_id")
+            .and_then(as_i64_flex)
+            .and_then(|hid| id_to_name.get(&hid).cloned())
+        else {
             continue;
         };
         if name.is_empty() {
@@ -109,8 +113,16 @@ pub fn build_stats_index(heroes: &[Value], stats: &[Value]) -> HashMap<String, H
         }
         let matches = r.get("matches").and_then(as_i64_flex).unwrap_or(0);
         let wins = r.get("wins").and_then(as_i64_flex).unwrap_or(0);
-        let wr = if matches != 0 { wins as f64 / matches as f64 } else { 0.0 };
-        let pr_ratio = if avg_matches != 0.0 { matches as f64 / avg_matches } else { 1.0 };
+        let wr = if matches != 0 {
+            wins as f64 / matches as f64
+        } else {
+            0.0
+        };
+        let pr_ratio = if avg_matches != 0.0 {
+            matches as f64 / avg_matches
+        } else {
+            1.0
+        };
         out.insert(name.to_lowercase(), HeroStat { name, wr, pr_ratio });
     }
     out
@@ -148,7 +160,11 @@ impl DeadlockStats {
         }
     }
 
-    async fn fetch_json(&self, url: &str, params: &[(&str, &str)]) -> Result<Value, reqwest::Error> {
+    async fn fetch_json(
+        &self,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> Result<Value, reqwest::Error> {
         self.http
             .get(url)
             .query(params)
@@ -161,7 +177,10 @@ impl DeadlockStats {
 
     async fn load_stats(&self) -> Result<HashMap<String, HeroStat>, reqwest::Error> {
         let heroes = self
-            .fetch_json(&format!("{}/v1/assets/heroes", self.api_base), &[("only_active", "true")])
+            .fetch_json(
+                &format!("{}/v1/assets/heroes", self.api_base),
+                &[("only_active", "true")],
+            )
             .await?;
         let stats = self
             .fetch_json(&format!("{}/v1/analytics/hero-stats", self.api_base), &[])
@@ -269,14 +288,18 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .mount(&wiki_server)
             .await;
-        let wiki =
-            DeadlockWiki::with_bases(&wiki_server.uri(), &format!("{}/api.php", wiki_server.uri()));
+        let wiki = DeadlockWiki::with_bases(
+            &wiki_server.uri(),
+            &format!("{}/api.php", wiki_server.uri()),
+        );
 
         // Stats-Server.
         let stats_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/assets/heroes"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": 1, "name": "Haze"}])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"id": 1, "name": "Haze"}])),
+            )
             .mount(&stats_server)
             .await;
         Mock::given(method("GET"))
@@ -288,13 +311,18 @@ mod tests {
             .await;
         let stats = DeadlockStats::with_base(&stats_server.uri());
 
-        let frag = stats.build_stats_fragment(&wiki, "wie stark ist haze grad").await;
+        let frag = stats
+            .build_stats_fragment(&wiki, "wie stark ist haze grad")
+            .await;
         assert!(frag.contains("'Haze'"));
         assert!(frag.contains("Winrate deutlich über 50%")); // wr 0.6
-        // Einziger Held → pr_ratio 1.0 → durchschnittlich.
+                                                             // Einziger Held → pr_ratio 1.0 → durchschnittlich.
         assert!(frag.contains("wird durchschnittlich oft gespielt"));
 
         // Kein Held erkannt → leer.
-        assert_eq!(stats.build_stats_fragment(&wiki, "hallo zusammen").await, "");
+        assert_eq!(
+            stats.build_stats_fragment(&wiki, "hallo zusammen").await,
+            ""
+        );
     }
 }

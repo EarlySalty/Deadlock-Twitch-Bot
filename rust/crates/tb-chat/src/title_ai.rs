@@ -1117,8 +1117,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(result.primary, "Ranked Grind");
         assert_eq!(result.alternatives, vec!["Alt Eins".to_string()]);
     }
@@ -1176,8 +1176,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(result.primary, "Ranked mit Plan");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -1206,8 +1206,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap_err();
+        .await
+        .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
     }
 
@@ -1239,8 +1239,8 @@ mod tests {
             &history,
             "01.06. – 28.06.2026",
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(r.strengths, "stark");
         assert_eq!(r.patterns, "muster");
         // 4 Recs → erste 3, je „• "-Prefix.

@@ -1046,12 +1046,9 @@ impl ChatPipeline {
         let sus_invite = Arc::clone(&p.sus_invite);
         let event_for_step = event.clone();
         let sus_channel = channel_login.to_string();
-        let Some(hit) = run_pipeline_step(
-            "sus_invite",
-            channel_login,
-            chatter_login,
-            async move { sus_invite.check(&event_for_step, &sus_channel).await },
-        )
+        let Some(hit) = run_pipeline_step("sus_invite", channel_login, chatter_login, async move {
+            sus_invite.check(&event_for_step, &sus_channel).await
+        })
         .await
         .flatten() else {
             return;

@@ -133,7 +133,10 @@ fn profile_user_prompt(samples: &str) -> String {
 }
 
 fn env_str(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn env_int(name: &str, default: i64, minimum: i64) -> i64 {
@@ -162,22 +165,38 @@ pub fn hot_ttl_minutes() -> i64 {
 
 /// Capture-Länge je Aufnahmeblock (Sekunden).
 pub fn capture_seconds() -> i64 {
-    env_int("ENGAGEMENT_LEARN_CAPTURE_SECONDS", DEFAULT_CAPTURE_SECONDS, 10)
+    env_int(
+        "ENGAGEMENT_LEARN_CAPTURE_SECONDS",
+        DEFAULT_CAPTURE_SECONDS,
+        10,
+    )
 }
 
 /// So viele lern-heiße Kanäle werden parallel aufgenommen.
 pub fn max_capture_channels() -> usize {
-    env_int("ENGAGEMENT_LEARN_MAX_CHANNELS", DEFAULT_MAX_CAPTURE_CHANNELS as i64, 1) as usize
+    env_int(
+        "ENGAGEMENT_LEARN_MAX_CHANNELS",
+        DEFAULT_MAX_CAPTURE_CHANNELS as i64,
+        1,
+    ) as usize
 }
 
 /// So viele Kanäle laufen mit, wenn der Owner nirgends gesichtet wurde.
 pub fn idle_capture_channels() -> usize {
-    env_int("ENGAGEMENT_LEARN_IDLE_CHANNELS", DEFAULT_IDLE_CAPTURE_CHANNELS as i64, 0) as usize
+    env_int(
+        "ENGAGEMENT_LEARN_IDLE_CHANNELS",
+        DEFAULT_IDLE_CAPTURE_CHANNELS as i64,
+        0,
+    ) as usize
 }
 
 /// Aufbewahrung der Rohdaten (Chat-Puffer, Transkripte) in Stunden.
 pub fn retention_hours() -> i64 {
-    env_int("ENGAGEMENT_LEARN_RETENTION_HOURS", DEFAULT_RETENTION_HOURS, 1)
+    env_int(
+        "ENGAGEMENT_LEARN_RETENTION_HOURS",
+        DEFAULT_RETENTION_HOURS,
+        1,
+    )
 }
 
 /// Ein Whisper-Segment aus einem lern-heißen Kanal.
@@ -328,7 +347,11 @@ impl ReactionLearning {
         let mut entries: Vec<(String, DateTime<Utc>)> =
             hot.iter().map(|(c, t)| (c.clone(), *t)).collect();
         entries.sort_by_key(|(_, seen)| std::cmp::Reverse(*seen));
-        entries.into_iter().take(max_capture_channels()).map(|(c, _)| c).collect()
+        entries
+            .into_iter()
+            .take(max_capture_channels())
+            .map(|(c, _)| c)
+            .collect()
     }
 
     /// Kanäle, die JETZT aufgenommen werden sollen.
@@ -359,7 +382,10 @@ impl ReactionLearning {
             return Vec::new();
         }
         let candidates = self.filter_live(&self.live_partner_channels().await).await;
-        self.busiest(&candidates).into_iter().take(idle_slots).collect()
+        self.busiest(&candidates)
+            .into_iter()
+            .take(idle_slots)
+            .collect()
     }
 
     /// Sortiert Kanäle nach Chat-Aktivität der letzten Minuten, lebendigste
@@ -448,7 +474,11 @@ impl ReactionLearning {
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        channels.iter().filter(|c| !offline.contains(c)).cloned().collect()
+        channels
+            .iter()
+            .filter(|c| !offline.contains(c))
+            .cloned()
+            .collect()
     }
 
     /// Soll dieser Kanal gerade aufgenommen werden? Prüft dieselben Quellen
@@ -556,7 +586,10 @@ impl ReactionLearning {
         // sind Response UND Umgebung des nächsten Turns — zweimal speichern
         // hiesse, sie beim Aufräumen zweimal treffen zu müssen.
         let kind = if is_owner { "own" } else { "chat" };
-        if let Err(error) = self.append_chat_entry(&channel, kind, &login, &text, message_id).await {
+        if let Err(error) = self
+            .append_chat_entry(&channel, kind, &login, &text, message_id)
+            .await
+        {
             tracing::warn!(%error, channel = %channel, kind, "learn: Timeline-Insert fehlgeschlagen");
         }
     }
@@ -744,8 +777,7 @@ impl ReactionLearning {
         channel_login: &str,
         before: DateTime<Utc>,
     ) -> Vec<(String, String)> {
-        let lines =
-            env_int("ENGAGEMENT_LEARN_CHAT_LINES", DEFAULT_CHAT_CONTEXT_LINES, 1);
+        let lines = env_int("ENGAGEMENT_LEARN_CHAT_LINES", DEFAULT_CHAT_CONTEXT_LINES, 1);
         let minutes = env_int(
             "ENGAGEMENT_LEARN_CHAT_MINUTES",
             DEFAULT_CHAT_CONTEXT_MINUTES,
@@ -767,7 +799,10 @@ impl ReactionLearning {
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        rows.into_iter().rev().map(|r| (r.author, r.content)).collect()
+        rows.into_iter()
+            .rev()
+            .map(|r| (r.author, r.content))
+            .collect()
     }
 
     /// Der gebündelte Zeitstrahl eines Kanals, chronologisch. Für die Sichtung.
@@ -847,10 +882,7 @@ impl ReactionLearning {
     ///
     /// Das Profil beantwortet die Frage, die einzelne Stil-Zeilen nicht
     /// beantworten können: nicht WIE geschrieben wird, sondern WORAUF hin.
-    pub async fn distill_profile(
-        &self,
-        minimax: &EngagementMinimaxClient,
-    ) -> Option<String> {
+    pub async fn distill_profile(&self, minimax: &EngagementMinimaxClient) -> Option<String> {
         let samples = self.recent_samples(DISTILL_SAMPLE_LIMIT, true).await;
         if samples.len() < MIN_SAMPLES_FOR_PROFILE {
             tracing::debug!(
@@ -867,7 +899,10 @@ impl ReactionLearning {
             .ok()?;
         let profile = crate::minimax_chat::strip_think(&raw).trim().to_string();
         if profile.is_empty() || profile.chars().count() > MAX_PROFILE_CHARS {
-            tracing::warn!(len = profile.chars().count(), "learn-profile: Antwort unbrauchbar");
+            tracing::warn!(
+                len = profile.chars().count(),
+                "learn-profile: Antwort unbrauchbar"
+            );
             return None;
         }
         if let Err(error) = sqlx::query!(
@@ -937,7 +972,10 @@ mod tests {
     #[test]
     fn stream_context_leer_bleibt_leer() {
         assert_eq!(build_stream_context(&[], ts(0)), "");
-        assert_eq!(build_stream_context(&[(ts(0), "   ".to_string())], ts(0)), "");
+        assert_eq!(
+            build_stream_context(&[(ts(0), "   ".to_string())], ts(0)),
+            ""
+        );
     }
 
     #[test]
@@ -947,7 +985,10 @@ mod tests {
             ("chatterB".to_string(), "  was war das  ".to_string()),
             ("chatterC".to_string(), "  ".to_string()), // leer → raus
         ];
-        assert_eq!(build_chat_context(&lines), "chatterA: lol\nchatterB: was war das");
+        assert_eq!(
+            build_chat_context(&lines),
+            "chatterA: lol\nchatterB: was war das"
+        );
     }
 
     #[test]
@@ -1016,12 +1057,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for statement in [
             "CREATE TABLE twitch_engagement_learn_channels (\
                channel_login TEXT PRIMARY KEY, channel_user_id TEXT, \
@@ -1059,7 +1116,9 @@ mod tests {
 
     #[tokio::test]
     async fn fremde_nachricht_in_kaltem_kanal_wird_ignoriert() {
-        let Some(pool) = make_pool("t_eng_learn_cold").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_cold").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         learn.observe("nani", None, "fremder", "hallo", None).await;
         let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
@@ -1072,10 +1131,16 @@ mod tests {
 
     #[tokio::test]
     async fn owner_macht_kanal_heiss_und_fremde_landen_im_puffer() {
-        let Some(pool) = make_pool("t_eng_learn_hot").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_hot").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
-        learn.observe("Nani", Some("42"), "Owner", "wilder take", Some("m1")).await;
-        learn.observe("nani", None, "fremder", "haha ja", None).await;
+        learn
+            .observe("Nani", Some("42"), "Owner", "wilder take", Some("m1"))
+            .await;
+        learn
+            .observe("nani", None, "fremder", "haha ja", None)
+            .await;
 
         assert_eq!(learn.hot_channels(), vec!["nani".to_string()]);
         let (login, count, user_id): (String, i64, Option<String>) = sqlx::query_as(
@@ -1110,16 +1175,28 @@ mod tests {
     /// Zeitstrahl-Zeilen und am Ende zwei Samples fuer eine Reaktion.
     #[tokio::test]
     async fn dieselbe_nachricht_aus_zwei_quellen_zaehlt_einmal() {
-        let Some(pool) = make_pool("t_eng_learn_dedup").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_dedup").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
-        learn.observe("nani", Some("42"), "owner", "wilder take", Some("msg-1")).await;
+        learn
+            .observe("nani", Some("42"), "owner", "wilder take", Some("msg-1"))
+            .await;
         // Zweiter Pfad, gleiche Twitch-Message-ID, minimal andere Formatierung.
-        learn.observe("nani", None, "owner", "wilder take", Some("msg-1")).await;
+        learn
+            .observe("nani", None, "owner", "wilder take", Some("msg-1"))
+            .await;
         // Andere ID im selben Kanal bleibt eine eigene Zeile.
-        learn.observe("nani", None, "fremder", "haha", Some("msg-2")).await;
+        learn
+            .observe("nani", None, "fremder", "haha", Some("msg-2"))
+            .await;
         // Ohne ID (etwa aus einem Pfad ohne Tags) greift der Index nicht.
-        learn.observe("nani", None, "fremder", "ohne id", None).await;
-        learn.observe("nani", None, "fremder", "ohne id", None).await;
+        learn
+            .observe("nani", None, "fremder", "ohne id", None)
+            .await;
+        learn
+            .observe("nani", None, "fremder", "ohne id", None)
+            .await;
 
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
@@ -1135,7 +1212,9 @@ mod tests {
     /// dabei entsteht.
     #[tokio::test]
     async fn ohne_owner_laeuft_nur_der_lebendigste_kanal() {
-        let Some(pool) = make_pool("t_eng_learn_capture").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_capture").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES \
              ('partner_live', TRUE), ('partner_still', TRUE), ('partner_offline', TRUE), \
@@ -1166,9 +1245,15 @@ mod tests {
         for _ in 0..3 {
             learn.note_activity("partner_live", now);
         }
-        assert_eq!(learn.capture_channels().await, vec!["partner_live".to_string()]);
+        assert_eq!(
+            learn.capture_channels().await,
+            vec!["partner_live".to_string()]
+        );
         assert!(learn.should_capture("Partner_Live").await);
-        assert!(!learn.should_capture("partner_still").await, "nur einer im Leerlauf");
+        assert!(
+            !learn.should_capture("partner_still").await,
+            "nur einer im Leerlauf"
+        );
         assert!(!learn.should_capture("partner_offline").await);
     }
 
@@ -1176,7 +1261,9 @@ mod tests {
     /// wenn woanders deutlich mehr los ist.
     #[tokio::test]
     async fn owner_verdraengt_den_leerlauf_kanal() {
-        let Some(pool) = make_pool("t_eng_learn_prio").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_prio").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('grosser', TRUE)",
         )
@@ -1198,7 +1285,9 @@ mod tests {
         assert_eq!(learn.capture_channels().await, vec!["grosser".to_string()]);
 
         // Owner taucht in einem kleinen fremden Kanal auf.
-        learn.observe("kleiner", None, "owner", "wilder take", Some("m1")).await;
+        learn
+            .observe("kleiner", None, "owner", "wilder take", Some("m1"))
+            .await;
         assert_eq!(learn.capture_channels().await, vec!["kleiner".to_string()]);
     }
 
@@ -1219,16 +1308,23 @@ mod tests {
         learn.note_activity("frisch", now);
         let snapshot = learn.activity_snapshot();
         assert_eq!(snapshot, vec![("frisch".to_string(), 1)]);
-        assert_eq!(learn.busiest(&["alt".to_string(), "frisch".to_string()]), vec!["frisch"]);
+        assert_eq!(
+            learn.busiest(&["alt".to_string(), "frisch".to_string()]),
+            vec!["frisch"]
+        );
     }
 
     #[tokio::test]
     async fn fremder_kanal_wird_ab_sichtung_aufgenommen_bis_der_stream_endet() {
-        let Some(pool) = make_pool("t_eng_learn_capture_fremd").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_capture_fremd").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         // Kein Partner, kein Live-State-Eintrag: unbekannte Kanaele bleiben
         // drin, sobald der Owner dort nachweislich schreibt.
-        learn.observe("fremd", None, "owner", "wilder take", Some("m1")).await;
+        learn
+            .observe("fremd", None, "owner", "wilder take", Some("m1"))
+            .await;
         assert_eq!(learn.capture_channels().await, vec!["fremd".to_string()]);
 
         // Geht der Stream aus, endet die Aufnahme sofort statt nach Ablauf der
@@ -1245,10 +1341,14 @@ mod tests {
 
     #[tokio::test]
     async fn in_aufgenommenen_kanaelen_wandert_auch_fremder_chat_mit() {
-        let Some(pool) = make_pool("t_eng_learn_recording").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_recording").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         // Ohne Aufnahme-Markierung faellt die fremde Zeile weg.
-        learn.observe("partner", None, "chatter", "erste zeile", Some("m1")).await;
+        learn
+            .observe("partner", None, "chatter", "erste zeile", Some("m1"))
+            .await;
         let before: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_learn_timeline")
                 .fetch_one(&pool)
@@ -1259,7 +1359,9 @@ mod tests {
         // Sobald der Supervisor den Kanal als aufgenommen meldet, laeuft der
         // Chat mit — sonst gaebe es Stream-Ton ohne den zugehoerigen Chat.
         learn.set_recording(&["partner".to_string()]);
-        learn.observe("partner", None, "chatter", "zweite zeile", Some("m2")).await;
+        learn
+            .observe("partner", None, "chatter", "zweite zeile", Some("m2"))
+            .await;
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT kind, content FROM twitch_engagement_learn_timeline ORDER BY id",
         )
@@ -1271,7 +1373,9 @@ mod tests {
 
     #[tokio::test]
     async fn timeline_mischt_audio_und_chat_chronologisch() {
-        let Some(pool) = make_pool("t_eng_learn_timeline").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_timeline").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         let base = Utc::now() - Duration::minutes(3);
         learn
@@ -1286,10 +1390,16 @@ mod tests {
             .await
             .unwrap();
         // Chat-Zeilen landen mit NOW() im Strahl, also nach dem Segment.
-        learn.observe("nani", None, "owner", "wilder take", None).await;
-        learn.observe("nani", None, "fremder", "haha ja", None).await;
+        learn
+            .observe("nani", None, "owner", "wilder take", None)
+            .await;
+        learn
+            .observe("nani", None, "fremder", "haha ja", None)
+            .await;
 
-        let entries = learn.timeline("Nani", base - Duration::minutes(1), 50).await;
+        let entries = learn
+            .timeline("Nani", base - Duration::minutes(1), 50)
+            .await;
         let shape: Vec<(&str, Option<&str>, &str)> = entries
             .iter()
             .map(|e| (e.kind.as_str(), e.author.as_deref(), e.content.as_str()))
@@ -1306,7 +1416,9 @@ mod tests {
 
     #[tokio::test]
     async fn mapper_baut_sample_aus_transkript_und_chat() {
-        let Some(pool) = make_pool("t_eng_learn_map").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_map").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         // Nachricht liegt weit genug zurück, damit sie fällig ist.
         let msg_ts = Utc::now() - Duration::minutes(5);
@@ -1353,7 +1465,9 @@ mod tests {
 
     #[tokio::test]
     async fn mapper_wartet_auf_das_fenster_nach_der_nachricht() {
-        let Some(pool) = make_pool("t_eng_learn_lag").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_lag").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         sqlx::query(
             "INSERT INTO twitch_engagement_learn_timeline \
@@ -1362,12 +1476,18 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(learn.map_pending().await, 0, "frische Nachricht wartet noch");
+        assert_eq!(
+            learn.map_pending().await,
+            0,
+            "frische Nachricht wartet noch"
+        );
     }
 
     #[tokio::test]
     async fn sample_ohne_stream_context_wird_markiert() {
-        let Some(pool) = make_pool("t_eng_learn_nostream").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_nostream").await else {
+            return;
+        };
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
         sqlx::query(
             "INSERT INTO twitch_engagement_learn_timeline \
@@ -1388,7 +1508,9 @@ mod tests {
 
     #[tokio::test]
     async fn warm_cache_holt_heisse_kanaele_zurueck() {
-        let Some(pool) = make_pool("t_eng_learn_warm").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_warm").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_learn_channels (channel_login, last_seen_at) \
              VALUES ('frisch', NOW()), ('alt', NOW() - INTERVAL '10 hours')",
@@ -1403,7 +1525,9 @@ mod tests {
 
     #[tokio::test]
     async fn trim_raeumt_den_zeitstrahl_aber_nicht_samples() {
-        let Some(pool) = make_pool("t_eng_learn_trim").await else { return };
+        let Some(pool) = make_pool("t_eng_learn_trim").await else {
+            return;
+        };
         let alt = Utc::now() - Duration::hours(retention_hours() + 1);
         sqlx::query(
             "INSERT INTO twitch_engagement_learn_timeline \
@@ -1421,13 +1545,21 @@ mod tests {
             .bind(alt).execute(&pool).await.unwrap();
 
         let learn = ReactionLearning::new(pool.clone()).with_owner("owner");
-        assert_eq!(learn.trim().await, 3, "alles außer der ungemappten eigenen Zeile");
+        assert_eq!(
+            learn.trim().await,
+            3,
+            "alles außer der ungemappten eigenen Zeile"
+        );
         let rest: Vec<String> =
             sqlx::query_scalar("SELECT content FROM twitch_engagement_learn_timeline")
                 .fetch_all(&pool)
                 .await
                 .unwrap();
         assert_eq!(rest, vec!["alt und ungemappt".to_string()]);
-        assert_eq!(learn.sample_count().await, 1, "Samples überleben das Trimmen");
+        assert_eq!(
+            learn.sample_count().await,
+            1,
+            "Samples überleben das Trimmen"
+        );
     }
 }

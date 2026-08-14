@@ -112,12 +112,16 @@ pub fn hero_name(entry: &serde_json::Value) -> Option<String> {
 /// überschreiben bei Namensgleichheit. Nur Namen ≥ [`MIN_NAME_LEN`]. Sortiert
 /// längster Name zuerst (spezifischster Treffer gewinnt), bei Gleichstand
 /// alphabetisch (Determinismus statt Python-Insertion-Order).
-pub fn build_entity_index(heroes: &[serde_json::Value], items: &[serde_json::Value]) -> Vec<Entity> {
+pub fn build_entity_index(
+    heroes: &[serde_json::Value],
+    items: &[serde_json::Value],
+) -> Vec<Entity> {
     let mut seen: HashMap<String, (String, EntityKind)> = HashMap::new();
     for it in items {
         if let Some(name) = display_item_name(it) {
             if name.chars().count() >= MIN_NAME_LEN {
-                seen.entry(name.to_lowercase()).or_insert((name, EntityKind::Item));
+                seen.entry(name.to_lowercase())
+                    .or_insert((name, EntityKind::Item));
             }
         }
     }
@@ -173,8 +177,8 @@ pub fn trim_extract(extract: &str) -> String {
 
     // 3+ aufeinanderfolgende (Whitespace-)Leerzeilen → ein einzelnes \n.
     static BLANK_RUN: OnceLock<Regex> = OnceLock::new();
-    let blank_run =
-        BLANK_RUN.get_or_init(|| Regex::new(r"\n[ \t]*\n[ \t]*(?:\n[ \t]*)+").expect("valide Regex"));
+    let blank_run = BLANK_RUN
+        .get_or_init(|| Regex::new(r"\n[ \t]*\n[ \t]*(?:\n[ \t]*)+").expect("valide Regex"));
     let collapsed = blank_run.replace_all(text, "\n");
     let collapsed = collapsed.trim();
 
@@ -241,7 +245,10 @@ impl DeadlockWiki {
         Self {
             assets_base: assets_base.trim_end_matches('/').to_string(),
             wiki_api: wiki_api.to_string(),
-            index: Mutex::new(IndexCache { entities: Vec::new(), loaded_at: None }),
+            index: Mutex::new(IndexCache {
+                entities: Vec::new(),
+                loaded_at: None,
+            }),
             pages: Mutex::new(HashMap::new()),
             http,
         }
@@ -264,7 +271,10 @@ impl DeadlockWiki {
 
     async fn load_entity_index(&self) -> Result<Vec<Entity>, reqwest::Error> {
         let heroes = self
-            .fetch_json(&format!("{}/v2/heroes", self.assets_base), &[("only_active", "true")])
+            .fetch_json(
+                &format!("{}/v2/heroes", self.assets_base),
+                &[("only_active", "true")],
+            )
             .await?;
         let items = self
             .fetch_json(&format!("{}/v2/items", self.assets_base), &[])
@@ -313,7 +323,11 @@ impl DeadlockWiki {
             let cache = self.pages.lock().unwrap_or_else(|p| p.into_inner());
             if let Some((loaded, trimmed)) = cache.get(&key) {
                 if loaded.elapsed() < PAGE_TTL {
-                    return if trimmed.is_empty() { None } else { Some(trimmed.clone()) };
+                    return if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.clone())
+                    };
                 }
             }
         }
@@ -388,11 +402,16 @@ mod tests {
         );
         // name == class_name → None
         assert_eq!(
-            display_item_name(&json!({"name": "citadel_weapon_x", "class_name": "citadel_weapon_x"})),
+            display_item_name(
+                &json!({"name": "citadel_weapon_x", "class_name": "citadel_weapon_x"})
+            ),
             None
         );
         // reiner snake_case → None
-        assert_eq!(display_item_name(&json!({"name": "citadel_weapon_x"})), None);
+        assert_eq!(
+            display_item_name(&json!({"name": "citadel_weapon_x"})),
+            None
+        );
     }
 
     #[test]
@@ -419,7 +438,10 @@ mod tests {
         // 'reach' triggert NICHT in 'breach'
         assert_eq!(detect_entity(&idx, "the breach is wide"), None);
         // exaktes Wort triggert
-        assert_eq!(detect_entity(&idx, "nice reach there").map(|(_, k)| k), Some(EntityKind::Hero));
+        assert_eq!(
+            detect_entity(&idx, "nice reach there").map(|(_, k)| k),
+            Some(EntityKind::Hero)
+        );
         // Mehrwort-Item
         assert_eq!(
             detect_entity(&idx, "lohnt trophy collector?").map(|(n, _)| n),
@@ -445,7 +467,11 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    async fn mount_assets(server: &MockServer, heroes: serde_json::Value, items: serde_json::Value) {
+    async fn mount_assets(
+        server: &MockServer,
+        heroes: serde_json::Value,
+        items: serde_json::Value,
+    ) {
         Mock::given(method("GET"))
             .and(path("/v2/heroes"))
             .respond_with(ResponseTemplate::new(200).set_body_json(heroes))
@@ -472,7 +498,9 @@ mod tests {
             .await;
 
         let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
-        let frag = wiki.build_grounding_fragment("erzähl mir was über haze").await;
+        let frag = wiki
+            .build_grounding_fragment("erzähl mir was über haze")
+            .await;
         assert!(frag.contains("[Held: Haze]"));
         assert!(frag.contains("Bullet-Dance"));
         assert!(frag.contains("Beleg aus dem Deadlock-Wiki"));
@@ -484,7 +512,11 @@ mod tests {
         mount_assets(&server, json!([{"name": "Haze"}]), json!([])).await;
         let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
         // Kein bekannter Held/Item im Text → leeres Fragment.
-        assert_eq!(wiki.build_grounding_fragment("hallo zusammen wie gehts").await, "");
+        assert_eq!(
+            wiki.build_grounding_fragment("hallo zusammen wie gehts")
+                .await,
+            ""
+        );
     }
 
     #[tokio::test]
@@ -506,7 +538,10 @@ mod tests {
         let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
         wiki.ensure_index().await;
         wiki.ensure_index().await; // aus dem Cache
-        assert_eq!(wiki.detect("haze ist stark").map(|(n, _)| n), Some("Haze".to_string()));
+        assert_eq!(
+            wiki.detect("haze ist stark").map(|(n, _)| n),
+            Some("Haze".to_string())
+        );
         server.verify().await;
     }
 }

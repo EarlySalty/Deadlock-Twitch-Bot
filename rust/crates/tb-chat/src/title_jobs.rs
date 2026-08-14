@@ -105,11 +105,17 @@ async fn resolve_streamer_id(pool: &PgPool, login: &str) -> Option<String> {
 /// History-Tiefe, und upserted überdurchschnittliche Titel in die Knowledge-Base.
 pub async fn run_knowledge_job(pool: &PgPool) {
     let sessions = fetch_recent_sessions(pool, 7).await;
-    tracing::info!(sessions = sessions.len(), "title_generator: knowledge job start");
+    tracing::info!(
+        sessions = sessions.len(),
+        "title_generator: knowledge job start"
+    );
 
     let mut by_streamer: HashMap<String, Vec<RecentSession>> = HashMap::new();
     for s in sessions {
-        by_streamer.entry(s.streamer_login.clone()).or_default().push(s);
+        by_streamer
+            .entry(s.streamer_login.clone())
+            .or_default()
+            .push(s);
     }
 
     let mut inserted = 0u32;
@@ -255,7 +261,10 @@ pub async fn run_insight_job(pool: &PgPool) {
     let now = Utc::now();
     let period_start = now - chrono::Duration::days(28);
     let partner_ids = fetch_active_partner_ids(pool).await;
-    tracing::info!(partners = partner_ids.len(), "title_generator: insight job start");
+    tracing::info!(
+        partners = partner_ids.len(),
+        "title_generator: insight job start"
+    );
 
     for streamer_id in partner_ids {
         let sessions = fetch_history_for_period(pool, &streamer_id, period_start, now).await;
@@ -332,12 +341,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(4).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_user_id TEXT, twitch_login TEXT)",
             "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, is_partner_active INTEGER)",
@@ -360,9 +385,15 @@ mod tests {
 
     #[tokio::test]
     async fn knowledge_job_scort_und_upserted() {
-        let Some(pool) = make_pool("t6e_title_knowledge_job").await else { return };
-        sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ('900','foo')")
-            .execute(&pool).await.unwrap();
+        let Some(pool) = make_pool("t6e_title_knowledge_job").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ('900','foo')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // 3 Sessions in den letzten 7 Tagen (relativ zu now() = 2026-06-14).
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (streamer_login, stream_title, avg_viewers, followers_start, started_at) VALUES \
@@ -378,14 +409,18 @@ mod tests {
         // s1: rel=1.25, eng=0.5 → (0.625+25)*0.15=3.84 ≥1.2 ✓; s2: (0.5+20)*0.15=3.075 ✓;
         // s3 'x' (len 1) gefiltert.
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 2);
 
         let (score, size, source, kw): (f64, String, String, Vec<String>) = sqlx::query_as(
             "SELECT normalized_score::float8, streamer_size, source_streamer, keywords \
              FROM title_generator_knowledge WHERE title='Deadlock Ranked Grind Session'",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(score > 3.0); // ≈3.84
         assert_eq!(size, "small"); // own_avg 40 < 100
         assert_eq!(source, "900..."); // streamer_id[:8] + "..."
@@ -393,30 +428,47 @@ mod tests {
 
         // Idempotent: erneut → GREATEST, weiterhin 2 Zeilen.
         run_knowledge_job(&pool).await;
-        let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
-            .fetch_one(&pool).await.unwrap();
+        let count2: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count2, 2);
     }
 
     #[test]
     fn enrich_filtert_null_followers_und_own_avg() {
         let sessions = vec![
-            HistorySession { title: "a".into(), avg_viewers: 50.0, followers_start: Some(100) },
-            HistorySession { title: "b".into(), avg_viewers: 40.0, followers_start: None }, // gefiltert
-            HistorySession { title: "c".into(), avg_viewers: 30.0, followers_start: Some(0) }, // 0 gefiltert
+            HistorySession {
+                title: "a".into(),
+                avg_viewers: 50.0,
+                followers_start: Some(100),
+            },
+            HistorySession {
+                title: "b".into(),
+                avg_viewers: 40.0,
+                followers_start: None,
+            }, // gefiltert
+            HistorySession {
+                title: "c".into(),
+                avg_viewers: 30.0,
+                followers_start: Some(0),
+            }, // 0 gefiltert
         ];
         let e = enrich_with_scores(&sessions, 40.0);
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].title, "a");
         assert_eq!(e[0].relative_perf, 1.25); // 50/40
         assert_eq!(e[0].engagement_rate, 0.5); // 50/100
-        // own_avg <= 0 → alles gefiltert.
+                                               // own_avg <= 0 → alles gefiltert.
         assert!(enrich_with_scores(&sessions, 0.0).is_empty());
     }
 
     #[tokio::test]
     async fn insight_loader_partner_und_historie() {
-        let Some(pool) = make_pool("t6e_title_insight_loader").await else { return };
+        let Some(pool) = make_pool("t6e_title_insight_loader").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_user_id, is_partner_active) VALUES \
              ('900',1),('901',0)",
@@ -439,7 +491,8 @@ mod tests {
 
         // 28d-Fenster: t1,t2 drin; t3 (40d) raus; leerer Titel raus → 2.
         let now = Utc::now();
-        let history = fetch_history_for_period(&pool, "900", now - chrono::Duration::days(28), now).await;
+        let history =
+            fetch_history_for_period(&pool, "900", now - chrono::Duration::days(28), now).await;
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].title, "t1"); // DESC nach started_at
         assert_eq!(history[0].avg_viewers, 50.0);

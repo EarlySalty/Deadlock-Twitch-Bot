@@ -820,7 +820,10 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
-        standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api), pool.clone())),
+        standard_replies: Arc::new(tb_chat::StandardReplies::new(
+            Arc::clone(&api),
+            pool.clone(),
+        )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
@@ -882,8 +885,7 @@ pub async fn build_runtime(
         // Zweiter, anonymer Mitleser für Kanäle ohne `channel:bot`-Grant. Der
         // EventSub-Pfad oben sieht nur Partner-Kanäle; genau die fremden Kanäle
         // fehlen dort, in denen gelernt werden soll.
-        let learn_reader =
-            LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
+        let learn_reader = LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
         supervisor.spawn("engagement_learn_irc_reader", async move {
             learn_reader.run().await;
             future::pending::<()>().await;
@@ -2814,7 +2816,10 @@ mod chat_notification_tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            standard_replies: Arc::new(tb_chat::StandardReplies::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -3164,8 +3169,9 @@ mod db_tests {
     use std::str::FromStr;
 
     async fn setup(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)

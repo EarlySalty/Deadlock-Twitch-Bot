@@ -1260,7 +1260,9 @@ async fn decide(
                 Some(reason) => {
                     debug!(
                         channel,
-                        chatter = login, reason, "crew_guard: Verhaltens-Gate ruft Judge"
+                        chatter = login,
+                        reason,
+                        "crew_guard: Verhaltens-Gate ruft Judge"
                     );
                     ask_judge(judge, content, recent_context, &facts, threshold).await
                 }

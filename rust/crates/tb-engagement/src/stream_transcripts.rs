@@ -74,7 +74,11 @@ pub fn segments_to_prompt_fragment(
 
     let mut parts: Vec<String> = Vec::new();
     for segment in segments {
-        let text = segment.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = segment
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if text.is_empty() {
             continue;
         }
@@ -117,7 +121,11 @@ impl StreamTranscripts {
         &self,
         segment: &StreamTranscriptSegment,
     ) -> Result<(), sqlx::Error> {
-        let text = segment.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = segment
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if text.is_empty() {
             return Ok(());
         }
@@ -240,14 +248,24 @@ mod tests {
     #[test]
     fn fragment_format_und_budget() {
         assert_eq!(segments_to_prompt_fragment(&[], None), "");
-        let segs = vec![seg("erster satz", 1_700_000_000), seg("zweiter satz", 1_700_000_060)];
+        let segs = vec![
+            seg("erster satz", 1_700_000_000),
+            seg("zweiter satz", 1_700_000_060),
+        ];
         let frag = segments_to_prompt_fragment(&segs, None);
         assert!(frag.contains("Stream-Audio-Kontext"));
         assert!(frag.contains(": erster satz"));
         assert!(frag.contains(": zweiter satz"));
 
         // Budget kürzt von vorne (erste angeschnittene Zeile fällt weg).
-        let many: Vec<_> = (0..20).map(|i| seg(&format!("zeile nummer {i} mit text"), 1_700_000_000 + i * 60)).collect();
+        let many: Vec<_> = (0..20)
+            .map(|i| {
+                seg(
+                    &format!("zeile nummer {i} mit text"),
+                    1_700_000_000 + i * 60,
+                )
+            })
+            .collect();
         let cut = segments_to_prompt_fragment(&many, Some(60));
         assert!(cut.chars().count() < 400); // deutlich gekürzt
         assert!(cut.contains("Stream-Audio-Kontext"));
@@ -266,12 +284,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_stream_transcripts (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT NOT NULL, \
@@ -287,7 +321,9 @@ mod tests {
 
     #[tokio::test]
     async fn append_und_load_chronologisch() {
-        let Some(pool) = make_pool("t_eng_transcript").await else { return };
+        let Some(pool) = make_pool("t_eng_transcript").await else {
+            return;
+        };
         let st = StreamTranscripts::new(pool.clone());
         // Zwei frische Segmente + ein leeres (wird nicht inserted).
         let now = Utc::now();

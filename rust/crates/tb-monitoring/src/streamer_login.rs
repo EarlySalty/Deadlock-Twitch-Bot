@@ -155,7 +155,11 @@ const HISTORIE_TABELLEN: &[(&str, &str, &str)] = &[
         "channel_login",
         "channel_user_id",
     ),
-    ("twitch_scout_pitch_ledger", "streamer_login", "twitch_user_id"),
+    (
+        "twitch_scout_pitch_ledger",
+        "streamer_login",
+        "twitch_user_id",
+    ),
 ];
 
 /// Zähler pro Tabelle. Bewusst eine Liste statt fester Felder: welche Tabellen
@@ -258,9 +262,9 @@ impl StreamerLoginStore {
         }
 
         let old_login = sqlx::query_scalar::<_, String>(KNOWN_LOGIN_SQL)
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await?;
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?;
 
         let Some(old_login) = old_login else {
             tracing::debug!(
@@ -583,8 +587,7 @@ async fn clear_stale_foreign_login(
     let extra = extra_condition
         .map(|condition| format!(" AND target.{condition}"))
         .unwrap_or_default();
-    let placeholder =
-        format!("'stale:' || COALESCE(target.{id_column}, 'unbekannt') || ':' || $2");
+    let placeholder = format!("'stale:' || COALESCE(target.{id_column}, 'unbekannt') || ':' || $2");
     let neutralize = format!(
         "UPDATE {table} target
             SET {login_column} = {placeholder}

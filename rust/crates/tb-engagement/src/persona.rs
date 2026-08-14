@@ -13,9 +13,9 @@ use regex::Regex;
 use sqlx::PgPool;
 
 const GERMAN_MARKERS: &[&str] = &[
-    "der", "die", "das", "und", "ist", "nicht", "auch", "auf", "mit", "für", "fuer", "ein",
-    "eine", "den", "im", "haben", "sind", "war", "wie", "noch", "schon", "hat", "wird", "halt",
-    "ne", "geh", "gleich", "ja", "nein", "aber", "doch", "echt", "krass", "sehr", "mehr", "wenn",
+    "der", "die", "das", "und", "ist", "nicht", "auch", "auf", "mit", "für", "fuer", "ein", "eine",
+    "den", "im", "haben", "sind", "war", "wie", "noch", "schon", "hat", "wird", "halt", "ne",
+    "geh", "gleich", "ja", "nein", "aber", "doch", "echt", "krass", "sehr", "mehr", "wenn",
 ];
 
 const ENGLISH_MARKERS: &[&str] = &[
@@ -25,8 +25,25 @@ const ENGLISH_MARKERS: &[&str] = &[
 ];
 
 const TWITCH_SLANG: &[&str] = &[
-    "kekw", "pog", "pogchamp", "lul", "omegalul", "kappa", "monkas", "jebaited", "sadge", "copium",
-    "ratjam", "peped", "5head", "ezclap", "kekwait", "yepw", "pepega", "pepehands", "nyaa",
+    "kekw",
+    "pog",
+    "pogchamp",
+    "lul",
+    "omegalul",
+    "kappa",
+    "monkas",
+    "jebaited",
+    "sadge",
+    "copium",
+    "ratjam",
+    "peped",
+    "5head",
+    "ezclap",
+    "kekwait",
+    "yepw",
+    "pepega",
+    "pepehands",
+    "nyaa",
     "okayeg",
 ];
 
@@ -191,7 +208,10 @@ pub struct Persona {
 
 impl Persona {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, cache: Mutex::new(HashMap::new()) }
+        Self {
+            pool,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn load_user_turns(&self, channel_login: &str, limit: i64) -> Vec<String> {
@@ -225,7 +245,10 @@ impl Persona {
         let snapshot = compute(&texts);
         {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            cache.insert(channel_login.to_string(), (Instant::now(), snapshot.clone()));
+            cache.insert(
+                channel_login.to_string(),
+                (Instant::now(), snapshot.clone()),
+            );
         }
         snapshot
     }
@@ -276,12 +299,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -295,7 +334,9 @@ mod tests {
 
     #[tokio::test]
     async fn sample_tone_aus_db() {
-        let Some(pool) = make_pool("t_eng_persona").await else { return };
+        let Some(pool) = make_pool("t_eng_persona").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES \
              ('nani','user','das ist echt krass und gut'), \

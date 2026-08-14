@@ -36,7 +36,6 @@ const SELF_HEAL_COOLDOWN: Duration = Duration::from_secs(600);
 /// versucht wird (ein Bot-Pfad-Erfolg löscht den Backoff sofort).
 const NOT_MOD_BACKOFF: Duration = Duration::from_secs(900);
 
-
 // ---------------------------------------------------------------------------
 // Injizierte Ports (Implementierung lebt im Composition-Root / Binary)
 // ---------------------------------------------------------------------------
@@ -603,8 +602,16 @@ impl ChattersCollector {
 
             let result = poll_streamer_once(
                 streamer,
-                if bot_usable { bot_token.as_deref() } else { None },
-                if bot_usable { bot_user_id.as_deref() } else { None },
+                if bot_usable {
+                    bot_token.as_deref()
+                } else {
+                    None
+                },
+                if bot_usable {
+                    bot_user_id.as_deref()
+                } else {
+                    None
+                },
                 streamer_token.as_deref(),
                 self.fetcher.as_ref(),
                 self.provisioner.as_ref(),

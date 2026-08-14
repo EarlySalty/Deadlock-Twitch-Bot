@@ -49,7 +49,10 @@ fn decode_entity(entity: &str) -> Option<char> {
         "apos" => Some('\''),
         "nbsp" => Some('\u{00A0}'),
         _ => {
-            if let Some(num) = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")) {
+            if let Some(num) = entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+            {
                 u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
             } else if let Some(num) = entity.strip_prefix('#') {
                 num.parse::<u32>().ok().and_then(char::from_u32)
@@ -89,7 +92,10 @@ fn html_unescape(input: &str) -> String {
 pub fn bbcode_to_change_lines(body: &str) -> Vec<String> {
     let mut t = html_unescape(body).replace('\r', "\n");
     let rep = |t: &str, pat: &str, with: &str| -> String {
-        Regex::new(pat).expect("static regex").replace_all(t, with).into_owned()
+        Regex::new(pat)
+            .expect("static regex")
+            .replace_all(t, with)
+            .into_owned()
     };
     t = rep(&t, r"(?i)\[/?p\]", "\n");
     t = rep(&t, r"(?i)\[h[12]\](.*?)\[/h[12]\]", "\n[ $1 ]\n");
@@ -234,7 +240,11 @@ impl DeadlockPatches {
     }
 
     fn latest_snapshot(&self) -> Option<LatestPatch> {
-        self.latest.lock().unwrap_or_else(|p| p.into_inner()).1.clone()
+        self.latest
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .1
+            .clone()
     }
 
     /// Echte Patch-Änderungen zum erkannten Held/Item — oder "".
@@ -251,7 +261,11 @@ impl DeadlockPatches {
         if lines.is_empty() {
             return String::new();
         }
-        let body = lines.iter().map(|ln| format!("- {ln}")).collect::<Vec<_>>().join("\n");
+        let body = lines
+            .iter()
+            .map(|ln| format!("- {ln}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
             "Echte Änderungen aus dem letzten Deadlock-Patch ('{title}') zu '{name}'. \
              Du darfst die einschätzen — Buff oder Nerf, ob sich das gut/stark anfühlt — aber \
@@ -271,7 +285,11 @@ impl DeadlockPatches {
             return String::new();
         };
         let shown = &patch.lines[..patch.lines.len().min(MAX_DIGEST_LINES)];
-        let body = shown.iter().map(|ln| format!("- {ln}")).collect::<Vec<_>>().join("\n");
+        let body = shown
+            .iter()
+            .map(|ln| format!("- {ln}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let more = patch.lines.len() - shown.len();
         let tail = if more > 0 {
             format!("\n(… und {more} weitere Änderungen)")
@@ -355,9 +373,14 @@ mod tests {
         let patches = DeadlockPatches::with_url(&format!("{}/news", server.uri()));
 
         // Kein Patch-Talk → leer (kein Fetch nötig).
-        assert_eq!(patches.get_patch_digest_fragment("hallo zusammen").await, "");
+        assert_eq!(
+            patches.get_patch_digest_fragment("hallo zusammen").await,
+            ""
+        );
         // Patch-Talk → Digest.
-        let frag = patches.get_patch_digest_fragment("wie ist die neue meta").await;
+        let frag = patches
+            .get_patch_digest_fragment("wie ist die neue meta")
+            .await;
         assert!(frag.contains("Patch X"));
         assert!(frag.contains("- Haze generft"));
     }

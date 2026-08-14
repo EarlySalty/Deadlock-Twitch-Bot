@@ -79,5 +79,8 @@ journalctl --user -u deadlock-twitch-stream-coaching-watch -f
 - Exit 2: Konfiguration fehlt (Kanaele, Helix, STT-URL) oder der Schutz gegen
   entfernte Transkription hat gegriffen. Grund steht im Klartext im Journal.
 - Exit 1: eine der beiden Schleifen ist gestorben; systemd startet neu.
-- Keine DM heisst: nichts gefunden. Gemeldet wird auch, wenn der Modellschritt
-  ausfiel oder ein Block endgueltig aufgegeben wurde.
+- Keine DM heisst in aller Regel: nichts gefunden. Gemeldet wird auch, wenn der
+  Modellschritt ausfiel, ein Block aufgegeben wurde, die Aufnahme wegen
+  Rueckstands pausiert oder die Twitch-Abfrage scheitert. Nimmt der Broker die
+  DM ueber Stunden nicht an, liegt der Bericht weiter im Ausgabeordner und der
+  Aufraeumtakt bietet die Meldung erneut an - Stille ist dann kein Beweis.

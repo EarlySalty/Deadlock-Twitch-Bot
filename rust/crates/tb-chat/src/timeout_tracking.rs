@@ -64,7 +64,10 @@ pub fn bot_banned_reason(outcome: &SendOutcome) -> Option<String> {
             Some(reason_with_detail("chat_bot_banned_in_channel", message))
         }
         SendOutcome::HttpError { status, body } if looks_like_bot_banned_error(*status, body) => {
-            Some(reason_with_detail(&format!("chat_bot_banned_in_channel_http_{status}"), body))
+            Some(reason_with_detail(
+                &format!("chat_bot_banned_in_channel_http_{status}"),
+                body,
+            ))
         }
         _ => None,
     }
@@ -236,7 +239,9 @@ impl ChatApi for TimeoutTrackingChatApi {
         target_user_id: &str,
         reason: &str,
     ) -> Result<BanOutcome, String> {
-        self.inner.ban_user(broadcaster_id, target_user_id, reason).await
+        self.inner
+            .ban_user(broadcaster_id, target_user_id, reason)
+            .await
     }
 
     async fn timeout_user(
@@ -251,26 +256,15 @@ impl ChatApi for TimeoutTrackingChatApi {
             .await
     }
 
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String> {
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String> {
         self.inner.unban_user(broadcaster_id, target_user_id).await
     }
 
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String> {
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
         self.inner.delete_message(broadcaster_id, message_id).await
     }
 
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String> {
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
         self.inner.user_created_at(user_id).await
     }
 
@@ -546,7 +540,10 @@ mod tests {
             matches!(out, SendOutcome::Dropped { ref code, .. } if code == "channel_settings"),
             "Original-Ergebnis unverändert"
         );
-        assert!(!guard.is_muted("egal"), "anderer Code → kein record_timeout");
+        assert!(
+            !guard.is_muted("egal"),
+            "anderer Code → kein record_timeout"
+        );
     }
 }
 

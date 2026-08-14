@@ -156,9 +156,7 @@ pub struct FireworksReviewClient {
 ///
 /// Fachschema und Prompt bleiben in den jeweiligen Review-Modulen; geteilt
 /// wird nur die Transport-Härtung.
-pub fn build_fireworks_http_client(
-    timeout: Duration,
-) -> Result<reqwest::Client, reqwest::Error> {
+pub fn build_fireworks_http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -195,8 +193,7 @@ impl FireworksReviewClient {
         if api_key.trim().is_empty() || base_url.trim().is_empty() || model.trim().is_empty() {
             return Err(ReviewError::Unavailable);
         }
-        let client =
-            build_fireworks_http_client(timeout).map_err(|_| ReviewError::Unavailable)?;
+        let client = build_fireworks_http_client(timeout).map_err(|_| ReviewError::Unavailable)?;
         Ok(Self {
             client,
             api_key,

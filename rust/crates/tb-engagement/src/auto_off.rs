@@ -47,12 +47,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (\
                 channel_login TEXT PRIMARY KEY, \
@@ -66,18 +82,26 @@ mod tests {
     }
 
     async fn enabled_of(pool: &PgPool, channel: &str) -> Option<bool> {
-        sqlx::query_scalar("SELECT enabled FROM twitch_engagement_settings WHERE channel_login = $1")
-            .bind(channel)
-            .fetch_optional(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = $1",
+        )
+        .bind(channel)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
     async fn deaktiviert_aktiven_channel() {
-        let Some(pool) = make_pool("t_eng_autooff_active").await else { return };
-        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', TRUE)")
-            .execute(&pool).await.unwrap();
+        let Some(pool) = make_pool("t_eng_autooff_active").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let n = auto_disable_on_offline(&pool, "nani").await.unwrap();
         assert_eq!(n, 1, "ein aktiver Channel wird umgeschaltet");
         assert_eq!(enabled_of(&pool, "nani").await, Some(false));
@@ -85,7 +109,9 @@ mod tests {
 
     #[tokio::test]
     async fn idempotent_bei_bereits_aus() {
-        let Some(pool) = make_pool("t_eng_autooff_idem").await else { return };
+        let Some(pool) = make_pool("t_eng_autooff_idem").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', FALSE)")
             .execute(&pool).await.unwrap();
         let n = auto_disable_on_offline(&pool, "nani").await.unwrap();
@@ -97,13 +123,22 @@ mod tests {
     /// nicht — exakt wie Python.
     #[tokio::test]
     async fn case_sensitiv_kein_lowercasing() {
-        let Some(pool) = make_pool("t_eng_autooff_case").await else { return };
+        let Some(pool) = make_pool("t_eng_autooff_case").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('MixedCase', TRUE)")
             .execute(&pool).await.unwrap();
         // Aufruf mit gelowercaster Variante → trifft die Zeile NICHT (case-sensitiv).
         let n = auto_disable_on_offline(&pool, "mixedcase").await.unwrap();
-        assert_eq!(n, 0, "gelowercaster Login trifft den exakt geschriebenen nicht");
-        assert_eq!(enabled_of(&pool, "MixedCase").await, Some(true), "Originalzeile unangetastet");
+        assert_eq!(
+            n, 0,
+            "gelowercaster Login trifft den exakt geschriebenen nicht"
+        );
+        assert_eq!(
+            enabled_of(&pool, "MixedCase").await,
+            Some(true),
+            "Originalzeile unangetastet"
+        );
         // Exakter Login → trifft.
         let n = auto_disable_on_offline(&pool, "MixedCase").await.unwrap();
         assert_eq!(n, 1);
@@ -112,7 +147,9 @@ mod tests {
 
     #[tokio::test]
     async fn leerer_login_kein_db_zugriff() {
-        let Some(pool) = make_pool("t_eng_autooff_empty").await else { return };
+        let Some(pool) = make_pool("t_eng_autooff_empty").await else {
+            return;
+        };
         assert_eq!(auto_disable_on_offline(&pool, "").await.unwrap(), 0);
     }
 }

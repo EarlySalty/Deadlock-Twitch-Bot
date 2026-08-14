@@ -279,7 +279,9 @@ mod tests {
     fn reminder_text_ist_python_paritaet() {
         // Byte-identisch zu monitoring.py::_reauth_chat_reminder_text.
         assert!(REAUTH_REMINDER_TEXT.starts_with("Kurze Erinnerung: Fuer den Raid-/Stats-Bot"));
-        assert!(REAUTH_REMINDER_TEXT.contains("Bitte im Dashboard einloggen und Twitch neu verbinden."));
+        assert!(
+            REAUTH_REMINDER_TEXT.contains("Bitte im Dashboard einloggen und Twitch neu verbinden.")
+        );
         assert!(REAUTH_REMINDER_TEXT.ends_with("auf Discord geschickt."));
         // ASCII-Parität: keine echten Umlaute im gesendeten Text.
         assert!(REAUTH_REMINDER_TEXT.is_ascii());

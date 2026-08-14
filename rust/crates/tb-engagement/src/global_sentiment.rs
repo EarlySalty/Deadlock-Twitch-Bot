@@ -24,7 +24,11 @@ kein Vorwort, keine Meta.";
 
 /// Build-Prompt aus den gepoolten Nachrichten (Python `_build_user_prompt`).
 fn build_user_prompt(lines: &[String]) -> String {
-    let block = lines.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n");
+    let block = lines
+        .iter()
+        .map(|m| format!("- {m}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "Hier echte Twitch-Chat-Nachrichten aus mehreren Deadlock-Streams (zusammengeworfen). \
          Destillier in 3-6 knappen Stichpunkten, wie sich Deadlock GERADE anfühlt — Stimmung, \
@@ -128,7 +132,10 @@ impl GlobalSentiment {
     ) -> Option<String> {
         let lines = self.load_pooled().await;
         if lines.len() < MIN_MSGS_TO_BUILD {
-            tracing::info!(msgs = lines.len(), "GlobalSentiment: zu wenig Material, skip");
+            tracing::info!(
+                msgs = lines.len(),
+                "GlobalSentiment: zu wenig Material, skip"
+            );
             return None;
         }
         let raw = minimax
@@ -140,8 +147,14 @@ impl GlobalSentiment {
         if text.is_empty() {
             return None;
         }
-        self.store(text, lines.len() as i64, minimax.model()).await.ok()?;
-        tracing::info!(msgs = lines.len(), chars = text.chars().count(), "GlobalSentiment: neu gebaut");
+        self.store(text, lines.len() as i64, minimax.model())
+            .await
+            .ok()?;
+        tracing::info!(
+            msgs = lines.len(),
+            chars = text.chars().count(),
+            "GlobalSentiment: neu gebaut"
+        );
         Some(text.to_string())
     }
 }
@@ -166,12 +179,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -193,10 +222,16 @@ mod tests {
 
     #[tokio::test]
     async fn rebuild_und_fragment_e2e() {
-        let Some(pool) = make_pool("t_eng_sentiment").await else { return };
+        let Some(pool) = make_pool("t_eng_sentiment").await else {
+            return;
+        };
         // 8 User-Msgs über mehrere Channels.
-        let mut q = String::from("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ");
-        let vals: Vec<String> = (0..8).map(|i| format!("('ch{i}','user','nachricht ueber meta {i}')")).collect();
+        let mut q = String::from(
+            "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ",
+        );
+        let vals: Vec<String> = (0..8)
+            .map(|i| format!("('ch{i}','user','nachricht ueber meta {i}')"))
+            .collect();
         q.push_str(&vals.join(","));
         sqlx::query(&q).execute(&pool).await.unwrap();
 
@@ -217,15 +252,20 @@ mod tests {
 
         let gs = GlobalSentiment::new(pool.clone());
         let text = gs.rebuild_global_sentiment(&minimax).await;
-        assert_eq!(text.as_deref(), Some("- meta ist grad spicy\n- haze gefeiert")); // <think> raus
-        // Frisches Fragment.
+        assert_eq!(
+            text.as_deref(),
+            Some("- meta ist grad spicy\n- haze gefeiert")
+        ); // <think> raus
+           // Frisches Fragment.
         let frag = gs.get_sentiment_fragment(FRESH_MAX_AGE_HOURS).await;
         assert!(frag.contains("- meta ist grad spicy"));
     }
 
     #[tokio::test]
     async fn rebuild_zu_wenig_none() {
-        let Some(pool) = make_pool("t_eng_sentiment_few").await else { return };
+        let Some(pool) = make_pool("t_eng_sentiment_few").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('a','user','eine lange nachricht')")
             .execute(&pool).await.unwrap();
         let minimax = EngagementMinimaxClient::new(
@@ -234,6 +274,11 @@ mod tests {
             Some("m".to_string()),
             None,
         );
-        assert_eq!(GlobalSentiment::new(pool).rebuild_global_sentiment(&minimax).await, None);
+        assert_eq!(
+            GlobalSentiment::new(pool)
+                .rebuild_global_sentiment(&minimax)
+                .await,
+            None
+        );
     }
 }

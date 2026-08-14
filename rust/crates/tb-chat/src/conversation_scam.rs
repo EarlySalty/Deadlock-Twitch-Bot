@@ -2713,8 +2713,8 @@ mod tests {
             assert!(dialog.has_enough_substance(), "Judge würde nie gefragt");
 
             let verdict = judge.judge(&mut dialog).await;
-            let bans = verdict.verdict == VerdictKind::Scam
-                && verdict.confidence >= enforcement_threshold;
+            let bans =
+                verdict.verdict == VerdictKind::Scam && verdict.confidence >= enforcement_threshold;
             would_ban += usize::from(bans);
             eprintln!(
                 "LIVE_BASELINE other_channels={other_channels} verdict={} confidence={:.2} threshold={enforcement_threshold:.2} category={} ban={bans} reasoning={}",
