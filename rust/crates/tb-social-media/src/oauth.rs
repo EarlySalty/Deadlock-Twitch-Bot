@@ -645,8 +645,7 @@ fn tiktok_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<St
 }
 
 fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<String, OAuthError> {
-    let client_id =
-        youtube_client_id().ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
+    let client_id = youtube_client_id().ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
     let challenge = pkce_challenge(verifier);
     build_url(
         "https://accounts.google.com/o/oauth2/v2/auth",
