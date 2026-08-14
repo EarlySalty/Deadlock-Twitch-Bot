@@ -410,7 +410,10 @@ async fn offene_meldungen_einreihen(
         let Some(mut block) = zettel_lesen(&pfad).await else {
             continue;
         };
-        block.nur_melden = true;
+        // Liegt ein lesbarer Bericht, fehlt nur die Meldung. Sonst muss der
+        // Block noch einmal komplett durch - etwa wenn schon die Transkription
+        // nie durchlief.
+        block.nur_melden = bericht_liegt_vor(konfiguration, &block).await;
         warteschlange.lock().await.einreihen(block);
         wieder += 1;
     }
@@ -960,6 +963,13 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
             if !matches!(endung, "md" | "json" | "txt") {
                 continue;
             }
+            let stamm = pfad
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if !ist_berichtsname(stamm) {
+                continue;
+            }
             let Ok(daten) = eintrag.metadata().await else {
                 continue;
             };
@@ -987,6 +997,43 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
     }
 }
 
+/// Der Blockordner zu einer Aufnahme - oder `None`, wenn der Pfad nicht der
+/// erwarteten Form `<wurzel>/<kanal>/<lauf>/t<sekunden>/<capture>/datei.ts`
+/// entspricht.
+///
+/// Der Namenstest auf `t<Ziffern>` ist die eigentliche Sicherung: er
+/// unterscheidet einen Blockordner von jedem anderen Verzeichnis, das zufaellig
+/// zwei Ebenen ueber einer Datei liegt.
+fn blockordner_von(wurzel: &Path, aufnahme: &Path) -> Option<PathBuf> {
+    let capture = aufnahme.parent()?;
+    let block = capture.parent()?;
+    let lauf = block.parent()?;
+    let kanal = lauf.parent()?;
+    if kanal.parent()? != wurzel {
+        return None;
+    }
+    let name = block.file_name()?.to_str()?;
+    let ziffern = name.strip_prefix('t')?;
+    if ziffern.is_empty() || !ziffern.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(block.to_path_buf())
+}
+
+/// Gehoert dieser Dateiname zu einem Bericht dieses Dienstes?
+///
+/// Berichte heissen `<kanal>-<lauf>-t<sekunden>`. Ohne diese Pruefung raeumte
+/// der Dienst einen Ausgabeordner mit auf, den sich jemand mit anderen Daten
+/// teilt.
+fn ist_berichtsname(stamm: &str) -> bool {
+    match stamm.rsplit_once("-t") {
+        Some((rest, ziffern)) => {
+            !rest.is_empty() && !ziffern.is_empty() && ziffern.chars().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
 /// Loescht liegengebliebene Aufnahmen, die aelter als die Aufbewahrung sind.
 ///
 /// Aufnahmen bleiben absichtlich liegen, wenn ein Fund drinsteht, die Pruefung
@@ -1006,8 +1053,9 @@ async fn alte_aufnahmen_loeschen(
     }
     let grenze = Duration::from_secs(tage.saturating_mul(24 * 60 * 60));
 
+    let wurzel = aufnahme_wurzel(konfiguration);
     let mut aufnahmen = Vec::new();
-    ts_dateien_sammeln(&aufnahme_wurzel(konfiguration), &mut aufnahmen).await;
+    ts_dateien_sammeln(&wurzel, &mut aufnahmen).await;
     let eingereiht: std::collections::HashSet<String> =
         warteschlange.lock().await.dateien().into_iter().collect();
 
@@ -1030,11 +1078,14 @@ async fn alte_aufnahmen_loeschen(
         }
         // Der Blockordner, nicht das Capture-Verzeichnis darin: sonst bleiben
         // block.json, ausgewertet.json und die leeren Ebenen fuer immer stehen.
-        let ziel = pfad
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(&pfad)
-            .to_path_buf();
+        //
+        // Blind zwei Ebenen hochzugehen waere gefaehrlich: eine verirrte Datei
+        // direkt unter der Wurzel fuehrte sonst zum Loeschen des ganzen
+        // Ausgabeordners. Geloescht wird nur, was aussieht wie ein Blockordner.
+        let Some(ziel) = blockordner_von(&wurzel, &pfad) else {
+            tracing::warn!(datei = ?pfad, "Aufnahme ausserhalb der erwarteten Struktur");
+            continue;
+        };
         match tokio::fs::remove_dir_all(&ziel).await {
             Ok(()) => geloescht += 1,
             Err(fehler) => tracing::warn!(?fehler, ordner = ?ziel, "Aufnahme nicht loeschbar"),
@@ -1162,6 +1213,7 @@ async fn auswertungs_schleife(
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
                 let mut aufgegeben = block.clone();
+                let block_datei = block.datei.clone();
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -1211,11 +1263,16 @@ Aufnahme liegt noch da.",
                                 "Aufgabe nicht meldbar - neuer Anlauf in 30 Minuten"
                             );
                         } else {
+                            // Marke setzen, sonst findet der Aufraeumtakt den
+                            // Block nicht wieder und ein dauerhafter
+                            // Transkriptionsfehler sieht aus wie ein sauberer
+                            // Stream.
+                            meldung_offen_markieren(Path::new(&block_datei)).await;
                             tracing::error!(
                                 dm_fehler,
                                 block = %bezeichnung,
-                                "Aufgabe endgueltig nicht meldbar; Aufnahme liegt im \
-                            Aufnahmeordner und faellt unter die Aufbewahrungsfrist"
+                                "Aufgabe endgueltig nicht meldbar; Marke gesetzt, der \
+                            naechste Aufraeumtakt versucht es erneut"
                             );
                         }
                     }
@@ -1659,10 +1716,11 @@ async fn broker_antwort_pruefen(antwort: reqwest::Response) -> Result<(), String
         .text()
         .await
         .map_err(|fehler| format!("Broker-Antwort unlesbar: {fehler}"))?;
-    // Ein leerer Rumpf gilt als Zustimmung: nicht jeder Broker antwortet mit
-    // JSON, und ein stiller 200 ist die aeltere Form.
+    // Ein leerer Rumpf beweist nichts. Der Broker antwortet auf send-dm mit
+    // einem SendResult; bleibt er stumm, gilt die DM als unbestaetigt und die
+    // Wiederholung laeuft weiter.
     if roh.trim().is_empty() {
-        return Ok(());
+        return Err("Broker antwortet ohne Rumpf - Zustellung unbestaetigt".to_owned());
     }
     let json: serde_json::Value = serde_json::from_str(&roh)
         .map_err(|fehler| format!("Broker-Antwort kein JSON: {fehler}"))?;
@@ -1832,8 +1890,8 @@ mod tests {
             std::env::temp_dir().join(format!("stream-audit-aufbewahrung-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
         tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
-        let alt = wurzel.join("alt.md");
-        let neu = wurzel.join("neu.md");
+        let alt = wurzel.join("ricky-4711-t000000.md");
+        let neu = wurzel.join("ricky-4711-t000600.md");
         tokio::fs::write(&alt, b"alt").await.expect("schreiben");
         tokio::fs::write(&neu, b"neu").await.expect("schreiben");
         // Aenderungszeit 40 Tage zurueckdrehen.
@@ -1873,7 +1931,7 @@ mod tests {
         tokio::fs::create_dir_all(&kanalordner)
             .await
             .expect("Ordner");
-        let alt = kanalordner.join("alt.json");
+        let alt = kanalordner.join("testkanal-4711-t000000.json");
         tokio::fs::write(&alt, b"{}").await.expect("schreiben");
         mtime_setzen(
             &alt,
@@ -2004,6 +2062,39 @@ mod tests {
         assert_eq!(segmente[0].start_sekunden, 600.0);
         assert_eq!(segmente[1].start_sekunden, 1080.0);
         assert_eq!(segmente[1].ende_sekunden, 1095.0);
+    }
+
+    #[test]
+    fn nur_echte_blockordner_werden_geloescht() {
+        // Eine verirrte Datei direkt unter der Wurzel darf nicht dazu fuehren,
+        // dass zwei Ebenen hoeher der ganze Ausgabeordner faellt.
+        let wurzel = PathBuf::from("/daten/audits/aufnahmen");
+        let echt = wurzel.join("ricky/4711/t000600/capture-abc/audio.ts");
+        assert_eq!(
+            blockordner_von(&wurzel, &echt),
+            Some(wurzel.join("ricky/4711/t000600"))
+        );
+        assert_eq!(blockordner_von(&wurzel, &wurzel.join("verirrt.ts")), None);
+        assert_eq!(
+            blockordner_von(
+                &wurzel,
+                &wurzel.join("ricky/4711/kein-block/capture/audio.ts")
+            ),
+            None,
+            "ein Ordner ohne t<Ziffern> ist kein Blockordner"
+        );
+        assert_eq!(
+            blockordner_von(&wurzel, &PathBuf::from("/woanders/a/b/c/d/audio.ts")),
+            None
+        );
+    }
+
+    #[test]
+    fn nur_eigene_berichte_werden_aufgeraeumt() {
+        assert!(ist_berichtsname("helmbombenricky-4711-t003600"));
+        assert!(!ist_berichtsname("steuererklaerung"));
+        assert!(!ist_berichtsname("-t000000"), "ohne Kanal kein Bericht");
+        assert!(!ist_berichtsname("ricky-tabc"));
     }
 
     #[test]
