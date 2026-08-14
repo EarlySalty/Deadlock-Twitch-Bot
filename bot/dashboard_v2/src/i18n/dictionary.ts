@@ -194,6 +194,8 @@ const EN: Record<string, string> = {
   Bearbeiten: 'Edit',
   Skip: 'Skip',
   Original: 'Original',
+  // Der Knopf an der Clip-Karte; 'Verworfen' oben ist der Status dazu.
+  Verwerfen: 'Discard',
   Metadaten: 'Metadata',
   Layout: 'Layout',
   'Clip "{title}" verwerfen?': 'Discard clip "{title}"?',
