@@ -321,10 +321,18 @@ async fn liegengebliebenes_einreihen(
         // ein Bericht daraus laege sonst wieder frisch da und verlaengerte die
         // Frist fuer Material, das laengst weg sein sollte.
         if zu_alt(&pfad, konfiguration.aufbewahrung_tage).await {
-            if let Some(blockordner) = pfad.parent().and_then(Path::parent) {
-                let _ = tokio::fs::remove_dir_all(blockordner).await;
+            // Nur echte Blockordner: eine verirrte Datei weiter oben haette
+            // sonst den ganzen Ausgabeordner mitgenommen.
+            match blockordner_von(&aufnahme_wurzel(konfiguration), &pfad) {
+                Some(blockordner) => {
+                    let _ = tokio::fs::remove_dir_all(&blockordner).await;
+                    zu_alt_zahl += 1;
+                }
+                None => tracing::warn!(
+                    datei = ?pfad,
+                    "alte Aufnahme ausserhalb der erwarteten Struktur - nichts geloescht"
+                ),
             }
-            zu_alt_zahl += 1;
             continue;
         }
         let mut block = match zettel_lesen(&pfad).await {
@@ -1101,7 +1109,12 @@ Dieser Abschnitt wird nicht geprueft."
                 if !aktuell.is_empty() && bekannt.is_some_and(|alt| alt != aktuell) {
                     tracing::info!(kanal, "neue Sendung erkannt - Aufnahme wird neu gestartet");
                     handle.abort();
-                    laufend.remove(kanal);
+                    // Erst abwarten, dann suchen: sonst schreibt streamlink
+                    // noch, waehrend die Datei schon in der Warteschlange
+                    // liegt.
+                    if let Some(handle) = laufend.remove(kanal) {
+                        let _ = handle.await;
+                    }
                     laufende_sendung.remove(kanal);
                     staende.remove(kanal);
                     // Der abgebrochene Block liegt als angefangene Datei da.
@@ -1153,7 +1166,11 @@ Dieser Abschnitt wird nicht geprueft."
                 continue;
             }
             gestartet_mit.insert(kanal.clone(), zustand.bloecke);
-            laufende_sendung.insert(kanal.clone(), zustand.lauf.clone());
+            // Die rohe Helix-Kennung, nicht unsere Lauf-Kennung: fehlt
+            // started_at, haengt an der Lauf-Kennung ein Zeitstempel, und der
+            // Vergleich waere bei jedem Takt ungleich - der Dienst haette sich
+            // selbst im Minutentakt abgebrochen.
+            laufende_sendung.insert(kanal.clone(), sendung.id.trim().to_owned());
             let handle = tokio::spawn(kanal_aufnehmen(
                 zustand,
                 konfiguration.clone(),
