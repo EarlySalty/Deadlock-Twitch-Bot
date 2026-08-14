@@ -79,6 +79,8 @@ keine Sanktionen und postet nichts öffentlich.
   eingeschaltet ist. Standard ist: nicht speichern.
 - Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht
   (Standard 30 Tage). Dateien liegen nur für den eigenen Benutzer lesbar.
+- Ein aufbewahrter Mitschnitt enthält Bild und Ton, weil er die Twitch-Spur so
+  speichert, wie sie kommt. Geprüft wird ausschließlich der Ton.
 
 ## Häufige Fragen
 
