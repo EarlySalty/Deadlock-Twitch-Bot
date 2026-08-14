@@ -69,7 +69,7 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_ALLOW_REMOTE_STT` | Transkription auf fremdem Host | aus |
 | `STREAM_AUDIT_ALLOW_REMOTE_LLM` | Modellschritt bei fremdem Anbieter | aus im Code, `1` in der Unit |
 | `STREAM_AUDIT_DISCORD_USER_ID` | Empfaenger der DM | Admin-ID aus `melden.rs` |
-| `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | Start bricht ohne ab |
+| `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 
 ## Betrieb
@@ -79,8 +79,11 @@ systemctl --user status deadlock-twitch-stream-coaching-watch
 journalctl --user -u deadlock-twitch-stream-coaching-watch -f
 ```
 
-- Exit 2: Konfiguration fehlt (Kanaele, Helix, STT-URL) oder der Schutz gegen
-  entfernte Transkription hat gegriffen. Grund steht im Klartext im Journal.
+- Exit 2: Konfiguration fehlt (Kanaele, Helix) oder der Schutz gegen entfernte
+  Transkription hat gegriffen. Grund steht im Klartext im Journal. Ohne
+  `ENGAGEMENT_STT_BASE_URL` faellt der Endpunkt auf localhost zurueck - der
+  Dienst startet also, findet aber nur dann etwas, wenn dort wirklich der
+  STT-Dienst horcht.
 - Exit 1: eine der beiden Schleifen ist gestorben; systemd startet neu.
 - Keine DM heisst in aller Regel: nichts gefunden. Gemeldet wird auch, wenn der
   Modellschritt ausfiel, ein Block aufgegeben wurde, die Aufnahme wegen
