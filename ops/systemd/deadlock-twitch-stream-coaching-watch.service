@@ -8,7 +8,7 @@ Requires=deadlock-stt-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
+WorkingDirectory=%h/Documents/Deadlock-Twitch-Bot
 
 # Bewusst kein EnvironmentFile: die gemeinsame bots.env kann Environment-Zeilen
 # ueberschreiben, und dieser Dienst haengt an genau diesen Werten - Kanaele,
@@ -18,7 +18,7 @@ WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
 # Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
 # in der Unit sichtbar sein.
 Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
-Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
+Environment=STREAM_AUDIT_OUTPUT_DIR=%h/Documents/Deadlock-Twitch-Bot/data/stream_coaching_audits
 
 # Transkription bleibt lokal. Zeigt diese URL woandershin, bricht der Start ab;
 # nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
@@ -42,7 +42,7 @@ LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitc
 
 # Secrets kommen ueber denselben Infisical-Wrapper wie beim Twitch-Bot; der
 # Service-Token liegt in systemd-Credentials, nicht in der Umgebung.
-ExecStart=%h/repos/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
+ExecStart=%h/Documents/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
 
 Restart=on-failure
 RestartSec=30
