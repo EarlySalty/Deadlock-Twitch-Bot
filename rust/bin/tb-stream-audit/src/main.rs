@@ -386,6 +386,19 @@ async fn liegengebliebenes_einreihen(
     }
 }
 
+/// Ist diese Datei aelter als so viele Sekunden?
+async fn zu_alt_sekunden(pfad: &Path, sekunden: u64) -> bool {
+    let Ok(daten) = tokio::fs::metadata(pfad).await else {
+        return false;
+    };
+    daten
+        .modified()
+        .ok()
+        .and_then(|m| m.elapsed().ok())
+        .map(|alter| alter > Duration::from_secs(sekunden))
+        .unwrap_or(false)
+}
+
 /// Ist diese Datei aelter als die Aufbewahrung? `0` heisst unbegrenzt.
 async fn zu_alt(pfad: &Path, tage: u64) -> bool {
     if tage == 0 {
@@ -426,10 +439,12 @@ async fn ts_dateien_sammeln(ordner: &Path, raus: &mut Vec<PathBuf>) {
                 Ok(Some(eintrag)) => eintrag,
                 Ok(None) => break,
                 Err(fehler) => {
-                    // Weiterlesen statt abbrechen: ein kaputter Eintrag darf
-                    // die restlichen Aufnahmen nicht verstecken.
-                    tracing::warn!(?fehler, ordner = ?aktuell, "Eintrag nicht lesbar");
-                    continue;
+                    // Abbrechen, nicht wiederholen: `next_entry` liefert
+                    // denselben Fehler beliebig oft (EIO, geloeschter Ordner,
+                    // Shutdown) und die Schleife liefe mit vollem Kern weiter,
+                    // ohne dass jemals wieder etwas ausgewertet wird.
+                    tracing::warn!(?fehler, ordner = ?aktuell, "Ordner nur teilweise gelesen");
+                    break;
                 }
             };
             let pfad = eintrag.path();
@@ -589,6 +604,54 @@ async fn offene_meldungen_einreihen(
     }
     if wieder > 0 {
         tracing::info!(wieder, "offene Meldungen erneut eingereiht");
+    }
+}
+
+/// Meldet einen ausgefallenen Modellschritt - aber nur beim ersten Block und
+/// danach bei jedem Vielfachen von [`MAX_LEER_AM_STUECK`].
+///
+/// Faellt der Modellschritt aus, faellt er meist fuer jeden Block aus: ein
+/// fehlender Schluessel, ein gesperrter Anbieter. Eine DM je Block waeren rund
+/// 90 Nachrichten pro Stunde.
+async fn modellausfall_melden(
+    konfiguration: &Konfiguration,
+    kanal: &str,
+    bericht: &Bericht,
+    zaehler: &mut std::collections::HashMap<String, usize>,
+) {
+    if bericht.modell_geprueft {
+        zaehler.remove(kanal);
+        hinweis_erledigt(konfiguration, &format!("modellausfall-{kanal}")).await;
+        return;
+    }
+    let stand = zaehler.entry(kanal.to_owned()).or_insert(0);
+    *stand += 1;
+    let bloecke = *stand;
+    if bloecke != 1 && !bloecke.is_multiple_of(MAX_LEER_AM_STUECK) {
+        return;
+    }
+    let ablage = format!("modellausfall-{kanal}");
+    let (schluessel, text) = match offener_hinweis(konfiguration, &ablage).await {
+        Some(offen) => offen,
+        None => (
+            format!(
+                "{}-{kanal}-modellausfall-{}",
+                start_kennung(),
+                naechste_vorfall_nummer()
+            ),
+            format!(
+                "Coaching-Audit {kanal}: Modellschritt faellt aus ({}). Es laeuft nur die \
+Regelpruefung, die Aufnahmen bleiben liegen.",
+                bericht.modell_hinweis
+            ),
+        ),
+    };
+    match dm_rohtext(&text, &schluessel).await {
+        Ok(()) => hinweis_erledigt(konfiguration, &ablage).await,
+        Err(fehler) => {
+            tracing::error!(fehler, kanal, "Modellausfall nicht meldbar");
+            hinweis_aufheben(konfiguration, &ablage, &schluessel, &text).await;
+        }
     }
 }
 
@@ -868,8 +931,9 @@ async fn aufnahme_schleife(
                 // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
                     let text = format!(
-                        "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
-Laufende Aufnahmen laufen weiter, neue Sendungen werden nicht erkannt."
+                        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
+{MAX_STILLE_VERSUCHE} Anlaeufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
+nicht erkannt."
                     );
                     let (schluessel, text) =
                         match offener_hinweis(&konfiguration, "helix-ausfall").await {
@@ -967,8 +1031,8 @@ Laufende Aufnahmen laufen weiter, neue Sendungen werden nicht erkannt."
                 continue;
             }
             let text = format!(
-                "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen kommt keine \
-Aufnahme zustande. streamlink pruefen."
+                "Coaching-Audit {kanal}: sendet, aber es kommt keine Aufnahme zustande \
+(seit mindestens {MAX_STILLE_VERSUCHE} Anlaeufen). streamlink pruefen."
             );
             // Der Schluessel der DM traegt die Anlaufzahl - derselbe Schluessel
             // mit anderem Text kann beim Broker als Widerspruch gelten. Die
@@ -1019,7 +1083,7 @@ Aufnahme zustande. streamlink pruefen."
         // leert. Ohne Grenze waechst der Rueckstand und mit ihm die Platte.
         // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
         // laufende Bloecke laufen zu Ende.
-        let stau = warteschlange.lock().await.laenge();
+        let stau = warteschlange.lock().await.offene_auswertungen();
         let ausgelassen = std::mem::take(&mut *pausen.lock().await);
         if !ausgelassen.is_empty() && !stau_gemeldet {
             // Auch wenn die Warteschlange inzwischen wieder kurz ist: diese
@@ -1094,7 +1158,11 @@ Dieser Abschnitt wird nicht geprueft."
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
         }
-        stau_gemeldet = false;
+        // Nur zuruecksetzen, wenn wirklich nichts ausgelassen wurde - sonst
+        // faellt die eben gesetzte Marke der "ausgelassen"-Meldung weg.
+        if ausgelassen.is_empty() {
+            stau_gemeldet = false;
+        }
 
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
@@ -1215,7 +1283,7 @@ async fn kanal_aufnehmen(
         // Pruefung in der Aufsicht verhindert nur neue Tasks; ein Kanal, der
         // seit Stunden aufnimmt, schriebe sonst weiter auf die Platte,
         // waehrend die Auswertung nicht hinterherkommt.
-        if warteschlange.lock().await.laenge() >= MAX_WARTESCHLANGE {
+        if warteschlange.lock().await.offene_auswertungen() >= MAX_WARTESCHLANGE {
             // Die Aufsicht meldet den Rueckstand, sieht ihn aber nur alle 60
             // Sekunden. Ist die Warteschlange bis dahin wieder unter der
             // Grenze, faellt die uebersprungene Sendezeit sonst unter den
@@ -1554,6 +1622,8 @@ async fn auswertungs_schleife(
     abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
+    // Wie viele Bloecke am Stueck je Kanal der Modellschritt ausfiel.
+    let mut modell_ausgefallen: std::collections::HashMap<String, usize> = Default::default();
     // Wie viele Bloecke am Stueck je Kanal ohne einen erkannten Satz blieben.
     let mut leer_am_stueck: std::collections::HashMap<String, usize> = Default::default();
     loop {
@@ -1587,6 +1657,13 @@ async fn auswertungs_schleife(
                 if bericht.segmente > 0 {
                     leer_am_stueck.remove(&block.kanal);
                 }
+                modellausfall_melden(
+                    &konfiguration,
+                    &block.kanal,
+                    &bericht,
+                    &mut modell_ausgefallen,
+                )
+                .await;
                 meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
                 tracing::info!(
@@ -1595,6 +1672,7 @@ async fn auswertungs_schleife(
                 );
             }
             Ok(Aufnahmeschicksal::Loeschen { segmente }) => {
+                modell_ausgefallen.remove(&block.kanal);
                 meldung_erledigt(Path::new(&block.datei)).await;
                 // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
                 // nicht - dann liefert der STT-Dienst vermutlich fuer alles
@@ -1621,24 +1699,26 @@ async fn auswertungs_schleife(
                             "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
 einzigen erkannten Satz. STT-Dienst pruefen."
                         );
-                        let schluessel = format!(
-                            "{}-{kanal}-nur-stille-{}",
-                            start_kennung(),
-                            naechste_vorfall_nummer()
-                        );
+                        let ablage = format!("nur-stille-{kanal}");
+                        let (schluessel, text) =
+                            match offener_hinweis(&konfiguration, &ablage).await {
+                                Some(offen) => offen,
+                                None => (
+                                    format!(
+                                        "{}-{kanal}-nur-stille-{}",
+                                        start_kennung(),
+                                        naechste_vorfall_nummer()
+                                    ),
+                                    text,
+                                ),
+                            };
                         if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
                             // Nicht wieder loeschen, wenn spaeter etwas
                             // ankommt: die Aufnahmen dieser Strecke sind dann
                             // schon weg, und die Warnung ist der einzige
                             // Hinweis darauf, dass sie ungeprueft blieben.
                             tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
-                            hinweis_aufheben(
-                                &konfiguration,
-                                &format!("nur-stille-{kanal}"),
-                                &schluessel,
-                                &text,
-                            )
-                            .await;
+                            hinweis_aufheben(&konfiguration, &ablage, &schluessel, &text).await;
                         }
                     }
                 } else {
@@ -2369,10 +2449,13 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
     };
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
         let pfad = eintrag.path();
-        // Reste des atomaren Schreibens: unvollstaendig und nicht zustellbar.
+        // Reste des atomaren Schreibens. Nur alte: eine gerade entstehende
+        // Datei gehoert einem anderen Task, der sie gleich umbenennt.
         if pfad.extension().and_then(|e| e.to_str()) == Some("neu") {
-            tracing::warn!(datei = ?pfad, "angefangene Hinweisdatei entfernt");
-            let _ = tokio::fs::remove_file(&pfad).await;
+            if zu_alt_sekunden(&pfad, 300).await {
+                tracing::warn!(datei = ?pfad, "angefangene Hinweisdatei entfernt");
+                let _ = tokio::fs::remove_file(&pfad).await;
+            }
             continue;
         }
         if pfad.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -2440,10 +2523,11 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
 
 async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     // Ohne Funde gibt es nichts zu melden - je Block eine DM "alles ruhig"
-    // waere bei drei Kanaelen im Zehnminutentakt nur noch Rauschen. Eine
-    // Ausnahme: lief der Modellschritt nicht, ist Stille irrefuehrend, denn
-    // dann hat nur die Regelpruefung hingesehen.
-    if bericht.funde.is_empty() && bericht.modell_geprueft {
+    // waere nur Rauschen. Ein ausgefallener Modellschritt wird nicht hier
+    // gemeldet, sondern gedrosselt in der Auswertungsschleife: er faellt
+    // typischerweise fuer *jeden* Block aus (fehlender Schluessel, gesperrter
+    // Anbieter), und eine DM je Block waere eine Mailbombe.
+    if bericht.funde.is_empty() {
         return Ok(());
     }
     let Some(token) = melden::broker_token() else {

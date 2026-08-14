@@ -161,7 +161,10 @@ pub fn markdown(bericht: &Bericht) -> String {
             zeilen.push(format!("- Begruendung: {}", fund.begruendung));
         }
         zeilen.push(format!("- Zitat (geschwaerzt): {}", fund.zitat_redigiert));
-        zeilen.push(format!("- Beleg-Hash: `{}`", &fund.zitat_hash[..16]));
+        // Zeichenweise kuerzen: `Bericht` wird auch von der Platte gelesen,
+        // und ein abgeschnittener Hash duerfte den Bericht nicht sprengen.
+        let hash_kurz: String = fund.zitat_hash.chars().take(16).collect();
+        zeilen.push(format!("- Beleg-Hash: `{hash_kurz}`"));
         zeilen.push(String::new());
     }
     zeilen.join("\n")
