@@ -1735,6 +1735,8 @@ einzigen erkannten Satz. STT-Dienst pruefen."
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
+                let aufgegeben_datei = block.datei.clone();
+                let aufgegeben_bericht = leerer_bericht(&block);
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -1763,6 +1765,9 @@ Aufnahme liegt noch da.",
                         plan::MAX_VERSUCHE,
                         fehler
                     );
+                    // Marke setzen, sonst faengt jeder Neustart die drei
+                    // Versuche und die Meldung von vorn an.
+                    fertig_markieren(Path::new(&aufgegeben_datei), &aufgegeben_bericht).await;
                     if let Err(dm_fehler) =
                         dm_rohtext(&text, &format!("{bezeichnung}-aufgegeben")).await
                     {
@@ -2074,6 +2079,14 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             .send()
             .await;
         let roh = match antwort {
+            // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
+            // JSON - und der Bericht nennt den falschen Grund.
+            Ok(r) if !r.status().is_success() => {
+                let status = r.status().as_u16();
+                tracing::warn!(status, "Modellaufruf abgelehnt");
+                fehler_gesehen.get_or_insert_with(|| format!("Modellaufruf HTTP {status}"));
+                continue;
+            }
             Ok(r) => r.text().await.unwrap_or_default(),
             Err(fehler) => {
                 tracing::warn!(?fehler, "Modellaufruf fehlgeschlagen");
@@ -2303,13 +2316,12 @@ async fn hinweis_aufheben(
     // derselbe Vorfall soll bei jedem Anlauf denselben tragen, sonst kommt er
     // doppelt an, wenn eine frueher gesendete Meldung doch ankam.
     let pfad = ordner.join(format!("{name}.json"));
-    let schluessel = match tokio::fs::read_to_string(&pfad).await {
-        Ok(roh) => serde_json::from_str::<serde_json::Value>(&roh)
-            .ok()
-            .and_then(|j| j["schluessel"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| schluessel.to_owned()),
-        Err(_) => schluessel.to_owned(),
-    };
+    // Liegt schon ein Hinweis derselben Sache, bleibt er unangetastet:
+    // Schluessel und Text gehoeren zusammen, und derselbe Schluessel mit
+    // anderem Inhalt ist beim Broker ein Widerspruch.
+    if tokio::fs::try_exists(&pfad).await.unwrap_or(false) {
+        return;
+    }
     let inhalt = serde_json::json!({ "schluessel": schluessel, "text": text });
     // Atomar: ein Abbruch mitten im Schreiben liesse sonst halbes JSON zurueck,
     // und der Wiederholungslauf ueberspringt genau diesen Hinweis fuer immer.
@@ -2768,7 +2780,10 @@ mod tests {
         let roh = tokio::fs::read_to_string(&datei).await.expect("Hinweis");
         let json: serde_json::Value = serde_json::from_str(&roh).expect("JSON");
         assert_eq!(json["schluessel"], "schluessel-1", "Schluessel bleibt");
-        assert_eq!(json["text"], "zweiter Text", "Text wird aufgefrischt");
+        assert_eq!(
+            json["text"], "erster Text",
+            "auch der Text bleibt - Schluessel und Inhalt gehoeren zusammen"
+        );
 
         // Erledigt heisst weg - sonst wird eine geloeste Stoerung spaeter
         // nachgereicht.
