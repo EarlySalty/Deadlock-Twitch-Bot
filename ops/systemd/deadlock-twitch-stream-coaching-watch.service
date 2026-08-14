@@ -10,11 +10,10 @@ Requires=deadlock-stt-server.service
 Type=simple
 WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
 
-# Die gemeinsame Bot-Konfiguration kommt zuerst; alles darunter gilt und
-# ueberschreibt sie. Andersherum koennte eine Zeile in bots.env still die
-# Kanaele, die Ablage oder den Schutz gegen entfernte Transkription
-# austauschen.
-EnvironmentFile=-%h/.config/deadlock/bots.env
+# Bewusst kein EnvironmentFile: die gemeinsame bots.env kann Environment-Zeilen
+# ueberschreiben, und dieser Dienst haengt an genau diesen Werten - Kanaele,
+# Ablage, Ortsbindung von Transkription und Modell. Was er braucht, steht hier
+# oder kommt aus Infisical.
 
 # Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
 # in der Unit sichtbar sein.
