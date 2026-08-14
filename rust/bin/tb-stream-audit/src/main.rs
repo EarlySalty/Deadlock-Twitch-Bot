@@ -766,6 +766,8 @@ async fn aufnahme_schleife(
     // 60 Sekunden Sendezeit, die niemand aufgenommen hat.
     let pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>> =
         Arc::new(Mutex::new(Default::default()));
+    // Welche Sendung der laufende Task eines Kanals aufnimmt.
+    let mut laufende_sendung: std::collections::HashMap<String, String> = Default::default();
     // Blockstand je Kanal beim Start des laufenden Tasks.
     let mut gestartet_mit: std::collections::HashMap<String, u32> = Default::default();
     // Kanaele, deren Task ohne neuen Block endete - egal ob sauber oder mit Panik.
@@ -1022,8 +1024,22 @@ Dieser Abschnitt wird nicht geprueft."
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
             let kanal = &kanal;
-            if laufend.contains_key(kanal) {
-                continue;
+            if let Some(handle) = laufend.get(kanal) {
+                // Endet eine Sendung und beginnt zwischen zwei Takten eine
+                // neue, nimmt der laufende Task sie unter der alten Kennung
+                // auf - mit deren Zeiten und deren Sechs-Stunden-Budget. Dann
+                // lieber abbrechen; der naechste Takt startet sauber neu.
+                let bekannt = laufende_sendung.get(kanal).map(String::as_str);
+                let aktuell = sendung.id.trim();
+                if !aktuell.is_empty() && bekannt.is_some_and(|alt| alt != aktuell) {
+                    tracing::info!(kanal, "neue Sendung erkannt - Aufnahme wird neu gestartet");
+                    handle.abort();
+                    laufend.remove(kanal);
+                    laufende_sendung.remove(kanal);
+                    staende.remove(kanal);
+                } else {
+                    continue;
+                }
             }
             // Ein Zustand aus einer anderen Sendung darf nicht weiterlaufen:
             // Endet ein Stream und startet zwischen zwei Takten neu, erbte die
@@ -1065,6 +1081,7 @@ Dieser Abschnitt wird nicht geprueft."
                 continue;
             }
             gestartet_mit.insert(kanal.clone(), zustand.bloecke);
+            laufende_sendung.insert(kanal.clone(), zustand.lauf.clone());
             let handle = tokio::spawn(kanal_aufnehmen(
                 zustand,
                 konfiguration.clone(),
@@ -1475,6 +1492,12 @@ async fn auswertungs_schleife(
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
             Ok(Aufnahmeschicksal::Behalten(bericht)) => {
+                // Auch ein aufbewahrter Block hatte Text. Ohne diese Zeile
+                // zaehlte der Stille-Zaehler ueber ihn hinweg weiter und
+                // meldete irgendwann eine Stoerung, die es nie gab.
+                if bericht.segmente > 0 {
+                    leer_am_stueck.remove(&block.kanal);
+                }
                 meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
                 tracing::info!(
