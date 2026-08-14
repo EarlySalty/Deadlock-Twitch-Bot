@@ -90,8 +90,11 @@ pub fn markdown(bericht: &Bericht) -> String {
         format!("- Lauf: `{}`", bericht.lauf_id),
         format!("- Erstellt: {}", bericht.erstellt_am),
         format!("- Quelle: {}", bericht.quelle),
+        // "angefragt": der lokale STT-Dienst ignoriert den Modellnamen aus der
+        // Anfrage und laedt, was in seiner eigenen Konfiguration steht. Nennt
+        // seine Antwort kein Modell, ist dieser Name nur der gewuenschte.
         format!(
-            "- Transkription: {} ({}), {}",
+            "- Transkription: {} (Modell angefragt: {}), {}",
             bericht.transkription,
             bericht.modell,
             if bericht.transkription_lokal {

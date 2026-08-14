@@ -288,8 +288,12 @@ impl OpenAiTranscriber {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or(model)
-            .to_string();
+            .map(str::to_owned)
+            // Nennt die Antwort kein Modell, bleibt es beim angefragten Namen.
+            // Der lokale Dienst ignoriert ihn und laedt, was in seiner eigenen
+            // Konfiguration steht - deshalb heisst das Feld im Audit-Bericht
+            // ausdruecklich "angefragt".
+            .unwrap_or_else(|| model.to_string());
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,
@@ -747,6 +751,14 @@ mod tests_segmente {
             ergebnis.model, "large-v3-turbo-ct2",
             "der Bericht nennt das Modell, das wirklich lief"
         );
+
+        // Nennt die Antwort kein Modell, bleibt es beim angefragten Namen.
+        let ohne_modell = antwort_mit(serde_json::json!({
+            "text": "Ein Satz.",
+            "duration": 3.0
+        }))
+        .await;
+        assert_eq!(ohne_modell.model, "whisper-1");
     }
 
     #[tokio::test]
