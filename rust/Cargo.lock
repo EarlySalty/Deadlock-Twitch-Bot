@@ -3116,6 +3116,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-smalltalk-bench-bin"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "sqlx",
+ "tb-engagement",
+ "tb-llm",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tb-social-media"
 version = "0.1.0"
 dependencies = [

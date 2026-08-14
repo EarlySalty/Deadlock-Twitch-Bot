@@ -1171,6 +1171,28 @@ twitch_shoutout_events|other_broadcaster_login|text|YES|
 twitch_shoutout_events|received_at|timestamp with time zone|NO|now()
 twitch_shoutout_events|twitch_user_id|text|NO|
 twitch_shoutout_events|viewer_count|integer|YES|0
+twitch_smalltalk_bench_lines|ai_text|text|YES|
+twitch_smalltalk_bench_lines|channel_login|text|NO|
+twitch_smalltalk_bench_lines|chat_context|text|NO|''::text
+twitch_smalltalk_bench_lines|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_bench_lines|human_text|text|NO|
+twitch_smalltalk_bench_lines|id|bigint|NO|nextval('twitch_smalltalk_bench_lines_id_seq'::regclass)
+twitch_smalltalk_bench_lines|judge_correct|boolean|YES|
+twitch_smalltalk_bench_lines|judge_pick|text|YES|
+twitch_smalltalk_bench_lines|latency_ms|integer|YES|
+twitch_smalltalk_bench_lines|message_ts|timestamp with time zone|NO|
+twitch_smalltalk_bench_lines|reject_reason|text|YES|
+twitch_smalltalk_bench_lines|run_id|uuid|NO|
+twitch_smalltalk_bench_lines|sample_id|bigint|NO|
+twitch_smalltalk_bench_lines|stream_context|text|NO|''::text
+twitch_smalltalk_bench_runs|finished_at|timestamp with time zone|YES|
+twitch_smalltalk_bench_runs|id|uuid|NO|
+twitch_smalltalk_bench_runs|judge_model|text|YES|
+twitch_smalltalk_bench_runs|model|text|NO|
+twitch_smalltalk_bench_runs|note|text|YES|
+twitch_smalltalk_bench_runs|sample_count|integer|NO|0
+twitch_smalltalk_bench_runs|started_at|timestamp with time zone|NO|now()
+twitch_smalltalk_bench_runs|variant|text|NO|
 twitch_smalltalk_messages|channel_login|text|NO|
 twitch_smalltalk_messages|channel_user_id|text|YES|
 twitch_smalltalk_messages|created_at|timestamp with time zone|NO|now()

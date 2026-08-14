@@ -1,0 +1,16 @@
+[package]
+name = "tb-smalltalk-bench-bin"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "tb-smalltalk-bench"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing-subscriber = { workspace = true }
+tb-engagement = { workspace = true }
+tb-llm = { workspace = true }

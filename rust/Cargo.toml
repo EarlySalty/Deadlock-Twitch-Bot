@@ -24,6 +24,7 @@ members = [
     "crates/tb-llm",
     "crates/tb-stream-audit",
     "bin/tb-stream-audit",
+    "bin/tb-smalltalk-bench",
     "bin/tb-dashboard",
     "bin/tb-bot",
 ]
