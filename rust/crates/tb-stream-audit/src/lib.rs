@@ -77,9 +77,6 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
     raus
 }
 
-/// Doppelte Funde zusammenfassen: derselbe Wortlaut im selben Segment ist ein
-/// Fund, auch wenn Regel und Modell ihn beide melden. Der Regel-Erkenner
-/// gewinnt, weil er reproduzierbar ist.
 /// Fasst nur wirklich gleiche Funde zusammen.
 ///
 /// Frueher fielen Regel- und Modellfund derselben Kategorie im selben Segment
