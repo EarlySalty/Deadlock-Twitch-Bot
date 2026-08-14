@@ -526,7 +526,7 @@ async fn aufnahme_schleife(
                         "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
 Es wird nichts aufgenommen und nichts geprueft."
                     );
-                    match dm_rohtext(&text, "helix-ausfall").await {
+                    match dm_rohtext(&text, &format!("helix-ausfall-{helix_fehler}")).await {
                         Ok(()) => helix_gemeldet = true,
                         Err(dm_fehler) => {
                             tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar")
@@ -574,7 +574,11 @@ Es wird nichts aufgenommen und nichts geprueft."
                                 "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen \
 kommt keine Aufnahme zustande. streamlink pruefen."
                             );
-                            match dm_rohtext(&text, &format!("{kanal}-keine-aufnahme")).await {
+                            // Der Schluessel traegt die Anlaufzahl: derselbe
+                            // Schluessel mit anderem Text kann beim Broker als
+                            // Widerspruch gelten und die Meldung verschlucken.
+                            let schluessel = format!("{kanal}-keine-aufnahme-{anlaeufe}");
+                            match dm_rohtext(&text, &schluessel).await {
                                 // Erst nach zugestellter DM merken. Sonst
                                 // verschluckt ein einziger Broker-Aussetzer
                                 // die Meldung fuer immer.
@@ -630,7 +634,7 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                match dm_rohtext(&text, "rueckstand").await {
+                match dm_rohtext(&text, &format!("rueckstand-{stau}")).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => stau_gemeldet = true,
                     Err(fehler) => tracing::error!(fehler, "Rueckstand nicht meldbar"),
@@ -772,6 +776,17 @@ async fn kanal_aufnehmen(
                 // Ein Fehlschlag heisst in aller Regel: der Stream ist vorbei.
                 // Dann endet dieser Task, und die Aufsicht startet ihn neu,
                 // sobald der Kanal wieder sendet.
+                //
+                // Der vorbereitete Blockordner samt Zettel muss weg, sonst
+                // bleibt bei jedem Sendungsende ein leerer Ordner liegen, den
+                // weder die Aufbewahrung noch die Wiederaufnahme je anfasst.
+                if let Err(aufraeumfehler) = tokio::fs::remove_dir_all(&blockordner).await {
+                    tracing::warn!(
+                        ?aufraeumfehler,
+                        ordner = ?blockordner,
+                        "leerer Blockordner bleibt liegen"
+                    );
+                }
                 tracing::info!(kanal, ?fehler, "Aufnahme beendet");
                 return zustand;
             }
@@ -992,6 +1007,7 @@ async fn auswertungs_schleife(
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
+                let mut aufgegeben = block.clone();
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -1023,12 +1039,31 @@ Aufnahme liegt noch da.",
                     if let Err(dm_fehler) =
                         dm_rohtext(&text, &format!("{bezeichnung}-aufgegeben")).await
                     {
-                        tracing::error!(
-                            dm_fehler,
-                            block = %bezeichnung,
-                            "Aufgabe konnte nicht gemeldet werden; Aufnahme liegt im \
-                        Aufnahmeordner und faellt unter die Aufbewahrungsfrist"
-                        );
+                        // Genau diese Meldung soll verhindern, dass ein
+                        // unvollstaendiges Audit wie ein sauberes aussieht.
+                        // Sie darf an einem Broker-Aussetzer nicht sterben.
+                        if aufgegeben.meldeversuche < plan::MAX_MELDEVERSUCHE {
+                            aufgegeben.meldeversuche += 1;
+                            aufgegeben.versuche = 0;
+                            let versuch = aufgegeben.meldeversuche;
+                            warteschlange
+                                .lock()
+                                .await
+                                .spaeter_einreihen(aufgegeben, MELDEPAUSE_SEKUNDEN);
+                            tracing::error!(
+                                dm_fehler,
+                                block = %bezeichnung,
+                                versuch,
+                                "Aufgabe nicht meldbar - neuer Anlauf in 30 Minuten"
+                            );
+                        } else {
+                            tracing::error!(
+                                dm_fehler,
+                                block = %bezeichnung,
+                                "Aufgabe endgueltig nicht meldbar; Aufnahme liegt im \
+                            Aufnahmeordner und faellt unter die Aufbewahrungsfrist"
+                            );
+                        }
                     }
                 }
             }
@@ -1351,11 +1386,13 @@ fn bericht_pfad(konfiguration: &Konfiguration, block: &plan::Block) -> PathBuf {
         .join(format!("{}.json", block.bezeichnung()))
 }
 
-/// Steht der Bericht zu diesem Block schon auf der Platte?
+/// Steht ein **lesbarer** Bericht zu diesem Block schon auf der Platte?
+///
+/// Nur die Existenz zu pruefen reicht nicht: ein halb geschriebener Bericht
+/// wuerde jede Wiederholung auf "nur noch melden" schicken, und die scheiterte
+/// dann am unlesbaren JSON, bis der Block aufgegeben ist.
 async fn bericht_liegt_vor(konfiguration: &Konfiguration, block: &plan::Block) -> bool {
-    tokio::fs::try_exists(bericht_pfad(konfiguration, block))
-        .await
-        .unwrap_or(false)
+    bericht_lesen(konfiguration, block).await.is_ok()
 }
 
 /// Liest einen schon geschriebenen Bericht wieder ein.
@@ -1416,7 +1453,6 @@ async fn schreiben(
         report::markdown(bericht).as_bytes(),
     )
     .await?;
-    nur_fuer_mich(&basis.with_extension("json"), json.as_bytes()).await?;
     if konfiguration.transkript_behalten {
         nur_fuer_mich(&basis.with_extension("txt"), transkript.as_bytes()).await?;
     } else {
@@ -1430,12 +1466,30 @@ async fn schreiben(
             Err(fehler) => tracing::warn!(?fehler, datei = ?alt, "altes Transkript bleibt liegen"),
         }
     }
+    // Die JSON-Datei kommt zuletzt und in einem Zug: sie ist das Signal, dass
+    // dieser Block fertig ausgewertet ist. Wer sie zuerst schreibt, laesst
+    // einen Abbruch mitten im Transkript wie einen abgeschlossenen Lauf
+    // aussehen. Und wer sie an Ort und Stelle kuerzt, hinterlaesst bei einem
+    // Abbruch halbes JSON, das keine Wiederholung mehr heilt.
+    atomar_schreiben(&basis.with_extension("json"), json.as_bytes()).await?;
     tracing::info!(
         block = %block.bezeichnung(),
         funde = bericht.funde.len(),
         "Bericht geschrieben"
     );
     Ok(())
+}
+
+/// Schreibt in eine Nebendatei und benennt sie um.
+///
+/// `rename` innerhalb eines Verzeichnisses ist unteilbar: entweder steht der
+/// alte Inhalt oder der neue, nie eine Haelfte.
+async fn atomar_schreiben(pfad: &Path, inhalt: &[u8]) -> Result<(), String> {
+    let neben = pfad.with_extension("json.neu");
+    nur_fuer_mich(&neben, inhalt).await?;
+    tokio::fs::rename(&neben, pfad)
+        .await
+        .map_err(|e| format!("{}: {e}", pfad.display()))
 }
 
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
