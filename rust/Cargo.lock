@@ -2812,6 +2812,7 @@ dependencies = [
  "tb-tips",
  "tb-transport-discord",
  "tb-transport-twitch",
+ "tb-vod-archive",
  "tokio",
  "tracing",
  "tracing-subscriber",
