@@ -52,9 +52,12 @@ keine Sanktionen und postet nichts öffentlich.
   und muss am echten Kontext geprüft werden.
 - Geprüft wird nur gesprochene Sprache. Bild, Einblendungen und Chat sind nicht
   Gegenstand.
-- Keine Meldung heißt: nichts gefunden. Gemeldet wird zusätzlich, wenn der
-  Modellschritt ausfiel, das Transkript leer blieb oder ein Block nach drei
-  Versuchen aufgegeben wurde — Stille soll nie eine halbe Prüfung verdecken.
+- Keine Meldung heißt in aller Regel: nichts gefunden. Gemeldet wird zusätzlich,
+  wenn der Modellschritt ausfiel, das Transkript leer blieb, ein Block
+  aufgegeben wurde, die Aufnahme wegen Rückstands pausiert oder die
+  Twitch-Abfrage scheitert. Nimmt Discord über Stunden keine Nachricht an,
+  bleibt der Befund im Protokoll auf der Platte stehen und wird weiter
+  angeboten — dann ist Stille kein Beweis für einen ruhigen Stream.
 - An Blockgrenzen kann eine Äußerung ungünstig fallen. Die Zeitstempel im
   Protokoll zählen ab Sendungsbeginn, damit die Stelle im VOD wiederzufinden
   ist, solange es das VOD gibt.
@@ -67,9 +70,11 @@ keine Sanktionen und postet nichts öffentlich.
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
   einzeln gesetzte Entscheidung.
-- Das Protokoll enthält kein ungefiltertes Zitat, sondern den geschwärzten
-  Beleg und eine Prüfsumme des Originals. Die private Nachricht enthält weder
-  Zitat noch Prüfsumme.
+- Jeder Beleg im Protokoll läuft durch die Schwärzung und trägt eine Prüfsumme
+  des Originals. Die Schwärzung kennt die bekannten Muster und sonst nichts:
+  anderer Wortlaut aus demselben Abschnitt steht im Protokoll. Es ist deshalb
+  eine zugriffsbeschränkte Akte, kein zitatfreier Text. Die private Nachricht
+  enthält weder Zitat noch Prüfsumme.
 - Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich
   eingeschaltet ist. Standard ist: nicht speichern.
 - Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht

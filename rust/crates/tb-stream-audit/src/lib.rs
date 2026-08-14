@@ -87,6 +87,21 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
 /// Genau derselbe Vorfall hatte damit zwei verschiedene Hashes und stand
 /// zweimal im Bericht - die Zusammenfassung griff nur, wenn beide Funde aus
 /// derselben Quelle stammten.
+/// Belegen zwei Funde dieselbe Stelle?
+///
+/// Der Regelfund zeigt rund 80 Zeichen um seine Fundstelle, der Modellfund das
+/// ganze Segment. Deckung heisst deshalb: der kuerzere Beleg steckt im
+/// laengeren.
+fn deckt_sich(a: &Fund, b: &Fund) -> bool {
+    let (kurz, lang) = if a.zitat_redigiert.len() <= b.zitat_redigiert.len() {
+        (&a.zitat_redigiert, &b.zitat_redigiert)
+    } else {
+        (&b.zitat_redigiert, &a.zitat_redigiert)
+    };
+    let kurz = kurz.trim();
+    !kurz.is_empty() && lang.contains(kurz)
+}
+
 pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
     funde.sort_by(|a, b| {
         a.segment_id
@@ -94,12 +109,16 @@ pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
             .then_with(|| a.kategorie.cmp(&b.kategorie))
             .then_with(|| (a.erkenner != "regel").cmp(&(b.erkenner != "regel")))
     });
-    // Zusammengefasst wird nur ueber die Erkennergrenze hinweg. Zwei
-    // Regelfunde derselben Kategorie in einem Segment sind zwei Vorfaelle -
-    // etwa zwei verschiedene Beleidigungen - und duerfen nicht zu einem
-    // werden.
+    // Zusammengefasst wird nur ueber die Erkennergrenze hinweg und nur, wenn
+    // der Modellfund denselben Wortlaut belegt wie der Regelfund. Zwei
+    // Regelfunde derselben Kategorie sind zwei Vorfaelle, und ein Modellfund
+    // ueber eine ganz andere Stelle desselben Segments ebenfalls - er darf
+    // nicht verschwinden, nur weil zufaellig dieselbe Kategorie danebensteht.
     funde.dedup_by(|a, b| {
-        a.segment_id == b.segment_id && a.kategorie == b.kategorie && a.erkenner != b.erkenner
+        a.segment_id == b.segment_id
+            && a.kategorie == b.kategorie
+            && a.erkenner != b.erkenner
+            && deckt_sich(a, b)
     });
     funde
 }
@@ -172,6 +191,30 @@ mod tests {
         let zusammen = funde_zusammenfassen(funde);
         assert_eq!(zusammen.len(), 1);
         assert_eq!(zusammen[0].erkenner, "regel", "Regel gewinnt gegen Modell");
+    }
+
+    #[test]
+    fn modellfund_ueber_eine_andere_stelle_bleibt_erhalten() {
+        // Gleiches Segment, gleiche Kategorie, aber ein anderer Vorfall: der
+        // Modellfund belegt Worte, die im Regelbeleg nicht vorkommen.
+        let mut funde = regelfunde(&[segment("s1", "du schwuchtel")]);
+        funde.push(Fund {
+            segment_id: funde[0].segment_id.clone(),
+            start_sekunden: funde[0].start_sekunden,
+            ende_sekunden: funde[0].ende_sekunden,
+            kategorie: funde[0].kategorie.clone(),
+            schwere: "medium".to_owned(),
+            erkenner: "modell".to_owned(),
+            sicherheit: "medium".to_owned(),
+            begruendung: "andere Stelle".to_owned(),
+            zitat_redigiert: "ganz andere Worte ohne Ueberschneidung".to_owned(),
+            zitat_hash: rules::evidence_hash("ganz andere Worte ohne Ueberschneidung"),
+        });
+        assert_eq!(
+            funde_zusammenfassen(funde).len(),
+            2,
+            "ein Modellfund ueber eine andere Stelle darf nicht verschwinden"
+        );
     }
 
     #[test]
