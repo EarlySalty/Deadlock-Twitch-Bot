@@ -110,13 +110,13 @@ Stream-Audio dorthin zu senden.",
     let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
-    let mut aufnahme = tokio::spawn(aufnahme_schleife(
+    let aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
         Arc::clone(&warteschlange),
         Arc::clone(&abbruch),
     ));
-    let mut auswertung = tokio::spawn(auswertungs_schleife(
+    let auswertung = tokio::spawn(auswertungs_schleife(
         transkribierer,
         konfiguration,
         Arc::clone(&warteschlange),
@@ -127,29 +127,55 @@ Stream-Audio dorthin zu senden.",
     // wuerde sonst als leere Huelle weiterlaufen und nie wieder etwas
     // auswerten. Der Ausstiegscode muss ungleich 0 sein, sonst greift
     // Restart=on-failure in der Unit nicht.
-    let sauberer_abschied = tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Abbruch angefordert");
-            true
-        }
-        _ = abschaltsignal() => {
-            tracing::info!("SIGTERM erhalten, beende");
-            true
-        }
-        ergebnis = &mut aufnahme => {
-            arbeiter_ende_melden("Aufnahmeschleife", ergebnis);
-            false
-        }
-        ergebnis = &mut auswertung => {
-            arbeiter_ende_melden("Auswertungsschleife", ergebnis);
-            false
+    // Wer schon fertig ist, wird nicht noch einmal abgewartet: einen
+    // abgeschlossenen JoinHandle erneut zu pollen, ist eine Panik.
+    let mut aufnahme_offen = Some(aufnahme);
+    let mut auswertung_offen = Some(auswertung);
+    let sauberer_abschied = {
+        let aufnahme = aufnahme_offen.as_mut().expect("gerade gesetzt");
+        let auswertung = auswertung_offen.as_mut().expect("gerade gesetzt");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Abbruch angefordert");
+                Fertig::Signal
+            }
+            _ = abschaltsignal() => {
+                tracing::info!("SIGTERM erhalten, beende");
+                Fertig::Signal
+            }
+            ergebnis = aufnahme => {
+                arbeiter_ende_melden("Aufnahmeschleife", ergebnis);
+                Fertig::Aufnahme
+            }
+            ergebnis = auswertung => {
+                arbeiter_ende_melden("Auswertungsschleife", ergebnis);
+                Fertig::Auswertung
+            }
         }
     };
+    match sauberer_abschied {
+        Fertig::Aufnahme => aufnahme_offen = None,
+        Fertig::Auswertung => auswertung_offen = None,
+        Fertig::Signal => {}
+    }
 
-    arbeiter_abraeumen(aufnahme, auswertung, &abbruch).await;
-    if !sauberer_abschied {
+    arbeiter_abraeumen(aufnahme_offen, auswertung_offen, &abbruch).await;
+    // Nach einem erzwungenen Abbruch koennen Zwischendateien liegen. Der
+    // naechste Start raeumt sie zwar auf, aber ein sauber gestoppter Dienst
+    // wird nicht neu gestartet - dann laege rohes Audio unbegrenzt herum.
+    zwischendateien_aufraeumen(&eigener_temp).await;
+    if !matches!(sauberer_abschied, Fertig::Signal) {
         std::process::exit(1);
     }
+}
+
+/// Wer den Ausstieg ausgeloest hat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fertig {
+    /// Ctrl-C oder SIGTERM - ein gewollter Halt.
+    Signal,
+    Aufnahme,
+    Auswertung,
 }
 
 /// Bricht die Arbeiter ab und wartet kurz, damit laufende Aufnahmen ihre
@@ -158,8 +184,8 @@ Stream-Audio dorthin zu senden.",
 /// Ohne diesen Schritt endet der Prozess sofort; streamlink- und
 /// ffmpeg-Zwischenordner blieben liegen und niemand raeumt sie je auf.
 async fn arbeiter_abraeumen(
-    aufnahme: tokio::task::JoinHandle<()>,
-    auswertung: tokio::task::JoinHandle<()>,
+    aufnahme: Option<tokio::task::JoinHandle<()>>,
+    auswertung: Option<tokio::task::JoinHandle<()>>,
     abbruch: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Erst bitten, dann zwingen: die Schleifen sehen die Marke an ihren
@@ -171,8 +197,12 @@ async fn arbeiter_abraeumen(
     // rohes Audio ausserhalb jeder Aufbewahrung. Zwei Minuten Ton sind in
     // deutlich weniger als einer Minute durch.
     let frist = Duration::from_secs(60);
-    warten_oder_abbrechen("Aufnahmeschleife", aufnahme, Duration::from_secs(10)).await;
-    warten_oder_abbrechen("Auswertungsschleife", auswertung, frist).await;
+    if let Some(aufnahme) = aufnahme {
+        warten_oder_abbrechen("Aufnahmeschleife", aufnahme, Duration::from_secs(10)).await;
+    }
+    if let Some(auswertung) = auswertung {
+        warten_oder_abbrechen("Auswertungsschleife", auswertung, frist).await;
+    }
 }
 
 /// Wartet auf einen Arbeiter und bricht ihn nach der Frist wirklich ab.
@@ -672,6 +702,8 @@ async fn aufnahme_schleife(
     let mut gemeldet: std::collections::HashSet<String> = Default::default();
     // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
     let mut stau_gemeldet = false;
+    // Wie oft ein Aufnahme-Task wegen Rueckstands einen Block ausliess.
+    let pausen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // Blockstand je Kanal beim Start des laufenden Tasks.
     let mut gestartet_mit: std::collections::HashMap<String, u32> = Default::default();
     // Kanaele, deren Task ohne neuen Block endete - egal ob sauber oder mit Panik.
@@ -833,6 +865,23 @@ Aufnahme zustande. streamlink pruefen."
         // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
         // laufende Bloecke laufen zu Ende.
         let stau = warteschlange.lock().await.laenge();
+        let ausgelassen = pausen.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if ausgelassen > 0 && !stau_gemeldet {
+            // Auch wenn die Warteschlange inzwischen wieder kurz ist: diese
+            // Bloecke sind nie aufgenommen worden.
+            let text = format!(
+                "Coaching-Audit: {ausgelassen} Aufnahmebloecke wegen Rueckstand ausgelassen. \
+Diese Sendezeit wird nicht geprueft."
+            );
+            let schluessel = format!("{}-ausgelassen-{ausgelassen}", start_kennung());
+            match dm_rohtext(&text, &schluessel).await {
+                Ok(()) => stau_gemeldet = true,
+                Err(fehler) => {
+                    tracing::error!(fehler, "ausgelassene Bloecke nicht meldbar");
+                    hinweis_aufheben(&konfiguration, "ausgelassen", &schluessel, &text).await;
+                }
+            }
+        }
         if stau >= MAX_WARTESCHLANGE {
             tracing::warn!(
                 stau,
@@ -910,6 +959,7 @@ Dieser Abschnitt wird nicht geprueft."
                 konfiguration.clone(),
                 Arc::clone(&warteschlange),
                 Arc::clone(&abbruch),
+                Arc::clone(&pausen),
             ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
@@ -931,6 +981,7 @@ async fn kanal_aufnehmen(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
+    pausen: Arc<std::sync::atomic::AtomicUsize>,
 ) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
     let kanal = zustand.kanal.clone();
@@ -948,6 +999,11 @@ async fn kanal_aufnehmen(
         // seit Stunden aufnimmt, schriebe sonst weiter auf die Platte,
         // waehrend die Auswertung nicht hinterherkommt.
         if warteschlange.lock().await.laenge() >= MAX_WARTESCHLANGE {
+            // Die Aufsicht meldet den Rueckstand, sieht ihn aber nur alle 60
+            // Sekunden. Ist die Warteschlange bis dahin wieder unter der
+            // Grenze, faellt die uebersprungene Sendezeit sonst unter den
+            // Tisch. Deshalb zaehlt jede Pause hier mit.
+            pausen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(kanal, "Rueckstand zu gross - Aufnahme pausiert");
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
@@ -1890,6 +1946,11 @@ async fn schreiben(
 /// alte Inhalt oder der neue, nie eine Haelfte.
 async fn atomar_schreiben(pfad: &Path, inhalt: &[u8]) -> Result<(), String> {
     let neben = pfad.with_extension("json.neu");
+    let neben = if neben == pfad.to_path_buf() {
+        pfad.with_extension("neu")
+    } else {
+        neben
+    };
     nur_fuer_mich(&neben, inhalt).await?;
     tokio::fs::rename(&neben, pfad)
         .await
@@ -1959,7 +2020,9 @@ async fn hinweis_aufheben(
     // ein Login mit Unterstrich wuerde beim Saeubern verfaelscht, und der
     // Broker erkennt die Wiederholung dann nicht mehr.
     let inhalt = serde_json::json!({ "schluessel": schluessel, "text": text });
-    if let Err(fehler) = nur_fuer_mich(
+    // Atomar: ein Abbruch mitten im Schreiben liesse sonst halbes JSON zurueck,
+    // und der Wiederholungslauf ueberspringt genau diesen Hinweis fuer immer.
+    if let Err(fehler) = atomar_schreiben(
         &ordner.join(format!("{name}.json")),
         inhalt.to_string().as_bytes(),
     )
@@ -1994,7 +2057,11 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
             continue;
         };
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&roh) else {
-            tracing::warn!(datei = ?pfad, "Hinweis unlesbar");
+            // Ein halb geschriebener Hinweis aus einer aelteren Fassung: er
+            // laesst sich nicht mehr zustellen und darf den Ordner nicht
+            // dauerhaft blockieren.
+            tracing::warn!(datei = ?pfad, "Hinweis unlesbar - wird entfernt");
+            let _ = tokio::fs::remove_file(&pfad).await;
             continue;
         };
         let (Some(schluessel), Some(text)) = (

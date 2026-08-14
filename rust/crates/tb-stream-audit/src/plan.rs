@@ -60,9 +60,11 @@ pub struct Block {
     pub meldeversuche: u32,
 }
 
-/// So oft wird versucht, einen Block zu melden, dessen Bericht schon steht.
-/// Danach bleibt es beim Journal - sonst kreist der Block bei kaputtem Broker
-/// endlos und haelt seine Aufnahme aus der Aufbewahrung heraus.
+/// So oft wird ein Block mit halbstuendigem Abstand gemeldet, dessen Bericht
+/// schon steht. Danach wechselt der Aufrufer auf sechsstuendige Abstaende und
+/// gibt nach insgesamt zwoelf Anlaeufen auf; die Marke `meldung_offen.json`
+/// bleibt liegen, sodass der stuendliche Aufraeumtakt es weiter versucht. Ein
+/// Fund verschwindet also nicht, er wird nur seltener angeboten.
 pub const MAX_MELDEVERSUCHE: u32 = 5;
 
 /// Grundpause vor der Wiederholung, mit dem Versuch multipliziert. Der
