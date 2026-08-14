@@ -26,7 +26,8 @@ im Deadlock-Docs-Korpus.
 
 1. Alle 60 Sekunden fragt der Dienst ueber Helix ab, wer sendet.
 2. Je sendendem Kanal laeuft eine eigene Aufnahmeschleife, in Bloecken von
-   10 Minuten, hoechstens 6 Stunden Sendungszeit je Sendung.
+   2 Minuten, hoechstens 6 Stunden Sendungszeit je Sendung. Kurze Bloecke,
+   weil der lokale STT-Dienst mit Reaktionen und Smalltalk geteilt wird.
 3. Fertige Bloecke gehen in eine Warteschlange; ausgewertet wird seriell.
 4. Transkription: lokaler STT-Dienst (`deadlock-stt-server`, faster-whisper).
 5. Pruefung: drei feste Regeln ueber dem Transkript, danach ein Modellschritt

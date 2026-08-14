@@ -48,9 +48,11 @@ Audit, das darauf baut, faellt still aus.
 1. **Aufsicht** fragt alle 60 Sekunden Helix ab. Je sendendem Kanal laeuft ein
    eigener Aufnahme-Task; der Aufnahmestand (Stream-ID, Zeitversatz) liegt bei
    der Aufsicht, damit ein abgebrochener Task nicht bei null anfaengt.
-2. **Aufnahme** in Bloecken von 10 Minuten, hoechstens 6 Stunden Sendungszeit.
+2. **Aufnahme** in Bloecken von 2 Minuten, hoechstens 6 Stunden Sendungszeit.
+   Kurze Bloecke, weil der lokale STT-Dienst geteilt wird und eine Anfrage nach
+   der anderen abarbeitet.
    Vor jedem Block entsteht `<kanal>/<stream-id>/t<sekunde>/block.json`.
-3. **Warteschlange** im Speicher, mit Wartezeiten je Block. Ab 36 wartenden
+3. **Warteschlange** im Speicher, mit Wartezeiten je Block. Ab 180 wartenden
    Bloecken pausiert die Aufnahme, und der Admin bekommt eine DM.
 4. **Auswertung** seriell: Transkription (30 Minuten Zeitgrenze), Regelfunde,
    Modellschritt in Stapeln zu 20 Segmenten, Zusammenfassen, Bericht schreiben
@@ -59,7 +61,8 @@ Audit, das darauf baut, faellt still aus.
    oder leeres Transkript — Aufnahme bleibt als Beleg, markiert mit
    `ausgewertet.json`.
 6. **Aufraeumtakt** stuendlich: Berichte und Aufnahmen aelter als
-   `STREAM_AUDIT_RETENTION_DAYS` loeschen, offene Meldungen wieder einreihen.
+   `STREAM_AUDIT_RETENTION_DAYS` loeschen, offene Meldungen wieder einreihen,
+   nicht zugestellte Hinweise aus `offene-hinweise/` nachreichen.
 
 ## 5. Fehlerverhalten
 
@@ -70,6 +73,7 @@ Audit, das darauf baut, faellt still aus.
 | Modellschritt faellt aus | Bericht und DM sagen "NICHT GELAUFEN"; Aufnahme bleibt liegen. |
 | streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
 | Helix antwortet nicht | Nach fuenf Anlaeufen eine DM; ohne Abfrage wird nichts aufgenommen. |
+| Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
 | Schleife stirbt | Prozess endet mit Code 1, `Restart=on-failure` greift. |
 
 ## 6. Datenschutz

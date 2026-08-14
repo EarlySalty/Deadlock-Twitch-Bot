@@ -11,8 +11,9 @@ keine Sanktionen und postet nichts öffentlich.
 ## Was der Bot tut
 
 - Er fragt jede Minute bei Twitch ab, welcher der eingetragenen Kanäle gerade
-  sendet, und nimmt jeden davon in Blöcken von zehn Minuten mit — parallel,
-  nicht nacheinander.
+  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit — parallel,
+  nicht nacheinander. Kurze Blöcke, weil die Spracherkennung mit anderen
+  Funktionen des Bots geteilt wird.
 - Aufgenommen wird live, nicht aus dem VOD: ob ein Kanal seine VODs behält,
   entscheidet der Kanal, und ein Audit, das darauf baut, fällt still aus.
 - Die Aufnahme wird auf demselben Rechner in Text umgewandelt. Der Ton
@@ -35,7 +36,8 @@ keine Sanktionen und postet nichts öffentlich.
 - Aufgenommen wird nur, solange ein Kanal sendet, höchstens sechs Stunden
   Sendungszeit je Sendung.
 - Ist ein Kanal offline, wartet der Dienst auf den nächsten Live-Start.
-- Kommt die Auswertung nicht hinterher — 36 wartende Blöcke —, startet keine
+- Kommt die Auswertung nicht hinterher — 180 wartende Blöcke, also sechs
+  Stunden Ton —, startet keine
   neue Aufnahme, bis der Rückstand abgebaut ist.
 
 ## Was Streamer und Zuschauer sehen
