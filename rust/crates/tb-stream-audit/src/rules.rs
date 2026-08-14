@@ -34,7 +34,9 @@ pub const REGELN: &[Rule] = &[
         begruendung: "Moegliche rassistische Beleidigung. Kontext und Transkript manuell pruefen.",
     },
     Rule {
-        muster: r"(?i)\b(?:f[\W_]*a[\W_]*g(?:[\W_]*g[\W_]*o[\W_]*t)?|schwuchtel)\w*\b",
+        // Kein `\w*` am Ende: sonst faengt das Muster "Fagott" und jedes
+        // andere harmlose Wort, das mit denselben Buchstaben beginnt.
+        muster: r"(?i)\b(?:f[\W_]*a[\W_]*g[\W_]*g[\W_]*o[\W_]*t(?:[\W_]*s)?|f[\W_]*a[\W_]*g(?:[\W_]*s)?|schwuchtel(?:[\W_]*n)?)\b",
         kategorie: "hate_speech_slur",
         schwere: "high",
         begruendung:
@@ -201,5 +203,32 @@ mod tests {
         let text = format!("{} schwuchtel {}", "ä".repeat(200), "ö".repeat(200));
         let treffer = treffer_im_text(&text);
         assert_eq!(treffer.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_wortgrenzen {
+    use super::*;
+
+    #[test]
+    fn harmlose_woerter_bleiben_unbehelligt() {
+        // "Fagott" ist ein Instrument. Ein Audit, das es meldet, verbrennt
+        // Vertrauen und haelt nebenbei Videomaterial fest.
+        for harmlos in ["Ich spiele Fagott.", "Das Fagott ist schoen.", "Fagottist"] {
+            assert!(
+                treffer_im_text(harmlos).is_empty(),
+                "faelschlich gemeldet: {harmlos}"
+            );
+        }
+    }
+
+    #[test]
+    fn die_echten_faelle_greifen_weiter() {
+        for treffer in ["du fag", "f a g g o t", "so eine schwuchtel", "faggots"] {
+            assert!(
+                !treffer_im_text(treffer).is_empty(),
+                "nicht erkannt: {treffer}"
+            );
+        }
     }
 }
