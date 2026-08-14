@@ -10,6 +10,12 @@ Requires=deadlock-stt-server.service
 Type=simple
 WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
 
+# Die gemeinsame Bot-Konfiguration kommt zuerst; alles darunter gilt und
+# ueberschreibt sie. Andersherum koennte eine Zeile in bots.env still die
+# Kanaele, die Ablage oder den Schutz gegen entfernte Transkription
+# austauschen.
+EnvironmentFile=-%h/.config/deadlock/bots.env
+
 # Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
 # in der Unit sichtbar sein.
 Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
@@ -33,7 +39,6 @@ UMask=0077
 # Regelpruefung, und jeder Bericht traegt "NICHT GELAUFEN". Raus gehen
 # geschwaerzte Transkriptausschnitte - nie Audio.
 Environment=STREAM_AUDIT_ALLOW_REMOTE_LLM=1
-EnvironmentFile=-%h/.config/deadlock/bots.env
 LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
 
 # Secrets kommen ueber denselben Infisical-Wrapper wie beim Twitch-Bot; der

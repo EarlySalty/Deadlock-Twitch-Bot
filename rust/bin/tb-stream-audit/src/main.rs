@@ -543,10 +543,10 @@ fn sendungssekunden(sendung: &tb_transport_twitch::streams::HelixStream) -> u64 
 
 /// Zeitgrenze fuer eine Transkriptionsanfrage.
 ///
-/// Ein Block ist zehn Minuten lang, und das lokale Whisper laeuft auf der CPU
-/// langsamer als Echtzeit. Die Vorgabe der Kiste sind 60 Sekunden - damit
-/// liefe jeder volle Block in die Zeitueberschreitung, dreimal, und waere
-/// danach verloren.
+/// Ein Block ist zwei Minuten lang, und das lokale Whisper laeuft auf der CPU
+/// langsamer als Echtzeit. Die Vorgabe der Kiste sind 60 Sekunden - bei
+/// belegtem Dienst reicht das nicht, und der Block waere nach drei Anlaeufen
+/// verloren. Grosszuegig gewaehlt, weil hier niemand auf die Antwort wartet.
 const STT_ZEITGRENZE: Duration = Duration::from_secs(30 * 60);
 
 /// Umgebungsschalter fuer einen STT-Endpunkt ausserhalb dieses Rechners.
@@ -617,6 +617,8 @@ async fn aufnahme_schleife(
     let mut stau_gemeldet = false;
     // Blockstand je Kanal beim Start des laufenden Tasks.
     let mut gestartet_mit: std::collections::HashMap<String, u32> = Default::default();
+    // Kanaele, deren Task ohne neuen Block endete - egal ob sauber oder mit Panik.
+    let mut ohne_block: Vec<String> = Vec::new();
     // Wie oft die Live-Abfrage am Stueck scheiterte, und ob das gemeldet ist.
     let mut helix_fehler = 0u32;
     let mut helix_gemeldet = false;
@@ -646,7 +648,8 @@ Es wird nichts aufgenommen und nichts geprueft."
                         Ok(()) => helix_gemeldet = true,
                         Err(dm_fehler) => {
                             tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar");
-                            hinweis_aufheben(&konfiguration, &schluessel, &text).await;
+                            hinweis_aufheben(&konfiguration, "helix-ausfall", &schluessel, &text)
+                                .await;
                         }
                     }
                 }
@@ -685,30 +688,7 @@ Es wird nichts aufgenommen und nichts geprueft."
                     if zustand.bloecke == vorher {
                         let zaehler = fehlschlaege.entry(kanal.clone()).or_default();
                         *zaehler += 1;
-                        let anlaeufe = *zaehler;
-                        if anlaeufe >= MAX_STILLE_VERSUCHE && !gemeldet.contains(&kanal) {
-                            let text = format!(
-                                "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen \
-kommt keine Aufnahme zustande. streamlink pruefen."
-                            );
-                            // Der Schluessel traegt die Anlaufzahl: derselbe
-                            // Schluessel mit anderem Text kann beim Broker als
-                            // Widerspruch gelten und die Meldung verschlucken.
-                            let schluessel =
-                                format!("{}-{kanal}-keine-aufnahme-{anlaeufe}", start_kennung());
-                            match dm_rohtext(&text, &schluessel).await {
-                                // Erst nach zugestellter DM merken. Sonst
-                                // verschluckt ein einziger Broker-Aussetzer
-                                // die Meldung fuer immer.
-                                Ok(()) => {
-                                    gemeldet.insert(kanal.clone());
-                                }
-                                Err(fehler) => {
-                                    tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
-                                    hinweis_aufheben(&konfiguration, &schluessel, &text).await;
-                                }
-                            }
-                        }
+                        ohne_block.push(kanal.clone());
                     } else {
                         fehlschlaege.remove(&kanal);
                         gemeldet.remove(&kanal);
@@ -726,12 +706,49 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                 // sichere Richtung: der naechste Start faengt bei 0 an, aber
                 // der Prozess laeuft weiter und die anderen Kanaele bleiben.
                 Err(fehler) => {
-                    // Eine Panik ist erst recht ein Fehlschlag: ohne diesen
-                    // Zaehler bliebe ein Kanal unbemerkt ungeprueft.
+                    // Eine Panik ist erst recht ein Fehlschlag.
                     let zaehler = fehlschlaege.entry(kanal.clone()).or_default();
                     *zaehler += 1;
+                    ohne_block.push(kanal.clone());
                     gestartet_mit.remove(&kanal);
                     tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt");
+                }
+            }
+        }
+
+        // Die Meldeschwelle gilt fuer beide Wege: sauber beendeter Task ohne
+        // Block und abgestuerzter Task. Frueher stand sie nur im Erfolgszweig,
+        // und wiederholte Panics blieben unbemerkt.
+        for kanal in ohne_block.drain(..) {
+            let anlaeufe = fehlschlaege.get(&kanal).copied().unwrap_or(0);
+            if anlaeufe < MAX_STILLE_VERSUCHE || gemeldet.contains(&kanal) {
+                continue;
+            }
+            let text = format!(
+                "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen kommt keine \
+Aufnahme zustande. streamlink pruefen."
+            );
+            // Der Schluessel der DM traegt die Anlaufzahl - derselbe Schluessel
+            // mit anderem Text kann beim Broker als Widerspruch gelten. Die
+            // Datei fuer den Wiederholungsversuch heisst dagegen je Kanal
+            // gleich, sonst sammelte sich waehrend eines Broker-Ausfalls jede
+            // Minute ein neuer Hinweis an und alle kaemen spaeter auf einmal.
+            let schluessel = format!("{}-{kanal}-keine-aufnahme-{anlaeufe}", start_kennung());
+            match dm_rohtext(&text, &schluessel).await {
+                // Erst nach zugestellter DM merken. Sonst verschluckt ein
+                // einziger Broker-Aussetzer die Meldung fuer immer.
+                Ok(()) => {
+                    gemeldet.insert(kanal.clone());
+                }
+                Err(fehler) => {
+                    tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
+                    hinweis_aufheben(
+                        &konfiguration,
+                        &format!("keine-aufnahme-{kanal}"),
+                        &schluessel,
+                        &text,
+                    )
+                    .await;
                 }
             }
         }
@@ -771,7 +788,7 @@ Dieser Abschnitt wird nicht geprueft."
                     Ok(()) => stau_gemeldet = true,
                     Err(fehler) => {
                         tracing::error!(fehler, "Rueckstand nicht meldbar");
-                        hinweis_aufheben(&konfiguration, &schluessel, &text).await;
+                        hinweis_aufheben(&konfiguration, "rueckstand", &schluessel, &text).await;
                     }
                 }
             }
@@ -891,11 +908,12 @@ async fn kanal_aufnehmen(
         {
             // Ohne Zettel waere die Aufnahme nach einem Neustart nicht mehr
             // zuzuordnen: falscher Kanal, Zeitversatz 0. Dann lieber gar nicht
-            // erst aufnehmen.
-            tracing::error!(kanal, "Zettel nicht schreibbar - Block wird uebersprungen");
+            // erst aufnehmen - und der Task endet, damit die Aufsicht den
+            // Fehlschlag sieht und nach fuenf Anlaeufen meldet. Im Kreis zu
+            // laufen hiesse: kein Ton, keine Meldung, niemand merkt es.
+            tracing::error!(kanal, "Zettel nicht schreibbar - Aufnahme beendet");
             let _ = tokio::fs::remove_dir_all(&blockordner).await;
-            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
-            continue;
+            return zustand;
         }
 
         match capturer
@@ -1817,17 +1835,34 @@ fn hinweis_ordner(konfiguration: &Konfiguration) -> PathBuf {
 /// waehrend der Stoerung nicht erreichbar und die Stoerung danach vorbei,
 /// erfuhr niemand davon - genau die Luecke, die diese Meldungen schliessen
 /// sollen.
-async fn hinweis_aufheben(konfiguration: &Konfiguration, schluessel: &str, text: &str) {
+async fn hinweis_aufheben(
+    konfiguration: &Konfiguration,
+    ablage: &str,
+    schluessel: &str,
+    text: &str,
+) {
     let ordner = hinweis_ordner(konfiguration);
     if let Err(fehler) = tokio::fs::create_dir_all(&ordner).await {
         tracing::error!(?fehler, "Hinweisordner nicht anlegbar");
         return;
     }
-    let name: String = schluessel
+    // Der Dateiname steht je Vorfallsart fest und wird ueberschrieben. Ein
+    // Name mit laufender Nummer haette waehrend eines Broker-Ausfalls jede
+    // Minute eine neue Datei angelegt - und alle kaemen spaeter auf einmal an.
+    let name: String = ablage
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    if let Err(fehler) = nur_fuer_mich(&ordner.join(format!("{name}.txt")), text.as_bytes()).await {
+    // Der echte Idempotenzschluessel steht im Inhalt, nicht im Dateinamen:
+    // ein Login mit Unterstrich wuerde beim Saeubern verfaelscht, und der
+    // Broker erkennt die Wiederholung dann nicht mehr.
+    let inhalt = serde_json::json!({ "schluessel": schluessel, "text": text });
+    if let Err(fehler) = nur_fuer_mich(
+        &ordner.join(format!("{name}.json")),
+        inhalt.to_string().as_bytes(),
+    )
+    .await
+    {
         tracing::error!(fehler, "Hinweis nicht ablegbar");
     }
 }
@@ -1840,17 +1875,22 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
     };
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
         let pfad = eintrag.path();
-        if pfad.extension().and_then(|e| e.to_str()) != Some("txt") {
+        if pfad.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = tokio::fs::read_to_string(&pfad).await else {
+        let Ok(roh) = tokio::fs::read_to_string(&pfad).await else {
             continue;
         };
-        let schluessel = pfad
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("hinweis")
-            .to_owned();
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&roh) else {
+            tracing::warn!(datei = ?pfad, "Hinweis unlesbar");
+            continue;
+        };
+        let (Some(schluessel), Some(text)) = (
+            json["schluessel"].as_str().map(str::to_owned),
+            json["text"].as_str().map(str::to_owned),
+        ) else {
+            continue;
+        };
         match dm_rohtext(&text, &schluessel).await {
             Ok(()) => {
                 let _ = tokio::fs::remove_file(&pfad).await;
