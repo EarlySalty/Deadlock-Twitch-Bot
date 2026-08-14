@@ -1261,8 +1261,8 @@ async fn auswertungs_schleife(
     abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
-    // Wie viele Bloecke am Stueck ohne einen erkannten Satz blieben.
-    let mut leer_am_stueck = 0usize;
+    // Wie viele Bloecke am Stueck je Kanal ohne einen erkannten Satz blieben.
+    let mut leer_am_stueck: std::collections::HashMap<String, usize> = Default::default();
     loop {
         if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::info!("Auswertungsschleife beendet sich");
@@ -1301,23 +1301,37 @@ async fn auswertungs_schleife(
                 // nicht - dann liefert der STT-Dienst vermutlich fuer alles
                 // nichts, und ohne diesen Zaehler saehe das aus wie lauter
                 // ruhige Streams.
+                // Gezaehlt wird je Kanal. Ein gesunder Kanal darf den Zaehler
+                // eines anderen nicht zuruecksetzen - sonst bliebe genau der
+                // Kanal, dessen Ton nie ankommt, ohne Warnung.
+                let kanal = block.kanal.clone();
                 if segmente == 0 {
-                    leer_am_stueck += 1;
-                    if leer_am_stueck == MAX_LEER_AM_STUECK {
+                    let zaehler = leer_am_stueck.entry(kanal.clone()).or_insert(0usize);
+                    *zaehler += 1;
+                    let stumm = *zaehler;
+                    if stumm == MAX_LEER_AM_STUECK {
                         let text = format!(
-                            "Coaching-Audit: {leer_am_stueck} Bloecke am Stueck ohne einen \
+                            "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
 einzigen erkannten Satz. STT-Dienst pruefen."
                         );
-                        let schluessel = format!("{}-nur-stille", start_kennung());
+                        let schluessel = format!("{}-{kanal}-nur-stille", start_kennung());
                         if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
-                            tracing::error!(fehler, "Stille-Verdacht nicht meldbar");
-                            hinweis_aufheben(&konfiguration, "nur-stille", &schluessel, &text)
-                                .await;
+                            // Nicht wieder loeschen, wenn spaeter etwas
+                            // ankommt: die Aufnahmen dieser Strecke sind dann
+                            // schon weg, und die Warnung ist der einzige
+                            // Hinweis darauf, dass sie ungeprueft blieben.
+                            tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
+                            hinweis_aufheben(
+                                &konfiguration,
+                                &format!("nur-stille-{kanal}"),
+                                &schluessel,
+                                &text,
+                            )
+                            .await;
                         }
                     }
                 } else {
-                    leer_am_stueck = 0;
-                    hinweis_erledigt(&konfiguration, "nur-stille").await;
+                    leer_am_stueck.remove(&kanal);
                 }
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
                 // Fehler loescht, vernichtet bei einem Aussetzer der
@@ -1325,15 +1339,23 @@ einzigen erkannten Satz. STT-Dienst pruefen."
                 let pfad = PathBuf::from(&block.datei);
                 // Der Blockordner, nicht nur das Capture-Verzeichnis darin:
                 // sonst bleiben block.json und die leeren Ebenen fuer immer
-                // liegen.
-                if let Some(verzeichnis) = pfad.parent().and_then(Path::parent) {
-                    if let Err(fehler) = tokio::fs::remove_dir_all(verzeichnis).await {
+                // liegen. Und nur, wenn der Pfad wirklich die Form eines
+                // Blockordners hat - eine verirrte Datei direkt unter
+                // aufnahmen/ haette sonst den ganzen Ausgabeordner mitgenommen.
+                let wurzel = aufnahme_wurzel(&konfiguration);
+                if let Some(verzeichnis) = blockordner_von(&wurzel, &pfad) {
+                    if let Err(fehler) = tokio::fs::remove_dir_all(&verzeichnis).await {
                         tracing::warn!(
                             ?fehler,
                             ordner = ?verzeichnis,
                             "Aufnahme nicht geloescht - sie laeuft nach einem Neustart erneut"
                         );
                     }
+                } else {
+                    tracing::warn!(
+                        datei = ?pfad,
+                        "Aufnahme ausserhalb der erwarteten Struktur - nichts geloescht"
+                    );
                 }
             }
             // Der Bericht steht, nur die Meldung fehlt. Wiederholt wird

@@ -34,7 +34,9 @@ im Deadlock-Docs-Korpus.
    ueber den Anbieter des Twitch-Bots. Er sieht alle Segmente des Blocks, nicht
    nur die ohne Regeltreffer, in Stapeln zu 20.
 6. Bericht als Markdown und JSON unter `STREAM_AUDIT_OUTPUT_DIR`, Kurzmeldung
-   als DM ueber den Master-Broker.
+   als DM ueber den Master-Broker. Ein Block, dessen Transkription dreimal
+   scheiterte, kommt nie so weit: von ihm bleiben die Aufnahme und die
+   DM "aufgegeben".
 
 ## Datenschutz
 

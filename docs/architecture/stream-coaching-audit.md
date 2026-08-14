@@ -57,8 +57,8 @@ Audit, das darauf baut, faellt still aus.
 4. **Auswertung** seriell: Transkription (30 Minuten Zeitgrenze), Regelfunde,
    Modellschritt in Stapeln zu 20 Segmenten, Zusammenfassen, Bericht schreiben
    (JSON zuletzt und ueber `rename`), DM senden.
-5. **Ablage**: sauberer Block — Aufnahme weg. Fund, unvollstaendige Pruefung
-   oder leeres Transkript — Aufnahme bleibt als Beleg, markiert mit
+5. **Ablage**: sauberer Block — Aufnahme weg, auch wenn kein Wort fiel. Fund
+   oder unvollstaendige Pruefung — Aufnahme bleibt als Beleg, markiert mit
    `ausgewertet.json`.
 6. **Aufraeumtakt** stuendlich: Berichte und Aufnahmen aelter als
    `STREAM_AUDIT_RETENTION_DAYS` loeschen, offene Meldungen wieder einreihen,
