@@ -30,6 +30,43 @@ pub mod plan;
 pub mod report;
 pub mod rules;
 
+/// Gemeinsame Testhilfe fuer Umgebungsvariablen.
+///
+/// Alle Tests eines Crates laufen im selben Prozess und teilen sich dessen
+/// Umgebung. `set_var` neben einem lesenden Test in einem anderen Thread ist
+/// ein Datenrennen, deshalb liegt die Sperre hier und nicht je Modul: zwei
+/// getrennte Sperren haetten sich gegenseitig nicht gesehen.
+#[cfg(test)]
+pub(crate) mod testumgebung {
+    use std::sync::Mutex;
+
+    static SPERRE: Mutex<()> = Mutex::new(());
+
+    /// Setzt Umgebungsvariablen fuer die Dauer des Aufrufs und stellt sie
+    /// danach wieder her.
+    pub(crate) fn temp_env(paare: &[(&str, Option<&str>)], f: impl FnOnce()) {
+        let _wache = SPERRE.lock().unwrap_or_else(|e| e.into_inner());
+        let vorher: Vec<_> = paare
+            .iter()
+            .map(|(k, _)| (*k, std::env::var(k).ok()))
+            .collect();
+        for (k, v) in paare {
+            setzen(k, *v);
+        }
+        f();
+        for (k, v) in vorher {
+            setzen(k, v.as_deref());
+        }
+    }
+
+    fn setzen(name: &str, wert: Option<&str>) {
+        match wert {
+            Some(wert) => std::env::set_var(name, wert),
+            None => std::env::remove_var(name),
+        }
+    }
+}
+
 /// Ein transkribierter Abschnitt mit Zeitbezug zum Stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Segment {

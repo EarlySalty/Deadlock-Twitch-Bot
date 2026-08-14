@@ -74,12 +74,37 @@ im Deadlock-Docs-Korpus.
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 
+## Deploy
+
+Der Dienst baut sich nicht selbst. Das Startskript prueft nur, ob das Binary da
+ist, und bricht sonst mit Exit 5 und einer klaren Meldung ab (statt mit dem
+nackten `203/EXEC`, an dem der Vorgaenger monatelang haengen blieb).
+
+```bash
+# im Deploy-Worktree, nicht im Arbeits-Checkout
+cd ~/.worktrees/tb-deploy/rust
+SQLX_OFFLINE=true cargo build --release -p tb-stream-audit
+cp target/release/tb-stream-audit ~/repos/Deadlock-Twitch-Bot/rust/target/release/tb-stream-audit.neu
+mv ~/repos/Deadlock-Twitch-Bot/rust/target/release/tb-stream-audit{.neu,}
+
+# Unit einmalig installieren, danach nur noch neu starten
+cp ~/repos/Deadlock-Twitch-Bot/ops/systemd/deadlock-twitch-stream-coaching-watch.service \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user restart deadlock-twitch-stream-coaching-watch
+```
+
+Der Umweg ueber `.neu` und `mv` ist noetig, weil `cp` auf die laufende Datei mit
+`ETXTBSY` scheitert.
+
 ## Betrieb
 
 ```bash
 systemctl --user status deadlock-twitch-stream-coaching-watch
 journalctl --user -u deadlock-twitch-stream-coaching-watch -f
 ```
+
+- Exit 5: das Binary fehlt im Zielpfad, siehe Deploy.
 
 - Exit 2: Konfiguration fehlt (Kanaele, Helix) oder der Schutz gegen entfernte
   Transkription hat gegriffen. Grund steht im Klartext im Journal. Ohne

@@ -27,6 +27,12 @@ use tokio::process::Command;
 pub const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-1";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Zeitgrenze der ffmpeg-Extraktion.
+///
+/// Grosszuegig gewaehlt: ein Zwei-Minuten-Block ist in Sekunden umgewandelt,
+/// diese Grenze faengt nur den haengenden Prozess. Ohne sie blockiert eine
+/// abgeschnittene Aufnahme den Aufrufer dauerhaft.
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 /// Transkriptions-Ergebnis (Teilmenge von Pythons `TranscriptionResult`, die der
@@ -148,7 +154,7 @@ impl OpenAiTranscriber {
 
     /// ffmpeg → 16 kHz Mono PCM-WAV (Python `_extract_audio`).
     async fn extract_audio(&self, video: &Path, wav: &Path) -> Result<(), String> {
-        let output = Command::new(&self.ffmpeg_bin)
+        let kind = Command::new(&self.ffmpeg_bin)
             .arg("-y")
             .arg("-i")
             .arg(video)
@@ -157,9 +163,22 @@ impl OpenAiTranscriber {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .kill_on_drop(true)
+            .spawn()
             .map_err(|e| format!("ffmpeg nicht startbar: {e}"))?;
+        // Die Zeitgrenze des HTTP-Clients deckt nur die Anfrage an den
+        // STT-Dienst ab. Eine abgeschnittene Datei kann ffmpeg dagegen
+        // dauerhaft haengen lassen, und der Aufrufer wartet dann fuer immer
+        // auf einen Block, der nie fertig wird.
+        let output = match tokio::time::timeout(FFMPEG_TIMEOUT, kind.wait_with_output()).await {
+            Ok(fertig) => fertig.map_err(|e| format!("ffmpeg nicht lesbar: {e}"))?,
+            Err(_) => {
+                return Err(format!(
+                    "ffmpeg-Audio-Extraktion nach {} Sekunden abgebrochen",
+                    FFMPEG_TIMEOUT.as_secs()
+                ));
+            }
+        };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!(

@@ -671,6 +671,7 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
         segmente: 0,
         modell_geprueft: false,
         modell_hinweis: "kein Text im Block".to_owned(),
+        aufnahme_abgebrochen: false,
         funde: Vec::new(),
     }
 }
@@ -685,7 +686,12 @@ async fn fertig_markieren(aufnahme: &Path, bericht: &Bericht) {
         "erstellt_am": bericht.erstellt_am,
         "funde": bericht.funde.len(),
         "modell_geprueft": bericht.modell_geprueft,
+        "aufnahme_abgebrochen": bericht.aufnahme_abgebrochen,
     });
+    // Die Laufmarke eines abgebrochenen Mitschnitts bleibt sonst neben der
+    // Fertig-Marke liegen und laesst den Ordner aussehen, als liefe die
+    // Aufnahme noch. Der Abbruch selbst steht jetzt im Bericht.
+    let _ = tokio::fs::remove_file(blockordner.join(LAEUFT)).await;
     if let Err(fehler) =
         nur_fuer_mich(&blockordner.join(FERTIG), inhalt.to_string().as_bytes()).await
     {
@@ -1661,8 +1667,13 @@ async fn auswertungs_schleife(
             tokio::time::sleep(Duration::from_secs(15)).await;
             continue;
         };
+        // Bis zur Freigabe am Ende dieses Durchlaufs zaehlt die Datei als in
+        // Arbeit. Erst danach schuetzt den Block seine Fertig-Marke oder sein
+        // neuer Platz in der Schlange.
+        let in_arbeit_datei = block.datei.clone();
 
         match block_auswerten(&transkribierer, &konfiguration, &block).await {
+            Ok(Aufnahmeschicksal::Uebersprungen) => {}
             Ok(Aufnahmeschicksal::Behalten(bericht)) => {
                 // Auch ein aufbewahrter Block hatte Text. Ohne diese Zeile
                 // zaehlte der Stille-Zaehler ueber ihn hinweg weiter und
@@ -1746,6 +1757,7 @@ einzigen erkannten Satz. STT-Dienst pruefen."
                         block = %block.bezeichnung(),
                         "Aufnahme bleibt liegen - Verdacht auf ausgefallene Transkription"
                     );
+                    warteschlange.lock().await.freigeben(&in_arbeit_datei);
                     continue;
                 }
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
@@ -1890,6 +1902,7 @@ Aufnahme liegt noch da.",
                 }
             }
         }
+        warteschlange.lock().await.freigeben(&in_arbeit_datei);
     }
 }
 
@@ -1915,6 +1928,10 @@ enum Aufnahmeschicksal {
     /// unvollstaendige Pruefung. Die Aufnahme bleibt liegen und wird als
     /// ausgewertet markiert.
     Behalten(Box<Bericht>),
+    /// Der Block trug beim Start der Auswertung schon seine Fertig-Marke. Es
+    /// passiert nichts weiter: sein Bericht steht, seine Meldung ist raus, und
+    /// ein zweiter Durchlauf koennte beides ueberschreiben.
+    Uebersprungen,
 }
 
 async fn block_auswerten(
@@ -1922,6 +1939,18 @@ async fn block_auswerten(
     konfiguration: &Konfiguration,
     block: &plan::Block,
 ) -> Result<Aufnahmeschicksal, Auswertefehler> {
+    // Zweite Sperre gegen einen doppelt eingereihten Block, unabhaengig von
+    // der Warteschlange: die Marke liegt auf der Platte und ueberlebt auch
+    // einen Neustart zwischen den beiden Durchlaeufen. Der Weg "nur melden"
+    // laeuft absichtlich weiter, er wertet nichts neu aus.
+    if !block.nur_melden && bereits_ausgewertet(Path::new(&block.datei)).await {
+        tracing::warn!(
+            block = %block.bezeichnung(),
+            "Block war schon ausgewertet - zweiter Durchlauf uebersprungen"
+        );
+        return Ok(Aufnahmeschicksal::Uebersprungen);
+    }
+
     // Der Bericht steht schon, nur die Meldung fehlt. Ein zweiter Durchlauf
     // durch Transkription und Modell koennte anders ausfallen - ein spaeteres
     // "nichts gefunden" wuerde den frueheren Fund ueberschreiben und seine
@@ -1933,13 +1962,16 @@ async fn block_auswerten(
         dm_senden(&bericht, &block.bezeichnung())
             .await
             .map_err(Auswertefehler::Meldung)?;
-        return Ok(if bericht.funde.is_empty() && bericht.modell_geprueft {
-            Aufnahmeschicksal::Loeschen {
-                segmente: bericht.segmente,
-            }
-        } else {
-            Aufnahmeschicksal::Behalten(Box::new(bericht))
-        });
+        return Ok(
+            if bericht.funde.is_empty() && bericht.modell_geprueft && !bericht.aufnahme_abgebrochen
+            {
+                Aufnahmeschicksal::Loeschen {
+                    segmente: bericht.segmente,
+                }
+            } else {
+                Aufnahmeschicksal::Behalten(Box::new(bericht))
+            },
+        );
     }
 
     let transkript = transkribierer
@@ -1968,13 +2000,11 @@ async fn block_auswerten(
     let mut funde = tb_stream_audit::regelfunde(&segmente);
     let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
-    let modell_hinweis = match (abgebrochen, modell_fehler) {
-        (true, Some(fehler)) => Some(format!("{fehler}; ausserdem Aufnahme abgebrochen")),
-        (true, None) => {
-            Some("Aufnahme wurde mitten im Block gestoppt - geprueft ist nur ihr Anfang".to_owned())
-        }
-        (false, fehler) => fehler,
-    };
+    // Der Abbruch der Aufnahme steht als eigenes Feld im Bericht. Frueher lief
+    // er in denselben Hinweis wie ein Modellausfall: der Bericht behauptete
+    // dann "der Modellschritt lief nicht", obwohl er lief, und die
+    // Ausfallmeldung ging bei jedem Neustart eines sendenden Kanals raus.
+    let modell_hinweis = modell_fehler;
     let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
@@ -2000,6 +2030,7 @@ async fn block_auswerten(
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
         modell_hinweis: modell_hinweis.unwrap_or_default(),
+        aufnahme_abgebrochen: abgebrochen,
         funde,
     };
 
@@ -2019,13 +2050,15 @@ async fn block_auswerten(
     // ohne Aufnahme waere eine Behauptung ohne Gegenprobe: das Transkript ist
     // standardmaessig weg, der Bericht zeigt nur den geschwaerzten Ausschnitt,
     // und ob das VOD noch existiert, entscheidet der Kanal.
-    Ok(if !bericht.funde.is_empty() || !bericht.modell_geprueft {
-        Aufnahmeschicksal::Behalten(Box::new(bericht))
-    } else {
-        Aufnahmeschicksal::Loeschen {
-            segmente: bericht.segmente,
-        }
-    })
+    Ok(
+        if !bericht.funde.is_empty() || !bericht.modell_geprueft || bericht.aufnahme_abgebrochen {
+            Aufnahmeschicksal::Behalten(Box::new(bericht))
+        } else {
+            Aufnahmeschicksal::Loeschen {
+                segmente: bericht.segmente,
+            }
+        },
+    )
 }
 
 /// Baut Segmente aus den Zeitstempeln, die Whisper selbst geliefert hat.
@@ -2146,21 +2179,8 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
         );
     };
-    // Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307
-    // nach draussen zeigen - und die Pruefung auf "lokal" waere umsonst.
-    // Deshalb hier kein Ersatzclient: `Client::default()` ist `Client::new()`
-    // und paniert im Fehlerfall, und ein Client ohne diese Einstellungen waere
-    // schlimmer als keiner.
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(client) => client,
-        Err(fehler) => {
-            tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
-            return (Vec::new(), Some("HTTP-Client nicht baubar".to_owned()));
-        }
+    let Some(client) = modell_client() else {
+        return (Vec::new(), Some("HTTP-Client nicht baubar".to_owned()));
     };
 
     let mut raus = Vec::new();
@@ -2235,12 +2255,73 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
     (raus, fehler_gesehen)
 }
 
-/// Pfad des Berichts zu einem Block.
-fn bericht_pfad(konfiguration: &Konfiguration, block: &plan::Block) -> PathBuf {
+/// HTTP-Client des Modellschritts.
+///
+/// Einmal gebaut und dann wiederverwendet: ein Client je Block hiesse ein
+/// neuer Verbindungspool und ein neuer TLS-Handschlag pro Auswertung.
+/// Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307 nach
+/// draussen zeigen - die Pruefung auf "lokal" waere dann umsonst. Deshalb gibt
+/// es auch keinen Ersatzclient: `Client::new()` paniert im selben Fehlerfall,
+/// und ein Client ohne diese Einstellungen waere schlimmer als keiner.
+fn modell_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(120))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|fehler| {
+                    tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
+                })
+                .ok()
+        })
+        .as_ref()
+}
+
+/// HTTP-Client fuer die Meldungen an den Broker.
+///
+/// Kurze Zeitgrenze: die Meldung haengt im seriellen Auswerter, und ein
+/// Client ohne Grenze bliebe dort fuer immer stehen.
+fn broker_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|fehler| {
+                    tracing::error!(?fehler, "HTTP-Client fuer die Meldung nicht baubar");
+                })
+                .ok()
+        })
+        .as_ref()
+}
+
+/// Namensbasis aller Berichtsdateien eines Blocks, ohne Endung.
+fn bericht_basis(konfiguration: &Konfiguration, block: &plan::Block) -> PathBuf {
     konfiguration
         .ausgabe
         .join(&block.kanal)
-        .join(format!("{}.json", block.bezeichnung()))
+        .join(block.bezeichnung())
+}
+
+/// Haengt eine Endung an, statt eine vorhandene zu ersetzen.
+///
+/// `with_extension` haette alles hinter einem Punkt in der Blockbezeichnung
+/// verschluckt. Lesender und schreibender Weg gingen dann auf verschiedene
+/// Dateien - der Bericht laege da, und der Dienst faende ihn nicht.
+fn mit_endung(basis: &Path, endung: &str) -> PathBuf {
+    let mut name = basis.file_name().unwrap_or_default().to_os_string();
+    name.push(".");
+    name.push(endung);
+    basis.with_file_name(name)
+}
+
+/// Pfad des Berichts zu einem Block.
+fn bericht_pfad(konfiguration: &Konfiguration, block: &plan::Block) -> PathBuf {
+    mit_endung(&bericht_basis(konfiguration, block), "json")
 }
 
 /// Steht ein **lesbarer** Bericht zu diesem Block schon auf der Platte?
@@ -2302,21 +2383,23 @@ async fn schreiben(
     tokio::fs::create_dir_all(&verzeichnis)
         .await
         .map_err(|e| format!("Ausgabeverzeichnis: {e}"))?;
-    let basis = verzeichnis.join(block.bezeichnung());
+    // Dieselbe Namensbasis wie der lesende Weg (`bericht_pfad`), sonst schreibt
+    // der Dienst an eine Stelle und sucht an einer anderen.
+    let basis = bericht_basis(konfiguration, block);
 
     let json = serde_json::to_string_pretty(bericht).map_err(|e| format!("JSON: {e}"))?;
     nur_fuer_mich(
-        &basis.with_extension("md"),
+        &mit_endung(&basis, "md"),
         report::markdown(bericht).as_bytes(),
     )
     .await?;
     if konfiguration.transkript_behalten {
-        nur_fuer_mich(&basis.with_extension("txt"), transkript.as_bytes()).await?;
+        nur_fuer_mich(&mit_endung(&basis, "txt"), transkript.as_bytes()).await?;
     } else {
         // Ein frueherer Lauf desselben Blocks kann den Wortlaut abgelegt
         // haben, als der Schalter noch an war. Bliebe er liegen, stuende im
         // neuen Bericht "nicht behalten", waehrend die Datei danebenliegt.
-        let alt = basis.with_extension("txt");
+        let alt = mit_endung(&basis, "txt");
         match tokio::fs::remove_file(&alt).await {
             Ok(()) => tracing::info!(datei = ?alt, "altes Transkript entfernt"),
             Err(fehler) if fehler.kind() == std::io::ErrorKind::NotFound => {}
@@ -2328,7 +2411,7 @@ async fn schreiben(
     // einen Abbruch mitten im Transkript wie einen abgeschlossenen Lauf
     // aussehen. Und wer sie an Ort und Stelle kuerzt, hinterlaesst bei einem
     // Abbruch halbes JSON, das keine Wiederholung mehr heilt.
-    atomar_schreiben(&basis.with_extension("json"), json.as_bytes()).await?;
+    atomar_schreiben(&mit_endung(&basis, "json"), json.as_bytes()).await?;
     tracing::info!(
         block = %block.bezeichnung(),
         funde = bericht.funde.len(),
@@ -2524,14 +2607,7 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
     };
     let anfrage = melden::anfrage(melden::empfaenger(), text);
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
-    // Kein Ersatzclient: `Client::default()` ist `Client::new()` und paniert
-    // im selben Fehlerfall, und ein Client ohne Zeitgrenze bliebe im seriellen
-    // Auswerter fuer immer haengen.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|fehler| format!("HTTP-Client nicht baubar: {fehler}"))?;
+    let client = broker_client().ok_or_else(|| "HTTP-Client nicht baubar".to_owned())?;
     match client
         .post(&url)
         .header("X-Internal-Token", token)
@@ -2563,14 +2639,8 @@ async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     };
     let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(bericht, 5));
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
-    // Kein Ersatzclient: `Client::default()` ist `Client::new()` und paniert
-    // im selben Fehlerfall, und ein Client ohne Zeitgrenze bliebe im seriellen
-    // Auswerter fuer immer haengen.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|fehler| format!("HTTP-Client nicht baubar: {fehler}"))?;
+    let client = broker_client()
+        .ok_or_else(|| "HTTP-Client nicht baubar, Fund waere unbemerkt geblieben".to_owned())?;
     match client
         .post(&url)
         .header("X-Internal-Token", token)
@@ -2821,6 +2891,7 @@ mod tests {
             segmente: 3,
             modell_geprueft: true,
             modell_hinweis: String::new(),
+            aufnahme_abgebrochen: false,
             funde: Vec::new(),
         };
         fertig_markieren(&aufnahme, &bericht).await;

@@ -52,4 +52,15 @@ unset INFISICAL_SERVICE_TOKEN
 # weiterleben.
 unset DL_INFISICAL_READY
 
-exec "$ROOT_DIR/rust/target/release/tb-stream-audit" "$@"
+BINARY="$ROOT_DIR/rust/target/release/tb-stream-audit"
+# Gebaut wird nicht hier, sondern beim Deploy (siehe docs/STREAM_COACHING_AUDIT.md).
+# Ohne diese Pruefung endet ein fehlendes Binary als nacktes 203/EXEC im
+# Journal - genau der Fehler, an dem der Vorgaengerdienst monatelang haengen
+# blieb, ohne dass jemand den Grund sah.
+if [[ ! -x "$BINARY" ]]; then
+  echo "tb-stream-audit fehlt oder ist nicht ausfuehrbar: $BINARY" >&2
+  echo "Bauen: SQLX_OFFLINE=true cargo build --release -p tb-stream-audit" >&2
+  exit 5
+fi
+
+exec "$BINARY" "$@"

@@ -126,6 +126,11 @@ async def transcriptions(
         "text": text,
         "duration": duration,
         "language": getattr(info, "language", language),
+        # Was wirklich lief, nicht was angefragt wurde: der Dienst laedt sein
+        # Modell aus der eigenen Konfiguration und ignoriert `model` aus der
+        # Anfrage. Ohne dieses Feld schreibt der Audit-Bericht den angefragten
+        # Namen (`whisper-1`), waehrend large-v3-turbo transkribiert hat.
+        "model": MODEL_ID,
     }
     if response_format == "verbose_json":
         body["segments"] = [

@@ -46,6 +46,17 @@ pub struct Bericht {
     pub modell_geprueft: bool,
     /// Grund, falls der Modellschritt ausfiel oder uebersprungen wurde.
     pub modell_hinweis: String,
+    /// Ob die Aufnahme mitten im Block gestoppt wurde, etwa bei Neustart oder
+    /// Sendungsende. Bewusst getrennt von [`Bericht::modell_geprueft`]: ein
+    /// abgebrochener Mitschnitt sagt nichts darueber aus, ob das Modell lief.
+    /// Beides in ein Feld zu legen hiess, bei jedem Neustart einen
+    /// Modellausfall zu melden, den es nie gab.
+    ///
+    /// `serde(default)`, damit Berichte aus der Zeit vor diesem Feld weiter
+    /// lesbar bleiben - sie liegen bis zum Ende der Aufbewahrung auf der
+    /// Platte und werden von dort erneut gemeldet.
+    #[serde(default)]
+    pub aufnahme_abgebrochen: bool,
     pub funde: Vec<Fund>,
 }
 
@@ -90,11 +101,12 @@ pub fn markdown(bericht: &Bericht) -> String {
         format!("- Lauf: `{}`", bericht.lauf_id),
         format!("- Erstellt: {}", bericht.erstellt_am),
         format!("- Quelle: {}", bericht.quelle),
-        // "angefragt": der lokale STT-Dienst ignoriert den Modellnamen aus der
-        // Anfrage und laedt, was in seiner eigenen Konfiguration steht. Nennt
-        // seine Antwort kein Modell, ist dieser Name nur der gewuenschte.
+        // Der Dienst nennt in seiner Antwort das Modell, das er wirklich
+        // geladen hat; erst wenn er schweigt, steht hier der angefragte Name.
+        // Deshalb die doppelte Angabe im Label statt eines Versprechens, das
+        // der Bericht nicht halten kann.
         format!(
-            "- Transkription: {} (Modell angefragt: {}), {}",
+            "- Transkription: {} (Modell laut Dienst, sonst angefragt: {}), {}",
             bericht.transkription,
             bericht.modell,
             if bericht.transkription_lokal {
@@ -117,6 +129,14 @@ pub fn markdown(bericht: &Bericht) -> String {
                 format!(" — NICHT GELAUFEN: {}", bericht.modell_hinweis)
             }
         ),
+        format!(
+            "- Aufnahme: {}",
+            if bericht.aufnahme_abgebrochen {
+                "mitten im Block gestoppt - geprueft ist nur ihr Anfang"
+            } else {
+                "vollstaendig"
+            }
+        ),
         format!("- Segmente: {}", bericht.segmente),
         format!(
             "- Rohtranskript behalten: {}",
@@ -130,13 +150,17 @@ pub fn markdown(bericht: &Bericht) -> String {
     ];
 
     if bericht.funde.is_empty() {
-        zeilen.push(if bericht.modell_geprueft {
-            "Keine Auffaelligkeiten.".to_owned()
-        } else {
-            format!(
+        zeilen.push(match (bericht.modell_geprueft, bericht.aufnahme_abgebrochen) {
+            (true, false) => "Keine Auffaelligkeiten.".to_owned(),
+            (true, true) => "Keine Auffaelligkeiten im aufgenommenen Anfang. **Die Aufnahme brach mitten im Block ab**, der Rest ist ungeprueft.".to_owned(),
+            (false, false) => format!(
                 "Keine Regelfunde. **Der Modellschritt lief nicht** ({}), diese Seite ist daher NICHT vollstaendig geprueft.",
                 bericht.modell_hinweis
-            )
+            ),
+            (false, true) => format!(
+                "Keine Regelfunde. **Der Modellschritt lief nicht** ({}), und die Aufnahme brach mitten im Block ab. Diese Seite ist NICHT vollstaendig geprueft.",
+                bericht.modell_hinweis
+            ),
         });
         zeilen.push(String::new());
         return zeilen.join("\n");
@@ -185,11 +209,14 @@ pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
         let hoch = bericht.funde.iter().filter(|f| f.schwere == "high").count();
         // Der Hinweis auf den ausgefallenen Modellschritt gehoert auch hierhin:
         // Funde heissen sonst "das war alles", obwohl nur die Regeln liefen.
-        let unvollstaendig = if bericht.modell_geprueft {
+        let mut unvollstaendig = if bericht.modell_geprueft {
             String::new()
         } else {
             format!(" Modellschritt lief nicht ({}).", bericht.modell_hinweis)
         };
+        if bericht.aufnahme_abgebrochen {
+            unvollstaendig.push_str(" Aufnahme brach mitten im Block ab.");
+        }
         format!(
             "Coaching-Audit {}: {} Funde, davon {} hoch ({} Segmente).{}",
             bericht.kanal,
@@ -256,6 +283,7 @@ mod tests {
             segmente: 12,
             modell_geprueft: true,
             modell_hinweis: String::new(),
+            aufnahme_abgebrochen: false,
             funde,
         }
     }
@@ -303,6 +331,26 @@ mod tests {
         assert!(text.contains("NICHT GELAUFEN"));
         assert!(text.contains("NICHT vollstaendig geprueft"));
         assert!(!text.contains("Keine Auffaelligkeiten."));
+    }
+
+    #[test]
+    fn abgebrochene_aufnahme_ist_kein_modellausfall() {
+        // Beides lief frueher in dasselbe Feld: ein Neustart waehrend einer
+        // laufenden Sendung meldete dann einen Modellausfall, den es nie gab,
+        // und der Bericht behauptete "der Modellschritt lief nicht".
+        let mut b = bericht(vec![]);
+        b.aufnahme_abgebrochen = true;
+        let text = markdown(&b);
+        assert!(text.contains("mitten im Block gestoppt"));
+        assert!(!text.contains("NICHT GELAUFEN"));
+        assert!(!text.contains("Der Modellschritt lief nicht"));
+        assert!(b.modell_geprueft, "das Modell lief, nur die Aufnahme nicht");
+
+        // In der DM steht der Abbruch neben den Funden, sonst liest sich die
+        // Liste wie das vollstaendige Ergebnis.
+        let mut mit_fund = bericht(vec![fund("high", 10.0, "harassment")]);
+        mit_fund.aufnahme_abgebrochen = true;
+        assert!(dm_text(&mit_fund, 3).contains("Aufnahme brach mitten im Block ab"));
     }
 
     #[test]

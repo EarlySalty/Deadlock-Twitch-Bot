@@ -65,8 +65,9 @@ pub struct Block {
     pub zeit_unsicher: bool,
 }
 
-/// So oft wird ein Block mit halbstuendigem Abstand gemeldet, dessen Bericht
-/// schon steht. Danach wechselt der Aufrufer auf sechsstuendige Abstaende und
+/// Ab diesem Zaehlerstand ist der halbstuendige Takt vorbei: gemeldet wird ein
+/// Block, dessen Bericht schon steht, also viermal mit halbstuendigem Abstand
+/// (Versuch 1 bis 4). Danach wechselt der Aufrufer auf sechsstuendige Abstaende und
 /// gibt nach insgesamt zwoelf Anlaeufen auf; die Marke `meldung_offen.json`
 /// bleibt liegen, sodass der stuendliche Aufraeumtakt es weiter versucht. Ein
 /// Fund verschwindet also nicht, er wird nur seltener angeboten.
@@ -116,6 +117,15 @@ impl Block {
 #[derive(Debug, Default)]
 pub struct Warteschlange {
     eintraege: VecDeque<Block>,
+    /// Dateien der Bloecke, die gerade ausgewertet werden.
+    ///
+    /// Ein Block ist zwischen [`Warteschlange::naechster`] und
+    /// [`Warteschlange::freigeben`] in keiner Liste und traegt auch noch keine
+    /// Fertig-Marke. Ohne diesen Zwischenspeicher hielt ihn der Aufnahme-Task
+    /// fuer liegengeblieben und reihte ihn ein zweites Mal ein: die zweite
+    /// Auswertung ueberschrieb dann den Bericht des ersten Durchlaufs und
+    /// loeschte im Zweifel die Aufnahme, die den Fund belegt.
+    in_arbeit: std::collections::HashSet<String>,
 }
 
 /// Mindestlaenge eines Blocks.
@@ -148,7 +158,17 @@ impl Warteschlange {
             .eintraege
             .iter()
             .position(|b| b.frueherstens <= jetzt)?;
-        self.eintraege.remove(stelle)
+        let block = self.eintraege.remove(stelle)?;
+        self.in_arbeit.insert(block.datei.clone());
+        Some(block)
+    }
+
+    /// Nimmt einen Block aus der Arbeit. Gehoert ans Ende jedes Durchlaufs,
+    /// egal ob er sauber durchlief, wieder eingereiht wurde oder aufgegeben
+    /// ist: danach schuetzt ihn seine Fertig-Marke oder sein neuer Platz in
+    /// der Schlange.
+    pub fn freigeben(&mut self, datei: &str) {
+        self.in_arbeit.remove(datei);
     }
 
     /// Reiht einen fehlgeschlagenen Block hinten wieder ein, bis die Versuche
@@ -176,12 +196,17 @@ impl Warteschlange {
         true
     }
 
-    /// Dateien aller wartenden Bloecke.
+    /// Dateien aller wartenden Bloecke - und der gerade laufenden Auswertung.
     ///
     /// Die Aufbewahrung braucht sie, um nicht genau die Aufnahme zu loeschen,
-    /// die gleich ausgewertet wird.
+    /// die gleich ausgewertet wird; das Wiedereinreihen liegengebliebener
+    /// Aufnahmen braucht sie, um den Block in Arbeit nicht doppelt zu starten.
     pub fn dateien(&self) -> Vec<String> {
-        self.eintraege.iter().map(|b| b.datei.clone()).collect()
+        self.eintraege
+            .iter()
+            .map(|b| b.datei.clone())
+            .chain(self.in_arbeit.iter().cloned())
+            .collect()
     }
 
     /// Reiht einen Block mit fester Pause wieder ein, ohne Versuche zu
@@ -382,6 +407,36 @@ mod tests {
         assert_eq!(w.naechster().unwrap().nummer, 2);
         assert_eq!(w.naechster().unwrap().nummer, 3);
         assert!(w.ist_leer());
+    }
+
+    #[test]
+    fn block_in_arbeit_bleibt_sichtbar() {
+        // Der Aufnahme-Task fragt `dateien()`, bevor er liegengebliebene
+        // Aufnahmen einreiht. Waere der Block in Arbeit dort unsichtbar, liefe
+        // er ein zweites Mal - und der zweite Bericht ueberschriebe den
+        // ersten samt seinem Beleg.
+        let mut w = Warteschlange::new();
+        w.einreihen(Block {
+            kanal: "a".to_owned(),
+            lauf: "L1".to_owned(),
+            nummer: 1,
+            versatz_sekunden: 0,
+            datei: "/pfad/a.ts".to_owned(),
+            versuche: 0,
+            frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
+            zeit_unsicher: false,
+        });
+        let block = w.naechster().expect("Block");
+        assert!(w.ist_leer(), "der Block ist aus der Schlange raus");
+        assert_eq!(
+            w.dateien(),
+            vec!["/pfad/a.ts".to_owned()],
+            "in Arbeit heisst weiterhin belegt"
+        );
+        w.freigeben(&block.datei);
+        assert!(w.dateien().is_empty(), "nach der Freigabe ist er weg");
     }
 
     #[test]

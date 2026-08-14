@@ -338,15 +338,18 @@ mod tests {
 
     #[test]
     fn fremder_anbieter_braucht_ausdrueckliche_erlaubnis() {
-        std::env::remove_var(REMOTE_ERLAUBT_ENV);
-        assert!(!fernes_modell_erlaubt(
-            "https://api.fireworks.ai/inference/v1"
-        ));
-        std::env::set_var(REMOTE_ERLAUBT_ENV, "1");
-        assert!(fernes_modell_erlaubt(
-            "https://api.fireworks.ai/inference/v1"
-        ));
-        std::env::remove_var(REMOTE_ERLAUBT_ENV);
+        // Dieselbe Sperre wie in den anderen Modulen: die Umgebung gehoert dem
+        // ganzen Testprozess, nicht diesem Test.
+        crate::testumgebung::temp_env(&[(REMOTE_ERLAUBT_ENV, None)], || {
+            assert!(!fernes_modell_erlaubt(
+                "https://api.fireworks.ai/inference/v1"
+            ));
+        });
+        crate::testumgebung::temp_env(&[(REMOTE_ERLAUBT_ENV, Some("1"))], || {
+            assert!(fernes_modell_erlaubt(
+                "https://api.fireworks.ai/inference/v1"
+            ));
+        });
     }
 
     #[test]

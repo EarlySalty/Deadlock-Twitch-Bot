@@ -206,28 +206,5 @@ mod tests {
         });
     }
 
-    /// Setzt Umgebungsvariablen fuer die Dauer des Aufrufs und stellt sie danach
-    /// wieder her. Tests laufen im selben Prozess, deshalb serialisiert.
-    fn temp_env(paare: &[(&str, Option<&str>)], f: impl FnOnce()) {
-        use std::sync::Mutex;
-        static SPERRE: Mutex<()> = Mutex::new(());
-        let _wache = SPERRE.lock().unwrap_or_else(|e| e.into_inner());
-        let vorher: Vec<_> = paare
-            .iter()
-            .map(|(k, _)| (*k, std::env::var(k).ok()))
-            .collect();
-        for (k, v) in paare {
-            match v {
-                Some(wert) => std::env::set_var(k, wert),
-                None => std::env::remove_var(k),
-            }
-        }
-        f();
-        for (k, v) in vorher {
-            match v {
-                Some(wert) => std::env::set_var(k, wert),
-                None => std::env::remove_var(k),
-            }
-        }
-    }
+    use crate::testumgebung::temp_env;
 }
