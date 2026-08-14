@@ -1,8 +1,10 @@
 //! Bericht als Markdown und JSON.
 //!
-//! Der Bericht ist das, was ein Mensch liest, und das Einzige, was den Rechner
-//! verlaesst. Deshalb steht in ihm nie ein Rohzitat, sondern die geschwaerzte
-//! Fassung und der Hash. Der Wortlaut ist danach in aller Regel weg: die
+//! Der Bericht ist das, was ein Mensch liest. Jeder Beleg laeuft durch die
+//! Schwaerzung und traegt den Hash des Originals - die Schwaerzung kennt aber
+//! nur die drei Muster aus [`crate::rules`]. Was ein Modellfund sonst an
+//! Wortlaut im Segment mitbringt, steht im Bericht; er ist damit kein
+//! zitatfreier Text, sondern eine zugriffsbeschraenkte Akte (Modus 0600). Der Wortlaut ist danach in aller Regel weg: die
 //! Aufnahme wird nach erfolgreicher Auswertung geloescht, und das Transkript
 //! bleibt nur liegen, wenn `STREAM_AUDIT_KEEP_TRANSCRIPT` vorher gesetzt war.
 //! Der Hash kann ein vorgelegtes Zitat bestaetigen, aber keines herstellen.

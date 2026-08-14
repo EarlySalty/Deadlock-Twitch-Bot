@@ -92,12 +92,12 @@ Stream-Audio dorthin zu senden.",
 
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
-    let aufnahme = tokio::spawn(aufnahme_schleife(
+    let mut aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
         Arc::clone(&warteschlange),
     ));
-    let auswertung = tokio::spawn(auswertungs_schleife(
+    let mut auswertung = tokio::spawn(auswertungs_schleife(
         transkribierer,
         konfiguration,
         Arc::clone(&warteschlange),
@@ -107,22 +107,45 @@ Stream-Audio dorthin zu senden.",
     // wuerde sonst als leere Huelle weiterlaufen und nie wieder etwas
     // auswerten. Der Ausstiegscode muss ungleich 0 sein, sonst greift
     // Restart=on-failure in der Unit nicht.
-    tokio::select! {
+    let abbruch = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Abbruch angefordert");
+            true
         }
         _ = abschaltsignal() => {
             tracing::info!("SIGTERM erhalten, beende");
+            true
         }
-        ergebnis = aufnahme => {
+        ergebnis = &mut aufnahme => {
             arbeiter_ende_melden("Aufnahmeschleife", ergebnis);
-            std::process::exit(1);
+            false
         }
-        ergebnis = auswertung => {
+        ergebnis = &mut auswertung => {
             arbeiter_ende_melden("Auswertungsschleife", ergebnis);
-            std::process::exit(1);
+            false
         }
+    };
+
+    arbeiter_abraeumen(aufnahme, auswertung).await;
+    if !abbruch {
+        std::process::exit(1);
     }
+}
+
+/// Bricht die Arbeiter ab und wartet kurz, damit laufende Aufnahmen ihre
+/// Zwischendateien noch wegraeumen koennen.
+///
+/// Ohne diesen Schritt endet der Prozess sofort; streamlink- und
+/// ffmpeg-Zwischenordner blieben liegen und niemand raeumt sie je auf.
+async fn arbeiter_abraeumen(
+    aufnahme: tokio::task::JoinHandle<()>,
+    auswertung: tokio::task::JoinHandle<()>,
+) {
+    aufnahme.abort();
+    auswertung.abort();
+    let frist = Duration::from_secs(5);
+    let _ = tokio::time::timeout(frist, aufnahme).await;
+    let _ = tokio::time::timeout(frist, auswertung).await;
 }
 
 /// Wartet auf SIGTERM.
@@ -181,6 +204,7 @@ async fn liegengebliebenes_einreihen(
     let mut ersatz = plan::Aufnahme::starten("wiederaufnahme", lauf);
     let mut gefunden = 0usize;
     let mut ohne_zettel = 0usize;
+    let mut nur_meldung = 0usize;
 
     let mut schon_fertig = 0usize;
     for pfad in aufnahmen {
@@ -188,7 +212,7 @@ async fn liegengebliebenes_einreihen(
             schon_fertig += 1;
             continue;
         }
-        let block = match zettel_lesen(&pfad).await {
+        let mut block = match zettel_lesen(&pfad).await {
             Some(block) => block,
             None => {
                 ohne_zettel += 1;
@@ -199,6 +223,13 @@ async fn liegengebliebenes_einreihen(
                 ersatz.block_fertig(pfad.to_string_lossy().to_string(), 1)
             }
         };
+        // Liegt der Bericht schon, fehlte nur die Meldung. Ein zweiter
+        // Durchlauf durch Transkription und Modell koennte anders ausfallen
+        // und den frueheren Fund ueberschreiben.
+        if bericht_liegt_vor(konfiguration, &block).await {
+            block.nur_melden = true;
+            nur_meldung += 1;
+        }
         warteschlange.lock().await.einreihen(block);
         gefunden += 1;
     }
@@ -213,6 +244,12 @@ async fn liegengebliebenes_einreihen(
         tracing::info!(
             schon_fertig,
             "aufbewahrte Aufnahmen uebersprungen - bereits ausgewertet"
+        );
+    }
+    if nur_meldung > 0 {
+        tracing::info!(
+            nur_meldung,
+            "Bericht lag schon vor - es wird nur die Meldung nachgeholt"
         );
     }
     if gefunden > 0 {
@@ -467,6 +504,11 @@ async fn aufnahme_schleife(
     let mut gemeldet: std::collections::HashSet<String> = Default::default();
     // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
     let mut stau_gemeldet = false;
+    // Blockstand je Kanal beim Start des laufenden Tasks.
+    let mut gestartet_mit: std::collections::HashMap<String, u32> = Default::default();
+    // Wie oft die Live-Abfrage am Stueck scheiterte, und ob das gemeldet ist.
+    let mut helix_fehler = 0u32;
+    let mut helix_gemeldet = false;
 
     loop {
         let sendungen = match helix
@@ -475,11 +517,28 @@ async fn aufnahme_schleife(
         {
             Ok(streams) => streams,
             Err(fehler) => {
-                tracing::warn!(?fehler, "Live-Abfrage fehlgeschlagen");
+                helix_fehler += 1;
+                tracing::warn!(?fehler, helix_fehler, "Live-Abfrage fehlgeschlagen");
+                // Ohne Live-Abfrage nimmt der Dienst nichts auf. Das sieht
+                // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
+                if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
+                    let text = format!(
+                        "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
+Es wird nichts aufgenommen und nichts geprueft."
+                    );
+                    match dm_rohtext(&text, "helix-ausfall").await {
+                        Ok(()) => helix_gemeldet = true,
+                        Err(dm_fehler) => {
+                            tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar")
+                        }
+                    }
+                }
                 tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
                 continue;
             }
         };
+        helix_fehler = 0;
+        helix_gemeldet = false;
         let live: Vec<String> = sendungen
             .iter()
             .map(|s| s.user_login.to_lowercase())
@@ -501,19 +560,30 @@ async fn aufnahme_schleife(
                     // heisst in aller Regel: der Stream ist vorbei. Er kann
                     // aber auch heissen, dass streamlink fehlt oder kaputt ist
                     // - und dann liefe das Audit still ins Leere.
-                    if zustand.bloecke == 0 {
+                    // Verglichen wird mit dem Stand beim Start dieses Tasks,
+                    // nicht mit null: nach einem einzigen gelungenen Block
+                    // waere sonst jeder weitere Fehlschlag ein "Erfolg", und
+                    // der Rest der Sendung fiele still aus.
+                    let vorher = gestartet_mit.remove(&kanal).unwrap_or(0);
+                    if zustand.bloecke == vorher {
                         let zaehler = fehlschlaege.entry(kanal.clone()).or_default();
                         *zaehler += 1;
                         let anlaeufe = *zaehler;
-                        if anlaeufe >= MAX_STILLE_VERSUCHE && gemeldet.insert(kanal.clone()) {
+                        if anlaeufe >= MAX_STILLE_VERSUCHE && !gemeldet.contains(&kanal) {
                             let text = format!(
                                 "Coaching-Audit {kanal}: sendet, aber seit {anlaeufe} Anlaeufen \
 kommt keine Aufnahme zustande. streamlink pruefen."
                             );
-                            if let Err(fehler) =
-                                dm_rohtext(&text, &format!("{kanal}-keine-aufnahme")).await
-                            {
-                                tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
+                            match dm_rohtext(&text, &format!("{kanal}-keine-aufnahme")).await {
+                                // Erst nach zugestellter DM merken. Sonst
+                                // verschluckt ein einziger Broker-Aussetzer
+                                // die Meldung fuer immer.
+                                Ok(()) => {
+                                    gemeldet.insert(kanal.clone());
+                                }
+                                Err(fehler) => {
+                                    tracing::error!(fehler, kanal, "Ausfall nicht meldbar")
+                                }
                             }
                         }
                     } else {
@@ -556,13 +626,14 @@ kommt keine Aufnahme zustande. streamlink pruefen."
             // Eine Pause heisst: Sendezeit wird nicht geprueft. Ohne Meldung
             // sieht das hinterher aus wie ein sauberer Stream.
             if !stau_gemeldet {
-                stau_gemeldet = true;
                 let text = format!(
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                if let Err(fehler) = dm_rohtext(&text, "rueckstand").await {
-                    tracing::error!(fehler, "Rueckstand nicht meldbar");
+                match dm_rohtext(&text, "rueckstand").await {
+                    // Auch hier erst nach der Zustellung merken.
+                    Ok(()) => stau_gemeldet = true,
+                    Err(fehler) => tracing::error!(fehler, "Rueckstand nicht meldbar"),
                 }
             }
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
@@ -610,6 +681,7 @@ Dieser Abschnitt wird nicht geprueft."
                 staende.insert(kanal.clone(), zustand);
                 continue;
             }
+            gestartet_mit.insert(kanal.clone(), zustand.bloecke);
             let handle = tokio::spawn(kanal_aufnehmen(
                 zustand,
                 konfiguration.clone(),
@@ -1199,8 +1271,11 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
         );
     };
+    // Ohne diese Zeile koennte ein Endpunkt auf 127.0.0.1 per 307 nach
+    // draussen zeigen - und die Pruefung auf "lokal" waere umsonst gewesen.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
 
@@ -1268,15 +1343,27 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
     (raus, fehler_gesehen)
 }
 
+/// Pfad des Berichts zu einem Block.
+fn bericht_pfad(konfiguration: &Konfiguration, block: &plan::Block) -> PathBuf {
+    konfiguration
+        .ausgabe
+        .join(&block.kanal)
+        .join(format!("{}.json", block.bezeichnung()))
+}
+
+/// Steht der Bericht zu diesem Block schon auf der Platte?
+async fn bericht_liegt_vor(konfiguration: &Konfiguration, block: &plan::Block) -> bool {
+    tokio::fs::try_exists(bericht_pfad(konfiguration, block))
+        .await
+        .unwrap_or(false)
+}
+
 /// Liest einen schon geschriebenen Bericht wieder ein.
 async fn bericht_lesen(
     konfiguration: &Konfiguration,
     block: &plan::Block,
 ) -> Result<Bericht, String> {
-    let pfad = konfiguration
-        .ausgabe
-        .join(&block.kanal)
-        .join(format!("{}.json", block.bezeichnung()));
+    let pfad = bericht_pfad(konfiguration, block);
     let roh = tokio::fs::read_to_string(&pfad)
         .await
         .map_err(|e| format!("Bericht {} nicht lesbar: {e}", pfad.display()))?;
@@ -1363,6 +1450,7 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
     match client
@@ -1397,6 +1485,7 @@ async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
     match client
