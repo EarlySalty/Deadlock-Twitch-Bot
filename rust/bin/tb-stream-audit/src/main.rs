@@ -108,7 +108,11 @@ Stream-Audio dorthin zu senden.",
         );
         std::process::exit(2);
     }
-    std::env::set_var("TMPDIR", &eigener_temp);
+    // Der Ordner geht direkt an den Transkribierer. Frueher stand hier
+    // `set_var("TMPDIR", ...)`: das ist ein Datenrennen auf der Prozessumgebung,
+    // sobald die Runtime laeuft, und es haette sich an jeden gestarteten
+    // streamlink- und ffmpeg-Prozess vererbt.
+    let transkribierer = transkribierer.with_temp_dir(&eigener_temp);
     zwischendateien_aufraeumen(&eigener_temp).await;
 
     let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -553,9 +557,15 @@ async fn angebrochenes_einreihen(
         {
             continue;
         }
-        let Some(block) = zettel_lesen(&pfad).await else {
+        let Some(mut block) = zettel_lesen(&pfad).await else {
             continue;
         };
+        // Wie in `offene_meldungen_einreihen`: liegt der Bericht schon, fehlt
+        // nur die Meldung. Ein voller zweiter Durchlauf koennte anders
+        // ausfallen, den frueheren Fund ueberschreiben und seine Aufnahme
+        // loeschen - die Marke `ausgewertet.json` fehlt in genau diesem Fall,
+        // weil die Meldung nie durchkam.
+        block.nur_melden = bericht_liegt_vor(konfiguration, &block).await;
         warteschlange.lock().await.einreihen(block);
         neu += 1;
     }
@@ -608,7 +618,7 @@ async fn offene_meldungen_einreihen(
 }
 
 /// Meldet einen ausgefallenen Modellschritt - aber nur beim ersten Block und
-/// danach bei jedem Vielfachen von [`MAX_LEER_AM_STUECK`].
+/// danach bei jedem Vielfachen von [`MODELLAUSFALL_TAKT`].
 ///
 /// Faellt der Modellschritt aus, faellt er meist fuer jeden Block aus: ein
 /// fehlender Schluessel, ein gesperrter Anbieter. Eine DM je Block waeren rund
@@ -627,7 +637,7 @@ async fn modellausfall_melden(
     let stand = zaehler.entry(kanal.to_owned()).or_insert(0);
     *stand += 1;
     let bloecke = *stand;
-    if bloecke != 1 && !bloecke.is_multiple_of(MAX_LEER_AM_STUECK) {
+    if bloecke != 1 && !bloecke.is_multiple_of(MODELLAUSFALL_TAKT) {
         return;
     }
     let ablage = format!("modellausfall-{kanal}");
@@ -787,6 +797,14 @@ fn start_kennung() -> &'static str {
 /// kaputten STT-Dienst. Zwanzig Bloecke sind rund 40 Minuten Sendung.
 const MAX_LEER_AM_STUECK: usize = 20;
 
+/// So viele Bloecke liegen zwischen zwei Meldungen ueber einen ausgefallenen
+/// Modellschritt.
+///
+/// Eigene Konstante, obwohl der Wert derselbe ist: die Stille-Schwelle und der
+/// Meldetakt haben nichts miteinander zu tun, und wer an einer schraubt, soll
+/// nicht ungewollt die andere verstellen.
+const MODELLAUSFALL_TAKT: usize = 20;
+
 /// So oft darf ein sendender Kanal keinen Block liefern, bevor gemeldet wird.
 ///
 /// Ein einzelner Fehlschlag ist der Normalfall am Sendungsende. Fuenf am
@@ -905,7 +923,14 @@ async fn aufnahme_schleife(
     // Schon gemeldete Dauerausfaelle, damit die DM nicht im Minutentakt kommt.
     let mut gemeldet: std::collections::HashSet<String> = Default::default();
     // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
-    let mut stau_gemeldet = false;
+    let mut rueckstand_gemeldet = false;
+    // Ausgelassene Minuten je Kanal, ueber die ganze Stauphase aufsummiert.
+    //
+    // Die Aufstellung geht erst raus, wenn der Rueckstand abgebaut ist: waehrend
+    // der Pause waechst sie ja noch. Frueher teilte sie sich die Marke mit der
+    // Rueckstandsmeldung, und weil die zuerst kommt, wurde die Aufstellung
+    // Takt fuer Takt verworfen statt gemeldet.
+    let mut ausgelassen_gesamt: std::collections::BTreeMap<String, usize> = Default::default();
     // Wie viele Wartetakte je Kanal wegen Rueckstands vergingen. Ein Takt sind
     // 60 Sekunden Sendezeit, die niemand aufgenommen hat.
     let pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>> =
@@ -1098,11 +1123,54 @@ nicht erkannt."
         // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
         // laufende Bloecke laufen zu Ende.
         let stau = warteschlange.lock().await.offene_auswertungen();
-        let ausgelassen = std::mem::take(&mut *pausen.lock().await);
-        if !ausgelassen.is_empty() && !stau_gemeldet {
-            // Auch wenn die Warteschlange inzwischen wieder kurz ist: diese
-            // Sendezeit ist nie aufgenommen worden.
-            let aufstellung: Vec<String> = ausgelassen
+        for (kanal, takte) in std::mem::take(&mut *pausen.lock().await) {
+            *ausgelassen_gesamt.entry(kanal).or_insert(0) += takte;
+        }
+        if stau >= MAX_WARTESCHLANGE {
+            tracing::warn!(
+                stau,
+                grenze = MAX_WARTESCHLANGE,
+                "Auswertung kommt nicht nach - keine neuen Aufnahmen"
+            );
+            // Eine Pause heisst: Sendezeit wird nicht geprueft. Ohne Meldung
+            // sieht das hinterher aus wie ein sauberer Stream.
+            if !rueckstand_gemeldet {
+                let text = format!(
+                    "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
+Dieser Abschnitt wird nicht geprueft."
+                );
+                let (schluessel, text) = match offener_hinweis(&konfiguration, "rueckstand").await {
+                    Some(offen) => offen,
+                    None => (
+                        format!(
+                            "{}-rueckstand-{}",
+                            start_kennung(),
+                            naechste_vorfall_nummer()
+                        ),
+                        text,
+                    ),
+                };
+                match dm_rohtext(&text, &schluessel).await {
+                    // Auch hier erst nach der Zustellung merken.
+                    Ok(()) => {
+                        rueckstand_gemeldet = true;
+                        hinweis_erledigt(&konfiguration, "rueckstand").await;
+                    }
+                    Err(fehler) => {
+                        tracing::error!(fehler, "Rueckstand nicht meldbar");
+                        hinweis_aufheben(&konfiguration, "rueckstand", &schluessel, &text).await;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
+            continue;
+        }
+        // Der Rueckstand ist abgebaut. Jetzt steht fest, wie viel Sendezeit die
+        // Pause gekostet hat - und erst jetzt ist die Aufstellung vollstaendig.
+        // Sie geht auch dann raus, wenn die Warteschlange laengst wieder kurz
+        // ist: diese Minuten sind nie aufgenommen worden.
+        if !ausgelassen_gesamt.is_empty() {
+            let aufstellung: Vec<String> = ausgelassen_gesamt
                 .iter()
                 .map(|(kanal, takte)| format!("{kanal}: rund {takte} Minuten"))
                 .collect();
@@ -1124,7 +1192,11 @@ Sie wird nicht geprueft.",
             };
             match dm_rohtext(&text, &schluessel).await {
                 Ok(()) => {
-                    stau_gemeldet = true;
+                    // Erst nach der Zustellung vergessen. Scheitert sie, bleiben
+                    // die Zahlen stehen und gehen beim naechsten Takt erneut
+                    // raus - sonst waere die verpasste Sendezeit still weg.
+                    ausgelassen_gesamt.clear();
+                    rueckstand_gemeldet = false;
                     hinweis_erledigt(&konfiguration, "ausgelassen").await;
                 }
                 Err(fehler) => {
@@ -1132,50 +1204,10 @@ Sie wird nicht geprueft.",
                     hinweis_aufheben(&konfiguration, "ausgelassen", &schluessel, &text).await;
                 }
             }
-        }
-        if stau >= MAX_WARTESCHLANGE {
-            tracing::warn!(
-                stau,
-                grenze = MAX_WARTESCHLANGE,
-                "Auswertung kommt nicht nach - keine neuen Aufnahmen"
-            );
-            // Eine Pause heisst: Sendezeit wird nicht geprueft. Ohne Meldung
-            // sieht das hinterher aus wie ein sauberer Stream.
-            if !stau_gemeldet {
-                let text = format!(
-                    "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
-Dieser Abschnitt wird nicht geprueft."
-                );
-                let (schluessel, text) = match offener_hinweis(&konfiguration, "rueckstand").await {
-                    Some(offen) => offen,
-                    None => (
-                        format!(
-                            "{}-rueckstand-{}",
-                            start_kennung(),
-                            naechste_vorfall_nummer()
-                        ),
-                        text,
-                    ),
-                };
-                match dm_rohtext(&text, &schluessel).await {
-                    // Auch hier erst nach der Zustellung merken.
-                    Ok(()) => {
-                        stau_gemeldet = true;
-                        hinweis_erledigt(&konfiguration, "rueckstand").await;
-                    }
-                    Err(fehler) => {
-                        tracing::error!(fehler, "Rueckstand nicht meldbar");
-                        hinweis_aufheben(&konfiguration, "rueckstand", &schluessel, &text).await;
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
-            continue;
-        }
-        // Nur zuruecksetzen, wenn wirklich nichts ausgelassen wurde - sonst
-        // faellt die eben gesetzte Marke der "ausgelassen"-Meldung weg.
-        if ausgelassen.is_empty() {
-            stau_gemeldet = false;
+        } else {
+            // Stau ohne verpasste Aufnahme: die naechste Pause darf sich wieder
+            // melden.
+            rueckstand_gemeldet = false;
         }
 
         for sendung in &sendungen {

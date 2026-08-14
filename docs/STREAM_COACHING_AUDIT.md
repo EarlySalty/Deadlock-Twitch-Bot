@@ -105,6 +105,10 @@ journalctl --user -u deadlock-twitch-stream-coaching-watch -f
 ```
 
 - Exit 5: das Binary fehlt im Zielpfad, siehe Deploy.
+- Exit 4: der Infisical-Loader `dl-infisical-env` fehlt oder ist nicht
+  ausfuehrbar.
+- Exit 3: `INFISICAL_SERVICE_TOKEN` steht weder in `infisical.conf` noch als
+  systemd-Credential.
 
 - Exit 2: Konfiguration fehlt (Kanaele, Helix) oder der Schutz gegen entfernte
   Transkription hat gegriffen. Grund steht im Klartext im Journal. Ohne

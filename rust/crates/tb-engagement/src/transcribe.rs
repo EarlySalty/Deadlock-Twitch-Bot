@@ -83,6 +83,8 @@ pub struct OpenAiTranscriber {
     base_url: String,
     ffmpeg_bin: String,
     http: reqwest::Client,
+    /// Ordner fuer die Zwischendateien; `None` heisst Systemtemp.
+    temp_dir: Option<std::path::PathBuf>,
 }
 
 impl OpenAiTranscriber {
@@ -117,6 +119,7 @@ impl OpenAiTranscriber {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok()?,
+            temp_dir: None,
         })
     }
 
@@ -132,11 +135,22 @@ impl OpenAiTranscriber {
         self
     }
 
+    /// Legt den Ordner fest, in dem die Zwischendateien entstehen.
+    ///
+    /// Ohne diesen Weg blieb nur `TMPDIR` im Prozess umzubiegen. Das ist ein
+    /// Datenrennen, sobald die Runtime laeuft, und es vererbt sich an jeden
+    /// gestarteten streamlink- und ffmpeg-Prozess. Ein Aufrufer, der seine
+    /// Zwischendateien selbst aufraeumen will, sagt es jetzt hier.
+    pub fn with_temp_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.temp_dir = Some(dir.into());
+        self
+    }
+
     /// Extrahiert Audio in ein Temp-WAV und transkribiert es (Python
     /// `transcribe_clip`). Das Temp-Verzeichnis wird immer aufgeräumt.
     pub async fn transcribe_clip(&self, video_path: &Path) -> Result<TranscriptionResult, String> {
-        let dir =
-            std::env::temp_dir().join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
+        let basis = self.temp_dir.clone().unwrap_or_else(std::env::temp_dir);
+        let dir = basis.join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -377,6 +391,7 @@ mod tests {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap(),
+            temp_dir: None,
         }
     }
 
@@ -679,6 +694,7 @@ mod tests_segmente {
             base_url: format!("{}/v1/audio/transcriptions", server.uri()),
             ffmpeg_bin: "ffmpeg".into(),
             http: reqwest::Client::new(),
+            temp_dir: None,
         };
         transcriber
             .transcribe_bytes(b"nicht wirklich wav".to_vec())

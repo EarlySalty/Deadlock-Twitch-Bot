@@ -11,7 +11,11 @@ path = "src/main.rs"
 chrono = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["signal", "time", "fs"] }
+# `sync` und `io-util` kamen bisher nur ueber die Feature-Vereinigung mit
+# tb-llm und tb-engagement herein: der Bin nutzt `tokio::sync::Mutex` und
+# `AsyncWriteExt` selbst und haette sonst gebrochen, sobald eine dieser
+# Abhaengigkeiten wegfaellt.
+tokio = { workspace = true, features = ["signal", "time", "fs", "sync", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tb-engagement = { workspace = true }
