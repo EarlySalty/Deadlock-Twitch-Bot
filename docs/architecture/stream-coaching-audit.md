@@ -71,7 +71,7 @@ Audit, das darauf baut, faellt still aus.
 | Fall | Verhalten |
 |------|-----------|
 | Transkription scheitert | Drei Versuche mit 2 und 4 Minuten Pause; danach DM "aufgegeben", Aufnahme bleibt liegen. |
-| DM scheitert | Nur die Meldung wird wiederholt (5x/30 min, dann 6-stuendlich, insgesamt 12); danach `meldung_offen.json`, das der Aufraeumtakt wieder aufgreift. |
+| DM scheitert | Nur die Meldung wird wiederholt: vier Anlaeufe im Abstand von 30 Minuten, danach sechsstuendlich bis zum zwoelften; danach bleibt `meldung_offen.json` liegen, das der stuendliche Aufraeumtakt wieder aufgreift. |
 | Modellschritt faellt aus | Bericht und DM sagen "NICHT GELAUFEN"; Aufnahme bleibt liegen. |
 | Block ohne gesprochenes Wort | Normalfall, keine Meldung, Aufnahme weg. Ab 20 stummen Bloecken am Stueck je Kanal: DM bei jedem Vielfachen, und die Aufnahmen bleiben liegen. |
 | streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
