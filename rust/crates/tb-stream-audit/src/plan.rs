@@ -86,7 +86,15 @@ impl Block {
     /// Zeitversatz ist innerhalb einer Sendung eindeutig und sortiert
     /// nebenbei richtig.
     pub fn bezeichnung(&self) -> String {
-        format!("{}-{}-t{:06}", self.kanal, self.lauf, self.versatz_sekunden)
+        // Zeit **und** laufende Nummer: der Versatz zaehlt in ganzen Sekunden,
+        // und eine Aufnahme kann in weniger als einer Sekunde zurueckkommen -
+        // etwa wenn streamlink sofort abbricht und trotzdem ein paar Kilobyte
+        // dalaesst. Zwei Bloecke haetten dann denselben Namen, denselben
+        // Ordner und denselben Idempotenzschluessel.
+        format!(
+            "{}-{}-t{:06}-b{:04}",
+            self.kanal, self.lauf, self.versatz_sekunden, self.nummer
+        )
     }
 
     /// Segment-ID-Praefix fuer diesen Block.
@@ -333,7 +341,11 @@ mod tests {
         namen.sort();
         assert_eq!(
             namen,
-            vec!["kanal-L1-t000600", "kanal-L1-t001200", "kanal-L1-t006000"]
+            vec![
+                "kanal-L1-t000600-b0001",
+                "kanal-L1-t001200-b0001",
+                "kanal-L1-t006000-b0001"
+            ]
         );
     }
 
@@ -505,7 +517,10 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
         };
-        assert_eq!(block.segment_id(7), "deadlockgermany-L1-t001200-s00007");
+        assert_eq!(
+            block.segment_id(7),
+            "deadlockgermany-L1-t001200-b0003-s00007"
+        );
     }
 }
 

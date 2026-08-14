@@ -20,8 +20,10 @@ set -a
 source "$CONFIG_FILE"
 set +a
 
-if [[ -z "${INFISICAL_SERVICE_TOKEN:-}" && -n "${CREDENTIALS_DIRECTORY:-}" ]] \
-  && [[ -r "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
+# Das systemd-Credential gewinnt gegen einen Wert aus der Config-Datei: es ist
+# die Stelle, die rotiert wird. Ein alter Token in infisical.conf hat den
+# Loader sonst still scheitern lassen.
+if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -r "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
   INFISICAL_SERVICE_TOKEN="$(<"$CREDENTIALS_DIRECTORY/infisical-token")"
   export INFISICAL_SERVICE_TOKEN
 fi

@@ -51,7 +51,9 @@ Audit, das darauf baut, faellt still aus.
 2. **Aufnahme** in Bloecken von 2 Minuten, hoechstens 6 Stunden Sendungszeit.
    Kurze Bloecke, weil der lokale STT-Dienst geteilt wird und eine Anfrage nach
    der anderen abarbeitet.
-   Vor jedem Block entsteht `<kanal>/<stream-id>/t<sekunde>/block.json`.
+   Vor jedem Block entsteht `<kanal>/<stream-id>/t<sekunde>-b<nummer>/block.json`;
+   Zeit und Nummer zusammen, weil zwei sofort abgebrochene Aufnahmen dieselbe
+   Sekunde treffen koennen.
 3. **Warteschlange** im Speicher, mit Wartezeiten je Block. Ab 180 wartenden
    Bloecken pausiert die Aufnahme, und der Admin bekommt eine DM.
 4. **Auswertung** seriell: Transkription (30 Minuten Zeitgrenze), Regelfunde,
