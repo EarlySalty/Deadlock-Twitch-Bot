@@ -354,3 +354,24 @@ export async function uploadClip(input: {
   }
   return (await response.json()) as UploadResponse;
 }
+
+export interface PlatformStatus {
+  platform: string;
+  connected: boolean;
+  username: string | null;
+  expired: boolean;
+}
+
+/// Verbindungsstatus je Plattform. Der OAuth-Flow selbst ist ein Redirect und
+/// laeuft deshalb nicht ueber fetch, sondern ueber `oauthStartUrl`.
+export async function fetchPlatformStatus(): Promise<{ platforms: PlatformStatus[] }> {
+  return fetchJson<{ platforms: PlatformStatus[] }>('/social-media/api/platforms/status');
+}
+
+export function oauthStartUrl(platform: string, streamer: string): string {
+  return `/social-media/oauth/start/${platform}?streamer=${encodeURIComponent(streamer)}`;
+}
+
+export async function disconnectPlatform(platform: string): Promise<void> {
+  await fetchJson(`/social-media/oauth/disconnect/${platform}`, { method: 'POST' });
+}

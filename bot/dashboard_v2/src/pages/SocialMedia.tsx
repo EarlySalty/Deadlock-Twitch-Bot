@@ -33,6 +33,10 @@ import {
   fetchAutoApproveSettings,
   fetchClips,
   fetchVodArchiveSettings,
+  fetchPlatformStatus,
+  disconnectPlatform,
+  oauthStartUrl,
+  type PlatformStatus,
   fetchStreamerLayout,
   saveStreamerLayout,
   saveAutoApproveSettings,
@@ -202,6 +206,23 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     },
   });
 
+  const platformStatusQuery = useQuery({
+    queryKey: ['social-media', 'platform-status', streamer],
+    queryFn: () => fetchPlatformStatus(),
+    enabled: !!streamer,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: (platform: string) => disconnectPlatform(platform),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', streamer] });
+    },
+  });
+
   const vodArchiveMutation = useMutation({
     mutationFn: (payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) =>
       saveVodArchiveSettings(streamer, payload),
@@ -314,6 +335,13 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
         <AnalyticsTab streamer={streamer} clips={clipsQuery.data?.items ?? []} />
       ) : activeView === 'settings' ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <PlatformConnectionsCard
+            streamer={streamer}
+            platforms={platformStatusQuery.data?.platforms ?? []}
+            isLoading={platformStatusQuery.isLoading}
+            onDisconnect={(platform) => disconnectMutation.mutate(platform)}
+            isDisconnecting={disconnectMutation.isPending}
+          />
           <AutoApproveCard
             settings={autoApproveQuery.data ?? { youtube: false, tiktok: false, instagram: false }}
             isLoading={autoApproveQuery.isLoading}
@@ -729,6 +757,84 @@ function AutoApproveCard({
  * Gilt immer fuer den gerade gewaehlten Kanal, deshalb steht er in der
  * Ueberschrift: die Seite zeigt je nach Auswahl unterschiedliche Schalter.
  */
+const PLATFORM_LABELS: Record<string, string> = {
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
+  instagram: 'Instagram',
+};
+
+/// Verbindungen zu den Plattformen. Der OAuth-Flow ist ein Redirect auf den
+/// Anbieter, deshalb ist "Verbinden" ein Link und kein fetch.
+function PlatformConnectionsCard({
+  streamer,
+  platforms,
+  isLoading,
+  onDisconnect,
+  isDisconnecting,
+}: {
+  streamer: string;
+  platforms: PlatformStatus[];
+  isLoading: boolean;
+  onDisconnect: (platform: string) => void;
+  isDisconnecting: boolean;
+}) {
+  const known = ['youtube', 'tiktok', 'instagram'];
+  const byName = new Map(platforms.map((p) => [p.platform, p]));
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <ExternalLink className="w-4 h-4 text-orange" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">Verbindungen</h3>
+        {isLoading && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+      </div>
+
+      <div className="space-y-2">
+        {known.map((platform) => {
+          const status = byName.get(platform);
+          const connected = status?.connected ?? false;
+          return (
+            <div
+              key={platform}
+              className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-white">
+                  {PLATFORM_LABELS[platform] ?? platform}
+                </div>
+                <div className="text-xs text-text-secondary truncate">
+                  {connected
+                    ? status?.expired
+                      ? 'Zugang abgelaufen, bitte neu verbinden'
+                      : (status?.username ?? 'verbunden')
+                    : 'nicht verbunden'}
+                </div>
+              </div>
+              {connected && !status?.expired ? (
+                <button
+                  type="button"
+                  disabled={isDisconnecting}
+                  onClick={() => onDisconnect(platform)}
+                  className="rounded-xl border border-border px-3 py-1.5 text-sm font-semibold text-text-secondary hover:text-white disabled:opacity-40"
+                >
+                  Trennen
+                </button>
+              ) : (
+                <a
+                  href={oauthStartUrl(platform, streamer)}
+                  className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white"
+                >
+                  Verbinden
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function VodArchiveCard({
   streamer,
   settings,
