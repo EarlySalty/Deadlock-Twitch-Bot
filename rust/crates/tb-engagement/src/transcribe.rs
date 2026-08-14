@@ -227,25 +227,45 @@ impl OpenAiTranscriber {
             .get("duration")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
-        let segments = payload
-            .get("segments")
-            .and_then(serde_json::Value::as_array)
-            .map(|roh| {
-                roh.iter()
-                    .filter_map(|eintrag| {
-                        let text = eintrag.get("text")?.as_str()?.trim().to_string();
-                        if text.is_empty() {
-                            return None;
+        // Entweder alle Zeitstempel oder keine. Einzelne fehlerhafte Eintraege
+        // wegzuwerfen hiesse: der Aufrufer haelt die Liste fuer vollstaendig,
+        // und genau die weggeworfene Stelle wird nie geprueft.
+        let segments = match payload.get("segments").and_then(serde_json::Value::as_array) {
+            Some(roh) => {
+                let mut gelesen = Vec::with_capacity(roh.len());
+                let mut unvollstaendig = false;
+                for eintrag in roh {
+                    let text = eintrag
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
+                    let start = eintrag.get("start").and_then(serde_json::Value::as_f64);
+                    let ende = eintrag.get("end").and_then(serde_json::Value::as_f64);
+                    match (text, start, ende) {
+                        (Some(text), Some(start_seconds), Some(end_seconds))
+                            if !text.is_empty() =>
+                        {
+                            gelesen.push(TranscriptSegment {
+                                start_seconds,
+                                end_seconds,
+                                text,
+                            })
                         }
-                        Some(TranscriptSegment {
-                            start_seconds: eintrag.get("start")?.as_f64()?,
-                            end_seconds: eintrag.get("end")?.as_f64()?,
-                            text,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        // Ein leerer Text ist normal (Stille zwischen zwei
+                        // Saetzen); fehlende Zeiten sind es nicht.
+                        (Some(text), _, _) if text.is_empty() => {}
+                        _ => unvollstaendig = true,
+                    }
+                }
+                if unvollstaendig {
+                    tracing::warn!("Zeitstempel unvollstaendig - es gilt der Volltext");
+                    Vec::new()
+                } else {
+                    gelesen
+                }
+            }
+            None => Vec::new(),
+        };
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,

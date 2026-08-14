@@ -94,9 +94,17 @@ Stream-Audio dorthin zu senden.",
     // in /tmp. Ein Abbruch mitten in der Anfrage laesst die WAV-Datei liegen;
     // dort finden wir sie beim naechsten Start und raeumen sie weg.
     let eigener_temp = konfiguration.ausgabe.join("zwischendateien");
-    if tokio::fs::create_dir_all(&eigener_temp).await.is_ok() {
-        std::env::set_var("TMPDIR", &eigener_temp);
+    if let Err(fehler) = tokio::fs::create_dir_all(&eigener_temp).await {
+        // Ohne eigenen Ordner landen die WAV-Dateien wieder in /tmp, wo sie
+        // ein erzwungener Stopp ausserhalb jeder Aufbewahrung liegen laesst.
+        tracing::error!(
+            ?fehler,
+            ordner = ?eigener_temp,
+            "Ordner fuer Zwischendateien nicht anlegbar"
+        );
+        std::process::exit(2);
     }
+    std::env::set_var("TMPDIR", &eigener_temp);
     zwischendateien_aufraeumen(&eigener_temp).await;
 
     let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -246,9 +254,9 @@ fn arbeiter_ende_melden(name: &str, ergebnis: Result<(), tokio::task::JoinError>
 /// Neustart ein stiller Verlust: die Aufnahmen lägen weiter auf der Platte,
 /// wuerden aber nie ausgewertet und nie geloescht.
 ///
-/// Erkannt werden die Capture-Verzeichnisse an ihrem Praefix; Kanal und
-/// Blocknummer sind aus dem Dateinamen nicht mehr rekonstruierbar, deshalb
-/// laufen sie als eigener Lauf "wiederaufnahme" mit fortlaufender Nummer.
+/// Kanal, Lauf und Zeitversatz stehen im Zettel neben der Aufnahme. Fehlt er,
+/// laeuft die Datei als eigener Lauf "wiederaufnahme" mit fortlaufender
+/// Nummer - dann ist die Zuordnung verloren.
 async fn liegengebliebenes_einreihen(
     konfiguration: &Konfiguration,
     warteschlange: &Arc<Mutex<plan::Warteschlange>>,
@@ -540,6 +548,10 @@ fn start_kennung() -> &'static str {
     static KENNUNG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     KENNUNG.get_or_init(|| chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string())
 }
+
+/// So viele Bloecke ohne einen erkannten Satz gelten als Verdacht auf einen
+/// kaputten STT-Dienst. Zwanzig Bloecke sind rund 40 Minuten Sendung.
+const MAX_LEER_AM_STUECK: usize = 20;
 
 /// So oft darf ein sendender Kanal keinen Block liefern, bevor gemeldet wird.
 ///
@@ -1249,6 +1261,8 @@ async fn auswertungs_schleife(
     abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
+    // Wie viele Bloecke am Stueck ohne einen erkannten Satz blieben.
+    let mut leer_am_stueck = 0usize;
     loop {
         if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::info!("Auswertungsschleife beendet sich");
@@ -1281,8 +1295,30 @@ async fn auswertungs_schleife(
                     "Aufnahme bleibt liegen - Fund oder unvollstaendige Pruefung"
                 );
             }
-            Ok(Aufnahmeschicksal::Loeschen) => {
+            Ok(Aufnahmeschicksal::Loeschen { segmente }) => {
                 meldung_erledigt(Path::new(&block.datei)).await;
+                // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
+                // nicht - dann liefert der STT-Dienst vermutlich fuer alles
+                // nichts, und ohne diesen Zaehler saehe das aus wie lauter
+                // ruhige Streams.
+                if segmente == 0 {
+                    leer_am_stueck += 1;
+                    if leer_am_stueck == MAX_LEER_AM_STUECK {
+                        let text = format!(
+                            "Coaching-Audit: {leer_am_stueck} Bloecke am Stueck ohne einen \
+einzigen erkannten Satz. STT-Dienst pruefen."
+                        );
+                        let schluessel = format!("{}-nur-stille", start_kennung());
+                        if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
+                            tracing::error!(fehler, "Stille-Verdacht nicht meldbar");
+                            hinweis_aufheben(&konfiguration, "nur-stille", &schluessel, &text)
+                                .await;
+                        }
+                    }
+                } else {
+                    leer_am_stueck = 0;
+                    hinweis_erledigt(&konfiguration, "nur-stille").await;
+                }
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
                 // Fehler loescht, vernichtet bei einem Aussetzer der
                 // Transkription den einzigen Beleg, den es je gab.
@@ -1358,7 +1394,6 @@ async fn auswertungs_schleife(
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
-                let block_datei = block.datei.clone();
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
                 // mit an, wegen eines Blocks, der gerade nicht geht.
@@ -1403,9 +1438,6 @@ Aufnahme liegt noch da.",
                             &text,
                         )
                         .await;
-                        // Marke am Block, damit der Aufraeumtakt die Aufnahme
-                        // nicht fuer erledigt haelt.
-                        meldung_offen_markieren(Path::new(&block_datei)).await;
                         tracing::error!(
                             dm_fehler,
                             block = %bezeichnung,
@@ -1433,11 +1465,13 @@ enum Auswertefehler {
 /// Was nach der Auswertung mit der Aufnahme geschieht.
 #[derive(Debug)]
 enum Aufnahmeschicksal {
-    /// Alles ausgewertet, nichts gefunden - die Aufnahme kann weg.
-    Loeschen,
-    /// Ausgewertet, aber es gibt etwas nachzuhoeren: ein Fund, eine
-    /// unvollstaendige Pruefung oder ein leeres Transkript. Die Aufnahme
-    /// bleibt liegen und wird als ausgewertet markiert.
+    /// Alles ausgewertet, nichts gefunden - die Aufnahme kann weg. Traegt die
+    /// Zahl der Segmente, damit die Auswertungsschleife merkt, wenn reihenweise
+    /// gar kein Text mehr ankommt.
+    Loeschen { segmente: usize },
+    /// Ausgewertet, aber es gibt etwas nachzuhoeren: ein Fund oder eine
+    /// unvollstaendige Pruefung. Die Aufnahme bleibt liegen und wird als
+    /// ausgewertet markiert.
     Behalten(Box<Bericht>),
 }
 
@@ -1458,7 +1492,9 @@ async fn block_auswerten(
             .await
             .map_err(Auswertefehler::Meldung)?;
         return Ok(if bericht.funde.is_empty() && bericht.modell_geprueft {
-            Aufnahmeschicksal::Loeschen
+            Aufnahmeschicksal::Loeschen {
+                segmente: bericht.segmente,
+            }
         } else {
             Aufnahmeschicksal::Behalten(Box::new(bericht))
         });
@@ -1474,22 +1510,20 @@ async fn block_auswerten(
     } else {
         segmente_aus_whisper(block, &transkript.segments)
     };
-    // Ein leerer Block ist keine ruhige Stunde, sondern ein unklarer Befund:
-    // stille Passage oder ausgefallene Transkription, von aussen nicht zu
-    // unterscheiden. Er wird gemeldet, und die Aufnahme bleibt liegen.
+    // Ein Block ohne Sprache ist der Normalfall: Musik, Spielton, Pause. Der
+    // lokale STT-Dienst liefert dafuer bewusst nichts. Ihn als Fehlschlag zu
+    // behandeln hiesse, bei jedem ruhigen Abschnitt zu melden und das ganze
+    // Video aufzuheben. Ein systematischer Ausfall faellt stattdessen ueber
+    // die Reihe auf (siehe leer_am_stueck in der Auswertungsschleife).
     let leer = segmente.is_empty();
     if leer {
-        tracing::warn!(block = %block.bezeichnung(), "kein Text im Block");
+        tracing::info!(block = %block.bezeichnung(), "kein gesprochener Text im Block");
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
     let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
-    let modell_hinweis = if leer {
-        Some("Transkription lieferte keinen Text; nichts geprueft".to_owned())
-    } else {
-        modell_fehler
-    };
+    let modell_hinweis = modell_fehler;
     let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
@@ -1527,13 +1561,13 @@ async fn block_auswerten(
     // ohne Aufnahme waere eine Behauptung ohne Gegenprobe: das Transkript ist
     // standardmaessig weg, der Bericht zeigt nur den geschwaerzten Ausschnitt,
     // und ob das VOD noch existiert, entscheidet der Kanal.
-    Ok(
-        if leer || !bericht.funde.is_empty() || !bericht.modell_geprueft {
-            Aufnahmeschicksal::Behalten(Box::new(bericht))
-        } else {
-            Aufnahmeschicksal::Loeschen
-        },
-    )
+    Ok(if !bericht.funde.is_empty() || !bericht.modell_geprueft {
+        Aufnahmeschicksal::Behalten(Box::new(bericht))
+    } else {
+        Aufnahmeschicksal::Loeschen {
+            segmente: bericht.segmente,
+        }
+    })
 }
 
 /// Baut Segmente aus den Zeitstempeln, die Whisper selbst geliefert hat.
