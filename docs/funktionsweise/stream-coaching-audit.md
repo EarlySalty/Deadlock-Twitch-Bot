@@ -1,73 +1,111 @@
-# Stream-Coaching- & Sprach-Audit
+# Stream-Coaching-Audit
 
 ## Worum es geht
 
-Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug, mit dem das Team eine ausdrücklich freigegebene Twitch-Aufnahme auf problematische Sprache prüft — vor allem auf Slurs und ähnlich heikle Äußerungen. Es entsteht ein privates, belegbares Protokoll mit Zeitstempeln, das als Grundlage für ein Coaching-Gespräch oder die Prüfung eines Partner-Kandidaten dient. Das Werkzeug moderiert nichts automatisch, verhängt keine Sanktionen und postet nichts öffentlich.
+Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug. Es hört bei den
+Streams der eigenen Leute mit, sucht im gesprochenen Wort nach problematischen
+Stellen und legt dazu ein privates Protokoll mit Zeitstempeln an — als
+Grundlage für ein Coaching-Gespräch. Das Werkzeug moderiert nichts, verhängt
+keine Sanktionen und postet nichts öffentlich.
 
 ## Was der Bot tut
 
-- Nimmt von einer freigegebenen Quelle einen Ausschnitt auf — entweder ein fertiges Twitch-VOD oder einen kurzen, zeitlich begrenzten Mitschnitt eines laufenden Live-Streams.
-- Verarbeitet ausschließlich den Ton (kein Video) und wandelt ihn in Text um (Transkription).
-- Durchsucht das Transkript zweistufig nach auffälligen Stellen: zuerst über lokale, sehr treffsichere Regeln, danach optional über eine zusätzliche KI-Kontextprüfung, die weichere Grenzfälle einordnet.
-- Erstellt ein privates Protokoll, in dem jede Fundstelle mit Zeitpunkt und — bei VODs — einem direkten Sprunglink auf genau die Stelle hinterlegt ist.
-- Stellt das Ergebnis nur bei tatsächlichen Funden zu: eine private Nachricht ans Team. Gibt es nichts zu melden, bleibt es still.
-- Maskiert heikle Begriffe für die breiter sichtbaren Wege; nur das streng private Admin-Protokoll enthält den Wortlaut im Klartext, damit ein Fund nachprüfbar bleibt.
-- Räumt die Roh-Audio- und Zwischendateien nach dem Lauf wieder weg; dauerhaft gespeichert wird nur das private Protokoll.
+- Er fragt jede Minute bei Twitch ab, welcher der eingetragenen Kanäle gerade
+  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit — parallel,
+  nicht nacheinander. Kurze Blöcke, weil die Spracherkennung mit anderen
+  Funktionen des Bots geteilt wird.
+- Aufgenommen wird live, nicht aus dem VOD: ob ein Kanal seine VODs behält,
+  entscheidet der Kanal, und ein Audit, das darauf baut, fällt still aus.
+- Die Aufnahme wird auf demselben Rechner in Text umgewandelt. Der Ton
+  verlässt die Maschine nicht.
+- Das Transkript läuft zweistufig durch die Prüfung: zuerst drei feste Regeln
+  für eindeutige Fälle, danach ein Modellschritt über **alle** Segmente des
+  Blocks — nicht nur die ohne Reizwort. Er läuft in Stapeln von 20 Segmenten;
+  über eine Stapelgrenze hinweg sieht das Modell keinen Zusammenhang. An das Modell gehen
+  geschwärzte Ausschnitte mit anonymer Nummer, nicht der Kanalname und nicht
+  die Stream-ID.
+- Pro Block entsteht ein Protokoll auf der Platte und, wenn es etwas zu melden
+  gibt, eine kurze private Nachricht an den Admin.
+- Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
+  Blöcke werden gelöscht.
 
 ## Wann es passiert
 
-- Ein Lauf startet nur, wenn die Aufnahme ausdrücklich als autorisiert markiert wurde. Ohne diese Freigabe passiert nichts.
-- Es gibt zwei typische Auslöser: ein manueller Audit eines bestehenden VODs (z. B. zur Nachbesprechung nach dem Stream) und eine Live-Beobachtung, die einen laufenden Stream in kurzen Abschnitten mitschneidet und fortlaufend prüft.
-- Im Live-Modus wird jeweils ein kurzes Fenster aufgenommen, sofort transkribiert und geprüft; neue Funde tauchen dadurch mit geringer Verzögerung auf.
-- Ist ein zu beobachtender Kanal gerade offline, wartet die Beobachtung von selbst auf den nächsten Live-Start, statt abzubrechen.
-- Beim Start einer Live-Beobachtung geht eine kurze, private Status-Nachricht ans Team, damit klar ist, dass die Überwachung läuft.
-- Es gibt zusätzlich einen Archiv-Weg, bei dem ein Mitschnitt bzw. VOD privat zur automatischen Untertitelung abgelegt und das Ergebnis dann geprüft wird; von der Plattform zensierte Stellen werden dabei lokal nachgeprüft, damit der echte Wortlaut im Protokoll landet.
+- Der Dienst läuft dauerhaft unter systemd; es gibt keinen manuellen Aufruf
+  mehr und keinen VOD- oder Datei-Modus.
+- Aufgenommen wird nur, solange ein Kanal sendet, höchstens sechs Stunden
+  Sendungszeit je Sendung.
+- Ist ein Kanal offline, wartet der Dienst auf den nächsten Live-Start.
+- Kommt die Auswertung nicht hinterher — 180 wartende Blöcke, also sechs
+  Stunden Ton —, startet keine
+  neue Aufnahme, bis der Rückstand abgebaut ist.
 
-## Was Streamer/Viewer sehen
+## Was Streamer und Zuschauer sehen
 
-- Zuschauer im Twitch-Chat sehen davon nichts. Es wird nichts in den öffentlichen Chat geschrieben und nichts öffentlich veröffentlicht.
-- Streamer und reguläre Zuschauer bemerken im laufenden Betrieb in der Regel nichts; es handelt sich um eine interne Prüfung, kein sichtbares Feature.
-- Sichtbar ist das Ergebnis nur für das Team: ein privates Protokoll und — nur bei Funden — eine private Nachricht mit den Fundstellen, Zeitpunkten und ggf. Sprunglinks.
+- Nichts. Es wird nichts in den Chat geschrieben und nichts veröffentlicht.
+- Sichtbar ist das Ergebnis nur für den Admin: das Protokoll auf der Platte und
+  bei Funden eine private Nachricht.
 
-## Grenzen & Sonderfälle
+## Grenzen und Sonderfälle
 
-- Das Werkzeug ergreift keine automatischen Maßnahmen. Es bannt, verwarnt oder sanktioniert niemanden — es liefert nur Belege für eine menschliche Entscheidung.
-- Transkription und KI-Einordnung können sich irren (verhörte Wörter, falsch eingeordneter Kontext). Jede Fundstelle ist als Hinweis zu verstehen und muss am echten Kontext der Aufnahme manuell gegengeprüft werden.
-- Geprüft wird ausschließlich gesprochene Sprache aus dem Ton. Bildinhalte, Texteinblendungen oder reiner Chat-Text sind nicht Gegenstand dieser Prüfung.
-- Stille ist das erwartete Normalergebnis: kein Fund bedeutet keine Nachricht. Ausbleibende Meldungen heißen also nicht, dass etwas defekt ist.
-- Im Live-Modus wird in Abschnitten geprüft; eine Äußerung genau an einer Abschnittsgrenze kann theoretisch ungünstig fallen. Für die belastbare Auswertung dient ohnehin die VOD-/Archiv-Prüfung mit Sprunglinks.
-- Die exakte Logik, ab wann eine Stelle als auffällig gilt, ist bewusst nicht im Detail dokumentiert. Die lokalen Regeln sind auf hohe Treffsicherheit ausgelegt; die zusätzliche KI-Prüfung fängt weichere Grenzfälle ab.
+- Keine automatischen Maßnahmen. Das Werkzeug liefert Belege, entschieden wird
+  von Menschen.
+- Transkription und Modell können sich irren. Jede Fundstelle ist ein Verdacht
+  und muss am echten Kontext geprüft werden.
+- Geprüft wird nur gesprochene Sprache. Bild, Einblendungen und Chat sind nicht
+  Gegenstand.
+- Keine Meldung heißt in aller Regel: nichts gefunden. Ein Abschnitt ohne
+  gesprochenes Wort (Musik, Spielton, Pause) ist normal und wird nicht
+  gemeldet; bleiben aber 20 Abschnitte am Stück stumm, meldet sich der Dienst.
+  Gemeldet wird außerdem, wenn der Modellschritt ausfiel, ein Block aufgegeben
+  wurde, die Aufnahme wegen Rückstands pausiert oder die Twitch-Abfrage
+  scheitert. Nimmt Discord über Stunden keine Nachricht an,
+  bleibt der Befund im Protokoll auf der Platte stehen und wird weiter
+  angeboten — dann ist Stille kein Beweis für einen ruhigen Stream.
+- An Blockgrenzen kann eine Äußerung ungünstig fallen. Die Zeitstempel im
+  Protokoll zählen ab Sendungsbeginn, damit die Stelle im VOD wiederzufinden
+  ist, solange es das VOD gibt.
 
 ## Datenschutz
 
-- Ein Audit läuft nur auf ausdrücklich freigegebenen Aufnahmen — die Autorisierung ist Pflicht und kein Standardverhalten.
-- Es wird kein vollständiges Rohtranskript dauerhaft aufbewahrt. Gespeichert wird nur das private Protokoll mit den Fundstellen; die Roh-Audio- und Zwischendateien werden nach dem Lauf entfernt.
-- Heikle Begriffe werden für die breiter sichtbaren Ausgabewege maskiert. Den unmaskierten Klartext-Beleg gibt es ausschließlich im streng privaten Admin-Protokoll, das zugriffsbeschränkt abgelegt ist.
-- Die Übertragung von Ton oder Text an externe Dienste (für Transkription oder die zusätzliche KI-Prüfung) ist nicht automatisch aktiv, sondern muss pro Lauf gesondert freigegeben werden. Standardmäßig läuft die Transkription lokal.
-- Protokolle sind privat und nicht zum Teilen gedacht.
+- Der Ton verlässt den Rechner nicht. Zeigt die Transkriptions-URL nach außen,
+  startet der Dienst gar nicht erst, außer das wurde ausdrücklich erlaubt.
+- An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
+  geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
+  anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
+  einzeln gesetzte Entscheidung.
+- Jeder Beleg im Protokoll läuft durch die Schwärzung und trägt eine Prüfsumme
+  des Originals. Die Schwärzung kennt die bekannten Muster und sonst nichts:
+  anderer Wortlaut aus demselben Abschnitt steht im Protokoll. Es ist deshalb
+  eine zugriffsbeschränkte Akte, kein zitatfreier Text. Die private Nachricht
+  enthält weder Zitat noch Prüfsumme.
+- Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich
+  eingeschaltet ist. Standard ist: nicht speichern.
+- Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht
+  (Standard 30 Tage). Dateien liegen nur für den eigenen Benutzer lesbar.
+- Ein aufbewahrter Mitschnitt enthält Bild und Ton, weil er die Twitch-Spur so
+  speichert, wie sie kommt. Geprüft wird ausschließlich der Ton.
 
 ## Häufige Fragen
 
-**Schreibt der Bot etwas in meinen Twitch-Chat, wenn er etwas findet?**
-Nein. Das Werkzeug postet grundsätzlich nichts in den öffentlichen Chat und veröffentlicht nichts öffentlich. Funde gehen ausschließlich als private Nachricht ans Team.
+**Schreibt der Bot etwas in meinen Chat, wenn er etwas findet?**
+Nein. Funde gehen ausschließlich als private Nachricht an den Admin.
 
-**Werde ich automatisch gebannt oder verwarnt, wenn etwas gefunden wird?**
-Nein. Es gibt keine automatische Sanktion. Das Werkzeug sammelt nur Belege mit Zeitstempel; jede Konsequenz entscheidet ein Mensch nach manueller Prüfung.
+**Werde ich automatisch gebannt oder verwarnt?**
+Nein. Es gibt keine automatische Sanktion.
 
-**Wird mein Stream heimlich überwacht?**
-Eine Prüfung läuft nur auf ausdrücklich freigegebenen Aufnahmen. Ohne diese Freigabe startet kein Audit.
-
-**Was passiert mit der Aufnahme und dem Transkript hinterher?**
-Die Roh-Audio- und Zwischendateien werden nach dem Lauf gelöscht. Ein vollständiges Rohtranskript wird nicht dauerhaft gespeichert — dauerhaft bleibt nur das private Protokoll mit den konkreten Fundstellen.
+**Was passiert mit der Aufnahme hinterher?**
+Ein sauberer, vollständig geprüfter Block wird gelöscht. Gibt es einen Fund
+oder blieb die Prüfung unvollständig, bleibt die Aufnahme bis zum Ablauf der
+Aufbewahrungsfrist liegen, damit jemand nachhören kann.
 
 **Warum kommt manchmal gar keine Meldung?**
-Weil nichts Auffälliges gefunden wurde. Kein Fund bedeutet keine Nachricht — Stille ist das erwartete Ergebnis und kein Fehler.
+Weil nichts gefunden wurde. Ein Ausfall der Prüfung meldet sich dagegen
+ausdrücklich.
 
 **Wie zuverlässig sind die Funde?**
-Sie sind Hinweise, keine endgültigen Urteile. Sprache-zu-Text und KI-Einordnung können sich verhören oder den Kontext falsch deuten. Deshalb wird jede Fundstelle am echten Aufnahme-Kontext manuell gegengeprüft, bevor irgendetwas daraus folgt.
+Es sind Hinweise, keine Urteile. Sprache-zu-Text und Modell können sich
+verhören oder Kontext falsch deuten.
 
-**Sieht jemand den genauen Wortlaut einer Fundstelle?**
-Für die breiter sichtbaren Wege werden heikle Begriffe maskiert. Den unmaskierten Klartext gibt es nur im streng privaten Admin-Protokoll, damit ein Fund nachprüfbar bleibt — und das ist nicht zum Teilen bestimmt.
-
-**Funktioniert das nur für fertige VODs oder auch live?**
-Beides. Es kann ein bestehendes VOD nachträglich geprüft werden (mit direkten Sprunglinks auf die Stellen) oder ein laufender Stream in kurzen Abschnitten fortlaufend mitgeprüft werden. Ist der Kanal gerade offline, wartet die Live-Beobachtung von selbst auf den nächsten Stream-Start.
+**Funktioniert das auch für fertige VODs?**
+Nein, nicht mehr. Geprüft wird ausschließlich live mitgeschnittenes Material.

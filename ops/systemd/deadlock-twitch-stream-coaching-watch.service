@@ -1,0 +1,61 @@
+[Unit]
+Description=Deadlock Twitch authorized stream coaching audit (live)
+After=network-online.target deadlock-stt-server.service
+Wants=network-online.target
+# Bewusst `Wants` statt `Requires`: der STT-Dienst soll mitstarten, aber sein
+# Ausfall darf das Audit nicht mitreissen. Mit `Requires` haette systemd das
+# Audit stillschweigend mitgestoppt - ohne Fehlerexit, ohne DM, also genau die
+# Stille, gegen die der Rest des Dienstes gebaut ist. Faellt der STT-Dienst aus,
+# laeuft das Audit weiter und meldet nach zwanzig stummen Bloecken selbst.
+Wants=deadlock-stt-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
+
+# Bewusst kein EnvironmentFile: die gemeinsame bots.env kann Environment-Zeilen
+# ueberschreiben, und dieser Dienst haengt an genau diesen Werten - Kanaele,
+# Ablage, Ortsbindung von Transkription und Modell. Was er braucht, steht hier
+# oder kommt aus Infisical.
+
+# Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
+# in der Unit sichtbar sein.
+Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
+Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
+
+# Transkription bleibt lokal. Zeigt diese URL woandershin, bricht der Start ab;
+# nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
+Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
+Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
+# ffmpeg fest auf das System-Binaerprogramm: der systemd-Benutzer-PATH stellt
+# ~/.local/bin nach vorn, und der dortige statische Build segfaultet mit leerem
+# stderr. Ohne diese Zeile scheitert jeder Block an der Tonspur.
+Environment=FFMPEG_BIN=/usr/bin/ffmpeg
+
+Environment=RUST_LOG=info
+
+# Berichte nennen Zeit und Kategorie moeglicher Vorfaelle, Transkripte den
+# vollen Wortlaut fremder Menschen. Der Prozess schreibt selbst mit 0600;
+# UMask deckt zusaetzlich die angelegten Verzeichnisse ab.
+UMask=0077
+
+# Der Modellschritt laeuft ueber denselben Anbieter wie der Twitch-Bot, und
+# der liegt nicht auf diesem Rechner. Der Schalter ist bewusst gesetzt: ohne
+# ihn faellt der Modellschritt bei jedem Block aus, es bleibt die reine
+# Regelpruefung, und jeder Bericht traegt "NICHT GELAUFEN". Raus gehen
+# geschwaerzte Transkriptausschnitte - nie Audio.
+Environment=STREAM_AUDIT_ALLOW_REMOTE_LLM=1
+LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
+
+# Secrets kommen ueber denselben Infisical-Wrapper wie beim Twitch-Bot; der
+# Service-Token liegt in systemd-Credentials, nicht in der Umgebung.
+ExecStart=%h/repos/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
+
+Restart=on-failure
+RestartSec=30
+# Eine laufende Transkription raeumt ihre WAV-Datei erst weg, wenn die Anfrage
+# zurueckkommt. Der Dienst braucht dafuer nach SIGTERM etwas Zeit.
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

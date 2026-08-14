@@ -19,9 +19,20 @@ use tokio::process::Command;
 /// `ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt — sonst geht nie
 /// Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
 /// `OPENAI_API_KEY` in der Umgebung steht.
-const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
+/// Vorgabe-Endpunkt: der lokale `ops/stt-server`.
+///
+/// Oeffentlich, damit ein Aufrufer denselben Wert pruefen kann, den
+/// [`OpenAiTranscriber::from_env`] nimmt - sonst haelt eine Pruefung auf der
+/// leeren Umgebungsvariable den Vorgabewert faelschlich fuer auswaertig.
+pub const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-1";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Zeitgrenze der ffmpeg-Extraktion.
+///
+/// Grosszuegig gewaehlt: ein Zwei-Minuten-Block ist in Sekunden umgewandelt,
+/// diese Grenze faengt nur den haengenden Prozess. Ohne sie blockiert eine
+/// abgeschnittene Aufnahme den Aufrufer dauerhaft.
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 /// Transkriptions-Ergebnis (Teilmenge von Pythons `TranscriptionResult`, die der
@@ -32,6 +43,22 @@ pub struct TranscriptionResult {
     pub duration_seconds: f64,
     pub engine: String,
     pub model: String,
+    /// Zeitstempel aus der `verbose_json`-Antwort, falls der Dienst welche
+    /// liefert.
+    ///
+    /// Ohne sie muessen Aufrufer die Zeit aus dem Textanteil schaetzen - eine
+    /// Naeherung, die bei Sprechpausen um Minuten danebenliegt. Angefragt
+    /// werden sie ohnehin (`timestamp_granularities[]=segment`); frueher
+    /// wurden sie nur weggeworfen.
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// Ein Abschnitt mit eigener Zeit, so wie Whisper ihn liefert.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptSegment {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub text: String,
 }
 
 /// Klassifizierter Whisper-Fehler ohne Provider-Body, Request oder Secret.
@@ -56,6 +83,8 @@ pub struct OpenAiTranscriber {
     base_url: String,
     ffmpeg_bin: String,
     http: reqwest::Client,
+    /// Ordner fuer die Zwischendateien; `None` heisst Systemtemp.
+    temp_dir: Option<std::path::PathBuf>,
 }
 
 impl OpenAiTranscriber {
@@ -68,6 +97,16 @@ impl OpenAiTranscriber {
     /// `Authorization`-Header ohnehin, und ein fehlender `OPENAI_API_KEY` darf
     /// die lokale Transkription nicht blockieren.
     pub fn from_env() -> Option<Self> {
+        Self::from_env_with_timeout(REQUEST_TIMEOUT)
+    }
+
+    /// Wie [`OpenAiTranscriber::from_env`], aber mit eigener Zeitgrenze.
+    ///
+    /// 60 Sekunden passen zu kurzen Reaktions-Clips. Wer laengere Bloecke
+    /// schickt oder auf einen belegten Dienst trifft, braucht mehr: das lokale
+    /// Whisper laeuft auf der CPU langsamer als Echtzeit, und eine zu knappe
+    /// Grenze bricht den Block ab, statt ihn zu transkribieren.
+    pub fn from_env_with_timeout(timeout: Duration) -> Option<Self> {
         Some(Self {
             api_key: nonempty_env("OPENAI_API_KEY").unwrap_or_else(|| "local".to_string()),
             model: nonempty_env("OPENAI_WHISPER_MODEL")
@@ -76,10 +115,11 @@ impl OpenAiTranscriber {
                 .unwrap_or_else(|| DEFAULT_STT_URL.to_string()),
             ffmpeg_bin: nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_string()),
             http: reqwest::Client::builder()
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(timeout)
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok()?,
+            temp_dir: None,
         })
     }
 
@@ -106,11 +146,22 @@ impl OpenAiTranscriber {
         self
     }
 
+    /// Legt den Ordner fest, in dem die Zwischendateien entstehen.
+    ///
+    /// Ohne diesen Weg blieb nur `TMPDIR` im Prozess umzubiegen. Das ist ein
+    /// Datenrennen, sobald die Runtime laeuft, und es vererbt sich an jeden
+    /// gestarteten streamlink- und ffmpeg-Prozess. Ein Aufrufer, der seine
+    /// Zwischendateien selbst aufraeumen will, sagt es jetzt hier.
+    pub fn with_temp_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.temp_dir = Some(dir.into());
+        self
+    }
+
     /// Extrahiert Audio in ein Temp-WAV und transkribiert es (Python
     /// `transcribe_clip`). Das Temp-Verzeichnis wird immer aufgeräumt.
     pub async fn transcribe_clip(&self, video_path: &Path) -> Result<TranscriptionResult, String> {
-        let dir =
-            std::env::temp_dir().join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
+        let basis = self.temp_dir.clone().unwrap_or_else(std::env::temp_dir);
+        let dir = basis.join(format!("eng-whisper-{}", tb_crypto::random_hex_token(8)));
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -128,7 +179,7 @@ impl OpenAiTranscriber {
 
     /// ffmpeg → 16 kHz Mono PCM-WAV (Python `_extract_audio`).
     async fn extract_audio(&self, video: &Path, wav: &Path) -> Result<(), String> {
-        let output = Command::new(&self.ffmpeg_bin)
+        let kind = Command::new(&self.ffmpeg_bin)
             .arg("-y")
             .arg("-i")
             .arg(video)
@@ -137,9 +188,22 @@ impl OpenAiTranscriber {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .kill_on_drop(true)
+            .spawn()
             .map_err(|e| format!("ffmpeg nicht startbar: {e}"))?;
+        // Die Zeitgrenze des HTTP-Clients deckt nur die Anfrage an den
+        // STT-Dienst ab. Eine abgeschnittene Datei kann ffmpeg dagegen
+        // dauerhaft haengen lassen, und der Aufrufer wartet dann fuer immer
+        // auf einen Block, der nie fertig wird.
+        let output = match tokio::time::timeout(FFMPEG_TIMEOUT, kind.wait_with_output()).await {
+            Ok(fertig) => fertig.map_err(|e| format!("ffmpeg nicht lesbar: {e}"))?,
+            Err(_) => {
+                return Err(format!(
+                    "ffmpeg-Audio-Extraktion nach {} Sekunden abgebrochen",
+                    FFMPEG_TIMEOUT.as_secs()
+                ));
+            }
+        };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!(
@@ -207,11 +271,73 @@ impl OpenAiTranscriber {
             .get("duration")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
+        // Entweder alle Zeitstempel oder keine. Einzelne fehlerhafte Eintraege
+        // wegzuwerfen hiesse: der Aufrufer haelt die Liste fuer vollstaendig,
+        // und genau die weggeworfene Stelle wird nie geprueft.
+        let segments = match payload
+            .get("segments")
+            .and_then(serde_json::Value::as_array)
+        {
+            Some(roh) => {
+                let mut gelesen = Vec::with_capacity(roh.len());
+                let mut unvollstaendig = false;
+                for eintrag in roh {
+                    let text = eintrag
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
+                    let start = eintrag.get("start").and_then(serde_json::Value::as_f64);
+                    let ende = eintrag.get("end").and_then(serde_json::Value::as_f64);
+                    match (text, start, ende) {
+                        (Some(text), Some(start_seconds), Some(end_seconds))
+                            if !text.is_empty() =>
+                        {
+                            gelesen.push(TranscriptSegment {
+                                start_seconds,
+                                end_seconds,
+                                text,
+                            })
+                        }
+                        // Ein leerer Text ist normal (Stille zwischen zwei
+                        // Saetzen); fehlende Zeiten sind es nicht.
+                        (Some(text), _, _) if text.is_empty() => {}
+                        _ => unvollstaendig = true,
+                    }
+                }
+                if unvollstaendig {
+                    tracing::warn!("Zeitstempel unvollstaendig - es gilt der Volltext");
+                    Vec::new()
+                } else {
+                    gelesen
+                }
+            }
+            None => Vec::new(),
+        };
+        // Der lokale Dienst ignoriert das angefragte Modell und nennt in der
+        // Antwort, was er wirklich geladen hat. Steht dort etwas, gilt das -
+        // sonst behauptet der Bericht "whisper-1", wo large-v3-turbo lief.
+        //
+        // Das wirkt auf alle Aufrufer: `crew_review.model` und das Embed der
+        // Schattenpruefung zeigen ab jetzt den echten Modellnamen. Aeltere
+        // Zeilen tragen weiter "whisper-1"; wer die Spalte auswertet, muss mit
+        // beiden Schreibweisen rechnen.
+        let genutztes_modell = payload
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            // Nennt die Antwort kein Modell, bleibt es beim angefragten Namen.
+            // Der lokale Dienst ignoriert ihn und laedt, was in seiner eigenen
+            // Konfiguration steht - deshalb heisst das Feld im Audit-Bericht
+            // ausdruecklich "angefragt".
+            .unwrap_or_else(|| model.to_string());
         Ok(TranscriptionResult {
             text,
             duration_seconds: duration,
             engine: "openai_api".to_string(),
-            model: model.to_string(),
+            model: genutztes_modell,
+            segments,
         })
     }
 }
@@ -334,6 +460,7 @@ mod tests {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap(),
+            temp_dir: None,
         }
     }
 
@@ -614,5 +741,81 @@ mod tests {
 
         assert_eq!(err, TranscribeError::Unavailable);
         assert!(server.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_segmente {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn antwort_mit(payload: serde_json::Value) -> TranscriptionResult {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+            .mount(&server)
+            .await;
+        let transcriber = OpenAiTranscriber {
+            api_key: "local".into(),
+            model: "whisper-1".into(),
+            base_url: format!("{}/v1/audio/transcriptions", server.uri()),
+            ffmpeg_bin: "ffmpeg".into(),
+            http: reqwest::Client::new(),
+            temp_dir: None,
+        };
+        transcriber
+            .transcribe_bytes(b"nicht wirklich wav".to_vec())
+            .await
+            .expect("Antwort")
+    }
+
+    #[tokio::test]
+    async fn zeitstempel_werden_uebernommen() {
+        let ergebnis = antwort_mit(serde_json::json!({
+            "text": "Erster Satz. Zweiter Satz.",
+            "duration": 12.0,
+            "model": "large-v3-turbo-ct2",
+            "segments": [
+                {"start": 0.0, "end": 4.0, "text": "Erster Satz."},
+                {"start": 4.0, "end": 12.0, "text": "Zweiter Satz."}
+            ]
+        }))
+        .await;
+        assert_eq!(ergebnis.segments.len(), 2);
+        assert_eq!(ergebnis.segments[1].start_seconds, 4.0);
+        assert_eq!(
+            ergebnis.model, "large-v3-turbo-ct2",
+            "der Bericht nennt das Modell, das wirklich lief"
+        );
+
+        // Nennt die Antwort kein Modell, bleibt es beim angefragten Namen.
+        let ohne_modell = antwort_mit(serde_json::json!({
+            "text": "Ein Satz.",
+            "duration": 3.0
+        }))
+        .await;
+        assert_eq!(ohne_modell.model, "whisper-1");
+    }
+
+    #[tokio::test]
+    async fn unvollstaendige_zeitstempel_ergeben_gar_keine() {
+        // Sonst haelt der Aufrufer die Liste fuer vollstaendig, und die Stelle
+        // ohne Zeit wird nie geprueft.
+        let ergebnis = antwort_mit(serde_json::json!({
+            "text": "Erster Satz. Zweiter Satz.",
+            "duration": 12.0,
+            "segments": [
+                {"start": 0.0, "end": 4.0, "text": "Erster Satz."},
+                {"text": "Zweiter Satz ohne Zeit."}
+            ]
+        }))
+        .await;
+        assert!(
+            ergebnis.segments.is_empty(),
+            "es gilt der Volltext, nicht die halbe Liste"
+        );
+        assert!(!ergebnis.text.is_empty());
     }
 }
