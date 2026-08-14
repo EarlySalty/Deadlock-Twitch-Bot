@@ -80,45 +80,27 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
 /// Doppelte Funde zusammenfassen: derselbe Wortlaut im selben Segment ist ein
 /// Fund, auch wenn Regel und Modell ihn beide melden. Der Regel-Erkenner
 /// gewinnt, weil er reproduzierbar ist.
-/// Fasst denselben Fund aus beiden Erkennern zusammen; die Regel gewinnt.
+/// Fasst nur wirklich gleiche Funde zusammen.
 ///
-/// Zusammengefasst wird ueber Segment und Kategorie, nicht ueber den Hash:
-/// ein Regelfund hasht seinen Ausschnitt, ein Modellfund das ganze Segment.
-/// Genau derselbe Vorfall hatte damit zwei verschiedene Hashes und stand
-/// zweimal im Bericht - die Zusammenfassung griff nur, wenn beide Funde aus
-/// derselben Quelle stammten.
-/// Belegen zwei Funde dieselbe Stelle?
-///
-/// Der Regelfund zeigt rund 80 Zeichen um seine Fundstelle, der Modellfund das
-/// ganze Segment. Deckung heisst deshalb: der kuerzere Beleg steckt im
-/// laengeren.
-fn deckt_sich(a: &Fund, b: &Fund) -> bool {
-    let (kurz, lang) = if a.zitat_redigiert.len() <= b.zitat_redigiert.len() {
-        (&a.zitat_redigiert, &b.zitat_redigiert)
-    } else {
-        (&b.zitat_redigiert, &a.zitat_redigiert)
-    };
-    let kurz = kurz.trim();
-    !kurz.is_empty() && lang.contains(kurz)
-}
-
+/// Frueher fielen Regel- und Modellfund derselben Kategorie im selben Segment
+/// zusammen. Das ging nicht auf: ein Modellfund belegt immer das ganze Segment
+/// und enthaelt damit jeden Regelausschnitt, egal welchen Vorfall das Modell
+/// tatsaechlich meinte. Ein zweiter, eigenstaendiger Befund verschwand so
+/// still. Lieber zwei Zeilen im Bericht als ein verlorener Fund - zusammen
+/// kommt nur, was in Segment, Kategorie, Erkenner und Beleg uebereinstimmt.
 pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
     funde.sort_by(|a, b| {
         a.segment_id
             .cmp(&b.segment_id)
             .then_with(|| a.kategorie.cmp(&b.kategorie))
             .then_with(|| (a.erkenner != "regel").cmp(&(b.erkenner != "regel")))
+            .then_with(|| a.zitat_hash.cmp(&b.zitat_hash))
     });
-    // Zusammengefasst wird nur ueber die Erkennergrenze hinweg und nur, wenn
-    // der Modellfund denselben Wortlaut belegt wie der Regelfund. Zwei
-    // Regelfunde derselben Kategorie sind zwei Vorfaelle, und ein Modellfund
-    // ueber eine ganz andere Stelle desselben Segments ebenfalls - er darf
-    // nicht verschwinden, nur weil zufaellig dieselbe Kategorie danebensteht.
     funde.dedup_by(|a, b| {
         a.segment_id == b.segment_id
             && a.kategorie == b.kategorie
-            && a.erkenner != b.erkenner
-            && deckt_sich(a, b)
+            && a.erkenner == b.erkenner
+            && a.zitat_hash == b.zitat_hash
     });
     funde
 }
@@ -166,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn gleicher_fund_aus_zwei_erkennern_wird_zusammengefasst() {
+    fn regel_und_modellfund_bleiben_beide_stehen() {
         // Der Modellfund entsteht wie im Betrieb: er belegt das ganze Segment,
         // der Regelfund nur seinen Ausschnitt. Die Hashes sind deshalb
         // verschieden - zusammengefasst wird trotzdem.
@@ -189,8 +171,13 @@ mod tests {
             "die Belege unterscheiden sich - genau darum ging der Fehler"
         );
         let zusammen = funde_zusammenfassen(funde);
-        assert_eq!(zusammen.len(), 1);
-        assert_eq!(zusammen[0].erkenner, "regel", "Regel gewinnt gegen Modell");
+        assert_eq!(
+            zusammen.len(),
+            2,
+            "verschiedene Belege bleiben zwei Zeilen - ein Modellfund belegt \
+immer das ganze Segment und darf keinen Regelfund verdraengen"
+        );
+        assert_eq!(zusammen[0].erkenner, "regel", "die Regel steht oben");
     }
 
     #[test]
@@ -219,11 +206,23 @@ mod tests {
 
     #[test]
     fn zwei_regelfunde_derselben_kategorie_bleiben_zwei() {
-        // Zwei verschiedene Beleidigungen im selben Segment sind zwei
-        // Vorfaelle; einer davon darf nicht verschwinden.
-        let funde = regelfunde(&[segment("s1", "du schwuchtel und du faggot")]);
+        // Zwei Vorfaelle derselben Kategorie, weit genug auseinander fuer
+        // eigene Ausschnitte: beide bleiben stehen.
+        let weit = "harmloser Fuelltext ".repeat(20);
+        let funde = regelfunde(&[segment(
+            "s1",
+            &format!("du schwuchtel {weit} und spaeter du faggot"),
+        )]);
         assert_eq!(funde.len(), 2);
         assert_eq!(funde_zusammenfassen(funde).len(), 2);
+    }
+
+    #[test]
+    fn wortgleiche_treffer_im_selben_ausschnitt_zaehlen_einmal() {
+        // Derselbe Beleg, derselbe Erkenner: eine Zeile reicht.
+        let funde = regelfunde(&[segment("s1", "du schwuchtel du schwuchtel")]);
+        let zusammen = funde_zusammenfassen(funde);
+        assert_eq!(zusammen.len(), 1);
     }
 
     #[test]

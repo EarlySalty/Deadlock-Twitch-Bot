@@ -433,12 +433,16 @@ async fn zettel_schreiben(
     lauf: &str,
     nummer: u32,
     versatz_sekunden: u64,
+    zeit_unsicher: bool,
 ) -> bool {
     let inhalt = serde_json::json!({
         "kanal": kanal,
         "lauf": lauf,
         "nummer": nummer,
         "versatz_sekunden": versatz_sekunden,
+        // Ohne diese Angabe behauptete ein wiederaufgenommener Block, seine
+        // Zeiten seien Sendungszeiten - auch wenn sie es nie waren.
+        "zeit_unsicher": zeit_unsicher,
     });
     match nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await {
         Ok(()) => true,
@@ -601,12 +605,14 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         lauf: json["lauf"].as_str()?.to_owned(),
         nummer: json["nummer"].as_u64()? as u32,
         versatz_sekunden: json["versatz_sekunden"].as_u64()?,
+        // Fehlt die Angabe (Zettel aus einer aelteren Fassung), gilt die
+        // vorsichtige Annahme: die Zeiten koennten geraten sein.
+        zeit_unsicher: json["zeit_unsicher"].as_bool().unwrap_or(true),
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
         frueherstens: 0,
         nur_melden: false,
         meldeversuche: 0,
-        zeit_unsicher: false,
     })
 }
 
@@ -788,13 +794,16 @@ async fn aufnahme_schleife(
                         "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
 Laufende Aufnahmen laufen weiter, neue Sendungen werden nicht erkannt."
                     );
-                    let schluessel =
-                        match offener_hinweis_schluessel(&konfiguration, "helix-ausfall").await {
-                            Some(schluessel) => schluessel,
-                            None => format!(
-                                "{}-helix-ausfall-{}",
-                                start_kennung(),
-                                naechste_vorfall_nummer()
+                    let (schluessel, text) =
+                        match offener_hinweis(&konfiguration, "helix-ausfall").await {
+                            Some(offen) => offen,
+                            None => (
+                                format!(
+                                    "{}-helix-ausfall-{}",
+                                    start_kennung(),
+                                    naechste_vorfall_nummer()
+                                ),
+                                text,
                             ),
                         };
                     match dm_rohtext(&text, &schluessel).await {
@@ -890,12 +899,15 @@ Aufnahme zustande. streamlink pruefen."
             // gleich, sonst sammelte sich waehrend eines Broker-Ausfalls jede
             // Minute ein neuer Hinweis an und alle kaemen spaeter auf einmal.
             let ablage = format!("keine-aufnahme-{kanal}");
-            let schluessel = match offener_hinweis_schluessel(&konfiguration, &ablage).await {
-                Some(schluessel) => schluessel,
-                None => format!(
-                    "{}-{kanal}-keine-aufnahme-{}",
-                    start_kennung(),
-                    naechste_vorfall_nummer()
+            let (schluessel, text) = match offener_hinweis(&konfiguration, &ablage).await {
+                Some(offen) => offen,
+                None => (
+                    format!(
+                        "{}-{kanal}-keine-aufnahme-{}",
+                        start_kennung(),
+                        naechste_vorfall_nummer()
+                    ),
+                    text,
                 ),
             };
             match dm_rohtext(&text, &schluessel).await {
@@ -944,16 +956,22 @@ Aufnahme zustande. streamlink pruefen."
 Sie wird nicht geprueft.",
                 aufstellung.join(", ")
             );
-            let schluessel = match offener_hinweis_schluessel(&konfiguration, "ausgelassen").await {
-                Some(schluessel) => schluessel,
-                None => format!(
-                    "{}-ausgelassen-{}",
-                    start_kennung(),
-                    naechste_vorfall_nummer()
+            let (schluessel, text) = match offener_hinweis(&konfiguration, "ausgelassen").await {
+                Some(offen) => offen,
+                None => (
+                    format!(
+                        "{}-ausgelassen-{}",
+                        start_kennung(),
+                        naechste_vorfall_nummer()
+                    ),
+                    text,
                 ),
             };
             match dm_rohtext(&text, &schluessel).await {
-                Ok(()) => stau_gemeldet = true,
+                Ok(()) => {
+                    stau_gemeldet = true;
+                    hinweis_erledigt(&konfiguration, "ausgelassen").await;
+                }
                 Err(fehler) => {
                     tracing::error!(fehler, "ausgelassene Bloecke nicht meldbar");
                     hinweis_aufheben(&konfiguration, "ausgelassen", &schluessel, &text).await;
@@ -973,15 +991,17 @@ Sie wird nicht geprueft.",
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                let schluessel =
-                    match offener_hinweis_schluessel(&konfiguration, "rueckstand").await {
-                        Some(schluessel) => schluessel,
-                        None => format!(
+                let (schluessel, text) = match offener_hinweis(&konfiguration, "rueckstand").await {
+                    Some(offen) => offen,
+                    None => (
+                        format!(
                             "{}-rueckstand-{}",
                             start_kennung(),
                             naechste_vorfall_nummer()
                         ),
-                    };
+                        text,
+                    ),
+                };
                 match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => {
@@ -1124,6 +1144,7 @@ async fn kanal_aufnehmen(
             &zustand.lauf,
             zustand.bloecke + 1,
             versatz,
+            zustand.zeit_unsicher,
         )
         .await
         {
@@ -2188,8 +2209,10 @@ async fn hinweis_aufheben(
 /// Schluessel eines noch offenen Hinweises, falls es einen gibt.
 ///
 /// Ohne ihn bekaeme jeder neue Anlauf einen neuen Schluessel - und wenn
-/// Discord die vorige Nachricht doch angenommen hat, kaeme sie doppelt.
-async fn offener_hinweis_schluessel(konfiguration: &Konfiguration, ablage: &str) -> Option<String> {
+/// Discord die vorige Nachricht doch angenommen hat, kaeme sie doppelt. Der
+/// Text gehoert dazu: derselbe Schluessel mit anderem Inhalt ist beim Broker
+/// ein Widerspruch.
+async fn offener_hinweis(konfiguration: &Konfiguration, ablage: &str) -> Option<(String, String)> {
     let name: String = ablage
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -2198,7 +2221,10 @@ async fn offener_hinweis_schluessel(konfiguration: &Konfiguration, ablage: &str)
         .await
         .ok()?;
     let json: serde_json::Value = serde_json::from_str(&roh).ok()?;
-    json["schluessel"].as_str().map(str::to_owned)
+    Some((
+        json["schluessel"].as_str()?.to_owned(),
+        json["text"].as_str()?.to_owned(),
+    ))
 }
 
 /// Nimmt einen aufgehobenen Hinweis wieder weg.
@@ -2486,7 +2512,7 @@ mod tests {
             .await
             .expect("schreiben");
 
-        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600).await;
+        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600, false).await;
 
         let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
         assert_eq!(gelesen.kanal, "helmbombenricky");
