@@ -10,6 +10,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { useT } from '../../context/LanguageContext';
 import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
@@ -47,6 +48,7 @@ interface TabNavigationProps {
 
 export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
   const { canAccessTab, isTabLocked, isPreviewMode, isAdmin } = usePlan();
+  const t = useT();
 
   // Filter tabs: show if accessible, or if in preview mode show locked tabs with opacity
   // Admin-only tabs are hidden completely for non-admins.
@@ -109,10 +111,10 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
               )}
               <span className="relative z-10 flex items-center gap-2">
                 <Icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="hidden sm:inline">{t(tab.label)}</span>
                 {tab.beta && (
                   <span className="hidden sm:inline-block text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30 leading-none">
-                    Beta
+                    {t('Beta')}
                   </span>
                 )}
                 {locked && (

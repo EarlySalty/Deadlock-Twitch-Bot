@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { usePlan } from '@/context/PlanContext';
+import { useT } from '@/context/LanguageContext';
 import type { TimeRange } from '@/types/analytics';
 
 // Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
@@ -39,12 +40,13 @@ export function Header({
   isDemoMode = false,
 }: HeaderProps) {
   const { view, setView, hasFullAccess, hasEntitlement } = usePlan();
+  const t = useT();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
 
   const viewOptions: { value: 'basic' | 'extended'; label: string }[] = [
-    { value: 'basic', label: 'Basis' },
-    { value: 'extended', label: 'Preview' },
+    { value: 'basic', label: t('Basis') },
+    { value: 'extended', label: t('Preview') },
   ];
 
   const timeRanges: { value: TimeRange; label: string }[] = [
@@ -70,7 +72,11 @@ export function Header({
   const q = search.trim().toLowerCase();
   const partners = streamers.filter(s => s.isPartner && (!q || s.login.includes(q)));
   const others = streamers.filter(s => !s.isPartner && (!q || s.login.includes(q)));
-  const allLabel = isDemoMode ? 'Demo-Profil' : canViewAllStreamers ? 'Alle Streamer' : 'Alle Partner';
+  const allLabel = isDemoMode
+    ? t('Demo-Profil')
+    : canViewAllStreamers
+    ? t('Alle Streamer')
+    : t('Alle Partner');
   const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics');
 
   // In Beta: Partner koennen vorerst alle Streamer sehen.
@@ -95,7 +101,8 @@ export function Header({
               {isLoading && <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
             </h1>
             <p className="text-text-secondary text-sm md:text-base mt-1">
-              Fokus: {streamer || allLabel} <span className="mx-1 text-border">•</span> Zeitraum: letzte {days} Tage
+              {t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}
+              <span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}
             </p>
           </div>
         </div>
@@ -159,7 +166,7 @@ export function Header({
                       <input
                         autoFocus
                         type="text"
-                        placeholder="Suchen…"
+                        placeholder={t('Suchen…')}
                         value={search}
                         onChange={e => setSearch(e.target.value)}
                         className="flex-1 bg-transparent text-sm text-white placeholder:text-text-secondary outline-none"
@@ -187,7 +194,7 @@ export function Header({
                   {visiblePartners.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
-                        Partner
+                        {t('Partner')}
                       </div>
                       {visiblePartners.map(s => (
                         <button
@@ -211,7 +218,7 @@ export function Header({
                   {visibleOthers.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
-                        Weitere Streamer
+                        {t('Weitere Streamer')}
                       </div>
                       {visibleOthers.map(s => (
                         <button
@@ -226,7 +233,7 @@ export function Header({
                           }`}
                         >
                           {s.login}
-                          <span className="ml-2 text-text-secondary text-xs">(extern)</span>
+                          <span className="ml-2 text-text-secondary text-xs">{t('(extern)')}</span>
                         </button>
                       ))}
                     </>
