@@ -30,6 +30,14 @@ pub struct Konfiguration {
     pub ausgabe: PathBuf,
     pub transkript_behalten: bool,
     pub aufbewahrung_tage: u64,
+    /// Obergrenze fuer alle aufbewahrten Aufnahmen zusammen, in Bytes.
+    ///
+    /// Die Frist allein ist keine Grenze: faellt der Modellschritt aus, gilt
+    /// jeder Block als unvollstaendig geprueft und seine Aufnahme bleibt
+    /// liegen. Bei drei Kanaelen sind das mehrere Gigabyte am Tag, dreissig
+    /// Tage lang, auf derselben Platte wie Bot und Datenbank. `0` hebt die
+    /// Grenze auf.
+    pub behalten_grenze_bytes: u64,
 }
 
 /// Trennt an Komma, Semikolon und Leerraum, normalisiert auf Kleinschreibung
@@ -84,6 +92,36 @@ fn wahrheit(roh: &str, standard: bool) -> bool {
 /// Aufbewahrung in Tagen. Ein unbrauchbarer Wert faellt auf den Standard
 /// zurueck - aber nicht still: sonst weicht die tatsaechliche Aufbewahrung von
 /// dem ab, was jemand eingestellt zu haben glaubt.
+/// Umgebungsvariable fuer die Obergrenze der aufbewahrten Aufnahmen, in
+/// Gigabyte.
+pub const BEHALTEN_GRENZE_ENV: &str = "STREAM_AUDIT_MAX_KEEP_GB";
+
+/// Zwanzig Gigabyte reichen fuer rund zehn Tage Dauerausfall bei drei Kanaelen
+/// und lassen auf der Platte noch Luft fuer Bot und Datenbank.
+const BEHALTEN_GRENZE_STANDARD_GB: u64 = 20;
+
+/// Liest die Obergrenze in Gigabyte und rechnet sie in Bytes um. `0` heisst
+/// ausdruecklich "keine Grenze".
+fn grenze_lesen(roh: &str) -> u64 {
+    let roh = roh.trim();
+    let gigabyte = if roh.is_empty() {
+        BEHALTEN_GRENZE_STANDARD_GB
+    } else {
+        match roh.parse::<u64>() {
+            Ok(wert) => wert,
+            Err(_) => {
+                tracing::warn!(
+                    wert = roh,
+                    standard = BEHALTEN_GRENZE_STANDARD_GB,
+                    "unbrauchbarer Wert fuer die Aufnahmegrenze, nehme den Standard"
+                );
+                BEHALTEN_GRENZE_STANDARD_GB
+            }
+        }
+    };
+    gigabyte.saturating_mul(1024 * 1024 * 1024)
+}
+
 fn aufbewahrung_lesen(roh: &str) -> u64 {
     let roh = roh.trim();
     if roh.is_empty() {
@@ -117,6 +155,9 @@ impl Konfiguration {
             ),
             aufbewahrung_tage: aufbewahrung_lesen(
                 &std::env::var(AUFBEWAHRUNG_ENV).unwrap_or_default(),
+            ),
+            behalten_grenze_bytes: grenze_lesen(
+                &std::env::var(BEHALTEN_GRENZE_ENV).unwrap_or_default(),
             ),
         }
     }

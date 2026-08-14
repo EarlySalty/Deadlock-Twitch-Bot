@@ -669,6 +669,37 @@ Regelpruefung, die Aufnahmen bleiben liegen.",
     }
 }
 
+/// Meldet den Verdacht auf einen ausgefallenen STT-Dienst.
+///
+/// Eigene Funktion, weil der Zaehler dahinter vor der Verzweigung laeuft: die
+/// Meldung haengt am Kanal und seiner Stille, nicht daran, was mit der einzelnen
+/// Aufnahme geschieht.
+async fn stille_melden(konfiguration: &Konfiguration, kanal: &str, stumm: usize) {
+    let text = format!(
+        "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen einzigen erkannten Satz. \
+STT-Dienst pruefen."
+    );
+    let ablage = format!("nur-stille-{kanal}");
+    let (schluessel, text) = match offener_hinweis(konfiguration, &ablage).await {
+        Some(offen) => offen,
+        None => (
+            format!(
+                "{}-{kanal}-nur-stille-{}",
+                start_kennung(),
+                naechste_vorfall_nummer()
+            ),
+            text,
+        ),
+    };
+    if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
+        // Nicht wieder loeschen, wenn spaeter etwas ankommt: die Aufnahmen
+        // dieser Strecke sind dann schon weg, und die Warnung ist der einzige
+        // Hinweis darauf, dass sie ungeprueft blieben.
+        tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
+        hinweis_aufheben(konfiguration, &ablage, &schluessel, &text).await;
+    }
+}
+
 /// Kopfdaten fuer die Fertig-Marke eines Blocks ohne Bericht.
 fn leerer_bericht(block: &plan::Block) -> Bericht {
     Bericht {
@@ -1690,6 +1721,79 @@ async fn alte_aufnahmen_loeschen(
     leere_huellen_loeschen(&wurzel).await;
 }
 
+/// Haelt die aufbewahrten Aufnahmen unter der Gesamtgrenze, aeltestes zuerst.
+///
+/// Die Frist allein reicht nicht: faellt der Modellschritt aus, gilt jeder
+/// Block als unvollstaendig geprueft, und dann bleibt jede Aufnahme dreissig
+/// Tage liegen. Genau der Ausfall, der das Aufbewahren ausloest, laesst es
+/// unbegrenzt wachsen - auf derselben Platte, auf der Bot und Datenbank liegen.
+///
+/// Gibt zurueck, wie viele Aufnahmen wegen der Grenze weichen mussten.
+async fn grenze_durchsetzen(
+    konfiguration: &Konfiguration,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
+) -> usize {
+    let grenze = konfiguration.behalten_grenze_bytes;
+    if grenze == 0 {
+        return 0;
+    }
+    let wurzel = aufnahme_wurzel(konfiguration);
+    let mut aufnahmen = Vec::new();
+    ts_dateien_sammeln(&wurzel, &mut aufnahmen).await;
+    let eingereiht: std::collections::HashSet<String> =
+        warteschlange.lock().await.dateien().into_iter().collect();
+
+    // Alter und Groesse einmal einsammeln, dann aeltestes zuerst.
+    let mut bestand: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    let mut belegt = 0u64;
+    for pfad in aufnahmen {
+        let Ok(daten) = tokio::fs::metadata(&pfad).await else {
+            continue;
+        };
+        belegt = belegt.saturating_add(daten.len());
+        if eingereiht.contains(&pfad.to_string_lossy().to_string()) {
+            // Was gleich ausgewertet wird, zaehlt zum Bestand, faellt aber
+            // nicht dem Loeschen zum Opfer - sonst zoege die Grenze einem
+            // wartenden Block die Datei unter den Fuessen weg.
+            continue;
+        }
+        let Ok(geaendert) = daten.modified() else {
+            continue;
+        };
+        bestand.push((geaendert, daten.len(), pfad));
+    }
+    if belegt <= grenze {
+        return 0;
+    }
+    bestand.sort_by_key(|(geaendert, _, _)| *geaendert);
+
+    let mut geloescht = 0usize;
+    for (_, groesse, pfad) in bestand {
+        if belegt <= grenze {
+            break;
+        }
+        let Some(ziel) = blockordner_von(&wurzel, &pfad) else {
+            continue;
+        };
+        match tokio::fs::remove_dir_all(&ziel).await {
+            Ok(()) => {
+                belegt = belegt.saturating_sub(groesse);
+                geloescht += 1;
+            }
+            Err(fehler) => tracing::warn!(?fehler, ordner = ?ziel, "Aufnahme nicht loeschbar"),
+        }
+    }
+    if geloescht > 0 {
+        tracing::warn!(
+            geloescht,
+            grenze_gb = grenze / (1024 * 1024 * 1024),
+            "Aufnahmegrenze erreicht - aelteste Aufnahmen entfernt"
+        );
+        leere_huellen_loeschen(&wurzel).await;
+    }
+    geloescht
+}
+
 /// Entfernt leergeraeumte Lauf- und Kanalordner unter `aufnahmen/`.
 ///
 /// Je Sendung bleibt sonst eine leere Huelle stehen, und genau dieser Baum wird
@@ -1729,6 +1833,9 @@ async fn auswertungs_schleife(
     let mut modell_ausgefallen: std::collections::HashMap<String, usize> = Default::default();
     // Wie viele Bloecke am Stueck je Kanal ohne einen erkannten Satz blieben.
     let mut leer_am_stueck: std::collections::HashMap<String, usize> = Default::default();
+    // Ist die Platzgrenze schon gemeldet? Sie greift, solange der Ausfall
+    // anhaelt; eine DM je Aufraeumtakt waere stuendliches Rauschen.
+    let mut platz_gemeldet = false;
     loop {
         if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::info!("Auswertungsschleife beendet sich");
@@ -1740,6 +1847,33 @@ async fn auswertungs_schleife(
         if tokio::time::Instant::now() >= naechstes_aufraeumen {
             alte_berichte_loeschen(&konfiguration).await;
             alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
+            // Erst die Frist, dann die Gesamtgrenze: was ohnehin abgelaufen
+            // ist, soll nicht als "wegen Platzmangel geloescht" gemeldet
+            // werden.
+            let wegen_platz = grenze_durchsetzen(&konfiguration, &warteschlange).await;
+            if wegen_platz > 0 && !platz_gemeldet {
+                let text = format!(
+                    "Coaching-Audit: Aufnahmegrenze erreicht, {wegen_platz} aelteste Aufnahmen \
+geloescht. Sie sind als Beleg nicht mehr da."
+                );
+                let schluessel = format!(
+                    "{}-platzgrenze-{}",
+                    start_kennung(),
+                    naechste_vorfall_nummer()
+                );
+                match dm_rohtext(&text, &schluessel).await {
+                    // Erst nach der Zustellung merken, sonst faellt die
+                    // Meldung bei einer Broker-Stoerung ganz aus.
+                    Ok(()) => platz_gemeldet = true,
+                    Err(fehler) => {
+                        tracing::error!(fehler, "Platzgrenze nicht meldbar");
+                        hinweis_aufheben(&konfiguration, "platzgrenze", &schluessel, &text).await;
+                    }
+                }
+            }
+            if wegen_platz == 0 {
+                platz_gemeldet = false;
+            }
             offene_meldungen_einreihen(&konfiguration, &warteschlange).await;
             offene_hinweise_senden(&konfiguration).await;
             naechstes_aufraeumen =
@@ -1756,15 +1890,47 @@ async fn auswertungs_schleife(
         // neuer Platz in der Schlange.
         let in_arbeit_datei = block.datei.clone();
 
-        match block_auswerten(&transkribierer, &konfiguration, &block).await {
+        let ergebnis = block_auswerten(&transkribierer, &konfiguration, &block).await;
+
+        // Der Stille-Zaehler laeuft vor der Verzweigung, nicht in einem ihrer
+        // Arme. Er stand frueher nur im Loesch-Arm: fiel der Modellschritt aus,
+        // landete jeder Block im Behalten-Arm, also auch jeder stumme, und die
+        // Meldung "zwanzig Bloecke ohne einen erkannten Satz" kam nie - genau
+        // beim Doppelausfall von STT und Modell, wo sie am noetigsten ist.
+        let segmente_gesehen = match &ergebnis {
+            Ok(Aufnahmeschicksal::Behalten(bericht)) => Some(bericht.segmente),
+            Ok(Aufnahmeschicksal::Loeschen { segmente }) => Some(*segmente),
+            // Ein uebersprungener Block wurde nie transkribiert, ein
+            // fehlgeschlagener nie fertig - beide sagen nichts ueber Stille.
+            Ok(Aufnahmeschicksal::Uebersprungen) | Err(_) => None,
+        };
+        let mut stumm_am_stueck = 0usize;
+        match segmente_gesehen {
+            Some(0) => {
+                let zaehler = leer_am_stueck.entry(block.kanal.clone()).or_insert(0usize);
+                *zaehler += 1;
+                stumm_am_stueck = *zaehler;
+            }
+            // Gezaehlt wird je Kanal. Ein gesunder Kanal darf den Zaehler eines
+            // anderen nicht zuruecksetzen - sonst bliebe genau der Kanal, dessen
+            // Ton nie ankommt, ohne Warnung.
+            Some(_) => {
+                leer_am_stueck.remove(&block.kanal);
+            }
+            None => {}
+        }
+        // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es nicht -
+        // dann liefert der STT-Dienst vermutlich fuer alles nichts, und ohne
+        // diesen Zaehler saehe das aus wie lauter ruhige Streams. Gemeldet wird
+        // bei jedem Vielfachen, nicht nur beim ersten Mal: eine Stoerung, die
+        // anhaelt, soll sich wieder melden.
+        if stumm_am_stueck > 0 && stumm_am_stueck.is_multiple_of(MAX_LEER_AM_STUECK) {
+            stille_melden(&konfiguration, &block.kanal, stumm_am_stueck).await;
+        }
+
+        match ergebnis {
             Ok(Aufnahmeschicksal::Uebersprungen) => {}
             Ok(Aufnahmeschicksal::Behalten(bericht)) => {
-                // Auch ein aufbewahrter Block hatte Text. Ohne diese Zeile
-                // zaehlte der Stille-Zaehler ueber ihn hinweg weiter und
-                // meldete irgendwann eine Stoerung, die es nie gab.
-                if bericht.segmente > 0 {
-                    leer_am_stueck.remove(&block.kanal);
-                }
                 modellausfall_melden(
                     &konfiguration,
                     &block.kanal,
@@ -1785,56 +1951,11 @@ async fn auswertungs_schleife(
                         .await;
                 }
                 meldung_erledigt(Path::new(&block.datei)).await;
-                // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
-                // nicht - dann liefert der STT-Dienst vermutlich fuer alles
-                // nichts, und ohne diesen Zaehler saehe das aus wie lauter
-                // ruhige Streams.
-                // Gezaehlt wird je Kanal. Ein gesunder Kanal darf den Zaehler
-                // eines anderen nicht zuruecksetzen - sonst bliebe genau der
-                // Kanal, dessen Ton nie ankommt, ohne Warnung.
-                let kanal = block.kanal.clone();
-                let mut aufnahme_behalten = false;
-                if segmente == 0 {
-                    let zaehler = leer_am_stueck.entry(kanal.clone()).or_insert(0usize);
-                    *zaehler += 1;
-                    let stumm = *zaehler;
-                    // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
-                    // weitere stumme Aufnahme liegen: sie ist der einzige Weg,
-                    // die uebersprungene Sendezeit noch nachzuhoeren.
-                    aufnahme_behalten = stumm >= MAX_LEER_AM_STUECK;
-                    // Gemeldet wird bei jedem Vielfachen, nicht nur beim
-                    // ersten Mal - eine Stoerung, die anhaelt, soll sich
-                    // wieder melden.
-                    if stumm.is_multiple_of(MAX_LEER_AM_STUECK) {
-                        let text = format!(
-                            "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
-einzigen erkannten Satz. STT-Dienst pruefen."
-                        );
-                        let ablage = format!("nur-stille-{kanal}");
-                        let (schluessel, text) =
-                            match offener_hinweis(&konfiguration, &ablage).await {
-                                Some(offen) => offen,
-                                None => (
-                                    format!(
-                                        "{}-{kanal}-nur-stille-{}",
-                                        start_kennung(),
-                                        naechste_vorfall_nummer()
-                                    ),
-                                    text,
-                                ),
-                            };
-                        if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
-                            // Nicht wieder loeschen, wenn spaeter etwas
-                            // ankommt: die Aufnahmen dieser Strecke sind dann
-                            // schon weg, und die Warnung ist der einzige
-                            // Hinweis darauf, dass sie ungeprueft blieben.
-                            tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
-                            hinweis_aufheben(&konfiguration, &ablage, &schluessel, &text).await;
-                        }
-                    }
-                } else {
-                    leer_am_stueck.remove(&kanal);
-                }
+                // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
+                // weitere stumme Aufnahme liegen: sie ist der einzige Weg, die
+                // uebersprungene Sendezeit noch nachzuhoeren. Gezaehlt und
+                // gemeldet wurde schon vor der Verzweigung.
+                let aufnahme_behalten = segmente == 0 && stumm_am_stueck >= MAX_LEER_AM_STUECK;
                 if aufnahme_behalten {
                     fertig_markieren(Path::new(&block.datei), &leerer_bericht(&block)).await;
                     tracing::warn!(
@@ -2848,6 +2969,7 @@ mod tests {
             ausgabe: wurzel.clone(),
             transkript_behalten: false,
             aufbewahrung_tage: 30,
+            behalten_grenze_bytes: 0,
         };
         alte_berichte_loeschen(&konfiguration).await;
         assert!(!alt.exists(), "40 Tage alter Bericht muss weg sein");
@@ -2858,6 +2980,7 @@ mod tests {
         mtime_setzen(&alt, vor_40_tagen);
         let unbegrenzt = Konfiguration {
             aufbewahrung_tage: 0,
+            behalten_grenze_bytes: 0,
             ..konfiguration
         };
         alte_berichte_loeschen(&unbegrenzt).await;
@@ -2887,6 +3010,7 @@ mod tests {
             ausgabe: wurzel.clone(),
             transkript_behalten: false,
             aufbewahrung_tage: 30,
+            behalten_grenze_bytes: 0,
         })
         .await;
         assert!(!alt.exists(), "Bericht im Kanalordner muss weg sein");
@@ -3031,7 +3155,47 @@ mod tests {
             ausgabe: wurzel.to_path_buf(),
             transkript_behalten: false,
             aufbewahrung_tage: 30,
+            behalten_grenze_bytes: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn platzgrenze_raeumt_die_aelteste_aufnahme() {
+        // Ohne diese Grenze fuellt ein anhaltender Modellausfall die Platte:
+        // jeder Block gilt dann als unvollstaendig geprueft und bleibt die
+        // volle Aufbewahrungsfrist liegen.
+        let wurzel = test_ordner("platzgrenze");
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+        let mut konfiguration = test_konfiguration(&wurzel);
+        konfiguration.behalten_grenze_bytes = 1500;
+
+        let aufnahmen = aufnahme_wurzel(&konfiguration);
+        let mut dateien = Vec::new();
+        for (nummer, alter_tage) in [(1u32, 3u64), (2, 1)] {
+            let block = aufnahmen
+                .join("testkanal")
+                .join("lauf")
+                .join(format!("t000000-b{nummer:04}"))
+                .join("capture");
+            tokio::fs::create_dir_all(&block).await.expect("Ordner");
+            let datei = block.join("audio.ts");
+            tokio::fs::write(&datei, vec![0u8; 1000])
+                .await
+                .expect("schreiben");
+            mtime_setzen(
+                &datei,
+                std::time::SystemTime::now() - Duration::from_secs(alter_tage * 24 * 60 * 60),
+            );
+            dateien.push(datei);
+        }
+
+        let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
+        let geloescht = grenze_durchsetzen(&konfiguration, &warteschlange).await;
+
+        assert_eq!(geloescht, 1, "eine Aufnahme muss fuer die Grenze weichen");
+        assert!(!dateien[0].exists(), "die aeltere Aufnahme geht zuerst");
+        assert!(dateien[1].exists(), "die juengere bleibt");
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
     }
 
     #[tokio::test]
@@ -3165,6 +3329,7 @@ mod tests {
             ausgabe: PathBuf::from("/daten/audits"),
             transkript_behalten: false,
             aufbewahrung_tage: 30,
+            behalten_grenze_bytes: 0,
         };
         let wurzel = aufnahme_wurzel(&konfiguration);
         assert_eq!(wurzel, PathBuf::from("/daten/audits/aufnahmen"));

@@ -51,6 +51,11 @@ im Deadlock-Docs-Korpus.
   werden nur die drei bekannten Muster: was ein Modellfund sonst an Wortlaut im
   Segment mitbringt, steht im Bericht. Er ist deshalb keine zitatfreie Datei,
   sondern eine Akte mit Modus 0600. Die DM traegt weder Zitat noch Hash.
+- Die Frist ist nicht die einzige Grenze: ueber `STREAM_AUDIT_MAX_KEEP_GB`
+  weichen die aeltesten Aufnahmen, sobald der Bestand die Obergrenze reisst.
+  Noetig, weil ein ausgefallener Modellschritt jeden Block als unvollstaendig
+  geprueft markiert und damit jede Aufnahme aufhebt. Greift die Grenze, gibt es
+  eine DM: die geloeschten Aufnahmen sind als Beleg weg.
 - Das Rohtranskript bleibt nur mit `STREAM_AUDIT_KEEP_TRANSCRIPT=1` liegen.
   Aufnahmen mit Fund bleiben liegen, saubere Bloecke werden geloescht. Sie
   liegen unter `STREAM_AUDIT_OUTPUT_DIR/aufnahmen`, nicht in `/tmp`. Die
@@ -68,6 +73,7 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_OUTPUT_DIR` | Ablage der Berichte | `data/stream_coaching_audits` |
 | `STREAM_AUDIT_KEEP_TRANSCRIPT` | Rohtranskript behalten | aus |
 | `STREAM_AUDIT_RETENTION_DAYS` | Aufbewahrung, `0` = unbegrenzt | 30 |
+| `STREAM_AUDIT_MAX_KEEP_GB` | Obergrenze aller aufbewahrten Aufnahmen, `0` = keine | 20 |
 | `STREAM_AUDIT_ALLOW_REMOTE_STT` | Transkription auf fremdem Host | aus |
 | `STREAM_AUDIT_ALLOW_REMOTE_LLM` | Modellschritt bei fremdem Anbieter | aus im Code, `1` in der Unit |
 | `STREAM_AUDIT_DISCORD_USER_ID` | Empfaenger der DM | Admin-ID aus `melden.rs` |

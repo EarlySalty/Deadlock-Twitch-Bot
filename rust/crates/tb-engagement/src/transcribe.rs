@@ -305,6 +305,11 @@ impl OpenAiTranscriber {
         // Der lokale Dienst ignoriert das angefragte Modell und nennt in der
         // Antwort, was er wirklich geladen hat. Steht dort etwas, gilt das -
         // sonst behauptet der Bericht "whisper-1", wo large-v3-turbo lief.
+        //
+        // Das wirkt auf alle Aufrufer: `crew_review.model` und das Embed der
+        // Schattenpruefung zeigen ab jetzt den echten Modellnamen. Aeltere
+        // Zeilen tragen weiter "whisper-1"; wer die Spalte auswertet, muss mit
+        // beiden Schreibweisen rechnen.
         let genutztes_modell = payload
             .get("model")
             .and_then(serde_json::Value::as_str)
