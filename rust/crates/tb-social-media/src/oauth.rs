@@ -280,8 +280,8 @@ impl OAuthManager {
         redirect_uri: &str,
         verifier: &str,
     ) -> Result<ExchangedTokens, OAuthError> {
-        let client_id = env_nonempty("YOUTUBE_CLIENT_ID").unwrap_or_default();
-        let client_secret = env_nonempty("YOUTUBE_CLIENT_SECRET").unwrap_or_default();
+        let client_id = youtube_client_id().unwrap_or_default();
+        let client_secret = youtube_client_secret().unwrap_or_default();
         let data = self
             .post_token(
                 "YouTube",
@@ -608,6 +608,18 @@ fn env_nonempty(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|v| !v.is_empty())
 }
 
+/// Google-Zugangsdaten. Historisch heissen sie hier `YOUTUBE_*`, gepflegt werden
+/// sie im Secret-Store aber als `GOOGLE_*`. Die `GOOGLE_*`-Namen haben deshalb
+/// Vorrang: unter `YOUTUBE_CLIENT_ID` liegt teils noch ein alter Client, der
+/// sonst den aktuellen ueberstimmen wuerde.
+fn youtube_client_id() -> Option<String> {
+    env_nonempty("GOOGLE_OAUTH_ID").or_else(|| env_nonempty("YOUTUBE_CLIENT_ID"))
+}
+
+fn youtube_client_secret() -> Option<String> {
+    env_nonempty("GOOGLE_CLIENT_SECRET").or_else(|| env_nonempty("YOUTUBE_CLIENT_SECRET"))
+}
+
 fn build_url(base: &str, params: &[(&str, &str)]) -> Result<String, OAuthError> {
     url::Url::parse_with_params(base, params)
         .map(|u| u.to_string())
@@ -634,7 +646,7 @@ fn tiktok_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<St
 
 fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<String, OAuthError> {
     let client_id =
-        env_nonempty("YOUTUBE_CLIENT_ID").ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
+        youtube_client_id().ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
     let challenge = pkce_challenge(verifier);
     build_url(
         "https://accounts.google.com/o/oauth2/v2/auth",
