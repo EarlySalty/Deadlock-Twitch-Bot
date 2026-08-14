@@ -58,6 +58,11 @@ pub struct Block {
     /// Wie oft die Meldung dieses Blocks schon scheiterte.
     #[doc(hidden)]
     pub meldeversuche: u32,
+    /// Zeiten zaehlen ab Aufnahmebeginn statt ab Sendungsbeginn.
+    ///
+    /// Passiert, wenn Twitch kein brauchbares `started_at` liefert. Der Bericht
+    /// sagt es dann, statt eine Stelle im VOD zu behaupten, die nicht stimmt.
+    pub zeit_unsicher: bool,
 }
 
 /// So oft wird ein Block mit halbstuendigem Abstand gemeldet, dessen Bericht
@@ -218,6 +223,8 @@ pub struct Aufnahme {
     /// einem Neustart des Dienstes faengt die Zaehlung erneut bei null an,
     /// samt Sechs-Stunden-Deckel.
     pub versatz_basis: u64,
+    /// Ob die Zeitbasis geraten ist, weil `started_at` fehlte.
+    pub zeit_unsicher: bool,
     /// Unix-Zeit, zu der diese Aufnahme angelegt wurde.
     ///
     /// Die Sendungszeit laeuft an der Uhr, nicht an der Summe der
@@ -244,6 +251,7 @@ impl Aufnahme {
             bloecke: 0,
             aufgenommen_sekunden: 0,
             versatz_basis,
+            zeit_unsicher: false,
             gestartet_um: chrono::Utc::now().timestamp(),
         }
     }
@@ -311,6 +319,7 @@ impl Aufnahme {
             frueherstens: 0,
             nur_melden: false,
             meldeversuche: 0,
+            zeit_unsicher: self.zeit_unsicher,
         }
     }
 }
@@ -334,6 +343,7 @@ mod tests {
                     frueherstens: 0,
                     nur_melden: false,
                     meldeversuche: 0,
+                    zeit_unsicher: false,
                 }
                 .bezeichnung()
             })
@@ -363,6 +373,7 @@ mod tests {
                 frueherstens: 0,
                 nur_melden: false,
                 meldeversuche: 0,
+                zeit_unsicher: false,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -387,6 +398,7 @@ mod tests {
                 frueherstens: 0,
                 nur_melden: false,
                 meldeversuche: 0,
+                zeit_unsicher: false,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -409,6 +421,7 @@ mod tests {
                 frueherstens: 0,
                 nur_melden: false,
                 meldeversuche: 0,
+                zeit_unsicher: false,
             });
         }
         assert_eq!(w.kanal_verwerfen("a"), 2);
@@ -516,6 +529,7 @@ mod tests {
             frueherstens: 0,
             nur_melden: false,
             meldeversuche: 0,
+            zeit_unsicher: false,
         };
         assert_eq!(
             block.segment_id(7),

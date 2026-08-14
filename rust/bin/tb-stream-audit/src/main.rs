@@ -412,6 +412,13 @@ const ZETTEL: &str = "block.json";
 /// aufgehoben wurde.
 const FERTIG: &str = "ausgewertet.json";
 
+/// Marke im Blockordner: hier laeuft gerade eine Aufnahme.
+///
+/// Sie verschwindet, wenn die Aufnahme sauber zurueckkommt. Liegt sie nach
+/// einem Neustart noch da, wurde mitten hinein gestoppt: die Datei ist gueltig,
+/// aber kurz - und ein Bericht darueber ist nur ein Bericht ueber den Anfang.
+const LAEUFT: &str = "aufnahme_laeuft.json";
+
 /// Legt Kanal, Lauf, Blocknummer und Zeitversatz in den Blockordner, **bevor**
 /// die Aufnahme laeuft.
 ///
@@ -547,6 +554,16 @@ async fn fertig_markieren(aufnahme: &Path, bericht: &Bericht) {
     }
 }
 
+/// Wurde die Aufnahme dieses Blocks mitten im Lauf gestoppt?
+async fn aufnahme_abgebrochen(aufnahme: &Path) -> bool {
+    let Some(blockordner) = aufnahme.parent().and_then(Path::parent) else {
+        return false;
+    };
+    tokio::fs::try_exists(blockordner.join(LAEUFT))
+        .await
+        .unwrap_or(false)
+}
+
 /// Wurde dieser Block schon ausgewertet?
 async fn bereits_ausgewertet(aufnahme: &Path) -> bool {
     let Some(capture) = aufnahme.parent() else {
@@ -589,6 +606,7 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         frueherstens: 0,
         nur_melden: false,
         meldeversuche: 0,
+        zeit_unsicher: false,
     })
 }
 
@@ -768,13 +786,17 @@ async fn aufnahme_schleife(
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
                     let text = format!(
                         "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
-Es wird nichts aufgenommen und nichts geprueft."
+Laufende Aufnahmen laufen weiter, neue Sendungen werden nicht erkannt."
                     );
-                    let schluessel = format!(
-                        "{}-helix-ausfall-{}",
-                        start_kennung(),
-                        naechste_vorfall_nummer()
-                    );
+                    let schluessel =
+                        match offener_hinweis_schluessel(&konfiguration, "helix-ausfall").await {
+                            Some(schluessel) => schluessel,
+                            None => format!(
+                                "{}-helix-ausfall-{}",
+                                start_kennung(),
+                                naechste_vorfall_nummer()
+                            ),
+                        };
                     match dm_rohtext(&text, &schluessel).await {
                         Ok(()) => {
                             helix_gemeldet = true;
@@ -867,11 +889,15 @@ Aufnahme zustande. streamlink pruefen."
             // Datei fuer den Wiederholungsversuch heisst dagegen je Kanal
             // gleich, sonst sammelte sich waehrend eines Broker-Ausfalls jede
             // Minute ein neuer Hinweis an und alle kaemen spaeter auf einmal.
-            let schluessel = format!(
-                "{}-{kanal}-keine-aufnahme-{}",
-                start_kennung(),
-                naechste_vorfall_nummer()
-            );
+            let ablage = format!("keine-aufnahme-{kanal}");
+            let schluessel = match offener_hinweis_schluessel(&konfiguration, &ablage).await {
+                Some(schluessel) => schluessel,
+                None => format!(
+                    "{}-{kanal}-keine-aufnahme-{}",
+                    start_kennung(),
+                    naechste_vorfall_nummer()
+                ),
+            };
             match dm_rohtext(&text, &schluessel).await {
                 // Erst nach zugestellter DM merken. Sonst verschluckt ein
                 // einziger Broker-Aussetzer die Meldung fuer immer.
@@ -880,17 +906,11 @@ Aufnahme zustande. streamlink pruefen."
                     // Ein aelterer, noch nicht zugestellter Hinweis zur selben
                     // Sache waere sonst spaeter nachgereicht worden und haette
                     // eine laengst erledigte Stoerung gemeldet.
-                    hinweis_erledigt(&konfiguration, &format!("keine-aufnahme-{kanal}")).await;
+                    hinweis_erledigt(&konfiguration, &ablage).await;
                 }
                 Err(fehler) => {
                     tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
-                    hinweis_aufheben(
-                        &konfiguration,
-                        &format!("keine-aufnahme-{kanal}"),
-                        &schluessel,
-                        &text,
-                    )
-                    .await;
+                    hinweis_aufheben(&konfiguration, &ablage, &schluessel, &text).await;
                 }
             }
         }
@@ -924,11 +944,14 @@ Aufnahme zustande. streamlink pruefen."
 Sie wird nicht geprueft.",
                 aufstellung.join(", ")
             );
-            let schluessel = format!(
-                "{}-ausgelassen-{}",
-                start_kennung(),
-                naechste_vorfall_nummer()
-            );
+            let schluessel = match offener_hinweis_schluessel(&konfiguration, "ausgelassen").await {
+                Some(schluessel) => schluessel,
+                None => format!(
+                    "{}-ausgelassen-{}",
+                    start_kennung(),
+                    naechste_vorfall_nummer()
+                ),
+            };
             match dm_rohtext(&text, &schluessel).await {
                 Ok(()) => stau_gemeldet = true,
                 Err(fehler) => {
@@ -950,11 +973,15 @@ Sie wird nicht geprueft.",
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                let schluessel = format!(
-                    "{}-rueckstand-{}",
-                    start_kennung(),
-                    naechste_vorfall_nummer()
-                );
+                let schluessel =
+                    match offener_hinweis_schluessel(&konfiguration, "rueckstand").await {
+                        Some(schluessel) => schluessel,
+                        None => format!(
+                            "{}-rueckstand-{}",
+                            start_kennung(),
+                            naechste_vorfall_nummer()
+                        ),
+                    };
                 match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => {
@@ -1004,7 +1031,12 @@ Dieser Abschnitt wird nicht geprueft."
                     (id, 0) => format!("{id}-{}", chrono::Utc::now().timestamp()),
                     (id, _) => id.to_owned(),
                 };
-                plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis)
+                let mut zustand = plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis);
+                // Ohne brauchbares started_at zaehlen die Zeiten ab
+                // Aufnahmebeginn. Das gehoert in den Bericht, sonst schickt er
+                // jemanden im VOD an die falsche Stelle.
+                zustand.zeit_unsicher = basis == 0;
+                zustand
             });
             if zustand.naechste_blocklaenge().is_none() {
                 // Deckel erreicht: Stand behalten, damit er beim naechsten Takt
@@ -1082,6 +1114,10 @@ async fn kanal_aufnehmen(
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
             return zustand;
         }
+        let laeuft = blockordner.join(LAEUFT);
+        if let Err(fehler) = nur_fuer_mich(&laeuft, b"{}").await {
+            tracing::warn!(fehler, "Laufmarke nicht schreibbar");
+        }
         if !zettel_schreiben(
             &blockordner,
             &kanal,
@@ -1111,6 +1147,7 @@ async fn kanal_aufnehmen(
             .await
         {
             Ok(aufgenommen) => {
+                let _ = tokio::fs::remove_file(&laeuft).await;
                 let block = zustand.block_fertig_bei(
                     aufgenommen.media_path.to_string_lossy().to_string(),
                     aufgenommen.actual_duration_seconds.round().max(0.0) as u64,
@@ -1132,6 +1169,7 @@ async fn kanal_aufnehmen(
                 // Der vorbereitete Blockordner samt Zettel muss weg, sonst
                 // bleibt bei jedem Sendungsende ein leerer Ordner liegen, den
                 // weder die Aufbewahrung noch die Wiederaufnahme je anfasst.
+                let _ = tokio::fs::remove_file(&laeuft).await;
                 if let Err(aufraeumfehler) = tokio::fs::remove_dir_all(&blockordner).await {
                     tracing::warn!(
                         ?aufraeumfehler,
@@ -1675,6 +1713,9 @@ async fn block_auswerten(
         .await
         .map_err(|e| Auswertefehler::Auswertung(format!("Transkription: {e}")))?;
 
+    // Lag die Laufmarke noch da, wurde die Aufnahme mitten im Block gestoppt.
+    // Was hier geprueft wird, ist dann nur ihr Anfang.
+    let abgebrochen = aufnahme_abgebrochen(Path::new(&block.datei)).await;
     let segmente = if transkript.segments.is_empty() {
         segmente_bauen(block, &transkript.text, transkript.duration_seconds)
     } else {
@@ -1693,7 +1734,13 @@ async fn block_auswerten(
     let mut funde = tb_stream_audit::regelfunde(&segmente);
     let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
-    let modell_hinweis = modell_fehler;
+    let modell_hinweis = match (abgebrochen, modell_fehler) {
+        (true, Some(fehler)) => Some(format!("{fehler}; ausserdem Aufnahme abgebrochen")),
+        (true, None) => {
+            Some("Aufnahme wurde mitten im Block gestoppt - geprueft ist nur ihr Anfang".to_owned())
+        }
+        (false, fehler) => fehler,
+    };
     let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
@@ -1701,7 +1748,14 @@ async fn block_auswerten(
     let bericht = Bericht {
         lauf_id: report::lauf_id(jetzt, &block.kanal),
         erstellt_am: jetzt.to_rfc3339(),
-        quelle: format!("live, Block {}", block.nummer),
+        quelle: if block.zeit_unsicher {
+            format!(
+                "live, Block {} - Zeiten ab Aufnahmebeginn, nicht ab Sendungsbeginn",
+                block.nummer
+            )
+        } else {
+            format!("live, Block {}", block.nummer)
+        },
         kanal: block.kanal.clone(),
         transkription: transkript.engine.clone(),
         modell: transkript.model.clone(),
@@ -2131,6 +2185,22 @@ async fn hinweis_aufheben(
     }
 }
 
+/// Schluessel eines noch offenen Hinweises, falls es einen gibt.
+///
+/// Ohne ihn bekaeme jeder neue Anlauf einen neuen Schluessel - und wenn
+/// Discord die vorige Nachricht doch angenommen hat, kaeme sie doppelt.
+async fn offener_hinweis_schluessel(konfiguration: &Konfiguration, ablage: &str) -> Option<String> {
+    let name: String = ablage
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let roh = tokio::fs::read_to_string(hinweis_ordner(konfiguration).join(format!("{name}.json")))
+        .await
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&roh).ok()?;
+    json["schluessel"].as_str().map(str::to_owned)
+}
+
 /// Nimmt einen aufgehobenen Hinweis wieder weg.
 async fn hinweis_erledigt(konfiguration: &Konfiguration, ablage: &str) {
     let name: String = ablage
@@ -2269,6 +2339,7 @@ mod tests {
             frueherstens: 0,
             nur_melden: false,
             meldeversuche: 0,
+            zeit_unsicher: false,
         }
     }
 
