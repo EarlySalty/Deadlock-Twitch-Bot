@@ -39,6 +39,7 @@ pub mod rhythm;
 pub mod sender_auth;
 pub mod shadow_review;
 pub mod smalltalk_loop_store;
+pub mod smalltalk_v1;
 pub mod soul_store;
 pub mod stealth_sender;
 pub mod stream_state;
