@@ -22,6 +22,7 @@ members = [
     "crates/tb-knowledge",
     "crates/tb-tips",
     "crates/tb-llm",
+    "crates/tb-vod-archive",
     "bin/tb-dashboard",
     "bin/tb-bot",
 ]
@@ -86,6 +87,7 @@ tb-engagement    = { path = "crates/tb-engagement" }
 tb-knowledge     = { path = "crates/tb-knowledge" }
 tb-tips          = { path = "crates/tb-tips" }
 tb-llm           = { path = "crates/tb-llm" }
+tb-vod-archive   = { path = "crates/tb-vod-archive" }
 url = "2"
 regex = "1"
 unicode-normalization = "0.1"

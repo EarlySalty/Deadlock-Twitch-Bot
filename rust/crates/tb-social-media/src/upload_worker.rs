@@ -87,7 +87,7 @@ fn build_uploader(
 /// Client-ID + Client-Secret tragen — die inline 401-Selbstheilung an
 /// (uploaders-1). Ohne vollständige Refresh-Daten bleibt es beim reinen
 /// Access-Token (Refresh dann nur proaktiv über den refresh_worker).
-pub(crate) fn youtube_uploader(creds: &SocialMediaCredentials) -> YouTubeUploader {
+pub fn youtube_uploader(creds: &SocialMediaCredentials) -> YouTubeUploader {
     let uploader = YouTubeUploader::new(creds.access_token.clone());
     match (
         creds.refresh_token.as_deref().filter(|s| !s.is_empty()),
