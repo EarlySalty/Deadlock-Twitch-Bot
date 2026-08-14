@@ -174,17 +174,13 @@ pub fn markdown(bericht: &Bericht) -> String {
 /// abgeschnittene Liste liest sich wie eine vollstaendige.
 pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
     let kopf = if bericht.funde.is_empty() {
-        if bericht.modell_geprueft {
-            format!(
-                "Coaching-Audit {}: keine Auffaelligkeiten ({} Segmente).",
-                bericht.kanal, bericht.segmente
-            )
-        } else {
-            format!(
-                "Coaching-Audit {}: keine Regelfunde, aber Modellschritt lief nicht ({}). Nicht vollstaendig geprueft.",
-                bericht.kanal, bericht.modell_hinweis
-            )
-        }
+        // Nur fuer den Bericht auf der Platte: ohne Funde verschickt der
+        // Dienst keine DM, ein ausgefallener Modellschritt meldet sich
+        // gedrosselt an anderer Stelle.
+        format!(
+            "Coaching-Audit {}: keine Auffaelligkeiten ({} Segmente).",
+            bericht.kanal, bericht.segmente
+        )
     } else {
         let hoch = bericht.funde.iter().filter(|f| f.schwere == "high").count();
         // Der Hinweis auf den ausgefallenen Modellschritt gehoert auch hierhin:
@@ -307,13 +303,6 @@ mod tests {
         assert!(text.contains("NICHT GELAUFEN"));
         assert!(text.contains("NICHT vollstaendig geprueft"));
         assert!(!text.contains("Keine Auffaelligkeiten."));
-    }
-
-    #[test]
-    fn ausgefallener_modellschritt_steht_auch_in_der_dm() {
-        let text = dm_text(&bericht_ohne_modell(vec![]), 3);
-        assert!(text.contains("Modellschritt lief nicht"));
-        assert!(!text.contains("keine Auffaelligkeiten"));
     }
 
     #[test]
