@@ -71,6 +71,7 @@ Audit, das darauf baut, faellt still aus.
 | Transkription scheitert | Drei Versuche mit 2 und 4 Minuten Pause; danach DM "aufgegeben", Aufnahme bleibt liegen. |
 | DM scheitert | Nur die Meldung wird wiederholt (5x/30 min, dann 6-stuendlich, insgesamt 12); danach `meldung_offen.json`, das der Aufraeumtakt wieder aufgreift. |
 | Modellschritt faellt aus | Bericht und DM sagen "NICHT GELAUFEN"; Aufnahme bleibt liegen. |
+| Block ohne gesprochenes Wort | Normalfall, keine Meldung, Aufnahme weg. Erst 20 stumme Bloecke am Stueck loesen eine DM aus. |
 | streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
 | Helix antwortet nicht | Nach fuenf Anlaeufen eine DM; ohne Abfrage wird nichts aufgenommen. |
 | Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
