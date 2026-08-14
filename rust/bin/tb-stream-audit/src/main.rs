@@ -419,7 +419,7 @@ async fn zu_alt(pfad: &Path, tage: u64) -> bool {
 /// Sammelt `.ts`-Dateien unterhalb eines Ordners.
 ///
 /// Die Aufnahmen liegen inzwischen mehrere Ebenen tief
-/// (`<kanal>/<lauf>/t<versatz>/<capture>/audio.ts`). Ein unlesbarer Ordner
+/// (`<kanal>/<lauf>/t<versatz>-b<nummer>/<capture>/audio.ts`). Ein unlesbarer Ordner
 /// beendet die Suche nicht - sonst nimmt eine kaputte Ecke alle folgenden
 /// Aufnahmen mit.
 async fn ts_dateien_sammeln(ordner: &Path, raus: &mut Vec<PathBuf>) {
@@ -963,6 +963,11 @@ nicht erkannt."
                 continue;
             }
         };
+        if helix_fehler > 0 {
+            // Die Stoerung ist vorbei: ein noch aufgehobener Hinweis wuerde
+            // sie sonst Stunden spaeter als aktuell melden.
+            hinweis_erledigt(&konfiguration, "helix-ausfall").await;
+        }
         helix_fehler = 0;
         helix_gemeldet = false;
         let live: Vec<String> = sendungen
@@ -996,7 +1001,10 @@ nicht erkannt."
                         *zaehler += 1;
                         ohne_block.push(kanal.clone());
                     } else {
-                        fehlschlaege.remove(&kanal);
+                        if fehlschlaege.remove(&kanal).is_some() {
+                            hinweis_erledigt(&konfiguration, &format!("keine-aufnahme-{kanal}"))
+                                .await;
+                        }
                         gemeldet.remove(&kanal);
                     }
                     if zustand.naechste_blocklaenge().is_none() {
@@ -1200,7 +1208,12 @@ Dieser Abschnitt wird nicht geprueft."
             // alten.
             let passend = staende
                 .get(kanal)
-                .map(|z| z.lauf == sendung.id.trim())
+                // Die Lauf-Kennung kann einen Zeitanhang tragen, wenn
+                // started_at fehlte. Dann passt sie trotzdem zur Sendung.
+                .map(|z| {
+                    let id = sendung.id.trim();
+                    z.lauf == id || z.lauf.starts_with(&format!("{id}-"))
+                })
                 .unwrap_or(false);
             if !passend {
                 staende.remove(kanal);
@@ -1491,7 +1504,7 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
 }
 
 /// Der Blockordner zu einer Aufnahme - oder `None`, wenn der Pfad nicht der
-/// erwarteten Form `<wurzel>/<kanal>/<lauf>/t<sekunden>/<capture>/datei.ts`
+/// erwarteten Form `<wurzel>/<kanal>/<lauf>/t<sekunden>-b<nummer>/<capture>/datei.ts`
 /// entspricht.
 ///
 /// Der Namenstest auf `t<Ziffern>` ist die eigentliche Sicherung: er
@@ -1672,7 +1685,10 @@ async fn auswertungs_schleife(
                 );
             }
             Ok(Aufnahmeschicksal::Loeschen { segmente }) => {
-                modell_ausgefallen.remove(&block.kanal);
+                if modell_ausgefallen.remove(&block.kanal).is_some() {
+                    hinweis_erledigt(&konfiguration, &format!("modellausfall-{}", block.kanal))
+                        .await;
+                }
                 meldung_erledigt(Path::new(&block.datei)).await;
                 // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
                 // nicht - dann liefert der STT-Dienst vermutlich fuer alles
@@ -2130,13 +2146,22 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
         );
     };
-    // Ohne diese Zeile koennte ein Endpunkt auf 127.0.0.1 per 307 nach
-    // draussen zeigen - und die Pruefung auf "lokal" waere umsonst gewesen.
-    let client = reqwest::Client::builder()
+    // Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307
+    // nach draussen zeigen - und die Pruefung auf "lokal" waere umsonst.
+    // Deshalb hier kein Ersatzclient: `Client::default()` ist `Client::new()`
+    // und paniert im Fehlerfall, und ein Client ohne diese Einstellungen waere
+    // schlimmer als keiner.
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default();
+    {
+        Ok(client) => client,
+        Err(fehler) => {
+            tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
+            return (Vec::new(), Some("HTTP-Client nicht baubar".to_owned()));
+        }
+    };
 
     let mut raus = Vec::new();
     let mut fehler_gesehen: Option<String> = None;
@@ -2499,11 +2524,14 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
     };
     let anfrage = melden::anfrage(melden::empfaenger(), text);
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
+    // Kein Ersatzclient: `Client::default()` ist `Client::new()` und paniert
+    // im selben Fehlerfall, und ein Client ohne Zeitgrenze bliebe im seriellen
+    // Auswerter fuer immer haengen.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default();
+        .map_err(|fehler| format!("HTTP-Client nicht baubar: {fehler}"))?;
     match client
         .post(&url)
         .header("X-Internal-Token", token)
@@ -2535,11 +2563,14 @@ async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     };
     let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(bericht, 5));
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
+    // Kein Ersatzclient: `Client::default()` ist `Client::new()` und paniert
+    // im selben Fehlerfall, und ein Client ohne Zeitgrenze bliebe im seriellen
+    // Auswerter fuer immer haengen.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default();
+        .map_err(|fehler| format!("HTTP-Client nicht baubar: {fehler}"))?;
     match client
         .post(&url)
         .header("X-Internal-Token", token)

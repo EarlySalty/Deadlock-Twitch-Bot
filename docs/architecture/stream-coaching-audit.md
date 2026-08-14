@@ -79,14 +79,6 @@ Audit, das darauf baut, faellt still aus.
 | Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
 | Schleife stirbt | Prozess endet mit Code 1, `Restart=on-failure` greift. |
 
-## 7. Stolperfallen
-
-- `FFMPEG_BIN` bleibt auf `/usr/bin/ffmpeg` gepinnt. Der systemd-Benutzer-PATH
-  stellt `~/.local/bin` nach vorn, und der statische Build dort segfaultet mit
-  leerem stderr - dann scheitert jeder Block an der Tonspur.
-- Der Ausgabeordner gehoert diesem Dienst allein: die Aufbewahrung loescht dort
-  Berichte nach Namensmuster und Aufnahmen nach Ordnerform.
-
 ## 6. Datenschutz
 
 - Audio verlaesst den Rechner nicht; ein entfernter STT-Endpunkt bricht den
@@ -98,3 +90,12 @@ Audit, das darauf baut, faellt still aus.
 - Berichte tragen geschwaerzte Belege plus SHA-256 des Originals, Modus 0600.
   Die DM traegt weder Zitat noch Hash.
 - Rohtranskripte nur mit `STREAM_AUDIT_KEEP_TRANSCRIPT=1`.
+
+## 7. Stolperfallen
+
+- `FFMPEG_BIN` bleibt auf `/usr/bin/ffmpeg` gepinnt. Der systemd-Benutzer-PATH
+  stellt `~/.local/bin` nach vorn, und der statische Build dort segfaultet mit
+  leerem stderr - dann scheitert jeder Block an der Tonspur.
+- Der Ausgabeordner gehoert diesem Dienst allein: die Aufbewahrung loescht dort
+  Berichte nach Namensmuster und Aufnahmen nach Ordnerform.
+
