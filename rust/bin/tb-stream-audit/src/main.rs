@@ -90,24 +90,27 @@ Stream-Audio dorthin zu senden.",
         tracing::warn!("Transkription laeuft entfernt - ausdruecklich erlaubt");
     }
 
+    let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
     let mut aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
         Arc::clone(&warteschlange),
+        Arc::clone(&abbruch),
     ));
     let mut auswertung = tokio::spawn(auswertungs_schleife(
         transkribierer,
         konfiguration,
         Arc::clone(&warteschlange),
+        Arc::clone(&abbruch),
     ));
 
     // Beide Schleifen laufen endlos. Endet eine, ist der Dienst kaputt - er
     // wuerde sonst als leere Huelle weiterlaufen und nie wieder etwas
     // auswerten. Der Ausstiegscode muss ungleich 0 sein, sonst greift
     // Restart=on-failure in der Unit nicht.
-    let abbruch = tokio::select! {
+    let sauberer_abschied = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Abbruch angefordert");
             true
@@ -126,8 +129,8 @@ Stream-Audio dorthin zu senden.",
         }
     };
 
-    arbeiter_abraeumen(aufnahme, auswertung).await;
-    if !abbruch {
+    arbeiter_abraeumen(aufnahme, auswertung, &abbruch).await;
+    if !sauberer_abschied {
         std::process::exit(1);
     }
 }
@@ -140,12 +143,21 @@ Stream-Audio dorthin zu senden.",
 async fn arbeiter_abraeumen(
     aufnahme: tokio::task::JoinHandle<()>,
     auswertung: tokio::task::JoinHandle<()>,
+    abbruch: &Arc<std::sync::atomic::AtomicBool>,
 ) {
-    aufnahme.abort();
-    auswertung.abort();
-    let frist = Duration::from_secs(5);
-    let _ = tokio::time::timeout(frist, aufnahme).await;
-    let _ = tokio::time::timeout(frist, auswertung).await;
+    // Erst bitten, dann zwingen: die Schleifen sehen die Marke an ihren
+    // Wartestellen und beenden sich selbst, sodass eine laufende Aufnahme ihre
+    // Zwischendateien noch wegraeumen kann.
+    abbruch.store(true, std::sync::atomic::Ordering::Relaxed);
+    let frist = Duration::from_secs(10);
+    let aufnahme_fertig = tokio::time::timeout(frist, aufnahme).await;
+    if aufnahme_fertig.is_err() {
+        tracing::warn!("Aufnahmeschleife reagiert nicht - Abbruch");
+    }
+    let auswertung_fertig = tokio::time::timeout(frist, auswertung).await;
+    if auswertung_fertig.is_err() {
+        tracing::warn!("Auswertungsschleife reagiert nicht - Abbruch");
+    }
 }
 
 /// Wartet auf SIGTERM.
@@ -402,6 +414,17 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
     })
 }
 
+/// Kennung dieses Prozessstarts.
+///
+/// Sie steckt in den Idempotenzschluesseln der Ausfallmeldungen. Ohne sie
+/// traegt der zweite Ausfall nach einem Neustart denselben Schluessel wie der
+/// erste, und der Broker koennte die neue Meldung als Wiederholung der alten
+/// verwerfen.
+fn start_kennung() -> &'static str {
+    static KENNUNG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KENNUNG.get_or_init(|| chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string())
+}
+
 /// So oft darf ein sendender Kanal keinen Block liefern, bevor gemeldet wird.
 ///
 /// Ein einzelner Fehlschlag ist der Normalfall am Sendungsende. Fuenf am
@@ -411,6 +434,13 @@ const MAX_STILLE_VERSUCHE: u32 = 5;
 
 /// Wie lange ein aufgegebener Block wartet, dessen Meldung nicht rausging.
 const MELDEPAUSE_SEKUNDEN: i64 = 30 * 60;
+
+/// Pause, wenn auch die kurzen Anlaeufe nichts gebracht haben.
+const LANGE_MELDEPAUSE_SEKUNDEN: i64 = 6 * 60 * 60;
+
+/// Endgueltige Grenze der Meldeversuche. Danach bleibt es beim Bericht auf der
+/// Platte, den der naechste Start des Dienstes wieder aufgreift.
+const MAX_MELDEVERSUCHE_LANG: u32 = 12;
 
 /// Hoechststand der Warteschlange, ab dem keine neuen Aufnahmen mehr starten.
 ///
@@ -490,6 +520,7 @@ async fn aufnahme_schleife(
     helix: HelixClient,
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
+    abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<plan::Aufnahme>> =
         Default::default();
@@ -511,6 +542,10 @@ async fn aufnahme_schleife(
     let mut helix_gemeldet = false;
 
     loop {
+        if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("Aufnahmeschleife beendet sich");
+            return;
+        }
         let sendungen = match helix
             .get_streams_by_logins(&konfiguration.kanaele, None)
             .await
@@ -526,7 +561,8 @@ async fn aufnahme_schleife(
                         "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
 Es wird nichts aufgenommen und nichts geprueft."
                     );
-                    match dm_rohtext(&text, &format!("helix-ausfall-{helix_fehler}")).await {
+                    let schluessel = format!("{}-helix-ausfall-{helix_fehler}", start_kennung());
+                    match dm_rohtext(&text, &schluessel).await {
                         Ok(()) => helix_gemeldet = true,
                         Err(dm_fehler) => {
                             tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar")
@@ -577,7 +613,8 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                             // Der Schluessel traegt die Anlaufzahl: derselbe
                             // Schluessel mit anderem Text kann beim Broker als
                             // Widerspruch gelten und die Meldung verschlucken.
-                            let schluessel = format!("{kanal}-keine-aufnahme-{anlaeufe}");
+                            let schluessel =
+                                format!("{}-{kanal}-keine-aufnahme-{anlaeufe}", start_kennung());
                             match dm_rohtext(&text, &schluessel).await {
                                 // Erst nach zugestellter DM merken. Sonst
                                 // verschluckt ein einziger Broker-Aussetzer
@@ -614,6 +651,11 @@ kommt keine Aufnahme zustande. streamlink pruefen."
         // jedem Takt zuruecksetzen, waere die Sechs-Stunden-Grenze wirkungslos:
         // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
         staende.retain(|kanal, _| live.contains(kanal));
+        // Auch Ausfallzaehler und Meldemarke gehoeren zum Kanal. Blieben sie
+        // stehen, bekaeme die naechste Sendung desselben Kanals bei weiterhin
+        // kaputtem streamlink keine einzige Meldung mehr.
+        fehlschlaege.retain(|kanal, _| live.contains(kanal));
+        gemeldet.retain(|kanal| live.contains(kanal));
 
         // Die Transkription ist langsamer als Echtzeit; drei gleichzeitige
         // Kanaele fuellen die Warteschlange schneller, als ein Auswerter sie
@@ -634,7 +676,8 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                match dm_rohtext(&text, &format!("rueckstand-{stau}")).await {
+                let schluessel = format!("{}-rueckstand-{stau}", start_kennung());
+                match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => stau_gemeldet = true,
                     Err(fehler) => tracing::error!(fehler, "Rueckstand nicht meldbar"),
@@ -690,6 +733,7 @@ Dieser Abschnitt wird nicht geprueft."
                 zustand,
                 konfiguration.clone(),
                 Arc::clone(&warteschlange),
+                Arc::clone(&abbruch),
             ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
@@ -710,11 +754,15 @@ async fn kanal_aufnehmen(
     mut zustand: plan::Aufnahme,
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
+    abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
     let kanal = zustand.kanal.clone();
 
     loop {
+        if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
+            return zustand;
+        }
         let Some(laenge) = zustand.naechste_blocklaenge() else {
             return zustand;
         };
@@ -909,7 +957,13 @@ async fn alte_aufnahmen_loeschen(
         if alter <= grenze {
             continue;
         }
-        let ziel = pfad.parent().unwrap_or(&pfad).to_path_buf();
+        // Der Blockordner, nicht das Capture-Verzeichnis darin: sonst bleiben
+        // block.json, ausgewertet.json und die leeren Ebenen fuer immer stehen.
+        let ziel = pfad
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(&pfad)
+            .to_path_buf();
         match tokio::fs::remove_dir_all(&ziel).await {
             Ok(()) => geloescht += 1,
             Err(fehler) => tracing::warn!(?fehler, ordner = ?ziel, "Aufnahme nicht loeschbar"),
@@ -925,9 +979,14 @@ async fn auswertungs_schleife(
     transkribierer: OpenAiTranscriber,
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
+    abbruch: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
     loop {
+        if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("Auswertungsschleife beendet sich");
+            return;
+        }
         // Aufbewahrung war bisher nur eine Zahl in der Konfiguration. Eine
         // Grenze, die nichts loescht, ist keine - Berichte mit moeglichen
         // Vorfaellen lagen unbegrenzt.
@@ -978,16 +1037,32 @@ async fn auswertungs_schleife(
                 let mut naechster = block.clone();
                 naechster.nur_melden = true;
                 naechster.meldeversuche += 1;
-                if naechster.meldeversuche >= plan::MAX_MELDEVERSUCHE {
-                    // Ewiges Kreisen ist keine Loesung: der Block haelt seine
-                    // Aufnahme aus der Aufbewahrung heraus und blockiert
-                    // irgendwann die Aufnahme selbst. Der Bericht liegt auf
-                    // der Platte, das Journal nennt ihn.
+                if naechster.meldeversuche >= MAX_MELDEVERSUCHE_LANG {
+                    // Irgendwann ist Schluss, sonst haelt der Block seine
+                    // Aufnahme dauerhaft aus der Aufbewahrung heraus. Der
+                    // Bericht liegt auf der Platte; der naechste Start des
+                    // Dienstes nimmt die Meldung von dort wieder auf.
                     tracing::error!(
                         block = %bezeichnung,
                         fehler,
-                        "Meldung nach {} Versuchen aufgegeben; Bericht liegt im Ausgabeordner",
-                        plan::MAX_MELDEVERSUCHE
+                        "Meldung nach {} Versuchen aufgegeben; Bericht liegt im Ausgabeordner \
+                    und wird beim naechsten Start erneut gemeldet",
+                        MAX_MELDEVERSUCHE_LANG
+                    );
+                } else if naechster.meldeversuche >= plan::MAX_MELDEVERSUCHE {
+                    // Die kurzen Anlaeufe sind durch. Statt die Meldung
+                    // fallenzulassen, wird sie seltener wiederholt - ein
+                    // Fund, den niemand erfaehrt, ist der schlimmere Fall.
+                    let versuch = naechster.meldeversuche;
+                    warteschlange
+                        .lock()
+                        .await
+                        .spaeter_einreihen(naechster, LANGE_MELDEPAUSE_SEKUNDEN);
+                    tracing::error!(
+                        block = %bezeichnung,
+                        fehler,
+                        versuch,
+                        "Meldung weiter nicht zustellbar - naechster Anlauf in sechs Stunden"
                     );
                 } else {
                     let versuch = naechster.meldeversuche;
@@ -1494,6 +1569,30 @@ async fn atomar_schreiben(pfad: &Path, inhalt: &[u8]) -> Result<(), String> {
 
 /// Nur melden, wenn es etwas zu melden gibt. Eine DM je Block ohne Funde waere
 /// nach dem ersten Abend Rauschen, das niemand mehr liest.
+/// Prueft den Rumpf einer Broker-Antwort.
+///
+/// HTTP 200 heisst beim Broker nicht "zugestellt": er antwortet mit
+/// `{"ok": false, ...}`, wenn Discord die DM abgelehnt hat. Wer nur den
+/// Statuscode ansieht, haelt einen Fehlschlag fuer eine Meldung und loescht
+/// danach die Aufnahme.
+async fn broker_antwort_pruefen(antwort: reqwest::Response) -> Result<(), String> {
+    let roh = antwort
+        .text()
+        .await
+        .map_err(|fehler| format!("Broker-Antwort unlesbar: {fehler}"))?;
+    // Ein leerer Rumpf gilt als Zustimmung: nicht jeder Broker antwortet mit
+    // JSON, und ein stiller 200 ist die aeltere Form.
+    if roh.trim().is_empty() {
+        return Ok(());
+    }
+    let json: serde_json::Value = serde_json::from_str(&roh)
+        .map_err(|fehler| format!("Broker-Antwort kein JSON: {fehler}"))?;
+    match json.get("ok").and_then(serde_json::Value::as_bool) {
+        Some(false) => Err(format!("Broker meldet ok=false: {roh}")),
+        _ => Ok(()),
+    }
+}
+
 /// Schickt eine freie Zeile an den Admin - fuer Meldungen, die kein Bericht
 /// sind, etwa einen endgueltig aufgegebenen Block.
 async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
@@ -1518,7 +1617,7 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
         .send()
         .await
     {
-        Ok(antwort) if antwort.status().is_success() => Ok(()),
+        Ok(antwort) if antwort.status().is_success() => broker_antwort_pruefen(antwort).await,
         Ok(antwort) => Err(format!("DM abgelehnt: HTTP {}", antwort.status().as_u16())),
         Err(fehler) => Err(format!("DM fehlgeschlagen: {fehler}")),
     }
@@ -1557,6 +1656,7 @@ async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
         .await
     {
         Ok(antwort) if antwort.status().is_success() => {
+            broker_antwort_pruefen(antwort).await?;
             tracing::info!("DM zugestellt");
             Ok(())
         }
