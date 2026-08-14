@@ -1,7 +1,8 @@
 //! Privates Coaching-Audit autorisierter Twitch-Kanaele.
 //!
-//! Ersetzt `deadlock-twitch-stream-coaching-watch.service`, das seit dem Abriss
-//! der Python-Laufzeit am 21.07.2026 auf ein geloeschtes Startskript zeigte.
+//! Fuellt `deadlock-twitch-stream-coaching-watch.service` wieder mit Leben: die
+//! Unit gab es weiter, ihr Startskript verschwand aber beim Abriss der
+//! Python-Laufzeit am 21.07.2026, und der Dienst scheiterte seitdem.
 //!
 //! # Warum live und nicht VOD
 //!
@@ -37,8 +38,11 @@ use tb_stream_audit::{
 use tb_transport_twitch::client::{HelixClient, HelixConfig};
 use tokio::sync::Mutex;
 
-/// Ein Segment je so vielen Sekunden Transkript. Whisper liefert einen Block am
-/// Stueck; fuer Zeitbezug im Bericht wird gleichmaessig aufgeteilt.
+/// Ein Segment je so vielen Sekunden Transkript.
+///
+/// Whisper liefert normalerweise eigene Zeitstempel; die werden zu Segmenten
+/// dieser Laenge gebuendelt. Nur wenn sie fehlen, teilt der Rueckfallweg den
+/// Text anteilig auf.
 const SEGMENT_SEKUNDEN: f64 = 30.0;
 
 #[tokio::main]
@@ -284,7 +288,7 @@ fn arbeiter_ende_melden(name: &str, ergebnis: Result<(), tokio::task::JoinError>
 /// Neustart ein stiller Verlust: die Aufnahmen lägen weiter auf der Platte,
 /// wuerden aber nie ausgewertet und nie geloescht.
 ///
-/// Kanal, Lauf und Zeitversatz stehen im Zettel neben der Aufnahme. Fehlt er,
+/// Kanal, Lauf, Nummer und Zeitversatz stehen im Zettel neben der Aufnahme. Fehlt er,
 /// laeuft die Datei als eigener Lauf "wiederaufnahme" mit fortlaufender
 /// Nummer - dann ist die Zuordnung verloren.
 async fn liegengebliebenes_einreihen(
@@ -414,7 +418,7 @@ const FERTIG: &str = "ausgewertet.json";
 /// Das Capture-Verzeichnis darunter heisst nach einem Zufallswert; aus dem
 /// Pfad allein ist nach einem Neustart nicht zu erkennen, von wem die Aufnahme
 /// stammt und an welcher Stelle der Sendung sie sass. Ein Stopp durch systemd
-/// trifft mitten in die zehn Minuten - wer den Zettel erst danach schreibt,
+/// trifft mitten in den Block - wer den Zettel erst danach schreibt,
 /// laesst genau die angebrochene Aufnahme ohne Zuordnung zurueck.
 async fn zettel_schreiben(
     blockordner: &Path,
@@ -1070,7 +1074,10 @@ async fn kanal_aufnehmen(
         let blockordner = aufnahme_wurzel(&konfiguration)
             .join(&kanal)
             .join(&zustand.lauf)
-            .join(format!("t{versatz:06}"));
+            // Zeit und Nummer, wie in der Blockbezeichnung: der Versatz allein
+            // zaehlt in ganzen Sekunden, und zwei schnell hintereinander
+            // abgebrochene Aufnahmen laegen sonst im selben Ordner.
+            .join(format!("t{versatz:06}-b{:04}", zustand.bloecke + 1));
         if let Err(fehler) = tokio::fs::create_dir_all(&blockordner).await {
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
             return zustand;
@@ -1266,8 +1273,12 @@ fn blockordner_von(wurzel: &Path, aufnahme: &Path) -> Option<PathBuf> {
         return None;
     }
     let name = block.file_name()?.to_str()?;
-    let ziffern = name.strip_prefix('t')?;
-    if ziffern.is_empty() || !ziffern.chars().all(|c| c.is_ascii_digit()) {
+    let (zeit, nummer) = name.strip_prefix('t')?.split_once("-b")?;
+    if zeit.is_empty()
+        || nummer.is_empty()
+        || !zeit.chars().all(|c| c.is_ascii_digit())
+        || !nummer.chars().all(|c| c.is_ascii_digit())
+    {
         return None;
     }
     Some(block.to_path_buf())
@@ -1294,12 +1305,18 @@ fn ist_berichtsname(stamm: &str, kanal: Option<&str>) -> bool {
     let Some(rest) = stamm.strip_prefix(kanal).and_then(|r| r.strip_prefix('-')) else {
         return false;
     };
-    match rest.rsplit_once("-t") {
-        Some((lauf, ziffern)) => {
-            !lauf.is_empty() && !ziffern.is_empty() && ziffern.chars().all(|c| c.is_ascii_digit())
-        }
-        None => false,
-    }
+    // <lauf>-t<sekunden>-b<nummer>
+    let Some((lauf_und_zeit, nummer)) = rest.rsplit_once("-b") else {
+        return false;
+    };
+    let Some((lauf, zeit)) = lauf_und_zeit.rsplit_once("-t") else {
+        return false;
+    };
+    !lauf.is_empty()
+        && !zeit.is_empty()
+        && !nummer.is_empty()
+        && zeit.chars().all(|c| c.is_ascii_digit())
+        && nummer.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Loescht liegengebliebene Aufnahmen, die aelter als die Aufbewahrung sind.
@@ -2364,7 +2381,7 @@ mod tests {
         tokio::fs::create_dir_all(&kanalordner)
             .await
             .expect("Ordner");
-        let alt = kanalordner.join("testkanal-4711-t000000.json");
+        let alt = kanalordner.join("testkanal-4711-t000000-b0001.json");
         tokio::fs::write(&alt, b"{}").await.expect("schreiben");
         mtime_setzen(
             &alt,
@@ -2580,10 +2597,10 @@ mod tests {
         // Eine verirrte Datei direkt unter der Wurzel darf nicht dazu fuehren,
         // dass zwei Ebenen hoeher der ganze Ausgabeordner faellt.
         let wurzel = PathBuf::from("/daten/audits/aufnahmen");
-        let echt = wurzel.join("ricky/4711/t000600/capture-abc/audio.ts");
+        let echt = wurzel.join("ricky/4711/t000600-b0003/capture-abc/audio.ts");
         assert_eq!(
             blockordner_von(&wurzel, &echt),
-            Some(wurzel.join("ricky/4711/t000600"))
+            Some(wurzel.join("ricky/4711/t000600-b0003"))
         );
         assert_eq!(blockordner_von(&wurzel, &wurzel.join("verirrt.ts")), None);
         assert_eq!(
@@ -2603,17 +2620,24 @@ mod tests {
     #[test]
     fn nur_eigene_berichte_werden_aufgeraeumt() {
         let kanal = Some("helmbombenricky");
-        assert!(ist_berichtsname("helmbombenricky-4711-t003600", kanal));
+        assert!(ist_berichtsname(
+            "helmbombenricky-4711-t003600-b0007",
+            kanal
+        ));
         assert!(!ist_berichtsname("steuererklaerung", kanal));
         assert!(
-            !ist_berichtsname("-t000000", kanal),
+            !ist_berichtsname("-t000000-b0001", kanal),
             "ohne Kanal kein Bericht"
         );
-        assert!(!ist_berichtsname("helmbombenricky-tabc", kanal));
+        assert!(!ist_berichtsname("helmbombenricky-tabc-b0001", kanal));
+        assert!(
+            !ist_berichtsname("helmbombenricky-4711-t003600", kanal),
+            "ohne Blocknummer kein eigener Bericht"
+        );
         // Eine fremde Datei im geteilten Ausgabeordner bleibt liegen, auch
         // wenn ihr Name zufaellig auf -t<Ziffern> endet.
-        assert!(!ist_berichtsname("rechnung-t2025", kanal));
-        assert!(!ist_berichtsname("rechnung-t2025", None));
+        assert!(!ist_berichtsname("rechnung-t2025-b0001", kanal));
+        assert!(!ist_berichtsname("rechnung-t2025-b0001", None));
         // Nur die Berichte der Vorgaengerfassung gelten ohne Kanalordner.
         assert!(ist_berichtsname("stream-audit-20260601T120000Z", None));
     }
