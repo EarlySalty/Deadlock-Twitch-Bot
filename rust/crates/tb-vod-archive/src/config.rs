@@ -1,33 +1,33 @@
 //! Laufzeit-Konfiguration des VOD-Archivs.
 //!
 //! Alles, was den Ort der Werkzeuge, die Grenzen eines Laufs und die Kadenz
-//! betrifft, kommt aus der Umgebung. Ob das Archiv ueberhaupt laeuft und wie
-//! sichtbar die Uploads sind, steht dagegen in `social_media_settings` und
-//! damit im Dashboard: das sind Entscheidungen des Betreibers, keine
-//! Betriebsparameter.
+//! betrifft, kommt aus der Umgebung. Welche Kanaele ueberhaupt archiviert
+//! werden und wie sichtbar die Uploads sind, steht dagegen je Streamer in
+//! `social_media_vod_archive` und damit im Dashboard: das sind Entscheidungen
+//! der Streamer, keine Betriebsparameter. Einen Kanal aus der Umgebung gibt es
+//! deshalb nicht mehr.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// YouTube nimmt maximal 12 Stunden. Mit Puffer wird frueher geschnitten,
 /// damit eine ungenaue Laengenmessung nicht kurz vor Schluss den Upload kippt.
 pub const MAX_PART_SECONDS: i64 = 11 * 3600 + 30 * 60;
 
-/// Eigener Kanal. Der VOD-Export fremder Kanaele haengt an anderer Stelle
-/// (`tb-highlight::vod_export`) und geht bewusst nicht hier durch.
-pub const DEFAULT_CHANNEL: &str = "earlysalty";
-
 #[derive(Debug, Clone)]
 pub struct VodArchiveConfig {
-    pub channel: String,
-    /// Wurzel fuer die heruntergeladenen Dateien.
+    /// Wurzel fuer die heruntergeladenen Dateien; je Streamer entsteht darin
+    /// ein eigenes Unterverzeichnis.
     pub download_dir: PathBuf,
     /// Downloads kosten kein API-Kontingent, nur Zeit und Platte, deshalb ein
-    /// eigenes, hoeheres Limit als beim Upload.
+    /// eigenes, hoeheres Limit als beim Upload. Gilt fuer den ganzen Lauf,
+    /// nicht je Streamer: Zeit und Platte teilen sich alle.
     pub max_downloads_per_run: usize,
     /// Ein Upload kostet 1600 der 10000 Einheiten Tageskontingent. Zwei Laeufe
     /// mit je zwei Uploads bleiben mit 6400 sicher unter der Grenze und lassen
-    /// Luft fuer die uebrige Social-Media-Pipeline.
+    /// Luft fuer die uebrige Social-Media-Pipeline. Das Kontingent haengt am
+    /// Google-Projekt, nicht am Nutzertoken, deshalb gilt auch diese Grenze
+    /// ueber alle Streamer zusammen.
     pub max_uploads_per_run: usize,
     /// Untergrenze freier Plattenplatz in Gigabyte.
     pub min_free_gb: u64,
@@ -52,7 +52,6 @@ pub struct VodArchiveConfig {
 impl Default for VodArchiveConfig {
     fn default() -> Self {
         Self {
-            channel: DEFAULT_CHANNEL.to_string(),
             download_dir: PathBuf::from("data/vod-archive"),
             max_downloads_per_run: 6,
             max_uploads_per_run: 2,
@@ -97,7 +96,6 @@ impl VodArchiveConfig {
         };
 
         Self {
-            channel: text("TB_VOD_ARCHIVE_CHANNEL").unwrap_or(default.channel),
             download_dir: text("TB_VOD_ARCHIVE_DIR")
                 .map(PathBuf::from)
                 .unwrap_or(default.download_dir),
@@ -143,6 +141,48 @@ impl VodArchiveConfig {
             title_template: text("TB_VOD_ARCHIVE_TITLE_TEMPLATE").unwrap_or(default.title_template),
         }
     }
+
+    /// Ablage eines Streamers. Je Kanal ein eigenes Unterverzeichnis, damit
+    /// zwei Streamer sich weder Dateien noch das Aufraeumen teilen.
+    pub fn verzeichnis_fuer(&self, streamer_login: &str) -> PathBuf {
+        self.download_dir.join(sicherer_ordnername(streamer_login))
+    }
+}
+
+/// Ein Twitch-Login besteht aus Buchstaben, Ziffern und Unterstrich. Alles
+/// andere kommt nicht aus Twitch, sondern aus einer falsch gefuellten Zeile,
+/// und darf sich nicht als `..` durch das Dateisystem schreiben.
+fn sicherer_ordnername(streamer_login: &str) -> String {
+    let sauber: String = streamer_login
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sauber.is_empty() {
+        "unbekannt".to_string()
+    } else {
+        sauber
+    }
+}
+
+/// Freier Platz zaehlt fuer die gemeinsame Wurzel, nicht je Streamer: es ist
+/// dieselbe Platte.
+pub fn wurzel_oder_elternteil(pfad: &Path) -> PathBuf {
+    if pfad.exists() {
+        pfad.to_path_buf()
+    } else {
+        // Vor dem ersten Lauf gibt es das Verzeichnis noch nicht.
+        pfad.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    }
 }
 
 #[cfg(test)]
@@ -161,7 +201,6 @@ mod tests {
     #[test]
     fn leere_umgebung_liefert_defaults() {
         let cfg = VodArchiveConfig::load(&quelle(&[]));
-        assert_eq!(cfg.channel, DEFAULT_CHANNEL);
         assert_eq!(cfg.max_uploads_per_run, 2);
         assert_eq!(cfg.interval, Duration::from_secs(12 * 3600));
     }
@@ -169,12 +208,10 @@ mod tests {
     #[test]
     fn werte_werden_uebernommen() {
         let cfg = VodArchiveConfig::load(&quelle(&[
-            ("TB_VOD_ARCHIVE_CHANNEL", " nani "),
             ("TB_VOD_ARCHIVE_MAX_UPLOADS", "3"),
             ("TB_VOD_ARCHIVE_INTERVAL_HOURS", "6"),
             ("TB_VOD_ARCHIVE_RATE_LIMIT", "5M"),
         ]));
-        assert_eq!(cfg.channel, "nani");
         assert_eq!(cfg.max_uploads_per_run, 3);
         assert_eq!(cfg.interval, Duration::from_secs(6 * 3600));
         assert_eq!(cfg.rate_limit.as_deref(), Some("5M"));
@@ -191,5 +228,24 @@ mod tests {
         assert_eq!(cfg.max_uploads_per_run, 2);
         assert_eq!(cfg.interval, Duration::from_secs(3600));
         assert!(cfg.rate_limit.is_none());
+    }
+
+    #[test]
+    fn jeder_streamer_bekommt_ein_eigenes_verzeichnis() {
+        let cfg = VodArchiveConfig::load(&quelle(&[("TB_VOD_ARCHIVE_DIR", "/archiv")]));
+        assert_eq!(
+            cfg.verzeichnis_fuer("EarlySalty"),
+            PathBuf::from("/archiv/earlysalty")
+        );
+        // Ein Login kann keine Pfadtrenner enthalten; kommt trotzdem einer an,
+        // darf er nicht aus der Wurzel herausfuehren.
+        assert_eq!(
+            cfg.verzeichnis_fuer("../../etc"),
+            PathBuf::from("/archiv/______etc")
+        );
+        assert_eq!(
+            cfg.verzeichnis_fuer("  "),
+            PathBuf::from("/archiv/unbekannt")
+        );
     }
 }

@@ -83,6 +83,7 @@ pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
 pub mod vocab;
+pub mod vod_archive;
 
 pub use clip::{
     repository::ClipRepository,

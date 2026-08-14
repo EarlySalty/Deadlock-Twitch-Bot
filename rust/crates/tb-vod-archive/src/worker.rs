@@ -5,20 +5,29 @@
 //! eigentliche Verlustschutz; ein fehlender Login verschiebt nur den Upload,
 //! er darf nie den Download verhindern.
 //!
-//! Grenzen je Lauf: Uploads sind knapp, weil ein einzelner 1600 der 10000
-//! Einheiten Tageskontingent kostet. Downloads kosten kein Kontingent und
-//! haben deshalb ein eigenes, hoeheres Limit.
+//! Der Worker kennt keinen festen Kanal, sondern arbeitet alle Streamer ab,
+//! die das Archiv im Dashboard eingeschaltet haben.
+//!
+//! Grenzen je Lauf gelten ueber alle Streamer zusammen, nicht je Streamer
+//! erneut: Uploads sind knapp, weil ein einzelner 1600 der 10000 Einheiten
+//! Tageskontingent kostet, und dieses Kontingent haengt am Google-Projekt, das
+//! sich alle teilen. Downloads kosten kein Kontingent, aber Zeit und Platte,
+//! also ebenfalls eine gemeinsame Ressource. Damit trotzdem kein Kanal das
+//! ganze Kontingent frisst, werden die Warteschlangen reihum verschraenkt und
+//! der Startplatz wandert von Lauf zu Lauf weiter.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
-use tb_social_media::settings::{get_vod_archive_settings, VodArchiveSettings};
 use tb_social_media::upload_worker::youtube_uploader;
 use tb_social_media::uploaders::youtube::{ChunkOutcome, YouTubeUploader};
+use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
 
-use crate::config::VodArchiveConfig;
+use crate::config::{wurzel_oder_elternteil, VodArchiveConfig};
 use crate::error::VodArchiveError;
 use crate::metadata::baue_metadaten;
 use crate::store;
@@ -33,6 +42,8 @@ pub struct VodArchiveWorker {
     config: VodArchiveConfig,
     credentials: CredentialManager,
     runner: Arc<dyn CommandRunner>,
+    /// Zaehlt die Laeufe, damit der Startplatz der Warteschlange wandert.
+    laeufe: AtomicUsize,
 }
 
 /// Was ein Lauf bewegt hat. Nur fuer Log und Tests.
@@ -50,6 +61,7 @@ impl VodArchiveWorker {
             config,
             credentials,
             runner: Arc::new(twitch::TokioCommandRunner),
+            laeufe: AtomicUsize::new(0),
         }
     }
 
@@ -70,13 +82,20 @@ impl VodArchiveWorker {
     /// Ein vollstaendiger Lauf. Faengt alle Fehler ab, weil der Worker sonst
     /// nach dem ersten kaputten VOD fuer immer schweigt.
     pub async fn run_once(&self) {
-        let einstellung = get_vod_archive_settings(&self.pool).await;
-        if !einstellung.enabled {
-            tracing::debug!("VOD-Archiv im Dashboard abgeschaltet");
+        let streamer = match aktive_vod_archive_streamer(&self.pool).await {
+            Ok(liste) => liste,
+            Err(fehler) => {
+                tracing::error!(%fehler, "VOD-Archiv: Einstellungen nicht lesbar");
+                return;
+            }
+        };
+        if streamer.is_empty() {
+            tracing::debug!("VOD-Archiv: kein Kanal eingeschaltet");
             return;
         }
-        match self.lauf(&einstellung).await {
+        match self.lauf(&streamer).await {
             Ok(bilanz) => tracing::info!(
+                kanaele = streamer.len(),
                 geladen = bilanz.geladen,
                 hochgeladen = bilanz.hochgeladen,
                 uebersprungen = bilanz.uebersprungen,
@@ -86,7 +105,7 @@ impl VodArchiveWorker {
         }
     }
 
-    async fn lauf(&self, einstellung: &VodArchiveSettings) -> Result<LaufBilanz, VodArchiveError> {
+    async fn lauf(&self, streamer: &[VodArchiveSettings]) -> Result<LaufBilanz, VodArchiveError> {
         let mut bilanz = LaufBilanz::default();
 
         if !self.platz_reicht() {
@@ -97,25 +116,47 @@ impl VodArchiveWorker {
             return Ok(bilanz);
         }
 
-        self.entdecke().await?;
-
-        // Ohne YouTube-Zugang wird nur geladen. Das ist der wichtigere Teil.
-        let uploader = self.baue_uploader().await;
-        if uploader.is_none() {
-            tracing::info!(
-                "Kein YouTube-Zugang hinterlegt, es wird nur lokal archiviert. \
-                 Der Upload startet, sobald die Verbindung im Dashboard steht."
-            );
+        // Ein Kanal, dessen Liste gerade nicht abrufbar ist, darf die anderen
+        // nicht mitreissen.
+        for einstellung in streamer {
+            if let Err(fehler) = self.entdecke(&einstellung.streamer_login).await {
+                tracing::error!(
+                    kanal = %einstellung.streamer_login,
+                    %fehler,
+                    "VODs nicht abrufbar, Kanal wird uebersprungen"
+                );
+            }
         }
 
-        let offen = store::offene_vods(
-            &self.pool,
-            &self.config.channel,
-            (self.config.max_downloads_per_run + self.config.max_uploads_per_run) as i64 + 10,
-        )
-        .await?;
+        // Ohne YouTube-Zugang wird nur geladen. Das ist der wichtigere Teil.
+        let mut uploader: HashMap<String, Option<YouTubeUploader>> = HashMap::new();
+        for einstellung in streamer {
+            let zugang = self.baue_uploader(&einstellung.streamer_login).await;
+            if zugang.is_none() {
+                tracing::info!(
+                    kanal = %einstellung.streamer_login,
+                    "Kein eigener YouTube-Zugang hinterlegt, es wird nur lokal archiviert. \
+                     Der Upload startet, sobald die Verbindung im Dashboard steht."
+                );
+            }
+            uploader.insert(einstellung.streamer_login.clone(), zugang);
+        }
 
-        for vod in offen {
+        // Reserve auf beide Grenzen, damit nach einem Download im selben Lauf
+        // noch Uploads gefunden werden.
+        let reserve =
+            (self.config.max_downloads_per_run + self.config.max_uploads_per_run) as i64 + 10;
+        let mut warteschlangen = Vec::with_capacity(streamer.len());
+        for einstellung in streamer {
+            let offen =
+                store::offene_vods(&self.pool, &einstellung.streamer_login, reserve).await?;
+            if !offen.is_empty() {
+                warteschlangen.push((einstellung, offen));
+            }
+        }
+
+        let versatz = self.laeufe.fetch_add(1, Ordering::Relaxed);
+        for (einstellung, vod) in verschraenke(warteschlangen, versatz) {
             let braucht_download = vod.braucht_download();
             if braucht_download && bilanz.geladen >= self.config.max_downloads_per_run {
                 bilanz.uebersprungen += 1;
@@ -136,13 +177,22 @@ impl VodArchiveWorker {
                 break;
             }
 
-            match self.bearbeite(&vod, uploader.as_ref(), einstellung).await {
+            let zugang = uploader
+                .get(&einstellung.streamer_login)
+                .and_then(|u| u.as_ref());
+            match self.bearbeite(&vod, zugang, einstellung).await {
                 Ok((geladen, hochgeladen)) => {
                     bilanz.geladen += usize::from(geladen);
                     bilanz.hochgeladen += usize::from(hochgeladen);
                 }
                 Err(fehler) if fehler.ist_kontingent() => {
-                    tracing::warn!(%fehler, "YouTube-Tageskontingent erschoepft, Abbruch bis morgen");
+                    // Das Tageskontingent haengt am Google-Projekt, nicht am
+                    // Nutzertoken: ist es leer, ist es fuer alle Kanaele leer.
+                    tracing::warn!(
+                        kanal = %einstellung.streamer_login,
+                        %fehler,
+                        "YouTube-Tageskontingent erschoepft, Abbruch bis morgen"
+                    );
                     break;
                 }
                 Err(fehler) => {
@@ -151,7 +201,12 @@ impl VodArchiveWorker {
                     } else {
                         store::STATUS_UPLOAD_FEHLER
                     };
-                    tracing::error!(vod = %vod.twitch_id, %fehler, "VOD fehlgeschlagen");
+                    tracing::error!(
+                        kanal = %einstellung.streamer_login,
+                        vod = %vod.twitch_id,
+                        %fehler,
+                        "VOD fehlgeschlagen"
+                    );
                     store::setze_fehler(&self.pool, vod.id, status, &fehler.to_string()).await?;
                 }
             }
@@ -161,29 +216,29 @@ impl VodArchiveWorker {
         Ok(bilanz)
     }
 
-    /// Traegt neue VODs ein. Ein laufender Stream wird ausgelassen, sein VOD
-    /// waere sonst nur zur Haelfte im Archiv.
-    async fn entdecke(&self) -> Result<(), VodArchiveError> {
-        let mut vods = twitch::liste_vods(self.runner.as_ref(), &self.config).await?;
+    /// Traegt neue VODs eines Kanals ein. Ein laufender Stream wird
+    /// ausgelassen, sein VOD waere sonst nur zur Haelfte im Archiv.
+    async fn entdecke(&self, kanal: &str) -> Result<(), VodArchiveError> {
+        let mut vods = twitch::liste_vods(self.runner.as_ref(), &self.config, kanal).await?;
         if vods.is_empty() {
-            tracing::info!(kanal = %self.config.channel, "Keine VODs gefunden");
+            tracing::info!(kanal = %kanal, "Keine VODs gefunden");
             return Ok(());
         }
-        if twitch::ist_live(self.runner.as_ref(), &self.config).await {
-            tracing::info!("Kanal ist live, das neueste VOD wartet auf das Streamende");
+        if twitch::ist_live(self.runner.as_ref(), &self.config, kanal).await {
+            tracing::info!(kanal = %kanal, "Kanal ist live, das neueste VOD wartet auf das Streamende");
             vods.remove(0);
         }
         for vod in &vods {
             if store::merke_vod(
                 &self.pool,
                 &vod.twitch_id,
-                &self.config.channel,
+                kanal,
                 &vod.title,
                 vod.duration_sec,
             )
             .await?
             {
-                tracing::info!(vod = %vod.twitch_id, titel = %vod.title, "Neues VOD entdeckt");
+                tracing::info!(kanal = %kanal, vod = %vod.twitch_id, titel = %vod.title, "Neues VOD entdeckt");
             }
         }
         Ok(())
@@ -196,14 +251,21 @@ impl VodArchiveWorker {
         uploader: Option<&YouTubeUploader>,
         einstellung: &VodArchiveSettings,
     ) -> Result<(bool, bool), VodArchiveError> {
+        let kanal = einstellung.streamer_login.as_str();
         let mut geladen = false;
         let mut aufgenommen_am = vod.recorded_at;
 
         if vod.braucht_download() {
-            tracing::info!(vod = %vod.twitch_id, titel = %vod.title, "Lade VOD");
+            tracing::info!(kanal = %kanal, vod = %vod.twitch_id, titel = %vod.title, "Lade VOD");
             store::setze_status(&self.pool, vod.id, store::STATUS_LAEDT).await?;
-            let download =
-                twitch::lade_vod(self.runner.as_ref(), &self.config, &vod.twitch_id).await?;
+            let verzeichnis = self.config.verzeichnis_fuer(kanal);
+            let download = twitch::lade_vod(
+                self.runner.as_ref(),
+                &self.config,
+                &verzeichnis,
+                &vod.twitch_id,
+            )
+            .await?;
             let laenge =
                 twitch::miss_laenge(self.runner.as_ref(), &self.config, &download.pfad).await;
             store::setze_geladen(
@@ -224,9 +286,9 @@ impl VodArchiveWorker {
             )
             .await?;
             let dateien: Vec<String> = teile.iter().map(|p| p.display().to_string()).collect();
-            store::setze_teile(&self.pool, vod.id, &dateien).await?;
+            store::setze_teile(&self.pool, vod.id, kanal, &dateien).await?;
             geladen = true;
-            tracing::info!(vod = %vod.twitch_id, teile = dateien.len(), "VOD liegt lokal");
+            tracing::info!(kanal = %kanal, vod = %vod.twitch_id, teile = dateien.len(), "VOD liegt lokal");
         }
 
         let Some(uploader) = uploader else {
@@ -308,6 +370,7 @@ impl VodArchiveWorker {
         };
 
         tracing::info!(
+            kanal = %einstellung.streamer_login,
             vod = %vod.twitch_id,
             teil = teil.part_index + 1,
             von = anzahl,
@@ -362,6 +425,7 @@ impl VodArchiveWorker {
     ) -> Result<String, VodArchiveError> {
         let metadaten = baue_metadaten(
             &self.config,
+            &einstellung.streamer_login,
             &vod.title,
             &vod.twitch_id,
             aufgenommen_am,
@@ -374,10 +438,28 @@ impl VodArchiveWorker {
         Ok(uri)
     }
 
-    /// Baut den YouTube-Uploader aus den hinterlegten Credentials. `None`
-    /// heisst: keine Verbindung, es wird nur lokal archiviert.
-    async fn baue_uploader(&self) -> Option<YouTubeUploader> {
-        let creds = self.credentials.get_credentials("youtube", None).await?;
+    /// Baut den YouTube-Uploader aus den Credentials **dieses** Streamers.
+    /// `None` heisst: keine Verbindung, es wird nur lokal archiviert.
+    ///
+    /// Der globale Rueckfall von [`CredentialManager::get_credentials`] wird
+    /// hier bewusst verworfen: er wuerde das VOD eines Partners auf den
+    /// YouTube-Kanal des Betreibers schieben.
+    async fn baue_uploader(&self, streamer_login: &str) -> Option<YouTubeUploader> {
+        let creds = self
+            .credentials
+            .get_credentials("youtube", Some(streamer_login))
+            .await?;
+        let gehoert_dem_streamer = creds
+            .streamer_login
+            .as_deref()
+            .is_some_and(|login| login.eq_ignore_ascii_case(streamer_login));
+        if !gehoert_dem_streamer {
+            tracing::info!(
+                kanal = %streamer_login,
+                "Nur ein globaler YouTube-Zugang vorhanden, der gilt hier nicht"
+            );
+            return None;
+        }
         if creds.access_token.is_empty() {
             return None;
         }
@@ -389,18 +471,22 @@ impl VodArchiveWorker {
         if self.config.keep_local_days <= 0 {
             return Ok(());
         }
-        for (id, twitch_id) in
-            store::abgelaufen_lokal(&self.pool, self.config.keep_local_days).await?
-        {
-            loesche_dateien(&self.config.download_dir, &twitch_id);
-            store::markiere_archiviert(&self.pool, id).await?;
-            tracing::info!(vod = %twitch_id, "Lokale Dateien geloescht");
+        for faellig in store::abgelaufen_lokal(&self.pool, self.config.keep_local_days).await? {
+            let verzeichnis = self.config.verzeichnis_fuer(&faellig.streamer_login);
+            loesche_dateien(&verzeichnis, &faellig.twitch_id);
+            store::markiere_archiviert(&self.pool, faellig.id).await?;
+            tracing::info!(
+                kanal = %faellig.streamer_login,
+                vod = %faellig.twitch_id,
+                "Lokale Dateien geloescht"
+            );
         }
         Ok(())
     }
 
     /// Reicht der Plattenplatz noch? Ein VOD kann zweistellige Gigabyte gross
-    /// sein, eine volle Platte wuerde den ganzen Bot mitreissen.
+    /// sein, eine volle Platte wuerde den ganzen Bot mitreissen. Gemessen wird
+    /// die gemeinsame Wurzel: es ist fuer alle Streamer dieselbe Platte.
     fn platz_reicht(&self) -> bool {
         match freier_platz_gb(&self.config.download_dir) {
             Some(frei) => frei >= self.config.min_free_gb,
@@ -411,17 +497,43 @@ impl VodArchiveWorker {
     }
 }
 
+/// Verschraenkt die Warteschlangen mehrerer Streamer reihum: erst das aelteste
+/// VOD jedes Kanals, dann das zweitaelteste und so weiter. So verbraucht ein
+/// Kanal mit dreissig offenen VODs nicht das ganze Tageskontingent, waehrend
+/// ein anderer wartet. `versatz` verschiebt den Startplatz, damit ueber die
+/// Laeufe hinweg nicht immer derselbe Kanal zuerst drankommt.
+fn verschraenke<T>(
+    mut warteschlangen: Vec<(T, Vec<store::Vod>)>,
+    versatz: usize,
+) -> Vec<(T, store::Vod)>
+where
+    T: Clone,
+{
+    if warteschlangen.is_empty() {
+        return Vec::new();
+    }
+    let start = versatz % warteschlangen.len();
+    warteschlangen.rotate_left(start);
+    let tiefe = warteschlangen
+        .iter()
+        .map(|(_, vods)| vods.len())
+        .max()
+        .unwrap_or(0);
+    let mut reihe = Vec::new();
+    for index in 0..tiefe {
+        for (schluessel, vods) in &warteschlangen {
+            if let Some(vod) = vods.get(index) {
+                reihe.push((schluessel.clone(), vod.clone()));
+            }
+        }
+    }
+    reihe
+}
+
 /// Freier Platz in Gigabyte. Nutzt `statvfs` ueber das `df`-Werkzeug, weil der
 /// Workspace keine libc-Bindung mitbringt.
 fn freier_platz_gb(pfad: &Path) -> Option<u64> {
-    let ziel = if pfad.exists() {
-        pfad.to_path_buf()
-    } else {
-        // Vor dem ersten Lauf gibt es das Verzeichnis noch nicht.
-        pfad.parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf()
-    };
+    let ziel = wurzel_oder_elternteil(pfad);
     let ausgabe = std::process::Command::new("df")
         .args(["-BG", "--output=avail"])
         .arg(&ziel)
@@ -464,5 +576,70 @@ mod tests {
         assert_eq!(parse_df("Avail\n0G\n"), Some(0));
         assert_eq!(parse_df("Avail\n"), None);
         assert_eq!(parse_df(""), None);
+    }
+
+    fn vod(twitch_id: &str) -> store::Vod {
+        store::Vod {
+            id: 0,
+            twitch_id: twitch_id.to_string(),
+            title: String::new(),
+            duration_sec: 0,
+            recorded_at: None,
+            status: store::STATUS_NEU.to_string(),
+            local_path: None,
+        }
+    }
+
+    #[test]
+    fn kein_kanal_frisst_das_ganze_kontingent() {
+        let warteschlangen = vec![
+            ("a", vec![vod("a1"), vod("a2"), vod("a3")]),
+            ("b", vec![vod("b1")]),
+            ("c", vec![vod("c1"), vod("c2")]),
+        ];
+        let reihe = verschraenke(warteschlangen, 0);
+        let namen: Vec<&str> = reihe
+            .iter()
+            .map(|(k, v)| {
+                assert!(v.twitch_id.starts_with(k));
+                *k
+            })
+            .collect();
+        // Runde eins nimmt von jedem Kanal eines, erst danach kommt die zweite
+        // Runde. Wer zuerst leer ist, faellt einfach raus.
+        assert_eq!(namen, vec!["a", "b", "c", "a", "c", "a"]);
+    }
+
+    #[test]
+    fn der_startplatz_wandert_von_lauf_zu_lauf() {
+        let bauen = || {
+            vec![
+                ("a", vec![vod("a1")]),
+                ("b", vec![vod("b1")]),
+                ("c", vec![vod("c1")]),
+            ]
+        };
+        let erster: Vec<&str> = verschraenke(bauen(), 0)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let zweiter: Vec<&str> = verschraenke(bauen(), 1)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let vierter: Vec<&str> = verschraenke(bauen(), 3)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(erster, vec!["a", "b", "c"]);
+        assert_eq!(zweiter, vec!["b", "c", "a"]);
+        // Nach einer vollen Runde ist wieder der erste dran.
+        assert_eq!(vierter, erster);
+    }
+
+    #[test]
+    fn leere_warteschlange_bleibt_leer() {
+        let leer: Vec<(&str, Vec<store::Vod>)> = Vec::new();
+        assert!(verschraenke(leer, 7).is_empty());
     }
 }

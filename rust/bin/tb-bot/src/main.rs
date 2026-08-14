@@ -34,12 +34,13 @@
 //!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
 //!                                   Review-Ausgang (B19). Fehlt sie, bleibt der
 //!                                   Forward-Loop aus (default aus, opt-in)
-//!   TB_VOD_ARCHIVE_DIR            — Ablage der geladenen VODs
-//!                                   (default data/vod-archive)
-//!   TB_VOD_ARCHIVE_CHANNEL        — Twitch-Kanal (default earlysalty)
-//!   TB_VOD_ARCHIVE_MAX_DOWNLOADS  — Downloads je Lauf (default 6)
-//!   TB_VOD_ARCHIVE_MAX_UPLOADS    — Uploads je Lauf (default 2; ein Upload
-//!                                   kostet 1600 der 10000 Einheiten Tagesquota)
+//!   TB_VOD_ARCHIVE_DIR            — Wurzel der geladenen VODs, je Streamer
+//!                                   ein Unterordner (default data/vod-archive)
+//!   TB_VOD_ARCHIVE_MAX_DOWNLOADS  — Downloads je Lauf über alle Streamer
+//!                                   zusammen (default 6)
+//!   TB_VOD_ARCHIVE_MAX_UPLOADS    — Uploads je Lauf über alle Streamer
+//!                                   zusammen (default 2; ein Upload kostet
+//!                                   1600 der 10000 Einheiten Tagesquota)
 //!   TB_VOD_ARCHIVE_MIN_FREE_GB    — Plattenplatz-Untergrenze (default 80)
 //!   TB_VOD_ARCHIVE_KEEP_LOCAL_DAYS — lokale Dateien nach N Tagen löschen
 //!                                   (default 0 = nie)
@@ -47,8 +48,9 @@
 //!   TB_VOD_ARCHIVE_RATE_LIMIT     — yt-dlp-Bandbreitenbremse (z. B. "5M")
 //!   TB_VOD_ARCHIVE_DOWNLOAD_TIMEOUT_SECS — Zeitgrenze je Download (default 21600)
 //!   TB_VOD_ARCHIVE_FFMPEG / _FFPROBE / _CATEGORY_ID / _TITLE_TEMPLATE /
-//!   _PLAYLIST_ID                  — optional; An/Aus und Sichtbarkeit stehen
-//!                                   dagegen im Dashboard, nicht hier
+//!   _PLAYLIST_ID                  — optional; welche Kanäle archiviert werden
+//!                                   und wie sichtbar, steht dagegen je
+//!                                   Streamer im Dashboard, nicht hier
 
 mod auto_raid;
 mod chat_wiring;
@@ -1631,11 +1633,12 @@ async fn main() {
                     async move { insights.run().await },
                 );
 
-                // VOD-Archiv: eigene Twitch-Aufzeichnungen sichern und auf
-                // YouTube spiegeln. Haengt am selben YouTube-Zugang wie der
-                // Upload-Worker, laeuft aber nur zweimal taeglich und ist bis
-                // zum Einschalten im Dashboard still. Ohne YouTube-Verbindung
-                // laedt er trotzdem lokal — das Archiv ist der Verlustschutz.
+                // VOD-Archiv: Twitch-Aufzeichnungen sichern und auf YouTube
+                // spiegeln, je Streamer einzeln im Dashboard schaltbar. Der
+                // Upload nutzt den YouTube-Zugang des jeweiligen Streamers,
+                // laeuft nur zweimal taeglich und bleibt still, solange kein
+                // Kanal eingeschaltet ist. Ohne YouTube-Verbindung laedt er
+                // trotzdem lokal — das Archiv ist der Verlustschutz.
                 let vod_creds =
                     tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
                 let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();

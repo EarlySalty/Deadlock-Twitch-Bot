@@ -109,12 +109,12 @@ pub fn vod_url(twitch_id: &str) -> String {
 
 /// Laeuft gerade ein Stream? Dann ist das neueste VOD noch nicht vollstaendig
 /// und wird ausgelassen, sonst landet ein halber Stream im Archiv.
-pub async fn ist_live(runner: &dyn CommandRunner, cfg: &VodArchiveConfig) -> bool {
+pub async fn ist_live(runner: &dyn CommandRunner, cfg: &VodArchiveConfig, kanal: &str) -> bool {
     let args = vec![
         "--no-warnings".to_string(),
         "--simulate".to_string(),
         "--quiet".to_string(),
-        format!("https://www.twitch.tv/{}", cfg.channel),
+        format!("https://www.twitch.tv/{kanal}"),
     ];
     runner
         .run(&cfg.yt_dlp, &args, Duration::from_secs(120))
@@ -151,15 +151,13 @@ pub fn parse_vod_liste(json: &str) -> Result<Vec<VodEintrag>, VodArchiveError> {
 pub async fn liste_vods(
     runner: &dyn CommandRunner,
     cfg: &VodArchiveConfig,
+    kanal: &str,
 ) -> Result<Vec<VodEintrag>, VodArchiveError> {
     let args = vec![
         "--no-warnings".to_string(),
         "--flat-playlist".to_string(),
         "-J".to_string(),
-        format!(
-            "https://www.twitch.tv/{}/videos?filter=archives",
-            cfg.channel
-        ),
+        format!("https://www.twitch.tv/{kanal}/videos?filter=archives"),
     ];
     let output = runner
         .run(&cfg.yt_dlp, &args, Duration::from_secs(300))
@@ -213,13 +211,15 @@ pub fn download_args(cfg: &VodArchiveConfig, ziel: &Path, twitch_id: &str) -> Ve
     args
 }
 
+/// Laedt ein VOD in das Verzeichnis des Streamers.
 pub async fn lade_vod(
     runner: &dyn CommandRunner,
     cfg: &VodArchiveConfig,
+    verzeichnis: &Path,
     twitch_id: &str,
 ) -> Result<Download, VodArchiveError> {
-    tokio::fs::create_dir_all(&cfg.download_dir).await?;
-    let args = download_args(cfg, &cfg.download_dir, twitch_id);
+    tokio::fs::create_dir_all(verzeichnis).await?;
+    let args = download_args(cfg, verzeichnis, twitch_id);
     let output = runner.run(&cfg.yt_dlp, &args, cfg.download_timeout).await?;
     if !output.success {
         return Err(VodArchiveError::Werkzeug {
@@ -228,8 +228,8 @@ pub async fn lade_vod(
         });
     }
     Ok(Download {
-        pfad: finde_mediendatei(&cfg.download_dir, twitch_id)?,
-        aufgenommen_am: lies_aufnahmedatum(&cfg.download_dir, twitch_id),
+        pfad: finde_mediendatei(verzeichnis, twitch_id)?,
+        aufgenommen_am: lies_aufnahmedatum(verzeichnis, twitch_id),
     })
 }
 
@@ -528,7 +528,7 @@ mod tests {
     fn liste_meldet_fehlerausgabe_gekuerzt() {
         let cfg = VodArchiveConfig::default();
         let runner = TestRunner::neu(false, "", &"x".repeat(2000));
-        let fehler = tokio_test_block(liste_vods(&runner, &cfg)).unwrap_err();
+        let fehler = tokio_test_block(liste_vods(&runner, &cfg, "earlysalty")).unwrap_err();
         let text = fehler.to_string();
         assert!(text.contains("VOD-Liste"));
         assert!(text.len() < 700);
@@ -553,7 +553,7 @@ mod tests {
                 })
             }
         }
-        assert!(tokio_test_block(ist_live(&Kaputt, &cfg)));
+        assert!(tokio_test_block(ist_live(&Kaputt, &cfg, "earlysalty")));
     }
 
     /// Kleiner Runtime-Helfer, damit die Tests ohne tokio-Attribut auskommen.

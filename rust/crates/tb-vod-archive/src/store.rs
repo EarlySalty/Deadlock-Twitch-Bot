@@ -64,16 +64,16 @@ pub struct Teil {
 pub async fn merke_vod(
     pool: &PgPool,
     twitch_id: &str,
-    channel: &str,
+    streamer_login: &str,
     title: &str,
     duration_sec: i64,
 ) -> Result<bool, VodArchiveError> {
     let eingefuegt = sqlx::query(
-        "INSERT INTO twitch_vod_archive_vods (twitch_id, channel_login, title, duration_sec) \
+        "INSERT INTO twitch_vod_archive_vods (twitch_id, streamer_login, title, duration_sec) \
          VALUES ($1, $2, $3, $4) ON CONFLICT (twitch_id) DO NOTHING",
     )
     .bind(twitch_id)
-    .bind(channel)
+    .bind(streamer_login)
     .bind(title)
     .bind(duration_sec)
     .execute(pool)
@@ -82,19 +82,20 @@ pub async fn merke_vod(
     Ok(eingefuegt > 0)
 }
 
-/// Offene VODs, aeltestes zuerst. Fertige und aufgeraeumte bleiben draussen.
+/// Offene VODs eines Streamers, aeltestes zuerst. Fertige und aufgeraeumte
+/// bleiben draussen.
 pub async fn offene_vods(
     pool: &PgPool,
-    channel: &str,
+    streamer_login: &str,
     limit: i64,
 ) -> Result<Vec<Vod>, VodArchiveError> {
     let rows = sqlx::query(
         "SELECT id, twitch_id, title, duration_sec, recorded_at, status, local_path \
          FROM twitch_vod_archive_vods \
-         WHERE channel_login = $1 AND status NOT IN ('uploaded', 'archived') \
+         WHERE LOWER(streamer_login) = LOWER($1) AND status NOT IN ('uploaded', 'archived') \
          ORDER BY discovered_at ASC, id ASC LIMIT $2",
     )
-    .bind(channel)
+    .bind(streamer_login)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -170,9 +171,14 @@ pub async fn setze_geladen(
 
 /// Legt die Teile eines VOD an. Bereits hochgeladene Teile bleiben stehen,
 /// damit ein wiederholter Download keinen fertigen Upload vergisst.
+///
+/// Der Streamer steht auch am Teil: hochgeladen wird je Teil, und ohne die
+/// Spalte braeuchte jede Frage nach dem Upload-Aufkommen eines Kanals einen
+/// Join auf die VOD-Tabelle.
 pub async fn setze_teile(
     pool: &PgPool,
     vod_id: i64,
+    streamer_login: &str,
     dateien: &[String],
 ) -> Result<(), VodArchiveError> {
     for (index, datei) in dateien.iter().enumerate() {
@@ -181,14 +187,17 @@ pub async fn setze_teile(
             .map(|meta| meta.len() as i64)
             .unwrap_or(0);
         sqlx::query(
-            "INSERT INTO twitch_vod_archive_parts (vod_id, part_index, file_path, size_bytes) \
-             VALUES ($1, $2, $3, $4) \
+            "INSERT INTO twitch_vod_archive_parts \
+                 (vod_id, streamer_login, part_index, file_path, size_bytes) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (vod_id, part_index) DO UPDATE \
              SET file_path = EXCLUDED.file_path, size_bytes = EXCLUDED.size_bytes, \
+                 streamer_login = EXCLUDED.streamer_login, \
                  updated_at = CURRENT_TIMESTAMP \
              WHERE twitch_vod_archive_parts.status <> 'done'",
         )
         .bind(vod_id)
+        .bind(streamer_login)
         .bind(index as i32)
         .bind(datei)
         .bind(groesse)
@@ -322,15 +331,24 @@ pub async fn setze_hochgeladen(pool: &PgPool, id: i64) -> Result<(), VodArchiveE
     Ok(())
 }
 
+/// Ein VOD, dessen lokale Dateien wegduerfen. Der Streamer gehoert dazu, weil
+/// jede Ablage in seinem eigenen Verzeichnis liegt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Abgelaufen {
+    pub id: i64,
+    pub twitch_id: String,
+    pub streamer_login: String,
+}
+
 /// VODs, deren lokale Dateien nach der eingestellten Frist wegduerfen. Nur
 /// vollstaendig hochgeladene kommen infrage, sonst waere das Archiv weg,
 /// bevor die Kopie steht.
 pub async fn abgelaufen_lokal(
     pool: &PgPool,
     tage: i64,
-) -> Result<Vec<(i64, String)>, VodArchiveError> {
+) -> Result<Vec<Abgelaufen>, VodArchiveError> {
     let rows = sqlx::query(
-        "SELECT id, twitch_id FROM twitch_vod_archive_vods \
+        "SELECT id, twitch_id, streamer_login FROM twitch_vod_archive_vods \
          WHERE status = 'uploaded' \
            AND uploaded_at IS NOT NULL \
            AND uploaded_at < CURRENT_TIMESTAMP - make_interval(days => $1::int)",
@@ -340,7 +358,11 @@ pub async fn abgelaufen_lokal(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| (row.get("id"), row.get("twitch_id")))
+        .map(|row| Abgelaufen {
+            id: row.get("id"),
+            twitch_id: row.get("twitch_id"),
+            streamer_login: row.get("streamer_login"),
+        })
         .collect())
 }
 
@@ -389,12 +411,13 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_vod_archive_vods (id BIGSERIAL PRIMARY KEY, twitch_id TEXT NOT NULL UNIQUE, \
-             channel_login TEXT NOT NULL, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
+             streamer_login TEXT NOT NULL, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
              recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
              discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
              uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE twitch_vod_archive_parts (id BIGSERIAL PRIMARY KEY, vod_id BIGINT NOT NULL \
-             REFERENCES twitch_vod_archive_vods (id) ON DELETE CASCADE, part_index INTEGER NOT NULL, \
+             REFERENCES twitch_vod_archive_vods (id) ON DELETE CASCADE, streamer_login TEXT, \
+             part_index INTEGER NOT NULL, \
              file_path TEXT NOT NULL, size_bytes BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', \
              upload_session_uri TEXT, upload_offset BIGINT NOT NULL DEFAULT 0, youtube_video_id TEXT, \
              last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
@@ -421,6 +444,14 @@ mod tests {
         assert_eq!(offen.len(), 1);
         assert_eq!(offen[0].title, "Erster");
         assert!(offen[0].braucht_download());
+
+        // Das VOD eines anderen Streamers taucht in seiner Warteschlange nicht
+        // auf. Das ist der ganze Punkt der Umstellung.
+        merke_vod(&pool, "v9", "nani", "Fremd", 100).await.unwrap();
+        assert_eq!(offene_vods(&pool, "earlysalty", 10).await.unwrap().len(), 1);
+        let fremd = offene_vods(&pool, "nani", 10).await.unwrap();
+        assert_eq!(fremd.len(), 1);
+        assert_eq!(fremd[0].twitch_id, "v9");
     }
 
     #[tokio::test]
@@ -444,6 +475,7 @@ mod tests {
         setze_teile(
             &pool,
             vod.id,
+            "earlysalty",
             &[
                 "/archiv/v2.part000.mp4".into(),
                 "/archiv/v2.part001.mp4".into(),
@@ -470,6 +502,7 @@ mod tests {
         setze_teile(
             &pool,
             vod.id,
+            "earlysalty",
             &["/neu/v2.part000.mp4".into(), "/neu/v2.part001.mp4".into()],
         )
         .await
@@ -540,9 +573,12 @@ mod tests {
         // Das noch nicht hochgeladene VOD bleibt unangetastet.
         let faellig = abgelaufen_lokal(&pool, 30).await.unwrap();
         assert_eq!(faellig.len(), 1);
-        assert_eq!(faellig[0].1, "v4");
+        assert_eq!(faellig[0].twitch_id, "v4");
+        // Der Streamer kommt mit, sonst wuesste das Aufraeumen nicht, in
+        // welchem Verzeichnis die Dateien liegen.
+        assert_eq!(faellig[0].streamer_login, "earlysalty");
 
-        markiere_archiviert(&pool, faellig[0].0).await.unwrap();
+        markiere_archiviert(&pool, faellig[0].id).await.unwrap();
         assert!(abgelaufen_lokal(&pool, 30).await.unwrap().is_empty());
     }
 }

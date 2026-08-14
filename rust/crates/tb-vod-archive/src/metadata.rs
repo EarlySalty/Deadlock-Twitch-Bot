@@ -60,6 +60,7 @@ pub fn baue_beschreibung(
 #[allow(clippy::too_many_arguments)]
 pub fn baue_metadaten(
     cfg: &VodArchiveConfig,
+    kanal: &str,
     title: &str,
     twitch_id: &str,
     datum: Option<chrono::NaiveDate>,
@@ -71,15 +72,15 @@ pub fn baue_metadaten(
         "snippet": {
             "title": baue_titel(
                 &cfg.title_template,
-                &cfg.channel,
+                kanal,
                 title,
                 datum,
                 teil_index,
                 teil_anzahl,
             ),
-            "description": baue_beschreibung(&cfg.channel, title, twitch_id, datum),
+            "description": baue_beschreibung(kanal, title, twitch_id, datum),
             "categoryId": cfg.category_id,
-            "tags": ["Twitch", "VOD", cfg.channel.as_str()],
+            "tags": ["Twitch", "VOD", kanal],
         },
         "status": {
             "privacyStatus": privacy,
@@ -140,9 +141,20 @@ mod tests {
     #[test]
     fn sichtbarkeit_landet_im_status() {
         let cfg = VodArchiveConfig::default();
-        let meta = baue_metadaten(&cfg, "Titel", "v1", datum(), 0, 1, "unlisted");
+        let meta = baue_metadaten(&cfg, "earlysalty", "Titel", "v1", datum(), 0, 1, "unlisted");
         assert_eq!(meta["status"]["privacyStatus"], "unlisted");
         assert_eq!(meta["snippet"]["categoryId"], "20");
         assert_eq!(meta["status"]["selfDeclaredMadeForKids"], false);
+    }
+
+    #[test]
+    fn der_kanal_kommt_vom_streamer_nicht_aus_der_konfiguration() {
+        let cfg = VodArchiveConfig::default();
+        let meta = baue_metadaten(&cfg, "nani", "Titel", "v1", datum(), 0, 1, "private");
+        assert!(meta["snippet"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("https://www.twitch.tv/nani"));
+        assert_eq!(meta["snippet"]["tags"][2], "nani");
     }
 }
