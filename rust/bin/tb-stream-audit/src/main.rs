@@ -309,11 +309,22 @@ async fn liegengebliebenes_einreihen(
     let mut gefunden = 0usize;
     let mut ohne_zettel = 0usize;
     let mut nur_meldung = 0usize;
+    let mut zu_alt_zahl = 0usize;
 
     let mut schon_fertig = 0usize;
     for pfad in aufnahmen {
         if bereits_ausgewertet(&pfad).await {
             schon_fertig += 1;
+            continue;
+        }
+        // Was aelter ist als die Aufbewahrung, wird nicht noch ausgewertet:
+        // ein Bericht daraus laege sonst wieder frisch da und verlaengerte die
+        // Frist fuer Material, das laengst weg sein sollte.
+        if zu_alt(&pfad, konfiguration.aufbewahrung_tage).await {
+            if let Some(blockordner) = pfad.parent().and_then(Path::parent) {
+                let _ = tokio::fs::remove_dir_all(blockordner).await;
+            }
+            zu_alt_zahl += 1;
             continue;
         }
         let mut block = match zettel_lesen(&pfad).await {
@@ -344,6 +355,12 @@ async fn liegengebliebenes_einreihen(
             "Aufnahmen ohne Zettel gefunden - Kanal und Zeitversatz sind fuer sie verloren"
         );
     }
+    if zu_alt_zahl > 0 {
+        tracing::info!(
+            zu_alt_zahl,
+            "Aufnahmen ueber der Aufbewahrungsfrist geloescht statt ausgewertet"
+        );
+    }
     if schon_fertig > 0 {
         tracing::info!(
             schon_fertig,
@@ -359,6 +376,23 @@ async fn liegengebliebenes_einreihen(
     if gefunden > 0 {
         tracing::info!(gefunden, "liegengebliebene Aufnahmen wieder eingereiht");
     }
+}
+
+/// Ist diese Datei aelter als die Aufbewahrung? `0` heisst unbegrenzt.
+async fn zu_alt(pfad: &Path, tage: u64) -> bool {
+    if tage == 0 {
+        return false;
+    }
+    let grenze = Duration::from_secs(tage.saturating_mul(24 * 60 * 60));
+    let Ok(daten) = tokio::fs::metadata(pfad).await else {
+        return false;
+    };
+    daten
+        .modified()
+        .ok()
+        .and_then(|m| m.elapsed().ok())
+        .map(|alter| alter > grenze)
+        .unwrap_or(false)
 }
 
 /// Sammelt `.ts`-Dateien unterhalb eines Ordners.
@@ -472,6 +506,39 @@ async fn meldung_erledigt(aufnahme: &Path) {
         return;
     };
     let _ = tokio::fs::remove_file(blockordner.join(MELDUNG_OFFEN)).await;
+}
+
+/// Reiht die noch nicht eingereihten Aufnahmen eines Kanals ein.
+///
+/// Gebraucht, wenn ein laufender Aufnahme-Task abgebrochen wird: seine
+/// angefangene Datei ist gueltig, nur kurz, und soll trotzdem geprueft werden.
+async fn angebrochenes_einreihen(
+    konfiguration: &Konfiguration,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
+    kanal: &str,
+) {
+    let ordner = aufnahme_wurzel(konfiguration).join(kanal);
+    let mut aufnahmen = Vec::new();
+    ts_dateien_sammeln(&ordner, &mut aufnahmen).await;
+    let eingereiht: std::collections::HashSet<String> =
+        warteschlange.lock().await.dateien().into_iter().collect();
+
+    let mut neu = 0usize;
+    for pfad in aufnahmen {
+        if eingereiht.contains(&pfad.to_string_lossy().to_string())
+            || bereits_ausgewertet(&pfad).await
+        {
+            continue;
+        }
+        let Some(block) = zettel_lesen(&pfad).await else {
+            continue;
+        };
+        warteschlange.lock().await.einreihen(block);
+        neu += 1;
+    }
+    if neu > 0 {
+        tracing::info!(kanal, neu, "angefangene Aufnahmen eingereiht");
+    }
 }
 
 /// Sucht Bloecke mit offener Meldung und reiht sie wieder ein.
@@ -1037,6 +1104,11 @@ Dieser Abschnitt wird nicht geprueft."
                     laufend.remove(kanal);
                     laufende_sendung.remove(kanal);
                     staende.remove(kanal);
+                    // Der abgebrochene Block liegt als angefangene Datei da.
+                    // Ohne diesen Schritt wuerde er nie ausgewertet und
+                    // irgendwann von der Aufbewahrung geloescht - eine stille
+                    // Luecke mitten in der Sendung.
+                    angebrochenes_einreihen(&konfiguration, &warteschlange, kanal).await;
                 } else {
                     continue;
                 }
@@ -2268,6 +2340,12 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
     };
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
         let pfad = eintrag.path();
+        // Reste des atomaren Schreibens: unvollstaendig und nicht zustellbar.
+        if pfad.extension().and_then(|e| e.to_str()) == Some("neu") {
+            tracing::warn!(datei = ?pfad, "angefangene Hinweisdatei entfernt");
+            let _ = tokio::fs::remove_file(&pfad).await;
+            continue;
+        }
         if pfad.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
