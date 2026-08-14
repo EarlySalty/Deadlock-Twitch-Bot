@@ -24,6 +24,11 @@ pub enum UploadError {
     Request(String),
     #[error("api error: {0}")]
     Api(String),
+    /// Tageskontingent der Plattform erschoepft. Kein Fehler im Code, sondern
+    /// ein Grund, den Rest auf morgen zu verschieben — deshalb eine eigene
+    /// Variante statt eines Api-Fehlers, den der Aufrufer nur am Text erkennt.
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
     #[error("not implemented: {0}")]
     NotImplemented(String),
     #[error("io: {0}")]

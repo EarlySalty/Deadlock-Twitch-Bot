@@ -12,11 +12,13 @@
 //! Google-Token-URL erneuert und der Call wiederholt — Parität zum
 //! google-api-python-client, der das automatisch tut (uploaders-1).
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 
 use super::{as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot, PlatformUploader, UploadError};
@@ -31,7 +33,21 @@ const DEFAULT_UPLOAD_BASE: &str = "https://www.googleapis.com/upload/youtube/v3"
 const DEFAULT_API_BASE: &str = "https://www.googleapis.com/youtube/v3";
 
 /// Google-OAuth-Token-Endpoint für den inline-Refresh.
-pub(crate) const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+
+/// Groesse eines Upload-Stuecks beim stueckweisen resumable Upload. Google
+/// verlangt, dass jedes Stueck ausser dem letzten ein Vielfaches von 256 KB ist.
+pub const RESUMABLE_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Ausgang eines einzelnen Upload-Stuecks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkOutcome {
+    /// YouTube hat die Datei vollstaendig angenommen; das ist die Video-ID.
+    Fertig(String),
+    /// Stueck angenommen, ab dieser Byte-Position geht es weiter. Der Wert
+    /// gehoert in die Datenbank, damit ein Abbruch nicht bei null beginnt.
+    Weiter(u64),
+}
 
 /// Refresh-Credentials für den inline 401-Selbstheilungs-Pfad. Spiegelt das, was
 /// der google-api-python-client aus `Credentials(...)` hält.
@@ -189,6 +205,181 @@ impl YouTubeUploader {
             return Ok(resp);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Grosse Dateien: stueckweiser resumable Upload
+    //
+    // `upload_video` oben laedt die ganze Datei in den Speicher und schiebt sie
+    // in einem PUT hoch. Fuer Shorts von wenigen Megabyte ist das richtig, fuer
+    // ein mehrstuendiges Twitch-VOD von zweistelligen Gigabyte nicht: der
+    // Speicher reicht nicht, und ein Abbruch nach Stunden faengt sonst wieder
+    // bei null an. Die folgenden drei Bausteine teilen sich Token, inline
+    // 401-Selbstheilung und HTTP-Client mit dem Shorts-Pfad, uebergeben aber
+    // Metadaten und Byte-Position von aussen, damit der Aufrufer den Stand
+    // dauerhaft festhalten kann.
+    // ------------------------------------------------------------------
+
+    /// Startet eine resumable Session fuer eine grosse Datei und liefert die
+    /// Session-URL. Die Metadaten kommen komplett von aussen (Titel,
+    /// Beschreibung, Sichtbarkeit), weil ein VOD andere Regeln hat als ein Short.
+    pub async fn start_resumable_upload(
+        &self,
+        metadata: &Value,
+        size_bytes: u64,
+    ) -> Result<String, UploadError> {
+        if self.token().await.is_empty() {
+            return Err(UploadError::NotAuthenticated);
+        }
+        let mut token = self.token().await;
+        let mut refreshed = false;
+        loop {
+            let resp = self
+                .http
+                .post(format!("{}/videos", self.upload_base))
+                .query(&[("uploadType", "resumable"), ("part", "snippet,status")])
+                .bearer_auth(&token)
+                .header("X-Upload-Content-Type", "video/*")
+                .header("X-Upload-Content-Length", size_bytes.to_string())
+                .json(metadata)
+                .send()
+                .await
+                .map_err(|e| UploadError::Request(e.to_string()))?;
+            if resp.status().as_u16() == 401 && !refreshed && self.refresh.is_some() {
+                token = self.refresh_access_token().await?;
+                refreshed = true;
+                continue;
+            }
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(quota_or_api(status, body, "YouTube resumable init"));
+            }
+            return resp
+                .headers()
+                .get(LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    UploadError::Api("YouTube resumable init: no Location header".to_string())
+                });
+        }
+    }
+
+    /// Fragt bei YouTube nach, wie viele Bytes der Session schon vorliegen.
+    /// `None` heisst: die Session ist verfallen und muss neu begonnen werden.
+    pub async fn resumable_offset(
+        &self,
+        session_url: &str,
+        size_bytes: u64,
+    ) -> Result<Option<u64>, UploadError> {
+        let resp = self
+            .http
+            .put(session_url)
+            .header(CONTENT_TYPE, "video/*")
+            .header("Content-Range", format!("bytes */{size_bytes}"))
+            .body(Vec::new())
+            .send()
+            .await
+            .map_err(|e| UploadError::Request(e.to_string()))?;
+        if resp.status().is_success() {
+            // Die Datei liegt bereits vollstaendig drueben.
+            return Ok(Some(size_bytes));
+        }
+        if resp.status().as_u16() == 308 {
+            // Ohne Range-Header hat YouTube noch kein einziges Byte.
+            return Ok(Some(range_end(resp.headers()).map_or(0, |end| end + 1)));
+        }
+        Ok(None)
+    }
+
+    /// Schiebt genau ein Stueck ab `offset` hoch. Der Aufrufer schreibt den
+    /// zurueckgegebenen Stand weg und ruft erneut auf, bis [`ChunkOutcome::Fertig`].
+    pub async fn upload_chunk(
+        &self,
+        session_url: &str,
+        video_path: &Path,
+        offset: u64,
+    ) -> Result<ChunkOutcome, UploadError> {
+        let size = tokio::fs::metadata(video_path).await?.len();
+        if offset >= size {
+            return Err(UploadError::Validation(format!(
+                "Byte-Position {offset} liegt hinter dem Dateiende {size}"
+            )));
+        }
+        let laenge = RESUMABLE_CHUNK_BYTES.min(size - offset) as usize;
+        let mut datei = tokio::fs::File::open(video_path).await?;
+        datei.seek(std::io::SeekFrom::Start(offset)).await?;
+        let mut puffer = vec![0u8; laenge];
+        // `read` darf kurz liefern; Google erwartet aber exakt die angekuendigte
+        // Stueckgroesse, deshalb bis zum Ende fuellen.
+        datei.read_exact(&mut puffer).await?;
+        let ende = offset + laenge as u64 - 1;
+
+        let mut token = self.token().await;
+        let mut refreshed = false;
+        loop {
+            let resp = self
+                .http
+                .put(session_url)
+                .bearer_auth(&token)
+                .header(CONTENT_TYPE, "video/*")
+                .header("Content-Range", format!("bytes {offset}-{ende}/{size}"))
+                .body(puffer.clone())
+                .send()
+                .await
+                .map_err(|e| UploadError::Request(e.to_string()))?;
+            if resp.status().as_u16() == 401 && !refreshed && self.refresh.is_some() {
+                token = self.refresh_access_token().await?;
+                refreshed = true;
+                continue;
+            }
+            if resp.status().as_u16() == 308 {
+                // YouTube bestaetigt den Stand; er kann hinter unserem Stueck
+                // zurueckliegen, wenn ein Teil verloren ging.
+                let weiter = range_end(resp.headers()).map_or(ende + 1, |end| end + 1);
+                return Ok(ChunkOutcome::Weiter(weiter));
+            }
+            if resp.status().is_success() {
+                let data: Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| UploadError::Request(e.to_string()))?;
+                return data["id"]
+                    .as_str()
+                    .map(|id| ChunkOutcome::Fertig(id.to_string()))
+                    .ok_or_else(|| {
+                        UploadError::Api("YouTube upload: no video id in response".to_string())
+                    });
+            }
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(quota_or_api(status, body, "YouTube upload"));
+        }
+    }
+}
+
+/// Ein 403 mit "quota" im Text ist kein Defekt, sondern das erschoepfte
+/// Tageskontingent. Es bekommt deshalb eine eigene Fehlervariante, damit der
+/// Aufrufer den Rest verschieben statt als Fehler zaehlen kann.
+fn quota_or_api(status: u16, body: String, kontext: &str) -> UploadError {
+    let kurz: String = body.chars().take(400).collect();
+    if status == 403 && body.to_lowercase().contains("quota") {
+        return UploadError::QuotaExceeded(kurz);
+    }
+    UploadError::Api(format!("{kontext} failed ({status}): {kurz}"))
+}
+
+/// Letzte bestaetigte Byte-Position aus dem `Range`-Header (`bytes=0-12345`).
+fn range_end(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("range")?
+        .to_str()
+        .ok()?
+        .rsplit('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 #[async_trait]
@@ -397,6 +588,113 @@ mod tests {
         assert_eq!(stats.provider, "youtube_data_api_v3");
         // engagement = (40+10+0)/500*100 = 10.
         assert_eq!(stats.engagement_rate, Some(10.0));
+    }
+
+    /// Legt eine Testdatei mit `groesse` Bytes an.
+    async fn temp_datei(name: &str, groesse: usize) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        tokio::fs::write(&p, vec![7u8; groesse]).await.unwrap();
+        p
+    }
+
+    // Stueckweiser Upload: das letzte Stueck kommt mit 200 zurueck und traegt
+    // die Video-ID.
+    #[tokio::test]
+    async fn chunk_upload_liefert_video_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/session/vod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "yt-vod" })))
+            .mount(&server)
+            .await;
+        let uploader = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
+        let datei = temp_datei("tb_vod_chunk_fertig.mp4", 1024).await;
+        let outcome = uploader
+            .upload_chunk(&format!("{}/session/vod", server.uri()), &datei, 0)
+            .await
+            .unwrap();
+        assert_eq!(outcome, ChunkOutcome::Fertig("yt-vod".into()));
+    }
+
+    // 308 heisst "angenommen, mach weiter"; der neue Stand kommt aus dem
+    // Range-Header und ist das, was der Aufrufer wegschreibt.
+    #[tokio::test]
+    async fn chunk_upload_meldet_naechste_position() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/session/vod"))
+            .respond_with(ResponseTemplate::new(308).insert_header("Range", "bytes=0-511"))
+            .mount(&server)
+            .await;
+        let uploader = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
+        let datei = temp_datei("tb_vod_chunk_weiter.mp4", 1024).await;
+        let outcome = uploader
+            .upload_chunk(&format!("{}/session/vod", server.uri()), &datei, 0)
+            .await
+            .unwrap();
+        assert_eq!(outcome, ChunkOutcome::Weiter(512));
+    }
+
+    // Erschoepftes Tageskontingent ist eine eigene Variante, kein Api-Fehler.
+    #[tokio::test]
+    async fn kontingent_wird_eigenstaendig_gemeldet() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_string("{\"error\":{\"errors\":[{\"reason\":\"quotaExceeded\"}]}}"),
+            )
+            .mount(&server)
+            .await;
+        let uploader = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
+        let fehler = uploader
+            .start_resumable_upload(&json!({"snippet": {}}), 4096)
+            .await
+            .unwrap_err();
+        assert!(matches!(fehler, UploadError::QuotaExceeded(_)));
+    }
+
+    // Wiederaufnahme: 308 ohne Range heisst null Bytes, mit Range heisst
+    // Fortsetzen, alles andere heisst verfallene Session.
+    #[tokio::test]
+    async fn resume_offset_faelle() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/leer"))
+            .respond_with(ResponseTemplate::new(308))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/teilweise"))
+            .respond_with(ResponseTemplate::new(308).insert_header("Range", "bytes=0-99"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/verfallen"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let uploader = YouTubeUploader::new("tok").with_bases(server.uri(), server.uri());
+        let uri = |p: &str| format!("{}{p}", server.uri());
+        assert_eq!(
+            uploader.resumable_offset(&uri("/leer"), 500).await.unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            uploader
+                .resumable_offset(&uri("/teilweise"), 500)
+                .await
+                .unwrap(),
+            Some(100)
+        );
+        assert_eq!(
+            uploader
+                .resumable_offset(&uri("/verfallen"), 500)
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
