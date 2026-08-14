@@ -502,6 +502,26 @@ async fn offene_meldungen_einreihen(
     }
 }
 
+/// Kopfdaten fuer die Fertig-Marke eines Blocks ohne Bericht.
+fn leerer_bericht(block: &plan::Block) -> Bericht {
+    Bericht {
+        lauf_id: block.bezeichnung(),
+        erstellt_am: chrono::Utc::now().to_rfc3339(),
+        quelle: "kein Text".to_owned(),
+        kanal: block.kanal.clone(),
+        transkription: String::new(),
+        modell: String::new(),
+        transkription_lokal: true,
+        anbieter: String::new(),
+        llm_modell: String::new(),
+        transkript_behalten: false,
+        segmente: 0,
+        modell_geprueft: false,
+        modell_hinweis: "kein Text im Block".to_owned(),
+        funde: Vec::new(),
+    }
+}
+
 /// Traegt die Marke, dass dieser Block ausgewertet ist.
 async fn fertig_markieren(aufnahme: &Path, bericht: &Bericht) {
     let Some(blockordner) = aufnahme.parent().and_then(Path::parent) else {
@@ -574,6 +594,18 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
 /// traegt der zweite Ausfall nach einem Neustart denselben Schluessel wie der
 /// erste, und der Broker koennte die neue Meldung als Wiederholung der alten
 /// verwerfen.
+/// Fortlaufende Nummer je Vorfall.
+///
+/// Der Schluessel einer Meldung darf sich waehrend eines Vorfalls nicht
+/// aendern (sonst kommt dieselbe Meldung doppelt) und nach einem Vorfall nicht
+/// wiederkehren (sonst haelt der Broker die naechste Stoerung fuer eine
+/// Wiederholung). Ein Zaehlerstand taugt fuer beides nicht - diese Nummer
+/// steigt bei jedem neuen Vorfall um eins.
+fn naechste_vorfall_nummer() -> u64 {
+    static NUMMER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NUMMER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 fn start_kennung() -> &'static str {
     static KENNUNG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     KENNUNG.get_or_init(|| chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string())
@@ -702,8 +734,10 @@ async fn aufnahme_schleife(
     let mut gemeldet: std::collections::HashSet<String> = Default::default();
     // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
     let mut stau_gemeldet = false;
-    // Wie oft ein Aufnahme-Task wegen Rueckstands einen Block ausliess.
-    let pausen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Wie viele Wartetakte je Kanal wegen Rueckstands vergingen. Ein Takt sind
+    // 60 Sekunden Sendezeit, die niemand aufgenommen hat.
+    let pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>> =
+        Arc::new(Mutex::new(Default::default()));
     // Blockstand je Kanal beim Start des laufenden Tasks.
     let mut gestartet_mit: std::collections::HashMap<String, u32> = Default::default();
     // Kanaele, deren Task ohne neuen Block endete - egal ob sauber oder mit Panik.
@@ -732,7 +766,11 @@ async fn aufnahme_schleife(
                         "Coaching-Audit: Twitch-Abfrage scheitert seit {helix_fehler} Anlaeufen. \
 Es wird nichts aufgenommen und nichts geprueft."
                     );
-                    let schluessel = format!("{}-helix-ausfall-{helix_fehler}", start_kennung());
+                    let schluessel = format!(
+                        "{}-helix-ausfall-{}",
+                        start_kennung(),
+                        naechste_vorfall_nummer()
+                    );
                     match dm_rohtext(&text, &schluessel).await {
                         Ok(()) => {
                             helix_gemeldet = true;
@@ -825,7 +863,11 @@ Aufnahme zustande. streamlink pruefen."
             // Datei fuer den Wiederholungsversuch heisst dagegen je Kanal
             // gleich, sonst sammelte sich waehrend eines Broker-Ausfalls jede
             // Minute ein neuer Hinweis an und alle kaemen spaeter auf einmal.
-            let schluessel = format!("{}-{kanal}-keine-aufnahme-{anlaeufe}", start_kennung());
+            let schluessel = format!(
+                "{}-{kanal}-keine-aufnahme-{}",
+                start_kennung(),
+                naechste_vorfall_nummer()
+            );
             match dm_rohtext(&text, &schluessel).await {
                 // Erst nach zugestellter DM merken. Sonst verschluckt ein
                 // einziger Broker-Aussetzer die Meldung fuer immer.
@@ -865,15 +907,24 @@ Aufnahme zustande. streamlink pruefen."
         // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
         // laufende Bloecke laufen zu Ende.
         let stau = warteschlange.lock().await.laenge();
-        let ausgelassen = pausen.swap(0, std::sync::atomic::Ordering::Relaxed);
-        if ausgelassen > 0 && !stau_gemeldet {
+        let ausgelassen = std::mem::take(&mut *pausen.lock().await);
+        if !ausgelassen.is_empty() && !stau_gemeldet {
             // Auch wenn die Warteschlange inzwischen wieder kurz ist: diese
-            // Bloecke sind nie aufgenommen worden.
+            // Sendezeit ist nie aufgenommen worden.
+            let aufstellung: Vec<String> = ausgelassen
+                .iter()
+                .map(|(kanal, takte)| format!("{kanal}: rund {takte} Minuten"))
+                .collect();
             let text = format!(
-                "Coaching-Audit: {ausgelassen} Aufnahmebloecke wegen Rueckstand ausgelassen. \
-Diese Sendezeit wird nicht geprueft."
+                "Coaching-Audit: Sendezeit wegen Rueckstand nicht aufgenommen ({}). \
+Sie wird nicht geprueft.",
+                aufstellung.join(", ")
             );
-            let schluessel = format!("{}-ausgelassen-{ausgelassen}", start_kennung());
+            let schluessel = format!(
+                "{}-ausgelassen-{}",
+                start_kennung(),
+                naechste_vorfall_nummer()
+            );
             match dm_rohtext(&text, &schluessel).await {
                 Ok(()) => stau_gemeldet = true,
                 Err(fehler) => {
@@ -895,7 +946,11 @@ Diese Sendezeit wird nicht geprueft."
                     "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
 Dieser Abschnitt wird nicht geprueft."
                 );
-                let schluessel = format!("{}-rueckstand-{stau}", start_kennung());
+                let schluessel = format!(
+                    "{}-rueckstand-{}",
+                    start_kennung(),
+                    naechste_vorfall_nummer()
+                );
                 match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => {
@@ -981,7 +1036,7 @@ async fn kanal_aufnehmen(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
-    pausen: Arc<std::sync::atomic::AtomicUsize>,
+    pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
 ) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
     let kanal = zustand.kanal.clone();
@@ -1003,7 +1058,7 @@ async fn kanal_aufnehmen(
             // Sekunden. Ist die Warteschlange bis dahin wieder unter der
             // Grenze, faellt die uebersprungene Sendezeit sonst unter den
             // Tisch. Deshalb zaehlt jede Pause hier mit.
-            pausen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *pausen.lock().await.entry(kanal.clone()).or_insert(0usize) += 1;
             tracing::warn!(kanal, "Rueckstand zu gross - Aufnahme pausiert");
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
@@ -1361,16 +1416,28 @@ async fn auswertungs_schleife(
                 // eines anderen nicht zuruecksetzen - sonst bliebe genau der
                 // Kanal, dessen Ton nie ankommt, ohne Warnung.
                 let kanal = block.kanal.clone();
+                let mut aufnahme_behalten = false;
                 if segmente == 0 {
                     let zaehler = leer_am_stueck.entry(kanal.clone()).or_insert(0usize);
                     *zaehler += 1;
                     let stumm = *zaehler;
-                    if stumm == MAX_LEER_AM_STUECK {
+                    // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
+                    // weitere stumme Aufnahme liegen: sie ist der einzige Weg,
+                    // die uebersprungene Sendezeit noch nachzuhoeren.
+                    aufnahme_behalten = stumm >= MAX_LEER_AM_STUECK;
+                    // Gemeldet wird bei jedem Vielfachen, nicht nur beim
+                    // ersten Mal - eine Stoerung, die anhaelt, soll sich
+                    // wieder melden.
+                    if stumm.is_multiple_of(MAX_LEER_AM_STUECK) {
                         let text = format!(
                             "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
 einzigen erkannten Satz. STT-Dienst pruefen."
                         );
-                        let schluessel = format!("{}-{kanal}-nur-stille", start_kennung());
+                        let schluessel = format!(
+                            "{}-{kanal}-nur-stille-{}",
+                            start_kennung(),
+                            naechste_vorfall_nummer()
+                        );
                         if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
                             // Nicht wieder loeschen, wenn spaeter etwas
                             // ankommt: die Aufnahmen dieser Strecke sind dann
@@ -1388,6 +1455,14 @@ einzigen erkannten Satz. STT-Dienst pruefen."
                     }
                 } else {
                     leer_am_stueck.remove(&kanal);
+                }
+                if aufnahme_behalten {
+                    fertig_markieren(Path::new(&block.datei), &leerer_bericht(&block)).await;
+                    tracing::warn!(
+                        block = %block.bezeichnung(),
+                        "Aufnahme bleibt liegen - Verdacht auf ausgefallene Transkription"
+                    );
+                    continue;
                 }
                 // Erst nach erfolgreicher Auswertung wegraeumen. Wer bei einem
                 // Fehler loescht, vernichtet bei einem Aussetzer der
@@ -2019,15 +2094,22 @@ async fn hinweis_aufheben(
     // Der echte Idempotenzschluessel steht im Inhalt, nicht im Dateinamen:
     // ein Login mit Unterstrich wuerde beim Saeubern verfaelscht, und der
     // Broker erkennt die Wiederholung dann nicht mehr.
+    //
+    // Liegt schon ein Hinweis derselben Sache, behaelt er seinen Schluessel:
+    // derselbe Vorfall soll bei jedem Anlauf denselben tragen, sonst kommt er
+    // doppelt an, wenn eine frueher gesendete Meldung doch ankam.
+    let pfad = ordner.join(format!("{name}.json"));
+    let schluessel = match tokio::fs::read_to_string(&pfad).await {
+        Ok(roh) => serde_json::from_str::<serde_json::Value>(&roh)
+            .ok()
+            .and_then(|j| j["schluessel"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| schluessel.to_owned()),
+        Err(_) => schluessel.to_owned(),
+    };
     let inhalt = serde_json::json!({ "schluessel": schluessel, "text": text });
     // Atomar: ein Abbruch mitten im Schreiben liesse sonst halbes JSON zurueck,
     // und der Wiederholungslauf ueberspringt genau diesen Hinweis fuer immer.
-    if let Err(fehler) = atomar_schreiben(
-        &ordner.join(format!("{name}.json")),
-        inhalt.to_string().as_bytes(),
-    )
-    .await
-    {
+    if let Err(fehler) = atomar_schreiben(&pfad, inhalt.to_string().as_bytes()).await {
         tracing::error!(fehler, "Hinweis nicht ablegbar");
     }
 }
@@ -2413,6 +2495,84 @@ mod tests {
         assert_eq!(segmente[0].start_sekunden, 600.0);
         assert_eq!(segmente[1].start_sekunden, 1080.0);
         assert_eq!(segmente[1].ende_sekunden, 1095.0);
+    }
+
+    fn test_konfiguration(wurzel: &Path) -> Konfiguration {
+        Konfiguration {
+            kanaele: Vec::new(),
+            ausgabe: wurzel.to_path_buf(),
+            transkript_behalten: false,
+            aufbewahrung_tage: 30,
+        }
+    }
+
+    #[tokio::test]
+    async fn hinweis_behaelt_seinen_schluessel() {
+        // Derselbe Vorfall muss bei jedem Anlauf denselben Schluessel tragen,
+        // sonst kommt die Meldung doppelt an, wenn ein frueherer Versuch doch
+        // zugestellt wurde.
+        let wurzel =
+            std::env::temp_dir().join(format!("stream-audit-hinweis-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+        tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
+        let konfiguration = test_konfiguration(&wurzel);
+
+        hinweis_aufheben(
+            &konfiguration,
+            "helix-ausfall",
+            "schluessel-1",
+            "erster Text",
+        )
+        .await;
+        hinweis_aufheben(
+            &konfiguration,
+            "helix-ausfall",
+            "schluessel-2",
+            "zweiter Text",
+        )
+        .await;
+
+        let datei = hinweis_ordner(&konfiguration).join("helix-ausfall.json");
+        let roh = tokio::fs::read_to_string(&datei).await.expect("Hinweis");
+        let json: serde_json::Value = serde_json::from_str(&roh).expect("JSON");
+        assert_eq!(json["schluessel"], "schluessel-1", "Schluessel bleibt");
+        assert_eq!(json["text"], "zweiter Text", "Text wird aufgefrischt");
+
+        // Erledigt heisst weg - sonst wird eine geloeste Stoerung spaeter
+        // nachgereicht.
+        hinweis_erledigt(&konfiguration, "helix-ausfall").await;
+        assert!(!datei.exists());
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+    }
+
+    #[test]
+    fn vorfallsnummern_wiederholen_sich_nicht() {
+        let erste = naechste_vorfall_nummer();
+        let zweite = naechste_vorfall_nummer();
+        assert!(zweite > erste, "jede Stoerung bekommt eine eigene Nummer");
+    }
+
+    #[tokio::test]
+    async fn stille_reihe_behaelt_die_aufnahme() {
+        // Ab dem Verdacht auf einen ausgefallenen STT-Dienst ist die Aufnahme
+        // der einzige Weg, die uebersprungene Sendezeit noch nachzuhoeren.
+        // Nachgebildet wird hier die Entscheidung, nicht die Schleife.
+        let mut stumm = 0usize;
+        let mut behalten = Vec::new();
+        for _ in 0..(MAX_LEER_AM_STUECK + 2) {
+            stumm += 1;
+            behalten.push(stumm >= MAX_LEER_AM_STUECK);
+        }
+        assert!(!behalten[MAX_LEER_AM_STUECK - 2], "vorher wird geloescht");
+        assert!(
+            behalten[MAX_LEER_AM_STUECK - 1],
+            "ab der Schwelle bleibt sie"
+        );
+        assert!(behalten[MAX_LEER_AM_STUECK + 1], "und danach weiter");
+        assert!(
+            MAX_LEER_AM_STUECK.is_multiple_of(MAX_LEER_AM_STUECK),
+            "gemeldet wird bei jedem Vielfachen"
+        );
     }
 
     #[test]
