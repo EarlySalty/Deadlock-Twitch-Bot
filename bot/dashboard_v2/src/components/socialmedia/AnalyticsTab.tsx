@@ -31,6 +31,7 @@ import type {
   SocialClip,
   SocialMediaReportKind,
 } from '@/types/socialMedia';
+import { useLanguage } from '@/context/LanguageContext';
 
 const BUCKET_ORDER = ['24h', '7d', '30d'] as const;
 
@@ -51,9 +52,9 @@ function toneClass(kind: SocialMediaReportKind): string {
   return 'bg-bg/70 text-white border-border';
 }
 
-function formatDate(value: string | null | undefined): string {
+function formatDate(value: string | null | undefined, locale: string): string {
   if (!value) return '—';
-  return new Date(value).toLocaleString('de-DE', {
+  return new Date(value).toLocaleString(locale, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -80,6 +81,7 @@ function normalizeChartRows(items: ClipAnalytics[]) {
 
 export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
   const queryClient = useQueryClient();
+  const { t, locale } = useLanguage();
   const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
   const eligibleClips = useMemo(
     () => clips.filter((clip) => clip.platform_status.youtube || clip.platform_status.tiktok || clip.platform_status.instagram),
@@ -146,9 +148,9 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
           <div className="relative flex flex-wrap items-center gap-3">
             <div>
               <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] font-bold text-orange/90">
-                <BarChart3 className="w-3.5 h-3.5" /> Phase 3 · Performance
+                <BarChart3 className="w-3.5 h-3.5" /> {t('Phase 3 · Performance')}
               </div>
-              <h3 className="text-xl font-bold text-white mt-1">Analytics je Clip und Plattform</h3>
+              <h3 className="text-xl font-bold text-white mt-1">{t('Analytics je Clip und Plattform')}</h3>
             </div>
             <div className="ml-auto flex items-center gap-2">
               <select
@@ -167,7 +169,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
 
           {!eligibleClips.length ? (
             <div className="rounded-2xl border border-border bg-bg/40 p-8 text-sm text-text-secondary text-center">
-              Noch keine veroeffentlichten Clips mit Plattform-ID vorhanden.
+              {t('Noch keine veroeffentlichten Clips mit Plattform-ID vorhanden.')}
             </div>
           ) : analyticsQuery.isLoading ? (
             <div className="h-[320px] flex items-center justify-center">
@@ -177,7 +179,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               <div className="rounded-2xl border border-border bg-bg/35 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.14em] text-text-secondary mb-3">
-                  Views nach Bucket
+                  {t('Views nach Bucket')}
                 </div>
                 <div className="h-[260px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -199,7 +201,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
 
               <div className="rounded-2xl border border-border bg-bg/35 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.14em] text-text-secondary mb-3">
-                  Engagement-Rate
+                  {t('Engagement-Rate')}
                 </div>
                 <div className="h-[260px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -226,7 +228,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
         <aside className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-teal" />
-            <h3 className="text-lg font-bold text-white">LLM-Reports</h3>
+            <h3 className="text-lg font-bold text-white">{t('LLM-Reports')}</h3>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <button
@@ -235,8 +237,8 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
               disabled={streamerReportMutation.isPending}
               className="rounded-xl border border-orange/30 bg-orange/12 px-4 py-3 text-left hover:bg-orange/18 transition disabled:opacity-50"
             >
-              <div className="text-xs font-bold uppercase tracking-[0.14em] text-orange">Streamer</div>
-              <div className="text-sm text-white mt-1">Wochenreport fuer {streamer}</div>
+              <div className="text-xs font-bold uppercase tracking-[0.14em] text-orange">{t('Streamer')}</div>
+              <div className="text-sm text-white mt-1">{t('Wochenreport fuer {streamer}', { streamer })}</div>
             </button>
             <button
               type="button"
@@ -244,23 +246,23 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
               disabled={crossReportMutation.isPending}
               className="rounded-xl border border-teal/30 bg-teal/12 px-4 py-3 text-left hover:bg-teal/18 transition disabled:opacity-50"
             >
-              <div className="text-xs font-bold uppercase tracking-[0.14em] text-teal">Cross</div>
-              <div className="text-sm text-white mt-1">Monatsreport ueber alle Streamer</div>
+              <div className="text-xs font-bold uppercase tracking-[0.14em] text-teal">{t('Cross')}</div>
+              <div className="text-sm text-white mt-1">{t('Monatsreport ueber alle Streamer')}</div>
             </button>
           </div>
           {(streamerReportMutation.isPending || crossReportMutation.isPending) && (
             <div className="text-xs text-text-secondary inline-flex items-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Report wird generiert…
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> {t('Report wird generiert…')}
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-border bg-bg/40 p-3">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-text-secondary font-bold">Letzter Streamer-Report</div>
-              <div className="text-sm text-white mt-1">{latestStreamerReport ? formatDate(latestStreamerReport.created_at) : '—'}</div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-text-secondary font-bold">{t('Letzter Streamer-Report')}</div>
+              <div className="text-sm text-white mt-1">{latestStreamerReport ? formatDate(latestStreamerReport.created_at, locale) : '—'}</div>
             </div>
             <div className="rounded-xl border border-border bg-bg/40 p-3">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-text-secondary font-bold">Letzter Admin-DM-Stand</div>
-              <div className="text-sm text-white mt-1">{latestAdminReport ? formatDate(latestAdminReport.created_at) : '—'}</div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-text-secondary font-bold">{t('Letzter Admin-DM-Stand')}</div>
+              <div className="text-sm text-white mt-1">{latestAdminReport ? formatDate(latestAdminReport.created_at, locale) : '—'}</div>
             </div>
           </div>
         </aside>
@@ -269,9 +271,9 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
       <section className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
         <div className="flex items-center gap-2">
           <FileText className="w-4 h-4 text-orange" />
-          <h3 className="text-lg font-bold text-white">Gespeicherte Reports</h3>
+          <h3 className="text-lg font-bold text-white">{t('Gespeicherte Reports')}</h3>
           <div className="ml-auto text-xs text-text-secondary inline-flex items-center gap-1.5">
-            <CalendarRange className="w-3.5 h-3.5" /> {reportItems.length} Eintraege
+            <CalendarRange className="w-3.5 h-3.5" /> {t('{count} Eintraege', { count: reportItems.length })}
           </div>
         </div>
 
@@ -281,7 +283,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
           </div>
         ) : reportItems.length === 0 ? (
           <div className="rounded-2xl border border-border bg-bg/35 p-8 text-sm text-text-secondary text-center">
-            Noch keine Reports gespeichert.
+            {t('Noch keine Reports gespeichert.')}
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -289,7 +291,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
               <article key={report.id} className="rounded-2xl border border-border bg-bg/35 p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${toneClass(report.kind)}`}>
-                    {kindLabel(report.kind)}
+                    {t(kindLabel(report.kind))}
                   </span>
                   {report.streamer_login && (
                     <span className="text-[10px] font-mono text-text-secondary bg-bg/60 px-2 py-1 rounded-md border border-border">
@@ -297,11 +299,14 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
                     </span>
                   )}
                   <span className="ml-auto text-[11px] text-text-secondary">
-                    {formatDate(report.created_at)}
+                    {formatDate(report.created_at, locale)}
                   </span>
                 </div>
                 <div className="text-[11px] text-text-secondary">
-                  Zeitraum: {formatDate(report.period_start)} bis {formatDate(report.period_end)}
+                  {t('Zeitraum: {from} bis {to}', {
+                    from: formatDate(report.period_start, locale),
+                    to: formatDate(report.period_end, locale),
+                  })}
                 </div>
                 <div className="rounded-xl border border-border bg-[var(--color-popover)] p-3 max-h-[280px] overflow-auto">
                   <pre className="whitespace-pre-wrap text-[12px] leading-6 text-text-primary font-sans">

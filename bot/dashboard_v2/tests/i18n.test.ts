@@ -6,6 +6,8 @@ import {
   LANGUAGE_STORAGE_KEY,
   dictionaryFor,
   isLanguage,
+  readStoredLanguage,
+  storeLanguage,
   translate,
 } from '../src/i18n/dictionary';
 
@@ -49,6 +51,49 @@ test('Platzhalter stimmen zwischen Deutsch und Englisch ueberein', () => {
     [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   for (const [key, value] of Object.entries(dictionaryFor('en'))) {
     assert.deepEqual(names(value), names(key), `Platzhalter weichen ab: ${key}`);
+  }
+});
+
+// Die Wahl muss einen Neuladen ueberstehen, sonst waere der Umschalter
+// wertlos. Der Speicher wird hier nachgebaut, damit das ohne Browser prueft.
+test('Sprachwahl ueberlebt einen Neuladen und faellt bei Muell auf Deutsch', () => {
+  const store = new Map<string, string>();
+  const original = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    },
+  };
+  try {
+    assert.equal(readStoredLanguage(), 'de');
+    storeLanguage('en');
+    assert.equal(store.get(LANGUAGE_STORAGE_KEY), 'en');
+    assert.equal(readStoredLanguage(), 'en');
+    store.set(LANGUAGE_STORAGE_KEY, 'klingonisch');
+    assert.equal(readStoredLanguage(), 'de');
+  } finally {
+    (globalThis as { window?: unknown }).window = original;
+  }
+});
+
+test('Gesperrter Speicher kippt die Oberflaeche nicht', () => {
+  const original = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem() {
+        throw new Error('SecurityError');
+      },
+      setItem() {
+        throw new Error('SecurityError');
+      },
+    },
+  };
+  try {
+    assert.equal(readStoredLanguage(), 'de');
+    assert.doesNotThrow(() => storeLanguage('en'));
+  } finally {
+    (globalThis as { window?: unknown }).window = original;
   }
 });
 

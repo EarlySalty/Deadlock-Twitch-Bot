@@ -9,13 +9,15 @@ import {
 } from 'react';
 import {
   DEFAULT_LANGUAGE,
-  LANGUAGE_STORAGE_KEY,
   LOCALES,
-  isLanguage,
+  readStoredLanguage,
+  storeLanguage,
   translate,
   type Language,
   type TranslateParams,
-} from '@/i18n/dictionary';
+  // Relativ statt ueber den @-Alias: die Node-Tests laufen ohne Vite und
+  // koennen den Alias nicht aufloesen.
+} from '../i18n/dictionary';
 
 export interface LanguageContextValue {
   language: Language;
@@ -38,27 +40,12 @@ const LanguageContext = createContext<LanguageContextValue>({
   locale: LOCALES[DEFAULT_LANGUAGE],
 });
 
-function readStoredLanguage(): Language {
-  if (typeof window === 'undefined') return DEFAULT_LANGUAGE;
-  try {
-    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return isLanguage(stored) ? stored : DEFAULT_LANGUAGE;
-  } catch {
-    // Privater Modus oder gesperrter Speicher: dann eben ohne Merken.
-    return DEFAULT_LANGUAGE;
-  }
-}
-
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
 
   const setLanguage = useCallback((next: Language) => {
     setLanguageState(next);
-    try {
-      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
-    } catch {
-      // Nicht speichern zu koennen ist kein Grund, die Umschaltung zu blocken.
-    }
+    storeLanguage(next);
   }, []);
 
   // Screenreader und Browser-Uebersetzer richten sich nach dem lang-Attribut.

@@ -308,6 +308,31 @@ export function isLanguage(value: unknown): value is Language {
   return value === 'de' || value === 'en';
 }
 
+/**
+ * Die Wahl liegt im Browser, nicht in der Datenbank: sie ist eine Anzeigesache
+ * und soll ohne Backend-Umbau ueber alle Routen dieses Bundles gelten.
+ * Gesperrter Speicher (privates Fenster) darf die Oberflaeche nicht kippen,
+ * deshalb faellt beides still auf Deutsch beziehungsweise auf "nicht gemerkt".
+ */
+export function readStoredLanguage(): Language {
+  if (typeof window === 'undefined') return DEFAULT_LANGUAGE;
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return isLanguage(stored) ? stored : DEFAULT_LANGUAGE;
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+}
+
+export function storeLanguage(language: Language): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  } catch {
+    // Nicht speichern zu koennen ist kein Grund, die Umschaltung zu blocken.
+  }
+}
+
 /** Nur fuer Tests und Werkzeuge: das rohe Woerterbuch einer Sprache. */
 export function dictionaryFor(language: Language): Record<string, string> {
   return TRANSLATIONS[language] ?? {};
