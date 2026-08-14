@@ -19,7 +19,12 @@ use tokio::process::Command;
 /// `ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt — sonst geht nie
 /// Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
 /// `OPENAI_API_KEY` in der Umgebung steht.
-const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
+/// Vorgabe-Endpunkt: der lokale `ops/stt-server`.
+///
+/// Oeffentlich, damit ein Aufrufer denselben Wert pruefen kann, den
+/// [`OpenAiTranscriber::from_env`] nimmt - sonst haelt eine Pruefung auf der
+/// leeren Umgebungsvariable den Vorgabewert faelschlich fuer auswaertig.
+pub const DEFAULT_STT_URL: &str = "http://127.0.0.1:8791/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-1";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
