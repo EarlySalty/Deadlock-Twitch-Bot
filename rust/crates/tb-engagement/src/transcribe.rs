@@ -89,10 +89,10 @@ impl OpenAiTranscriber {
 
     /// Wie [`OpenAiTranscriber::from_env`], aber mit eigener Zeitgrenze.
     ///
-    /// 60 Sekunden passen zu kurzen Reaktions-Clips. Wer einen Zehn-Minuten-
-    /// Block schickt, braucht mehr: das lokale Whisper laeuft auf der CPU
-    /// deutlich langsamer als Echtzeit, und eine zu knappe Grenze bricht
-    /// jeden langen Block ab, statt ihn zu transkribieren.
+    /// 60 Sekunden passen zu kurzen Reaktions-Clips. Wer laengere Bloecke
+    /// schickt oder auf einen belegten Dienst trifft, braucht mehr: das lokale
+    /// Whisper laeuft auf der CPU langsamer als Echtzeit, und eine zu knappe
+    /// Grenze bricht den Block ab, statt ihn zu transkribieren.
     pub fn from_env_with_timeout(timeout: Duration) -> Option<Self> {
         Some(Self {
             api_key: nonempty_env("OPENAI_API_KEY").unwrap_or_else(|| "local".to_string()),
