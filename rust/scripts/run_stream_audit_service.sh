@@ -48,5 +48,8 @@ fi
 # stuende er in der Umgebung des Audits - und damit in der jedes von ihm
 # gestarteten streamlink-Prozesses, lesbar in /proc.
 unset INFISICAL_SERVICE_TOKEN
+# Die Marke hat ihren Zweck erfuellt; sie muss nicht in streamlink und ffmpeg
+# weiterleben.
+unset DL_INFISICAL_READY
 
 exec "$ROOT_DIR/rust/target/release/tb-stream-audit" "$@"

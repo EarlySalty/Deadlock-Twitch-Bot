@@ -24,6 +24,10 @@ Environment=STREAM_AUDIT_OUTPUT_DIR=%h/Documents/Deadlock-Twitch-Bot/data/stream
 # nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
 Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
 Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
+# ffmpeg fest auf das System-Binaerprogramm: der systemd-Benutzer-PATH stellt
+# ~/.local/bin nach vorn, und der dortige statische Build segfaultet mit leerem
+# stderr. Ohne diese Zeile scheitert jeder Block an der Tonspur.
+Environment=FFMPEG_BIN=/usr/bin/ffmpeg
 
 Environment=RUST_LOG=info
 
