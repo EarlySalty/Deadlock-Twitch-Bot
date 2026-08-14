@@ -192,20 +192,21 @@ impl Warteschlange {
         self.eintraege.push_back(block);
     }
 
+    /// Bloecke, die noch transkribiert werden muessen.
+    ///
+    /// Der Gegendruck haengt an dieser Zahl, nicht an der Gesamtlaenge: sonst
+    /// stoppt eine Discord-Stoerung die Aufnahme. Bloecke, die nur noch auf
+    /// ihre Meldung warten, kosten keine Rechenzeit.
+    pub fn offene_auswertungen(&self) -> usize {
+        self.eintraege.iter().filter(|b| !b.nur_melden).count()
+    }
+
     pub fn laenge(&self) -> usize {
         self.eintraege.len()
     }
 
     pub fn ist_leer(&self) -> bool {
         self.eintraege.is_empty()
-    }
-
-    /// Bloecke eines Kanals verwerfen, etwa wenn eine Sendung abgebrochen ist
-    /// und die Reste nichts mehr aussagen.
-    pub fn kanal_verwerfen(&mut self, kanal: &str) -> usize {
-        let vorher = self.eintraege.len();
-        self.eintraege.retain(|b| b.kanal != kanal);
-        vorher - self.eintraege.len()
     }
 }
 
@@ -408,28 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn kanal_verwerfen_laesst_andere_stehen() {
-        let mut w = Warteschlange::new();
-        for kanal in ["a", "b", "a"] {
-            w.einreihen(Block {
-                kanal: kanal.to_owned(),
-                lauf: "L1".to_owned(),
-                nummer: 1,
-                versatz_sekunden: 0,
-                datei: "x.ts".to_owned(),
-                versuche: 0,
-                frueherstens: 0,
-                nur_melden: false,
-                meldeversuche: 0,
-                zeit_unsicher: false,
-            });
-        }
-        assert_eq!(w.kanal_verwerfen("a"), 2);
-        assert_eq!(w.laenge(), 1);
-        assert_eq!(w.naechster().unwrap().kanal, "b");
-    }
-
-    #[test]
     fn fehlgeschlagener_block_kommt_hinten_wieder_rein() {
         let mut w = Warteschlange::new();
         let mut a = Aufnahme::starten("k", "L1");
@@ -561,5 +540,24 @@ mod tests_versatz {
         // Kurz vor dem Deckel bleibt nur der Rest.
         let knapp = Aufnahme::starten_bei("ricky", "42", MAX_SEKUNDEN_JE_SENDUNG - 120);
         assert_eq!(knapp.naechste_blocklaenge(), Some(120));
+    }
+}
+
+#[cfg(test)]
+mod tests_gegendruck {
+    use super::*;
+
+    #[test]
+    fn wartende_meldungen_zaehlen_nicht_als_rueckstand() {
+        // Eine Discord-Stoerung darf die Aufnahme nicht stoppen.
+        let mut w = Warteschlange::new();
+        let mut a = Aufnahme::starten("k", "L1");
+        let auszuwerten = a.block_fertig("1.ts", 120);
+        let mut nur_meldung = a.block_fertig("2.ts", 120);
+        nur_meldung.nur_melden = true;
+        w.einreihen(auszuwerten);
+        w.einreihen(nur_meldung);
+        assert_eq!(w.laenge(), 2);
+        assert_eq!(w.offene_auswertungen(), 1);
     }
 }
