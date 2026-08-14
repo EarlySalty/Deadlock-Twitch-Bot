@@ -284,11 +284,15 @@ Alle relevanten Python-Module mit Pfad, Zweck und Zugriffslevel (A=Admin, S=Stre
 | `insight_job.py` | Wöchentlicher Insight-Job je Partner | I |
 | `steam_lookup.py` | Rang + Live-In-Game-State eines Discord-Users | I |
 
-## bot/stream_coaching_audit/
+## rust/crates/tb-stream-audit, rust/bin/tb-stream-audit
 
 | Datei | Zweck | Level |
 |-------|-------|-------|
-| `service.py` | Privates Slur-/Coaching-Audit (Transkription, Redaktion, VOD-Links) | A |
+| `crates/tb-stream-audit/` | Regeln, Modellschritt, Plan, Bericht, Meldung des Coaching-Audits | A |
+| `bin/tb-stream-audit/` | Aufsicht, Live-Aufnahme, Auswertung, Ablage, Aufraeumen | A |
+
+Der alte Python-Pfad `bot/stream_coaching_audit/` ist abgeloest; VOD- und
+Dateimodus gibt es nicht mehr.
 
 ## bot/entitlements/
 

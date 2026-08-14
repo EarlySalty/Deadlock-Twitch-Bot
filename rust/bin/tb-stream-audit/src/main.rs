@@ -960,13 +960,20 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or_default();
-            if !matches!(endung, "md" | "json" | "txt") {
+            // `neu` ist die Nebendatei des atomaren Schreibens. Bricht der
+            // Dienst mitten im Schreiben ab, bleibt sie liegen - mit dem
+            // Inhalt eines Berichts. Ohne sie hier faellt sie aus der
+            // Aufbewahrung heraus und liegt fuer immer da.
+            if !matches!(endung, "md" | "json" | "txt" | "neu") {
                 continue;
             }
             let stamm = pfad
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
+            // Bei `bericht.json.neu` steckt der eigentliche Name eine Ebene
+            // tiefer im Stamm.
+            let stamm = stamm.strip_suffix(".json").unwrap_or(stamm);
             if !ist_berichtsname(stamm) {
                 continue;
             }
