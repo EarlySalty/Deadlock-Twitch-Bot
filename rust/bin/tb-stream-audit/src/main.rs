@@ -90,6 +90,15 @@ Stream-Audio dorthin zu senden.",
         tracing::warn!("Transkription laeuft entfernt - ausdruecklich erlaubt");
     }
 
+    // Zwischendateien der Transkription landen in unserem eigenen Ordner statt
+    // in /tmp. Ein Abbruch mitten in der Anfrage laesst die WAV-Datei liegen;
+    // dort finden wir sie beim naechsten Start und raeumen sie weg.
+    let eigener_temp = konfiguration.ausgabe.join("zwischendateien");
+    if tokio::fs::create_dir_all(&eigener_temp).await.is_ok() {
+        std::env::set_var("TMPDIR", &eigener_temp);
+    }
+    zwischendateien_aufraeumen(&eigener_temp).await;
+
     let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
@@ -171,6 +180,33 @@ async fn warten_oder_abbrechen(
         tracing::warn!(arbeiter = name, "reagiert nicht - wird abgebrochen");
         handle.abort();
         let _ = handle.await;
+    }
+}
+
+/// Raeumt Zwischendateien eines frueheren Laufs weg.
+///
+/// `transcribe_clip` legt die WAV-Datei in einem Ordner `eng-whisper-*` ab und
+/// loescht ihn erst, wenn die Anfrage zurueckkommt. Wird der Dienst vorher
+/// gestoppt, bleibt rohes Audio liegen - beim naechsten Start ist es ganz
+/// sicher nicht mehr in Benutzung.
+async fn zwischendateien_aufraeumen(ordner: &Path) {
+    let Ok(mut eintraege) = tokio::fs::read_dir(ordner).await else {
+        return;
+    };
+    let mut geloescht = 0usize;
+    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+        let pfad = eintrag.path();
+        let ist_zwischenordner = pfad
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("eng-whisper-"))
+            .unwrap_or(false);
+        if ist_zwischenordner && tokio::fs::remove_dir_all(&pfad).await.is_ok() {
+            geloescht += 1;
+        }
+    }
+    if geloescht > 0 {
+        tracing::info!(geloescht, "Zwischendateien eines frueheren Laufs entfernt");
     }
 }
 
@@ -552,8 +588,17 @@ const STT_ZEITGRENZE: Duration = Duration::from_secs(30 * 60);
 /// Umgebungsschalter fuer einen STT-Endpunkt ausserhalb dieses Rechners.
 const REMOTE_STT_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_STT";
 
+/// Der Endpunkt, den die Transkription tatsaechlich nimmt.
+///
+/// Frueher stand hier die rohe Umgebungsvariable. Ohne sie war der Wert leer,
+/// die Ortspruefung hielt das fuer auswaertig und der Dienst startete nicht -
+/// obwohl der Transkriber selbst auf localhost zurueckfaellt.
 fn stt_basis_url() -> String {
-    std::env::var("ENGAGEMENT_STT_BASE_URL").unwrap_or_default()
+    std::env::var("ENGAGEMENT_STT_BASE_URL")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| tb_engagement::transcribe::DEFAULT_STT_URL.to_owned())
 }
 
 fn remote_stt_erlaubt() -> bool {
@@ -645,7 +690,10 @@ Es wird nichts aufgenommen und nichts geprueft."
                     );
                     let schluessel = format!("{}-helix-ausfall-{helix_fehler}", start_kennung());
                     match dm_rohtext(&text, &schluessel).await {
-                        Ok(()) => helix_gemeldet = true,
+                        Ok(()) => {
+                            helix_gemeldet = true;
+                            hinweis_erledigt(&konfiguration, "helix-ausfall").await;
+                        }
                         Err(dm_fehler) => {
                             tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar");
                             hinweis_aufheben(&konfiguration, "helix-ausfall", &schluessel, &text)
@@ -739,6 +787,10 @@ Aufnahme zustande. streamlink pruefen."
                 // einziger Broker-Aussetzer die Meldung fuer immer.
                 Ok(()) => {
                     gemeldet.insert(kanal.clone());
+                    // Ein aelterer, noch nicht zugestellter Hinweis zur selben
+                    // Sache waere sonst spaeter nachgereicht worden und haette
+                    // eine laengst erledigte Stoerung gemeldet.
+                    hinweis_erledigt(&konfiguration, &format!("keine-aufnahme-{kanal}")).await;
                 }
                 Err(fehler) => {
                     tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
@@ -785,7 +837,10 @@ Dieser Abschnitt wird nicht geprueft."
                 let schluessel = format!("{}-rueckstand-{stau}", start_kennung());
                 match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
-                    Ok(()) => stau_gemeldet = true,
+                    Ok(()) => {
+                        stau_gemeldet = true;
+                        hinweis_erledigt(&konfiguration, "rueckstand").await;
+                    }
                     Err(fehler) => {
                         tracing::error!(fehler, "Rueckstand nicht meldbar");
                         hinweis_aufheben(&konfiguration, "rueckstand", &schluessel, &text).await;
@@ -1303,7 +1358,6 @@ async fn auswertungs_schleife(
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
                 let versuch = block.versuche + 1;
-                let mut aufgegeben = block.clone();
                 let block_datei = block.datei.clone();
                 // Die Pause haengt am Block (plan::PAUSE_SEKUNDEN), nicht an
                 // diesem Arbeiter: ein Schlaf hier hielte alle anderen Kanaele
@@ -1338,34 +1392,26 @@ Aufnahme liegt noch da.",
                     {
                         // Genau diese Meldung soll verhindern, dass ein
                         // unvollstaendiges Audit wie ein sauberes aussieht.
-                        // Sie darf an einem Broker-Aussetzer nicht sterben.
-                        if aufgegeben.meldeversuche < plan::MAX_MELDEVERSUCHE {
-                            aufgegeben.meldeversuche += 1;
-                            aufgegeben.versuche = 0;
-                            let versuch = aufgegeben.meldeversuche;
-                            warteschlange
-                                .lock()
-                                .await
-                                .spaeter_einreihen(aufgegeben, MELDEPAUSE_SEKUNDEN);
-                            tracing::error!(
-                                dm_fehler,
-                                block = %bezeichnung,
-                                versuch,
-                                "Aufgabe nicht meldbar - neuer Anlauf in 30 Minuten"
-                            );
-                        } else {
-                            // Marke setzen, sonst findet der Aufraeumtakt den
-                            // Block nicht wieder und ein dauerhafter
-                            // Transkriptionsfehler sieht aus wie ein sauberer
-                            // Stream.
-                            meldung_offen_markieren(Path::new(&block_datei)).await;
-                            tracing::error!(
-                                dm_fehler,
-                                block = %bezeichnung,
-                                "Aufgabe endgueltig nicht meldbar; Marke gesetzt, der \
-                            naechste Aufraeumtakt versucht es erneut"
-                            );
-                        }
+                        // Sie geht in den Hinweisspeicher und wird stuendlich
+                        // erneut versucht - den Block noch einmal einzureihen
+                        // hiesse, Transkription und Modell erneut laufen zu
+                        // lassen, obwohl nur die Zustellung klemmt.
+                        hinweis_aufheben(
+                            &konfiguration,
+                            &format!("aufgegeben-{bezeichnung}"),
+                            &format!("{bezeichnung}-aufgegeben"),
+                            &text,
+                        )
+                        .await;
+                        // Marke am Block, damit der Aufraeumtakt die Aufnahme
+                        // nicht fuer erledigt haelt.
+                        meldung_offen_markieren(Path::new(&block_datei)).await;
+                        tracing::error!(
+                            dm_fehler,
+                            block = %bezeichnung,
+                            "Aufgabe nicht meldbar - Hinweis aufgehoben, wird stuendlich \
+                            erneut versucht"
+                        );
                     }
                 }
             }
@@ -1865,6 +1911,16 @@ async fn hinweis_aufheben(
     {
         tracing::error!(fehler, "Hinweis nicht ablegbar");
     }
+}
+
+/// Nimmt einen aufgehobenen Hinweis wieder weg.
+async fn hinweis_erledigt(konfiguration: &Konfiguration, ablage: &str) {
+    let name: String = ablage
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let _ =
+        tokio::fs::remove_file(hinweis_ordner(konfiguration).join(format!("{name}.json"))).await;
 }
 
 /// Versucht die abgelegten Hinweise erneut zuzustellen.
