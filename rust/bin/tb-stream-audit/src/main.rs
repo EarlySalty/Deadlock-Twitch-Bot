@@ -348,17 +348,19 @@ async fn zettel_schreiben(
     lauf: &str,
     nummer: u32,
     versatz_sekunden: u64,
-) {
+) -> bool {
     let inhalt = serde_json::json!({
         "kanal": kanal,
         "lauf": lauf,
         "nummer": nummer,
         "versatz_sekunden": versatz_sekunden,
     });
-    if let Err(fehler) =
-        nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await
-    {
-        tracing::warn!(fehler, "Zettel nicht geschrieben");
+    match nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await {
+        Ok(()) => true,
+        Err(fehler) => {
+            tracing::warn!(fehler, "Zettel nicht geschrieben");
+            false
+        }
     }
 }
 
@@ -643,7 +645,8 @@ Es wird nichts aufgenommen und nichts geprueft."
                     match dm_rohtext(&text, &schluessel).await {
                         Ok(()) => helix_gemeldet = true,
                         Err(dm_fehler) => {
-                            tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar")
+                            tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar");
+                            hinweis_aufheben(&konfiguration, &schluessel, &text).await;
                         }
                     }
                 }
@@ -701,7 +704,8 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                                     gemeldet.insert(kanal.clone());
                                 }
                                 Err(fehler) => {
-                                    tracing::error!(fehler, kanal, "Ausfall nicht meldbar")
+                                    tracing::error!(fehler, kanal, "Ausfall nicht meldbar");
+                                    hinweis_aufheben(&konfiguration, &schluessel, &text).await;
                                 }
                             }
                         }
@@ -721,7 +725,14 @@ kommt keine Aufnahme zustande. streamlink pruefen."
                 // Eine Panik kostet den Stand dieses Kanals. Das ist die
                 // sichere Richtung: der naechste Start faengt bei 0 an, aber
                 // der Prozess laeuft weiter und die anderen Kanaele bleiben.
-                Err(fehler) => tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt"),
+                Err(fehler) => {
+                    // Eine Panik ist erst recht ein Fehlschlag: ohne diesen
+                    // Zaehler bliebe ein Kanal unbemerkt ungeprueft.
+                    let zaehler = fehlschlaege.entry(kanal.clone()).or_default();
+                    *zaehler += 1;
+                    gestartet_mit.remove(&kanal);
+                    tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt");
+                }
             }
         }
 
@@ -758,7 +769,10 @@ Dieser Abschnitt wird nicht geprueft."
                 match dm_rohtext(&text, &schluessel).await {
                     // Auch hier erst nach der Zustellung merken.
                     Ok(()) => stau_gemeldet = true,
-                    Err(fehler) => tracing::error!(fehler, "Rueckstand nicht meldbar"),
+                    Err(fehler) => {
+                        tracing::error!(fehler, "Rueckstand nicht meldbar");
+                        hinweis_aufheben(&konfiguration, &schluessel, &text).await;
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
@@ -866,14 +880,23 @@ async fn kanal_aufnehmen(
             tracing::error!(?fehler, "Aufnahmeordner nicht anlegbar");
             return zustand;
         }
-        zettel_schreiben(
+        if !zettel_schreiben(
             &blockordner,
             &kanal,
             &zustand.lauf,
             zustand.bloecke + 1,
             versatz,
         )
-        .await;
+        .await
+        {
+            // Ohne Zettel waere die Aufnahme nach einem Neustart nicht mehr
+            // zuzuordnen: falscher Kanal, Zeitversatz 0. Dann lieber gar nicht
+            // erst aufnehmen.
+            tracing::error!(kanal, "Zettel nicht schreibbar - Block wird uebersprungen");
+            let _ = tokio::fs::remove_dir_all(&blockordner).await;
+            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
+            continue;
+        }
 
         match capturer
             .capture(
@@ -939,8 +962,16 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
     // Berichte liegen unter <ausgabe>/<kanal>/. Ein Aufraeumen, das nur die
     // oberste Ebene liest, findet keinen einzigen davon.
     let mut ordner = vec![konfiguration.ausgabe.clone()];
-    let Ok(mut oben) = tokio::fs::read_dir(&konfiguration.ausgabe).await else {
-        return;
+    let mut oben = match tokio::fs::read_dir(&konfiguration.ausgabe).await {
+        Ok(oben) => oben,
+        Err(fehler) => {
+            tracing::warn!(
+                ?fehler,
+                ordner = ?konfiguration.ausgabe,
+                "Ausgabeordner nicht lesbar - Aufbewahrung greift nicht"
+            );
+            return;
+        }
     };
     while let Ok(Some(eintrag)) = oben.next_entry().await {
         if eintrag
@@ -955,8 +986,16 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
 
     let mut geloescht = 0usize;
     for ordner in ordner {
-        let Ok(mut eintraege) = tokio::fs::read_dir(&ordner).await else {
-            continue;
+        let mut eintraege = match tokio::fs::read_dir(&ordner).await {
+            Ok(eintraege) => eintraege,
+            Err(fehler) => {
+                tracing::warn!(
+                    ?fehler,
+                    ?ordner,
+                    "Ordner nicht lesbar - Berichte bleiben liegen"
+                );
+                continue;
+            }
         };
         while let Ok(Some(eintrag)) = eintraege.next_entry().await {
             let pfad = eintrag.path();
@@ -978,7 +1017,14 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
             // Bei `bericht.json.neu` steckt der eigentliche Name eine Ebene
             // tiefer im Stamm.
             let stamm = stamm.strip_suffix(".json").unwrap_or(stamm);
-            if !ist_berichtsname(stamm) {
+            // Im Kanalordner gilt der Kanalname als Praefix; direkt in der
+            // Ausgabe nur die Namen der Vorgaengerfassung.
+            let kanal = if ordner == konfiguration.ausgabe {
+                None
+            } else {
+                ordner.file_name().and_then(|n| n.to_str())
+            };
+            if !ist_berichtsname(stamm, kanal) {
                 continue;
             }
             let Ok(daten) = eintrag.metadata().await else {
@@ -1036,16 +1082,25 @@ fn blockordner_von(wurzel: &Path, aufnahme: &Path) -> Option<PathBuf> {
 /// Berichte heissen `<kanal>-<lauf>-t<sekunden>`. Ohne diese Pruefung raeumte
 /// der Dienst einen Ausgabeordner mit auf, den sich jemand mit anderen Daten
 /// teilt.
-fn ist_berichtsname(stamm: &str) -> bool {
+fn ist_berichtsname(stamm: &str, kanal: Option<&str>) -> bool {
     // Die Vorgaengerfassung schrieb `stream-audit-<zeitstempel>` in denselben
     // Ordner, mit unmaskierten Belegen. Ohne diese Zeile laegen die fuer immer
     // dort.
     if stamm.starts_with("stream-audit-") || stamm.starts_with("stream_coaching_audit-") {
         return true;
     }
-    match stamm.rsplit_once("-t") {
-        Some((rest, ziffern)) => {
-            !rest.is_empty() && !ziffern.is_empty() && ziffern.chars().all(|c| c.is_ascii_digit())
+    // Ein Bericht liegt im Ordner seines Kanals und traegt dessen Namen. Ohne
+    // diesen Abgleich reichte ein fremdes `rechnung-t2025.json` im geteilten
+    // Ausgabeordner, um geloescht zu werden.
+    let Some(kanal) = kanal else {
+        return false;
+    };
+    let Some(rest) = stamm.strip_prefix(kanal).and_then(|r| r.strip_prefix('-')) else {
+        return false;
+    };
+    match rest.rsplit_once("-t") {
+        Some((lauf, ziffern)) => {
+            !lauf.is_empty() && !ziffern.is_empty() && ziffern.chars().all(|c| c.is_ascii_digit())
         }
         None => false,
     }
@@ -1133,6 +1188,7 @@ async fn auswertungs_schleife(
             alte_berichte_loeschen(&konfiguration).await;
             alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
             offene_meldungen_einreihen(&konfiguration, &warteschlange).await;
+            offene_hinweise_senden(&konfiguration).await;
             naechstes_aufraeumen =
                 tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
         }
@@ -1750,6 +1806,64 @@ async fn broker_antwort_pruefen(antwort: reqwest::Response) -> Result<(), String
     }
 }
 
+/// Ordner fuer Hinweise, die der Broker nicht angenommen hat.
+fn hinweis_ordner(konfiguration: &Konfiguration) -> PathBuf {
+    konfiguration.ausgabe.join("offene-hinweise")
+}
+
+/// Legt einen nicht zugestellten Hinweis auf die Platte.
+///
+/// Ausfallmeldungen lebten bisher nur im Speicher: war der Broker genau
+/// waehrend der Stoerung nicht erreichbar und die Stoerung danach vorbei,
+/// erfuhr niemand davon - genau die Luecke, die diese Meldungen schliessen
+/// sollen.
+async fn hinweis_aufheben(konfiguration: &Konfiguration, schluessel: &str, text: &str) {
+    let ordner = hinweis_ordner(konfiguration);
+    if let Err(fehler) = tokio::fs::create_dir_all(&ordner).await {
+        tracing::error!(?fehler, "Hinweisordner nicht anlegbar");
+        return;
+    }
+    let name: String = schluessel
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    if let Err(fehler) = nur_fuer_mich(&ordner.join(format!("{name}.txt")), text.as_bytes()).await {
+        tracing::error!(fehler, "Hinweis nicht ablegbar");
+    }
+}
+
+/// Versucht die abgelegten Hinweise erneut zuzustellen.
+async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
+    let ordner = hinweis_ordner(konfiguration);
+    let Ok(mut eintraege) = tokio::fs::read_dir(&ordner).await else {
+        return;
+    };
+    while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+        let pfad = eintrag.path();
+        if pfad.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        let Ok(text) = tokio::fs::read_to_string(&pfad).await else {
+            continue;
+        };
+        let schluessel = pfad
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("hinweis")
+            .to_owned();
+        match dm_rohtext(&text, &schluessel).await {
+            Ok(()) => {
+                let _ = tokio::fs::remove_file(&pfad).await;
+                tracing::info!(schluessel, "aufgehobenen Hinweis nachgereicht");
+            }
+            Err(fehler) => {
+                tracing::warn!(fehler, schluessel, "Hinweis weiter nicht zustellbar");
+                return;
+            }
+        }
+    }
+}
+
 /// Schickt eine freie Zeile an den Admin - fuer Meldungen, die kein Bericht
 /// sind, etwa einen endgueltig aufgegebenen Block.
 async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
@@ -1907,8 +2021,9 @@ mod tests {
             std::env::temp_dir().join(format!("stream-audit-aufbewahrung-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
         tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
-        let alt = wurzel.join("ricky-4711-t000000.md");
-        let neu = wurzel.join("ricky-4711-t000600.md");
+        // Ein Bericht der Vorgaengerfassung, direkt im Ausgabeordner.
+        let alt = wurzel.join("stream-audit-20260601T120000Z.md");
+        let neu = wurzel.join("stream-audit-20260813T120000Z.md");
         tokio::fs::write(&alt, b"alt").await.expect("schreiben");
         tokio::fs::write(&neu, b"neu").await.expect("schreiben");
         // Aenderungszeit 40 Tage zurueckdrehen.
@@ -2108,10 +2223,20 @@ mod tests {
 
     #[test]
     fn nur_eigene_berichte_werden_aufgeraeumt() {
-        assert!(ist_berichtsname("helmbombenricky-4711-t003600"));
-        assert!(!ist_berichtsname("steuererklaerung"));
-        assert!(!ist_berichtsname("-t000000"), "ohne Kanal kein Bericht");
-        assert!(!ist_berichtsname("ricky-tabc"));
+        let kanal = Some("helmbombenricky");
+        assert!(ist_berichtsname("helmbombenricky-4711-t003600", kanal));
+        assert!(!ist_berichtsname("steuererklaerung", kanal));
+        assert!(
+            !ist_berichtsname("-t000000", kanal),
+            "ohne Kanal kein Bericht"
+        );
+        assert!(!ist_berichtsname("helmbombenricky-tabc", kanal));
+        // Eine fremde Datei im geteilten Ausgabeordner bleibt liegen, auch
+        // wenn ihr Name zufaellig auf -t<Ziffern> endet.
+        assert!(!ist_berichtsname("rechnung-t2025", kanal));
+        assert!(!ist_berichtsname("rechnung-t2025", None));
+        // Nur die Berichte der Vorgaengerfassung gelten ohne Kanalordner.
+        assert!(ist_berichtsname("stream-audit-20260601T120000Z", None));
     }
 
     #[test]
