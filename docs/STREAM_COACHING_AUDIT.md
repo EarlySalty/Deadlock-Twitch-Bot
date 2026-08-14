@@ -44,8 +44,10 @@ im Deadlock-Docs-Korpus.
   geschickt, mit anonymer Segmentnummer statt Segment-ID. Die Schwaerzung kennt
   die drei Muster aus `rules.rs` und sonst nichts: anderer Wortlaut geht mit.
   Deshalb setzt die Unit `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` ausdruecklich.
-- Berichte tragen den geschwaerzten Beleg und SHA-256 des Originals, nie ein
-  ungefiltertes Zitat. Die DM traegt weder Zitat noch Hash.
+- Berichte tragen den geschwaerzten Beleg und SHA-256 des Originals. Geschwaerzt
+  werden nur die drei bekannten Muster: was ein Modellfund sonst an Wortlaut im
+  Segment mitbringt, steht im Bericht. Er ist deshalb keine zitatfreie Datei,
+  sondern eine Akte mit Modus 0600. Die DM traegt weder Zitat noch Hash.
 - Das Rohtranskript bleibt nur mit `STREAM_AUDIT_KEEP_TRANSCRIPT=1` liegen.
   Aufnahmen mit Fund bleiben liegen, saubere Bloecke werden geloescht. Sie
   liegen unter `STREAM_AUDIT_OUTPUT_DIR/aufnahmen`, nicht in `/tmp`.
