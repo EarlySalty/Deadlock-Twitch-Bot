@@ -197,8 +197,12 @@ async fn arbeiter_abraeumen(
     abbruch: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Erst bitten, dann zwingen: die Schleifen sehen die Marke an ihren
-    // Wartestellen und beenden sich selbst, sodass eine laufende Aufnahme ihre
-    // Zwischendateien noch wegraeumen kann.
+    // Wartestellen und beenden sich selbst. Das gilt fuer die Auswertung, die
+    // ihre WAV-Datei danach noch wegraeumt. Die einzelnen Aufnahme-Tasks eines
+    // Kanals haengen dagegen nur als Handles in der Aufnahmeschleife: endet
+    // sie, werden die Handles fallengelassen, die Tasks laufen also weiter,
+    // bis systemd die Cgroup abraeumt. Ihre `aufnahme_laeuft.json` bleibt dann
+    // liegen - der naechste Start erkennt den Block daran als abgebrochen.
     abbruch.store(true, std::sync::atomic::Ordering::Relaxed);
     // Eine laufende Transkription raeumt ihre WAV-Datei erst weg, wenn die
     // Anfrage zurueckkommt. Ein Abbruch nach zehn Sekunden liess sie liegen -
@@ -790,7 +794,16 @@ fn naechste_vorfall_nummer() -> u64 {
 
 fn start_kennung() -> &'static str {
     static KENNUNG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    KENNUNG.get_or_init(|| chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string())
+    KENNUNG.get_or_init(|| {
+        // Mit Prozessnummer, weil die Sekunde allein nicht reicht: zwei Starts
+        // in derselben Sekunde ergaeben dieselben Idempotenzschluessel, und der
+        // Broker haette eine echte neue Stoerung als Wiederholung verworfen.
+        format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+            std::process::id()
+        )
+    })
 }
 
 /// So viele Bloecke ohne einen erkannten Satz gelten als Verdacht auf einen
@@ -1589,6 +1602,17 @@ fn ist_berichtsname(stamm: &str, kanal: Option<&str>) -> bool {
     let Some(rest) = stamm.strip_prefix(kanal).and_then(|r| r.strip_prefix('-')) else {
         return false;
     };
+    // Bestand aus der Zeit vor den Bloecken: `<kanal>-<zeitstempel>-block<nnn>`.
+    // Auf der Maschine liegt genau das, und ohne diesen Zweig faellt es aus der
+    // Aufbewahrung - Berichte mit Belegen, die nie ablaufen.
+    if let Some((zeitstempel, nummer)) = rest.rsplit_once("-block") {
+        if !zeitstempel.is_empty()
+            && !nummer.is_empty()
+            && nummer.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
     // <lauf>-t<sekunden>-b<nummer>
     let Some((lauf_und_zeit, nummer)) = rest.rsplit_once("-b") else {
         return false;
@@ -1662,6 +1686,34 @@ async fn alte_aufnahmen_loeschen(
     }
     if geloescht > 0 {
         tracing::info!(geloescht, tage, "alte Aufnahmen geloescht");
+    }
+    leere_huellen_loeschen(&wurzel).await;
+}
+
+/// Entfernt leergeraeumte Lauf- und Kanalordner unter `aufnahmen/`.
+///
+/// Je Sendung bleibt sonst eine leere Huelle stehen, und genau dieser Baum wird
+/// bei jedem Aufraeumtakt rekursiv abgesucht. `remove_dir` loescht nur leere
+/// Verzeichnisse, ein volles bleibt also unangetastet.
+async fn leere_huellen_loeschen(wurzel: &Path) {
+    let Ok(mut kanaele) = tokio::fs::read_dir(wurzel).await else {
+        return;
+    };
+    while let Ok(Some(kanal)) = kanaele.next_entry().await {
+        let kanalpfad = kanal.path();
+        if !kanalpfad.is_dir() {
+            continue;
+        }
+        if let Ok(mut laeufe) = tokio::fs::read_dir(&kanalpfad).await {
+            while let Ok(Some(lauf)) = laeufe.next_entry().await {
+                let laufpfad = lauf.path();
+                if laufpfad.is_dir() {
+                    let _ = tokio::fs::remove_dir(&laufpfad).await;
+                }
+            }
+        }
+        // Der Kanalordner faellt erst, wenn auch sein letzter Lauf weg ist.
+        let _ = tokio::fs::remove_dir(&kanalpfad).await;
     }
 }
 

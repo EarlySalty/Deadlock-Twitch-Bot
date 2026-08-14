@@ -10,7 +10,10 @@ INFISICAL_LOADER="${INFISICAL_LOADER:-$HOME/.local/bin/dl-infisical-env}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Infisical-Config fehlt: $CONFIG_FILE" >&2
-  exit 1
+  # Eigener Code: Exit 1 gehoert dem Programm ("eine Schleife ist gestorben").
+  # Beides auf 1 zu legen hiess, den haeufigsten Einrichtungsfehler als
+  # Laufzeitfehler zu lesen.
+  exit 6
 fi
 
 # set -a, sonst bleiben die Werte Shell-Variablen und der Loader sieht sie
@@ -59,7 +62,7 @@ BINARY="$ROOT_DIR/rust/target/release/tb-stream-audit"
 # blieb, ohne dass jemand den Grund sah.
 if [[ ! -x "$BINARY" ]]; then
   echo "tb-stream-audit fehlt oder ist nicht ausfuehrbar: $BINARY" >&2
-  echo "Bauen: SQLX_OFFLINE=true cargo build --release -p tb-stream-audit" >&2
+  echo "Bauen: SQLX_OFFLINE=true cargo build --release -p tb-stream-audit-bin" >&2
   exit 5
 fi
 

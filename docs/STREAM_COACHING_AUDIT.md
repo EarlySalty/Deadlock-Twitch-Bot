@@ -83,7 +83,7 @@ nackten `203/EXEC`, an dem der Vorgaenger monatelang haengen blieb).
 ```bash
 # im Deploy-Worktree, nicht im Arbeits-Checkout
 cd ~/.worktrees/tb-deploy/rust
-SQLX_OFFLINE=true cargo build --release -p tb-stream-audit
+SQLX_OFFLINE=true cargo build --release -p tb-stream-audit-bin
 cp target/release/tb-stream-audit ~/repos/Deadlock-Twitch-Bot/rust/target/release/tb-stream-audit.neu
 mv ~/repos/Deadlock-Twitch-Bot/rust/target/release/tb-stream-audit{.neu,}
 
@@ -109,7 +109,7 @@ journalctl --user -u deadlock-twitch-stream-coaching-watch -f
   ausfuehrbar.
 - Exit 3: `INFISICAL_SERVICE_TOKEN` steht weder in `infisical.conf` noch als
   systemd-Credential.
-
+- Exit 6: `~/.config/deadlock-twitch-bot/infisical.conf` fehlt.
 - Exit 2: Konfiguration fehlt (Kanaele, Helix) oder der Schutz gegen entfernte
   Transkription hat gegriffen. Grund steht im Klartext im Journal. Ohne
   `ENGAGEMENT_STT_BASE_URL` faellt der Endpunkt auf localhost zurueck - der
