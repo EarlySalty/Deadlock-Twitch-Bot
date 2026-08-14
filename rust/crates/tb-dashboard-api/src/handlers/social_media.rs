@@ -2611,7 +2611,9 @@ pub async fn auto_approve_put_handler(
     State(pool): State<PgPool>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
+    // Gleiche Huerde wie beim Lesen: wer im Social-Media-Dashboard ist, ist
+    // freigeschaltet. Achtung, diese Einstellung gilt weiterhin global.
+    if let Err(e) = require_sm_access(&auth, &pool, None).await {
         return e;
     }
     let payload: Value = match serde_json::from_str(&body) {
@@ -2680,13 +2682,23 @@ fn vod_archive_json(s: &VodArchiveSettings) -> Value {
         "enabled": s.enabled,
         "privacy": s.privacy,
         "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
-        "privacy_forced": true,
+        "privacy_forced": privacy_forced(),
     })
 }
 
 /// `GET /social-media/api/admin/settings/vod-archive?streamer_login=` —
 /// VOD-Archiv eines Streamers lesen.
 ///
+/// Solange das Google-Projekt nicht auditiert ist, dreht YouTube jeden Upload
+/// auf `private` zurueck. Nach bestandenem Audit `YOUTUBE_AUDIT_PASSED=1`
+/// setzen, dann ist die Sichtbarkeit im Dashboard waehlbar.
+fn privacy_forced() -> bool {
+    !matches!(
+        std::env::var("YOUTUBE_AUDIT_PASSED").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
 /// `privacy_forced` sagt der Oberfläche, dass YouTube ohne auditiertes
 /// API-Projekt jeden Upload auf `private` zurückdreht, egal was hier steht.
 pub async fn vod_archive_get_handler(
@@ -4450,7 +4462,7 @@ mod tests {
         let v = body_json(resp).await;
         assert_eq!(v["enabled"], false);
         assert_eq!(v["privacy"], "private");
-        assert_eq!(v["privacy_forced"], true);
+        assert_eq!(v["privacy_forced"], privacy_forced());
         assert_eq!(v["streamer_login"], "earlysalty");
 
         // Einschalten mit Sichtbarkeit.

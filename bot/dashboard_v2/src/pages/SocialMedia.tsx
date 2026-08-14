@@ -803,13 +803,9 @@ function PlatformConnectionsCard({
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
                 <div className="text-xs text-text-secondary truncate">
-                  {connected
-                    ? status?.expired
-                      ? // Der Zugang gilt schon eine Stunde vor Ablauf als
-                        // erneuerungsbeduerftig und wird selbst nachgezogen.
-                        `${status?.username ?? 'verbunden'} · Zugang wird erneuert`
-                      : (status?.username ?? 'verbunden')
-                    : 'nicht verbunden'}
+                  {/* Der Ablauf des Zugangs wird selbst nachgezogen und ist
+                      deshalb keine Meldung wert. */}
+                  {connected ? (status?.username ?? 'verbunden') : 'nicht verbunden'}
                 </div>
               </div>
               {connected ? (

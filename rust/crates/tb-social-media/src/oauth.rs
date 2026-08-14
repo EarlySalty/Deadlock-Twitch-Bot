@@ -653,10 +653,11 @@ fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<S
             ("client_id", &client_id),
             ("redirect_uri", redirect_uri),
             ("response_type", "code"),
-            // yt-analytics.readonly liefert Aufrufe und Wiedergabezeit fuer das
-            // Dashboard. Playlist-Rechte bleiben bewusst draussen, jeder zusaetzliche
-            // Bereich vergroessert nur den spaeteren Audit.
-            ("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"),
+            // Nur was die Anwendung wirklich tut: hochladen und den verbundenen
+            // Kanal lesen. Google verlangt im Audit, dass jeder angefragte Bereich
+            // im Demo-Video in Benutzung zu sehen ist; yt-analytics.readonly kommt
+            // erst dazu, wenn das Dashboard die Zahlen tatsaechlich abruft.
+            ("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"),
             ("state", state),
             ("code_challenge", &challenge),
             ("code_challenge_method", "S256"),
