@@ -819,7 +819,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                AND a.access_token_enc IS NOT NULL
                AND OCTET_LENGTH(a.access_token_enc) > 0
                AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
-                   NOT IN ('blocked', 'bot_banned', 'deadlock_pause')
+                   NOT IN ('blocked', 'bot_banned')
+               -- Kanäle in der Deadlock-Pause bleiben außen vor: dort ist der
+               -- Bot absichtlich entmoddet, und die Probe würde ihn im selben
+               -- Call wieder einsetzen (siehe `crate::deadlock_pause`).
+               AND p.deadlock_pause_unmodded_at IS NULL
                AND NOT EXISTS (
                    SELECT 1
                      FROM twitch_raid_blacklist rb
@@ -1418,6 +1422,20 @@ mod tests {
     impl BotBanStatusProbe for FixedBotBanStatus {
         async fn bot_ban_status(&self, _twitch_user_id: &str, _twitch_login: &str) -> BotBanStatus {
             self.0
+        }
+    }
+
+    /// Merkt sich, welche Kanäle die Ban-Probe überhaupt angefasst hat.
+    #[derive(Default)]
+    struct RecordingBanProbe {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BotBanStatusProbe for Arc<RecordingBanProbe> {
+        async fn bot_ban_status(&self, _twitch_user_id: &str, twitch_login: &str) -> BotBanStatus {
+            self.seen.lock().unwrap().push(twitch_login.to_string());
+            BotBanStatus::NotBanned
         }
     }
 
@@ -2385,5 +2403,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1);
+    }
+
+    /// Der aktive Ban-Sweep probt über `add_channel_moderator` und setzt den Bot
+    /// dabei als Moderator ein. In einem Kanal, der wegen Deadlock-Pause
+    /// absichtlich entmoddet ist, würde er die Pause damit sofort aufheben.
+    #[tokio::test]
+    async fn ban_sweep_fasst_kanaele_in_der_deadlock_pause_nicht_an() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_sweep_pause").await;
+        sqlx::query(
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS deadlock_pause_unmodded_at text",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (uid, login) in [("1", "normal"), ("2", "pausiert")] {
+            sqlx::query(
+                "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ($1, $2, 'active')",
+            )
+            .bind(uid)
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+            seed_raid_auth(
+                &pool,
+                uid,
+                login,
+                true,
+                false,
+                Utc::now() + chrono::Duration::days(1),
+            )
+            .await;
+        }
+        sqlx::query(
+            "UPDATE twitch_partners SET deadlock_pause_unmodded_at = '2026-01-01T00:00:00+00:00'
+              WHERE twitch_login = 'pausiert'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let probe = Arc::new(RecordingBanProbe::default());
+        let reactor =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()))
+                .with_bot_ban_status_probe(Arc::new(probe.clone()));
+        reactor.detect_bot_bans().await;
+
+        let seen = probe.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec!["normal".to_string()],
+            "der pausierte Kanal darf nicht geprobt werden"
+        );
     }
 }
