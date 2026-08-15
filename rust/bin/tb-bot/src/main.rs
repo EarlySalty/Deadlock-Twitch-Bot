@@ -728,11 +728,18 @@ async fn main() {
                     if let Some(token_provider) =
                         build_moderator_token_provider(pool.clone(), helix_client.clone())
                     {
-                        let provisioner = Arc::new(eventsub_hooks::HelixModeratorProvisioner::new(
+                        // Bot-Token nur für die Chat-Sendeprobe: sie klärt bei
+                        // abgelehnter Moderator-Einsetzung, ob der Bot wirklich
+                        // gebannt ist oder nur seine Rechte los.
+                        let mut provisioner = eventsub_hooks::HelixModeratorProvisioner::new(
                             token_provider,
                             helix_client.clone(),
                             bot_user_id,
-                        ));
+                        );
+                        if let Some(handle) = chat_api_handle.as_ref() {
+                            provisioner = provisioner.with_bot_token(handle.bot_token_manager());
+                        }
+                        let provisioner = Arc::new(provisioner);
                         manager_builder =
                             manager_builder.with_moderator_provisioner(provisioner.clone());
                         bot_ban_status_probe = Some(provisioner);

@@ -167,8 +167,8 @@ pub use target_resolution::{
 };
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_lifecycle::{
-    BotBanStatus, BotBanStatusProbe, BotBannedOutcome, NotifyOutcome, TokenLifecycleNotifier,
-    TokenLifecycleReactor, TOKEN_ERROR_CHANNEL_ID,
+    BotBanStatus, BotBanStatusProbe, BotBannedOutcome, ChatSendeProbe, NotifyOutcome,
+    TokenLifecycleNotifier, TokenLifecycleReactor, TOKEN_ERROR_CHANNEL_ID,
 };
 pub use token_provider::TokenProvider;
 pub use token_refresher::{

@@ -22,6 +22,7 @@ use std::{
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_chat::token::BotTokenManager;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
@@ -38,12 +39,12 @@ use tb_raid::pending_raids::normalize_broadcaster_login;
 use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
     classify_partner_raid_arrival, ArrivalTrackingStore, BotBanStatus, BotBanStatusProbe,
-    ManualRaidSuppression, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
+    ChatSendeProbe, ManualRaidSuppression, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
     RaidBlacklistStore, RaidGreetingRegistration, RaidSignalCorrelationService, RaidSignalOutcome,
     TokenProvider,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
-use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome};
+use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome, SendOutcome};
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
@@ -827,6 +828,9 @@ pub struct HelixModeratorProvisioner {
     token_provider: Arc<TokenProvider>,
     helix: HelixClient,
     bot_user_id: String,
+    /// Nur für die Chat-Sendeprobe und den Streamer-Whisper. Fehlt er, entfällt
+    /// beides.
+    bot_token: Option<Arc<BotTokenManager>>,
 }
 
 impl HelixModeratorProvisioner {
@@ -839,7 +843,14 @@ impl HelixModeratorProvisioner {
             token_provider,
             helix,
             bot_user_id,
+            bot_token: None,
         }
+    }
+
+    /// Verdrahtet den Bot-Token für Sendeprobe und Whisper.
+    pub fn with_bot_token(mut self, bot_token: Arc<BotTokenManager>) -> Self {
+        self.bot_token = Some(bot_token);
+        self
     }
 }
 
@@ -1076,6 +1087,118 @@ impl BotBanStatusProbe for HelixModeratorProvisioner {
             ModeratorProvisionOutcome::RetryLater => BotBanStatus::Unknown,
         }
     }
+
+    /// Klärt, was hinter der abgelehnten Moderator-Einsetzung steckt: Bann,
+    /// Timeout oder nur fehlende Rechte. Twitch sagt das nur beim Senden,
+    /// deshalb geht eine kurze Zeile in den Chat, und auch das nur, solange der
+    /// Kanal offline ist.
+    async fn chat_sende_probe(&self, twitch_user_id: &str, twitch_login: &str) -> ChatSendeProbe {
+        let Some(bot_token_manager) = &self.bot_token else {
+            tracing::debug!(
+                channel = twitch_login,
+                "Sendeprobe: kein Bot-Token verdrahtet"
+            );
+            return ChatSendeProbe::Unklar;
+        };
+        match self
+            .helix
+            .get_streams_by_user_ids(&[twitch_user_id.to_string()], None)
+            .await
+        {
+            Ok(streams) if !streams.is_empty() => {
+                tracing::debug!(
+                    channel = twitch_login,
+                    "Sendeprobe: Kanal ist live, keine Probe"
+                );
+                return ChatSendeProbe::Unklar;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, channel = twitch_login, "Sendeprobe: Live-Status nicht abfragbar");
+                return ChatSendeProbe::Unklar;
+            }
+        }
+        let token = match bot_token_manager.get_valid_token(false).await {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::warn!(%error, channel = twitch_login, "Sendeprobe: kein gültiger Bot-Token");
+                return ChatSendeProbe::Unklar;
+            }
+        };
+        match self
+            .helix
+            .send_chat_message(
+                twitch_user_id,
+                &self.bot_user_id,
+                &ban_probe_testzeile(),
+                &token,
+            )
+            .await
+        {
+            Ok(SendOutcome::Sent) => {
+                tracing::info!(channel = twitch_login, "Sendeprobe zugestellt: kein Bann");
+                ChatSendeProbe::Zugestellt
+            }
+            Ok(SendOutcome::Dropped { code, message }) if code == "sender_banned" => {
+                tracing::warn!(channel = twitch_login, %message, "Sendeprobe verworfen: Bann belegt");
+                ChatSendeProbe::Gebannt
+            }
+            Ok(SendOutcome::Dropped { code, message }) if code == "sender_timedout" => {
+                // Twitch schreibt die Restdauer in den Klartext ("You can chat
+                // again in 1 day 14 hours"). Genau die will der Admin sehen.
+                tracing::warn!(channel = twitch_login, %message, "Sendeprobe verworfen: Timeout");
+                ChatSendeProbe::Timeout { hinweis: message }
+            }
+            Ok(SendOutcome::Dropped { code, message }) => {
+                // channel_settings (Follower-/Sub-Only) heißt nicht gebannt.
+                tracing::info!(channel = twitch_login, %code, %message, "Sendeprobe verworfen, kein Ban-Grund");
+                ChatSendeProbe::Unklar
+            }
+            Ok(SendOutcome::HttpError { status, body }) => {
+                tracing::warn!(channel = twitch_login, status, %body, "Sendeprobe: HTTP-Fehler");
+                ChatSendeProbe::Unklar
+            }
+            Err(error) => {
+                tracing::warn!(%error, channel = twitch_login, "Sendeprobe: Request fehlgeschlagen");
+                ChatSendeProbe::Unklar
+            }
+        }
+    }
+
+    /// Whisper an den Streamer. Läuft über den Bot-Token, `user:manage:whispers`.
+    async fn streamer_whisper(&self, twitch_user_id: &str, text: &str) -> bool {
+        let Some(bot_token_manager) = &self.bot_token else {
+            return false;
+        };
+        let token = match bot_token_manager.get_valid_token(false).await {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::warn!(%error, "Streamer-Whisper: kein gültiger Bot-Token");
+                return false;
+            }
+        };
+        match self
+            .helix
+            .send_whisper(&self.bot_user_id, twitch_user_id, text, &token)
+            .await
+        {
+            Ok(outcome) => outcome.accepted,
+            Err(error) => {
+                tracing::warn!(%error, "Streamer-Whisper fehlgeschlagen");
+                false
+            }
+        }
+    }
+}
+
+/// Text der Sendeprobe. Steht im Offline-Chat und soll dort nicht nach Störung
+/// aussehen. Per `BAN_PROBE_TESTZEILE` überschreibbar.
+fn ban_probe_testzeile() -> String {
+    std::env::var("BAN_PROBE_TESTZEILE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "kurzer Verbindungstest, alles gut 👋".to_string())
 }
 
 // ─── Session-Finalize → Raid-Score-Tracking-Resolve (B7) ─────────────────────

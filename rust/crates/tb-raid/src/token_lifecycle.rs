@@ -50,6 +50,16 @@ const BAN_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(12
 /// nicht täglich, und ein stiller Kanal ist kein Bann.
 const CHAT_FRISCH_FENSTER: Duration = Duration::days(7);
 
+/// Mindestabstand zwischen zwei Sendeproben im selben Kanal.
+///
+/// Die Probe läuft ohnehin nur, wenn etwas nicht stimmt: die Moderator-
+/// Einsetzung wurde abgelehnt. Beim ersten Mal wird sofort geprüft, danach
+/// bleibt es dabei. Erst nach einer Woche wird der Zustand aufgefrischt, damit
+/// ein abgelaufener Timeout irgendwann auffällt, ohne dass der Bot regelmäßig
+/// in fremde Chats schreibt. Kommt der Kanal vorher zurück, räumt die
+/// erfolgreiche Einsetzung den Zustand von selbst ab.
+const SENDEPROBE_ABSTAND: Duration = Duration::days(7);
+
 /// Was die aktive Prüfung über einen Kanal weiß.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeZustand {
@@ -58,6 +68,10 @@ enum ProbeZustand {
     ModRechteWeg,
     /// Einsetzung abgelehnt, und aus dem Kanal kam länger kein Chat an.
     ModRechteWegStill,
+    /// Die Sendeprobe kam mit `sender_banned` zurück: Bann bewiesen.
+    Gebannt,
+    /// Die Sendeprobe kam mit `sender_timedout` zurück: befristet stumm.
+    Timeout,
 }
 
 impl ProbeZustand {
@@ -65,6 +79,8 @@ impl ProbeZustand {
         match self {
             ProbeZustand::ModRechteWeg => "mod_rechte_weg",
             ProbeZustand::ModRechteWegStill => "mod_rechte_weg_still",
+            ProbeZustand::Gebannt => "gebannt",
+            ProbeZustand::Timeout => "timeout",
         }
     }
 }
@@ -146,9 +162,41 @@ pub enum BotBanStatus {
     Unknown,
 }
 
+/// Ergebnis der aktiven Chat-Sendeprobe.
+///
+/// Die abgelehnte Moderator-Einsetzung sagt nicht, ob der Bot gebannt ist. Eine
+/// Nachricht in den Chat sagt es: kommt sie durch, ist er es nicht.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatSendeProbe {
+    /// Nachricht angekommen: kein Bann.
+    Zugestellt,
+    /// Twitch hat mit `sender_banned` verworfen: Bann bewiesen.
+    Gebannt,
+    /// Twitch hat mit `sender_timedout` verworfen: befristeter Timeout, kein
+    /// Bann. `hinweis` ist Twitchs Klartext samt Restdauer.
+    Timeout { hinweis: String },
+    /// Kanal ist live, kein Bot-Token, Netzfehler: kein Urteil.
+    Unklar,
+}
+
 #[async_trait::async_trait]
 pub trait BotBanStatusProbe: Send + Sync {
     async fn bot_ban_status(&self, twitch_user_id: &str, twitch_login: &str) -> BotBanStatus;
+
+    /// Schreibt eine kurze Testzeile in den Chat, aber nur wenn der Kanal
+    /// offline ist. Zuschauer sollen davon nichts mitbekommen, deshalb läuft die
+    /// Probe nie in einen laufenden Stream.
+    ///
+    /// Default ist [`ChatSendeProbe::Unklar`]: Implementierungen ohne
+    /// Chat-Zugang (Tests, Teil-Verdrahtungen) müssen nichts tun.
+    async fn chat_sende_probe(&self, _twitch_user_id: &str, _twitch_login: &str) -> ChatSendeProbe {
+        ChatSendeProbe::Unklar
+    }
+
+    /// Whisper an den Streamer auf Twitch. Default: nichts senden.
+    async fn streamer_whisper(&self, _twitch_user_id: &str, _text: &str) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +332,79 @@ pub fn admin_mod_rechte_weg_still_text(
          einmal und erst wieder, wenn sich der Zustand ändert."
     );
     (title, description)
+}
+
+/// Admin-Meldung: Die Sendeprobe wurde mit `sender_banned` verworfen. Damit ist
+/// der Bann kein Verdacht mehr, sondern gemessen.
+pub fn admin_bot_gebannt_text(twitch_login: &str, twitch_user_id: &str) -> (String, String) {
+    let title = format!("🚫 Bot in {twitch_login} gebannt");
+    let description = format!(
+        "Der Bot hat in **{twitch_login}** eine Testzeile in den Chat geschickt, \
+         während der Kanal offline war. Twitch hat sie mit `sender_banned` \
+         verworfen. Der Bann ist damit belegt, nicht vermutet.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
+         User ID: `{twitch_user_id}`\n\n\
+         **Automatisch passiert nichts:** keine Pause, keine Blacklist, keine \
+         Streamer-DM. Diese Meldung kommt genau einmal und erst wieder, wenn sich \
+         der Zustand ändert."
+    );
+    (title, description)
+}
+
+/// Admin-Meldung: Die Sendeprobe kam mit `sender_timedout` zurück. Der Bot ist
+/// befristet stumm, nicht gebannt.
+pub fn admin_bot_timeout_text(
+    twitch_login: &str,
+    twitch_user_id: &str,
+    hinweis: &str,
+) -> (String, String) {
+    let title = format!("⏳ Bot in {twitch_login} im Timeout");
+    let rest = truncate_chars(hinweis.trim(), 200);
+    let restzeile = if rest.is_empty() {
+        String::new()
+    } else {
+        format!("Twitchs Antwort: ```{rest}```\n")
+    };
+    let description = format!(
+        "Der Bot hat in **{twitch_login}** eine Testzeile in den Chat geschickt, \
+         während der Kanal offline war. Twitch hat sie mit `sender_timedout` \
+         verworfen: Der Bot wurde dort getimeoutet, gebannt ist er nicht.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
+         User ID: `{twitch_user_id}`\n\
+         {restzeile}\n\
+         **Zustand:** stumm bis der Timeout abläuft, Mod-Rechte weg. Danach \
+         läuft alles von selbst wieder an. Automatisch passiert nichts: keine \
+         Pause, keine Blacklist, keine Streamer-DM."
+    );
+    (title, description)
+}
+
+/// Nachricht an den Streamer, wenn der Bot in seinem Kanal im Timeout sitzt
+/// oder gebannt ist. Geht als Twitch-Whisper und als Discord-DM raus.
+///
+/// Kein Vorwurf, keine Technik: der Streamer soll wissen, dass der Bot dort
+/// nichts mehr tut, und wie er ihn loswird, wenn das so gewollt war. Der Weg
+/// über das Dashboard braucht einen Bot, der schreiben darf, deshalb steht die
+/// Reihenfolge drin.
+pub fn streamer_stumm_text(twitch_login: &str, gebannt: bool) -> String {
+    let lage = if gebannt {
+        "ist bei dir gebannt"
+    } else {
+        "sitzt bei dir gerade im Timeout"
+    };
+    let ende = if gebannt {
+        "Der Bann bleibt, bis du ihn aufhebst."
+    } else {
+        "Sobald der Timeout abläuft, macht er von allein weiter."
+    };
+    format!(
+        "Hey {twitch_login}, kurze Info: Der Deutsche-Deadlock-Community-Bot {lage}, \
+         also läuft in deinem Kanal gerade nichts von ihm. {ende} \
+         Wenn du ihn dauerhaft loswerden willst, geht das hier in zwei Schritten: \
+         erst den Bot bei dir entbannen oder den Timeout aufheben, dann auf \
+         {BOT_SECTION_URL} auf \"Bot vom Kanal trennen\" klicken. Andersherum \
+         klappt es nicht, weil er sonst nichts mehr bestätigen kann."
+    )
 }
 
 /// Admin-Meldung: Der Bot ist im Kanal wieder Moderator.
@@ -1073,14 +1194,35 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             match probe.bot_ban_status(&twitch_user_id, &twitch_login).await {
                 BotBanStatus::Banned => {
                     // Die abgelehnte Einsetzung allein sagt nicht, was los ist.
-                    // Der Chat entscheidet: kommen aus dem Kanal weiter
-                    // Nachrichten an, ist der Bot nicht gebannt, sondern nur
-                    // seine Autorisierung durch.
+                    // Beweis holen: eine Testzeile in den offline stehenden
+                    // Chat. Kommt sie durch, ist der Bot nicht gebannt, sondern
+                    // nur seine Autorisierung durch. Geht die Probe nicht (Kanal
+                    // live, kein Bot-Token), bleibt der empfangene Chat als
+                    // schwächeres Indiz.
+                    // Die Sendeprobe schreibt in einen fremden Chat. Das darf
+                    // nicht stündlich passieren: solange der gemerkte Zustand
+                    // frisch ist, wird er nur mitgezählt.
+                    if !self.sendeprobe_faellig(&twitch_user_id).await {
+                        self.probe_mitzaehlen(&twitch_user_id).await;
+                        tracing::debug!(
+                            login = %twitch_login,
+                            "Aktive Prüfung: Zustand frisch, keine neue Sendeprobe"
+                        );
+                        tokio::time::sleep(BAN_PROBE_DELAY).await;
+                        continue;
+                    }
                     let chat = self.letzte_chatzeile(&twitch_login).await;
-                    let zustand = if chat.frisch() {
-                        ProbeZustand::ModRechteWeg
-                    } else {
-                        ProbeZustand::ModRechteWegStill
+                    let mut timeout_hinweis = String::new();
+                    let zustand = match probe.chat_sende_probe(&twitch_user_id, &twitch_login).await
+                    {
+                        ChatSendeProbe::Zugestellt => ProbeZustand::ModRechteWeg,
+                        ChatSendeProbe::Gebannt => ProbeZustand::Gebannt,
+                        ChatSendeProbe::Timeout { hinweis } => {
+                            timeout_hinweis = hinweis;
+                            ProbeZustand::Timeout
+                        }
+                        ChatSendeProbe::Unklar if chat.frisch() => ProbeZustand::ModRechteWeg,
+                        ChatSendeProbe::Unklar => ProbeZustand::ModRechteWegStill,
                     };
                     if self
                         .zustand_ist_neu(&twitch_user_id, &twitch_login, zustand)
@@ -1098,6 +1240,14 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                                 &twitch_user_id,
                                 &chat.beschreibung(),
                             ),
+                            ProbeZustand::Gebannt => {
+                                admin_bot_gebannt_text(&twitch_login, &twitch_user_id)
+                            }
+                            ProbeZustand::Timeout => admin_bot_timeout_text(
+                                &twitch_login,
+                                &twitch_user_id,
+                                &timeout_hinweis,
+                            ),
                         };
                         tracing::warn!(
                             login = %twitch_login,
@@ -1107,6 +1257,17 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                         self.notifier
                             .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
                             .await;
+                        // Bei Timeout und Bann erfährt es auch der Streamer:
+                        // einmal, auf beiden Wegen, mit dem Weg zum Trennen.
+                        if matches!(zustand, ProbeZustand::Timeout | ProbeZustand::Gebannt) {
+                            self.streamer_ueber_stumm_informieren(
+                                probe.as_ref(),
+                                &twitch_user_id,
+                                &twitch_login,
+                                zustand == ProbeZustand::Gebannt,
+                            )
+                            .await;
+                        }
                     } else {
                         tracing::debug!(
                             login = %twitch_login,
@@ -1206,6 +1367,63 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 tracing::warn!(%error, login = %twitch_login, "Prüf-Zustand nicht speicherbar");
                 false
             }
+        }
+    }
+
+    /// Sagt dem Streamer, dass der Bot bei ihm stumm ist, und wie er ihn
+    /// loswird. Twitch-Whisper und Discord-DM, damit es ankommt.
+    async fn streamer_ueber_stumm_informieren(
+        &self,
+        probe: &dyn BotBanStatusProbe,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        gebannt: bool,
+    ) {
+        let text = streamer_stumm_text(twitch_login, gebannt);
+        let whisper = probe.streamer_whisper(twitch_user_id, &text).await;
+        let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
+        let dm = if let Some(ref did) = discord_user_id {
+            self.notifier.send_user_dm(did, &text).await
+        } else {
+            false
+        };
+        tracing::info!(
+            login = %twitch_login,
+            whisper,
+            discord_dm = dm,
+            "Streamer über stummen Bot informiert"
+        );
+    }
+
+    /// Ist für diesen Kanal wieder eine Sendeprobe fällig? Ohne gemerkten
+    /// Zustand ja, sonst erst nach [`SENDEPROBE_ABSTAND`].
+    async fn sendeprobe_faellig(&self, twitch_user_id: &str) -> bool {
+        let letzte = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+            "SELECT MAX(letzte_probe) FROM twitch_ban_probe_zustand WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .fetch_one(&self.pool)
+        .await;
+        match letzte {
+            Ok(Some(ts)) => Utc::now().signed_duration_since(ts) >= SENDEPROBE_ABSTAND,
+            Ok(None) => true,
+            Err(error) => {
+                tracing::warn!(%error, "Sendeprobe-Fälligkeit nicht lesbar");
+                false
+            }
+        }
+    }
+
+    /// Zählt eine übersprungene Prüfung mit, ohne den Zustand zu ändern.
+    async fn probe_mitzaehlen(&self, twitch_user_id: &str) {
+        if let Err(error) = sqlx::query(
+            "UPDATE twitch_ban_probe_zustand SET proben = proben + 1 WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%error, "Prüf-Zähler nicht schreibbar");
         }
     }
 
