@@ -239,22 +239,18 @@ pub async fn checkout_start_handler(
             "source": "abbo_page_pay_link",
             "customer_reference": reference,
         },
+        "subscription_data": {
+            "metadata": {
+                "plan_id": plan_id,
+                "cycle_months": cycle.to_string(),
+                "customer_reference": reference,
+            },
+        },
     });
 
-    // 30-Tage-Trial nur für analysis_dashboard im Monatszyklus; +2 Bonus-Monate
-    // beim Jahreszyklus (vom Webhook via subscription_data.metadata verarbeitet).
-    if plan_id == "analysis_dashboard" && cycle == 1 {
-        session_payload["subscription_data"] = json!({ "trial_period_days": 30 });
-    }
+    // Trial-Tage setzt M4. Jahreszyklus: Bonus-Monate bleiben für Alt-Abos.
     if cycle == 12 {
-        // Auf bestehende subscription_data mergen (für Jahreszyklus ist sie leer,
-        // da der Trial nur bei Monatszyklus greift — Python-Parität).
-        let mut sub_data = session_payload
-            .get("subscription_data")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        sub_data["metadata"] = json!({ "bonus_months": "2" });
-        session_payload["subscription_data"] = sub_data;
+        session_payload["subscription_data"]["metadata"]["bonus_months"] = json!("2");
     }
 
     let (profile, _) =
@@ -1216,7 +1212,7 @@ mod tests {
             DashboardAuthLevel::None,
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle_months: None,
             }),
         )
@@ -1246,7 +1242,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p == "raid_boost"));
+            .any(|p| p == "premium"));
     }
 
     /// P1.44: gültiger bezahlter Plan ohne Stripe-Config → 200 mit readiness/
@@ -1257,7 +1253,7 @@ mod tests {
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle_months: Some(serde_json::json!(1)),
             }),
         )
@@ -1268,7 +1264,7 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["provider"], "stripe");
-        assert_eq!(v["plan"]["id"], "raid_boost");
+        assert_eq!(v["plan"]["id"], "premium");
         assert_eq!(v["integration_state"], "planned");
         assert_eq!(v["ready"], false);
         assert!(v["next_steps"].as_array().unwrap().len() == 2);
@@ -1281,7 +1277,7 @@ mod tests {
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle_months: None,
             }),
         )
@@ -1342,7 +1338,7 @@ mod tests {
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1389,7 +1385,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: Some("1".into()),
             }),
@@ -1409,7 +1405,7 @@ mod tests {
             Some(Extension(cfg_with_base("http://unused.invalid"))),
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1428,7 +1424,7 @@ mod tests {
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1461,7 +1457,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("premium".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1714,19 +1710,19 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["currency"], "EUR");
+        assert_eq!(v["tax_mode"], "small_business");
         let plans = v["plans"].as_array().unwrap();
-        assert_eq!(plans.len(), 8);
-        // raid_free = aktueller Default-Plan.
-        assert_eq!(v["current_subscription"]["plan_id"], "raid_free");
-        let raid_free = plans.iter().find(|p| p["id"] == "raid_free").unwrap();
-        assert_eq!(raid_free["is_current"], true);
-        assert_eq!(raid_free["checkout_available"], false);
-        assert!(raid_free["stripe_price_id"].is_null());
-        // Bezahlter Plan trägt Price-ID + checkout_available (Config ⇒ checkout_ready).
-        let raid_boost = plans.iter().find(|p| p["id"] == "raid_boost").unwrap();
-        assert_eq!(raid_boost["is_current"], false);
-        assert!(raid_boost["stripe_price_id"].is_string());
-        assert_eq!(raid_boost["checkout_available"], true);
+        assert_eq!(plans.len(), 2);
+        assert_eq!(v["current_subscription"]["plan_id"], "free");
+        let free = plans.iter().find(|p| p["id"] == "free").unwrap();
+        assert_eq!(free["is_current"], true);
+        assert_eq!(free["checkout_available"], false);
+        assert!(free["stripe_price_id"].is_null());
+        let premium = plans.iter().find(|p| p["id"] == "premium").unwrap();
+        assert_eq!(premium["is_current"], false);
+        assert!(premium["stripe_price_id"].is_string());
+        assert_eq!(premium["checkout_available"], true);
+        assert_eq!(premium["monthly_gross_cents"], 299);
         // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
         // persistiert; recipient_name fällt auf den Login zurück, country=DE).
         assert_eq!(v["billing_profile"]["customer_reference"], "login");

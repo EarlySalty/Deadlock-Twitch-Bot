@@ -16,9 +16,10 @@ use sqlx::PgPool;
 /// Plan-Tier aus Plan-ID ableiten (Python: `PLAN_TIER_MAP`).
 pub fn plan_tier(plan_id: &str) -> &'static str {
     match plan_id {
-        "raid_free" => "free",
+        "free" | "raid_free" => "free",
         "chat_quiet" | "raid_boost" | "bundle_chat_quiet_raid_boost" => "basic",
-        "analysis_dashboard"
+        "premium"
+        | "analysis_dashboard"
         | "bundle_analysis_raid_boost"
         | "bundle_werbefrei_analyse"
         | "bundle_komplett"
@@ -30,7 +31,8 @@ pub fn plan_tier(plan_id: &str) -> &'static str {
 /// Anzeigename aus Plan-ID (Python: `PLAN_DISPLAY_NAME_MAP`).
 pub fn plan_display_name(plan_id: &str) -> &'static str {
     match plan_id {
-        "raid_free" => "Free",
+        "free" | "raid_free" => "Free",
+        "premium" => "Premium",
         "chat_quiet" => "Werbefrei",
         "raid_boost" => "Basic",
         "bundle_chat_quiet_raid_boost" => "Werbefrei + Raid Boost",
@@ -54,7 +56,8 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
         // Analytics-Konsolidierung auf EIN Flag: kein Flag => `last_stream`
         // (kostenlose Tagesform) ist der Default; das Flag `"analytics"` => voller
         // Analytics-Zugang (voller Verlauf, Vergleiche, KI-Analyse via Opus).
-        "raid_free" => &[],
+        "free" | "raid_free" => &[],
+        "premium" => crate::billing::catalog::PREMIUM_ENTITLEMENTS,
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &["chat.lurker_tax", "raid.priority"],
         "bundle_chat_quiet_raid_boost" => {
@@ -74,7 +77,7 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
             "chat.promos.disable",
             "raid.priority",
         ],
-        "analytics_trial" => &["analytics", "chat.lurker_tax"],
+        "analytics_trial" => crate::billing::catalog::PREMIUM_ENTITLEMENTS,
         _ => &[],
     }
 }
@@ -99,6 +102,8 @@ pub fn plan_has_analytics(plan_id: &str) -> bool {
 /// bzw. ganz aus dem Override (Manual) wirft. Test-Gate: siehe `tests`.
 fn normalize_plan_id(raw: &str) -> &'static str {
     match raw.trim() {
+        "free" => "free",
+        "premium" => "premium",
         "raid_free" => "raid_free",
         "chat_quiet" => "chat_quiet",
         "raid_boost" => "raid_boost",
@@ -108,12 +113,14 @@ fn normalize_plan_id(raw: &str) -> &'static str {
         "bundle_werbefrei_analyse" => "bundle_werbefrei_analyse",
         "bundle_komplett" => "bundle_komplett",
         "analytics_trial" => "analytics_trial",
-        _ => "raid_free",
+        _ => "free",
     }
 }
 
-/// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
-const KNOWN_PLAN_IDS: [&str; 9] = [
+/// Kanonische Plan-IDs. Alte IDs bleiben lesbar, Free/Premium sind kaufbar.
+const KNOWN_PLAN_IDS: [&str; 11] = [
+    "free",
+    "premium",
     "raid_free",
     "chat_quiet",
     "raid_boost",
@@ -128,7 +135,7 @@ const KNOWN_PLAN_IDS: [&str; 9] = [
 /// `true`, wenn `raw` (nur whitespace-getrimmt) ein bekannter kanonischer Plan
 /// ist. Spiegelt Python `manual_override_from_row` (repository.py:82):
 /// `if plan_id not in KNOWN_PLAN_IDS: return None`.
-fn is_known_plan_id(raw: &str) -> bool {
+pub fn is_known_plan_id(raw: &str) -> bool {
     KNOWN_PLAN_IDS.contains(&raw.trim())
 }
 
@@ -212,7 +219,7 @@ impl PlanSnapshot {
     /// kanonischen raid_free-Snapshot bauen, ohne das Feld-Set zu duplizieren.
     pub fn default_basic(fallback_ref: &str) -> Self {
         Self::from_plan(
-            "raid_free",
+            "free",
             "default_basic",
             None,
             fallback_ref.trim().to_string(),
@@ -549,10 +556,10 @@ mod tests {
 
     #[test]
     fn normalize_ist_case_sensitive() {
-        // Python lowercased NICHT in normalize_plan_id → Case-Mismatch fällt auf raid_free.
-        assert_eq!(normalize_plan_id("Raid_Boost"), "raid_free");
-        assert_eq!(normalize_plan_id("ANALYSIS_DASHBOARD"), "raid_free");
-        assert_eq!(normalize_plan_id("Chat_Quiet"), "raid_free");
+        // Case-Mismatch fällt auf free.
+        assert_eq!(normalize_plan_id("Raid_Boost"), "free");
+        assert_eq!(normalize_plan_id("ANALYSIS_DASHBOARD"), "free");
+        assert_eq!(normalize_plan_id("Chat_Quiet"), "free");
     }
 
     #[test]
@@ -570,17 +577,19 @@ mod tests {
         ] {
             assert_eq!(
                 normalize_plan_id(alias),
-                "raid_free",
+                "free",
                 "Legacy-Alias darf in DB-Resolution nicht aufgelöst werden: {alias}"
             );
         }
     }
 
     #[test]
-    fn normalize_unbekannt_faellt_auf_raid_free() {
-        assert_eq!(normalize_plan_id(""), "raid_free");
-        assert_eq!(normalize_plan_id("garbage"), "raid_free");
-        assert_eq!(normalize_plan_id("premium_max"), "raid_free");
+    fn normalize_unbekannt_faellt_auf_free() {
+        assert_eq!(normalize_plan_id(""), "free");
+        assert_eq!(normalize_plan_id("garbage"), "free");
+        assert_eq!(normalize_plan_id("premium_max"), "free");
+        assert_eq!(normalize_plan_id("premium"), "premium");
+        assert_eq!(normalize_plan_id("free"), "free");
     }
 
     // ── is_known_plan_id: Manual-Override-Gate (Python repository.py:82) ─────
@@ -588,6 +597,8 @@ mod tests {
     #[test]
     fn known_plan_id_nur_fuer_kanonische_ids() {
         assert!(is_known_plan_id("raid_free"));
+        assert!(is_known_plan_id("free"));
+        assert!(is_known_plan_id("premium"));
         assert!(is_known_plan_id("analytics_trial"));
         assert!(is_known_plan_id("  bundle_komplett  ")); // trim wie Python
     }
@@ -598,7 +609,6 @@ mod tests {
         // Fall-Through zu Billing) statt ihn als raid_free zu honorieren.
         assert!(!is_known_plan_id("Raid_Boost"));
         assert!(!is_known_plan_id("analysis"));
-        assert!(!is_known_plan_id("free"));
         assert!(!is_known_plan_id(""));
         assert!(!is_known_plan_id("garbage"));
     }
@@ -627,6 +637,7 @@ mod tests {
             "raid_boost",
             "bundle_chat_quiet_raid_boost",
             "raid_free",
+            "free",
             "chat_quiet",
         ] {
             assert!(
@@ -639,6 +650,7 @@ mod tests {
             );
         }
         for id in [
+            "premium",
             "analysis_dashboard",
             "bundle_werbefrei_analyse",
             "bundle_komplett",
@@ -705,7 +717,7 @@ mod tests {
     #[test]
     fn default_basic_snapshot_hat_alle_felder() {
         let snap = PlanSnapshot::default_basic("Nani");
-        assert_eq!(snap.plan_id, "raid_free");
+        assert_eq!(snap.plan_id, "free");
         assert_eq!(snap.source, "default_basic");
         assert_eq!(snap.status, "active");
         assert_eq!(snap.customer_reference, "Nani"); // getrimmt durchgereicht

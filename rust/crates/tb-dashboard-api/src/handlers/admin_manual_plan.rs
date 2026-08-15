@@ -148,12 +148,15 @@ async fn set_manual_plan(
     if normalized_login.is_empty() {
         return Err(ManualPlanError::LoginRequired);
     }
-    // Python `_billing_normalize_plan_id`: nur Plan-IDs aus dem Billing-Katalog
-    // (`_BILLING_PLANS`) sind gültig. `find_plan` liefert die kanonische
-    // `&'static str`-ID (exakter Match, kein Lowercasing — Python-Parität).
-    let normalized_plan_id = tb_analytics::billing::find_plan(plan_id.trim())
-        .map(|plan| plan.id)
-        .ok_or(ManualPlanError::UnknownPlanId)?;
+    // Kaufbare Katalog-IDs plus alte, in der DB noch lesbare Plan-IDs.
+    let trimmed = plan_id.trim();
+    let normalized_plan_id = if let Some(plan) = tb_analytics::billing::find_plan(trimmed) {
+        plan.id.to_string()
+    } else if tb_analytics::plan::is_known_plan_id(trimmed) {
+        trimmed.to_string()
+    } else {
+        return Err(ManualPlanError::UnknownPlanId);
+    };
     let expires_at_iso = parse_datetime_value(expires_at);
     let notes_value: String = notes.trim().chars().take(MAX_NOTES_LEN).collect();
     let updated_at_iso = now_iso();

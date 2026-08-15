@@ -157,6 +157,7 @@ export function isActivePaidSubscription(
     !!sub &&
     !!sub.plan_id &&
     sub.plan_id !== 'raid_free' &&
+    sub.plan_id !== 'free' &&
     sub.tier !== 'free'
   );
 }

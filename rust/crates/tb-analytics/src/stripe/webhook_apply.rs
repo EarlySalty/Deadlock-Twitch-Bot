@@ -113,6 +113,7 @@ impl StreamerPlanSync {
 /// Voll-Auflösung des Katalogs — diese Engführung ist das Python-Orakel.)
 pub fn plan_name_from_id(plan_id: &str) -> &'static str {
     match plan_id.trim() {
+        "premium" => "premium",
         "raid_boost" => "raid_boost",
         "analysis_dashboard" => "analysis",
         "bundle_analysis_raid_boost" => "bundle",
@@ -936,13 +937,14 @@ mod tests {
     // ── Plan-Name-Mapping (Geld-kritisch: nur 3 Pläne ≠ free) ───────────────
     #[test]
     fn plan_name_map_matches_python_oracle() {
+        assert_eq!(plan_name_from_id("premium"), "premium");
         assert_eq!(plan_name_from_id("raid_boost"), "raid_boost");
         assert_eq!(plan_name_from_id("analysis_dashboard"), "analysis");
         assert_eq!(plan_name_from_id("bundle_analysis_raid_boost"), "bundle");
-        // Alles andere → free (auch sonst bezahlte Pläne — Python-Engführung).
         assert_eq!(plan_name_from_id("chat_quiet"), "free");
         assert_eq!(plan_name_from_id("bundle_komplett"), "free");
         assert_eq!(plan_name_from_id("raid_free"), "free");
+        assert_eq!(plan_name_from_id("free"), "free");
         assert_eq!(plan_name_from_id(""), "free");
         assert_eq!(plan_name_from_id("  raid_boost  "), "raid_boost");
     }
