@@ -73,34 +73,22 @@ pub trait DeadlockPauseUnmodPort: Send + Sync {
 
 /// DM an den Streamer, wenn der Bot sich wegen Deadlock-Pause entmoddet hat.
 ///
-/// Zwei Botschaften, in dieser Reihenfolge: es ist nichts kaputt und kommt von
-/// allein zurück, und wer den Bot dauerhaft loswerden will, findet hier den
-/// sauberen Weg. Die Rückkehr wird ausdrücklich zugesagt, damit niemand denkt,
-/// eine Trennung sei endgültig.
+/// Die Nachricht darf nicht wie ein Rauswurf klingen. Reihenfolge deshalb: was
+/// passiert ist, dann sofort die Entwarnung (Status bleibt, kein Handlungsbedarf),
+/// dann die Rückkehr-Zusage samt Bedingung. Das Trennen steht bewusst nur als
+/// letzte Zeile: wer nichts tun will, soll es auch nicht lesen müssen.
 pub fn user_dm_deadlock_pause_text(twitch_login: &str, pause_days: i64) -> String {
     let months = pause_days / 30;
     format!(
-        "💤 **Twitch Bot – Mod-Rechte pausiert**\n\n\
-         In **{twitch_login}** lief seit {months} Monaten kein Deadlock-Stream. \
-         Der Bot hat seine Moderator-Rechte deshalb von allein abgegeben.\n\n\
-         **Streamst du wieder Deadlock, moddet er sich automatisch zurück.** \
-         Du musst dafür nichts tun, deine Partnerschaft und deine Einstellungen \
-         bleiben bestehen.\n\n\
-         **Wenn du dauerhaft kein Deadlock mehr streamst** und den Bot ganz \
-         loswerden willst:\n\
-         1️⃣ {BOT_SECTION_URL} öffnen\n\
-         2️⃣ Ganz unten **Bot vom Kanal trennen** klicken\n\n\
-         Du kannst jederzeit wieder Partner werden, auch nach einer Trennung."
-    )
-}
-
-/// DM an den Streamer, wenn der Bot sich nach einem Deadlock-Stream zurückgeholt
-/// hat. Kurz gehalten: hier ist nichts zu tun und nichts zu entscheiden.
-pub fn user_dm_deadlock_return_text(twitch_login: &str) -> String {
-    format!(
-        "✅ **Twitch Bot – wieder aktiv**\n\n\
-         Du streamst wieder Deadlock, der Bot ist in **{twitch_login}** zurück als \
-         Moderator. Auto-Raid, Chat-Schutz und Analytics laufen wieder."
+        "💤 **Der Bot ist bei dir kein Mod mehr**\n\n\
+         Du hast seit {months} Monaten kein Deadlock gestreamt. Deshalb hat der Bot \
+         seine Mod-Rechte in **{twitch_login}** abgegeben. Er soll keine Rechte in \
+         deinem Kanal haben, wenn er dort gerade nichts tut.\n\n\
+         **Du bleibst Partner und musst nichts machen.**\n\n\
+         Streamst du wieder Deadlock, ist er von selbst zurück. Falls nicht, ist \
+         meist die Verbindung zu deinem Twitch-Konto abgelaufen; die erneuerst du \
+         im Dashboard.\n\n\
+         Willst du ihn dauerhaft raus haben: {BOT_SECTION_URL}"
     )
 }
 
@@ -376,16 +364,17 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
         remodded
     }
 
+    /// Meldet einen Pausen-Wechsel. Der Streamer bekommt nur beim Unmod eine DM:
+    /// dass der Bot nach einem Deadlock-Stream wieder da ist, sieht er selbst,
+    /// und eine Nachricht dafür wäre nur Rauschen.
     async fn notify_pause(&self, twitch_user_id: &str, twitch_login: &str, zurueck: bool) {
-        if let Some(discord_user_id) =
-            discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
-        {
-            let text = if zurueck {
-                user_dm_deadlock_return_text(twitch_login)
-            } else {
-                user_dm_deadlock_pause_text(twitch_login, self.pause_days)
-            };
-            self.notifier.send_user_dm(&discord_user_id, &text).await;
+        if !zurueck {
+            if let Some(discord_user_id) =
+                discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
+            {
+                let text = user_dm_deadlock_pause_text(twitch_login, self.pause_days);
+                self.notifier.send_user_dm(&discord_user_id, &text).await;
+            }
         }
         let (title, description) = admin_deadlock_pause_text(twitch_login, twitch_user_id, zurueck);
         self.notifier
@@ -424,31 +413,69 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
 mod tests {
     use super::*;
 
+    /// Die DM muss vier Fragen beantworten, bevor sie zum Trennen kommt: was ist
+    /// passiert, verliere ich etwas, muss ich handeln, wie komme ich zurueck.
+    /// Steht der Trenn-Link vorher, liest sie sich wie eine Kuendigung.
     #[test]
-    fn pause_dm_sagt_rueckkehr_zu_und_zeigt_den_trennweg() {
+    fn pause_dm_beantwortet_erst_die_sorgen_dann_den_ausstieg() {
         let text = user_dm_deadlock_pause_text("foo", DEADLOCK_PAUSE_DAYS);
         assert!(text.contains("foo"));
-        // Kernaussage: es kommt von allein zurück.
-        assert!(text.contains("automatisch zurück"));
-        // Der Trenn-Weg fürs dauerhafte Aus.
-        assert!(text.contains(BOT_SECTION_URL));
-        assert!(text.contains("Bot vom Kanal trennen"));
-        // Und die Tür bleibt offen.
-        assert!(text.contains("jederzeit wieder Partner"));
+
+        let bleibt = text
+            .find("Du bleibst Partner und musst nichts machen")
+            .expect("Entwarnung fehlt");
+        let rueckkehr = text.find("von selbst zurück").expect("Rueckkehr fehlt");
+        let trennen = text.find(BOT_SECTION_URL).expect("Trenn-Link fehlt");
+        assert!(
+            bleibt < rueckkehr && rueckkehr < trennen,
+            "Reihenfolge muss Entwarnung, Rueckkehr, Trennen sein"
+        );
+    }
+
+    /// Kein internes Vokabular in einer Streamer-DM: was fuer uns "archiviert",
+    /// "Autorisierung" oder "entmoddet" heisst, sagt dem Streamer nichts.
+    #[test]
+    fn pause_dm_spricht_streamersprache() {
+        let text = user_dm_deadlock_pause_text("foo", DEADLOCK_PAUSE_DAYS).to_lowercase();
+        for begriff in [
+            "archiviert",
+            "autorisierung",
+            "entmoddet",
+            "opt-out",
+            "technical",
+            "token",
+        ] {
+            assert!(
+                !text.contains(begriff),
+                "internes Vokabular '{begriff}' gehoert nicht in die Streamer-DM"
+            );
+        }
+    }
+
+    /// Keine Dashes als Satzzeichen in Texten, die beim Nutzer landen.
+    #[test]
+    fn nutzertexte_ohne_dash_ersatzzeichen() {
+        let texte = [
+            user_dm_deadlock_pause_text("foo", DEADLOCK_PAUSE_DAYS),
+            admin_deadlock_pause_text("foo", "42", false).1,
+            admin_deadlock_pause_text("foo", "42", true).1,
+        ];
+        for text in texte {
+            for zeichen in ['\u{2014}', '\u{2013}', '\u{2015}'] {
+                assert!(
+                    !text.contains(zeichen),
+                    "Dash-Ersatzzeichen in Nutzertext: {text}"
+                );
+            }
+            assert!(!text.contains(" - "), "Spaced Hyphen in Nutzertext: {text}");
+            assert!(!text.contains("--"), "Doppel-Hyphen in Nutzertext: {text}");
+        }
     }
 
     #[test]
     fn pause_dm_nennt_die_dauer_in_monaten() {
         let text = user_dm_deadlock_pause_text("foo", 60);
         assert!(text.contains("2 Monaten"), "Text war: {text}");
-    }
-
-    #[test]
-    fn rueckkehr_dm_verlangt_keine_aktion() {
-        let text = user_dm_deadlock_return_text("foo");
-        assert!(text.contains("foo"));
-        assert!(text.contains("wieder aktiv"));
-        assert!(!text.contains("klicken"));
     }
 
     #[test]
@@ -714,11 +741,12 @@ mod tests {
         .unwrap();
         assert_eq!(marked, vec!["alt".to_string(), "andersspiel".to_string()]);
 
-        // Jeder bekommt genau eine DM mit dem Trennweg.
+        // Jeder bekommt genau eine DM, personalisiert und mit dem Trennweg.
         let dms = notifier.dms.lock().unwrap().clone();
         assert_eq!(dms.len(), 2);
-        assert!(dms.iter().all(|d| d.contains("Bot vom Kanal trennen")));
-        assert!(dms.iter().all(|d| d.contains("jederzeit wieder Partner")));
+        assert!(dms.iter().all(|d| d.contains(BOT_SECTION_URL)));
+        assert!(dms.iter().any(|d| d.contains("alt")));
+        assert!(dms.iter().any(|d| d.contains("andersspiel")));
 
         // Zweiter Lauf ist ein No-op: der Marker dedupliziert.
         assert_eq!(reactor.unmod_idle_channels().await, 0);
@@ -856,9 +884,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(still_paused, vec!["immernoch".to_string()]);
-        let dms = notifier.dms.lock().unwrap().clone();
-        assert_eq!(dms.len(), 1);
-        assert!(dms[0].contains("wieder aktiv"));
+        // Die Rückkehr wird nicht angekündigt: dass der Bot wieder da ist, sieht
+        // der Streamer selbst. Nur das Admin-Log bekommt eine Zeile.
+        assert!(
+            notifier.dms.lock().unwrap().is_empty(),
+            "der Remod darf den Streamer nicht anschreiben"
+        );
+        assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
     }
 
     /// Wenn der Streamer den Bot in der Pause gebannt hat, ist das Sache des

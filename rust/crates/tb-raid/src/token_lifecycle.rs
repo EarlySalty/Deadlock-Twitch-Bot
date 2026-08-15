@@ -126,7 +126,7 @@ pub fn admin_grace_expired_text(
         Some(id) if !id.is_empty() => format!("<@{id}>"),
         _ => format!("`{twitch_login}`"),
     };
-    let title = "🚨 Grace-Period abgelaufen – Streamer-Rolle entzogen".to_string();
+    let title = "🚨 Grace-Period abgelaufen, Streamer-Rolle entzogen".to_string();
     let description = format!(
         "Der Streamer **{twitch_login}** hat seinen Token innerhalb von \
          **{GRACE_PERIOD_DAYS} Tagen** nicht erneuert. Die Streamer-Rolle wurde \
@@ -134,7 +134,7 @@ pub fn admin_grace_expired_text(
          Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
          Discord: {mention}\n\
          User ID: `{twitch_user_id}`\n\
-         Bitte kontaktiere {mention} direkt — Re-Auth über die Website stellt die \
+         Bitte kontaktiere {mention} direkt. Ein Re-Auth über die Website stellt die \
          Rolle automatisch wieder her."
     );
     (title, description)
@@ -185,7 +185,7 @@ pub fn admin_bot_banned_text(
 /// "Twitch-Verbindung" gilt das Dashboard sofort wieder als vertraut.
 pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String {
     format!(
-        "⚠️ **Twitch Bot – Verbindung fehlgeschlagen**\n\n\
+        "⚠️ **Twitch-Verbindung fehlgeschlagen**\n\n\
          Die Verbindung für **{twitch_login}** ist abgelaufen (z. B. nach Passwort- \
          oder 2FA-Änderung). Auto-Raid, Chat-Schutz und Analytics pausieren, bis sie \
          wieder steht.\n\n\
@@ -202,7 +202,7 @@ pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String 
 /// User-DM-Text als Grace-Reminder (Python `is_reminder=True`).
 pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
     format!(
-        "⚠️ **Twitch Bot – Verbindung fehlt weiterhin**\n\n\
+        "⚠️ **Twitch-Verbindung fehlt weiterhin**\n\n\
          Für **{twitch_login}** ist die Verbindung seit {GRACE_PERIOD_DAYS} Tagen \
          offen. Die Bot-Funktionen bleiben so lange aus.\n\n\
          **So verbindest du neu:**\n\
@@ -224,14 +224,14 @@ pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
 pub fn user_dm_bot_banned_text(twitch_login: &str, _error_message: &str) -> String {
     let bot = bot_twitch_login();
     format!(
-        "⚠️ **Twitch Bot – in deinem Channel blockiert**\n\n\
+        "⚠️ **Der Bot ist in deinem Kanal blockiert**\n\n\
          Der Bot wurde in **{twitch_login}** gebannt oder als Moderator entfernt. \
          Auto-Raid, Chat-Schutz und Analytics pausieren so lange.\n\n\
-         **Wenn das ein Versehen war** – zwei Befehle in deinem Chat:\n\
+         **War das ein Versehen?** Zwei Befehle in deinem Chat:\n\
          1️⃣ `/unban {bot}`\n\
          2️⃣ `/mod {bot}`\n\n\
          Danach läuft alles von allein wieder an.\n\n\
-         **Wenn du den Bot loswerden willst** – bitte in dieser Reihenfolge:\n\
+         **Willst du den Bot loswerden?** Bitte in dieser Reihenfolge:\n\
          1️⃣ `/unban {bot}` in deinem Chat (ohne das behält der Bot seine Rechte)\n\
          2️⃣ {BOT_SECTION_URL} öffnen\n\
          3️⃣ Ganz unten **Bot vom Kanal trennen** klicken\n\n\
@@ -506,7 +506,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             // 2. Streamer-Rolle entziehen (best-effort via Broker).
             if let Some(ref did) = discord_user_id {
                 let reason = format!(
-                    "Twitch-Token seit {GRACE_PERIOD_DAYS} Tagen ungültig – Grace-Period abgelaufen"
+                    "Twitch-Token seit {GRACE_PERIOD_DAYS} Tagen ungültig, Grace-Period abgelaufen"
                 );
                 self.notifier.revoke_streamer_role(did, &reason).await;
             }
@@ -521,7 +521,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 processed += 1;
                 tracing::info!(
                     user = %mask(&row.twitch_user_id),
-                    "Grace-Period abgelaufen – Rolle entzogen, token_error_expired gesetzt"
+                    "Grace-Period abgelaufen: Rolle entzogen, token_error_expired gesetzt"
                 );
             }
         }
@@ -801,7 +801,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// Liefert die Anzahl neu erkannter Bans.
     pub async fn detect_bot_bans(&self) -> u64 {
         let Some(probe) = &self.bot_ban_status_probe else {
-            tracing::debug!("Bot-Ban-Sweep übersprungen — kein Ban-Status-Provisioner verdrahtet");
+            tracing::debug!("Bot-Ban-Sweep übersprungen: kein Ban-Status-Provisioner verdrahtet");
             return 0;
         };
 
