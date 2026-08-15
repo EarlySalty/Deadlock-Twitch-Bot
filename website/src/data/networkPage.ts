@@ -100,7 +100,7 @@ export const valuePillars: ValuePillar[] = [
     points: [
       "Erkennung über Chat-Ausschläge und !clip im Chat",
       "Hochkant-Format für TikTok, Shorts und Reels",
-      "Automatisches Posten ist in Arbeit und Teil von Creator Pro",
+      "Automatisches Posten ist in Arbeit und Teil von Premium",
     ],
     tone: "accent",
   },
@@ -121,71 +121,47 @@ export interface Plan {
 }
 
 /**
- * Drei Stufen nach docs/strategie/32. Free ist der heutige Ist-Zustand;
- * Plus und Creator Pro bündeln bestehende Einzelpläne neu, deshalb steht bei
- * beiden ausdrücklich, dass sie mit dem Netzwerk-Update starten.
+ * Free plus Premium. Endpreise, Kleinunternehmer nach § 19 UStG.
  */
 export const plans: Plan[] = [
   {
     id: "free",
-    name: "Netzwerk Free",
+    name: "Free",
     price: "0 €",
     period: "dauerhaft",
     yearly: null,
-    anchor: "Vollwertig, ohne Ablaufdatum",
+    anchor: "Tagesform, Auto-Raid, Chat-Befehle, Overlay",
     featured: false,
     cta: "Kostenlos verbinden",
     ctaHref: "AUTH",
     features: [
-      { label: "Auto-Raid-Netzwerk in beide Richtungen", included: true },
-      { label: "Kompletter Chat-Schutz", included: true },
-      { label: "Go-Live-Post im Community-Discord", included: true },
-      { label: "Dashboard mit Grundauswertung", included: true },
-      { label: "3 Clips pro Monat, mit Wasserzeichen", included: true },
-      { label: "Werbefreier Chat", included: false },
-      { label: "Wochenreport und volle Auswertung", included: false },
+      { label: "Tagesform des letzten Streams", included: true },
+      { label: "Auto-Raid-Netzwerk", included: true },
+      { label: "Alle Chat-Befehle", included: true },
+      { label: "Overlay-Builder und Planung", included: true },
+      { label: "Voller Verlauf und Vergleiche", included: false },
+      { label: "KI, Coaching, Clip-Pipeline", included: false },
     ],
+    note: "Kein Ausweis von Umsatzsteuer gemäß § 19 UStG.",
   },
   {
-    id: "plus",
-    name: "Netzwerk Plus",
-    price: "4,99 €",
+    id: "premium",
+    name: "Premium",
+    price: "2,99 €",
     period: "pro Monat",
-    yearly: "39,99 € im Jahr, zwei Monate geschenkt",
-    anchor: "Der Preis eines Twitch-Subs",
+    yearly: "29,90 € im Jahr, zwei Monate geschenkt",
+    anchor: "Deine Zahlen, sichtbar",
     featured: true,
-    cta: "Plus ansehen",
+    cta: "Premium ansehen",
     ctaHref: "ABBO",
     features: [
       { label: "Alles aus Free", included: true },
-      { label: "Bevorzugte Platzierung im Raid-Netzwerk", included: true },
-      { label: "Werbefreier Chat", included: true },
-      { label: "Volle Auswertung und KI-Wochenreport", included: true },
-      { label: "Lurker-Erinnerung und eigener Bot-Name", included: true },
-      { label: "10 Clips pro Monat, ohne Wasserzeichen", included: true },
-      { label: "Automatisches Posten der Clips", included: false },
+      { label: "Voller Verlauf, Vergleiche, Wachstum", included: true },
+      { label: "KI-Analyse, Coaching, Titel-Generator", included: true },
+      { label: "Clip- und Social-Pipeline", included: true },
+      { label: "Werbefrei, Raid-Prio, Lurker-Steuer", included: true },
     ],
-    note: "Startet mit dem Netzwerk-Update. Bestehende Abos werden übernommen.",
-  },
-  {
-    id: "pro",
-    name: "Creator Pro",
-    price: "9,99 €",
-    period: "pro Monat",
-    yearly: "79,99 € im Jahr, zwei Monate geschenkt",
-    anchor: "Clip-Werkzeuge kosten am Markt 15 bis 25 $ im Monat",
-    featured: false,
-    cta: "Pro ansehen",
-    ctaHref: "ABBO",
-    features: [
-      { label: "Alles aus Plus", included: true },
-      { label: "Clips ohne Mengenbegrenzung", included: true },
-      { label: "Automatisches Posten auf TikTok, Instagram und YouTube", included: true },
-      { label: "Untertitel und mehrere Formate", included: true },
-      { label: "Vorrang bei Support und neuen Features", included: true },
-      { label: "Mehrere Plattformen, sobald verfügbar", included: true },
-    ],
-    note: "Startet mit dem Netzwerk-Update.",
+    note: "Kein Ausweis von Umsatzsteuer gemäß § 19 UStG.",
   },
 ];
 
