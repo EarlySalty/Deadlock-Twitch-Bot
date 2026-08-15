@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k.category_key, k.display_name, k.enrichment_enabled, k.sort_order, COALESCE(s.auto_post, FALSE) AS \"auto_post!\" FROM social_media_category k LEFT JOIN social_media_category_settings s ON s.category_key = k.category_key AND s.streamer_login = $1 ORDER BY k.sort_order, k.category_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "category_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "enrichment_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "auto_post!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "beef286d33db20a09e91eb47fda0b97693ad2e2eac2a5656296db71880cec063"
+}

@@ -370,6 +370,9 @@ impl ClipEnrichmentPipeline {
             );
         }
         crate::approval::mark_clip_awaiting_approval(&self.pool, clip_db_id).await;
+        // Im Freigabe-Modus `manual` passiert hier nichts, sonst wird der Clip
+        // direkt auf seinen naechsten Kadenz-Termin gelegt.
+        crate::approval::auto_approve_if_allowed(&self.pool, clip_db_id).await;
 
         Ok(Self::done_outcome(
             clip_db_id,

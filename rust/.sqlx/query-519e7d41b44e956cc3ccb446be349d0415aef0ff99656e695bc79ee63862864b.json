@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT platform, auto_post, posts_per_week, max_posts_per_day, post_times::text AS \"post_times?\" FROM social_media_platform_schedule WHERE streamer_login = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "auto_post",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "posts_per_week",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_posts_per_day",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "post_times?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "519e7d41b44e956cc3ccb446be349d0415aef0ff99656e695bc79ee63862864b"
+}

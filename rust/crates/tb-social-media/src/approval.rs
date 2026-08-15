@@ -11,7 +11,7 @@ use sqlx::PgPool;
 
 use crate::clip_queue::queue_upload;
 use crate::enrichment::get_enrichment;
-use crate::settings::{get_auto_approve_settings, AutoApprove};
+use crate::posting_plan;
 
 pub const STATE_AWAITING: &str = "awaiting_approval";
 pub const STATE_APPROVED: &str = "approved";
@@ -204,6 +204,29 @@ pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
     }
 }
 
+/// Clips, die ohne Enrichment direkt in den Approval-Workflow gehoeren.
+///
+/// Die LLM-Anreicherung laeuft nur fuer Kategorien mit `enrichment_enabled`, und
+/// erst an ihrem Ende landet ein Clip in `awaiting_approval`. Clips anderer
+/// Kategorien wuerden sonst nie auftauchen; die holt diese Abfrage ab.
+pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
+    sqlx::query_scalar!(
+        "SELECT c.id::int AS \"id!\" FROM twitch_clips_social_media c \
+         JOIN social_media_category k ON k.category_key = c.category_key \
+         LEFT JOIN social_media_clip_approval a ON a.clip_db_id = c.id \
+         WHERE c.discarded_at IS NULL \
+           AND NOT k.enrichment_enabled \
+           AND a.clip_db_id IS NULL \
+           AND COALESCE(c.status, 'pending') = 'pending' \
+           AND c.id BETWEEN 0 AND 2147483647 \
+         ORDER BY c.created_at DESC LIMIT $1",
+        limit.max(1)
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
 /// Freigegebene Clips, die noch in die Queue müssen.
 pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec<i32> {
     sqlx::query_scalar!(
@@ -252,18 +275,57 @@ pub fn serialize_approval_record(record: &ApprovalRecord) -> Value {
     })
 }
 
-fn auto_platforms(settings: AutoApprove) -> Vec<String> {
-    let mut out = Vec::new();
-    if settings.youtube {
-        out.push("youtube".to_string());
+/// Kanal, dem dieser Clip gehoert.
+async fn clip_streamer(pool: &PgPool, clip_db_id: i32) -> Option<String> {
+    sqlx::query_scalar!(
+        "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1",
+        clip_db_id as i64
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Plattformen, auf denen der Kanal dieses Clips automatisch postet.
+async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
+    let Some(streamer) = clip_streamer(pool, clip_db_id).await else {
+        return Vec::new();
+    };
+    posting_plan::auto_post_platforms(pool, &streamer).await
+}
+
+/// Plant einen Clip ohne menschliche Sichtung ein, wenn der Freigabe-Modus des
+/// Kanals und der Kategorie-Schalter das hergeben.
+///
+/// Wird am Ende der Enrichment-Pipeline aufgerufen. Im Modus `manual` passiert
+/// hier nichts, der Clip bleibt in `awaiting_approval` liegen.
+pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
+    if !posting_plan::auto_schedule_allowed(pool, i64::from(clip_db_id)).await {
+        return Vec::new();
     }
-    if settings.tiktok {
-        out.push("tiktok".to_string());
+    let platforms = auto_platforms(pool, clip_db_id).await;
+    if platforms.is_empty() {
+        return Vec::new();
     }
-    if settings.instagram {
-        out.push("instagram".to_string());
+    match handle_decision(pool, clip_db_id, DECISION_APPROVE, &platforms, Some("auto")).await {
+        Ok(record) => {
+            tracing::info!(
+                clip_db_id,
+                platforms = ?record.approved_platforms,
+                "Social-Media-Approval: Clip automatisch eingeplant"
+            );
+            record.approved_platforms
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Approval: automatische Freigabe fehlgeschlagen"
+            );
+            Vec::new()
+        }
     }
-    out
 }
 
 /// Verarbeitet eine Approval-Entscheidung (Python `handle_decision`): setzt
@@ -283,9 +345,15 @@ pub async fn handle_decision(
 
     let (final_platforms, next_state) = match decision {
         DECISION_APPROVE => {
-            let mut combined = selected;
-            combined.extend(auto_platforms(get_auto_approve_settings(pool).await));
-            let final_platforms = normalize_platforms(combined);
+            // Wer ausdruecklich Plattformen waehlt, bekommt genau diese. Nur wenn
+            // nichts gewaehlt wurde, greifen die Auto-Posting-Plattformen des
+            // Kanals. Frueher wurden globale Flags immer dazugemischt, was die
+            // Auswahl des Nutzers still ueberschrieb.
+            let final_platforms = if selected.is_empty() {
+                normalize_platforms(auto_platforms(pool, clip_db_id).await)
+            } else {
+                selected
+            };
             if final_platforms.is_empty() {
                 return Err(ApprovalError::NoPlatform);
             }
@@ -333,6 +401,8 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         return Vec::new();
     }
     let enrichment = get_enrichment(pool, clip_db_id).await;
+    let streamer = clip_streamer(pool, clip_db_id).await;
+    let now = chrono::Utc::now();
     let mut queued = Vec::new();
     for platform in &record.approved_platforms {
         match is_clip_approved_for(pool, i64::from(clip_db_id), platform).await {
@@ -366,6 +436,16 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                         e.hashtags_instagram.clone(),
                     ),
                 });
+        // Freigegeben heisst ab hier nicht mehr „sofort raus": der Clip bekommt
+        // den naechsten Termin aus der Kadenz des Kanals. Ohne Kanal oder ohne
+        // freien Termin bleibt `scheduled_at` leer, dann arbeitet der
+        // Upload-Worker den Eintrag wie bisher beim naechsten Lauf ab.
+        let scheduled_at = match &streamer {
+            Some(login) => posting_plan::plan_next_slot(pool, login, platform, now)
+                .await
+                .map(|slot| slot.to_rfc3339()),
+            None => None,
+        };
         match queue_upload(
             pool,
             clip_db_id,
@@ -373,7 +453,7 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
             title.as_deref(),
             description.as_deref(),
             Some(&hashtags),
-            None,
+            scheduled_at.as_deref(),
             0,
         )
         .await

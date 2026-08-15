@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 
-use crate::approval::{ensure_queued_uploads, iter_approved_clips_pending_queue};
+use crate::approval::{
+    auto_approve_if_allowed, ensure_queued_uploads, iter_approved_clips_pending_queue,
+    iter_clips_ohne_enrichment, mark_clip_awaiting_approval,
+};
 
 const INTERVAL_SECS: u64 = 60;
 const INITIAL_DELAY_SECS: u64 = 20;
@@ -35,6 +38,12 @@ impl ApprovalWorker {
 
     /// Ein Durchlauf (Python `_queue_approved_uploads`).
     pub async fn run_once(&self) {
+        // Clips ohne Enrichment (alles ausser Deadlock) treten hier in den
+        // Workflow ein; angereicherte Clips bringt die Enrichment-Pipeline mit.
+        for clip_db_id in iter_clips_ohne_enrichment(&self.pool, self.batch_size).await {
+            mark_clip_awaiting_approval(&self.pool, clip_db_id).await;
+            auto_approve_if_allowed(&self.pool, clip_db_id).await;
+        }
         for clip_db_id in iter_approved_clips_pending_queue(&self.pool, self.batch_size).await {
             // best-effort je Clip (Python try/except, ein Fehler bricht den
             // Batch nicht ab).
