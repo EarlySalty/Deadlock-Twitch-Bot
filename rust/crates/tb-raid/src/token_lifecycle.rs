@@ -1331,9 +1331,24 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         twitch_user_id: &str,
         twitch_login: &str,
     ) -> Option<String> {
-        let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
-        let row: Result<Option<String>, _> = sqlx::query_scalar!(
-            r#"
+        discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
+    }
+}
+
+/// Discord-ID eines Streamers aus `twitch_streamer_identities`, gesucht über
+/// User-ID oder Login. Freie Funktion, damit alle Lifecycle-Pfade (Token-Fehler,
+/// Bot-Ban, Deadlock-Pause) dieselbe Auflösung benutzen statt je eigener Queries.
+pub async fn discord_user_id_for(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Option<String> {
+    let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
+    // Einrückung des Query-Strings bewusst unverändert gelassen: der
+    // sqlx-Offline-Cache hasht den Literal-Text, ein Umformatieren würde den
+    // vorbereiteten Eintrag verwaisen lassen.
+    let row: Result<Option<String>, _> = sqlx::query_scalar!(
+        r#"
             SELECT discord_user_id AS "discord_user_id?"
             FROM twitch_streamer_identities
             WHERE ($1 <> '' AND twitch_user_id = $1)
@@ -1341,18 +1356,17 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             ORDER BY updated_at DESC
             LIMIT 1
             "#,
-            twitch_user_id.trim(),
-            &login
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map(Option::flatten);
-        match row {
-            Ok(raw) => sanitize_discord_user_id(raw.as_deref()),
-            Err(error) => {
-                tracing::warn!(%error, user = %mask(twitch_login), "discord_user_id-Lookup fehlgeschlagen");
-                None
-            }
+        twitch_user_id.trim(),
+        &login
+    )
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten);
+    match row {
+        Ok(raw) => sanitize_discord_user_id(raw.as_deref()),
+        Err(error) => {
+            tracing::warn!(%error, user = %mask(twitch_login), "discord_user_id-Lookup fehlgeschlagen");
+            None
         }
     }
 }
