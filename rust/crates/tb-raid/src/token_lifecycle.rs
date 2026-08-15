@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sqlx::PgPool;
 
 use crate::token_blacklist::{BLACKLIST_DISABLE_THRESHOLD, GRACE_PERIOD_DAYS};
@@ -44,6 +44,61 @@ const BAN_PROBE_MAX_PER_SWEEP: i64 = 400;
 /// Pause zwischen zwei Ban-Proben. Hält den Sweep weit unter dem Helix-Budget,
 /// ohne dass ein Lauf spürbar länger dauert.
 const BAN_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// So frisch muss die letzte Chat-Zeile sein, damit sie als Beweis zählt, dass
+/// der Bot im Kanal weiter mitliest. Großzügig gewählt: viele Partner streamen
+/// nicht täglich, und ein stiller Kanal ist kein Bann.
+const CHAT_FRISCH_FENSTER: Duration = Duration::days(7);
+
+/// Was die aktive Prüfung über einen Kanal weiß.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeZustand {
+    /// Einsetzung abgelehnt, aber der Chat läuft weiter: keine Mod-Rechte,
+    /// kein Bann.
+    ModRechteWeg,
+    /// Einsetzung abgelehnt, und aus dem Kanal kam länger kein Chat an.
+    ModRechteWegStill,
+}
+
+impl ProbeZustand {
+    fn als_text(self) -> &'static str {
+        match self {
+            ProbeZustand::ModRechteWeg => "mod_rechte_weg",
+            ProbeZustand::ModRechteWegStill => "mod_rechte_weg_still",
+        }
+    }
+}
+
+/// Letzte Chat-Zeile aus einem Kanal.
+#[derive(Debug, Clone, Copy)]
+struct ChatSpur {
+    letzte: Option<DateTime<Utc>>,
+}
+
+impl ChatSpur {
+    /// Kam zuletzt innerhalb des Frischefensters Chat an?
+    fn frisch(&self) -> bool {
+        self.letzte
+            .is_some_and(|ts| Utc::now().signed_duration_since(ts) < CHAT_FRISCH_FENSTER)
+    }
+
+    /// Für die Meldung: seit wann kein Chat mehr da ist, in Klartext.
+    fn beschreibung(&self) -> String {
+        match self.letzte {
+            None => "seit mindestens 30 Tagen keine Zeile".to_string(),
+            Some(ts) => {
+                let alter = Utc::now().signed_duration_since(ts);
+                if alter.num_hours() < 1 {
+                    format!("vor {} Minuten", alter.num_minutes().max(1))
+                } else if alter.num_days() < 1 {
+                    format!("vor {} Stunden", alter.num_hours())
+                } else {
+                    format!("vor {} Tagen", alter.num_days())
+                }
+            }
+        }
+    }
+}
 
 /// Anker der Bot-Sektion im Verwaltungs-Dashboard. Dort unten sitzt
 /// "Bot vom Kanal trennen" — der einzige saubere Weg, den Bot loszuwerden.
@@ -178,24 +233,65 @@ pub fn admin_bot_banned_text(
     (title, description)
 }
 
-/// Admin-Meldung für einen Bot-Ban-**Verdacht** aus der aktiven Prüfung.
+/// Admin-Meldung: Die Moderator-Einsetzung scheitert, der Bot liest im Kanal
+/// aber weiter mit. Das ist kein Bann, sondern eine fehlende Autorisierung.
 ///
-/// Bewusst als Verdacht formuliert und ohne jede automatische Folge: die Prüfung
-/// kann einen kaputten Token nicht sicher von einem Bann unterscheiden. Der Text
-/// nennt deshalb beide Möglichkeiten und den Weg, es selbst nachzusehen.
-pub fn admin_bot_ban_verdacht_text(twitch_login: &str, twitch_user_id: &str) -> (String, String) {
-    let title = "🔍 Bot-Ban-Verdacht (nicht bestätigt)".to_string();
+/// Der Chat ist hier der Beweis: ein gebannter Account bekommt vom Kanal keine
+/// Nachrichten mehr. Kommen sie an, trägt schlicht der Streamer-Token die
+/// Einsetzung nicht mehr.
+pub fn admin_mod_rechte_weg_text(
+    twitch_login: &str,
+    twitch_user_id: &str,
+    letzte_chatzeile: &str,
+) -> (String, String) {
+    let title = format!("🔧 Kein Moderator mehr in {twitch_login}");
     let description = format!(
-        "Twitch hat die Moderator-Einsetzung in **{twitch_login}** abgelehnt. Das \
-         kann ein Kanal-Bann sein, aber auch ein abgelaufener Streamer-Token oder \
-         ein fehlender Scope.\n\n\
+        "In **{twitch_login}** kann der Bot sich nicht mehr als Moderator \
+         einsetzen. Ein Bann ist es nicht: aus dem Kanal kommen weiter \
+         Chat-Nachrichten an, zuletzt {letzte_chatzeile}.\n\n\
          Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
          User ID: `{twitch_user_id}`\n\n\
-         **Es wurde nichts unternommen:** keine Pause, keine Blacklist, keine \
-         Nachricht an den Streamer. Der genaue Antwortkörper von Twitch steht im \
-         Bot-Log unter `ensure_bot_is_mod`. Ist es wirklich ein Bann, fällt er \
-         beim nächsten Chat-Versuch ohnehin auf und läuft dann über den normalen \
-         Weg."
+         **Zustand:** Der Bot liest mit, hat aber keine Mod-Rechte. Ursache ist \
+         die Streamer-Autorisierung (abgelaufen oder ohne den nötigen Scope). \
+         Behoben wird das durch eine neue Autorisierung unter \
+         {DEFAULT_REAUTH_URL}.\n\n\
+         Pause, Blacklist und Streamer-DM bleiben aus. Diese Meldung kommt genau \
+         einmal und erst wieder, wenn sich der Zustand ändert."
+    );
+    (title, description)
+}
+
+/// Admin-Meldung: Moderator-Einsetzung abgelehnt, und aus dem Kanal kam schon
+/// länger kein Chat an.
+///
+/// Hier fehlt der Beweis in beide Richtungen: ein stiller Kanal sieht genauso
+/// aus wie ein Bann. Der Text nennt deshalb nur, was gemessen wurde.
+pub fn admin_mod_rechte_weg_still_text(
+    twitch_login: &str,
+    twitch_user_id: &str,
+    letzte_chatzeile: &str,
+) -> (String, String) {
+    let title = format!("🔇 Kein Moderator mehr in {twitch_login}, Kanal still");
+    let description = format!(
+        "In **{twitch_login}** wird die Moderator-Einsetzung abgelehnt, und aus \
+         dem Kanal kam zuletzt {letzte_chatzeile} eine Nachricht an.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
+         User ID: `{twitch_user_id}`\n\n\
+         **Zustand:** keine Mod-Rechte. Ob der Kanal nur nicht streamt oder der \
+         Bot dort rausgeflogen ist, lässt sich von hier aus nicht unterscheiden. \
+         Sicher entschieden wird das erst beim nächsten Sendeversuch im Chat.\n\n\
+         Pause, Blacklist und Streamer-DM bleiben aus. Diese Meldung kommt genau \
+         einmal und erst wieder, wenn sich der Zustand ändert."
+    );
+    (title, description)
+}
+
+/// Admin-Meldung: Der Bot ist im Kanal wieder Moderator.
+pub fn admin_mod_rechte_zurueck_text(twitch_login: &str) -> (String, String) {
+    let title = format!("✅ Wieder Moderator in {twitch_login}");
+    let description = format!(
+        "Die Moderator-Einsetzung in **{twitch_login}** greift wieder. Der zuvor \
+         gemeldete Zustand ist damit erledigt, es ist nichts zu tun."
     );
     (title, description)
 }
@@ -976,25 +1072,167 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             }
             match probe.bot_ban_status(&twitch_user_id, &twitch_login).await {
                 BotBanStatus::Banned => {
-                    detected += 1;
-                    tracing::warn!(
-                        login = %twitch_login,
-                        "Bot-Ban-Verdacht aus aktiver Prüfung — nur gemeldet, keine Reaktion"
-                    );
-                    let (title, description) =
-                        admin_bot_ban_verdacht_text(&twitch_login, &twitch_user_id);
-                    self.notifier
-                        .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
-                        .await;
+                    // Die abgelehnte Einsetzung allein sagt nicht, was los ist.
+                    // Der Chat entscheidet: kommen aus dem Kanal weiter
+                    // Nachrichten an, ist der Bot nicht gebannt, sondern nur
+                    // seine Autorisierung durch.
+                    let chat = self.letzte_chatzeile(&twitch_login).await;
+                    let zustand = if chat.frisch() {
+                        ProbeZustand::ModRechteWeg
+                    } else {
+                        ProbeZustand::ModRechteWegStill
+                    };
+                    if self
+                        .zustand_ist_neu(&twitch_user_id, &twitch_login, zustand)
+                        .await
+                    {
+                        detected += 1;
+                        let (title, description) = match zustand {
+                            ProbeZustand::ModRechteWeg => admin_mod_rechte_weg_text(
+                                &twitch_login,
+                                &twitch_user_id,
+                                &chat.beschreibung(),
+                            ),
+                            ProbeZustand::ModRechteWegStill => admin_mod_rechte_weg_still_text(
+                                &twitch_login,
+                                &twitch_user_id,
+                                &chat.beschreibung(),
+                            ),
+                        };
+                        tracing::warn!(
+                            login = %twitch_login,
+                            zustand = zustand.als_text(),
+                            "Aktive Prüfung: Zustand gemeldet, keine Reaktion"
+                        );
+                        self.notifier
+                            .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
+                            .await;
+                    } else {
+                        tracing::debug!(
+                            login = %twitch_login,
+                            zustand = zustand.als_text(),
+                            "Aktive Prüfung: Zustand unverändert, keine neue Meldung"
+                        );
+                    }
                 }
                 // NotBanned heißt hier zugleich: der Bot ist (wieder) Moderator,
-                // die Probe setzt ihn im selben Call ein. Unknown ist ein
-                // Netz-/Token-Problem und darf niemanden pausieren.
-                BotBanStatus::NotBanned | BotBanStatus::Unknown => {}
+                // die Probe setzt ihn im selben Call ein.
+                BotBanStatus::NotBanned => {
+                    // Entwarnung nur für Kanäle, die vorher gemeldet waren. Ein
+                    // gesunder Kanal, der gesund bleibt, sagt gar nichts.
+                    if self.zustand_aufloesen(&twitch_user_id).await {
+                        let (title, description) = admin_mod_rechte_zurueck_text(&twitch_login);
+                        self.notifier
+                            .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
+                            .await;
+                    }
+                }
+                // Unknown ist ein Netz-/Token-Problem und sagt über den Kanal
+                // nichts aus: kein Zustandswechsel, keine Meldung.
+                BotBanStatus::Unknown => {}
             }
             tokio::time::sleep(BAN_PROBE_DELAY).await;
         }
         detected
+    }
+
+    /// Wann zuletzt eine Chat-Nachricht aus diesem Kanal angekommen ist.
+    ///
+    /// Der Bot schreibt jede empfangene Zeile mit. Bekommt er weiter welche, ist
+    /// er im Kanal nicht gebannt: Twitch stellt einem gebannten Account keine
+    /// Chat-Nachrichten mehr zu.
+    async fn letzte_chatzeile(&self, twitch_login: &str) -> ChatSpur {
+        let letzte = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+            // MAX(...) liefert genau eine Zeile, bei leerem Kanal mit NULL.
+            r#"
+            SELECT MAX(message_ts)
+              FROM twitch_chat_messages
+             WHERE LOWER(streamer_login) = LOWER($1)
+               AND message_ts > NOW() - INTERVAL '30 days'
+            "#,
+        )
+        .bind(twitch_login)
+        .fetch_one(&self.pool)
+        .await;
+        match letzte {
+            Ok(ts) => ChatSpur { letzte: ts },
+            Err(error) => {
+                tracing::warn!(%error, login = %twitch_login, "Chat-Spur nicht lesbar");
+                ChatSpur { letzte: None }
+            }
+        }
+    }
+
+    /// Bucht den Zustand und sagt, ob er neu ist. Nur ein Wechsel wird gemeldet,
+    /// jede weitere Prüfung zählt still mit. Schlägt die Buchung fehl, gilt der
+    /// Zustand als bekannt: lieber eine Meldung zu wenig als der stündliche
+    /// Wiederholer, den diese Tabelle abstellt.
+    async fn zustand_ist_neu(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        zustand: ProbeZustand,
+    ) -> bool {
+        let row = sqlx::query_as::<_, (bool,)>(
+            r#"
+            INSERT INTO twitch_ban_probe_zustand
+                        (twitch_user_id, twitch_login, zustand, seit, letzte_probe, proben)
+                 VALUES ($1, $2, $3, NOW(), NOW(), 1)
+            ON CONFLICT (twitch_user_id) DO UPDATE
+                    SET twitch_login = EXCLUDED.twitch_login,
+                        zustand = EXCLUDED.zustand,
+                        seit = CASE
+                                   WHEN twitch_ban_probe_zustand.zustand = EXCLUDED.zustand
+                                   THEN twitch_ban_probe_zustand.seit
+                                   ELSE NOW()
+                               END,
+                        letzte_probe = NOW(),
+                        proben = CASE
+                                     WHEN twitch_ban_probe_zustand.zustand = EXCLUDED.zustand
+                                     THEN twitch_ban_probe_zustand.proben + 1
+                                     ELSE 1
+                                 END
+              RETURNING (xmax = 0 OR proben = 1) AS gewechselt
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(twitch_login)
+        .bind(zustand.als_text())
+        .fetch_one(&self.pool)
+        .await;
+        match row {
+            Ok((gewechselt,)) => gewechselt,
+            Err(error) => {
+                tracing::warn!(%error, login = %twitch_login, "Prüf-Zustand nicht speicherbar");
+                false
+            }
+        }
+    }
+
+    /// Räumt den gemerkten Zustand ab, sobald der Kanal wieder in Ordnung ist.
+    /// Liefert `true`, wenn vorher tatsächlich etwas gemeldet war (nur dann gibt
+    /// es eine Entwarnung).
+    async fn zustand_aufloesen(&self, twitch_user_id: &str) -> bool {
+        let geloescht = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH weg AS (
+                DELETE FROM twitch_ban_probe_zustand
+                      WHERE twitch_user_id = $1
+                  RETURNING 1
+            )
+            SELECT COUNT(*) FROM weg
+            "#,
+        )
+        .bind(twitch_user_id)
+        .fetch_one(&self.pool)
+        .await;
+        match geloescht {
+            Ok(count) => count > 0,
+            Err(error) => {
+                tracing::warn!(%error, "Prüf-Zustand nicht löschbar");
+                false
+            }
+        }
     }
 
     /// Reaktiviert Partner, die nur wegen `token_error*` pausiert sind, wenn die
