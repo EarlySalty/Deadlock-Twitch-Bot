@@ -48,12 +48,20 @@ pub const DEADLOCK_PAUSE_COLOR: i64 = 0xC8_A8_6B;
 // Ports
 // ---------------------------------------------------------------------------
 
-/// Ausgang eines Unmod-Versuchs, auf das reduziert, was der Sweep entscheiden
-/// muss: Rechte weg (oder ohnehin nicht vorhanden) oder eben nicht.
+/// Ausgang eines Unmod-Versuchs.
+///
+/// Der Unterschied zwischen [`Self::Removed`] und [`Self::WasNotModerator`] ist
+/// kein technisches Detail, sondern entscheidet, was der Streamer zu lesen
+/// bekommt. In gut der Hälfte der Pausen-Kandidaten ist der Bot längst kein
+/// Moderator mehr, weil der Streamer ihn selbst entfernt hat. Denen zu
+/// schreiben, der Bot habe gerade seine Rechte abgegeben, wäre schlicht falsch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmodOutcome {
-    /// Der Bot ist in diesem Kanal kein Moderator mehr.
-    Done,
+    /// Twitch hat die Mod-Rechte des Bots entfernt.
+    Removed,
+    /// Der Bot war in diesem Kanal gar kein Moderator. Zielzustand erreicht,
+    /// aber für den Streamer hat sich nichts geändert.
+    WasNotModerator,
     /// Twitch hat den Entzug nicht ausgeführt (kein Token, Fehler). Der Kanal
     /// bleibt unmarkiert und wird beim nächsten Sweep erneut versucht.
     Failed,
@@ -97,6 +105,7 @@ pub fn admin_deadlock_pause_text(
     twitch_login: &str,
     twitch_user_id: &str,
     zurueck: bool,
+    war_moderator: bool,
 ) -> (String, String) {
     if zurueck {
         (
@@ -108,14 +117,25 @@ pub fn admin_deadlock_pause_text(
             ),
         )
     } else {
+        let (was, dm) = if war_moderator {
+            (
+                "Der Bot hat seine Mod-Rechte abgegeben",
+                "Der Streamer wurde per DM informiert.",
+            )
+        } else {
+            (
+                "Der Bot war dort ohnehin kein Moderator mehr",
+                "Keine DM verschickt: für den Streamer ändert sich nichts.",
+            )
+        };
         (
-            "💤 Bot wegen Deadlock-Pause entmoddet".to_string(),
+            "💤 Kanal in der Deadlock-Pause".to_string(),
             format!(
                 "In **{twitch_login}** lief seit {DEADLOCK_PAUSE_DAYS} Tagen kein \
-                 Deadlock-Stream. Der Bot hat seine Mod-Rechte abgegeben; die \
-                 Partnerschaft läuft weiter.\n\n\
+                 Deadlock-Stream. {was}; die Partnerschaft läuft weiter.\n\n\
                  Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
                  User ID: `{twitch_user_id}`\n\
+                 {dm}\n\
                  Bei einem Deadlock-Stream moddet er sich automatisch zurück."
             ),
         )
@@ -255,8 +275,9 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
 
         let mut unmodded = 0u64;
         for (twitch_user_id, twitch_login) in rows {
-            match self.unmod.unmod_bot(&twitch_user_id, &twitch_login).await {
-                UnmodOutcome::Done => {}
+            let war_moderator = match self.unmod.unmod_bot(&twitch_user_id, &twitch_login).await {
+                UnmodOutcome::Removed => true,
+                UnmodOutcome::WasNotModerator => false,
                 UnmodOutcome::Failed => {
                     // Nicht markieren: sonst gilt der Kanal als pausiert,
                     // obwohl der Bot seine Rechte behalten hat.
@@ -267,16 +288,23 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                     tokio::time::sleep(CALL_DELAY).await;
                     continue;
                 }
-            }
+            };
             if let Err(error) = self.mark_paused(&twitch_user_id).await {
                 tracing::warn!(%error, user = %mask(&twitch_user_id), "Deadlock-Pause: Markierung fehlgeschlagen");
                 tokio::time::sleep(CALL_DELAY).await;
                 continue;
             }
             unmodded += 1;
-            self.notify_pause(&twitch_user_id, &twitch_login, false)
+            // DM nur, wenn sich für den Streamer wirklich etwas geändert hat.
+            // War der Bot ohnehin kein Moderator, wäre die Nachricht eine
+            // Behauptung über einen Vorgang, den es nie gab.
+            self.notify_pause(&twitch_user_id, &twitch_login, false, war_moderator)
                 .await;
-            tracing::info!(login = %twitch_login, "Deadlock-Pause: Bot entmoddet");
+            tracing::info!(
+                login = %twitch_login,
+                war_moderator,
+                "Deadlock-Pause: Kanal pausiert"
+            );
             tokio::time::sleep(CALL_DELAY).await;
         }
         unmodded
@@ -362,7 +390,7 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                 continue;
             }
             remodded += 1;
-            self.notify_pause(&twitch_user_id, &twitch_login, true)
+            self.notify_pause(&twitch_user_id, &twitch_login, true, true)
                 .await;
             tracing::info!(login = %twitch_login, "Deadlock-Pause: Bot wieder gemoddet");
             tokio::time::sleep(CALL_DELAY).await;
@@ -370,11 +398,21 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
         remodded
     }
 
-    /// Meldet einen Pausen-Wechsel. Der Streamer bekommt nur beim Unmod eine DM:
-    /// dass der Bot nach einem Deadlock-Stream wieder da ist, sieht er selbst,
-    /// und eine Nachricht dafür wäre nur Rauschen.
-    async fn notify_pause(&self, twitch_user_id: &str, twitch_login: &str, zurueck: bool) {
-        if !zurueck {
+    /// Meldet einen Pausen-Wechsel.
+    ///
+    /// Der Streamer wird nur angeschrieben, wenn sich für ihn wirklich etwas
+    /// geändert hat: der Bot war Moderator und ist es jetzt nicht mehr. Zwei
+    /// Fälle bleiben bewusst stumm. Die Rückkehr sieht der Streamer selbst, und
+    /// wenn der Bot ohnehin kein Moderator war, gab es nichts abzugeben. Das
+    /// Admin-Log bekommt in jedem Fall seine Zeile.
+    async fn notify_pause(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        zurueck: bool,
+        war_moderator: bool,
+    ) {
+        if !zurueck && war_moderator {
             if let Some(discord_user_id) =
                 discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
             {
@@ -382,7 +420,8 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                 self.notifier.send_user_dm(&discord_user_id, &text).await;
             }
         }
-        let (title, description) = admin_deadlock_pause_text(twitch_login, twitch_user_id, zurueck);
+        let (title, description) =
+            admin_deadlock_pause_text(twitch_login, twitch_user_id, zurueck, war_moderator);
         self.notifier
             .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
             .await;
@@ -463,8 +502,8 @@ mod tests {
     fn nutzertexte_ohne_dash_ersatzzeichen() {
         let texte = [
             user_dm_deadlock_pause_text("foo", DEADLOCK_PAUSE_DAYS),
-            admin_deadlock_pause_text("foo", "42", false).1,
-            admin_deadlock_pause_text("foo", "42", true).1,
+            admin_deadlock_pause_text("foo", "42", false, true).1,
+            admin_deadlock_pause_text("foo", "42", true, true).1,
         ];
         for text in texte {
             for zeichen in ['\u{2014}', '\u{2013}', '\u{2015}'] {
@@ -486,10 +525,10 @@ mod tests {
 
     #[test]
     fn admin_text_unterscheidet_pause_und_rueckkehr() {
-        let (pause_title, pause_body) = admin_deadlock_pause_text("foo", "42", false);
-        assert!(pause_title.contains("entmoddet"));
+        let (pause_title, pause_body) = admin_deadlock_pause_text("foo", "42", false, true);
+        assert!(pause_title.contains("Deadlock-Pause"));
         assert!(pause_body.contains("42"));
-        let (back_title, _) = admin_deadlock_pause_text("foo", "42", true);
+        let (back_title, _) = admin_deadlock_pause_text("foo", "42", true, true);
         assert!(back_title.contains("wieder gemoddet"));
     }
 
@@ -732,7 +771,7 @@ mod tests {
         .await;
 
         let notifier = Arc::new(RecordingNotifier::default());
-        let unmod = fake_unmod(UnmodOutcome::Done);
+        let unmod = fake_unmod(UnmodOutcome::Removed);
         let reactor = reactor_with(
             pool.clone(),
             notifier.clone(),
@@ -801,7 +840,7 @@ mod tests {
         .await;
 
         let notifier = Arc::new(RecordingNotifier::default());
-        let unmod = fake_unmod(UnmodOutcome::Done);
+        let unmod = fake_unmod(UnmodOutcome::Removed);
         let reactor = reactor_with(
             pool.clone(),
             notifier.clone(),
@@ -816,6 +855,60 @@ mod tests {
             "nur der Kanal mit echter Deadlock-Historie wird pausiert"
         );
         assert_eq!(notifier.dms.lock().unwrap().len(), 1);
+    }
+
+    /// War der Bot ohnehin kein Moderator, hat der Streamer ihn selbst entfernt.
+    /// Ihm dann zu schreiben, der Bot habe gerade seine Rechte abgegeben, waere
+    /// eine Behauptung ueber einen Vorgang, den es nie gab. Der Kanal wird
+    /// trotzdem markiert, damit der Remod beim Comeback greift.
+    #[tokio::test]
+    async fn kanal_ohne_mod_rechte_wird_markiert_aber_nicht_angeschrieben() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("dlp_kein_mod").await;
+        seed_partner(
+            &pool,
+            "1",
+            "laengstraus",
+            Utc::now() - chrono::Duration::days(400),
+        )
+        .await;
+        seed_session(
+            &pool,
+            "laengstraus",
+            Utc::now() - chrono::Duration::days(90),
+            true,
+        )
+        .await;
+
+        let notifier = Arc::new(RecordingNotifier::default());
+        let reactor = reactor_with(
+            pool.clone(),
+            notifier.clone(),
+            fake_unmod(UnmodOutcome::WasNotModerator),
+            BotBanStatus::NotBanned,
+        );
+
+        assert_eq!(reactor.unmod_idle_channels().await, 1);
+
+        // Markiert, damit der Comeback-Remod greift.
+        let marked: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_partners WHERE deadlock_pause_unmodded_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(marked, 1);
+
+        // Aber keine DM: fuer den Streamer hat sich nichts geaendert.
+        assert!(
+            notifier.dms.lock().unwrap().is_empty(),
+            "kein Anschreiben, wenn der Bot ohnehin kein Mod war"
+        );
+        // Das Admin-Log bekommt trotzdem seine Zeile.
+        assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
     }
 
     /// Ein fehlgeschlagener Entzug darf nicht als Pause gelten, sonst behält der
@@ -877,7 +970,7 @@ mod tests {
             .await
             .unwrap();
 
-        let unmod = fake_unmod(UnmodOutcome::Done);
+        let unmod = fake_unmod(UnmodOutcome::Removed);
         let reactor = reactor_with(
             pool.clone(),
             Arc::new(RecordingNotifier::default()),
@@ -936,7 +1029,7 @@ mod tests {
         let reactor = reactor_with(
             pool.clone(),
             notifier.clone(),
-            fake_unmod(UnmodOutcome::Done),
+            fake_unmod(UnmodOutcome::Removed),
             BotBanStatus::NotBanned,
         );
 
@@ -994,7 +1087,7 @@ mod tests {
         let reactor = reactor_with(
             pool.clone(),
             notifier.clone(),
-            fake_unmod(UnmodOutcome::Done),
+            fake_unmod(UnmodOutcome::Removed),
             BotBanStatus::Banned,
         );
         assert_eq!(reactor.remod_returned_channels().await, 0);
@@ -1040,7 +1133,7 @@ mod tests {
         )
         .await;
 
-        let unmod = fake_unmod(UnmodOutcome::Done);
+        let unmod = fake_unmod(UnmodOutcome::Removed);
         let reactor = reactor_with(
             pool.clone(),
             Arc::new(RecordingNotifier::default()),
