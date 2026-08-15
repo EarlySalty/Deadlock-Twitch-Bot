@@ -1207,15 +1207,17 @@ impl BotBanStatusProbe for HelixModeratorProvisioner {
                 tracing::info!(channel = twitch_login, "Sendeprobe zugestellt: kein Bann");
                 ChatSendeProbe::Zugestellt
             }
-            Ok(SendOutcome::Dropped { code, message }) if code == "sender_banned" => {
-                tracing::warn!(channel = twitch_login, %message, "Sendeprobe verworfen: Bann belegt");
-                ChatSendeProbe::Gebannt
-            }
-            Ok(SendOutcome::Dropped { code, message }) if code == "sender_timedout" => {
-                // Twitch schreibt die Restdauer in den Klartext ("You can chat
-                // again in 1 day 14 hours"). Genau die will der Admin sehen.
-                tracing::warn!(channel = twitch_login, %message, "Sendeprobe verworfen: Timeout");
+            // Twitch ist bei den Drop-Codes nicht einheitlich: live kam für
+            // einen Timeout `user_timed_out`, das Repo kennt aus der
+            // Python-Zeit `sender_timedout`. Deshalb auf das Wort prüfen, nicht
+            // auf eine feste Schreibweise.
+            Ok(SendOutcome::Dropped { code, message }) if ist_timeout_code(&code) => {
+                tracing::warn!(channel = twitch_login, %code, %message, "Sendeprobe verworfen: Timeout");
                 ChatSendeProbe::Timeout { hinweis: message }
+            }
+            Ok(SendOutcome::Dropped { code, message }) if ist_ban_code(&code) => {
+                tracing::warn!(channel = twitch_login, %code, %message, "Sendeprobe verworfen: Bann belegt");
+                ChatSendeProbe::Gebannt
             }
             Ok(SendOutcome::Dropped { code, message }) => {
                 // channel_settings (Follower-/Sub-Only) heißt nicht gebannt.
@@ -1257,6 +1259,19 @@ impl BotBanStatusProbe for HelixModeratorProvisioner {
             }
         }
     }
+}
+
+/// Erkennt einen Timeout-Drop, egal wie Twitch ihn gerade schreibt
+/// (`user_timed_out` live gesehen, `sender_timedout` aus der Python-Zeit).
+fn ist_timeout_code(code: &str) -> bool {
+    let code = code.to_ascii_lowercase();
+    code.contains("timed_out") || code.contains("timedout") || code.contains("timeout")
+}
+
+/// Erkennt einen Bann-Drop. Wird nach [`ist_timeout_code`] geprüft: ein
+/// Timeout ist kein Bann, auch wenn Twitch beides ähnlich benennt.
+fn ist_ban_code(code: &str) -> bool {
+    code.to_ascii_lowercase().contains("banned")
 }
 
 /// Text der Sendeprobe. Steht im Offline-Chat und soll dort nicht nach Störung
@@ -1470,6 +1485,33 @@ impl EventSubHooks for RaidEventSubHooks {
         self.arrival
             .handle_chat_unraid_notification(event, message_id)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod drop_code_tests {
+    use super::{ist_ban_code, ist_timeout_code};
+
+    /// Live kam für einen Timeout `user_timed_out`, das ältere Vokabular im
+    /// Repo heißt `sender_timedout`. Beides muss als Timeout gelten, sonst
+    /// wird ein stummer Bot als "nur keine Mod-Rechte" gemeldet.
+    #[test]
+    fn timeout_codes_werden_in_allen_schreibweisen_erkannt() {
+        for code in ["user_timed_out", "sender_timedout", "USER_TIMEOUT"] {
+            assert!(ist_timeout_code(code), "{code} ist ein Timeout");
+            assert!(!ist_ban_code(code), "{code} ist kein Bann");
+        }
+    }
+
+    #[test]
+    fn ban_codes_bleiben_bann_und_harmlose_codes_keins_von_beidem() {
+        for code in ["sender_banned", "user_banned"] {
+            assert!(ist_ban_code(code), "{code} ist ein Bann");
+        }
+        for code in ["channel_settings", "msg_duplicate", ""] {
+            assert!(!ist_ban_code(code));
+            assert!(!ist_timeout_code(code));
+        }
     }
 }
 
