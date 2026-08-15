@@ -11,21 +11,15 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 pub const KEY_EXTERNAL_LLM_CONSENT: &str = "external_llm_consent";
-pub const KEY_AUTO_APPROVE_YOUTUBE: &str = "auto_approve_youtube";
-pub const KEY_AUTO_APPROVE_TIKTOK: &str = "auto_approve_tiktok";
-pub const KEY_AUTO_APPROVE_INSTAGRAM: &str = "auto_approve_instagram";
 pub const KEY_POSTING_SCHEDULE: &str = "posting_schedule";
 pub const KEY_FORMS_CONTACT_EMAIL: &str = "forms_contact_email";
 pub const KEY_FORMS_SUBMIT_ENABLED: &str = "forms_submit_enabled";
 pub const DEFAULT_FORMS_CONTACT_EMAIL: &str = "deadlockclips.dl@mailinator.com";
 
-/// Auto-Approve-Flags je Plattform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AutoApprove {
-    pub youtube: bool,
-    pub tiktok: bool,
-    pub instagram: bool,
-}
+// Die frueheren Keys `auto_approve_youtube`/`_tiktok`/`_instagram` sind entfallen.
+// Sie galten global fuer die ganze Instanz und liessen sich von jedem
+// freigegebenen Partner umschalten. Ersatz ist `crate::posting_plan` mit Zeilen
+// pro Streamer und Plattform (Migration 20260815120000).
 
 /// Tägliche Posting-Slots in der angegebenen Zeitzone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,45 +109,6 @@ async fn get_bool(pool: &PgPool, key: &str) -> bool {
 /// `true`, wenn der Admin explizit `external_llm_consent=true` gesetzt hat.
 pub async fn external_llm_consent(pool: &PgPool) -> bool {
     get_bool(pool, KEY_EXTERNAL_LLM_CONSENT).await
-}
-
-/// Auto-Approve-Flags aller Plattformen (Python `get_auto_approve_settings`).
-pub async fn get_auto_approve_settings(pool: &PgPool) -> AutoApprove {
-    AutoApprove {
-        youtube: get_bool(pool, KEY_AUTO_APPROVE_YOUTUBE).await,
-        tiktok: get_bool(pool, KEY_AUTO_APPROVE_TIKTOK).await,
-        instagram: get_bool(pool, KEY_AUTO_APPROVE_INSTAGRAM).await,
-    }
-}
-
-/// Setzt die Auto-Approve-Flags (Python `set_auto_approve_settings`).
-pub async fn set_auto_approve_settings(
-    pool: &PgPool,
-    values: AutoApprove,
-    updated_by: Option<&str>,
-) -> Result<AutoApprove, sqlx::Error> {
-    set_setting(
-        pool,
-        KEY_AUTO_APPROVE_YOUTUBE,
-        &Value::Bool(values.youtube),
-        updated_by,
-    )
-    .await?;
-    set_setting(
-        pool,
-        KEY_AUTO_APPROVE_TIKTOK,
-        &Value::Bool(values.tiktok),
-        updated_by,
-    )
-    .await?;
-    set_setting(
-        pool,
-        KEY_AUTO_APPROVE_INSTAGRAM,
-        &Value::Bool(values.instagram),
-        updated_by,
-    )
-    .await?;
-    Ok(values)
 }
 
 /// Liest die tägliche Posting-Kadenz; fehlende oder ungültige Werte nutzen den Default.
@@ -327,31 +282,6 @@ mod tests {
             .await
             .unwrap();
         assert!(!external_llm_consent(&pool).await);
-    }
-
-    #[tokio::test]
-    async fn auto_approve_roundtrip() {
-        let Some(pool) = make_pool("t_sm_autoapprove").await else {
-            return;
-        };
-        // Default alle false.
-        assert_eq!(
-            get_auto_approve_settings(&pool).await,
-            AutoApprove {
-                youtube: false,
-                tiktok: false,
-                instagram: false
-            }
-        );
-        let set = AutoApprove {
-            youtube: true,
-            tiktok: false,
-            instagram: true,
-        };
-        set_auto_approve_settings(&pool, set, Some("admin"))
-            .await
-            .unwrap();
-        assert_eq!(get_auto_approve_settings(&pool).await, set);
     }
 
     #[tokio::test]

@@ -165,10 +165,10 @@ export function SocialMediaAdminDashboard() {
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] font-bold text-primary/90">
-                {isAdminView ? t('Admin-Tooling') : t('Clip-Pipeline')}
+                {isAdminView ? t('Alle Kanäle') : t('Dein Kanal')}
               </div>
               <h1 className="display-font font-extrabold text-white text-xl md:text-2xl tracking-tight leading-tight">
-                {t('Social-Media-Pipeline')}
+                {t('Social Media')}
               </h1>
             </div>
           </div>

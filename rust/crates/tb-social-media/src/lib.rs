@@ -68,6 +68,7 @@ pub mod llm;
 pub mod llm_dispatch;
 pub mod oauth;
 pub mod partner_access;
+pub mod posting_plan;
 pub mod refresh_worker;
 pub mod rendering;
 pub mod report_dispatcher;

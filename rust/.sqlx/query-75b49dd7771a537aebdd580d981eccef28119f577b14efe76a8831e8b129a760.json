@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_category_settings (streamer_login, category_key, auto_post, updated_by) SELECT $1, k.category_key, (k.category_key = $2), 'auto_default' FROM social_media_category k WHERE EXISTS (SELECT 1 FROM twitch_streamers WHERE twitch_login = $1) ON CONFLICT (streamer_login, category_key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "75b49dd7771a537aebdd580d981eccef28119f577b14efe76a8831e8b129a760"
+}

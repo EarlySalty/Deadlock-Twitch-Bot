@@ -78,11 +78,81 @@ Gespeichert werden auch:
 
 Die Plattformfreigabe ist explizit pro Clip und pro Zielnetzwerk. Ein Clip kann also fuer YouTube freigegeben sein, aber fuer TikTok nicht.
 
-Auto-Approve-Flags liegen als Key/Value-Settings in `social_media_settings`:
+### Freigabe-Modi (pro Streamer)
 
-- `auto_approve_youtube`
-- `auto_approve_tiktok`
-- `auto_approve_instagram`
+Der Modus steht in `social_media_streamer_settings.approval_mode`:
+
+- `manual`: jeder Clip braucht eine ausdrueckliche Freigabe (Default)
+- `veto_window`: Clip wird eingeplant und geht raus, wenn bis zum Termin niemand widerspricht
+- `full_auto`: Clip wird ohne Sichtung eingeplant
+
+Unbekannte Werte fallen auf `manual` zurueck.
+
+Die frueheren Key/Value-Settings `auto_approve_youtube` / `_tiktok` / `_instagram` in
+`social_media_settings` sind entfallen (Migration `20260815120000`). Sie galten global
+fuer die ganze Instanz, liessen sich von jedem freigegebenen Partner umschalten und
+loesten ausserdem nie eine Freigabe aus: sie mischten sich nur additiv in eine manuelle
+Entscheidung und ueberschrieben damit still die Auswahl des Nutzers.
+
+Automatisch eingeplant wird nur, wenn beides zusammenkommt: der Modus laesst es zu
+**und** die Kategorie des Clips ist eingeschaltet
+(`social_media_category_settings.auto_post`). Einstiegspunkt ist
+`approval::auto_approve_if_allowed`, aufgerufen am Ende der Enrichment-Pipeline und
+im `ApprovalWorker`.
+
+## 3b. Zeitplan
+
+Freigegeben heisst nicht mehr „sofort raus". `approval::ensure_queued_uploads` setzt
+beim Einreihen `twitch_clips_upload_queue.scheduled_at` auf den naechsten freien
+Termin aus `posting_plan::plan_next_slot`. Der Upload-Worker zieht ohnehin nur
+Zeilen, deren `scheduled_at` NULL oder erreicht ist.
+
+Kadenz je Streamer und Plattform in `social_media_platform_schedule`:
+
+| Spalte | Default | Bedeutung |
+|---|---|---|
+| `auto_post` | `false` | Plattform postet automatisch |
+| `posts_per_week` | `4` | Obergrenze im rollierenden Sieben-Tage-Fenster |
+| `max_posts_per_day` | `1` | Obergrenze pro lokalem Kalendertag |
+| `post_times` | `["18:00"]` | Tageszeiten in der Zeitzone des Kanals |
+
+Die Defaults kommen aus der Kadenz-Recherche: hoechstens ein Post pro Tag und
+Plattform, rund drei bis fuenf pro Woche.
+
+Gerechnet wird in `scheduler::next_cadence_slot`, rein funktional ohne IO und ohne
+Systemzeit. Steht eine Kadenz auf null, gibt es keinen Termin und die Plattform
+zaehlt nicht als aktiv. Der Suchhorizont betraegt 180 Tage.
+
+## 3c. Kategorien
+
+Clips tragen `game_id` (aus Helix) und `category_key`. Der Katalog steht in
+`social_media_category`:
+
+- `deadlock`: `enrichment_enabled = true`
+- `other`: Fallback, ohne Anreicherung
+
+Zugeordnet wird beim Registrieren des Clips ueber `posting_plan::resolve_category`:
+die `twitch_game_id` schlaegt den Abgleich ueber `match_game_names`, ohne Treffer
+landet der Clip in `other`.
+
+Das Kategorie-Gate haengt an zwei Stellen:
+
+- `enrichment::iter_pending_enrichments` nimmt nur Kategorien mit `enrichment_enabled`.
+- `approval::iter_clips_ohne_enrichment` holt die uebrigen ab und schleust sie in den
+  Approval-Workflow. Ohne diesen zweiten Pfad wuerden Clips anderer Spiele nie
+  auftauchen, denn `awaiting_approval` setzt sonst erst das Ende der
+  Enrichment-Pipeline.
+
+## 3d. Vorratswarnung
+
+`posting_plan::pool_forecast` rechnet aus Pool-Bestand und Kadenz aus, fuer wie viele
+Posts der Vorrat reicht. Gezaehlt werden Clips des Kanals, die nicht verworfen und
+nicht schon ueberall veroeffentlicht sind und in einer eingeschalteten Kategorie
+liegen. Ein Clip ergibt einen Post je aktiver Plattform. Traegt der Vorrat keine
+volle Woche mehr, setzt die Rechnung `warnung`, und das Dashboard zeigt eine eigene
+betonte Zeile ueber Clip-Pool und Zeitplan.
+
+Clip-Nachschub ist Sache der Streamer; die Plattform warnt nur.
 
 ## 4. Upload
 
@@ -150,5 +220,10 @@ Reports werden separat in `social_media_reports` geschrieben. Report-Arten:
 
 - Die Pipeline ist asynchron; "Clip registriert" heisst nicht "Clip schon gepostet".
 - Approval ist der haerteste Gatekeeper vor dem Upload.
+- Freigegeben heisst "eingeplant", nicht "gepostet": zwischen Freigabe und Upload
+  liegt der Termin aus der Kadenz.
+- Zeitplan, Freigabe-Modus und Kategorie-Schalter haengen am Kanal, nicht an der
+  Instanz. Das Partner-Scoping aus `social_media_partner_access` gilt unveraendert:
+  ein Partner sieht und setzt nur den eigenen Kanal.
 - Analytics bauen auf erfolgreich veroeffentlichten Plattform-IDs auf; ohne Video-ID kein Polling.
 - Retention ist keine Archivierungsfunktion, sondern Cleanup fuer Produktionsmaterial.

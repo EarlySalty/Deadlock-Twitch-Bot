@@ -67,9 +67,9 @@ const EN: Record<string, string> = {
   Beta: 'Beta',
 
   // -- Social-Media-Rahmen ------------------------------------------------
-  'Admin-Tooling': 'Admin tooling',
-  'Clip-Pipeline': 'Clip pipeline',
-  'Social-Media-Pipeline': 'Social media pipeline',
+  'Alle Kanäle': 'All channels',
+  'Dein Kanal': 'Your channel',
+  'Social Media': 'Social media',
   'Freigabe für diesen Streamer entziehen': 'Revoke access for this streamer',
   'Diesen Streamer für das eigene Social-Media-Dashboard freischalten':
     'Give this streamer access to their own social media dashboard',
@@ -88,8 +88,34 @@ const EN: Record<string, string> = {
   'Streamer auswählen': 'Select a streamer',
   'Wähle oben einen Streamer aus, um Layouts, Clips und Uploads zu verwalten.':
     'Pick a streamer above to manage layouts, clips and uploads.',
-  'Admin-Tooling · Social Media 2.0': 'Admin tooling · Social Media 2.0',
-  'Cross-Posting-Pipeline für': 'Cross-posting pipeline for',
+  'Clips automatisch posten': 'Post clips automatically',
+  'Social Media für': 'Social media for',
+
+  // -- Zeitplan, Freigabe-Modi, Kategorien, Vorrat ------------------------
+  'Clip-Pool': 'Clip pool',
+  Zeitplan: 'Schedule',
+  Konten: 'Accounts',
+  Kategorien: 'Categories',
+  'Clips im Pool': 'Clips in pool',
+  'Nur nach Freigabe': 'Only after approval',
+  'Jeder Clip wartet auf dein Okay.': 'Every clip waits for your go-ahead.',
+  'Einspruch bis zum Termin': 'Veto until the slot',
+  'Clips werden eingeplant. Du kannst sie bis zum Posting stoppen.':
+    'Clips get scheduled. You can stop them until they go out.',
+  Vollautomatik: 'Fully automatic',
+  'Clips gehen ohne Sichtung raus.': 'Clips go out without review.',
+  'Zeiten gelten in {tz}.': 'Times apply in {tz}.',
+  'Automatisch posten': 'Post automatically',
+  'Posts pro Woche': 'Posts per week',
+  'Höchstens pro Tag': 'At most per day',
+  'Uhrzeiten, mit Komma getrennt': 'Times, comma separated',
+  'Nächster Post: {termin}': 'Next post: {termin}',
+  'Mit Titel- und Hashtag-Vorschlägen.': 'With title and hashtag suggestions.',
+  'Ohne Vorschläge, Clip geht so raus.': 'No suggestions, the clip goes out as is.',
+  'Vorrat reicht noch für {posts} Posts.': 'Enough clips left for {posts} posts.',
+  '{clips} Clips im Pool.': '{clips} clips in the pool.',
+  '{clips} Clips im Pool, das sind rund {tage} Tage bei {proWoche} Posts pro Woche.':
+    '{clips} clips in the pool, about {tage} days at {proWoche} posts per week.',
   'Twitch-Clips werden automatisch eingesammelt, vertikal aufbereitet und für YT Shorts / TikTok / Reels vorbereitet. Layouts pro Streamer als Default, pro Clip override-bar, 14-Tage-Retention.':
     'Twitch clips are collected automatically, converted to vertical format and prepared for YT Shorts, TikTok and Reels. Layouts are a per-streamer default, can be overridden per clip, and are kept for 14 days.',
   'Layout: Repo-Default aktiv': 'Layout: repo default active',

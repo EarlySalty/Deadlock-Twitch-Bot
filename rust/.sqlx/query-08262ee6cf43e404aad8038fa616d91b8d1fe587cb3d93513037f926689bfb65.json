@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k.enrichment_enabled FROM twitch_clips_social_media c JOIN social_media_category k ON k.category_key = c.category_key WHERE c.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enrichment_enabled",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "08262ee6cf43e404aad8038fa616d91b8d1fe587cb3d93513037f926689bfb65"
+}

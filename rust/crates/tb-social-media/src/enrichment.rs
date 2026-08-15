@@ -319,11 +319,18 @@ pub async fn save_llm_output(
 /// Clip-IDs, die Enrichment brauchen (Python `iter_pending_enrichments`):
 /// nicht verworfen, mit lokaler Datei, ohne Enrichment-Zeile ODER Status
 /// `pending`/`failed` — neueste zuerst.
+///
+/// Kategorie-Gate: angereichert wird nur, was in einer Kategorie mit
+/// `enrichment_enabled` liegt (heute allein Deadlock). Clips anderer Spiele
+/// bekommen das nackte Auto-Posting ohne LLM und laufen ueber
+/// [`crate::approval::iter_clips_ohne_enrichment`] in den Approval-Workflow.
 pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     let rows = sqlx::query!(
         "SELECT c.id AS \"id!\" FROM twitch_clips_social_media c \
          LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
+         JOIN social_media_category k ON k.category_key = c.category_key \
          WHERE c.discarded_at IS NULL \
+           AND k.enrichment_enabled \
            AND COALESCE(c.upload_local_path, c.local_file_path) IS NOT NULL \
            AND (e.status IS NULL OR e.status IN ('pending', 'failed')) \
            AND c.id BETWEEN 0 AND 2147483647 \

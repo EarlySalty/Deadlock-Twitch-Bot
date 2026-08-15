@@ -289,9 +289,19 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/admin/approval/:clip_db_id/decision",
             post(social_media::approval_decision_handler),
         )
+        // Zeitplan, Freigabe-Modus, Kategorien und Vorratsrechnung je Kanal.
+        // Loest die frueheren globalen Auto-Approve-Flags ab.
         .route(
-            "/social-media/api/admin/settings/auto-approve",
-            get(social_media::auto_approve_get_handler).put(social_media::auto_approve_put_handler),
+            "/social-media/api/admin/settings/posting-plan",
+            get(social_media::posting_plan_get_handler).put(social_media::posting_plan_put_handler),
+        )
+        .route(
+            "/social-media/api/admin/settings/posting-plan/platform/:platform",
+            put(social_media::posting_plan_platform_put_handler),
+        )
+        .route(
+            "/social-media/api/admin/settings/posting-plan/category/:category_key",
+            put(social_media::posting_plan_category_put_handler),
         )
         .route(
             "/social-media/api/admin/settings/vod-archive",

@@ -1,12 +1,14 @@
 import { withCookieCredentials } from './core';
 import type {
-  AutoApproveSettings,
+  ApprovalMode,
   ClipAnalyticsResponse,
   ClipApprovalRecord,
   ClipEnrichment,
   ClipListResponse,
   ClipStatus,
   LayoutPayload,
+  PlatformScheduleEntry,
+  PostingPlan,
   SocialClip,
   SocialMediaReport,
   SocialMediaReportKind,
@@ -249,18 +251,58 @@ export async function decideClipApproval(input: {
   );
 }
 
-export async function fetchAutoApproveSettings(): Promise<AutoApproveSettings> {
-  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`);
+/**
+ * Zeitplan eines Kanals. Alle vier Aufrufe liefern den kompletten Plan zurueck,
+ * damit die Oberflaeche nach jeder Aenderung den neu berechneten Termin und die
+ * neue Vorratsrechnung sieht, ohne zweite Abfrage.
+ */
+export async function fetchPostingPlan(streamerLogin: string): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`);
 }
 
-export async function saveAutoApproveSettings(
-  payload: AutoApproveSettings,
-): Promise<AutoApproveSettings> {
-  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`, {
+export async function savePostingPlanSettings(
+  streamerLogin: string,
+  payload: { approval_mode?: ApprovalMode; timezone?: string },
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+}
+
+export async function savePlatformSchedule(
+  streamerLogin: string,
+  platform: SocialPlatform,
+  payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(
+    `${ADMIN_PREFIX}/settings/posting-plan/platform/${encodeURIComponent(platform)}${qs}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function saveCategoryAutoPost(
+  streamerLogin: string,
+  categoryKey: string,
+  autoPost: boolean,
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(
+    `${ADMIN_PREFIX}/settings/posting-plan/category/${encodeURIComponent(categoryKey)}${qs}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_post: autoPost }),
+    },
+  );
 }
 
 /** Das VOD-Archiv haengt am Streamer, nicht am Dashboard: immer mit Kanal. */
