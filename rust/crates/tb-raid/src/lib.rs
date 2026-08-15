@@ -96,8 +96,9 @@ pub use candidate_selection::{
     PARTNER_SCORE_THRESHOLD,
 };
 pub use deadlock_pause::{
-    DeadlockPauseOutcome, DeadlockPauseReactor, DeadlockPauseUnmodPort, UnmodOutcome,
-    DEADLOCK_PAUSE_DAYS,
+    remod_candidates, unmod_candidates, DeadlockPauseCandidate, DeadlockPauseOutcome,
+    DeadlockPauseReactor, DeadlockPauseUnmodPort, UnmodOutcome, DEADLOCK_PAUSE_DAYS,
+    MAX_REMOD_PER_SWEEP, MAX_UNMOD_PER_SWEEP,
 };
 pub use eligibility::{
     classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,

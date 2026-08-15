@@ -309,6 +309,18 @@ pub struct AnalyticsDaysQuery {
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
+/// Das Spiel, an dem die Deadlock-Erkennung in den Sessions hängt.
+///
+/// `pub`, damit jede zweite Oberfläche (MCP-Connector) dieselbe Antwort bekommt
+/// wie `GET /streamers` und nicht ihren eigenen Default mitbringt.
+pub fn target_game_name() -> String {
+    std::env::var("TWITCH_TARGET_GAME_NAME")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "Deadlock".to_string())
+}
+
 /// `GET /internal/twitch/v1/streamers`
 pub async fn list_handler(
     auth: AuthLevel,
@@ -318,11 +330,7 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let target_game = std::env::var("TWITCH_TARGET_GAME_NAME")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "Deadlock".to_string());
+    let target_game = target_game_name();
     let streamers = db::list_streamers(&pool, &target_game).await.map_err(|e| {
         tracing::error!("list_streamers DB-Fehler: {e}");
         ApiError::internal()
@@ -996,7 +1004,12 @@ async fn resolve_discord_user_id(pool: &PgPool, login: &str) -> Option<String> {
     row.flatten()
 }
 
-async fn disconnect_bot_handler_inner(
+/// Der eigentliche Trenn-Vorgang, ohne HTTP-Rahmen.
+///
+/// `pub`, weil der MCP-Connector in tb-bot denselben Ablauf auslöst wie der
+/// Dashboard-Endpoint. Zweiter Aufrufer, ein Ablauf: alles andere wäre ein
+/// paralleler Trenn-Pfad, der irgendwann auseinanderläuft.
+pub async fn disconnect_bot_handler_inner(
     pool: &PgPool,
     role_ext: &DiscordRoleExt,
     removal_ext: &ModeratorRemovalExt,

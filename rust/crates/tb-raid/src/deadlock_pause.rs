@@ -32,11 +32,11 @@ pub const DEADLOCK_PAUSE_DAYS: i64 = 60;
 /// Ausrollen ist der ganze Rückstand auf einmal fällig, und jeder Unmod schickt
 /// eine DM an einen echten Streamer. Gestaffelt über mehrere Läufe bleibt Zeit,
 /// einen Fehler zu bemerken, bevor alle Kanäle betroffen sind.
-const MAX_UNMOD_PER_SWEEP: i64 = 5;
+pub const MAX_UNMOD_PER_SWEEP: i64 = 5;
 
 /// Obergrenze an Remods pro Lauf. Höher, weil ein Comeback nicht warten soll und
 /// die Nachricht eine gute ist.
-const MAX_REMOD_PER_SWEEP: i64 = 50;
+pub const MAX_REMOD_PER_SWEEP: i64 = 50;
 
 /// Pause zwischen zwei Helix-Calls im Sweep.
 const CALL_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -123,6 +123,131 @@ pub fn admin_deadlock_pause_text(
 }
 
 // ---------------------------------------------------------------------------
+// Kandidaten-Queries (reiner Read, ohne Wirkung)
+// ---------------------------------------------------------------------------
+
+/// Ein Kanal, den der nächste Sweep anfassen würde.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadlockPauseCandidate {
+    pub twitch_user_id: String,
+    pub twitch_login: String,
+}
+
+impl From<(String, String)> for DeadlockPauseCandidate {
+    fn from((twitch_user_id, twitch_login): (String, String)) -> Self {
+        Self {
+            twitch_user_id,
+            twitch_login,
+        }
+    }
+}
+
+/// Wer beim nächsten Lauf entmoddet würde.
+///
+/// Bewusst als eigene Funktion und nicht als Kopie in einer Vorschau: der Sweep
+/// selbst liest über genau diese Query, damit eine Vorschau nie etwas anderes
+/// zeigt als der echte Lauf tut.
+///
+/// Kandidat ist nur, wer aktiv ist, einen gültigen Streamer-Token hat (ohne
+/// den kann Twitch den Entzug gar nicht ausführen) und nicht bereits wegen
+/// Ban oder Block pausiert. Als Referenzzeitpunkt zählt der letzte
+/// Deadlock-Stream, ersatzweise der Beginn der Partnerschaft: wer nie
+/// Deadlock gestreamt hat, soll nicht sofort beim ersten Sweep fliegen.
+pub async fn unmod_candidates(
+    pool: &PgPool,
+    pause_days: i64,
+    limit: i64,
+) -> Result<Vec<DeadlockPauseCandidate>, sqlx::Error> {
+    let cutoff = (Utc::now() - chrono::Duration::days(pause_days))
+        .format("%Y-%m-%d")
+        .to_string();
+    // Alle Zeitvergleiche laufen über `LEFT(x::text, 10)::date`. Grund: die
+    // Zeitspalten sind je nach Umgebung `text` oder `timestamptz` und
+    // `had_deadlock_in_session` je nach Umgebung `boolean` oder `integer`
+    // (Prod führt boolean/timestamptz, das Baseline-Schema integer/text).
+    // Ein direkter Vergleich bricht deshalb mit einem Typfehler ab. Der
+    // Datumsschnitt ist bei einem 60-Tage-Fenster genau genug.
+    let rows = sqlx::query_as::<_, (String, String)>(
+        r#"
+            SELECT p.twitch_user_id,
+                   LOWER(p.twitch_login) AS twitch_login
+              FROM twitch_partners p
+              JOIN twitch_raid_auth a
+                ON a.twitch_user_id = p.twitch_user_id
+             WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
+               AND p.deadlock_pause_unmodded_at IS NULL
+               AND COALESCE(NULLIF(TRIM(p.twitch_login), ''), '') <> ''
+               AND COALESCE(a.needs_reauth, TRUE) = FALSE
+               AND a.access_token_enc IS NOT NULL
+               AND OCTET_LENGTH(a.access_token_enc) > 0
+               AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
+                   NOT IN ('blocked', 'bot_banned')
+               AND COALESCE(
+                       (SELECT MAX(LEFT(s.started_at::text, 10)::date)
+                          FROM twitch_stream_sessions s
+                         WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
+                           AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
+                                OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')),
+                       LEFT(NULLIF(TRIM(p.partnered_at), ''), 10)::date,
+                       DATE '1970-01-01'
+                   ) < $1::date
+             ORDER BY p.twitch_login
+             LIMIT $2
+            "#,
+    )
+    .bind(&cutoff)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(DeadlockPauseCandidate::from).collect())
+}
+
+/// Wer beim nächsten Lauf wieder gemoddet würde: pausierte Kanäle, die seit dem
+/// Unmod wieder Deadlock gestreamt haben. Voraussetzung ist ein gültiger
+/// Streamer-Token; ohne den bleibt die Pause bestehen, bis der Streamer neu
+/// verbindet.
+pub async fn remod_candidates(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<DeadlockPauseCandidate>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        r#"
+            SELECT p.twitch_user_id,
+                   LOWER(p.twitch_login) AS twitch_login
+              FROM twitch_partners p
+              JOIN twitch_raid_auth a
+                ON a.twitch_user_id = p.twitch_user_id
+             WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
+               AND p.deadlock_pause_unmodded_at IS NOT NULL
+               AND COALESCE(a.needs_reauth, TRUE) = FALSE
+               AND a.access_token_enc IS NOT NULL
+               AND OCTET_LENGTH(a.access_token_enc) > 0
+               AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
+                   NOT IN ('blocked', 'bot_banned')
+               AND EXISTS (
+                   SELECT 1
+                     FROM twitch_stream_sessions s
+                    WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
+                      AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
+                           OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')
+                      -- `>=` statt `>`: der Vergleich läuft auf Tagesbasis
+                      -- (siehe unmod_candidates), sonst fiele ein Comeback am
+                      -- Tag des Unmods durch. Die Session, die den Unmod
+                      -- ausgelöst hat, ist zwei Monate alt und trifft nie zu.
+                      AND LEFT(s.started_at::text, 10)::date
+                          >= LEFT(p.deadlock_pause_unmodded_at, 10)::date
+               )
+             ORDER BY p.twitch_login
+             LIMIT $1
+            "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(DeadlockPauseCandidate::from).collect())
+}
+
+// ---------------------------------------------------------------------------
 // Reactor
 // ---------------------------------------------------------------------------
 
@@ -175,6 +300,18 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
         self
     }
 
+    /// Die aktive Pausendauer. Eine Vorschau muss mit derselben Grenze rechnen
+    /// wie der Sweep, sonst zeigt sie andere Kandidaten als der echte Lauf.
+    pub fn pause_days(&self) -> i64 {
+        self.pause_days
+    }
+
+    /// Der Pool, auf dem dieser Reactor arbeitet — für Vorschauen auf demselben
+    /// Zustand.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     fn iso(dt: DateTime<Utc>) -> String {
         dt.to_rfc3339_opts(SecondsFormat::Secs, false)
     }
@@ -192,54 +329,10 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
 
     /// Entmoddet Partner ohne Deadlock-Stream innerhalb der Pausendauer.
     ///
-    /// Kandidat ist nur, wer aktiv ist, einen gültigen Streamer-Token hat (ohne
-    /// den kann Twitch den Entzug gar nicht ausführen) und nicht bereits wegen
-    /// Ban oder Block pausiert. Als Referenzzeitpunkt zählt der letzte
-    /// Deadlock-Stream, ersatzweise der Beginn der Partnerschaft: wer nie
-    /// Deadlock gestreamt hat, soll nicht sofort beim ersten Sweep fliegen.
+    /// Die Auswahl steckt in [`unmod_candidates`]; hier steht nur, was mit den
+    /// Kandidaten passiert.
     pub async fn unmod_idle_channels(&self) -> u64 {
-        let cutoff = (Utc::now() - chrono::Duration::days(self.pause_days))
-            .format("%Y-%m-%d")
-            .to_string();
-        // Alle Zeitvergleiche laufen über `LEFT(x::text, 10)::date`. Grund: die
-        // Zeitspalten sind je nach Umgebung `text` oder `timestamptz` und
-        // `had_deadlock_in_session` je nach Umgebung `boolean` oder `integer`
-        // (Prod führt boolean/timestamptz, das Baseline-Schema integer/text).
-        // Ein direkter Vergleich bricht deshalb mit einem Typfehler ab. Der
-        // Datumsschnitt ist bei einem 60-Tage-Fenster genau genug.
-        let rows = match sqlx::query_as::<_, (String, String)>(
-            r#"
-            SELECT p.twitch_user_id,
-                   LOWER(p.twitch_login) AS twitch_login
-              FROM twitch_partners p
-              JOIN twitch_raid_auth a
-                ON a.twitch_user_id = p.twitch_user_id
-             WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
-               AND p.deadlock_pause_unmodded_at IS NULL
-               AND COALESCE(NULLIF(TRIM(p.twitch_login), ''), '') <> ''
-               AND COALESCE(a.needs_reauth, TRUE) = FALSE
-               AND a.access_token_enc IS NOT NULL
-               AND OCTET_LENGTH(a.access_token_enc) > 0
-               AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
-                   NOT IN ('blocked', 'bot_banned')
-               AND COALESCE(
-                       (SELECT MAX(LEFT(s.started_at::text, 10)::date)
-                          FROM twitch_stream_sessions s
-                         WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
-                           AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
-                                OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')),
-                       LEFT(NULLIF(TRIM(p.partnered_at), ''), 10)::date,
-                       DATE '1970-01-01'
-                   ) < $1::date
-             ORDER BY p.twitch_login
-             LIMIT $2
-            "#,
-        )
-        .bind(&cutoff)
-        .bind(MAX_UNMOD_PER_SWEEP)
-        .fetch_all(&self.pool)
-        .await
-        {
+        let rows = match unmod_candidates(&self.pool, self.pause_days, MAX_UNMOD_PER_SWEEP).await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(%error, "Deadlock-Pause: Unmod-Query fehlgeschlagen");
@@ -248,7 +341,11 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
         };
 
         let mut unmodded = 0u64;
-        for (twitch_user_id, twitch_login) in rows {
+        for DeadlockPauseCandidate {
+            twitch_user_id,
+            twitch_login,
+        } in rows
+        {
             match self.unmod.unmod_bot(&twitch_user_id, &twitch_login).await {
                 UnmodOutcome::Done => {}
                 UnmodOutcome::Failed => {
@@ -277,44 +374,9 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
     }
 
     /// Holt die Mod-Rechte zurück, sobald ein pausierter Kanal wieder Deadlock
-    /// gestreamt hat. Voraussetzung ist ein gültiger Streamer-Token; ohne den
-    /// bleibt die Pause bestehen, bis der Streamer neu verbindet.
+    /// gestreamt hat. Die Auswahl steckt in [`remod_candidates`].
     pub async fn remod_returned_channels(&self) -> u64 {
-        let rows = match sqlx::query_as::<_, (String, String)>(
-            r#"
-            SELECT p.twitch_user_id,
-                   LOWER(p.twitch_login) AS twitch_login
-              FROM twitch_partners p
-              JOIN twitch_raid_auth a
-                ON a.twitch_user_id = p.twitch_user_id
-             WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
-               AND p.deadlock_pause_unmodded_at IS NOT NULL
-               AND COALESCE(a.needs_reauth, TRUE) = FALSE
-               AND a.access_token_enc IS NOT NULL
-               AND OCTET_LENGTH(a.access_token_enc) > 0
-               AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
-                   NOT IN ('blocked', 'bot_banned')
-               AND EXISTS (
-                   SELECT 1
-                     FROM twitch_stream_sessions s
-                    WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
-                      AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
-                           OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')
-                      -- `>=` statt `>`: der Vergleich läuft auf Tagesbasis
-                      -- (siehe unmod_idle_channels), sonst fiele ein Comeback am
-                      -- Tag des Unmods durch. Die Session, die den Unmod
-                      -- ausgelöst hat, ist zwei Monate alt und trifft nie zu.
-                      AND LEFT(s.started_at::text, 10)::date
-                          >= LEFT(p.deadlock_pause_unmodded_at, 10)::date
-               )
-             ORDER BY p.twitch_login
-             LIMIT $1
-            "#,
-        )
-        .bind(MAX_REMOD_PER_SWEEP)
-        .fetch_all(&self.pool)
-        .await
-        {
+        let rows = match remod_candidates(&self.pool, MAX_REMOD_PER_SWEEP).await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(%error, "Deadlock-Pause: Remod-Query fehlgeschlagen");
@@ -323,7 +385,11 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
         };
 
         let mut remodded = 0u64;
-        for (twitch_user_id, twitch_login) in rows {
+        for DeadlockPauseCandidate {
+            twitch_user_id,
+            twitch_login,
+        } in rows
+        {
             match self
                 .remod
                 .bot_ban_status(&twitch_user_id, &twitch_login)
@@ -751,6 +817,64 @@ mod tests {
         // Zweiter Lauf ist ein No-op: der Marker dedupliziert.
         assert_eq!(reactor.unmod_idle_channels().await, 0);
         assert_eq!(notifier.dms.lock().unwrap().len(), 2);
+    }
+
+    /// Eine Vorschau, die etwas anderes zeigt als der Lauf tut, ist schlimmer
+    /// als keine. Deshalb: dieselben Kandidaten aus der Vorschau-Funktion und
+    /// aus dem echten Unmod-Lauf.
+    #[tokio::test]
+    async fn vorschau_nennt_genau_die_kanaele_die_der_lauf_anfasst() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("dlp_vorschau").await;
+        let long_ago = Utc::now() - chrono::Duration::days(400);
+        seed_partner(&pool, "1", "alt", long_ago).await;
+        seed_session(&pool, "alt", Utc::now() - chrono::Duration::days(90), true).await;
+        seed_partner(&pool, "2", "frisch", long_ago).await;
+        seed_session(
+            &pool,
+            "frisch",
+            Utc::now() - chrono::Duration::days(10),
+            true,
+        )
+        .await;
+
+        let vorschau = unmod_candidates(&pool, DEADLOCK_PAUSE_DAYS, MAX_UNMOD_PER_SWEEP)
+            .await
+            .unwrap();
+        let vorschau_logins: Vec<String> =
+            vorschau.iter().map(|k| k.twitch_login.clone()).collect();
+        assert_eq!(vorschau_logins, vec!["alt".to_string()]);
+
+        let unmod = fake_unmod(UnmodOutcome::Done);
+        let reactor = reactor_with(
+            pool.clone(),
+            Arc::new(RecordingNotifier::default()),
+            unmod.clone(),
+            BotBanStatus::NotBanned,
+        );
+        assert_eq!(reactor.unmod_idle_channels().await, 1);
+        assert_eq!(unmod.calls.lock().unwrap().clone(), vorschau_logins);
+
+        // Nach dem Lauf ist der Kanal Remod-Kandidat, sobald er wieder Deadlock
+        // streamt — und taucht in der Unmod-Vorschau nicht mehr auf.
+        assert!(
+            unmod_candidates(&pool, DEADLOCK_PAUSE_DAYS, MAX_UNMOD_PER_SWEEP)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        seed_session(&pool, "alt", Utc::now(), true).await;
+        let remod = remod_candidates(&pool, MAX_REMOD_PER_SWEEP).await.unwrap();
+        assert_eq!(
+            remod
+                .iter()
+                .map(|k| k.twitch_login.clone())
+                .collect::<Vec<_>>(),
+            vec!["alt".to_string()]
+        );
     }
 
     /// Ein fehlgeschlagener Entzug darf nicht als Pause gelten, sonst behält der
