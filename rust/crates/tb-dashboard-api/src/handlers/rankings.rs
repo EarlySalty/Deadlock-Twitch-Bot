@@ -5,12 +5,7 @@
 //!
 //! Drei SQL-Varianten je nach `metric`; `exclude_external=1` → HAVING AVG(avg_viewers) <= 100.
 
-use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::{Query, State}, response::IntoResponse, Json};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
@@ -39,22 +34,14 @@ pub struct RankingsQuery {
     pub exclude_external: Option<String>,
 }
 
-fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if matches!(auth, DashboardAuthLevel::None) {
-        Err(crate::auth::unauthorized_v2_json())
-    } else {
-        Ok(())
-    }
-}
-
 /// `GET /twitch/api/v2/rankings`
 pub async fn rankings_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<RankingsQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let metric = params.metric.as_deref().unwrap_or("viewers");

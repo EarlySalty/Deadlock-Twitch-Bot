@@ -30,16 +30,15 @@ pub struct WatchTimeQuery {
 }
 
 /// Pures Fenster-Mapping anhand der Plan-Entitlements (Python `_plan_has_entitlement`).
-fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
-    if entitlements.contains(&"analytics") {
+fn window_for_plan_id(plan_id: &str) -> &'static str {
+    if tb_analytics::plan::plan_is_premium(plan_id) {
         "full"
     } else {
         "last_stream"
     }
 }
 
-/// Lesefenster auflösen: Admin → `full`; sonst Plan des Streamers prüfen.
-/// Bei Plan-Lookup-Fehler konservativ `last_stream` (nie mehr Daten zeigen als erlaubt).
+/// Lesefenster auflösen: Admin → `full`; sonst Premium → `full`, Free nur letzter Stream.
 async fn resolve_read_window(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
@@ -49,7 +48,7 @@ async fn resolve_read_window(
         return "full";
     }
     match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
-        Ok(snap) => window_for_entitlements(&snap.entitlements),
+        Ok(snap) => window_for_plan_id(snap.plan_id),
         Err(_) => "last_stream",
     }
 }
@@ -130,13 +129,11 @@ mod tests {
 
     #[test]
     fn fenster_mapping() {
-        assert_eq!(
-            window_for_entitlements(&["analytics", "chat.lurker_tax"]),
-            "full"
-        );
-        assert_eq!(window_for_entitlements(&["analytics"]), "full");
-        assert_eq!(window_for_entitlements(&["chat.lurker_tax"]), "last_stream"); // kein Flag
-        assert_eq!(window_for_entitlements(&[]), "last_stream");
+        assert_eq!(window_for_plan_id("premium"), "full");
+        assert_eq!(window_for_plan_id("analytics_trial"), "full");
+        assert_eq!(window_for_plan_id("chat_quiet"), "full");
+        assert_eq!(window_for_plan_id("free"), "last_stream");
+        assert_eq!(window_for_plan_id("raid_free"), "last_stream");
     }
 
     #[tokio::test]

@@ -70,6 +70,9 @@ pub async fn get_handler(
     State(pool): State<PgPool>,
     Query(query): Query<ClipCommandQuery>,
 ) -> Response {
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     let (login, user_id) = match resolve_target(&auth, &query.streamer) {
         Ok(t) => t,
         Err(resp) => return resp,
@@ -103,6 +106,9 @@ pub async fn post_handler(
     Query(query): Query<ClipCommandQuery>,
     Json(body): Json<ClipCommandUpdate>,
 ) -> Response {
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
     let (login, user_id) = match resolve_target(&auth, &query.streamer) {
         Ok(t) => t,
         Err(resp) => return resp,
@@ -197,7 +203,16 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
-             plan_name TEXT DEFAULT 'free' NOT NULL, clip_command_enabled INTEGER DEFAULT 1 NOT NULL)",
+             plan_name TEXT DEFAULT 'free' NOT NULL, clip_command_enabled INTEGER DEFAULT 1 NOT NULL, \
+             manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, \
+             manual_plan_updated_at TEXT, first_login_at TEXT, trial_ever_granted INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
+             status TEXT, current_period_end TEXT, updated_at TEXT)",
         )
         .execute(&pool)
         .await
@@ -222,11 +237,42 @@ mod tests {
         )
     }
 
+    async fn grant_premium(pool: &PgPool, login: &str, uid: &str) {
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id) \
+             VALUES ($1, $2, 'premium')",
+        )
+        .bind(uid)
+        .bind(login)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn partner_ohne_premium_403() {
+        let Some(pool) = make_pool("t_clipcmd_free").await else {
+            return;
+        };
+        let (s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool),
+                Query(ClipCommandQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        assert_eq!(j["error"], "plan_required");
+    }
+
     #[tokio::test]
     async fn partner_toggle_roundtrip_default_an() {
         let Some(pool) = make_pool("t_clipcmd_partner").await else {
             return;
         };
+        grant_premium(&pool, "nani", "42").await;
 
         let (s, j) = body_of(
             get_handler(

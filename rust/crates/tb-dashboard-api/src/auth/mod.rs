@@ -144,18 +144,12 @@ pub async fn require_extended_plan(
     }
 }
 
-/// `true` wenn der Streamer einen Plan mit dem konsolidierten `analytics`-Flag,
-/// ein aktives Stripe-Abo ODER einen laufenden 30-Tage-Trial hat. Nutzt denselben
-/// Resolver wie das Dashboard (`resolve_plan_snapshot`), damit Manual-Override UND
-/// Stripe-Abo (und der `user_id`-Match) berücksichtigt werden — die frühere
-/// verkürzte streamer_plans-Login-Query sperrte zahlende Stripe-Kunden ohne
-/// Manual-Eintrag fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei
-/// DB-Fehler `false` (fail-closed — kein versehentlicher Gratis-Zugang).
+/// `true` wenn der Streamer Premium hat (inkl. Alt-Pläne und laufendem Trial).
+/// Fail-closed bei DB-Fehler.
 pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
-    match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
-        Ok(snapshot) => snapshot.entitlements.contains(&"analytics"),
-        Err(_) => false,
-    }
+    tb_analytics::plan::is_premium_for(pool, login, user_id)
+        .await
+        .unwrap_or(false)
 }
 
 /// Plan-Gate für die DashboardAuthLevel-Handler. Gibt `Some(response)` zurück,
@@ -240,23 +234,7 @@ pub fn plan_required_response() -> Response {
 /// Analytics-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
 /// `tb-analytics` privat) und gegen Drift testgesichert.
 fn extended_required_plans() -> Vec<&'static str> {
-    const KNOWN_BILLING_PLAN_IDS: [&str; 9] = [
-        "raid_free",
-        "chat_quiet",
-        "raid_boost",
-        "bundle_chat_quiet_raid_boost",
-        "analysis_dashboard",
-        "bundle_analysis_raid_boost",
-        "bundle_werbefrei_analyse",
-        "bundle_komplett",
-        "analytics_trial",
-    ];
-    let mut plans: Vec<&'static str> = KNOWN_BILLING_PLAN_IDS
-        .into_iter()
-        .filter(|id| tb_analytics::plan::plan_has_analytics(id))
-        .collect();
-    plans.sort_unstable();
-    plans
+    vec!["premium"]
 }
 
 #[cfg(test)]
@@ -275,16 +253,7 @@ mod tests {
         assert_eq!(body["error"], "plan_required");
         assert_eq!(body["required_entitlements"], json!(["analytics"]));
         // Exakt die Analyse-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
-        assert_eq!(
-            body["required_plans"],
-            json!([
-                "analysis_dashboard",
-                "analytics_trial",
-                "bundle_analysis_raid_boost",
-                "bundle_komplett",
-                "bundle_werbefrei_analyse",
-            ])
-        );
+        assert_eq!(body["required_plans"], json!(["premium"]));
     }
 
     /// Drift-Gate: jeder gelistete required_plan trägt tatsächlich das

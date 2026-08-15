@@ -87,6 +87,38 @@ pub fn plan_has_analytics(plan_id: &str) -> bool {
     plan_entitlements(plan_id).contains(&"analytics")
 }
 
+/// Bezahlte bzw. trial-Pläne, die Premium-Zugang geben. Alte IDs bleiben
+/// wahr, bis die Bestandsmigration sie auf `premium` schreibt.
+pub fn plan_is_premium(plan_id: &str) -> bool {
+    matches!(
+        plan_id.trim(),
+        "premium"
+            | "chat_quiet"
+            | "raid_boost"
+            | "analysis_dashboard"
+            | "bundle_chat_quiet_raid_boost"
+            | "bundle_werbefrei_analyse"
+            | "bundle_komplett"
+            | "bundle_analysis_raid_boost"
+            | "analytics_trial"
+    )
+}
+
+/// Eine Wahrheit für die Paywall: alle Handler fragen dieses Prädikat.
+pub async fn is_premium(pool: &PgPool, streamer: &str) -> Result<bool, sqlx::Error> {
+    is_premium_for(pool, streamer, "").await
+}
+
+/// Wie [`is_premium`], mit optionaler `twitch_user_id` für den Snapshot-Resolver.
+pub async fn is_premium_for(
+    pool: &PgPool,
+    login: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let snap = resolve_plan_snapshot(pool, login, user_id).await?;
+    Ok(plan_is_premium(snap.plan_id))
+}
+
 /// Normalisiert eine Plan-ID strikt-kanonisch auf einen bekannten Plan.
 ///
 /// Spiegelt Python `catalog.py:normalize_plan_id` (Zeile 138-140):
@@ -713,6 +745,17 @@ mod tests {
     }
 
     // ── B20-ent-3: PlanSnapshot-Felder ──────────────────────────────────────
+
+    #[test]
+    fn plan_is_premium_deckt_alt_und_neu() {
+        assert!(plan_is_premium("premium"));
+        assert!(plan_is_premium("analytics_trial"));
+        assert!(plan_is_premium("chat_quiet"));
+        assert!(plan_is_premium("  analysis_dashboard  "));
+        assert!(!plan_is_premium("free"));
+        assert!(!plan_is_premium("raid_free"));
+        assert!(!plan_is_premium(""));
+    }
 
     #[test]
     fn default_basic_snapshot_hat_alle_felder() {

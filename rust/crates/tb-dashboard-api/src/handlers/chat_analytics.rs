@@ -35,8 +35,8 @@ pub async fn chat_analytics_handler(
     Query(params): Query<ChatAnalyticsQuery>,
 ) -> impl IntoResponse {
     // _require_v2_auth: jede gültige v2-Auth genügt, None → 401.
-    if matches!(auth, DashboardAuthLevel::None) {
-        return crate::auth::unauthorized_v2_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_chat_analytics).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
@@ -133,6 +133,45 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn partner_ohne_premium_403() {
+        let Some(pool) = make_pool("t_ca_h_premium").await else {
+            return;
+        };
+        sqlx::query(
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+             manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, \
+             manual_plan_updated_at TEXT, first_login_at TEXT, trial_ever_granted INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
+             status TEXT, current_period_end TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let resp = chat_analytics_handler(
+            partner("nani"),
+            State(pool),
+            Query(ChatAnalyticsQuery {
+                streamer: Some("nani".into()),
+                days: None,
+                timezone: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "plan_required");
     }
 
     #[tokio::test]

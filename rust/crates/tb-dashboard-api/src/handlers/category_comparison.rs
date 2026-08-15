@@ -79,12 +79,8 @@ pub async fn category_comparison_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ComparisonQuery>,
 ) -> impl IntoResponse {
-    // Python _api_v2_category_comparison ruft NUR _require_v2_auth (KEIN
-    // _require_extended_plan) — also reiner Authentifizierungs-Check, kein
-    // Plan-Gate. (Rust hatte hier fälschlich extended_gate → 403 für
-    // authentifizierte Nicht-Extended-Partner.)
-    if matches!(auth, DashboardAuthLevel::None) {
-        return crate::auth::unauthorized_v2_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_category_comparison).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {

@@ -498,7 +498,18 @@ async fn require_sm_access(
     pool: &PgPool,
     requested: Option<&str>,
 ) -> Result<Option<String>, Response> {
-    if let DashboardAuthLevel::Partner { twitch_login, .. } = auth {
+    if let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = auth
+    {
+        if !tb_analytics::plan::is_premium_for(pool, twitch_login, twitch_user_id)
+            .await
+            .unwrap_or(false)
+        {
+            return Err(crate::auth::plan_required_response());
+        }
         if !is_partner_granted(pool, twitch_login).await {
             return Err(forbidden(
                 "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
@@ -539,9 +550,16 @@ pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPo
         DashboardAuthLevel::Admin { .. } => {
             Json(json!({ "allowed": true, "streamer": null, "isAdmin": true })).into_response()
         }
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
             let login = twitch_login.to_lowercase();
-            let allowed = is_partner_granted(&pool, &login).await;
+            let premium = tb_analytics::plan::is_premium_for(&pool, &login, twitch_user_id)
+                .await
+                .unwrap_or(false);
+            let allowed = premium && is_partner_granted(&pool, &login).await;
             Json(json!({ "allowed": allowed, "streamer": login, "isAdmin": false })).into_response()
         }
         DashboardAuthLevel::None => unauthorized(),
