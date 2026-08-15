@@ -1057,8 +1057,10 @@ impl tb_raid::DeadlockPauseUnmodPort for HelixModeratorRemover {
             .remove_bot_moderator(broadcaster_id, twitch_login)
             .await
         {
-            // "war ohnehin kein Mod" ist derselbe Zielzustand wie "entzogen".
-            R::Removed | R::NotModerator => tb_raid::UnmodOutcome::Done,
+            R::Removed => tb_raid::UnmodOutcome::Removed,
+            // Zielzustand erreicht, aber der Streamer merkt davon nichts: er
+            // hatte dem Bot die Rechte längst selbst entzogen.
+            R::NotModerator => tb_raid::UnmodOutcome::WasNotModerator,
             R::NoToken | R::Failed { .. } => tb_raid::UnmodOutcome::Failed,
         }
     }
