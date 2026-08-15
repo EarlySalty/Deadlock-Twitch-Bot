@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Clock,
   Archive,
-  Cog,
   Film,
   HardDrive,
   Loader2,
@@ -17,6 +16,7 @@ import {
   Upload,
   Layers3,
   Calendar,
+  Gamepad2,
   ExternalLink,
   Pencil,
   Wand2,
@@ -33,7 +33,7 @@ import {
   decideClipApproval,
   SocialMediaForbiddenError,
   discardClip,
-  fetchAutoApproveSettings,
+  fetchPostingPlan,
   fetchClips,
   fetchVodArchiveSettings,
   fetchPlatformStatus,
@@ -42,13 +42,18 @@ import {
   type PlatformStatus,
   fetchStreamerLayout,
   saveStreamerLayout,
-  saveAutoApproveSettings,
+  saveCategoryAutoPost,
+  savePlatformSchedule,
+  savePostingPlanSettings,
   saveVodArchiveSettings,
   setClipLayoutOverride,
   uploadClip,
 } from '@/api/socialMedia';
 import {
-  type AutoApproveSettings,
+  type ApprovalMode,
+  type ClipPoolForecast,
+  type PlatformScheduleEntry,
+  type PostingPlan,
   DEFAULT_LAYOUT,
   type ClipStatus,
   type LayoutPayload,
@@ -102,14 +107,19 @@ function formatRetention(retentionUntil: string | null, t: Translate): string {
 }
 
 type EditMode = 'layout' | 'enrichment';
-type SocialMediaView = 'pipeline' | 'analytics' | 'settings';
+/**
+ * Die vier Bereiche der Seite. Getrennt statt alles auf einer Flaeche: die
+ * Reihenfolge folgt dem Weg eines Clips, vom Konto ueber den Plan und den Pool
+ * bis zum Veroeffentlichten.
+ */
+type SocialMediaView = 'konten' | 'plan' | 'pool' | 'veroeffentlicht';
 
 export function SocialMedia({ streamer }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
   const [editingClip, setEditingClip] = useState<{ id: number; mode: EditMode } | null>(null);
-  const [activeView, setActiveView] = useState<SocialMediaView>('pipeline');
+  const [activeView, setActiveView] = useState<SocialMediaView>('pool');
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
     queryKey: ['social-media', 'streamer-layout', streamer],
@@ -137,9 +147,9 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     },
   });
 
-  const autoApproveQuery = useQuery<AutoApproveSettings, Error>({
-    queryKey: ['social-media', 'auto-approve-settings'],
-    queryFn: () => fetchAutoApproveSettings(),
+  const postingPlanQuery = useQuery<PostingPlan, Error>({
+    queryKey: ['social-media', 'posting-plan', streamer],
+    queryFn: () => fetchPostingPlan(streamer),
     enabled: !!streamer,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -160,7 +170,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
   const isForbidden =
     layoutQuery.error instanceof SocialMediaForbiddenError ||
     clipsQuery.error instanceof SocialMediaForbiddenError ||
-    autoApproveQuery.error instanceof SocialMediaForbiddenError;
+    postingPlanQuery.error instanceof SocialMediaForbiddenError;
 
   // Construct a normalized LayoutPayload (with cam_enabled + mode) from the API response.
   // Backend sometimes returns layout without those fields nested — copy from response level.
@@ -206,11 +216,35 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     },
   });
 
-  const autoApproveMutation = useMutation({
-    mutationFn: (payload: AutoApproveSettings) => saveAutoApproveSettings(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'auto-approve-settings'] });
-    },
+  // Alle drei Zeitplan-Aufrufe liefern den kompletten Plan zurueck. Wir setzen
+  // ihn direkt in den Cache, damit der neu berechnete Termin und die
+  // Vorratsrechnung ohne zweite Abfrage sofort stehen.
+  const planKey = ['social-media', 'posting-plan', streamer];
+  const uebernehmePlan = (plan: PostingPlan) => {
+    queryClient.setQueryData(planKey, plan);
+  };
+
+  const approvalModeMutation = useMutation({
+    mutationFn: (payload: { approval_mode?: ApprovalMode; timezone?: string }) =>
+      savePostingPlanSettings(streamer, payload),
+    onSuccess: uebernehmePlan,
+  });
+
+  const platformScheduleMutation = useMutation({
+    mutationFn: ({
+      platform,
+      payload,
+    }: {
+      platform: SocialPlatform;
+      payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>;
+    }) => savePlatformSchedule(streamer, platform, payload),
+    onSuccess: uebernehmePlan,
+  });
+
+  const categoryMutation = useMutation({
+    mutationFn: ({ categoryKey, autoPost }: { categoryKey: string; autoPost: boolean }) =>
+      saveCategoryAutoPost(streamer, categoryKey, autoPost),
+    onSuccess: uebernehmePlan,
   });
 
   const platformStatusQuery = useQuery({
@@ -316,9 +350,10 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
 
       <div className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5">
         {[
-          { id: 'pipeline' as const, label: 'Pipeline', Icon: Layers3 },
-          { id: 'analytics' as const, label: 'Analytics', Icon: BarChart3 },
-          { id: 'settings' as const, label: 'Einstellungen', Icon: SlidersHorizontal },
+          { id: 'pool' as const, label: 'Clip-Pool', Icon: Layers3 },
+          { id: 'plan' as const, label: 'Zeitplan', Icon: Calendar },
+          { id: 'veroeffentlicht' as const, label: 'Veröffentlicht', Icon: BarChart3 },
+          { id: 'konten' as const, label: 'Konten', Icon: SlidersHorizontal },
         ].map(({ id, label, Icon }) => {
           const active = activeView === id;
           return (
@@ -339,9 +374,42 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
         })}
       </div>
 
-      {activeView === 'analytics' ? (
+      {activeView === 'veroeffentlicht' ? (
         <AnalyticsTab streamer={streamer} clips={clipsQuery.data?.items ?? []} />
-      ) : activeView === 'settings' ? (
+      ) : activeView === 'plan' ? (
+        <div className="space-y-6">
+          <VorratsHinweis pool={postingPlanQuery.data?.pool ?? null} />
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <ApprovalModeCard
+              plan={postingPlanQuery.data ?? null}
+              isLoading={postingPlanQuery.isLoading}
+              isSaving={approvalModeMutation.isPending}
+              error={approvalModeMutation.error as Error | null}
+              onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
+            />
+            <CategoryCard
+              plan={postingPlanQuery.data ?? null}
+              isLoading={postingPlanQuery.isLoading}
+              isSaving={categoryMutation.isPending}
+              error={categoryMutation.error as Error | null}
+              onChange={(categoryKey, autoPost) =>
+                categoryMutation.mutate({ categoryKey, autoPost })
+              }
+            />
+            <div className="xl:col-span-2">
+              <PostingScheduleCard
+                plan={postingPlanQuery.data ?? null}
+                isLoading={postingPlanQuery.isLoading}
+                isSaving={platformScheduleMutation.isPending}
+                error={platformScheduleMutation.error as Error | null}
+                onChange={(platform, payload) =>
+                  platformScheduleMutation.mutate({ platform, payload })
+                }
+              />
+            </div>
+          </div>
+        </div>
+      ) : activeView === 'konten' ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <PlatformConnectionsCard
             streamer={streamer}
@@ -349,13 +417,6 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
             isLoading={platformStatusQuery.isLoading}
             onDisconnect={(platform) => disconnectMutation.mutate(platform)}
             isDisconnecting={disconnectMutation.isPending}
-          />
-          <AutoApproveCard
-            settings={autoApproveQuery.data ?? { youtube: false, tiktok: false, instagram: false }}
-            isLoading={autoApproveQuery.isLoading}
-            isSaving={autoApproveMutation.isPending}
-            error={autoApproveMutation.error as Error | null}
-            onChange={(nextSettings) => autoApproveMutation.mutate(nextSettings)}
           />
           <VodArchiveCard
             streamer={streamer}
@@ -369,9 +430,10 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
         </div>
       ) : (
         <>
+          <VorratsHinweis pool={postingPlanQuery.data?.pool ?? null} />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <KpiCard
-              title={t('Clips in Pipeline')}
+              title={t('Clips im Pool')}
               value={stats.total}
               icon={Film}
               color="purple"
@@ -528,10 +590,10 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
       <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-5">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-bold text-orange/90 px-2.5 py-1 rounded-full bg-orange/12 border border-orange/30">
-            <Sparkles className="w-3.5 h-3.5" /> {t('Admin-Tooling · Social Media 2.0')}
+            <Sparkles className="w-3.5 h-3.5" /> {t('Clips automatisch posten')}
           </div>
           <h1 className="display-font font-extrabold text-white mt-3 text-3xl md:text-4xl tracking-tight">
-            {t('Cross-Posting-Pipeline für')}{' '}
+            {t('Social Media für')}{' '}
             <span className="bg-gradient-to-r from-orange to-teal bg-clip-text text-transparent">
               {streamer}
             </span>
@@ -717,63 +779,333 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
   );
 }
 
-function AutoApproveCard({
-  settings,
+/** Beschriftung und Erklaerung der drei Freigabe-Modi. */
+const APPROVAL_MODE_TEXTE: Record<ApprovalMode, { label: string; hinweis: string }> = {
+  manual: {
+    label: 'Nur nach Freigabe',
+    hinweis: 'Jeder Clip wartet auf dein Okay.',
+  },
+  veto_window: {
+    label: 'Einspruch bis zum Termin',
+    hinweis: 'Clips werden eingeplant. Du kannst sie bis zum Posting stoppen.',
+  },
+  full_auto: {
+    label: 'Vollautomatik',
+    hinweis: 'Clips gehen ohne Sichtung raus.',
+  },
+};
+
+/**
+ * Freigabe-Modus des Kanals. Eine Entscheidung mit drei Stufen, deshalb
+ * Segment-Knoepfe statt Dropdown: alle Optionen sind gleichzeitig sichtbar.
+ */
+function ApprovalModeCard({
+  plan,
   isLoading,
   isSaving,
   error,
   onChange,
 }: {
-  settings: AutoApproveSettings;
+  plan: PostingPlan | null;
   isLoading: boolean;
   isSaving: boolean;
   error: Error | null;
-  onChange: (next: AutoApproveSettings) => void;
+  onChange: (mode: ApprovalMode) => void;
 }) {
   const t = useT();
-  const updateSetting = (platform: keyof AutoApproveSettings, checked: boolean) => {
-    onChange({
-      ...settings,
-      [platform]: checked,
-    });
-  };
+  const modi = plan?.approval_modes ?? (['manual', 'veto_window', 'full_auto'] as ApprovalMode[]);
+  const aktiv = plan?.approval_mode ?? 'manual';
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
-        <Cog className="w-4 h-4 text-orange" />
+        <ShieldAlert className="w-4 h-4 text-primary" />
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('Auto-Approve')}
+          {t('Freigabe')}
         </h3>
-        {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
+      </div>
+      <div className="space-y-2">
+        {modi.map((mode) => {
+          const texte = APPROVAL_MODE_TEXTE[mode];
+          if (!texte) return null;
+          const active = aktiv === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              disabled={isLoading || isSaving}
+              onClick={() => onChange(mode)}
+              className={`w-full text-left rounded-xl border px-4 py-3 disabled:opacity-60 ${
+                active
+                  ? 'border-primary/60 bg-primary/10'
+                  : 'border-border bg-bg/40 hover:border-border-hover'
+              }`}
+              style={{ transitionProperty: 'border-color, background-color' }}
+            >
+              <div
+                className={`text-sm font-semibold ${active ? 'text-primary' : 'text-white'}`}
+              >
+                {t(texte.label)}
+              </div>
+              <div className="text-xs text-text-secondary mt-0.5">{t(texte.hinweis)}</div>
+            </button>
+          );
+        })}
+      </div>
+      {error && <div className="text-xs text-danger">{error.message}</div>}
+    </div>
+  );
+}
+
+/** Formatiert einen Termin kurz und lesbar, ohne Sekunden. */
+function formatTermin(iso: string | null, locale: string): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(locale, {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Auto-Posting und Kadenz je Plattform. Die Defaults kommen aus der Recherche:
+ * hoechstens ein Post pro Tag, rund vier pro Woche.
+ */
+function PostingScheduleCard({
+  plan,
+  isLoading,
+  isSaving,
+  error,
+  onChange,
+}: {
+  plan: PostingPlan | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: Error | null;
+  onChange: (
+    platform: SocialPlatform,
+    payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
+  ) => void;
+}) {
+  const t = useT();
+  const { language } = useLanguage();
+  const locale = language === 'en' ? 'en-GB' : 'de-DE';
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Calendar className="w-4 h-4 text-primary" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          {t('Zeitplan')}
+        </h3>
+        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
       </div>
       <p className="text-sm text-text-secondary">
-        {t(
-          'Plattformen mit aktivem Toggle werden nach einer Freigabe automatisch mit in die Queue gelegt, auch wenn im Approval-DM kein Häkchen gesetzt wurde.',
-        )}
+        {t('Zeiten gelten in {tz}.', { tz: plan?.timezone ?? 'Europe/Berlin' })}
       </p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {([
-          ['youtube', 'YouTube Shorts'],
-          ['tiktok', 'TikTok'],
-          ['instagram', 'Instagram Reels'],
-        ] as const).map(([platform, label]) => (
+
+      <div className="space-y-3">
+        {(plan?.platforms ?? []).map((eintrag) => {
+          const termin = formatTermin(eintrag.next_slot, locale);
+          return (
+            <div
+              key={eintrag.platform}
+              className="rounded-xl border border-border bg-bg/40 px-4 py-3 space-y-3"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-white">
+                  {PLATFORM_LABELS[eintrag.platform] ?? eintrag.platform}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={eintrag.auto_post}
+                  aria-label={t('Automatisch posten')}
+                  disabled={isLoading || isSaving}
+                  onClick={() => onChange(eintrag.platform, { auto_post: !eintrag.auto_post })}
+                  className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border disabled:opacity-60 ${
+                    eintrag.auto_post
+                      ? 'border-primary/60 bg-primary/30'
+                      : 'border-border bg-bg/60'
+                  }`}
+                  style={{ transitionProperty: 'border-color, background-color' }}
+                >
+                  <span
+                    className={`absolute top-1 h-5 w-5 rounded-full bg-white ${
+                      eintrag.auto_post ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                    style={{ transitionProperty: 'transform' }}
+                  />
+                </button>
+              </div>
+
+              {eintrag.auto_post && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs text-text-secondary">{t('Posts pro Woche')}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={70}
+                        defaultValue={eintrag.posts_per_week}
+                        disabled={isSaving}
+                        onBlur={(event) => {
+                          const wert = Number(event.target.value);
+                          if (!Number.isFinite(wert) || wert === eintrag.posts_per_week) return;
+                          onChange(eintrag.platform, { posts_per_week: wert });
+                        }}
+                        className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs text-text-secondary">{t('Höchstens pro Tag')}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        defaultValue={eintrag.max_posts_per_day}
+                        disabled={isSaving}
+                        onBlur={(event) => {
+                          const wert = Number(event.target.value);
+                          if (!Number.isFinite(wert) || wert === eintrag.max_posts_per_day) return;
+                          onChange(eintrag.platform, { max_posts_per_day: wert });
+                        }}
+                        className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="text-xs text-text-secondary">
+                      {t('Uhrzeiten, mit Komma getrennt')}
+                    </span>
+                    <input
+                      type="text"
+                      defaultValue={eintrag.post_times.join(', ')}
+                      placeholder="18:00, 21:00"
+                      disabled={isSaving}
+                      onBlur={(event) => {
+                        const zeiten = event.target.value
+                          .split(',')
+                          .map((wert) => wert.trim())
+                          .filter(Boolean);
+                        if (zeiten.join(',') === eintrag.post_times.join(',')) return;
+                        onChange(eintrag.platform, { post_times: zeiten });
+                      }}
+                      className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                    />
+                  </label>
+                  {termin && (
+                    <div className="text-xs text-text-secondary">
+                      {t('Nächster Post: {termin}', { termin })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {error && <div className="text-xs text-danger">{error.message}</div>}
+    </div>
+  );
+}
+
+/**
+ * Auto-Posting je Spielkategorie. Angereichert wird nur Deadlock; andere
+ * Kategorien gehen ohne Titel- und Hashtag-Vorschlaege raus.
+ */
+function CategoryCard({
+  plan,
+  isLoading,
+  isSaving,
+  error,
+  onChange,
+}: {
+  plan: PostingPlan | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: Error | null;
+  onChange: (categoryKey: string, autoPost: boolean) => void;
+}) {
+  const t = useT();
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Gamepad2 className="w-4 h-4 text-primary" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          {t('Kategorien')}
+        </h3>
+        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
+      </div>
+      <div className="space-y-2">
+        {(plan?.categories ?? []).map((kategorie) => (
           <label
-            key={platform}
+            key={kategorie.category_key}
             className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
           >
-            <span className="text-sm font-semibold text-white">{t(label)}</span>
+            <span>
+              <span className="block text-sm font-semibold text-white">
+                {kategorie.display_name}
+              </span>
+              <span className="block text-xs text-text-secondary mt-0.5">
+                {kategorie.enrichment_enabled
+                  ? t('Mit Titel- und Hashtag-Vorschlägen.')
+                  : t('Ohne Vorschläge, Clip geht so raus.')}
+              </span>
+            </span>
             <input
               type="checkbox"
-              checked={settings[platform]}
+              checked={kategorie.auto_post}
               disabled={isLoading || isSaving}
-              onChange={(event) => updateSetting(platform, event.target.checked)}
-              className="h-4 w-4 accent-orange"
+              onChange={(event) => onChange(kategorie.category_key, event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-primary"
             />
           </label>
         ))}
       </div>
       {error && <div className="text-xs text-danger">{error.message}</div>}
+    </div>
+  );
+}
+
+/**
+ * Vorratswarnung. Steht bewusst als eigene betonte Zeile ueber dem Clip-Pool
+ * und nicht kleingedruckt in einer Karte: wer keinen Nachschub liefert, hoert
+ * irgendwann auf zu posten, ohne es zu merken.
+ */
+function VorratsHinweis({ pool }: { pool: ClipPoolForecast | null }) {
+  const t = useT();
+  if (!pool || pool.aktive_plattformen === 0) return null;
+
+  const knapp = pool.warnung;
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 flex items-center gap-3 ${
+        knapp ? 'border-warning/45 bg-warning/10' : 'border-border bg-bg/40'
+      }`}
+    >
+      <AlertCircle className={`w-4 h-4 shrink-0 ${knapp ? 'text-warning' : 'text-primary'}`} />
+      <div>
+        <div className={`text-sm font-semibold ${knapp ? 'text-warning' : 'text-white'}`}>
+          {t('Vorrat reicht noch für {posts} Posts.', { posts: pool.reicht_fuer_posts })}
+        </div>
+        <div className="text-xs text-text-secondary mt-0.5">
+          {pool.reicht_fuer_tage === null
+            ? t('{clips} Clips im Pool.', { clips: pool.verfuegbare_clips })
+            : t('{clips} Clips im Pool, das sind rund {tage} Tage bei {proWoche} Posts pro Woche.', {
+                clips: pool.verfuegbare_clips,
+                tage: pool.reicht_fuer_tage,
+                proWoche: pool.posts_pro_woche,
+              })}
+        </div>
+      </div>
     </div>
   );
 }
