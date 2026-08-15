@@ -40,6 +40,10 @@ const CLEANUP_DAYS: i64 = 30;
 /// erst nach zwei Monaten), aber ein Comeback soll nicht bis zum nächsten
 /// Stundenschlag warten. Ohne Treffer kostet der Lauf zwei DB-Queries.
 const DEADLOCK_PAUSE_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// Anlaufzeit nach dem Bot-Start, bevor der erste Deadlock-Pause-Sweep läuft.
+/// Gibt nach einem Deploy Luft, den Zustand zu prüfen, bevor Mod-Rechte fallen
+/// und Streamer-DMs rausgehen.
+const DEADLOCK_PAUSE_STARTUP_DELAY: Duration = Duration::from_secs(10 * 60);
 /// Embed-Farbe für Token-Fehler-Alerts (rot).
 const ALERT_COLOR: i64 = 0xE7_4C_3C;
 
@@ -344,7 +348,14 @@ pub fn spawn_deadlock_pause_scheduler(
         pool, notifier, unmod, remod,
     ));
     supervisor.spawn("deadlock_pause_sweep", async move {
-        let mut tick = tokio::time::interval(DEADLOCK_PAUSE_INTERVAL);
+        // Erst nach einer Anlaufzeit loslegen. `tokio::time::interval` feuert
+        // sonst sofort beim Start, und genau dann ist der Rückstand am größten:
+        // nach einem Deploy oder einem Neustart ginge unmittelbar ein Schwall
+        // Unmods samt Streamer-DMs raus, ohne dass jemand noch eingreifen kann.
+        let mut tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + DEADLOCK_PAUSE_STARTUP_DELAY,
+            DEADLOCK_PAUSE_INTERVAL,
+        );
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
