@@ -574,6 +574,15 @@ async fn main() {
         tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
     }
 
+    // Modellnamen beim Anbieter nachschlagen, bevor der erste Judge feuert.
+    // Ein einkompilierter Name altert mit dem Binary: Fireworks hat
+    // `deepseek-v4-flash` am 15.08.2026 abgeschaltet, der Scam-Judge lief
+    // danach einen Tag lang ins Leere. Der Lauf blockiert den Start nicht —
+    // ohne Antwort gilt der zuletzt bekannte Stand aus `llm_model_cache`.
+    // Der Handle wird nicht gehalten: der Task soll die ganze Laufzeit ueber
+    // weiterlaufen, es gibt nichts abzuwarten und nichts abzubrechen.
+    tb_llm::spawn_refresh_loop(Some(pool.clone()));
+
     let ricky_review = ricky_review_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let outreach_shadow =
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);

@@ -2805,6 +2805,7 @@ dependencies = [
  "tb-highlight",
  "tb-internal-api",
  "tb-knowledge",
+ "tb-llm",
  "tb-monitoring",
  "tb-observability",
  "tb-raid",

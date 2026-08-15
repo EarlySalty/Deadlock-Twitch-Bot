@@ -937,15 +937,45 @@ impl EngagementMinimaxClient {
             .map_err(|e| GenerateError::Http(e.to_string()))?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let started = std::time::Instant::now();
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| GenerateError::Http(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| GenerateError::Http(e.to_string()))?;
+        let mut versuch = 0;
+        let resp = loop {
+            let antwort = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| GenerateError::Http(e.to_string()))?;
+            let status = antwort.status();
+            match antwort.error_for_status() {
+                Ok(ok) => break ok,
+                Err(e) => {
+                    // Ein 404 auf `/chat/completions` heisst bei OpenAI-kompatiblen
+                    // Anbietern fast immer: das Modell gibt es nicht mehr. Genau so
+                    // ist am 15.08.2026 `deepseek-v4-flash` verschwunden und der
+                    // Scam-Judge hat einen Tag lang stumm auf `unsure` gestanden.
+                    // Deshalb einmal neu aufloesen und den Call wiederholen,
+                    // statt den Ausfall als Anbieterfehler durchzureichen.
+                    let modell_weg = status == reqwest::StatusCode::NOT_FOUND && versuch == 0;
+                    if !modell_weg {
+                        return Err(GenerateError::Http(e.to_string()));
+                    }
+                    versuch += 1;
+                    let aktuelles = body["model"].as_str().unwrap_or_default().to_string();
+                    match tb_llm::invalidate_and_refresh(None, &aktuelles).await {
+                        Some(neu) => {
+                            tracing::warn!(
+                                alt = %aktuelles,
+                                neu = %neu,
+                                "Modell war weg, wiederhole Call mit aufgeloestem Namen"
+                            );
+                            body["model"] = serde_json::json!(neu);
+                        }
+                        None => return Err(GenerateError::Http(e.to_string())),
+                    }
+                }
+            }
+        };
         let payload: serde_json::Value = resp
             .json()
             .await

@@ -96,15 +96,35 @@ fn auto(use_case: &str) -> LlmEndpoint {
     fallback
 }
 
+/// Adresse der Fireworks-API. Auch der Modell-Resolver fragt hierüber, damit
+/// eine umgebogene Basis-URL (Test-Proxy) für beide Wege gilt.
+pub(crate) fn fireworks_base_url() -> String {
+    nonempty_env("FIREWORK_BASE_URL")
+        .or_else(|| nonempty_env("FIREWORKS_BASE_URL"))
+        .unwrap_or_else(|| FIREWORKS_BASE_URL.to_string())
+}
+
+/// Ein ausdrücklich festgelegtes Modell, falls gesetzt. Diese Festlegung
+/// schlägt den Resolver: wer einen Namen einträgt, will genau den.
+pub(crate) fn pinned_fireworks_model() -> Option<String> {
+    nonempty_env("FIREWORK_MODEL").or_else(|| nonempty_env("FIREWORKS_MODEL"))
+}
+
+/// Modellname in der Rangfolge Festlegung, Resolver, einkompilierter Default.
+///
+/// Der Default ist bewusst der letzte Notnagel: er altert mit dem Binary und
+/// war am 15.08.2026 einen ganzen Tag lang falsch, ohne dass es auffiel.
+fn fireworks_model() -> String {
+    pinned_fireworks_model()
+        .or_else(crate::model_resolver::resolved_fireworks_model)
+        .unwrap_or_else(|| FIREWORKS_DEFAULT_MODEL.to_string())
+}
+
 fn fireworks_endpoint() -> LlmEndpoint {
     LlmEndpoint {
         provider: "fireworks",
-        base_url: nonempty_env("FIREWORK_BASE_URL")
-            .or_else(|| nonempty_env("FIREWORKS_BASE_URL"))
-            .unwrap_or_else(|| FIREWORKS_BASE_URL.to_string()),
-        model: nonempty_env("FIREWORK_MODEL")
-            .or_else(|| nonempty_env("FIREWORKS_MODEL"))
-            .unwrap_or_else(|| FIREWORKS_DEFAULT_MODEL.to_string()),
+        base_url: fireworks_base_url(),
+        model: fireworks_model(),
         api_key: crate::keys::fireworks_api_key(),
     }
 }
