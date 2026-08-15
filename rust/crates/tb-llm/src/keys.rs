@@ -40,10 +40,7 @@ pub fn anthropic_api_key() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serialisiert die Env-Mutationen über die Tests dieses Moduls.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::TEST_ENV_LOCK as ENV_LOCK;
 
     fn clear() {
         for v in [

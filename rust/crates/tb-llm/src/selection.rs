@@ -126,9 +126,7 @@ fn nonempty_env(var: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::TEST_ENV_LOCK as ENV_LOCK;
 
     fn clear() {
         for v in [

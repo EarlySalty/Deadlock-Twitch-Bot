@@ -250,6 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn complete_ohne_key_unavailable() {
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         if std::env::var("ANTHROPIC_API_KEY").is_ok() {
             return;
         }

@@ -22,6 +22,13 @@
 //! [`provider::LlmProvider`] programmieren, ohne ihre Fachlogik umzubauen — diese
 //! Crate stellt nur die Foundation (Clients + Ledger) bereit.
 
+/// Serialisiert Env-Mutationen crate-weit über alle Testmodule. Modul-lokale
+/// Locks reichen nicht: `keys`-Tests setzen `ANTHROPIC_API_KEY`, waehrend
+/// `anthropic`-Tests denselben Env lesen — ohne gemeinsames Lock ist
+/// `complete_ohne_key_unavailable` flaky (ca. jeder vierte volle Lauf).
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub mod anthropic;
 pub mod keys;
 pub mod ledger;
