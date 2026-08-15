@@ -1758,7 +1758,8 @@ mod tests {
                 departnered_at           TEXT,
                 technical_pause_reason   TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
-                raid_bot_enabled         INTEGER DEFAULT 1
+                raid_bot_enabled         INTEGER DEFAULT 1,
+                deadlock_pause_unmodded_at TEXT
             )
             "#,
         )

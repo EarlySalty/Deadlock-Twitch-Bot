@@ -36,6 +36,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(3 * 60 * 60 + 30 * 60);
 /// Blacklist-Aufbewahrung in Tagen (Python `cleanup_old_entries` Default).
 const CLEANUP_DAYS: i64 = 30;
+/// Deadlock-Pause-Sweep: 15 Minuten. Der Unmod-Teil hat es nicht eilig (er greift
+/// erst nach zwei Monaten), aber ein Comeback soll nicht bis zum nächsten
+/// Stundenschlag warten. Ohne Treffer kostet der Lauf zwei DB-Queries.
+const DEADLOCK_PAUSE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// Embed-Farbe für Token-Fehler-Alerts (rot).
 const ALERT_COLOR: i64 = 0xE7_4C_3C;
 
@@ -303,6 +307,60 @@ fn spawn_token_lifecycle_tasks(
 
     tracing::info!(
         "Token-Lifecycle-Scheduler aktiv (Fehler-Reaktion + Grace + Bot-Ban-Restore stündlich, Cleanup 3,5 h)"
+    );
+}
+
+/// Spawnt den Deadlock-Pause-Sweep: Mod-Rechte abgeben, wenn ein Partner
+/// [`tb_raid::DEADLOCK_PAUSE_DAYS`] lang kein Deadlock gestreamt hat, und beim
+/// Comeback zurückholen.
+///
+/// Eigener Task statt eines weiteren Schritts im Token-Lifecycle-Sweep: der läuft
+/// stündlich, hier soll ein Comeback schneller beantwortet werden. Ohne Unmod-Port
+/// oder Ban-Probe (fehlender `DB_MASTER_KEY_V1`, keine Bot-ID) startet er nicht,
+/// statt halb zu arbeiten und Kanäle unmarkiert zu lassen.
+pub fn spawn_deadlock_pause_scheduler(
+    supervisor: &TaskSupervisor,
+    pool: PgPool,
+    broker: &tb_config::BrokerConfig,
+    unmod: Option<Arc<dyn tb_raid::DeadlockPauseUnmodPort>>,
+    remod: Option<Arc<dyn BotBanStatusProbe>>,
+) {
+    let (Some(unmod), Some(remod)) = (unmod, remod) else {
+        tracing::info!(
+            "Deadlock-Pause-Sweep nicht gestartet — Mod-Entzug oder Ban-Probe nicht verdrahtet"
+        );
+        return;
+    };
+    let notifier = match BrokerRelay::new(broker) {
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_env(relay),
+        Err(error) => {
+            tracing::warn!(
+                "Deadlock-Pause-Sweep ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {error}"
+            );
+            BrokerTokenLifecycleNotifier::disabled()
+        }
+    };
+    let reactor = Arc::new(tb_raid::DeadlockPauseReactor::new(
+        pool, notifier, unmod, remod,
+    ));
+    supervisor.spawn("deadlock_pause_sweep", async move {
+        let mut tick = tokio::time::interval(DEADLOCK_PAUSE_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let outcome = reactor.sweep().await;
+            if outcome.any() {
+                tracing::info!(
+                    unmodded = outcome.unmodded,
+                    remodded = outcome.remodded,
+                    "Deadlock-Pause-Sweep abgeschlossen"
+                );
+            }
+        }
+    });
+    tracing::info!(
+        pause_days = tb_raid::DEADLOCK_PAUSE_DAYS,
+        "Deadlock-Pause-Sweep aktiv (Unmod nach Deadlock-Pause, Remod beim Comeback)"
     );
 }
 
