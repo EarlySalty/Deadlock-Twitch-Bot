@@ -246,7 +246,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                     {bundlePrice > 0 ? `${bundlePrice.toFixed(2).replace('.', ',')} €` : 'Kostenlos'}
                   </span>
                   {bundlePrice > 0 && (
-                    <span className="text-white/40 text-sm">/ Mo. inkl. MwSt.</span>
+                    <span className="text-white/40 text-sm">/ Mo. Endpreis</span>
                   )}
                 </div>
                 {cycle === 12 && bundlePrice > 0 && (

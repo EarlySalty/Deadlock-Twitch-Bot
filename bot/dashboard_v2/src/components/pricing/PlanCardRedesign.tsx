@@ -155,7 +155,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
                 : `${plan.price_monthly.toFixed(2).replace('.', ',')}€`}
             </span>
             {plan.price_monthly > 0 && (
-              <span className="text-white/40 text-sm leading-tight">/ Mo.<br/>inkl. MwSt.</span>
+              <span className="text-white/40 text-sm leading-tight">/ Mo.<br/>Endpreis</span>
             )}
           </div>
           {cycle === 12 && plan.price_monthly > 0 && (
