@@ -32,16 +32,16 @@ use sqlx::PgPool;
 
 use tb_analytics::affiliate_commission::{process_commission, InvoicePayment};
 use tb_analytics::stripe::webhook_apply::{
-    apply_event, record_event_once, streamer_plan_sync_from_event, sync_plan_to_streamer_plans,
+    apply_event, invoice_subscription_id, record_event_once, streamer_plan_sync_from_event,
+    sync_plan_to_streamer_plans,
 };
 use tb_analytics::stripe::{verify_signature, StripeClient, DEFAULT_TOLERANCE_SECONDS};
 
 /// Laufzeit-Konfiguration des Webhooks (als Extension injiziert).
 ///
 /// `None` als Extension → Webhook nicht konfiguriert → 503. Der `StripeClient`
-/// wird nur für das Nachladen der Subscription bei `checkout.session.completed`
-/// gebraucht (Pythons `stripe.Subscription.retrieve`); fehlt er, wird nur der
-/// dünne Checkout-Zustand erfasst.
+/// lädt die Subscription bei Checkout- und Invoice-Events nach; fehlt er,
+/// wird nur der dünne Event-Zustand erfasst.
 #[derive(Clone)]
 pub struct StripeWebhookConfig {
     /// Webhook-Signing-Secret (`whsec_…`). Wird NIE geloggt.
@@ -207,8 +207,8 @@ async fn process_event(
     livemode: bool,
     payload_text: &str,
 ) -> Result<(bool, &'static str), sqlx::Error> {
-    // checkout.session.completed: volle Subscription VOR der Transaktion nachladen
-    // (HTTP-Call gehört nicht in eine offene DB-Transaktion).
+    // Checkout- und Invoice-Events: volle Subscription VOR der Transaktion
+    // nachladen (HTTP-Call gehört nicht in eine offene DB-Transaktion).
     let retrieved_subscription =
         maybe_retrieve_subscription(config, event_type, event_object).await;
 
@@ -371,21 +371,25 @@ fn epoch_to_iso(epoch: i64) -> Option<String> {
         .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
 }
 
-/// Lädt für `checkout.session.completed` (mode=subscription) die volle
-/// Subscription via Stripe-API nach (Pythons `stripe.Subscription.retrieve`).
-/// Fehler/fehlender Client → `None` (Aufrufer erfasst dann den dünnen Zustand).
+/// Lädt die volle Subscription via Stripe-API nach, wenn das Event nur eine
+/// ID trägt (`checkout.session.completed` oder Invoice). Fehler/fehlender
+/// Client → `None` (Aufrufer erfasst dann den dünnen Zustand).
 async fn maybe_retrieve_subscription(
     config: &StripeWebhookConfig,
     event_type: &str,
     event_object: &Value,
 ) -> Option<Value> {
-    if event_type.trim() != "checkout.session.completed" {
+    let event_name = event_type.trim();
+    let subscription_id = if event_name == "checkout.session.completed" {
+        if str_field(event_object, "mode") != "subscription" {
+            return None;
+        }
+        str_field(event_object, "subscription")
+    } else if event_name == "invoice.payment_succeeded" || event_name == "invoice.payment_failed" {
+        invoice_subscription_id(event_object)
+    } else {
         return None;
-    }
-    if str_field(event_object, "mode") != "subscription" {
-        return None;
-    }
-    let subscription_id = str_field(event_object, "subscription");
+    };
     if subscription_id.is_empty() {
         return None;
     }

@@ -21,7 +21,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tb_raid::PartnerScoreRefresher;
 
-use crate::billing::normalize_billing_cycle;
+use crate::billing::{normalize_billing_cycle, plan_id_from_lookup_key, plan_id_from_price_id};
 
 /// Ergebnis-Aktion der Event-Anwendung (stabile Strings, Python-Parität — werden
 /// in der JSON-Antwort des Handlers gespiegelt).
@@ -151,11 +151,85 @@ fn value_as_i64(v: &Value) -> Option<i64> {
     v.as_str().and_then(|s| s.trim().parse::<i64>().ok())
 }
 
+/// Löst die Katalog-Plan-ID aus Subscription-/Price-Feldern auf.
+fn resolve_plan_id(subscription_metadata: &Value, price: &Value, price_metadata: &Value) -> String {
+    let from_meta = str_field(subscription_metadata, "plan_id");
+    if !from_meta.is_empty() {
+        return from_meta;
+    }
+    let from_price_meta = str_field(price_metadata, "plan_id");
+    if !from_price_meta.is_empty() {
+        return from_price_meta;
+    }
+    let lookup = str_field(price, "lookup_key");
+    if let Some(parsed) = plan_id_from_lookup_key(&lookup) {
+        return parsed.to_string();
+    }
+    if !lookup.is_empty() {
+        return lookup;
+    }
+    let price_id = if let Some(id) = price.as_str() {
+        id.trim().to_string()
+    } else {
+        str_field(price, "id")
+    };
+    plan_id_from_price_id(&price_id).unwrap_or("").to_string()
+}
+
+/// Subscription-ID aus einem Invoice-Objekt (legacy `subscription` oder
+/// Stripe-Basil `parent.subscription_details.subscription`).
+pub fn invoice_subscription_id(obj: &Value) -> String {
+    let top = str_field(obj, "subscription");
+    if !top.is_empty() {
+        return top;
+    }
+    if let Some(id) = obj
+        .get("subscription")
+        .and_then(|s| s.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return id.to_string();
+    }
+    let parent_sub = obj
+        .get("parent")
+        .and_then(|p| p.get("subscription_details"))
+        .and_then(|s| s.get("subscription"));
+    if let Some(id) = parent_sub
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return id.to_string();
+    }
+    parent_sub
+        .and_then(|s| s.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Perioden aus Invoice-Lines, falls das Subscription-Objekt sie nicht trägt.
+fn invoice_line_period(obj: &Value) -> (Option<String>, Option<String>) {
+    let period = obj
+        .get("lines")
+        .and_then(|l| l.get("data"))
+        .and_then(Value::as_array)
+        .and_then(|d| d.first())
+        .and_then(|line| line.get("period"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    (epoch_to_iso(&period, "start"), epoch_to_iso(&period, "end"))
+}
+
 /// Extrahiert den Abo-Zustand aus einem Stripe-Subscription-Objekt.
 ///
-/// Port von `_billing_subscription_payload_from_object`. `plan_id` wird in der
-/// Python-Reihenfolge aufgelöst: Subscription-`metadata.plan_id` →
-/// `price.metadata.plan_id` → `price.lookup_key`.
+/// `plan_id`: Subscription-`metadata.plan_id` → `price.metadata.plan_id` →
+/// Lookup-Key `deadlock_{plan}_{cycle}m_*` → eingecheckte Price-ID.
+/// Perioden: Subscription-Root, sonst Stripe-Basil `items.data[0]`.
 pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
     let metadata = sub.get("metadata").cloned().unwrap_or(Value::Null);
     let items_data = sub
@@ -187,20 +261,11 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         .and_then(|q| i32::try_from(q).ok())
         .unwrap_or(1);
 
-    // plan_id: metadata.plan_id → price.metadata.plan_id → price.lookup_key.
-    let plan_id = {
-        let from_meta = str_field(&metadata, "plan_id");
-        if !from_meta.is_empty() {
-            from_meta
-        } else {
-            let from_price_meta = str_field(&price_metadata, "plan_id");
-            if !from_price_meta.is_empty() {
-                from_price_meta
-            } else {
-                str_field(&price, "lookup_key")
-            }
-        }
-    };
+    // plan_id: metadata.plan_id → price.metadata.plan_id → Lookup-Key
+    // (deadlock_{plan}_{cycle}m_*) → Price-ID-Default. Live-Abos haben oft
+    // weder Subscription- noch Price-Metadata; ohne diese Fallbacks bleiben
+    // plan_id und die Perioden leer.
+    let plan_id = resolve_plan_id(&metadata, &price, &price_metadata);
 
     SubscriptionState {
         stripe_subscription_id: str_field(sub, "id"),
@@ -217,8 +282,10 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         plan_id,
         cycle_months,
         quantity,
-        current_period_start: epoch_to_iso(sub, "current_period_start"),
-        current_period_end: epoch_to_iso(sub, "current_period_end"),
+        current_period_start: epoch_to_iso(sub, "current_period_start")
+            .or_else(|| epoch_to_iso(&first_item, "current_period_start")),
+        current_period_end: epoch_to_iso(sub, "current_period_end")
+            .or_else(|| epoch_to_iso(&first_item, "current_period_end")),
         cancel_at_period_end: sub
             .get("cancel_at_period_end")
             .and_then(Value::as_bool)
@@ -272,12 +339,22 @@ fn checkout_subscription_state_from_event(
     };
 
     // Volle Subscription nachladen (vom Aufrufer) → überschreibt den dünnen
-    // Zustand, aber customer_reference aus der Session bleibt Fallback.
+    // Zustand. Session-Metadata bleibt Fallback, wenn Stripe am Abo weder
+    // plan_id noch Perioden liefert (typisch für Live-Abos ohne Price-Metadata).
     if !payload.stripe_subscription_id.is_empty() {
         if let Some(sub) = retrieved_subscription {
             let mut sub_payload = subscription_payload_from_object(sub);
             if sub_payload.customer_reference.trim().is_empty() {
                 sub_payload.customer_reference = customer_reference;
+            }
+            if sub_payload.plan_id.trim().is_empty() {
+                sub_payload.plan_id = payload.plan_id.clone();
+            }
+            if sub_payload.current_period_start.is_none() {
+                sub_payload.current_period_start = payload.current_period_start.clone();
+            }
+            if sub_payload.current_period_end.is_none() {
+                sub_payload.current_period_end = payload.current_period_end.clone();
             }
             sub_payload.last_event_id = event_id.to_string();
             payload = sub_payload;
@@ -722,17 +799,17 @@ pub async fn apply_event(
     }
 
     if event_name == "invoice.payment_succeeded" {
-        let subscription_id = str_field(event_object, "subscription");
+        let subscription_id = invoice_subscription_id(event_object);
         if subscription_id.is_empty() {
             return Ok(WebhookAction::InvoiceIgnoredWithoutSubscription);
         }
-        let state = SubscriptionState {
-            stripe_subscription_id: subscription_id,
-            stripe_customer_id: str_field(event_object, "customer"),
-            status: "active".to_string(),
-            last_event_id: event_id.to_string(),
-            ..SubscriptionState::default()
-        };
+        let state = invoice_subscription_state(
+            event_id,
+            event_object,
+            &subscription_id,
+            "active",
+            retrieved_subscription,
+        );
         upsert_subscription_state(tx, &state).await?;
         // Affiliate-Provision (30 % bei Zahlung): wert-identisch in
         // [`crate::affiliate_commission::process_commission`] portiert. Wie Pythons
@@ -745,22 +822,57 @@ pub async fn apply_event(
     }
 
     if event_name == "invoice.payment_failed" {
-        let subscription_id = str_field(event_object, "subscription");
+        let subscription_id = invoice_subscription_id(event_object);
         if subscription_id.is_empty() {
             return Ok(WebhookAction::InvoiceIgnoredWithoutSubscription);
         }
-        let state = SubscriptionState {
-            stripe_subscription_id: subscription_id,
-            stripe_customer_id: str_field(event_object, "customer"),
-            status: "past_due".to_string(),
-            last_event_id: event_id.to_string(),
-            ..SubscriptionState::default()
-        };
+        let state = invoice_subscription_state(
+            event_id,
+            event_object,
+            &subscription_id,
+            "past_due",
+            retrieved_subscription,
+        );
         upsert_subscription_state(tx, &state).await?;
         return Ok(WebhookAction::InvoiceFailureRecorded);
     }
 
     Ok(WebhookAction::IgnoredUnsupportedEvent)
+}
+
+/// Dünner Invoice-Zustand, optional mit nachgeladener Subscription aufgefüllt.
+fn invoice_subscription_state(
+    event_id: &str,
+    event_object: &Value,
+    subscription_id: &str,
+    status: &str,
+    retrieved_subscription: Option<&Value>,
+) -> SubscriptionState {
+    let mut state = if let Some(sub) = retrieved_subscription {
+        subscription_payload_from_object(sub)
+    } else {
+        SubscriptionState {
+            stripe_subscription_id: subscription_id.to_string(),
+            stripe_customer_id: str_field(event_object, "customer"),
+            ..SubscriptionState::default()
+        }
+    };
+    if state.stripe_subscription_id.trim().is_empty() {
+        state.stripe_subscription_id = subscription_id.to_string();
+    }
+    if state.stripe_customer_id.trim().is_empty() {
+        state.stripe_customer_id = str_field(event_object, "customer");
+    }
+    let (line_start, line_end) = invoice_line_period(event_object);
+    if state.current_period_start.is_none() {
+        state.current_period_start = line_start;
+    }
+    if state.current_period_end.is_none() {
+        state.current_period_end = line_end;
+    }
+    state.status = status.to_string();
+    state.last_event_id = event_id.to_string();
+    state
 }
 
 /// Idempotenter Dedup-Insert in `twitch_billing_events`.
@@ -895,6 +1007,105 @@ mod tests {
         let state2 = subscription_payload_from_object(&sub2);
         assert_eq!(state2.plan_id, "fallback_key");
         assert_eq!(state2.cycle_months, 12);
+    }
+
+    #[test]
+    fn payload_plan_id_from_deadlock_lookup_key() {
+        let sub = json!({
+            "id": "s", "status": "active", "metadata": {},
+            "items": { "data": [ { "price": {
+                "id": "price_other",
+                "lookup_key": "deadlock_chat_quiet_12m_net_v2",
+                "metadata": {},
+                "recurring": { "interval": "month", "interval_count": 12 }
+            } } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.plan_id, "chat_quiet");
+    }
+
+    #[test]
+    fn payload_plan_id_from_price_id_default() {
+        let sub = json!({
+            "id": "s", "status": "active", "metadata": {},
+            "items": { "data": [ { "price": {
+                "id": "price_1TeNGF0yU8I2yGJ0YLkz7PCX",
+                "metadata": {},
+                "recurring": { "interval": "month", "interval_count": 12 }
+            } } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.plan_id, "chat_quiet");
+    }
+
+    #[test]
+    fn payload_periods_from_basil_subscription_item() {
+        // Stripe Basil: current_period_* sitzen auf dem Item, nicht auf der Subscription.
+        let sub = json!({
+            "id": "sub_basil",
+            "customer": "cus_x",
+            "status": "active",
+            "metadata": {},
+            "items": { "data": [ {
+                "current_period_start": 1_700_000_000,
+                "current_period_end": 1_702_000_000,
+                "quantity": 1,
+                "price": {
+                    "id": "price_1TeNGF0yU8I2yGJ0crjsfhHO",
+                    "lookup_key": "deadlock_chat_quiet_1m_net_v2",
+                    "metadata": {},
+                    "recurring": { "interval": "month", "interval_count": 1 }
+                }
+            } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.plan_id, "chat_quiet");
+        assert_eq!(
+            state.current_period_start.as_deref(),
+            epoch_to_iso(&json!({ "t": 1_700_000_000 }), "t").as_deref()
+        );
+        assert_eq!(
+            state.current_period_end.as_deref(),
+            epoch_to_iso(&json!({ "t": 1_702_000_000 }), "t").as_deref()
+        );
+    }
+
+    #[test]
+    fn checkout_keeps_session_plan_id_when_retrieved_sub_has_none() {
+        let session = json!({
+            "mode": "subscription",
+            "subscription": "sub_x",
+            "customer": "cus_x",
+            "metadata": { "customer_reference": "timosius", "plan_id": "chat_quiet" }
+        });
+        let retrieved = json!({
+            "id": "sub_x",
+            "customer": "cus_x",
+            "status": "active",
+            "metadata": {},
+            "items": { "data": [ {
+                "current_period_start": 1_700_000_000,
+                "current_period_end": 1_703_000_000,
+                "price": { "id": "price_unknown", "metadata": {} }
+            } ] }
+        });
+        let (state, _) = checkout_subscription_state_from_event("evt", &session, Some(&retrieved));
+        assert_eq!(state.plan_id, "chat_quiet");
+        assert!(state.current_period_start.is_some());
+        assert!(state.current_period_end.is_some());
+    }
+
+    #[test]
+    fn invoice_subscription_id_reads_basil_parent() {
+        let invoice = json!({
+            "id": "in_1",
+            "parent": { "subscription_details": { "subscription": "sub_basil" } }
+        });
+        assert_eq!(invoice_subscription_id(&invoice), "sub_basil");
+        let legacy = json!({ "id": "in_2", "subscription": "sub_legacy" });
+        assert_eq!(invoice_subscription_id(&legacy), "sub_legacy");
+        let empty = json!({ "id": "in_3" });
+        assert_eq!(invoice_subscription_id(&empty), "");
     }
 
     #[test]
@@ -1071,6 +1282,105 @@ mod tests {
         .unwrap();
         assert_eq!(plan.0, "raid_boost");
         assert!(plan.1.is_none());
+    }
+
+    #[tokio::test]
+    async fn basil_subscription_event_writes_plan_and_periods() {
+        let Some(pool) = pool_or_skip("wh_basil_map").await else {
+            return;
+        };
+        let event_object = json!({
+            "id": "sub_1TfbbR0yU8I2yGJ0t0l9uxrT",
+            "customer": "cus_live",
+            "status": "active",
+            "metadata": { "customer_reference": "123175963" },
+            "items": { "data": [ {
+                "current_period_start": 1_749_254_400,
+                "current_period_end": 1_780_790_400,
+                "quantity": 1,
+                "price": {
+                    "id": "price_1TeNGF0yU8I2yGJ0YLkz7PCX",
+                    "lookup_key": "deadlock_chat_quiet_12m_net_v2",
+                    "metadata": {},
+                    "recurring": { "interval": "month", "interval_count": 12 }
+                }
+            } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(
+            &mut tx,
+            "evt_basil",
+            "customer.subscription.updated",
+            &event_object,
+            None,
+        )
+        .await
+        .unwrap();
+        drop(tx);
+
+        let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT plan_id, current_period_start, current_period_end \
+             FROM twitch_billing_subscriptions WHERE stripe_subscription_id = $1",
+        )
+        .bind("sub_1TfbbR0yU8I2yGJ0t0l9uxrT")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("chat_quiet"));
+        assert!(row.1.is_some(), "current_period_start muss gesetzt sein");
+        assert!(row.2.is_some(), "current_period_end muss gesetzt sein");
+    }
+
+    #[tokio::test]
+    async fn basil_invoice_fills_plan_and_periods_from_lines() {
+        let Some(pool) = pool_or_skip("wh_basil_invoice").await else {
+            return;
+        };
+        let invoice = json!({
+            "id": "in_basil",
+            "customer": "cus_x",
+            "parent": { "subscription_details": { "subscription": "sub_inv_basil" } },
+            "lines": { "data": [ {
+                "period": { "start": 1_700_000_000, "end": 1_702_592_000 }
+            } ] }
+        });
+        let retrieved = json!({
+            "id": "sub_inv_basil",
+            "customer": "cus_x",
+            "status": "active",
+            "metadata": {},
+            "items": { "data": [ {
+                "price": {
+                    "id": "price_1TeNGF0yU8I2yGJ0crjsfhHO",
+                    "metadata": {},
+                    "recurring": { "interval": "month", "interval_count": 1 }
+                }
+            } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(
+            &mut tx,
+            "evt_inv_basil",
+            "invoice.payment_succeeded",
+            &invoice,
+            Some(&retrieved),
+        )
+        .await
+        .unwrap();
+        assert_eq!(action, WebhookAction::InvoicePaymentRecorded);
+        drop(tx);
+
+        let row: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT status, plan_id, current_period_start, current_period_end \
+             FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_inv_basil'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1.as_deref(), Some("chat_quiet"));
+        assert!(row.2.is_some());
+        assert!(row.3.is_some());
     }
 
     #[tokio::test]
