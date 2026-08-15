@@ -21,8 +21,19 @@ Signals ohne Beweiskraft.
 - [ ] bot_banned-Marker fuer whysolowkey und pixelpiratemarvin ueberpruefen
       (stammen aus dem eventsub-Pfad, nicht aus der Probe).
 - [ ] Erst nach geklaerter Klassifikation: Sammel-Deploy neu schnueren
-      (Fireworks-Default 0731, Versions-Guard und Test-Fixes sind unstrittig
-      und koennen notfalls separat deployt werden).
+      (Versions-Guard und Test-Fixes sind unstrittig und koennen notfalls
+      separat deployt werden). ACHTUNG: der Fireworks-Default 0731 ist NICHT
+      mehr unstrittig, siehe naechster Punkt.
+- [ ] Fireworks-Default 0731 aus dem Sammel-Deploy nehmen. Gemessen am
+      2026-08-15: accounts/fireworks/models/deepseek-v4-flash-0731 wird bei
+      Fireworks nicht warm gehalten, erster Aufruf 60 s Timeout, zweiter
+      14,8 s, erst danach 0,6 s. Der Deadlock-Concierge (8-s-Limit) ist daran
+      einen halben Tag lang komplett ausgefallen. Als Default taugt nur ein
+      dauerhaft warmes Modell. Ebenfalls nicht nehmen: kimi-k2p6, ein
+      Thinking-Modell, das sein Token-Budget im Reasoning verbraucht und bei
+      knappem max_tokens einen leeren content liefert (hat Hermes lahmgelegt).
+      Brauchbar gemessen: kimi-k3, 0,9 s blank, 4,3 bis 9,2 s mit 4 kB
+      Systemprompt und JSON-Modus.
 
 ## Wartet auf andere
 
@@ -34,6 +45,15 @@ Signals ohne Beweiskraft.
       Nach d2s Fix: auf 08cc9031+ rebasen, mergen, Test-Gate, deployen, DANACH
       FIREWORKS_MODEL aus ~/.config/deadlock/bots.env entfernen (Backup
       bots.env.bak-fwmodel) und Dienst neu starten. Bis dahin traegt der Env-Override.
+      Stand 2026-08-15 14:36: der Env-Wert ist von
+      accounts/fireworks/models/deepseek-v4-flash-0731 auf
+      accounts/fireworks/models/kimi-k3 geaendert, weil 0731 kalt ist und den
+      Concierge lahmgelegt hat. Der Wert traegt weiterhin allein.
+      dl-ai hat gar keinen Resolver, nur einkompilierte Defaults, die auf das
+      tote deepseek-v4-flash zeigen: dl-ai/src/lib.rs DEFAULT_FIREWORKS_MODEL,
+      tb-llm/src/selection.rs und tb-engagement/src/crew_review.rs. Wenn der
+      Resolver durch ist, gehoert dl-ai denselben Weg zu bekommen, sonst faellt
+      der Deadlock-Bot beim naechsten Modellwechsel wieder auf ein totes Modell.
 - [ ] Deadlock-Pause-Sweep beobachten: erste Welle nach Deploy (10 Min Anlauf,
       5 Unmods/15 Min), 6 DM-Kanaele + stumme Markierungen im Admin-Log.
       miracleghost9/whysolowkey/pixelpiratemarvin sind echt gebannt; Re-Pausierung
