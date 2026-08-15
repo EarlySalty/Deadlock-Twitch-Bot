@@ -906,12 +906,25 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
                 );
                 ModeratorProvisionOutcome::Ready
             }
-            Ok(AddModeratorOutcome::BotBanned) => {
+            Ok(AddModeratorOutcome::BotBanned { status, body }) => {
                 tracing::info!(
                     channel = login,
+                    status,
+                    body = %body,
                     "ensure_bot_is_mod: Bot ist im Kanal gebannt"
                 );
                 ModeratorProvisionOutcome::BotBanned
+            }
+            Ok(AddModeratorOutcome::AuthError { status, body }) => {
+                // Kein Bann: der Streamer-Token trägt nicht mehr. Das gehört in
+                // den Token-Lifecycle, nicht in die Ban-Reaktion.
+                tracing::warn!(
+                    channel = login,
+                    status,
+                    body = %body,
+                    "ensure_bot_is_mod: Streamer-Autorisierung trägt nicht mehr"
+                );
+                ModeratorProvisionOutcome::RetryLater
             }
             Ok(AddModeratorOutcome::Failed { status, body }) => {
                 tracing::warn!(

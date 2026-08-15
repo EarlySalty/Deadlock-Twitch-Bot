@@ -178,6 +178,28 @@ pub fn admin_bot_banned_text(
     (title, description)
 }
 
+/// Admin-Meldung für einen Bot-Ban-**Verdacht** aus der aktiven Prüfung.
+///
+/// Bewusst als Verdacht formuliert und ohne jede automatische Folge: die Prüfung
+/// kann einen kaputten Token nicht sicher von einem Bann unterscheiden. Der Text
+/// nennt deshalb beide Möglichkeiten und den Weg, es selbst nachzusehen.
+pub fn admin_bot_ban_verdacht_text(twitch_login: &str, twitch_user_id: &str) -> (String, String) {
+    let title = "🔍 Bot-Ban-Verdacht (nicht bestätigt)".to_string();
+    let description = format!(
+        "Twitch hat die Moderator-Einsetzung in **{twitch_login}** abgelehnt. Das \
+         kann ein Kanal-Bann sein, aber auch ein abgelaufener Streamer-Token oder \
+         ein fehlender Scope.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
+         User ID: `{twitch_user_id}`\n\n\
+         **Es wurde nichts unternommen:** keine Pause, keine Blacklist, keine \
+         Nachricht an den Streamer. Der genaue Antwortkörper von Twitch steht im \
+         Bot-Log unter `ensure_bot_is_mod`. Ist es wirklich ein Bann, fällt er \
+         beim nächsten Chat-Versuch ohnehin auf und läuft dann über den normalen \
+         Weg."
+    );
+    (title, description)
+}
+
 /// User-DM-Text bei Token-Fehler (Erst-DM). Text-only mit Re-Auth-Link.
 ///
 /// Der Re-Auth läuft bewusst über das Verwaltungs-Dashboard und nicht über einen
@@ -798,7 +820,16 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// außen vor: dort ist der Bot bewusst entmoddet, die Probe würde ihn sofort
     /// wieder einsetzen.
     ///
-    /// Liefert die Anzahl neu erkannter Bans.
+    /// **Die Prüfung meldet nur, sie reagiert nicht.** Ein fehlgeschlagener
+    /// Moderator-Einsetzungs-Versuch ist ein Indiz, kein Beweis: er kann auch an
+    /// einem kaputten Token oder einem fehlenden Scope liegen. Genau diese
+    /// Verwechslung hat einem gesunden Partner eine Bann-DM eingebracht und ihn
+    /// pausiert. Deshalb landet der Befund ausschließlich im Admin-Log; die
+    /// vollen Konsequenzen (Pause, Blacklist, Streamer-DM) zieht weiterhin nur
+    /// der reaktive Pfad, der einen echten Chat-Drop mit `sender_banned` gesehen
+    /// hat.
+    ///
+    /// Liefert die Anzahl gemeldeter Verdachtsfälle.
     pub async fn detect_bot_bans(&self) -> u64 {
         let Some(probe) = &self.bot_ban_status_probe else {
             tracing::debug!("Bot-Ban-Sweep übersprungen: kein Ban-Status-Provisioner verdrahtet");
@@ -853,22 +884,16 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             }
             match probe.bot_ban_status(&twitch_user_id, &twitch_login).await {
                 BotBanStatus::Banned => {
-                    let outcome = self
-                        .handle_bot_banned_channel(
-                            &twitch_user_id,
-                            &twitch_login,
-                            "ban_probe: Twitch lehnt die Moderator-Einsetzung mit Ban-Hinweis ab",
-                        )
+                    detected += 1;
+                    tracing::warn!(
+                        login = %twitch_login,
+                        "Bot-Ban-Verdacht aus aktiver Prüfung — nur gemeldet, keine Reaktion"
+                    );
+                    let (title, description) =
+                        admin_bot_ban_verdacht_text(&twitch_login, &twitch_user_id);
+                    self.notifier
+                        .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
                         .await;
-                    if outcome.opt_out_marked {
-                        detected += 1;
-                        tracing::warn!(
-                            login = %twitch_login,
-                            dm = outcome.user_dm_sent,
-                            admin = outcome.admin_sent,
-                            "Bot-Ban aktiv erkannt"
-                        );
-                    }
                 }
                 // NotBanned heißt hier zugleich: der Bot ist (wieder) Moderator,
                 // die Probe setzt ihn im selben Call ein. Unknown ist ein
@@ -2403,6 +2428,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1);
+    }
+
+    /// Regression miracleghost9: Die aktive Pruefung darf einen Kanal nicht
+    /// pausieren und dem Streamer keine DM schicken. Ein abgelehnter
+    /// Moderator-Einsetzungs-Versuch kann auch an einem kaputten Token liegen;
+    /// genau diese Verwechslung hat einen gesunden Partner getroffen. Gemeldet
+    /// wird nur ins Admin-Log.
+    #[tokio::test]
+    async fn ban_sweep_meldet_nur_und_pausiert_niemanden() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_sweep_meldet").await;
+        sqlx::query(
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS deadlock_pause_unmodded_at text",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('1', 'verdaechtig', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_raid_auth(
+            &pool,
+            "1",
+            "verdaechtig",
+            true,
+            false,
+            Utc::now() + chrono::Duration::days(1),
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id)
+             VALUES ('1', 'verdaechtig', '4711')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Banned)));
+
+        assert_eq!(reactor.detect_bot_bans().await, 1, "Verdacht wird gemeldet");
+
+        // Genau eine Admin-Meldung, keine einzige Streamer-DM.
+        assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            notifier.user_dms.load(Ordering::SeqCst),
+            0,
+            "die aktive Pruefung darf den Streamer nicht anschreiben"
+        );
+
+        // Und der Kanal bleibt unangetastet: keine Pause, keine Blacklist.
+        let pause: Option<String> = sqlx::query_scalar(
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pause, None, "kein technical_pause_reason gesetzt");
+        let blacklisted: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_blacklist WHERE target_id = '1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(blacklisted, 0, "kein Blacklist-Eintrag");
     }
 
     /// Der aktive Ban-Sweep probt über `add_channel_moderator` und setzt den Bot
