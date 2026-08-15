@@ -55,30 +55,16 @@ pub fn is_bot_timeout_drop(outcome: &SendOutcome) -> Option<&str> {
 
 /// Interner Grund fuer einen Kanal-seitigen Bot-Ban.
 ///
-/// `sender_timedout` bleibt bewusst TimeoutGuard-only; der Bot-Ban-Lifecycle
-/// reagiert nur auf `sender_banned` oder HTTP-Fehlerkoerper, die klar nach
-/// Kanal-Ban aussehen.
+/// Einziger harter Beweis ist `sender_banned` beim Senden. Ein HTTP-Body mit
+/// "user is banned" (auch 401) ist das nicht: derselbe Text kommt bei der
+/// Moderator-Einsetzung ohne Bann, und 401 ist ein Auth-Fehler.
 pub fn bot_banned_reason(outcome: &SendOutcome) -> Option<String> {
     match outcome {
         SendOutcome::Dropped { code, message } if code == "sender_banned" => {
             Some(reason_with_detail("chat_bot_banned_in_channel", message))
         }
-        SendOutcome::HttpError { status, body } if looks_like_bot_banned_error(*status, body) => {
-            Some(reason_with_detail(
-                &format!("chat_bot_banned_in_channel_http_{status}"),
-                body,
-            ))
-        }
         _ => None,
     }
-}
-
-fn looks_like_bot_banned_error(status: u16, text: &str) -> bool {
-    let lowered = text.to_lowercase();
-    if lowered.contains("user is banned") || lowered.contains("sender is banned") {
-        return true;
-    }
-    matches!(status, 400 | 401 | 403) && lowered.contains("ban")
 }
 
 fn reason_with_detail(code: &str, detail: &str) -> String {
@@ -434,13 +420,29 @@ mod tests {
     }
 
     #[test]
-    fn bot_banned_reason_erkennt_401_user_is_banned() {
+    fn bot_banned_reason_ignoriert_401_user_is_banned() {
         let o = SendOutcome::HttpError {
             status: 401,
             body: "user is banned".into(),
         };
-        let reason = bot_banned_reason(&o).expect("401 mit Ban-Body muss Bot-Ban signalisieren");
-        assert!(reason.contains("http_401"));
+        assert_eq!(
+            bot_banned_reason(&o),
+            None,
+            "401 ist Auth, kein Bann-Beweis"
+        );
+    }
+
+    #[test]
+    fn bot_banned_reason_ignoriert_http_400_user_is_banned() {
+        let o = SendOutcome::HttpError {
+            status: 400,
+            body: r#"{"message":"user is banned"}"#.into(),
+        };
+        assert_eq!(
+            bot_banned_reason(&o),
+            None,
+            "Moderator-Body beim Senden ist kein sender_banned-Drop"
+        );
     }
 
     #[test]

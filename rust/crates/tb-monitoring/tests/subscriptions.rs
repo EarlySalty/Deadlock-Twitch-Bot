@@ -310,8 +310,9 @@ async fn chat_403_bot_banned_geht_in_permission_cooldown() {
     );
     assert_eq!(provisioner.calls.load(Ordering::SeqCst), 1);
 
-    // Der zweite Lauf würde ohne Permission-Cooldown sofort wieder remodden.
-    // BotBanned nutzt aber den längeren 403-Cooldown statt des 10-Min-Remod-Loops.
+    // Der zweite Lauf würde ohne Remod-Cooldown sofort wieder remodden.
+    // Der Ban-Body der Moderator-Einsetzung ist kein Bann-Beweis, löst aber
+    // denselben Cooldown aus wie ein fehlgeschlagener Remod.
     assert!(
         !manager
             .ensure_first_message_subscription("888", "bot1", "BOT_TOKEN", "banned")

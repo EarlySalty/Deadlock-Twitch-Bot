@@ -9,9 +9,10 @@
 //!   benachrichtigt neu blacklistete Streamer einmalig (Admin-Embed + User-DM)
 //!   entzieht nach 7 Tagen abgelaufener Grace die Streamer-Rolle und hebt
 //!   technische `bot_banned`-Pausen nach Health-Restore wieder auf.
-//! - **Aktive Ban-Prüfung** — im selben stündlichen Sweep: fragt für jeden
-//!   gesunden Partner-Kanal bei Twitch nach, ob der Bot dort gebannt ist. Ohne
-//!   sie fällt ein Ban nur auf, wenn der Bot in dem Kanal gerade sendet.
+//! - **Aktive Ban-Prüfung** — im selben stündlichen Sweep: klassifiziert den
+//!   Zustand neu. Ein Moderator-400 ist kein Bann. Pause nur bei
+//!   `sender_banned`. Sichtbare Chatter heben eine eigene `bot_banned`-Pause
+//!   wieder auf.
 //! - **Blacklist-Cleanup** — alle 3,5 h (Python `cleanup_old_entries`, >30 Tage).
 //!
 //! Discord-Reaktionen laufen ausschließlich über den Broker (der Twitch-Bot hat
@@ -25,7 +26,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
 use tb_raid::token_lifecycle::TokenLifecycleNotifier;
-use tb_raid::{BotBanStatusProbe, TokenLifecycleReactor};
+use tb_raid::{BotBanStatusProbe, OfflineSendeprobe, TokenLifecycleReactor};
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
 
 use crate::task_supervisor::TaskSupervisor;
@@ -224,6 +225,7 @@ pub fn spawn_token_lifecycle_schedulers(
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
     bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
+    offline_sendeprobe: Option<Arc<dyn OfflineSendeprobe>>,
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
         Ok(relay) => (BrokerTokenLifecycleNotifier::from_env(relay), true),
@@ -237,6 +239,9 @@ pub fn spawn_token_lifecycle_schedulers(
     let mut reactor = TokenLifecycleReactor::new(pool, notifier);
     if let Some(probe) = bot_ban_status_probe {
         reactor = reactor.with_bot_ban_status_probe(probe);
+    }
+    if let Some(sendeprobe) = offline_sendeprobe {
+        reactor = reactor.with_offline_sendeprobe(sendeprobe);
     }
     let reactor = Arc::new(reactor);
     spawn_token_lifecycle_tasks(supervisor, reactor, discord_enabled);

@@ -33,6 +33,7 @@ pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod auto_raid_pipeline;
+pub mod ban_klassifikation;
 pub mod bot_oauth;
 pub mod candidate_selection;
 pub mod courtesy;
@@ -86,6 +87,10 @@ pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
     FallbackStreamSource, FollowerEnricher, FollowersEnrichmentObservation, OrphanChatNotification,
     OrphanReplay, RaidGreetingMonitorPort, RaidGreetingRegistration,
+};
+pub use ban_klassifikation::{
+    klassifiziere_ban, send_probe_env_aktiv, BanKlassifikation, ChatSichtbarkeit,
+    OfflineSendeprobe, SendeprobeErgebnis, SEND_PROBE_ENV,
 };
 pub use bot_oauth::{
     normalize_bot_oauth_context, resolve_bot_oauth_context, BotOAuthContext, BotOAuthSource,

@@ -1074,8 +1074,101 @@ impl BotBanStatusProbe for HelixModeratorProvisioner {
             .await
         {
             ModeratorProvisionOutcome::Ready => BotBanStatus::NotBanned,
-            ModeratorProvisionOutcome::BotBanned => BotBanStatus::Banned,
+            // Der Ban-Body der Moderator-Einsetzung ist kein Beweis. Restore
+            // und detect werten das als Verdacht und schauen auf Chatter.
+            ModeratorProvisionOutcome::BotBanned => BotBanStatus::Suspect,
             ModeratorProvisionOutcome::RetryLater => BotBanStatus::Unknown,
+        }
+    }
+}
+
+/// Sendeprobe hinter `TB_BOT_BAN_SEND_PROBE`. Default aus. Schickt nie, wenn
+/// der Kanal live ist.
+pub struct HelixOfflineSendeprobe {
+    helix: HelixClient,
+    bot_user_id: String,
+    bot_token: Arc<tb_chat::token::BotTokenManager>,
+    pool: PgPool,
+}
+
+impl HelixOfflineSendeprobe {
+    pub fn new(
+        helix: HelixClient,
+        bot_user_id: String,
+        bot_token: Arc<tb_chat::token::BotTokenManager>,
+        pool: PgPool,
+    ) -> Self {
+        Self {
+            helix,
+            bot_user_id,
+            bot_token,
+            pool,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl tb_raid::OfflineSendeprobe for HelixOfflineSendeprobe {
+    async fn sendeprobe(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+    ) -> tb_raid::SendeprobeErgebnis {
+        use tb_raid::SendeprobeErgebnis;
+        use tb_transport_twitch::SendOutcome;
+
+        let live = sqlx::query_scalar::<_, Option<i32>>(
+            r#"
+            SELECT is_live
+              FROM twitch_live_state
+             WHERE twitch_user_id = $1
+                OR LOWER(streamer_login) = LOWER($2)
+             LIMIT 1
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(twitch_login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0);
+        if live != 0 {
+            return SendeprobeErgebnis::KanalLive;
+        }
+
+        let token = match self.bot_token.get_valid_token(false).await {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::warn!(%error, login = twitch_login, "Sendeprobe: Bot-Token fehlt");
+                return SendeprobeErgebnis::NichtVerfuegbar;
+            }
+        };
+        match self
+            .helix
+            .send_chat_message(twitch_user_id, &self.bot_user_id, ".", &token)
+            .await
+        {
+            Ok(SendOutcome::Dropped { ref code, .. }) if code == "sender_banned" => {
+                SendeprobeErgebnis::SenderBanned
+            }
+            Ok(SendOutcome::Dropped { ref code, .. }) if code == "sender_timedout" => {
+                SendeprobeErgebnis::Timeout
+            }
+            Ok(SendOutcome::Sent) => SendeprobeErgebnis::Zugestellt,
+            Ok(other) => {
+                tracing::info!(
+                    login = twitch_login,
+                    ?other,
+                    "Sendeprobe: kein klares Ergebnis"
+                );
+                SendeprobeErgebnis::NichtVerfuegbar
+            }
+            Err(error) => {
+                tracing::warn!(%error, login = twitch_login, "Sendeprobe fehlgeschlagen");
+                SendeprobeErgebnis::NichtVerfuegbar
+            }
         }
     }
 }

@@ -365,12 +365,12 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
             {
                 // Die Probe setzt den Bot im selben Call als Moderator ein.
                 BotBanStatus::NotBanned => {}
-                BotBanStatus::Banned => {
-                    // Der Streamer hat den Bot in der Zwischenzeit gebannt. Das
-                    // ist Sache des Bot-Ban-Lifecycles, nicht dieser Pause.
+                BotBanStatus::Banned | BotBanStatus::Suspect => {
+                    // Die Einsetzung trägt nicht. Ob das ein Bann ist, entscheidet
+                    // der Bot-Ban-Lifecycle. Hier wird nicht remoddet.
                     tracing::info!(
                         login = %twitch_login,
-                        "Deadlock-Pause: Remod übersprungen, Bot ist im Kanal gebannt"
+                        "Deadlock-Pause: Remod übersprungen, Moderator-Einsetzung trägt nicht"
                     );
                     tokio::time::sleep(CALL_DELAY).await;
                     continue;

@@ -15,7 +15,7 @@ use std::time::Duration as StdDuration;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
+use tb_chat::timeout_tracking::BotBannedChannelHandler;
 use tb_chat::{is_passive_lurker_channel, PASSIVE_LURKER_DETAIL, PASSIVE_LURKER_STATE};
 use thiserror::Error;
 
@@ -2009,21 +2009,14 @@ impl SubscriptionManager {
                 return false;
             }
             ModeratorProvisionOutcome::BotBanned => {
-                self.mark_perm_failed(sub_type, broadcaster_id);
-                if let Some(handler) = &self.bot_ban_handler {
-                    handler
-                        .on_bot_banned_channel(BotBannedChannelSignal {
-                            broadcaster_id: broadcaster_id.to_string(),
-                            broadcaster_login: login.to_string(),
-                            reason: "eventsub_bot_banned_in_channel".to_string(),
-                        })
-                        .await;
-                }
+                // Derselbe Body hat miracleghost9 als gebannt markiert, während
+                // der Bot den Chat weiter mitgelesen hat. Kein Lifecycle, kein
+                // permanenter Fail: nach dem normalen Remod-Cooldown erneut.
+                self.set_mod_retry_cooldown(sub_type, broadcaster_id);
                 tracing::info!(
                     sub_type,
                     login,
-                    cooldown_seconds = PERMISSION_RETRY_COOLDOWN_SECONDS as u64,
-                    "EventSub 403: Bot ist im Kanal gebannt — Re-Mod bis Unban/Reauth ausgesetzt"
+                    "EventSub 403: Moderator-Einsetzung mit Ban-Body, kein harter Bann-Beweis"
                 );
                 return false;
             }
@@ -2558,7 +2551,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bot_banned_mod_retry_meldet_jeden_subtyp_an_lifecycle_port() {
+    async fn bot_banned_mod_retry_meldet_nicht_an_lifecycle_port() {
         let handler = Arc::new(CapturingBotBanHandler::default());
         let manager = SubscriptionManager::new(
             Arc::new(UnitTransport::default()),
@@ -2583,12 +2576,10 @@ mod tests {
         }
 
         let signals = handler.signals.lock().expect("signals lock");
-        assert_eq!(signals.len(), 2);
-        assert!(signals.iter().all(|signal| {
-            signal.broadcaster_id == "500"
-                && signal.broadcaster_login == "banme"
-                && signal.reason == "eventsub_bot_banned_in_channel"
-        }));
+        assert!(
+            signals.is_empty(),
+            "Moderator-400 ist kein Bann-Beweis, Lifecycle bleibt stumm"
+        );
     }
 
     #[tokio::test]

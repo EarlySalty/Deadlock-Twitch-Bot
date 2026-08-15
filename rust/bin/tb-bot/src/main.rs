@@ -1264,8 +1264,10 @@ async fn main() {
     // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
     // 30-min-Subscription-Reconcile.
     let mut scout_crew_guard = None;
+    let mut sendeprobe_teile: Option<(String, Arc<tb_chat::BotTokenManager>)> = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
         Some(handle) => {
+            sendeprobe_teile = Some((handle.bot_user_id.clone(), handle.bot_token_manager()));
             // !clip: Broadcaster-Token-Clip-Port (Fallback: Bot-Token), nur mit
             // Helix + Krypto-Key.
             let clip_port = chat_wiring::build_clip_port(
@@ -1793,11 +1795,35 @@ async fn main() {
     // Token-Fehler (1×/Streamer), 7-Tage-Grace-Sweep mit Rollen-Entzug
     // (stündlich) und Blacklist-Cleanup >30 Tage (3,5 h) — alles über den
     // F4-Master-Broker, da der Twitch-Bot keinen Discord-Zugang hat.
+    let offline_sendeprobe = if tb_raid::send_probe_env_aktiv() {
+        match (helix.as_ref().clone(), sendeprobe_teile) {
+            (Some(helix_client), Some((bot_user_id, bot_token)))
+                if !bot_user_id.trim().is_empty() =>
+            {
+                tracing::warn!(
+                    "Sendeprobe für Ban-Klassifikation ist an. Schickt nur in Offline-Kanälen."
+                );
+                Some(Arc::new(eventsub_hooks::HelixOfflineSendeprobe::new(
+                    helix_client,
+                    bot_user_id,
+                    bot_token,
+                    pool.clone(),
+                )) as Arc<dyn tb_raid::OfflineSendeprobe>)
+            }
+            _ => {
+                tracing::warn!("TB_BOT_BAN_SEND_PROBE ist gesetzt, Helix oder Bot-Token fehlen");
+                None
+            }
+        }
+    } else {
+        None
+    };
     token_lifecycle_wiring::spawn_token_lifecycle_schedulers(
         &supervisor,
         pool.clone(),
         &settings.broker,
         bot_ban_status_probe.clone(),
+        offline_sendeprobe,
     );
 
     // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch
