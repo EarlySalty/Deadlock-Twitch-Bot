@@ -248,7 +248,9 @@ pub async fn checkout_start_handler(
         },
     });
 
-    // Trial-Tage setzt M4. Jahreszyklus: Bonus-Monate bleiben für Alt-Abos.
+    if plan_id == "premium" && cycle == 1 {
+        session_payload["subscription_data"]["trial_period_days"] = json!(14);
+    }
     if cycle == 12 {
         session_payload["subscription_data"]["metadata"]["bonus_months"] = json!("2");
     }

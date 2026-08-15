@@ -1,4 +1,4 @@
-//! Analytics-Trial (30 Tage, einmalig pro Streamer).
+//! Analytics-Trial (14 Tage, automatisch beim ersten Login, einmal verlängerbar).
 //!
 //! Port von `bot/dashboard/billing/billing_mixin.py:_billing_start_trial_for_user`
 //! (Self-Claim) plus der Onboarding-Variante („Mitbringsel" für neue Partner).
@@ -16,12 +16,15 @@ use sqlx::PgPool;
 
 /// Plan-ID des Trials (Python `catalog.ANALYTICS_TRIAL_PLAN_ID`).
 pub const ANALYTICS_TRIAL_PLAN_ID: &str = "analytics_trial";
-/// Trial-Dauer in Tagen (Python `catalog.TRIAL_DURATION_DAYS`).
-pub const TRIAL_DURATION_DAYS: i64 = 30;
+/// Trial-Dauer in Tagen. Automatischer Erst-Grant plus eine Einlösung.
+pub const TRIAL_DURATION_DAYS: i64 = 14;
+/// Maximal zwei Grants: erster Login, danach einmal nachlösen.
+pub const MAX_TRIALS_GRANTED: i32 = 2;
 
 /// Bezahlpläne, die einen Self-Claim-Trial ausschließen
 /// (Python `_billing_start_trial_for_user`, `all_paid_plan_ids`).
 const PAID_PLAN_IDS: &[&str] = &[
+    "premium",
     "chat_quiet",
     "raid_boost",
     "analysis_dashboard",
@@ -36,7 +39,7 @@ const PAID_PLAN_IDS: &[&str] = &[
 pub enum TrialOutcome {
     /// Trial wurde frisch gewährt.
     Granted,
-    /// Der Streamer hatte schon einmal einen Trial (`trial_ever_granted = 1`).
+    /// Beide Trials sind verbraucht (`trials_granted >= 2`).
     AlreadyUsed,
     /// Es liegt bereits ein bezahlter Plan vor (Billing-Abo oder manuell).
     HasPaidPlan,
@@ -67,7 +70,7 @@ pub async fn start_trial_for_user(
         pool,
         twitch_user_id,
         twitch_login,
-        "30-day trial started by user",
+        "14-day trial started by user",
     )
     .await
 }
@@ -122,18 +125,23 @@ async fn grant_trial_inner(
 
     let mut tx = pool.begin().await?;
 
-    // Einmal-Flag: bereits ein Trial gewährt?
-    let trial_row = sqlx::query_scalar!(
-        r#"SELECT trial_ever_granted FROM streamer_plans
+    let trial_row = sqlx::query_as::<_, (Option<i32>, Option<i32>)>(
+        r#"SELECT trials_granted, trial_ever_granted FROM streamer_plans
            WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
               OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
            LIMIT 1"#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
-    let already_granted = trial_row.unwrap_or(0) == 1;
+    let (granted_count, ever_flag) = trial_row.unwrap_or((None, None));
+    let granted_count = granted_count.unwrap_or(0).max(if ever_flag.unwrap_or(0) == 1 {
+        1
+    } else {
+        0
+    });
+    let already_granted = granted_count >= MAX_TRIALS_GRANTED;
 
     // Manueller Bezahlplan gesetzt?
     let manual_row = sqlx::query_scalar!(
@@ -159,24 +167,25 @@ async fn grant_trial_inner(
         let now = Utc::now();
         let now_iso = now.to_rfc3339();
         let expires_iso = (now + Duration::days(TRIAL_DURATION_DAYS)).to_rfc3339();
-        sqlx::query!(
+        sqlx::query(
             r#"INSERT INTO streamer_plans
                    (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,
-                    trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
-               VALUES ($1, $2, $3, $4, 1, $5, $6)
+                    trial_ever_granted, trials_granted, manual_plan_notes, manual_plan_updated_at)
+               VALUES ($1, $2, $3, $4, 1, 1, $5, $6)
                ON CONFLICT (twitch_user_id) DO UPDATE SET
                    manual_plan_id = EXCLUDED.manual_plan_id,
                    manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,
                    trial_ever_granted = 1,
+                   trials_granted = GREATEST(COALESCE(streamer_plans.trials_granted, 0), COALESCE(streamer_plans.trial_ever_granted, 0)) + 1,
                    manual_plan_notes = EXCLUDED.manual_plan_notes,
                    manual_plan_updated_at = EXCLUDED.manual_plan_updated_at"#,
-            twitch_user_id,
-            twitch_login,
-            ANALYTICS_TRIAL_PLAN_ID,
-            &expires_iso,
-            notes,
-            &now_iso
         )
+        .bind(twitch_user_id)
+        .bind(twitch_login)
+        .bind(ANALYTICS_TRIAL_PLAN_ID)
+        .bind(&expires_iso)
+        .bind(notes)
+        .bind(&now_iso)
         .execute(&mut *tx)
         .await?;
         TrialOutcome::Granted
@@ -226,12 +235,10 @@ async fn has_active_paid_billing_sub_in(
     }
 }
 
-/// Grace-Periode (Stunden) vor dem 24h-Auto-Grant (Python `grace_period_hours = 24`).
-const TRIAL_GRACE_PERIOD_HOURS: f64 = 24.0;
-
-/// Bezahlpläne, die den 24h-Auto-Grant ausschließen — Python-Auto-Grant
+/// Bezahlpläne, die den Auto-Grant ausschließen.
 /// `paid_plan_ids` (kleinere Menge als der Self-Claim).
 const AUTO_GRANT_PAID_PLAN_IDS: &[&str] = &[
+    "premium",
     "raid_boost",
     "analysis_dashboard",
     "bundle_analysis_raid_boost",
@@ -275,37 +282,31 @@ async fn check_and_grant_inner(
     let mut tx = pool.begin().await?;
     // Flag + manueller Plan + Stunden seit first_login_at in einer Query.
     // first_login_at::timestamptz toleriert ISO/Date-only; NULL/unparsebar → NULL.
-    let row = sqlx::query!(
-        r#"SELECT
-               trial_ever_granted,
-               manual_plan_id,
-               (EXTRACT(EPOCH FROM (NOW() - first_login_at::timestamptz)) / 3600.0)::float8 AS hours_since
+    let row = sqlx::query_as::<_, (Option<i32>, Option<i32>, Option<String>)>(
+        r#"SELECT trials_granted, trial_ever_granted, manual_plan_id
            FROM streamer_plans
            WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
               OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
            LIMIT 1"#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some(row) = row else {
-        return Ok(false); // kein streamer_plans-Eintrag → kein first_login → nein
-    };
-    if row.trial_ever_granted == 1 {
-        return Ok(false);
-    }
-    // first_login_at fehlt/unparsebar oder < 24 h her → kein Grant.
-    let Some(hours) = row.hours_since else {
+    let Some((granted_count, ever_flag, manual_plan_id)) = row else {
         return Ok(false);
     };
-    if hours < TRIAL_GRACE_PERIOD_HOURS {
+    let granted_count = granted_count.unwrap_or(0).max(if ever_flag.unwrap_or(0) == 1 {
+        1
+    } else {
+        0
+    });
+    if granted_count != 0 {
         return Ok(false);
     }
-    // Manueller Bezahlplan (≠ raid_free) → kein Grant.
-    if let Some(mp) = row.manual_plan_id.as_deref().map(str::trim) {
-        if !mp.is_empty() && mp != "raid_free" {
+    if let Some(mp) = manual_plan_id.as_deref().map(str::trim) {
+        if !mp.is_empty() && mp != "raid_free" && mp != "free" {
             return Ok(false);
         }
     }
@@ -313,28 +314,28 @@ async fn check_and_grant_inner(
         return Ok(false);
     }
 
-    // Grant — UPSERT mit Einmal-Flag (Python-Notiz beibehalten).
     let now = Utc::now();
     let now_iso = now.to_rfc3339();
     let expires_iso = (now + Duration::days(TRIAL_DURATION_DAYS)).to_rfc3339();
-    sqlx::query!(
+    sqlx::query(
         r#"INSERT INTO streamer_plans
                (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,
-                trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
-           VALUES ($1, $2, $3, $4, 1, $5, $6)
+                trial_ever_granted, trials_granted, manual_plan_notes, manual_plan_updated_at)
+           VALUES ($1, $2, $3, $4, 1, 1, $5, $6)
            ON CONFLICT (twitch_user_id) DO UPDATE SET
                manual_plan_id = EXCLUDED.manual_plan_id,
                manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,
                trial_ever_granted = 1,
+               trials_granted = 1,
                manual_plan_notes = EXCLUDED.manual_plan_notes,
                manual_plan_updated_at = EXCLUDED.manual_plan_updated_at"#,
-        twitch_user_id,
-        twitch_login,
-        ANALYTICS_TRIAL_PLAN_ID,
-        &expires_iso,
-        "Trial granted after 24h grace period",
-        &now_iso
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
+    .bind(ANALYTICS_TRIAL_PLAN_ID)
+    .bind(&expires_iso)
+    .bind("14-day trial on first login")
+    .bind(&now_iso)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -374,6 +375,7 @@ mod auto_grant_tests {
                    manual_plan_id TEXT,
                    manual_plan_expires_at TEXT,
                    trial_ever_granted INTEGER DEFAULT 0,
+                   trials_granted INTEGER DEFAULT 0,
                    manual_plan_notes TEXT,
                    manual_plan_updated_at TEXT,
                    first_login_at TEXT
@@ -407,19 +409,55 @@ mod auto_grant_tests {
     }
 
     #[tokio::test]
-    async fn grant_nach_24h_grace() {
+    async fn grant_beim_ersten_login() {
         let Some(pool) = pool_or_skip("t6e_trial_grant").await else {
             return;
         };
-        // first_login 30h her, kein Flag, kein Plan → Grant.
-        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('10','streamer', (NOW() - INTERVAL '30 hours')::text)")
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('10','streamer', NOW()::text)")
             .execute(&pool).await.unwrap();
         assert!(check_and_grant_trial_eligibility(&pool, "10", "streamer").await);
         let (flag, plan) = flag_and_plan(&pool, "10").await;
         assert_eq!(flag, 1);
         assert_eq!(plan.as_deref(), Some(ANALYTICS_TRIAL_PLAN_ID));
-        // Idempotent: zweiter Aufruf grantet nicht erneut.
         assert!(!check_and_grant_trial_eligibility(&pool, "10", "streamer").await);
+    }
+
+    #[tokio::test]
+    async fn erster_zweiter_dritter_trial() {
+        let Some(pool) = pool_or_skip("t6e_trial_14_14").await else {
+            return;
+        };
+        let first = start_trial_for_user(&pool, "1", "neu").await;
+        assert_eq!(first, TrialOutcome::Granted);
+        let second = start_trial_for_user(&pool, "1", "neu").await;
+        assert_eq!(second, TrialOutcome::Granted);
+        let third = start_trial_for_user(&pool, "1", "neu").await;
+        assert_eq!(third, TrialOutcome::AlreadyUsed);
+        let count: i32 = sqlx::query_scalar(
+            "SELECT trials_granted FROM streamer_plans WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn bestand_mit_trial_ever_granted_hat_eine_einloesung() {
+        let Some(pool) = pool_or_skip("t6e_trial_backfill").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, trial_ever_granted, trials_granted) \
+             VALUES ('5', 'alt', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let second = start_trial_for_user(&pool, "5", "alt").await;
+        assert_eq!(second, TrialOutcome::Granted);
+        let third = start_trial_for_user(&pool, "5", "alt").await;
+        assert_eq!(third, TrialOutcome::AlreadyUsed);
     }
 
     #[tokio::test]
@@ -470,24 +508,14 @@ mod auto_grant_tests {
     }
 
     #[tokio::test]
-    async fn kein_grant_innerhalb_grace_oder_ohne_first_login() {
+    async fn kein_grant_ohne_streamer_plans_zeile() {
         let Some(pool) = pool_or_skip("t6e_trial_nograce").await else {
             return;
         };
-        // first_login erst 5h her → noch nicht eligible.
-        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('20','frisch', (NOW() - INTERVAL '5 hours')::text)")
-            .execute(&pool).await.unwrap();
-        assert!(!check_and_grant_trial_eligibility(&pool, "20", "frisch").await);
-        // kein first_login_at → kein Grant.
-        sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login) VALUES ('21','ohnelogin')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        assert!(!check_and_grant_trial_eligibility(&pool, "21", "ohnelogin").await);
-        // gar kein Eintrag → kein Grant.
         assert!(!check_and_grant_trial_eligibility(&pool, "99", "unbekannt").await);
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) VALUES ('20','frisch', NOW()::text)")
+            .execute(&pool).await.unwrap();
+        assert!(check_and_grant_trial_eligibility(&pool, "20", "frisch").await);
     }
 
     #[tokio::test]
