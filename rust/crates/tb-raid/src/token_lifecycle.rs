@@ -200,6 +200,21 @@ pub fn admin_bot_ban_verdacht_text(twitch_login: &str, twitch_user_id: &str) -> 
     (title, description)
 }
 
+/// Admin-Meldung, wenn der Bot eine unbelegte eigene Bann-Markierung zurücknimmt.
+pub fn admin_ban_probe_rueckname_text(twitch_login: &str) -> (String, String) {
+    let title = "♻️ Unbelegte Bann-Markierung zurückgenommen".to_string();
+    let description = format!(
+        "**{twitch_login}** war als gebannt markiert, obwohl das nie belegt war: \
+         die Markierung stammt aus der aktiven Prüfung, die einen kaputten \
+         Streamer-Token nicht von einem Bann unterscheiden konnte.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\n\
+         Pause und Blacklist-Eintrag sind aufgehoben, der Kanal läuft wieder \
+         normal. Ist der Bot dort doch gebannt, fällt das beim nächsten \
+         Chat-Versuch auf und wird dann sauber erkannt."
+    );
+    (title, description)
+}
+
 /// User-DM-Text bei Token-Fehler (Erst-DM). Text-only mit Re-Auth-Link.
 ///
 /// Der Re-Auth läuft bewusst über das Verwaltungs-Dashboard und nicht über einen
@@ -805,6 +820,83 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             }
         }
         restored
+    }
+
+    /// Nimmt Bot-Ban-Markierungen zurück, die aus der aktiven Prüfung stammen.
+    ///
+    /// Diese Prüfung durfte einmal selbst pausieren und hat dabei einen kaputten
+    /// Streamer-Token für einen Kanal-Bann gehalten. Alles, was sie damals gesetzt
+    /// hat, ist unbelegt: der Grund-String trägt `ban_probe`, kein anderer Pfad
+    /// benutzt ihn. Statt solche Zustände von Hand aus der Datenbank zu putzen,
+    /// räumt der Bot sie hier selbst weg.
+    ///
+    /// Bewusst ohne erneute Twitch-Abfrage. Ist der Kanal wirklich gebannt, fällt
+    /// das beim nächsten Chat-Versuch auf und läuft über den reaktiven Pfad, der
+    /// einen echten `sender_banned`-Drop gesehen hat. Ein unbelegter Verdacht darf
+    /// keinen Partner dauerhaft lahmlegen.
+    ///
+    /// Liefert die Anzahl geheilter Kanäle.
+    pub async fn clear_unverified_ban_probe_marks(&self) -> u64 {
+        let logins = match sqlx::query_as::<_, (String,)>(
+            r#"
+            DELETE FROM twitch_raid_blacklist
+             WHERE LOWER(COALESCE(reason, '')) LIKE '%ban_probe%'
+            RETURNING target_login
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "Ban-Probe-Cleanup: Blacklist-Query fehlgeschlagen");
+                return 0;
+            }
+        };
+        if logins.is_empty() {
+            return 0;
+        }
+
+        let mut healed = 0u64;
+        for (login,) in logins {
+            // Die Pause nur dort aufheben, wo sie genau diesen Grund trägt. Ein
+            // Kanal, der zusätzlich echt gesperrt ist, bleibt gesperrt.
+            let result = sqlx::query(
+                r#"
+                UPDATE twitch_partners
+                   SET technical_pause_reason = NULL,
+                       raid_bot_enabled = 1
+                 WHERE LOWER(twitch_login) = LOWER($1)
+                   AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'bot_banned'
+                "#,
+            )
+            .bind(&login)
+            .execute(&self.pool)
+            .await;
+            match result {
+                Ok(result) if result.rows_affected() > 0 => {
+                    healed += 1;
+                    tracing::warn!(
+                        login = %login,
+                        "Unbelegte Bot-Ban-Markierung aus der aktiven Prüfung zurückgenommen"
+                    );
+                    let (title, description) = admin_ban_probe_rueckname_text(&login);
+                    self.notifier
+                        .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
+                        .await;
+                }
+                Ok(_) => {
+                    tracing::info!(
+                        login = %login,
+                        "Ban-Probe-Blacklist entfernt, Partner-Pause hatte einen anderen Grund"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(%error, login = %login, "Ban-Probe-Cleanup: Pause nicht aufhebbar");
+                }
+            }
+        }
+        healed
     }
 
     /// Aktive Ban-Prüfung über alle gesunden Partner-Kanäle.
@@ -2428,6 +2520,92 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1);
+    }
+
+    /// Der Bot raeumt seinen eigenen Fehler auf: Markierungen aus der aktiven
+    /// Pruefung sind unbelegt und werden zurueckgenommen, ohne dass jemand die
+    /// Datenbank von Hand anfassen muss. Ein echter Bann bleibt bestehen.
+    #[tokio::test]
+    async fn ban_probe_marken_werden_selbst_zurueckgenommen() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_probe_cleanup").await;
+
+        // Kanal A: Opfer der Fehlklassifikation.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, technical_pause_reason, raid_bot_enabled)
+             VALUES ('1', 'falschpositiv', 'active', 'bot_banned', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
+             VALUES ('1', 'falschpositiv', 'chat_bot_banned_in_channel: ban_probe: Twitch lehnt ab', '2026-08-15T03:28:24+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Kanal B: echter Bann aus dem reaktiven Pfad, muss bestehen bleiben.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, technical_pause_reason, raid_bot_enabled)
+             VALUES ('2', 'echtgebannt', 'active', 'bot_banned', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
+             VALUES ('2', 'echtgebannt', 'chat_bot_banned_in_channel: sender_banned', '2026-08-15T03:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone());
+
+        assert_eq!(reactor.clear_unverified_ban_probe_marks().await, 1);
+
+        // Kanal A ist frei, Kanal B unangetastet.
+        let a: (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(a.0, None, "Pause muss weg sein");
+        assert_eq!(a.1, Some(1), "Raid muss wieder an sein");
+
+        let b: (Option<String>,) = sqlx::query_as(
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '2'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            b.0.as_deref(),
+            Some("bot_banned"),
+            "ein echter Bann bleibt bestehen"
+        );
+
+        let rest: Vec<(String,)> =
+            sqlx::query_as("SELECT target_login FROM twitch_raid_blacklist ORDER BY target_login")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].0, "echtgebannt");
+
+        // Genau eine Admin-Meldung, keine Streamer-DM.
+        assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
+        assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 0);
+
+        // Zweiter Lauf ist ein No-op.
+        assert_eq!(reactor.clear_unverified_ban_probe_marks().await, 0);
     }
 
     /// Regression miracleghost9: Die aktive Pruefung darf einen Kanal nicht

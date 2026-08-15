@@ -263,6 +263,11 @@ fn spawn_token_lifecycle_tasks(
                 } else {
                     0
                 };
+                // Zuerst die eigenen Fehlurteile zurücknehmen: die aktive
+                // Prüfung durfte einmal selbst pausieren und hat dabei kaputte
+                // Tokens für Banns gehalten. Was danach läuft, soll auf einem
+                // sauberen Zustand arbeiten.
+                let ban_probe_geheilt = reactor.clear_unverified_ban_probe_marks().await;
                 let restored = reactor.restore_ready_bot_banned_channels().await;
                 let token_reactivated = reactor
                     .reactivate_token_error_partners_with_valid_auth()
@@ -278,12 +283,14 @@ fn spawn_token_lifecycle_tasks(
                     || token_reactivated > 0
                     || reconciled > 0
                     || banned_detected > 0
+                    || ban_probe_geheilt > 0
                 {
                     tracing::info!(
                         notified,
                         grace_expired = expired,
                         bot_ban_restored = restored,
                         bot_ban_detected = banned_detected,
+                        ban_probe_geheilt,
                         token_error_reactivated = token_reactivated,
                         raid_toggle_reconciled = reconciled,
                         "Token-Lifecycle-Sweep abgeschlossen"
