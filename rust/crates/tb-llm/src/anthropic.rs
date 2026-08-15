@@ -250,16 +250,20 @@ mod tests {
 
     #[tokio::test]
     async fn complete_ohne_key_unavailable() {
-        let _g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            return;
-        }
-        let client = AnthropicClient::new(
-            Some(String::new()),
-            Some("http://127.0.0.1:1/messages".into()),
-            None,
-            None,
-        );
+        // Der Key wird in `new` aufgeloest und gespeichert; das Lock muss also
+        // nur Env-Check und Konstruktion decken, nicht den await danach.
+        let client = {
+            let _g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                return;
+            }
+            AnthropicClient::new(
+                Some(String::new()),
+                Some("http://127.0.0.1:1/messages".into()),
+                None,
+                None,
+            )
+        };
         let req = CompletionRequest::simple("s", "u", 10);
         match client.complete(&req, "analytics").await {
             Err(LlmError::Unavailable(_)) => {}
