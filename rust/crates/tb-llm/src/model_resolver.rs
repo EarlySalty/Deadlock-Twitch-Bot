@@ -6,12 +6,12 @@
 //! gebannt — ohne dass jemand etwas gemerkt hätte. Ein hartcodierter
 //! Modellname ist deshalb ein Ablaufdatum, das keiner im Kalender stehen hat.
 //!
-//! Der Resolver fragt `GET /v1/models`, nimmt alle Modelle, deren Name mit der
-//! konfigurierten Familie beginnt (`deepseek-v4-flash` findet also auch
-//! `deepseek-v4-flash-0731`), und wählt die neueste Fassung nach dem
-//! Anbieter-Zeitstempel. Das Ergebnis liegt im Prozess und zusätzlich in
-//! Postgres, damit ein Neustart ohne API-Zugriff nicht auf dem alten
-//! Kompilat-Default landet.
+//! Der Resolver fragt `GET /v1/models`, nimmt die Modelle der konfigurierten
+//! Familie (`deepseek-v4-flash` und datierte Fassungen wie `…-0731`, nicht
+//! `-lite`/`-preview`/`-thinking`) und wählt die neueste Fassung nach dem
+//! Namen, mit Anbieter-Zeitstempel nur als Tiebreak. Das Ergebnis liegt im
+//! Prozess und zusätzlich in Postgres, damit ein Neustart ohne API-Zugriff
+//! nicht auf dem alten Kompilat-Default landet.
 //!
 //! # Rangfolge
 //!
@@ -23,15 +23,21 @@
 //! # Selbstheilung
 //!
 //! Läuft ein Call trotzdem in ein 404, ruft der Aufrufer
-//! [`invalidate_and_refresh`]: der zwischengespeicherte Wert fliegt raus, die
-//! Liste wird einmal neu geholt, und der Aufrufer wiederholt den Call mit dem
-//! frischen Namen. Erst wenn auch das scheitert, gilt der Anbieter als tot.
+//! [`invalidate_and_refresh`]: die Liste wird einmal neu geholt, und der
+//! Aufrufer wiederholt den Call mit dem frischen Namen. Der alte Cache-Wert
+//! bleibt stehen, bis ein neuer feststeht — ein transienter Listen-Fehler
+//! darf die Prozess-Zelle nicht für 24 h leeren. Erst wenn auch das
+//! scheitert, gilt der Anbieter als tot.
 
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
+
+/// Pool, den [`spawn_refresh_loop`] einmalig ablegt. Der 404-Pfad darf ihn
+/// mitnehmen, auch wenn der Aufrufer selbst keinen Pool in der Hand hat.
+static REGISTERED_POOL: OnceLock<PgPool> = OnceLock::new();
 
 /// Anbieter-Kennung in `llm_model_cache`. Aktuell hat nur Fireworks eine
 /// Modellliste, die sich unter uns wegdreht; MiniMax und Anthropic führen
@@ -71,13 +77,24 @@ fn store(model: &str) {
     }
 }
 
-/// Setzt den zwischengespeicherten Namen zurück. Nach einem 404 ist der Wert
-/// nachweislich falsch, und der einkompilierte Default ist dann die bessere
-/// Ausgangslage als ein Name, den der Anbieter gerade abgelehnt hat.
+/// Setzt den zwischengespeicherten Namen zurück. Nur aufrufen, wenn ein
+/// neuer Wert feststeht oder der Cache in Tests geleert werden muss. Ein
+/// transienter Listen-Fehler darf das nicht tun — sonst fällt der Prozess
+/// 24 h auf den einkompilierten Default zurück.
 pub fn invalidate() {
     if let Ok(mut guard) = cell().write() {
         *guard = None;
     }
+}
+
+/// Pool, den der Startlauf hinterlegt hat. Der 404-Pfad reicht ihn durch,
+/// damit der geheilte Name in `llm_model_cache` landet.
+pub fn model_cache_pool() -> Option<&'static PgPool> {
+    REGISTERED_POOL.get()
+}
+
+fn resolve_pool(pool: Option<&PgPool>) -> Option<&PgPool> {
+    pool.or_else(|| REGISTERED_POOL.get())
 }
 
 /// Ein Eintrag aus der Modellliste des Anbieters.
@@ -87,21 +104,39 @@ struct ModelEntry {
     created: Option<i64>,
 }
 
+/// Gehört `id` zur Familie, ohne Varianten wie `-lite`/`-preview`/`-thinking`?
+///
+/// Erlaubt ist der nackte Familienname und eine rein numerische Datums-
+/// Endung (`…-0731`). Alles andere ist eine andere Produktlinie.
+fn in_family(id: &str, family: &str) -> bool {
+    let Some(rest) = id.strip_prefix(family) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(suffix) = rest.strip_prefix('-') else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Wählt aus einer Modellliste die neueste Fassung der Familie.
 ///
-/// Sortiert nach Anbieter-Zeitstempel, bei Gleichstand (oder fehlendem
-/// Zeitstempel) nach Name absteigend — die datierten Namen sortieren dann
-/// lexikografisch richtig, weil das Datum als `MMTT` hinten steht.
+/// Zuerst nach Name absteigend — die datierten Fassungen sortieren
+/// lexikografisch richtig, weil das Datum als `MMTT` hinten steht. Der
+/// Anbieter-Zeitstempel ist nur Tiebreak. `created = None` darf deshalb
+/// nicht gegen einen älteren Eintrag mit Zeitstempel verlieren.
 ///
 /// Reine Funktion, damit die Auswahlregel ohne Netz testbar bleibt.
 fn pick_newest(entries: &[ModelEntry], family: &str) -> Option<String> {
     entries
         .iter()
-        .filter(|entry| entry.id.starts_with(family))
+        .filter(|entry| in_family(&entry.id, family))
         .max_by(|a, b| {
-            a.created
-                .cmp(&b.created)
-                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+            a.id.as_str()
+                .cmp(b.id.as_str())
+                .then_with(|| a.created.cmp(&b.created))
         })
         .map(|entry| entry.id.clone())
 }
@@ -209,6 +244,7 @@ pub async fn refresh_fireworks(pool: Option<&PgPool>) -> Option<String> {
         return Some(pinned);
     }
 
+    let pool = resolve_pool(pool);
     let api_key = crate::keys::fireworks_api_key()?;
     let base_url = crate::selection::fireworks_base_url();
 
@@ -216,7 +252,7 @@ pub async fn refresh_fireworks(pool: Option<&PgPool>) -> Option<String> {
         Ok(entries) => {
             let created = entries
                 .iter()
-                .filter(|entry| entry.id.starts_with(FIREWORKS_FAMILY))
+                .filter(|entry| in_family(&entry.id, FIREWORKS_FAMILY))
                 .filter_map(|entry| entry.created)
                 .max();
             match pick_newest(&entries, FIREWORKS_FAMILY) {
@@ -265,16 +301,17 @@ async fn fallback_from_db(pool: Option<&PgPool>) -> Option<String> {
     Some(model)
 }
 
-/// Nach einem 404: Wert verwerfen, einmal neu auflösen. Liefert den neuen
-/// Namen, wenn er sich vom abgelehnten unterscheidet — nur dann lohnt der
-/// Wiederholungsversuch.
+/// Nach einem 404: einmal neu auflösen. Liefert den neuen Namen, wenn er
+/// sich vom abgelehnten unterscheidet — nur dann lohnt der
+/// Wiederholungsversuch. Der alte Cache bleibt stehen, bis `refresh`
+/// wirklich etwas Neues ablegt; ein Timeout oder 5xx der Liste darf die
+/// Zelle nicht leeren.
 pub async fn invalidate_and_refresh(pool: Option<&PgPool>, abgelehnt: &str) -> Option<String> {
     warn!(
         model = %abgelehnt,
         "Anbieter kennt das Modell nicht mehr (404) — loese neu auf"
     );
-    invalidate();
-    let neu = refresh_fireworks(pool).await?;
+    let neu = refresh_fireworks(resolve_pool(pool)).await?;
     if neu == abgelehnt {
         warn!(
             model = %neu,
@@ -287,8 +324,12 @@ pub async fn invalidate_and_refresh(pool: Option<&PgPool>, abgelehnt: &str) -> O
 
 /// Startet den Hintergrund-Refresh. Läuft sofort einmal und danach täglich.
 /// Der zurückgegebene Task hängt am Tokio-Runtime des Aufrufers; wer ihn
-/// fallen lässt, hat trotzdem die erste Auflösung.
+/// fallen lässt, hat trotzdem die erste Auflösung. Der Pool bleibt für den
+/// 404-Pfad hinterlegt, damit ein geheilter Name die DB erreicht.
 pub fn spawn_refresh_loop(pool: Option<PgPool>) -> tokio::task::JoinHandle<()> {
+    if let Some(pool) = pool.clone() {
+        let _ = REGISTERED_POOL.set(pool);
+    }
     tokio::spawn(async move {
         loop {
             refresh_fireworks(pool.as_ref()).await;
@@ -359,6 +400,46 @@ mod tests {
     }
 
     #[test]
+    fn fassung_ohne_zeitstempel_verliert_nicht_gegen_tote() {
+        // Die tote Basis hat einen Zeitstempel, die neue datierte Fassung
+        // nicht. `None < Some(_)` darf hier nicht die tote gewinnen lassen.
+        let entries = vec![
+            entry(
+                "accounts/fireworks/models/deepseek-v4-flash",
+                Some(1_753_000_000),
+            ),
+            entry("accounts/fireworks/models/deepseek-v4-flash-0731", None),
+        ];
+        assert_eq!(
+            pick_newest(&entries, FIREWORKS_FAMILY).as_deref(),
+            Some("accounts/fireworks/models/deepseek-v4-flash-0731")
+        );
+    }
+
+    #[test]
+    fn lite_preview_thinking_gehoeren_nicht_zur_familie() {
+        let entries = vec![
+            entry(
+                "accounts/fireworks/models/deepseek-v4-flash-lite",
+                Some(9_999),
+            ),
+            entry(
+                "accounts/fireworks/models/deepseek-v4-flash-preview",
+                Some(9_999),
+            ),
+            entry(
+                "accounts/fireworks/models/deepseek-v4-flash-thinking",
+                Some(9_999),
+            ),
+            entry("accounts/fireworks/models/deepseek-v4-flash-0731", Some(1)),
+        ];
+        assert_eq!(
+            pick_newest(&entries, FIREWORKS_FAMILY).as_deref(),
+            Some("accounts/fireworks/models/deepseek-v4-flash-0731")
+        );
+    }
+
+    #[test]
     fn antwort_ohne_created_wird_trotzdem_gelesen() {
         let body = serde_json::json!({
             "data": [
@@ -380,6 +461,91 @@ mod tests {
     fn muell_antwort_kippt_nichts() {
         assert!(parse_models(&serde_json::json!({"error": "kaputt"})).is_empty());
         assert!(parse_models(&serde_json::json!([])).is_empty());
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_resolver_env() {
+        for name in [
+            "FIREWORK_API_KEY",
+            "FIREWORKS_API_KEY",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
+            "FIREWORK_MODEL",
+            "FIREWORKS_MODEL",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn transienter_listenfehler_leert_die_zelle_nicht() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_resolver_env();
+        let bekannt = "accounts/fireworks/models/deepseek-v4-flash-0731";
+        store(bekannt);
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/models"))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "test-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let neu = invalidate_and_refresh(None, "accounts/fireworks/models/deepseek-v4-flash").await;
+        assert!(neu.is_none(), "503 darf keinen neuen Namen liefern");
+        assert_eq!(
+            resolved_fireworks_model().as_deref(),
+            Some(bekannt),
+            "transientes Listen-500 darf den letzten guten Stand nicht verwerfen"
+        );
+
+        clear_resolver_env();
+        invalidate();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn listen_ok_legt_neue_fassung_in_die_zelle() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_resolver_env();
+        store("accounts/fireworks/models/deepseek-v4-flash");
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "data": [
+                        {"id": "accounts/fireworks/models/deepseek-v4-flash", "created": 1_000},
+                        {"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}
+                    ]
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "test-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let neu = invalidate_and_refresh(None, "accounts/fireworks/models/deepseek-v4-flash")
+            .await
+            .expect("Liste liefert die neue Fassung");
+        assert_eq!(neu, "accounts/fireworks/models/deepseek-v4-flash-0731");
+        assert_eq!(resolved_fireworks_model().as_deref(), Some(neu.as_str()));
+
+        clear_resolver_env();
+        invalidate();
     }
 
     /// Fragt die echte Modellliste ab. Braucht einen gültigen

@@ -1623,7 +1623,7 @@ impl SpamAiReviewer {
         let mut last_error = String::new();
         let mut last_verdict = SpamReviewVerdict::Unsure;
         for provider in &providers {
-            match call_judge(&self.http, provider, true, &content).await {
+            match call_judge(&self.http, provider, true, &content, Some(&self.pool)).await {
                 Ok(Some(review)) => {
                     let (learned, rejected_pattern, save_failed) =
                         persist_spam_learning(&self.pool, &review, &content, &channel).await;
@@ -1798,12 +1798,14 @@ fn usage_tokens(resp: &serde_json::Value) -> (i64, i64) {
 ///
 /// `Ok(None)` = Antwort kam, aber kein parsebares Urteil (kein Fallback-Fehler
 /// des Transports). `Err` = Transport-/HTTP-Problem → Aufrufer probiert den
-/// nächsten Provider.
+/// nächsten Provider. Ein Fireworks-404 löst einmal neu auf und wiederholt
+/// den Call — derselbe Selbstheilungs-Pfad wie im Engagement-Client.
 async fn call_judge(
     http: &reqwest::Client,
     provider: &tb_llm::LlmEndpoint,
     record_usage: bool,
     content: &str,
+    pool: Option<&PgPool>,
 ) -> Result<Option<AiReview>, JudgeCallError> {
     let Some(api_key) = provider.api_key.as_deref() else {
         return Err(JudgeCallError::Provider(
@@ -1811,50 +1813,74 @@ async fn call_judge(
         ));
     };
     let truncated: String = content.chars().take(500).collect();
-    let body = serde_json::json!({
-        "model": provider.model,
-        "max_tokens": JUDGE_MAX_TOKENS,
-        "temperature": 0.0,
-        "messages": [
-            {"role": "system", "content": SPAM_REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": format!("Nachricht: {truncated}")}
-        ]
-    });
+    let mut model = provider.model.clone();
+    let mut versuch = 0;
+    let json = loop {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": JUDGE_MAX_TOKENS,
+            "temperature": 0.0,
+            "messages": [
+                {"role": "system", "content": SPAM_REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": format!("Nachricht: {truncated}")}
+            ]
+        });
 
-    let resp = http
-        .post(format!(
-            "{}/chat/completions",
-            provider.base_url.trim_end_matches('/')
-        ))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(20))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                JudgeCallError::Timeout(error.to_string())
-            } else {
-                JudgeCallError::Provider(error.to_string())
+        let resp = http
+            .post(format!(
+                "{}/chat/completions",
+                provider.base_url.trim_end_matches('/')
+            ))
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(20))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    JudgeCallError::Timeout(error.to_string())
+                } else {
+                    JudgeCallError::Provider(error.to_string())
+                }
+            })?;
+
+        let status = resp.status();
+        if status.is_success() {
+            break resp
+                .json()
+                .await
+                .map_err(|error| JudgeCallError::Provider(error.to_string()))?;
+        }
+        // Nur Fireworks dreht Modellnamen unter uns weg. Ein MiniMax-404
+        // darf keinen `accounts/fireworks/models/…`-Namen in den Call
+        // gegen die MiniMax-Adresse schreiben.
+        let fireworks_weg = status == reqwest::StatusCode::NOT_FOUND
+            && provider.provider == "fireworks"
+            && versuch == 0;
+        if !fireworks_weg {
+            return Err(JudgeCallError::Provider(format!("HTTP {status}")));
+        }
+        versuch += 1;
+        match tb_llm::invalidate_and_refresh(pool.or(tb_llm::model_cache_pool()), &model).await {
+            Some(neu) => {
+                warn!(
+                    alt = %model,
+                    neu = %neu,
+                    "Judge-Modell war weg, wiederhole Call mit aufgeloestem Namen"
+                );
+                model = neu;
             }
-        })?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(JudgeCallError::Provider(format!("HTTP {status}")));
-    }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|error| JudgeCallError::Provider(error.to_string()))?;
+            None => return Err(JudgeCallError::Provider(format!("HTTP {status}"))),
+        }
+    };
 
     // Verbrauch ins gemeinsame LLM-Ledger (best-effort, wirft nie).
     // Verbucht direkt nach der Antwort, damit der Token-Verbrauch auch dann
     // zählt, wenn die JSON-Extraktion unten scheitert.
     let (tokens_in, tokens_out) = usage_tokens(&json);
     if record_usage {
-        tb_llm::ledger::record(JUDGE_PURPOSE, &provider.model, tokens_in, tokens_out, true).await;
+        tb_llm::ledger::record(JUDGE_PURPOSE, &model, tokens_in, tokens_out, true).await;
     }
 
     let message = &json["choices"][0]["message"];
@@ -2788,7 +2814,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
         };
-        let review = call_judge(&http, &provider, false, content)
+        let review = call_judge(&http, &provider, false, content, Some(&pool))
             .await
             .expect("Transport ok")
             .expect("Urteil muss parsebar sein");
@@ -2809,6 +2835,106 @@ mod tests {
         assert_eq!(pattern, "peakpy c0m");
         assert_eq!(source_channel.as_deref(), Some("cheazycrust"));
         assert_eq!(source_message.as_deref(), Some(content));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn call_judge_heilt_fireworks_404() {
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek-v4-flash\""))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek-v4-flash-0731"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"content": "{\"is_spam\": true, \"reason\": \"viewbot\"}"}
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "fw-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let http = reqwest::Client::new();
+        let provider = tb_llm::LlmEndpoint {
+            provider: "fireworks",
+            base_url: server.uri(),
+            api_key: Some("fw-key".to_string()),
+            model: "accounts/fireworks/models/deepseek-v4-flash".to_string(),
+        };
+        let review = call_judge(&http, &provider, false, "cheap viewers telegram", None)
+            .await
+            .expect("404 muss geheilt werden")
+            .expect("Urteil muss parsebar sein");
+        assert!(review.is_spam);
+
+        clear_provider_env();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn call_judge_minimax_404_ohne_fireworks_retry() {
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "fw-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let http = reqwest::Client::new();
+        let provider = tb_llm::LlmEndpoint {
+            provider: "minimax",
+            base_url: server.uri(),
+            api_key: Some("minimax-key".to_string()),
+            model: "MiniMax-M3".to_string(),
+        };
+        let err = call_judge(&http, &provider, false, "cheap viewers telegram", None)
+            .await
+            .expect_err("MiniMax-404 darf nicht den Fireworks-Resolver anstossen");
+        assert!(
+            matches!(err, JudgeCallError::Provider(ref detail) if detail.contains("404")),
+            "erwartete Provider-404, war {err:?}"
+        );
+
+        clear_provider_env();
     }
 
     #[tokio::test]
@@ -3121,7 +3247,7 @@ mod tests {
             ("endlich affiliate erreicht!", false),
             ("wie kriegt man eigentlich mehr viewer?", false),
         ] {
-            let review = call_judge(&http, provider, false, message)
+            let review = call_judge(&http, provider, false, message, None)
                 .await
                 .expect("Judge-Call fehlgeschlagen")
                 .expect("Judge lieferte kein parsebares JSON");
