@@ -28,9 +28,15 @@ use crate::util::mask_log_identifier as mask;
 /// Ohne Deadlock-Stream über diese Dauer gibt der Bot seine Mod-Rechte ab.
 pub const DEADLOCK_PAUSE_DAYS: i64 = 60;
 
-/// Obergrenze an Kanälen pro Sweep-Richtung. Sicherheitsleine gegen einen
-/// Helix-Ansturm, falls die Partner-Zahl unerwartet wächst.
-const MAX_PER_SWEEP: i64 = 200;
+/// Obergrenze an Unmods pro Lauf. Bewusst klein: beim ersten Sweep nach dem
+/// Ausrollen ist der ganze Rückstand auf einmal fällig, und jeder Unmod schickt
+/// eine DM an einen echten Streamer. Gestaffelt über mehrere Läufe bleibt Zeit,
+/// einen Fehler zu bemerken, bevor alle Kanäle betroffen sind.
+const MAX_UNMOD_PER_SWEEP: i64 = 5;
+
+/// Obergrenze an Remods pro Lauf. Höher, weil ein Comeback nicht warten soll und
+/// die Nachricht eine gute ist.
+const MAX_REMOD_PER_SWEEP: i64 = 50;
 
 /// Pause zwischen zwei Helix-Calls im Sweep.
 const CALL_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -204,7 +210,15 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
     /// Deadlock-Stream, ersatzweise der Beginn der Partnerschaft: wer nie
     /// Deadlock gestreamt hat, soll nicht sofort beim ersten Sweep fliegen.
     pub async fn unmod_idle_channels(&self) -> u64 {
-        let cutoff = Self::iso(Utc::now() - chrono::Duration::days(self.pause_days));
+        let cutoff = (Utc::now() - chrono::Duration::days(self.pause_days))
+            .format("%Y-%m-%d")
+            .to_string();
+        // Alle Zeitvergleiche laufen über `LEFT(x::text, 10)::date`. Grund: die
+        // Zeitspalten sind je nach Umgebung `text` oder `timestamptz` und
+        // `had_deadlock_in_session` je nach Umgebung `boolean` oder `integer`
+        // (Prod führt boolean/timestamptz, das Baseline-Schema integer/text).
+        // Ein direkter Vergleich bricht deshalb mit einem Typfehler ab. Der
+        // Datumsschnitt ist bei einem 60-Tage-Fenster genau genug.
         let rows = match sqlx::query_as::<_, (String, String)>(
             r#"
             SELECT p.twitch_user_id,
@@ -221,20 +235,20 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
                    NOT IN ('blocked', 'bot_banned')
                AND COALESCE(
-                       (SELECT MAX(s.started_at)
+                       (SELECT MAX(LEFT(s.started_at::text, 10)::date)
                           FROM twitch_stream_sessions s
                          WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
-                           AND (COALESCE(s.had_deadlock_in_session, 0) <> 0
+                           AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
                                 OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')),
-                       p.partnered_at,
-                       ''
-                   ) < $1
+                       LEFT(NULLIF(TRIM(p.partnered_at), ''), 10)::date,
+                       DATE '1970-01-01'
+                   ) < $1::date
              ORDER BY p.twitch_login
              LIMIT $2
             "#,
         )
         .bind(&cutoff)
-        .bind(MAX_PER_SWEEP)
+        .bind(MAX_UNMOD_PER_SWEEP)
         .fetch_all(&self.pool)
         .await
         {
@@ -296,15 +310,20 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                    SELECT 1
                      FROM twitch_stream_sessions s
                     WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
-                      AND (COALESCE(s.had_deadlock_in_session, 0) <> 0
+                      AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
                            OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')
-                      AND s.started_at > p.deadlock_pause_unmodded_at
+                      -- `>=` statt `>`: der Vergleich läuft auf Tagesbasis
+                      -- (siehe unmod_idle_channels), sonst fiele ein Comeback am
+                      -- Tag des Unmods durch. Die Session, die den Unmod
+                      -- ausgelöst hat, ist zwei Monate alt und trifft nie zu.
+                      AND LEFT(s.started_at::text, 10)::date
+                          >= LEFT(p.deadlock_pause_unmodded_at, 10)::date
                )
              ORDER BY p.twitch_login
              LIMIT $1
             "#,
         )
-        .bind(MAX_PER_SWEEP)
+        .bind(MAX_REMOD_PER_SWEEP)
         .fetch_all(&self.pool)
         .await
         {
@@ -560,10 +579,14 @@ mod tests {
             "CREATE TABLE twitch_raid_auth (
                 twitch_user_id text PRIMARY KEY, twitch_login text,
                 needs_reauth boolean DEFAULT false, access_token_enc bytea)",
+            // Typen bewusst wie in Prod: timestamptz + boolean. Das
+            // Baseline-Schema fuehrt hier text + integer; die Queries muessen
+            // mit beidem klarkommen, deshalb testet dieses Schema die Variante,
+            // an der ein direkter Vergleich scheitern wuerde.
             "CREATE TABLE twitch_stream_sessions (
                 id bigserial PRIMARY KEY, streamer_login text NOT NULL,
-                started_at text NOT NULL, game_name text,
-                had_deadlock_in_session integer DEFAULT 0)",
+                started_at timestamptz NOT NULL, game_name text,
+                had_deadlock_in_session boolean DEFAULT false)",
             "CREATE TABLE twitch_streamer_identities (
                 twitch_user_id text, twitch_login text, discord_user_id text,
                 updated_at timestamptz DEFAULT now())",
@@ -612,9 +635,9 @@ mod tests {
              VALUES ($1, $2, $3, $4)",
         )
         .bind(login)
-        .bind(at.to_rfc3339_opts(SecondsFormat::Secs, false))
+        .bind(at)
         .bind(if deadlock { "Deadlock" } else { "Dota 2" })
-        .bind(i32::from(deadlock))
+        .bind(deadlock)
         .execute(pool)
         .await
         .unwrap();
