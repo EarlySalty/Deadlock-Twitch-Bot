@@ -9,6 +9,9 @@
 //!   benachrichtigt neu blacklistete Streamer einmalig (Admin-Embed + User-DM)
 //!   entzieht nach 7 Tagen abgelaufener Grace die Streamer-Rolle und hebt
 //!   technische `bot_banned`-Pausen nach Health-Restore wieder auf.
+//! - **Aktive Ban-Prüfung** — im selben stündlichen Sweep: fragt für jeden
+//!   gesunden Partner-Kanal bei Twitch nach, ob der Bot dort gebannt ist. Ohne
+//!   sie fällt ein Ban nur auf, wenn der Bot in dem Kanal gerade sendet.
 //! - **Blacklist-Cleanup** — alle 3,5 h (Python `cleanup_old_entries`, >30 Tage).
 //!
 //! Discord-Reaktionen laufen ausschließlich über den Broker (der Twitch-Bot hat
@@ -261,16 +264,22 @@ fn spawn_token_lifecycle_tasks(
                     .reactivate_token_error_partners_with_valid_auth()
                     .await;
                 let reconciled = reactor.reconcile_healthy_raid_toggles().await;
+                // Aktive Ban-Prüfung zuletzt: sie sendet Helix-Requests und soll
+                // erst laufen, wenn die reinen DB-Sweeps ihren Zustand gesetzt
+                // haben (sonst probt sie Kanäle, die gerade restauriert wurden).
+                let banned_detected = reactor.detect_bot_bans().await;
                 if notified > 0
                     || expired > 0
                     || restored > 0
                     || token_reactivated > 0
                     || reconciled > 0
+                    || banned_detected > 0
                 {
                     tracing::info!(
                         notified,
                         grace_expired = expired,
                         bot_ban_restored = restored,
+                        bot_ban_detected = banned_detected,
                         token_error_reactivated = token_reactivated,
                         raid_toggle_reconciled = reconciled,
                         "Token-Lifecycle-Sweep abgeschlossen"
