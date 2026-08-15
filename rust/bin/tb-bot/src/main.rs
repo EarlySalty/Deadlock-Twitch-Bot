@@ -59,6 +59,7 @@ mod confirm_resolver;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
 mod irc_lurker_wiring;
+mod mcp;
 mod oauth_followups;
 mod offline_side_effects;
 mod outreach_shadow_wiring;
@@ -1977,12 +1978,14 @@ async fn main() {
 
     // Deadlock-Pause: Mod-Rechte ruhen lassen, wenn ein Partner seit zwei
     // Monaten kein Deadlock streamt, und beim Comeback zurückholen.
-    token_lifecycle_wiring::spawn_deadlock_pause_scheduler(
+    // Der Reactor kommt zurück, damit der MCP-Connector denselben Lauf außer
+    // der Reihe auslösen kann statt einen zweiten aufzubauen.
+    let deadlock_pause_reactor = token_lifecycle_wiring::spawn_deadlock_pause_scheduler(
         &supervisor,
         pool.clone(),
         &settings.broker,
         moderator_remover.map(|r| r as Arc<dyn tb_raid::DeadlockPauseUnmodPort>),
-        bot_ban_status_probe,
+        bot_ban_status_probe.clone(),
     );
     let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
         scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
@@ -1992,6 +1995,22 @@ async fn main() {
         Some(Arc::new(InternalBulkReauthAdapter {
             store: tb_raid::ReauthAdminStore::new(pool.clone()),
         }));
+
+    // MCP-Connector (loopback-only, default 127.0.0.1:8891): zweite Oberfläche
+    // auf dieselben Ports und Handler wie die interne API, damit eine
+    // Claude-Sitzung den Bot ohne eigene Secrets verwalten kann. Ein Bind-Fehler
+    // kostet nur den Connector, nicht den Bot.
+    mcp::spawn(
+        &supervisor,
+        Arc::new(mcp::McpState::new(
+            pool.clone(),
+            tb_internal_api::DiscordRoleExt(discord_role.clone()),
+            tb_internal_api::ModeratorRemovalExt(moderator_removal.clone()),
+            bot_ban_status_probe,
+            deadlock_pause_reactor,
+        )),
+    );
+
     let app = build_internal_router(
         pool,
         token,
