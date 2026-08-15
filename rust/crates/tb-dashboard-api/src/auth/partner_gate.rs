@@ -25,6 +25,7 @@ use crate::auth::session::DashboardAuthState;
 const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/verwaltung",
     "/twitch/pricing",
+    "/twitch/old/pricing",
     "/twitch/abbo",
     "/twitch/abbo/bezahlen",
     "/twitch/abbo/kündigen",

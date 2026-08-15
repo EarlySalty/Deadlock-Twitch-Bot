@@ -1448,6 +1448,10 @@ pub fn build_v2_spa_pages_router() -> Router {
         )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
+            "/twitch/old/pricing",
+            get(spa::main_domain_spa_shell_handler),
+        )
+        .route(
             "/twitch/analyse",
             get(spa::legacy_analyse_root_redirect_handler),
         )

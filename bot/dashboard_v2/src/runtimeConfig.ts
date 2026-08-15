@@ -1,6 +1,7 @@
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
+  PREVIEW_PRICING_OLD_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   isPreviewModeEnabled,
@@ -97,7 +98,8 @@ export function isDemoDashboardPath(pathname: string): boolean {
       normalized === PREVIEW_ANALYTICS_ROUTE ||
       normalized === PREVIEW_HOME_ROUTE ||
       normalized === PREVIEW_VERWALTUNG_ROUTE ||
-      normalized === PREVIEW_PRICING_ROUTE
+      normalized === PREVIEW_PRICING_ROUTE ||
+      normalized === PREVIEW_PRICING_OLD_ROUTE
     );
   }
   return (

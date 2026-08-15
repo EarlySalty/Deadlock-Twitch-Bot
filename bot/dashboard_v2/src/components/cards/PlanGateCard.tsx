@@ -1,6 +1,7 @@
-import { Lock, Sparkles } from 'lucide-react';
+import { useState } from 'react';
+import { Lock } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
-import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
+import { UnlockSheet } from '../pricing-v2/UnlockSheet';
 import type { FeatureId } from '../../types/billing';
 
 interface PlanGateCardProps {
@@ -10,34 +11,31 @@ interface PlanGateCardProps {
 }
 
 export function PlanGateCard({ featureId, title, children }: PlanGateCardProps) {
-  const { isFeatureLocked, isPreviewMode } = usePlan();
+  const { isFeatureLocked } = usePlan();
+  const [open, setOpen] = useState(false);
   const locked = isFeatureLocked(featureId);
 
   if (!locked) return <>{children}</>;
 
   return (
-    <div className="relative">
-      <div className="blur-sm pointer-events-none select-none opacity-50">
-        {children}
-      </div>
-      <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-xl backdrop-blur-[2px]">
-        <div className="text-center p-6">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white/5 border border-white/10 mb-3">
-            <Lock className="w-5 h-5 text-white/40" />
+    <>
+      <button
+        type="button"
+        className="relative block w-full text-left"
+        onClick={() => setOpen(true)}
+      >
+        <div className="pointer-events-none select-none opacity-50 blur-sm">{children}</div>
+        <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/20 backdrop-blur-[2px]">
+          <div className="p-6 text-center">
+            <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5">
+              <Lock className="h-5 w-5 text-white/40" />
+            </div>
+            <p className="text-sm font-medium text-white/70">{title}</p>
+            <p className="mt-1 text-xs text-white/40">Premium macht deine Zahlen sichtbar.</p>
           </div>
-          <p className="text-sm font-medium text-white/70">{title}</p>
-          <p className="text-xs text-white/40 mt-1">Mit dem Analyse-Zugang freischalten</p>
-          {isPreviewMode && (
-            <a
-              href={PREVIEW_PRICING_ROUTE}
-              className="inline-flex items-center gap-1 mt-3 px-3 py-1.5 rounded-lg bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30 transition-colors"
-            >
-              <Sparkles className="w-3 h-3" />
-              Freischalten
-            </a>
-          )}
         </div>
-      </div>
-    </div>
+      </button>
+      <UnlockSheet open={open} onClose={() => setOpen(false)} />
+    </>
   );
 }
