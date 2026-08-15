@@ -195,8 +195,13 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
     /// Kandidat ist nur, wer aktiv ist, einen gültigen Streamer-Token hat (ohne
     /// den kann Twitch den Entzug gar nicht ausführen) und nicht bereits wegen
     /// Ban oder Block pausiert. Als Referenzzeitpunkt zählt der letzte
-    /// Deadlock-Stream, ersatzweise der Beginn der Partnerschaft: wer nie
-    /// Deadlock gestreamt hat, soll nicht sofort beim ersten Sweep fliegen.
+    /// Deadlock-Stream.
+    ///
+    /// Wer in der erfassten Historie **nie** einen Deadlock-Stream hatte, bleibt
+    /// bewusst außen vor. Für den ist die Pause die falsche Antwort: sie sagt
+    /// "streamst du wieder Deadlock, ist der Bot zurück", obwohl es dort nie ein
+    /// "wieder" gab. Solche Kanäle gehören getrennt, und das ist eine
+    /// Entscheidung mit Ansage, kein Nebeneffekt eines Sweeps.
     pub async fn unmod_idle_channels(&self) -> u64 {
         let cutoff = (Utc::now() - chrono::Duration::days(self.pause_days))
             .format("%Y-%m-%d")
@@ -222,15 +227,16 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                AND OCTET_LENGTH(a.access_token_enc) > 0
                AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
                    NOT IN ('blocked', 'bot_banned')
-               AND COALESCE(
-                       (SELECT MAX(LEFT(s.started_at::text, 10)::date)
-                          FROM twitch_stream_sessions s
-                         WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
-                           AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
-                                OR LOWER(COALESCE(s.game_name, '')) = 'deadlock')),
-                       LEFT(NULLIF(TRIM(p.partnered_at), ''), 10)::date,
-                       DATE '1970-01-01'
-                   ) < $1::date
+               -- Der letzte Deadlock-Stream muss existieren UND alt genug sein.
+               -- Kein NULL-Fallback auf partnered_at: ohne je einen
+               -- Deadlock-Stream ist der Kanal kein Pausen-, sondern ein
+               -- Trenn-Fall und bleibt hier unangetastet.
+               AND (SELECT MAX(LEFT(s.started_at::text, 10)::date)
+                      FROM twitch_stream_sessions s
+                     WHERE LOWER(s.streamer_login) = LOWER(p.twitch_login)
+                       AND (s.had_deadlock_in_session::text IN ('1', 't', 'true')
+                            OR LOWER(COALESCE(s.game_name, '')) = 'deadlock'))
+                   < $1::date
              ORDER BY p.twitch_login
              LIMIT $2
             "#,
@@ -707,8 +713,16 @@ mod tests {
             true,
         )
         .await;
-        // Kanal C: streamt viel, aber kein Deadlock → fällig.
+        // Kanal C: hatte frueher Deadlock, streamt jetzt taeglich etwas
+        // anderes. Der Realfall, auf den die Pause zielt.
         seed_partner(&pool, "3", "andersspiel", long_ago).await;
+        seed_session(
+            &pool,
+            "andersspiel",
+            Utc::now() - chrono::Duration::days(120),
+            true,
+        )
+        .await;
         seed_session(
             &pool,
             "andersspiel",
@@ -751,6 +765,57 @@ mod tests {
         // Zweiter Lauf ist ein No-op: der Marker dedupliziert.
         assert_eq!(reactor.unmod_idle_channels().await, 0);
         assert_eq!(notifier.dms.lock().unwrap().len(), 2);
+    }
+
+    /// Ein Kanal ohne jeden Deadlock-Stream ist ein Trenn-Fall, kein Pausen-Fall.
+    /// Die Pausen-DM verspricht "streamst du wieder Deadlock, ist der Bot
+    /// zurueck" und waere dort schlicht falsch.
+    #[tokio::test]
+    async fn kanal_ohne_je_einen_deadlock_stream_wird_nicht_pausiert() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("dlp_nie_deadlock").await;
+        let long_ago = Utc::now() - chrono::Duration::days(400);
+
+        // Streamt aktiv, aber nie Deadlock.
+        seed_partner(&pool, "1", "anderesspiel", long_ago).await;
+        seed_session(
+            &pool,
+            "anderesspiel",
+            Utc::now() - chrono::Duration::days(2),
+            false,
+        )
+        .await;
+        // Gar keine Sessions erfasst.
+        seed_partner(&pool, "2", "niegesehen", long_ago).await;
+        // Kontrolle: hatte Deadlock, aber vor langer Zeit.
+        seed_partner(&pool, "3", "frueher", long_ago).await;
+        seed_session(
+            &pool,
+            "frueher",
+            Utc::now() - chrono::Duration::days(90),
+            true,
+        )
+        .await;
+
+        let notifier = Arc::new(RecordingNotifier::default());
+        let unmod = fake_unmod(UnmodOutcome::Done);
+        let reactor = reactor_with(
+            pool.clone(),
+            notifier.clone(),
+            unmod.clone(),
+            BotBanStatus::NotBanned,
+        );
+
+        assert_eq!(reactor.unmod_idle_channels().await, 1);
+        assert_eq!(
+            unmod.calls.lock().unwrap().clone(),
+            vec!["frueher".to_string()],
+            "nur der Kanal mit echter Deadlock-Historie wird pausiert"
+        );
+        assert_eq!(notifier.dms.lock().unwrap().len(), 1);
     }
 
     /// Ein fehlgeschlagener Entzug darf nicht als Pause gelten, sonst behält der
