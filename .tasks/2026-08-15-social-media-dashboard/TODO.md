@@ -45,10 +45,13 @@ Signals ohne Beweiskraft.
       Nach d2s Fix: auf 08cc9031+ rebasen, mergen, Test-Gate, deployen, DANACH
       FIREWORKS_MODEL aus ~/.config/deadlock/bots.env entfernen (Backup
       bots.env.bak-fwmodel) und Dienst neu starten. Bis dahin traegt der Env-Override.
-      Stand 2026-08-15 14:36: der Env-Wert ist von
-      accounts/fireworks/models/deepseek-v4-flash-0731 auf
-      accounts/fireworks/models/kimi-k3 geaendert, weil 0731 kalt ist und den
-      Concierge lahmgelegt hat. Der Wert traegt weiterhin allein.
+      Stand 2026-08-15 15:20: der Env-Wert bleibt
+      accounts/fireworks/models/deepseek-v4-flash-0731. Ein zwischenzeitlicher
+      Wechsel auf kimi-k3 ist auf Ansage des Nutzers zurueckgenommen: der Bot
+      bedient FAQ, Moderation und Concierge, dafuer ist die Flash-Klasse
+      richtig, ein Modellwechsel ist keine Agenten-Entscheidung. Der Cold Start
+      wird stattdessen ueber das Zeitlimit aufgefangen (Concierge 45 s statt
+      8 s, gleichauf mit dem HTTP-Versuch in dl-ai). Der Wert traegt allein.
       dl-ai hat gar keinen Resolver, nur einkompilierte Defaults, die auf das
       tote deepseek-v4-flash zeigen: dl-ai/src/lib.rs DEFAULT_FIREWORKS_MODEL,
       tb-llm/src/selection.rs und tb-engagement/src/crew_review.rs. Wenn der
