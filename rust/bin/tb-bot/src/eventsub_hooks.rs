@@ -44,7 +44,9 @@ use tb_raid::{
     TokenProvider,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
-use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome, SendOutcome};
+use tb_transport_twitch::{
+    AddModeratorOutcome, BanLookupOutcome, HelixClient, RemoveModeratorOutcome, SendOutcome,
+};
 
 use crate::auto_raid::OfflineRaidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
@@ -852,6 +854,60 @@ impl HelixModeratorProvisioner {
         self.bot_token = Some(bot_token);
         self
     }
+
+    /// Fragt Twitchs Bannliste des Kanals nach dem Bot. Liefert `None`, wenn
+    /// daraus keine Aussage folgt (kein Token, fehlender Scope, Fehler), dann
+    /// bleibt nur die Sendeprobe.
+    async fn ban_liste_fragen(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+    ) -> Option<ChatSendeProbe> {
+        let token = match self
+            .token_provider
+            .get_valid_token_unrestricted(twitch_user_id, Utc::now())
+            .await
+        {
+            Ok(Some(token)) => token,
+            _ => return None,
+        };
+        match self
+            .helix
+            .banned_user_status(twitch_user_id, &self.bot_user_id, &token)
+            .await
+        {
+            Ok(BanLookupOutcome::Frei) => {
+                tracing::info!(
+                    channel = twitch_login,
+                    "Bannliste: Bot steht nicht drauf, also nur die Mod-Rechte weg"
+                );
+                Some(ChatSendeProbe::Zugestellt)
+            }
+            Ok(BanLookupOutcome::Gebannt) => {
+                tracing::warn!(channel = twitch_login, "Bannliste: Bot ist gebannt");
+                Some(ChatSendeProbe::Gebannt)
+            }
+            Ok(BanLookupOutcome::Timeout { expires_at }) => {
+                tracing::warn!(
+                    channel = twitch_login,
+                    %expires_at,
+                    "Bannliste: Bot ist getimeoutet"
+                );
+                Some(ChatSendeProbe::Timeout {
+                    hinweis: format!("Timeout laut Twitch bis {expires_at}"),
+                })
+            }
+            Ok(BanLookupOutcome::NichtErlaubt) => None,
+            Ok(BanLookupOutcome::Fehler { status, body }) => {
+                tracing::warn!(channel = twitch_login, status, %body, "Bannliste nicht lesbar");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(%error, channel = twitch_login, "Bannlisten-Abfrage fehlgeschlagen");
+                None
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1093,6 +1149,18 @@ impl BotBanStatusProbe for HelixModeratorProvisioner {
     /// deshalb geht eine kurze Zeile in den Chat, und auch das nur, solange der
     /// Kanal offline ist.
     async fn chat_sende_probe(&self, twitch_user_id: &str, twitch_login: &str) -> ChatSendeProbe {
+        // Erst der Weg ohne Nebenwirkung: Twitchs Bannliste sagt dasselbe, und
+        // zwar ohne dass jemand etwas im Chat sieht. Sie verlangt allerdings
+        // einen Scope, den nicht jeder Streamer-Token trägt.
+        match self.ban_liste_fragen(twitch_user_id, twitch_login).await {
+            Some(ergebnis) => return ergebnis,
+            None => {
+                tracing::debug!(
+                    channel = twitch_login,
+                    "Bannliste nicht abfragbar, fällt auf die Sendeprobe zurück"
+                );
+            }
+        }
         let Some(bot_token_manager) = &self.bot_token else {
             tracing::debug!(
                 channel = twitch_login,

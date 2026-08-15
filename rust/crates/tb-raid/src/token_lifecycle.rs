@@ -290,23 +290,45 @@ pub fn admin_bot_banned_text(
 pub fn admin_mod_rechte_weg_text(
     twitch_login: &str,
     twitch_user_id: &str,
-    letzte_chatzeile: &str,
+    beleg: ModRechteBeleg<'_>,
 ) -> (String, String) {
     let title = format!("🔧 Kein Moderator mehr in {twitch_login}");
+    // Den Beweis nennen, den es wirklich gibt. Die zugestellte Testzeile ist
+    // hart, empfangener Chat ist ein Indiz, und so steht es auch da.
+    let (beweis, sicherheit) = match beleg {
+        ModRechteBeleg::ProbeZugestellt => (
+            "Eine Testzeile in den Chat kam durch, Twitch hat sie nicht \
+             verworfen."
+                .to_string(),
+            "Ein Bann oder Timeout ist damit ausgeschlossen.",
+        ),
+        ModRechteBeleg::ChatLaeuftWeiter { letzte_chatzeile } => (
+            format!("Aus dem Kanal kommen weiter Chat-Nachrichten an, zuletzt {letzte_chatzeile}."),
+            "Das spricht gegen einen Bann, beweist ihn aber nicht: geprüft wurde \
+             nur, was ankommt, nicht was rausgeht.",
+        ),
+    };
     let description = format!(
         "In **{twitch_login}** kann der Bot sich nicht mehr als Moderator \
-         einsetzen. Ein Bann ist es nicht: aus dem Kanal kommen weiter \
-         Chat-Nachrichten an, zuletzt {letzte_chatzeile}.\n\n\
+         einsetzen. {beweis} {sicherheit}\n\n\
          Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
          User ID: `{twitch_user_id}`\n\n\
-         **Zustand:** Der Bot liest mit, hat aber keine Mod-Rechte. Ursache ist \
-         die Streamer-Autorisierung (abgelaufen oder ohne den nötigen Scope). \
-         Behoben wird das durch eine neue Autorisierung unter \
-         {DEFAULT_REAUTH_URL}.\n\n\
+         **Zustand:** keine Mod-Rechte. Ursache ist die Streamer-Autorisierung \
+         (abgelaufen oder ohne den nötigen Scope). Behoben wird das durch eine \
+         neue Autorisierung unter {DEFAULT_REAUTH_URL}.\n\n\
          Pause, Blacklist und Streamer-DM bleiben aus. Diese Meldung kommt genau \
          einmal und erst wieder, wenn sich der Zustand ändert."
     );
     (title, description)
+}
+
+/// Worauf sich die Aussage "kein Bann" stützt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModRechteBeleg<'a> {
+    /// Die Testzeile kam durch. Harter Beweis.
+    ProbeZugestellt,
+    /// Aus dem Kanal kommt weiter Chat an. Indiz.
+    ChatLaeuftWeiter { letzte_chatzeile: &'a str },
 }
 
 /// Admin-Meldung: Moderator-Einsetzung abgelehnt, und aus dem Kanal kam schon
@@ -1213,9 +1235,13 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                     }
                     let chat = self.letzte_chatzeile(&twitch_login).await;
                     let mut timeout_hinweis = String::new();
+                    let mut probe_zugestellt = false;
                     let zustand = match probe.chat_sende_probe(&twitch_user_id, &twitch_login).await
                     {
-                        ChatSendeProbe::Zugestellt => ProbeZustand::ModRechteWeg,
+                        ChatSendeProbe::Zugestellt => {
+                            probe_zugestellt = true;
+                            ProbeZustand::ModRechteWeg
+                        }
                         ChatSendeProbe::Gebannt => ProbeZustand::Gebannt,
                         ChatSendeProbe::Timeout { hinweis } => {
                             timeout_hinweis = hinweis;
@@ -1230,11 +1256,17 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                     {
                         detected += 1;
                         let (title, description) = match zustand {
-                            ProbeZustand::ModRechteWeg => admin_mod_rechte_weg_text(
-                                &twitch_login,
-                                &twitch_user_id,
-                                &chat.beschreibung(),
-                            ),
+                            ProbeZustand::ModRechteWeg => {
+                                let chat_text = chat.beschreibung();
+                                let beleg = if probe_zugestellt {
+                                    ModRechteBeleg::ProbeZugestellt
+                                } else {
+                                    ModRechteBeleg::ChatLaeuftWeiter {
+                                        letzte_chatzeile: &chat_text,
+                                    }
+                                };
+                                admin_mod_rechte_weg_text(&twitch_login, &twitch_user_id, beleg)
+                            }
                             ProbeZustand::ModRechteWegStill => admin_mod_rechte_weg_still_text(
                                 &twitch_login,
                                 &twitch_user_id,
@@ -1353,7 +1385,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                                      THEN twitch_ban_probe_zustand.proben + 1
                                      ELSE 1
                                  END
-              RETURNING (xmax = 0 OR proben = 1) AS gewechselt
+              RETURNING (proben = 1) AS gewechselt
             "#,
         )
         .bind(twitch_user_id)
@@ -2210,6 +2242,13 @@ mod tests {
                 reauth_notified_at timestamptz)",
             "CREATE TABLE twitch_raid_blacklist (
                 target_id text, target_login text PRIMARY KEY, reason text, added_at text)",
+            "CREATE TABLE twitch_ban_probe_zustand (
+                twitch_user_id text PRIMARY KEY, twitch_login text NOT NULL DEFAULT '',
+                zustand text NOT NULL, seit timestamptz NOT NULL DEFAULT NOW(),
+                letzte_probe timestamptz NOT NULL DEFAULT NOW(),
+                proben bigint NOT NULL DEFAULT 1)",
+            "CREATE TABLE twitch_chat_messages (
+                message_ts timestamptz NOT NULL, streamer_login text NOT NULL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3133,6 +3172,148 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(blacklisted, 0, "kein Blacklist-Eintrag");
+    }
+
+    /// Der Kern der Beschwerde: derselbe Zustand darf nur einmal gemeldet
+    /// werden, egal wie oft der stündliche Sweep darüberläuft.
+    #[tokio::test]
+    async fn gleicher_zustand_wird_nur_einmal_gemeldet() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_zustand_dedup").await;
+        seed_verdaechtigen_kanal(&pool).await;
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Banned)));
+
+        assert_eq!(reactor.detect_bot_bans().await, 1, "erste Meldung");
+        assert_eq!(reactor.detect_bot_bans().await, 0, "keine Wiederholung");
+        assert_eq!(reactor.detect_bot_bans().await, 0, "auch beim dritten Lauf");
+        assert_eq!(
+            notifier.admin_embeds.load(Ordering::SeqCst),
+            1,
+            "genau eine Admin-Meldung für denselben Zustand"
+        );
+
+        let proben: i64 = sqlx::query_scalar(
+            "SELECT proben FROM twitch_ban_probe_zustand WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(proben >= 2, "Wiederholungen zählen still mit: {proben}");
+    }
+
+    /// Ist der Bot wieder Moderator, gibt es genau eine Entwarnung, und
+    /// gesunde Kanäle ohne vorherige Meldung bleiben still.
+    #[tokio::test]
+    async fn entwarnung_kommt_einmal_und_nur_nach_einer_meldung() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_zustand_entwarnung").await;
+        seed_verdaechtigen_kanal(&pool).await;
+
+        // Gesunder Kanal, der nie gemeldet war: kein Wort.
+        let notifier = Arc::new(CountingNotifier::default());
+        let gesund = TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::NotBanned)));
+        gesund.detect_bot_bans().await;
+        assert_eq!(
+            notifier.admin_embeds.load(Ordering::SeqCst),
+            0,
+            "ein gesunder Kanal meldet nichts"
+        );
+
+        // Erst melden, dann gesunden: eine Meldung, eine Entwarnung.
+        let kaputt = TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Banned)));
+        kaputt.detect_bot_bans().await;
+        gesund.detect_bot_bans().await;
+        gesund.detect_bot_bans().await;
+        assert_eq!(
+            notifier.admin_embeds.load(Ordering::SeqCst),
+            2,
+            "eine Meldung plus genau eine Entwarnung"
+        );
+        let offen: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_ban_probe_zustand WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(offen, 0, "Zustand ist abgeräumt");
+    }
+
+    /// Unknown ist ein Netzproblem und darf weder melden noch den gemerkten
+    /// Zustand abräumen.
+    #[tokio::test]
+    async fn unklarer_status_meldet_nichts_und_loescht_nichts() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_zustand_unknown").await;
+        seed_verdaechtigen_kanal(&pool).await;
+
+        let notifier = Arc::new(CountingNotifier::default());
+        TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Banned)))
+            .detect_bot_bans()
+            .await;
+        TokenLifecycleReactor::new(pool.clone(), notifier.clone())
+            .with_bot_ban_status_probe(Arc::new(FixedBotBanStatus(BotBanStatus::Unknown)))
+            .detect_bot_bans()
+            .await;
+
+        assert_eq!(
+            notifier.admin_embeds.load(Ordering::SeqCst),
+            1,
+            "Unknown meldet nicht"
+        );
+        let offen: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_ban_probe_zustand WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(offen, 1, "Unknown räumt den Zustand nicht ab");
+    }
+
+    /// Ein Partner mit gesundem Token, den die Probe als auffällig meldet.
+    async fn seed_verdaechtigen_kanal(pool: &PgPool) {
+        sqlx::query(
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS deadlock_pause_unmodded_at text",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('1', 'verdaechtig', 'active')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        seed_raid_auth(
+            pool,
+            "1",
+            "verdaechtig",
+            true,
+            false,
+            Utc::now() + chrono::Duration::days(1),
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id)
+             VALUES ('1', 'verdaechtig', '4711')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     /// Der aktive Ban-Sweep probt über `add_channel_moderator` und setzt den Bot

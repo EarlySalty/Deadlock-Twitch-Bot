@@ -22,6 +22,21 @@ pub enum AddModeratorOutcome {
     Failed { status: u16, body: String },
 }
 
+/// Ausgang der Bann-Abfrage über `GET /moderation/banned`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BanLookupOutcome {
+    /// Steht nicht auf der Liste.
+    Frei,
+    /// Dauerhaft gebannt (kein `expires_at`).
+    Gebannt,
+    /// Befristet stumm, `expires_at` ist das Ende im ISO-Format.
+    Timeout { expires_at: String },
+    /// Der Token trägt den nötigen Scope nicht.
+    NichtErlaubt,
+    /// Andere Antwort, die keine Aussage erlaubt.
+    Fehler { status: u16, body: String },
+}
+
 /// Ausgang der Moderator-Entfernung (Gegenstück zu [`AddModeratorOutcome`]).
 ///
 /// Genutzt vom bewussten Trennen: der Bot gibt die Mod-Rechte in einem Kanal ab.
@@ -120,6 +135,69 @@ impl HelixClient {
                     })
                 }
             }
+        }
+    }
+
+    /// Fragt, ob `user_id` im Kanal `broadcaster_id` gebannt oder getimeoutet
+    /// ist (`GET /moderation/banned`).
+    ///
+    /// Der einzige Weg, der die beiden auseinanderhält, ohne im fremden Chat zu
+    /// schreiben: Twitch liefert für Timeouts ein `expires_at`, für Banns nicht.
+    /// Er verlangt den Broadcaster-Token mit `moderation:read` oder
+    /// `moderator:manage:banned_users`. Fehlt der Scope, kommt
+    /// [`BanLookupOutcome::NichtErlaubt`] zurück und der Aufrufer muss anders
+    /// weiterkommen.
+    pub async fn banned_user_status(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+        user_token: &str,
+    ) -> Result<BanLookupOutcome, HelixError> {
+        let resp = self
+            .get_with_user_token("/moderation/banned", user_token)
+            .query(&[("broadcaster_id", broadcaster_id), ("user_id", user_id)])
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        if status == 401 || status == 403 {
+            return Ok(BanLookupOutcome::NichtErlaubt);
+        }
+        if !(200..300).contains(&status) {
+            let body = resp.text().await.unwrap_or_default();
+            return Ok(BanLookupOutcome::Fehler {
+                status,
+                body: body.chars().take(200).collect(),
+            });
+        }
+        let body: serde_json::Value = match resp.json().await {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(%error, "Twitch Get-Banned-Users: Antwort nicht lesbar");
+                return Ok(BanLookupOutcome::Fehler {
+                    status,
+                    body: String::new(),
+                });
+            }
+        };
+        let Some(eintrag) = body
+            .get("data")
+            .and_then(|data| data.as_array())
+            .and_then(|data| data.first())
+        else {
+            return Ok(BanLookupOutcome::Frei);
+        };
+        // `expires_at` ist bei einem dauerhaften Bann leer, bei einem Timeout
+        // trägt es das Ende.
+        match eintrag
+            .get("expires_at")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(expires_at) => Ok(BanLookupOutcome::Timeout {
+                expires_at: expires_at.to_string(),
+            }),
+            None => Ok(BanLookupOutcome::Gebannt),
         }
     }
 

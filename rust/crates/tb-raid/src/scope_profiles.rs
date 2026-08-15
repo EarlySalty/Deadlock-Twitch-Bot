@@ -29,6 +29,12 @@ pub const BASE_STREAMER_SCOPES: &[&str] = &[
     "channel:read:ads",
     "bits:read",
     "channel:read:redemptions",
+    // Lesend, nur für die Frage "ist der Bot hier gebannt oder getimeoutet".
+    // Ohne diesen Scope bleibt als Antwort nur eine Testzeile im fremden Chat.
+    // Bewusst nicht in `REQUIRED_SCOPES`: Bestandspartner sollen deswegen nicht
+    // als Re-Auth-Fall gelten, der Scope kommt bei der nächsten Autorisierung
+    // von allein mit.
+    "moderation:read",
 ];
 
 /// Zusätzliche Scopes für Dashboard-Features (Python: `DASHBOARD_UPGRADE_SCOPES`).
@@ -51,6 +57,8 @@ pub const FULL_STREAMER_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    // Siehe BASE_STREAMER_SCOPES: lesend, klärt Bann gegen Timeout.
+    "moderation:read",
 ];
 
 /// Kritische Basis-Scopes, deren Fehlen den Bot-Betrieb verhindert
