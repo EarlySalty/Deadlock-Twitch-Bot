@@ -22,12 +22,13 @@ Der schnellste Weg ist der Discord — dort gibt es einen Support-Bereich, in de
 
 ### Wie lösche ich meinen Account oder widerrufe den Zugang?
 
-Du kannst den Bot-Zugang jederzeit über deine Twitch-Einstellungen widerrufen. Geh dazu in deine Twitch-Verbindungen und entferne die Deutsche Deadlock Community-Autorisierung. Für eine komplette Datenlöschung kontaktiere uns im Discord.
+Der saubere Weg führt über das Dashboard: unter Bot-Einstellungen sitzt ganz unten "Bot vom Kanal trennen". Damit gibt der Bot seine Moderator-Rechte ab und stellt alle Funktionen für deinen Kanal ein. Für eine komplette Datenlöschung melde dich im Discord.
 
-- Twitch-Autorisierung widerrufen: Twitch → Einstellungen → Verbindungen → Deutsche Deadlock Community entfernen.
-- Nach dem Widerruf hat der Bot keinen Zugriff mehr auf deinen Account.
-- Für eine vollständige Löschung deiner gespeicherten Daten melde dich im Discord.
+- Hast du den Bot vorher gebannt, hebe den Bann erst auf: gebannt kann er seine Mod-Rechte nicht abgeben und bleibt sonst als Moderator stehen.
+- Nur die Twitch-Autorisierung zu widerrufen reicht nicht: die Mod-Rechte bleiben dann bestehen, und wir schreiben dich an, weil die Verbindung als kaputt gilt.
+- Nach dem Trennen kannst du jederzeit wieder Partner werden.
 
+[Bot trennen](https://deutsche-deadlock-community.de/twitch/verwaltung#bot)
 [Discord (Support)](https://discord.gg/z5TfVHuQq2)
 
 ### Wo finde ich Impressum, Datenschutz und AGB?
