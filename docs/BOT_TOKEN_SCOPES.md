@@ -1,8 +1,20 @@
 # Bot Token Scopes
 
-Stand: 2026-03-17
+Stand: 2026-08-15
 
-Dieses Dokument beschreibt den aktuell gewollten Scope-Satz fuer den zentralen Bot-Account, wie der Token neu erzeugt wurde und wo er im lokalen Setup liegt.
+Dieses Dokument beschreibt den aktuell gewollten Scope-Satz fuer den zentralen Bot-Account, wie der Token neu erzeugt wird und wo er im laufenden Setup liegt.
+
+Die verbindliche Liste im Code ist `REQUIRED_BOT_SCOPES` in `rust/bin/tb-bot/src/chat_wiring.rs`. Der Bot prueft sie beim Boot gegen den validierten Token und warnt pro fehlendem Scope. Aendert sich diese Liste, muss der CLI-Befehl weiter unten mitgezogen werden.
+
+## Nachtrag 2026-08-15
+
+Der Scope-Satz wurde um die Pfade erweitert, die der Rust-Bot inzwischen wirklich faehrt:
+
+- `user:bot` und `user:manage:whispers` waren im Boot-Check schon Pflicht, standen aber nicht im CLI-Befehl.
+- `user:read:whispers` kommt neu dazu, damit der Bot Antworten von Streamern auf seine Whispers lesen kann.
+- `moderator:manage:banned_users`, `moderator:manage:shoutouts` und `moderator:read:followers` sind fuer die Moderator-Telemetrie-EventSubs (`tb_monitoring::MODERATOR_TELEMETRY_SUBSCRIPTIONS`) verbindlich, nicht mehr nur nice to have. Ohne sie ueberspringt der Reconcile den Bot-Pfad und faellt auf den Broadcaster-Token zurueck.
+
+Diese Scopes wirken erst nach einer neuen Autorisierung des Bot-Accounts (siehe "Re-Auth ausloesen").
 
 ## Ergebnis vom 17.03.2026
 
@@ -24,9 +36,12 @@ Dieses Dokument beschreibt den aktuell gewollten Scope-Satz fuer den zentralen B
 Der Bot bekommt absichtlich einen grosszuegigen Moderator-Scope-Satz:
 
 - alle offiziellen `moderator:*`-Scopes, die Twitch am 2026-03-17 dokumentiert
-- plus die zentralen Chat-Scopes:
+- plus die zentralen Chat- und Whisper-Scopes:
+  - `user:bot`
   - `user:read:chat`
   - `user:write:chat`
+  - `user:manage:whispers`
+  - `user:read:whispers`
 
 Hintergrund:
 
@@ -36,10 +51,13 @@ Hintergrund:
 
 ## Voller Scope-Satz
 
-### Chat
+### Chat und Whisper
 
+- `user:bot`
 - `user:read:chat`
 - `user:write:chat`
+- `user:manage:whispers`
+- `user:read:whispers`
 
 ### Moderator Read
 
@@ -77,34 +95,38 @@ Hintergrund:
 
 ## Code-pfade, die heute direkt davon profitieren
 
-- Chatters-Fallback ueber Bot-Token:
-  - `bot/analytics/mixin.py`
-  - braucht `moderator:read:chatters`
-- Follower-Fallback ueber Bot-Token:
-  - `bot/monitoring/sessions_mixin.py`
-  - `bot/raid/bot.py`
+- Boot-Pruefung des Bot-Tokens:
+  - `rust/bin/tb-bot/src/chat_wiring.rs` (`REQUIRED_BOT_SCOPES`)
+- Chat lesen und senden, Whisper senden:
+  - `rust/crates/tb-chat/src/moderation.rs`, `rust/crates/tb-chat/src/api.rs`, `rust/crates/tb-transport-twitch/src/chat.rs`
+  - braucht `user:bot`, `user:read:chat`, `user:write:chat`, `user:manage:whispers`
+- Antworten von Streamern auf Bot-Whispers lesen:
+  - braucht `user:read:whispers` (Twitch-EventSub `user.whisper.message`)
+  - der Empfangspfad wird nachgezogen, der Scope muss vorher im Token stehen
+- Moderator-Telemetrie-EventSub ueber den Bot-Token:
+  - `rust/crates/tb-monitoring/src/subscriptions.rs` (`MODERATOR_TELEMETRY_SUBSCRIPTIONS`)
+  - braucht:
+    - `moderator:manage:banned_users` (`channel.ban`, `channel.unban`)
+    - `moderator:manage:shoutouts` (`channel.shoutout.create`, `channel.shoutout.receive`)
+    - `moderator:read:followers` (`channel.follow` v2)
+- Follower-Total ueber Bot-Token:
+  - `rust/crates/tb-raid/src/bot_oauth.rs` (`can_read_followers`), `rust/bin/tb-bot/src/wiring.rs`
   - braucht `moderator:read:followers`
-- Moderator-EventSub ueber Bot-Token:
-  - `bot/monitoring/eventsub_mixin.py`
-  - braucht unter anderem:
-    - `moderator:manage:banned_users`
-    - `moderator:manage:shoutouts`
-    - `moderator:read:followers`
-- Chat senden:
-  - `bot/chat/moderation.py`
-  - braucht `user:write:chat`
-- Chat lesen / Chat-EventSub:
-  - `bot/chat/connection.py`
-  - braucht `user:read:chat`
+- Chatters-Quelle ueber Bot-Token:
+  - `rust/crates/tb-chat/src/promos.rs` (`has_chatters_scope`), `rust/bin/tb-bot/src/chatters_wiring.rs`
+  - braucht `moderator:read:chatters`
 - Dashboard-Announcements:
-  - `bot/chat/moderation.py`
+  - `rust/crates/tb-chat/src/moderation.rs`
   - braucht `moderator:manage:announcements`
+
+Nicht zu verwechseln mit den Broadcaster-Scopes der Streamer
+(`rust/crates/tb-analytics/src/system_oauth_scopes.rs`, `REQUIRED_SCOPES`) und
+mit dem separaten Engagement-Sende-Account
+(`rust/crates/tb-engagement/src/sender_auth.rs`, eigener Token, eigener
+Authorize-Flow). Das sind drei getrennte Tokens.
 
 ## Bewusst nicht im neuen Bot-Token enthalten
 
-- `user:bot`
-  - bleibt optional
-  - wird erst noetig, wenn der Chat-Flow auf App-Token-EventSub umgebaut wird
 - `user:read:follows`
   - wird nur fuer den Best-Effort-Follow-Check verwendet
   - kein Produktionsblocker
@@ -112,38 +134,41 @@ Hintergrund:
   - gehoeren fachlich nicht zum zentralen Moderator-Bot-Token
   - laufen streamer-seitig oder sind fuer den Bot derzeit nicht kritisch
 
-## Reproduzierbarer CLI-Befehl
+## Re-Auth ausloesen
 
-```powershell
-twitch token -u -s "moderator:manage:announcements moderator:manage:automod moderator:read:automod_settings moderator:manage:automod_settings moderator:read:banned_users moderator:manage:banned_users moderator:read:blocked_terms moderator:manage:blocked_terms moderator:read:chat_messages moderator:manage:chat_messages moderator:read:chat_settings moderator:manage:chat_settings moderator:read:chatters moderator:read:followers moderator:read:guest_star moderator:manage:guest_star moderator:read:moderators moderator:read:shield_mode moderator:manage:shield_mode moderator:read:shoutouts moderator:manage:shoutouts moderator:read:suspicious_users moderator:manage:suspicious_users moderator:read:unban_requests moderator:manage:unban_requests moderator:read:vips moderator:read:warnings moderator:manage:warnings user:read:chat user:write:chat"
+Ein Refresh aendert die Scopes nie. Neue Scopes kommen nur ueber eine frische
+Autorisierung des Bot-Accounts `deutschedeadlockcommunity`. Es gibt dafuer
+bewusst keinen Endpunkt im Bot: der Bot liest seinen Token nur aus der Env
+(`TWITCH_BOT_TOKEN`, `TWITCH_BOT_REFRESH_TOKEN`, gefuellt aus Infisical) und
+schreibt Rotationen best effort dorthin zurueck (ADR 0005). Die Erst-Autorisierung
+laeuft manuell.
+
+1. Im Browser als `deutschedeadlockcommunity` bei Twitch angemeldet sein, dann
+   die Twitch CLI mit Client-ID und Secret der Bot-App verbinden
+   (`twitch configure`, Redirect `http://localhost:3000` muss in der App
+   eingetragen sein).
+2. Token mit dem vollen Scope-Satz ziehen:
+
+```bash
+twitch token -u -s "moderator:manage:announcements moderator:manage:automod moderator:read:automod_settings moderator:manage:automod_settings moderator:read:banned_users moderator:manage:banned_users moderator:read:blocked_terms moderator:manage:blocked_terms moderator:read:chat_messages moderator:manage:chat_messages moderator:read:chat_settings moderator:manage:chat_settings moderator:read:chatters moderator:read:followers moderator:read:guest_star moderator:manage:guest_star moderator:read:moderators moderator:read:shield_mode moderator:manage:shield_mode moderator:read:shoutouts moderator:manage:shoutouts moderator:read:suspicious_users moderator:manage:suspicious_users moderator:read:unban_requests moderator:manage:unban_requests moderator:read:vips moderator:read:warnings moderator:manage:warnings user:bot user:read:chat user:write:chat user:manage:whispers user:read:whispers"
 ```
 
-Danach die Rueckgabe nicht in Dateien loggen, sondern direkt in den Credential Store schreiben.
+3. Ergebnis gegen `https://id.twitch.tv/oauth2/validate` pruefen und die
+   Scope-Liste mit `REQUIRED_BOT_SCOPES` abgleichen.
+4. Access- und Refresh-Token in Infisical (`http://127.0.0.1:8080`) unter
+   `TWITCH_BOT_TOKEN` und `TWITCH_BOT_REFRESH_TOKEN` setzen. Nicht in Dateien
+   loggen und nicht in die Shell-History schreiben.
+5. Dienst neu starten, damit das alte Token-Paar aus dem RAM faellt:
 
-## Lokale Speicherung
-
-Der Runtime-Code liest Secrets aus `DeadlockBot` in Windows Credential Manager:
-
-- `TWITCH_BOT_TOKEN`
-- `TWITCH_BOT_REFRESH_TOKEN`
-- `TWITCH_BOT_CLIENT_ID`
-- optional `TWITCH_BOT_CLIENT_SECRET`
-
-Relevante Loader:
-
-- `bot/secret_store.py`
-- `bot/api/token_manager.py`
-- `bot/chat/tokens.py`
-
-## Nach der Re-Auth
-
-Wenn die Twitch-Runtime bereits laeuft, sollte sie nach dem Schreiben des neuen
-Access-/Refresh-Tokens neu gestartet werden. Sonst haelt der Prozess unter
-Umstaenden noch das alte Token-Paar im RAM.
-
-```powershell
-Restart-Service -Name "Deadlock-twitch-bot-service","Deadlock-twitch-dashboard-service" -Force
+```bash
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart deadlock-twitch-bot-rust.service
 ```
+
+6. Im Log pruefen, dass beim Boot keine Zeile `Bot-Token ohne Scope ...` mehr
+   auftaucht.
+
+Der Dienst liest die Secrets beim Start ueber `rust/scripts/run_tb_bot_service.sh`
+und `dl-infisical-env --profile all`.
 
 ## Offizielle Referenzen
 

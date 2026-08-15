@@ -535,6 +535,34 @@ pub struct ChatRuntime {
     supervisor: TaskSupervisor,
 }
 
+/// Scope-Satz, den der Bot-User-Token tragen muss. Das ist die eine Liste, an
+/// der sich die Re-Auth des Bot-Accounts orientiert (Doku:
+/// `docs/BOT_TOKEN_SCOPES.md`); ein fehlender Scope wird beim Boot einzeln
+/// gewarnt, weil Twitch die betroffenen Aufrufe sonst mit 403 abweist.
+///
+/// - `user:bot`, `user:read:chat`, `user:write:chat`: Chat-EventSub lesen und
+///   Nachrichten senden.
+/// - `user:manage:whispers`, `user:read:whispers`: Whisper an Streamer senden
+///   und deren Antworten wieder einlesen.
+/// - `moderator:manage:banned_users`, `moderator:manage:shoutouts`,
+///   `moderator:read:followers`: Moderator-Telemetrie-EventSubs, die über den
+///   Bot-Token als Moderator laufen
+///   (`tb_monitoring::MODERATOR_TELEMETRY_SUBSCRIPTIONS`).
+///
+/// Bewusst getrennt von den Broadcaster-Scopes der Streamer
+/// (`tb_analytics::system_oauth_scopes::REQUIRED_SCOPES`): das sind zwei
+/// verschiedene Tokens mit zwei verschiedenen Autorisierungswegen.
+const REQUIRED_BOT_SCOPES: &[&str] = &[
+    "user:bot",
+    "user:read:chat",
+    "user:write:chat",
+    "user:manage:whispers",
+    "user:read:whispers",
+    "moderator:manage:banned_users",
+    "moderator:manage:shoutouts",
+    "moderator:read:followers",
+];
+
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
 /// `None` = Chat bleibt aus (Python bedient weiter).
@@ -599,14 +627,11 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
         scopes = %scopes.join(" "),
         "Chat-Bot-Token validiert"
     );
-    for required in [
-        "user:bot",
-        "user:read:chat",
-        "user:write:chat",
-        "user:manage:whispers",
-    ] {
+    for required in REQUIRED_BOT_SCOPES {
         if !scopes.iter().any(|s| s == required) {
-            tracing::warn!("Bot-Token ohne Scope {required} — Chat-Funktionen eingeschränkt");
+            tracing::warn!(
+                "Bot-Token ohne Scope {required}: betroffene Funktionen bleiben eingeschränkt, Re-Auth nötig (docs/BOT_TOKEN_SCOPES.md)"
+            );
         }
     }
 
