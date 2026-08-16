@@ -2,13 +2,16 @@
 Description=Deadlock Twitch authorized stream coaching audit (live)
 After=network-online.target deadlock-stt-server.service
 Wants=network-online.target
-# Ohne den lokalen STT-Dienst laeuft die Warteschlange voll, ohne dass ein
-# einziger Block ausgewertet wird. Lieber gar nicht starten.
-Requires=deadlock-stt-server.service
+# Bewusst `Wants` statt `Requires`: der STT-Dienst soll mitstarten, aber sein
+# Ausfall darf das Audit nicht mitreissen. Mit `Requires` haette systemd das
+# Audit stillschweigend mitgestoppt - ohne Fehlerexit, ohne DM, also genau die
+# Stille, gegen die der Rest des Dienstes gebaut ist. Faellt der STT-Dienst aus,
+# laeuft das Audit weiter und meldet nach zwanzig stummen Bloecken selbst.
+Wants=deadlock-stt-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Documents/Deadlock-Twitch-Bot
+WorkingDirectory=%h/repos/Deadlock-Twitch-Bot
 
 # Bewusst kein EnvironmentFile: die gemeinsame bots.env kann Environment-Zeilen
 # ueberschreiben, und dieser Dienst haengt an genau diesen Werten - Kanaele,
@@ -18,7 +21,7 @@ WorkingDirectory=%h/Documents/Deadlock-Twitch-Bot
 # Kanaele stehen hier und nicht im Binaerprogramm: wer aufgenommen wird, soll
 # in der Unit sichtbar sein.
 Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
-Environment=STREAM_AUDIT_OUTPUT_DIR=%h/Documents/Deadlock-Twitch-Bot/data/stream_coaching_audits
+Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
 
 # Transkription bleibt lokal. Zeigt diese URL woandershin, bricht der Start ab;
 # nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
@@ -42,11 +45,20 @@ UMask=0077
 # Regelpruefung, und jeder Bericht traegt "NICHT GELAUFEN". Raus gehen
 # geschwaerzte Transkriptausschnitte - nie Audio.
 Environment=STREAM_AUDIT_ALLOW_REMOTE_LLM=1
+
+# Dasselbe Modell wie der Twitch-Bot, der es aus bots.env bekommt. Diese Unit
+# laedt bewusst kein EnvironmentFile, Infisical fuehrt den Wert nicht, also
+# griff hier bisher der einkompilierte Default deepseek-v4-flash - und der
+# existiert bei Fireworks nicht mehr. Ergebnis war HTTP 404 bei jedem Block:
+# nur Regelpruefung, "NICHT GELAUFEN" im Bericht, Aufnahmen blieben liegen.
+# Wird das Modell gewechselt, muss es hier und in bots.env zusammen wandern.
+Environment=FIREWORKS_MODEL=accounts/fireworks/models/deepseek-v4-flash-0731
+
 LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
 
 # Secrets kommen ueber denselben Infisical-Wrapper wie beim Twitch-Bot; der
 # Service-Token liegt in systemd-Credentials, nicht in der Umgebung.
-ExecStart=%h/Documents/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
+ExecStart=%h/repos/Deadlock-Twitch-Bot/rust/scripts/run_stream_audit_service.sh
 
 Restart=on-failure
 RestartSec=30
