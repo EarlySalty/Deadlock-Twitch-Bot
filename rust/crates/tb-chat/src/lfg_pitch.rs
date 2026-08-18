@@ -21,7 +21,20 @@ const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub const LFG_PITCH_REPLY: &str =
-    "@{chatter} Schau gerne mal in unsere Community rein: {invite} da findest du jederzeit passende Mitspieler :)";
+    "@{chatter} Mitspieler findest du auf Discord, Kanal Mitspieler Suche: {invite}";
+
+#[cfg(test)]
+mod lfg_copy_tests {
+    #[test]
+    fn lfg_pitch_hat_invite_und_keinen_gedankenstrich() {
+        let text = super::LFG_PITCH_REPLY;
+        assert!(text.contains("{invite}"));
+        assert!(text.contains("{chatter}"));
+        assert!(!text.contains('\u{2014}'));
+        assert!(!text.contains('\u{2013}'));
+        assert!(!text.contains(" - "));
+    }
+}
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
