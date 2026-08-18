@@ -52,6 +52,7 @@ pub mod pending_raids;
 pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
+pub mod raid_message_log;
 pub mod raid_messaging;
 pub mod reauth_admin;
 pub mod recruitment_messaging;

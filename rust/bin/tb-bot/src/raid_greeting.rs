@@ -9,6 +9,7 @@ use tb_monitoring::{LiveStateStore, WriteStats};
 use tb_raid::alias_store::{AliasGroup, AliasStore};
 use tb_raid::courtesy::{classify, should_remind, CourtesyClass, CourtesyOutcome, CourtesySummary};
 use tb_raid::courtesy_store::{CourtesyEvent, CourtesyStore, ObservationSource};
+use tb_raid::raid_message_log::{GreetingObservation, RaidMessageLog};
 use tb_raid::{RaidGreetingMonitorPort, RaidGreetingRegistration};
 
 // ponytail: 20 Min Kulanz; Pending ist prozess-lokal, Neustart verwirft es konservativ: lieber kein Whisper als ein falscher Vorwurf.
@@ -114,6 +115,57 @@ impl CourtesyRecorder for DbCourtesyRecorder {
     }
 }
 
+/// Gleicht die Begrüßung am Fensterende gegen das persistierte Chatlog ab.
+/// Als Trait, damit der Monitor ohne Datenbank testbar bleibt.
+#[async_trait::async_trait]
+pub trait RaidGreetingLog: Send + Sync {
+    /// Nachrichten des Raiders (inkl. Zweit-Accounts) im Zielchat seit `since`.
+    /// `None` = nicht messbar (Kanal nicht erfasst oder DB-Fehler); daraus darf
+    /// **nicht** auf Schweigen geschlossen werden.
+    async fn observe(
+        &self,
+        target_login: &str,
+        raider_logins: &[String],
+        raider_ids: &[String],
+        since: DateTime<Utc>,
+    ) -> Option<GreetingObservation>;
+}
+
+/// Postgres-Implementierung über den [`RaidMessageLog`].
+pub struct DbRaidGreetingLog {
+    store: RaidMessageLog,
+}
+
+impl DbRaidGreetingLog {
+    pub fn new(store: RaidMessageLog) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait::async_trait]
+impl RaidGreetingLog for DbRaidGreetingLog {
+    async fn observe(
+        &self,
+        target_login: &str,
+        raider_logins: &[String],
+        raider_ids: &[String],
+        since: DateTime<Utc>,
+    ) -> Option<GreetingObservation> {
+        match self
+            .store
+            .observe(target_login, raider_logins, raider_ids, since)
+            .await
+        {
+            Ok(observation) => observation,
+            Err(error) => {
+                // Konservativ: ein DB-Schluckauf ist keine Aussage über Schweigen.
+                tracing::warn!(%error, "Chatlog-Abgleich der Raid-Begrüßung fehlgeschlagen");
+                None
+            }
+        }
+    }
+}
+
 /// Senke für das Raid-Ziel, das Twitch im Quellkanal meldet (`channel.moderate`).
 pub trait OutgoingRaidSink: Send + Sync {
     fn raid_retargeted(&self, registration: RaidGreetingRegistration);
@@ -202,6 +254,7 @@ pub struct RaidGreetingMonitor {
     live: Option<Arc<dyn RaidTargetLiveProbe>>,
     courtesy: Option<Arc<dyn CourtesyRecorder>>,
     aliases: Option<Arc<dyn AliasResolver>>,
+    message_log: Option<Arc<dyn RaidGreetingLog>>,
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
@@ -214,6 +267,7 @@ impl RaidGreetingMonitor {
             live: None,
             courtesy: None,
             aliases: None,
+            message_log: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
@@ -241,6 +295,15 @@ impl RaidGreetingMonitor {
         self
     }
 
+    /// Gleicht die Begrüßung am Fensterende zusätzlich gegen das persistierte
+    /// Chatlog ab. Das schließt die Blindstellen von EventSub (Nachricht vor der
+    /// Registrierung) und IRC (Beitritt erst nach Raid-Start): das Log trägt den
+    /// echten Zeitstempel und kennt diese Rennen nicht.
+    pub fn with_message_log(mut self, message_log: Arc<dyn RaidGreetingLog>) -> Self {
+        self.message_log = Some(message_log);
+        self
+    }
+
     #[cfg(test)]
     fn with_window(
         chat: Arc<dyn ChatApi>,
@@ -253,6 +316,7 @@ impl RaidGreetingMonitor {
             live: None,
             courtesy: None,
             aliases: None,
+            message_log: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window,
         }
@@ -513,6 +577,7 @@ impl RaidGreetingMonitor {
         let probe = self.probe.clone();
         let live = self.live.clone();
         let courtesy = self.courtesy.clone();
+        let message_log = self.message_log.clone();
         let greeting_window = self.greeting_window;
         tokio::spawn(async move {
             tokio::time::sleep(greeting_window).await;
@@ -541,14 +606,52 @@ impl RaidGreetingMonitor {
                 }
             }
 
-            let (stats, source) = merge_stats(item.eventsub_stats(), probe_stats);
+            let (live_stats, live_source) = merge_stats(item.eventsub_stats(), probe_stats);
+
+            // Chatlog-Abgleich: kennt weder das EventSub-Registrierungsrennen noch
+            // das IRC-Beitrittsrennen, weil jede Nachricht mit echtem Zeitstempel
+            // in der Tabelle steht. `None` heißt „nicht erfasst", nicht „still".
+            let db_obs = if let Some(log) = &message_log {
+                let mut raider_logins = vec![item.from_broadcaster_login.clone()];
+                let mut raider_ids = vec![item.from_broadcaster_id.clone()];
+                if let Some(group) = &item.alias_group {
+                    raider_logins.extend(group.logins.iter().cloned());
+                    raider_ids.extend(group.user_ids.iter().cloned());
+                }
+                log.observe(
+                    &item.to_broadcaster_login,
+                    &raider_logins,
+                    &raider_ids,
+                    item.started_at,
+                )
+                .await
+            } else {
+                None
+            };
+
+            // Höchste belastbare Zählung gewinnt: eine gesehene Nachricht ist
+            // immer ein Fakt, egal über welche Quelle. Das Chatlog ist die
+            // vollständigste Quelle für mitgeschriebene Kanäle.
+            let (count, span, source) = match (db_obs, live_source) {
+                (Some(db), Some(live_src)) => {
+                    if db.count >= live_stats.count {
+                        (db.count, db.span, Some(ObservationSource::Both))
+                    } else {
+                        (live_stats.count, live_stats.span(), Some(live_src))
+                    }
+                }
+                // Das Chatlog stammt aus demselben EventSub-Strom, nur persistiert.
+                (Some(db), None) => (db.count, db.span, Some(ObservationSource::EventSub)),
+                (None, Some(live_src)) => (live_stats.count, live_stats.span(), Some(live_src)),
+                (None, None) => (0, Duration::ZERO, None),
+            };
 
             // Einstufung: erst entscheiden, ob überhaupt messbar, dann in eine
             // der drei Klassen einsortieren. Nicht messbar ist ausdrücklich
             // nicht dasselbe wie geschwiegen.
-            let (outcome, unknown_reason) = if stats.count > 0 {
+            let (outcome, unknown_reason) = if count > 0 {
                 (
-                    CourtesyOutcome::Classified(classify(stats.count, stats.span())),
+                    CourtesyOutcome::Classified(classify(count, span)),
                     None,
                 )
             } else if source.is_none() {
@@ -593,8 +696,8 @@ impl RaidGreetingMonitor {
                 from = %item.from_broadcaster_login,
                 to = %item.to_broadcaster_login,
                 klasse = %outcome.as_str(),
-                nachrichten = stats.count,
-                spanne_sek = stats.span().as_secs(),
+                nachrichten = count,
+                spanne_sek = span.as_secs(),
                 quelle = source.map(ObservationSource::as_str).unwrap_or("keine"),
                 grund = unknown_reason.unwrap_or(""),
                 whisper = whisper_sent,
@@ -611,8 +714,8 @@ impl RaidGreetingMonitor {
                         to_broadcaster_login: item.to_broadcaster_login.clone(),
                         observed_from: item.started_at,
                         outcome,
-                        message_count: stats.count as i32,
-                        message_span_sec: stats.span().as_secs().min(i32::MAX as u64) as i32,
+                        message_count: count as i32,
+                        message_span_sec: span.as_secs().min(i32::MAX as u64) as i32,
                         observation_source: source,
                         unknown_reason: unknown_reason.map(str::to_string),
                         whisper_sent,
@@ -799,6 +902,29 @@ mod tests {
                 watched: Mutex::new(Vec::new()),
                 unwatched: Mutex::new(Vec::new()),
             }
+        }
+    }
+
+    struct FakeGreetingLog {
+        result: Option<GreetingObservation>,
+    }
+
+    impl FakeGreetingLog {
+        fn new(result: Option<GreetingObservation>) -> Self {
+            Self { result }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RaidGreetingLog for FakeGreetingLog {
+        async fn observe(
+            &self,
+            _target_login: &str,
+            _raider_logins: &[String],
+            _raider_ids: &[String],
+            _since: DateTime<Utc>,
+        ) -> Option<GreetingObservation> {
+            self.result
         }
     }
 
@@ -1034,6 +1160,46 @@ mod tests {
         assert!(whispers[0].1.to_lowercase().contains("hallo"));
         assert_eq!(probe.watched.lock().unwrap().as_slice(), ["ziel"]);
         assert_eq!(probe.unwatched.lock().unwrap().as_slice(), ["ziel"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn chatlog_belegt_begruessung_trotz_stiller_liveblindstelle() {
+        // Der Nutzerfall: der Raider grüßt direkt zum Start, die Live-Beobachtung
+        // verpasst es (probe meldet belegtes Schweigen), aber das Chatlog kennt
+        // die Nachricht mit echtem Zeitstempel. Dann darf keine Erinnerung raus.
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let log = Arc::new(FakeGreetingLog::new(Some(GreetingObservation {
+            count: 1,
+            span: Duration::ZERO,
+        })));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5))
+                .with_message_log(log);
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(fake.whispers.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn chatlog_ohne_erfassung_laesst_das_bisherige_verhalten() {
+        // Zielkanal nicht mitgeschrieben: das Log sagt nichts (None), es bleibt
+        // bei der Live-Beobachtung. Belegtes Schweigen führt weiter zur Erinnerung.
+        let fake = Arc::new(FakeChatApi::default());
+        let chat: Arc<dyn ChatApi> = fake.clone();
+        let probe = Arc::new(FakeProbe::new(Some(false)));
+        let log = Arc::new(FakeGreetingLog::new(None));
+        let monitor =
+            RaidGreetingMonitor::with_window(chat, Some(probe.clone()), Duration::from_millis(5))
+                .with_message_log(log);
+
+        monitor.raid_started(registration()).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(fake.whispers.lock().unwrap().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]

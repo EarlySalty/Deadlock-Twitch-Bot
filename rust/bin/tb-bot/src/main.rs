@@ -818,6 +818,13 @@ async fn main() {
                 Arc::new(raid_greeting::DbAliasResolver::new(
                     tb_raid::alias_store::AliasStore::new(pool.clone()),
                 ));
+            // Chatlog-Abgleich schließt die Blindstellen der Live-Beobachtung:
+            // eine Begrüßung direkt zum Raid-Start (vor EventSub-Registrierung
+            // oder IRC-Beitritt) steht mit echtem Zeitstempel in der Tabelle.
+            let message_log: Arc<dyn raid_greeting::RaidGreetingLog> =
+                Arc::new(raid_greeting::DbRaidGreetingLog::new(
+                    tb_raid::raid_message_log::RaidMessageLog::new(pool.clone()),
+                ));
             Arc::new(
                 raid_greeting::RaidGreetingMonitor::new(
                     h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
@@ -825,7 +832,8 @@ async fn main() {
                 )
                 .with_live_probe(live_probe)
                 .with_courtesy(courtesy)
-                .with_aliases(aliases),
+                .with_aliases(aliases)
+                .with_message_log(message_log),
             )
         });
 
