@@ -38,11 +38,48 @@ pub const SCHEMA_OWNER_COMPONENT: &str = "analytics_schema";
 pub const SCHEMA_OWNER_VALUE: &str = "rust";
 pub const SCHEMA_OWNER_MARKER_VERSION: i32 = 1;
 
-/// Führt ausstehende Migrationen aus (Phase 0b: keine → no-op außer Tracking-Tabelle).
+/// Führt ausstehende Migrationen aus.
+///
+/// Angewandte Versionen, deren Datei im Binary fehlt, halten den Start nicht
+/// auf. Genau das hat den Live-Bot gelegt: Feature-Branches schrieben nach
+/// Prod, `main` kannte die Dateien nicht, sqlx machte Exit 1. Checksummen-
+/// Konflikte und halbfertige Läufe bleiben fatal.
 pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
-    MIGRATOR.run(pool).await?;
+    report_applied_but_missing(pool).await;
+    let migrator = Migrator {
+        migrations: MIGRATOR.migrations.clone(),
+        ignore_missing: true,
+        locking: MIGRATOR.locking,
+        no_tx: MIGRATOR.no_tx,
+    };
+    migrator.run(pool).await?;
     ensure_schema_owner_marker(pool).await?;
     Ok(())
+}
+
+async fn report_applied_but_missing(pool: &PgPool) {
+    let applied: Vec<i64> = match sqlx::query_scalar("SELECT version FROM _sqlx_migrations")
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return,
+    };
+    let known: std::collections::HashSet<i64> = MIGRATOR.iter().map(|m| m.version).collect();
+    for version in applied_but_missing(&applied, &known) {
+        tracing::error!(
+            version,
+            "sqlx-Migration ist in der DB angewandt, fehlt aber im Binary. Start geht weiter. Datei nach main holen."
+        );
+    }
+}
+
+fn applied_but_missing(applied: &[i64], known: &std::collections::HashSet<i64>) -> Vec<i64> {
+    applied
+        .iter()
+        .copied()
+        .filter(|version| !known.contains(version))
+        .collect()
 }
 
 pub async fn ensure_schema_owner_marker(pool: &PgPool) -> Result<(), DbError> {
@@ -91,4 +128,17 @@ pub async fn ensure_schema_owner_marker(pool: &PgPool) -> Result<(), DbError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::applied_but_missing;
+    use std::collections::HashSet;
+
+    #[test]
+    fn applied_but_missing_findet_nur_unbekannte_versionen() {
+        let known = HashSet::from([1, 2, 3]);
+        assert_eq!(applied_but_missing(&[1, 2, 3], &known), Vec::<i64>::new());
+        assert_eq!(applied_but_missing(&[1, 99, 3], &known), vec![99]);
+    }
 }
