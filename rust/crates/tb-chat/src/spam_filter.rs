@@ -256,6 +256,44 @@ fn viewer_pattern_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\bviewers?\s+\w+").expect("viewer-Regex ist konstant"))
 }
 
+/// Grund-Label des reinen Viewer-Regex-Treffers (Schritt 5). Als Konstante,
+/// weil das Safe-Wording-Gate exakt gegen dieses Label prüft.
+pub const VIEWER_PATTERN_REASON: &str = "Muster: viewer + name";
+
+/// Deutsche Umgangssprache, die harmlos mit „viewer" zusammenfällt und den
+/// weichen Viewer-Regex (Schritt 5) allein auslöst: Lurk- und Gönn-Sprech.
+///
+/// KEIN Negativ-Scoring (das war das Safe-List-Poisoning vom 11.07.), sondern
+/// nur ein Gate für den reinen Viewer-Regex-Treffer, siehe
+/// [`spam_signal_ist_nur_viewer_muster`]. Distinktiv gehalten: englischer
+/// Viewbot-Spam nutzt keinen dieser Marker.
+const SAFE_WORDING_MARKERS: &[&str] = &[
+    "gönn",  // gönn, gönne, gönnt, gönn dir, gönnen
+    "goenn", // ohne Umlaut getippt
+    "am lurken",
+    "nur am lurk",
+    "bin am lurk",
+];
+
+/// Trifft ein harmloses Umgangssprache-Muster, das den Viewer-Regex fälschlich
+/// triggert, gibt den Marker zurück. Lowercase-Contains reicht: die Marker sind
+/// distinktiv, und das Gate greift nur im reinen Viewer-Regex-Pfad.
+pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
+    let lowered = text.to_lowercase();
+    SAFE_WORDING_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| lowered.contains(marker))
+}
+
+/// True, wenn der EINZIGE Spam-Grund der weiche Viewer-Regex ist (kein
+/// Fragment, keine Phrase, keine Domain, kein gelerntes Muster). Nur dann darf
+/// ein Safe-Wording-Treffer den Judge überstimmen, damit echter Spam, der
+/// immer ein stärkeres Signal trägt, nie durchrutscht.
+pub fn spam_signal_ist_nur_viewer_muster(matched: &[String]) -> bool {
+    !matched.is_empty() && matched.iter().all(|reason| reason == VIEWER_PATTERN_REASON)
+}
+
 /// Baut einen Word-Boundary-Regex für ein Literal-Muster (\b...\b).
 /// Entspricht `re.search(r"\b" + re.escape(...) + r"\b", lowered)`.
 fn word_boundary_re(pattern: &str) -> Option<Regex> {
@@ -584,7 +622,7 @@ impl SpamFilter {
         // Schritt 5: Viewer-Muster (moderation.py Z. 537–539)
         if viewer_pattern_re().is_match(&lowered) {
             hits += 1;
-            reasons.push("Muster: viewer + name".to_string());
+            reasons.push(VIEWER_PATTERN_REASON.to_string());
         }
 
         // Schritt 6+7: Gelernte Muster (moderation.py Z. 542–562)
@@ -930,6 +968,41 @@ mod tests {
         assert_eq!(v.score, 1);
         assert!(!v.hard_signal);
         assert_eq!(v.action, SpamAction::None);
+    }
+
+    // --- Safe-Wording-Gate ---
+
+    #[test]
+    fn safe_wording_trifft_goenn_und_lurk_sprech() {
+        assert_eq!(matches_safe_wording("gönne viewer du weißt"), Some("gönn"));
+        assert_eq!(
+            matches_safe_wording("GÖNN dir viewer bro"),
+            Some("gönn"),
+            "case-insensitiv"
+        );
+        assert_eq!(matches_safe_wording("goenn dir viewer"), Some("goenn"));
+        assert_eq!(matches_safe_wording("bin nur am lurken hehe"), Some("am lurken"));
+        assert_eq!(matches_safe_wording("best viewers streamboo com"), None);
+    }
+
+    #[test]
+    fn gate_greift_nur_bei_reinem_viewer_muster() {
+        // Reiner Viewer-Regex-Treffer → Gate darf greifen.
+        let nur_viewer = filter().evaluate("gönne viewer du weißt", &ctx_default());
+        assert_eq!(nur_viewer.matched, vec![VIEWER_PATTERN_REASON.to_string()]);
+        assert!(spam_signal_ist_nur_viewer_muster(&nur_viewer.matched));
+
+        // Zusätzliches Fragment/Phrase → Gate darf NICHT greifen (echter Spam
+        // trägt immer ein stärkeres Signal).
+        let mit_phrase = filter().evaluate("gönn dir viewers smmhype", &ctx_default());
+        assert!(
+            !spam_signal_ist_nur_viewer_muster(&mit_phrase.matched),
+            "matched: {:?}",
+            mit_phrase.matched
+        );
+
+        // Leere Trefferliste ist kein Viewer-Muster.
+        assert!(!spam_signal_ist_nur_viewer_muster(&[]));
     }
 
     // --- SPAM_MIN_MATCHES Schwelle ---
