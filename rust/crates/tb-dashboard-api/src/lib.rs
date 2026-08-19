@@ -165,6 +165,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
         streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
+        uplink,
         viewer_timeline, viewers,
         watch_time,
     };
@@ -462,6 +463,15 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamers",
             get(streamers::streamers_handler),
+        )
+        .route("/twitch/api/v2/uplink/me", get(uplink::me_handler))
+        .route(
+            "/twitch/api/v2/uplink/waitlist",
+            post(uplink::waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/destinations",
+            put(uplink::put_destination_handler),
         )
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
@@ -1446,6 +1456,7 @@ pub fn build_v2_spa_pages_router() -> Router {
             "/twitch/verwaltung",
             get(spa::main_domain_spa_shell_handler),
         )
+        .route("/twitch/uplink", get(spa::main_domain_spa_shell_handler))
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
             "/twitch/analyse",
