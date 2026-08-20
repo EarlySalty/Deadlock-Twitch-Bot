@@ -10,6 +10,14 @@ function jsonRequest(method: string, body: unknown): RequestInit {
   });
 }
 
+/** Die laufende Session, so wie der Uplink sie unter `session` mitschickt. */
+export interface UplinkSession {
+  id: number;
+  started_at: string;
+  ingest_protocol: string;
+  ingest_codec?: string | null;
+}
+
 export interface UplinkMe {
   enabled: boolean;
   waitlisted: boolean;
@@ -23,8 +31,13 @@ export interface UplinkMe {
    * dann nur im Admin-Modus in der Hauptnavigation auf.
    */
   public_visible?: boolean;
-  /** Laufende Session, sobald der Server eine kennt. */
-  session_id?: number | null;
+  /**
+   * Laufende Session, sobald der Server eine kennt. Der Uplink liefert das
+   * Objekt unter `session`, eine Nummer auf oberster Ebene gibt es nicht.
+   */
+  session?: UplinkSession | null;
+  /** Wie stark der Server die Ausgabe gerade heruntergefahren hat. */
+  degraded_level?: number | null;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
@@ -113,6 +126,16 @@ export interface UplinkMetricSample {
   ts: string;
   ingest_kbps?: number | null;
   dropped_pkts?: number | null;
+  /**
+   * Rechenlast dieses Streams in Prozent. Kommt aus `session_metrics` und
+   * meint nur den eigenen Stream, nicht die Last der ganzen Maschine.
+   */
+  cpu_pct?: number | null;
+  /** Unter 1 kommt der Server beim Senden nicht hinterher. */
+  encoder_speed?: number | null;
+  /** Ausgehende Datenrate je Plattform in kbit/s. */
+  egress_kbps_by_target?: Record<string, number | null> | null;
+  degraded_level?: number | null;
 }
 
 export interface UplinkMetrics {
@@ -170,9 +193,18 @@ export function saveUplinkAdminSettings(body: {
   return fetchJson<UplinkAdminSettings>(`${BASE}/admin/settings`, jsonRequest('PUT', body));
 }
 
+export interface UplinkKillResult {
+  session_id: number;
+  /** Der Server hat den Stream als beendet vermerkt. */
+  ended: boolean;
+  end_reason?: string | null;
+  /** Erst hier steht, ob der Stream wirklich steht. */
+  stopped: boolean;
+}
+
 /** Beendet eine laufende Session. Ohne `confirm=true` lehnt der Server ab. */
-export function killUplinkSession(sessionId: number): Promise<{ ended: boolean }> {
-  return fetchJson<{ ended: boolean }>(
+export function killUplinkSession(sessionId: number): Promise<UplinkKillResult> {
+  return fetchJson<UplinkKillResult>(
     `${BASE}/admin/sessions/${encodeURIComponent(String(sessionId))}/kill?confirm=true`,
     jsonRequest('POST', {})
   );

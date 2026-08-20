@@ -32,15 +32,25 @@ import {
   type UplinkScheduleEntry,
 } from '@/api/uplink';
 import {
+  UPLINK_KILL_LAEUFT_NOCH,
   UPLINK_PLATFORMS,
   UPLINK_REAUTH_HREF,
   UPLINK_TWITCH_SCOPE_HINT,
+  UPLINK_WAITLIST_FEHLER,
   UPLINK_WAITLIST_TEXT,
+  aktiveSessionId,
   canSaveDestination,
   clampedFields,
+  egressJeZiel,
   formatDauer,
+  formularAusEinstellungen,
+  killErfolgreich,
+  lastProzent,
+  speedLage,
   toEingabeZeit,
   toRelayZeit,
+  twitchFehlertext,
+  zielRumpf,
 } from './uplinkModel';
 import {
   PREVIEW_CHANGELOG_ROUTE,
@@ -166,16 +176,7 @@ function PlattformKarte({
   }, [gespeichert?.rtmp_url]);
 
   const speichern = useMutation({
-    mutationFn: () =>
-      saveUplinkDestination({
-        platform: platform.id,
-        rtmp_url: eingabe.rtmpUrl.trim() || undefined,
-        stream_key: eingabe.streamKey.trim() || undefined,
-        width: zahlOderUndefined(eingabe.width),
-        height: zahlOderUndefined(eingabe.height),
-        fps: zahlOderUndefined(eingabe.fps),
-        bitrate_kbps: zahlOderUndefined(eingabe.bitrate),
-      }),
+    mutationFn: () => saveUplinkDestination(zielRumpf({ platform: platform.id, ...eingabe })),
     onSuccess: () => {
       setEingabe((alt) => ({ ...alt, streamKey: '' }));
       onSaved();
@@ -188,7 +189,7 @@ function PlattformKarte({
       setTwitchHinweis(null);
       onSaved();
     },
-    onError: () => setTwitchHinweis(UPLINK_TWITCH_SCOPE_HINT),
+    onError: (e) => setTwitchHinweis(twitchFehlertext(e)),
   });
 
   const profilBeruehrt = Boolean(
@@ -201,6 +202,7 @@ function PlattformKarte({
     rtmpUrl: eingabe.rtmpUrl,
     streamKey: eingabe.streamKey,
     profileTouched: profilBeruehrt,
+    verbunden: Boolean(gespeichert),
   });
   const geklemmt = clampedFields(gespeichert?.requested, gespeichert?.effective);
 
@@ -232,10 +234,15 @@ function PlattformKarte({
           </button>
           {twitchHinweis && (
             <p className="text-xs text-warning">
-              {twitchHinweis}{' '}
-              <a href={UPLINK_REAUTH_HREF} className="font-semibold underline">
-                Twitch neu verbinden
-              </a>
+              {twitchHinweis}
+              {twitchHinweis === UPLINK_TWITCH_SCOPE_HINT && (
+                <>
+                  {' '}
+                  <a href={UPLINK_REAUTH_HREF} className="font-semibold underline">
+                    Twitch neu verbinden
+                  </a>
+                </>
+              )}
             </p>
           )}
         </div>
@@ -434,6 +441,9 @@ function StatusKarte({ sessionId }: { sessionId: number | null | undefined }) {
 
   const letzte = data?.samples?.[data.samples.length - 1];
   const proZiel = Object.entries(data?.gb_by_target ?? {});
+  const lage = speedLage(letzte?.encoder_speed);
+  const auslastung = lastProzent(letzte?.cpu_pct);
+  const ausgang = egressJeZiel(letzte?.egress_kbps_by_target);
 
   return (
     <Rise className="panel-card space-y-3 rounded-2xl p-6">
@@ -464,6 +474,26 @@ function StatusKarte({ sessionId }: { sessionId: number | null | undefined }) {
               {letzte?.dropped_pkts ? `, ${letzte.dropped_pkts} verlorene Pakete` : ''}
             </div>
           </div>
+          {auslastung && (
+            <div>
+              <div className={LABEL_KLASSE}>Auslastung des Servers</div>
+              <div className="text-sm text-white">{auslastung}</div>
+            </div>
+          )}
+          {ausgang.length > 0 && (
+            <div>
+              <div className={LABEL_KLASSE}>Ausgehend je Plattform</div>
+              <div className="text-sm text-white">
+                {ausgang.map((z) => `${z.ziel}: ${z.kbps} kbit/s`).join(' · ')}
+              </div>
+            </div>
+          )}
+          {lage && (
+            <div className="sm:col-span-2">
+              <div className={LABEL_KLASSE}>Wie es gerade läuft</div>
+              <div className="text-sm text-white">{lage}</div>
+            </div>
+          )}
           {proZiel.length > 0 && (
             <div className="sm:col-span-2">
               <div className={LABEL_KLASSE}>Übertragen</div>
@@ -503,16 +533,23 @@ function VerwaltungsKarte() {
         max_points: zahlOderUndefined(plaetze),
         load_reject_threshold: lastgrenze.trim() ? Number(lastgrenze) : undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (antwort) => {
+      const formular = formularAusEinstellungen(antwort);
+      setPlaetze(formular.plaetze);
+      setLastgrenze(formular.lastgrenze);
       queryClient.invalidateQueries({ queryKey: ['uplink-admin-overview'] });
     },
   });
 
   const beenden = useMutation({
     mutationFn: () => killUplinkSession(Number(sessionId)),
-    onSuccess: () => {
-      setSessionId('');
-      setBestaetigt(false);
+    onSuccess: (antwort) => {
+      // Steht der Stream noch, bleibt die Nummer im Feld: sonst müsste der
+      // Admin sie für den zweiten Versuch neu heraussuchen.
+      if (killErfolgreich(antwort)) {
+        setSessionId('');
+        setBestaetigt(false);
+      }
       queryClient.invalidateQueries({ queryKey: ['uplink-admin-overview'] });
     },
   });
@@ -617,12 +654,15 @@ function VerwaltungsKarte() {
         </div>
         {beenden.isError && (
           <p className="text-xs text-warning">
-            {fehlertext(beenden.error, 'Der Stream ließ sich nicht beenden.')}
+            {fehlertext(beenden.error, UPLINK_KILL_LAEUFT_NOCH)}
           </p>
         )}
-        {beenden.isSuccess && (
-          <p className="text-xs text-success">Der Stream wurde beendet.</p>
-        )}
+        {beenden.isSuccess &&
+          (killErfolgreich(beenden.data) ? (
+            <p className="text-xs text-success">Der Stream wurde beendet.</p>
+          ) : (
+            <p className="text-xs text-warning">{UPLINK_KILL_LAEUFT_NOCH}</p>
+          ))}
       </div>
 
       <div className="space-y-2 border-t border-border pt-4">
@@ -749,6 +789,9 @@ export function UplinkPage() {
                       {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
                     </button>
                   </div>
+                  {waitlist.isError && (
+                    <p className="text-xs text-warning">{UPLINK_WAITLIST_FEHLER}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -780,7 +823,7 @@ export function UplinkPage() {
                 </div>
 
                 <ZeitplanKarte />
-                <StatusKarte sessionId={data.session_id} />
+                <StatusKarte sessionId={aktiveSessionId(data)} />
               </div>
             )}
 
