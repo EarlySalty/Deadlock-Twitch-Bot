@@ -1,42 +1,179 @@
 import { fetchJson, withCookieCredentials } from './core';
 
+const BASE = '/twitch/api/v2/uplink';
+
+function jsonRequest(method: string, body: unknown): RequestInit {
+  return withCookieCredentials({
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
 export interface UplinkMe {
   enabled: boolean;
   waitlisted: boolean;
   ingest_key: string;
+  /** Push-Adresse auf diesem Rechner. Nach aussen leer, dann gilt SRT. */
   rtmp_url: string;
+  /** Vollstaendige SRT-Adresse fuer OBS. */
   srt_hint: string;
+  /**
+   * Freigabe fuer alle. Fehlt das Feld, gilt es als aus: der Uplink taucht
+   * dann nur im Admin-Modus in der Hauptnavigation auf.
+   */
+  public_visible?: boolean;
+  /** Laufende Session, sobald der Server eine kennt. */
+  session_id?: number | null;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
-  return fetchJson<UplinkMe>('/twitch/api/v2/uplink/me', withCookieCredentials());
+  return fetchJson<UplinkMe>(`${BASE}/me`, withCookieCredentials());
 }
 
 export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
-  return fetchJson<{ waitlisted: boolean }>(
-    '/twitch/api/v2/uplink/waitlist',
-    withCookieCredentials({
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: '{}',
+  return fetchJson<{ waitlisted: boolean }>(`${BASE}/waitlist`, jsonRequest('POST', {}));
+}
+
+export interface UplinkProfileView {
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_kbps: number;
+}
+
+export interface UplinkDestination {
+  platform: string;
+  rtmp_url: string;
+  enabled: boolean;
+  requested: UplinkProfileView;
+  effective: UplinkProfileView;
+}
+
+export interface UplinkDestinations {
+  destinations: UplinkDestination[];
+}
+
+export function fetchUplinkDestinations(): Promise<UplinkDestinations> {
+  return fetchJson<UplinkDestinations>(`${BASE}/destinations`, withCookieCredentials());
+}
+
+export interface SaveDestinationBody {
+  platform: string;
+  rtmp_url?: string;
+  stream_key?: string;
+  enabled?: boolean;
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrate_kbps?: number;
+}
+
+export function saveUplinkDestination(body: SaveDestinationBody): Promise<UplinkDestinations> {
+  return fetchJson<UplinkDestinations>(`${BASE}/destinations`, jsonRequest('PUT', body));
+}
+
+/**
+ * Laesst den Server den Twitch-Schluessel holen und eintragen.
+ *
+ * Der Schluessel kommt nie im Browser an: das Dashboard holt ihn serverseitig
+ * per Helix und reicht ihn direkt an den Uplink weiter.
+ */
+export function connectUplinkTwitch(): Promise<UplinkDestinations> {
+  return fetchJson<UplinkDestinations>(
+    `${BASE}/destinations/twitch-auto`,
+    jsonRequest('POST', {})
+  );
+}
+
+export interface UplinkScheduleEntry {
+  id?: number;
+  starts_at: string;
+  ends_at: string;
+}
+
+export interface UplinkSchedule {
+  entries: UplinkScheduleEntry[];
+}
+
+export function fetchUplinkSchedule(): Promise<UplinkSchedule> {
+  return fetchJson<UplinkSchedule>(`${BASE}/schedule`, withCookieCredentials());
+}
+
+export function saveUplinkSchedule(entries: UplinkScheduleEntry[]): Promise<UplinkSchedule> {
+  return fetchJson<UplinkSchedule>(
+    `${BASE}/schedule`,
+    jsonRequest('PUT', {
+      entries: entries.map((e) => ({ starts_at: e.starts_at, ends_at: e.ends_at })),
     })
   );
 }
 
-export function saveUplinkTwitchDestination(body: {
-  rtmp_url: string;
-  stream_key: string;
-}): Promise<{ platform: string; width: number; height: number }> {
-  return fetchJson(
-    '/twitch/api/v2/uplink/destinations',
-    withCookieCredentials({
-      method: 'PUT',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: 'twitch',
-        rtmp_url: body.rtmp_url,
-        stream_key: body.stream_key,
-      }),
-    })
+export interface UplinkMetricSample {
+  ts: string;
+  ingest_kbps?: number | null;
+  dropped_pkts?: number | null;
+}
+
+export interface UplinkMetrics {
+  session_id: number;
+  started_at: string;
+  ended_at: string | null;
+  ingest_protocol: string;
+  ingest_codec?: string | null;
+  end_reason?: string | null;
+  gb_by_target: Record<string, number>;
+  sample_count: number;
+  samples: UplinkMetricSample[];
+}
+
+export function fetchUplinkMetrics(session: number): Promise<UplinkMetrics> {
+  return fetchJson<UplinkMetrics>(
+    `${BASE}/metrics?session=${encodeURIComponent(String(session))}`,
+    withCookieCredentials()
+  );
+}
+
+export interface UplinkAdminOverview {
+  loadavg: number;
+  max_points: number;
+  used_points: number;
+}
+
+export function fetchUplinkAdminOverview(): Promise<UplinkAdminOverview> {
+  return fetchJson<UplinkAdminOverview>(`${BASE}/admin/overview`, withCookieCredentials());
+}
+
+export interface UplinkAdminWaitlistEntry {
+  streamer_id: number;
+  requested_at: string;
+  note: string | null;
+  enabled: boolean;
+}
+
+export function fetchUplinkAdminWaitlist(): Promise<{ entries: UplinkAdminWaitlistEntry[] }> {
+  return fetchJson<{ entries: UplinkAdminWaitlistEntry[] }>(
+    `${BASE}/admin/waitlist`,
+    withCookieCredentials()
+  );
+}
+
+export interface UplinkAdminSettings {
+  max_points: number;
+  load_reject_threshold: number;
+}
+
+export function saveUplinkAdminSettings(body: {
+  max_points?: number;
+  load_reject_threshold?: number;
+}): Promise<UplinkAdminSettings> {
+  return fetchJson<UplinkAdminSettings>(`${BASE}/admin/settings`, jsonRequest('PUT', body));
+}
+
+/** Beendet eine laufende Session. Ohne `confirm=true` lehnt der Server ab. */
+export function killUplinkSession(sessionId: number): Promise<{ ended: boolean }> {
+  return fetchJson<{ ended: boolean }>(
+    `${BASE}/admin/sessions/${encodeURIComponent(String(sessionId))}/kill?confirm=true`,
+    jsonRequest('POST', {})
   );
 }

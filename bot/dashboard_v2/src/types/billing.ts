@@ -30,7 +30,8 @@ export type TabId =
   | 'growth'
   | 'planning'
   | 'coaching'
-  | 'monetization';
+  | 'monetization'
+  | 'restream';
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'analytics',

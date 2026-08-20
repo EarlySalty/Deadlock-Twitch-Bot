@@ -8,8 +8,11 @@ import {
   GraduationCap,
   DollarSign,
   Lock,
+  Radio,
 } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { useUplinkVisibility } from '../../hooks/useUplinkVisibility';
+import { UPLINK_TAB_ID, UPLINK_TAB_LABEL } from '../../pages/uplinkModel';
 import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
@@ -20,7 +23,8 @@ export type TabId =
   | 'growth'
   | 'planning'
   | 'coaching'
-  | 'monetization';
+  | 'monetization'
+  | 'restream';
 
 interface Tab {
   id: TabId;
@@ -38,6 +42,7 @@ const tabs: Tab[] = [
   { id: 'planning', label: 'Planung', icon: Calendar },
   { id: 'coaching', label: 'Was tun?', icon: GraduationCap },
   { id: 'monetization', label: 'Monetization', icon: DollarSign },
+  { id: UPLINK_TAB_ID, label: UPLINK_TAB_LABEL, icon: Radio },
 ];
 
 interface TabNavigationProps {
@@ -47,11 +52,15 @@ interface TabNavigationProps {
 
 export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
   const { canAccessTab, isTabLocked, isPreviewMode, isAdmin } = usePlan();
+  const uplinkVisible = useUplinkVisibility(isAdmin);
 
   // Filter tabs: show if accessible, or if in preview mode show locked tabs with opacity
   // Admin-only tabs are hidden completely for non-admins.
   const visibleTabs = tabs.filter(tab => {
     if (tab.adminOnly && !isAdmin) return false;
+    // Uplink haengt an der Freigabe des Dienstes, nicht am Tarif. Ohne
+    // Freigabe bleibt er dem Admin-Modus vorbehalten.
+    if (tab.id === UPLINK_TAB_ID) return uplinkVisible;
     const tabId = tab.id as BillingTabId;
     if (canAccessTab(tabId)) return true;
     if (isPreviewMode) return true;

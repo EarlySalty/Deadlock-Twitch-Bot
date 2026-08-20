@@ -32,10 +32,18 @@ pub const BASE_STREAMER_SCOPES: &[&str] = &[
 ];
 
 /// Zusätzliche Scopes für Dashboard-Features (Python: `DASHBOARD_UPGRADE_SCOPES`).
+///
+/// `channel:read:stream_key` kam mit dem Uplink dazu: nur damit gibt Twitch
+/// `GET /streams/key` heraus, und nur damit kann das Dashboard das Twitch-Ziel
+/// ohne Copy-und-Paste einrichten. Der Scope steht bewusst hier und nicht in
+/// [`BASE_STREAMER_SCOPES`] — der Basis-Satz ist die Bedingung für den
+/// Bot-Betrieb, und ein Streamer ohne Uplink soll deshalb nicht als
+/// unvollständig autorisiert gelten.
 pub const DASHBOARD_UPGRADE_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    "channel:read:stream_key",
 ];
 
 /// Vollständiger Satz = Basis + Dashboard-Upgrade
@@ -51,6 +59,7 @@ pub const FULL_STREAMER_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    "channel:read:stream_key",
 ];
 
 /// Kritische Basis-Scopes, deren Fehlen den Bot-Betrieb verhindert
@@ -156,6 +165,17 @@ mod tests {
         assert!(scopes.contains(&"channel:read:subscriptions"));
         assert!(scopes.contains(&"channel:read:hype_train"));
         assert_eq!(scopes.len(), FULL_STREAMER_SCOPES.len());
+    }
+
+    /// Ohne diesen Scope gibt Twitch `GET /streams/key` nicht heraus, und die
+    /// Uplink-Seite müsste den Streamer den Schlüssel selbst kopieren lassen.
+    #[test]
+    fn dashboard_reauth_holt_den_stream_key_scope() {
+        let scopes = scopes_for_profile("dashboard_reauth");
+        assert!(scopes.contains(&"channel:read:stream_key"));
+        // Der Basis-Satz bleibt die Bedingung für den Bot-Betrieb: taucht der
+        // Scope dort auf, gilt jeder Streamer ohne Uplink als unvollständig.
+        assert!(!scopes_for_profile("base").contains(&"channel:read:stream_key"));
     }
 
     #[test]

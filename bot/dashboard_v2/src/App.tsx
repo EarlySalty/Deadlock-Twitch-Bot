@@ -15,6 +15,7 @@ import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { UplinkPage } from '@/pages/Uplink';
+import { UPLINK_TAB_ID } from '@/pages/uplinkModel';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
@@ -221,6 +222,12 @@ function AnalyticsDashboard() {
   };
 
   const handleTabChange = (tab: TabId) => {
+    // Uplink ist eine eigene Seite, kein Inhalt dieser Tab-Leiste. Der Eintrag
+    // steht trotzdem hier, damit er in der Hauptnavigation auftaucht.
+    if (tab === UPLINK_TAB_ID) {
+      window.location.href = PREVIEW_UPLINK_ROUTE;
+      return;
+    }
     hasExplicitTab.current = true;
     setActiveTab(tab);
     setPendingSub(null);

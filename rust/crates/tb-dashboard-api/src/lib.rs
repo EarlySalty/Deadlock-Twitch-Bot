@@ -471,7 +471,32 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route(
             "/twitch/api/v2/uplink/destinations",
-            put(uplink::put_destination_handler),
+            get(uplink::get_destinations_handler).put(uplink::put_destination_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/destinations/twitch-auto",
+            post(uplink::twitch_auto_destination_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/schedule",
+            get(uplink::get_schedule_handler).put(uplink::put_schedule_handler),
+        )
+        .route("/twitch/api/v2/uplink/metrics", get(uplink::metrics_handler))
+        .route(
+            "/twitch/api/v2/uplink/admin/overview",
+            get(uplink::admin_overview_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/waitlist",
+            get(uplink::admin_waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/settings",
+            put(uplink::admin_settings_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/sessions/:session_id/kill",
+            post(uplink::admin_kill_session_handler),
         )
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
