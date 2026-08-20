@@ -270,7 +270,7 @@ export const UPLINK_SPEED_HINTERHER =
   'Unser Server kommt gerade nicht ganz mit. Wenn das so bleibt, kann dein Bild bei den Zuschauern stocken.';
 
 /** Der Server hält Schritt. */
-export const UPLINK_SPEED_MITHALTEN = 'Unser Server hält mühelos Schritt.';
+export const UPLINK_SPEED_MITHALTEN = 'Unser Server hält Schritt.';
 
 /**
  * Lage des Servers in einem Satz, ohne Zahl und ohne Fachwort.
