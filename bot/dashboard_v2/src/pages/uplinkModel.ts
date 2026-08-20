@@ -5,6 +5,8 @@
 // Die woertlichen Texte stehen als Konstanten, damit Seite und Test dieselbe
 // Quelle benutzen.
 
+import { ApiHttpError } from '../api/httpError';
+
 export const UPLINK_TAB_ID = 'restream' as const;
 export const UPLINK_TAB_LABEL = 'Uplink';
 
@@ -12,12 +14,33 @@ export const UPLINK_TAB_LABEL = 'Uplink';
 export const UPLINK_WAITLIST_TEXT =
   'Streame über unseren Server auf Twitch, Kick, YouTube und TikTok gleichzeitig, auch mit schwachem Upload. Trag dich auf die Warteliste ein, die Plätze sind begrenzt.';
 
+/** Wenn der Eintrag auf die Warteliste beim Server hängen bleibt. */
+export const UPLINK_WAITLIST_FEHLER =
+  'Der Eintrag auf die Warteliste hat gerade nicht geklappt. Versuch es bitte gleich noch einmal.';
+
 /** Hinweis, wenn Twitch den Schlüssel nicht herausgibt. */
 export const UPLINK_TWITCH_SCOPE_HINT =
   'Twitch gibt den Schlüssel für dieses Konto noch nicht heraus. Verbinde deinen Twitch-Zugang neu, dann holen wir ihn automatisch. Bis dahin kannst du den Schlüssel unten selbst eintragen.';
 
+/** Wenn das Holen aus einem anderen Grund als der Freigabe scheitert. */
+export const UPLINK_TWITCH_ALLGEMEINER_FEHLER =
+  'Twitch antwortet uns gerade nicht. Versuch es später noch einmal oder trag den Schlüssel unten selbst ein.';
+
 /** Link in den bestehenden OAuth-Flow, erweiterter Scope-Satz. */
 export const UPLINK_REAUTH_HREF = '/twitch/raid/auth?scope_profile=dashboard_reauth';
+
+/**
+ * Welcher Satz zu einem gescheiterten Twitch-Abruf gehört.
+ *
+ * Nur wenn Twitch die Freigabe verweigert, hilft ein neues Verbinden. Bei
+ * allem anderen wäre dieser Rat falsch und der Streamer klickt umsonst.
+ */
+export function twitchFehlertext(error: unknown): string {
+  if (error instanceof ApiHttpError && (error.status === 401 || error.status === 403)) {
+    return UPLINK_TWITCH_SCOPE_HINT;
+  }
+  return UPLINK_TWITCH_ALLGEMEINER_FEHLER;
+}
 
 /**
  * Ob der Uplink-Tab in der Hauptnavigation auftaucht.
@@ -32,6 +55,19 @@ export function isUplinkTabVisible(opts: {
 }): boolean {
   if (opts.publicVisible === true) return true;
   return opts.isAdmin === true;
+}
+
+/**
+ * Nummer des laufenden Streams, sonst nichts.
+ *
+ * Der Uplink schickt die laufende Session als Objekt unter `session`. Fehlt
+ * das Objekt, laeuft nichts, und die Statuskarte darf keine Zahlen anfragen.
+ */
+export function aktiveSessionId(
+  me?: { session?: { id?: number | null } | null } | null
+): number | null {
+  const id = Number(me?.session?.id);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
 export interface UplinkProfile {
@@ -114,21 +150,170 @@ export const UPLINK_PLATFORMS: UplinkPlatform[] = [
 ];
 
 /**
- * Ob Adresse und Schlüssel zusammen abgeschickt werden können.
+ * Ob sich der Knopf abschicken lässt.
  *
- * Halb ausgefüllt lehnt der Server ab. Der Knopf bleibt deshalb aus, bis
- * beides steht oder beides leer ist und nur die Profilwerte geändert wurden.
+ * Halb ausgefüllt lehnt der Server ab, deshalb gehen Adresse und Schlüssel
+ * nur zusammen weg. Steht die Adresse nach dem automatischen Verbinden schon
+ * im Feld und liegt der Schlüssel beim Server, bleibt trotzdem ein reines
+ * Profil-Update möglich: dann fahren wir Adresse und Schlüssel gar nicht mit.
  */
 export function canSaveDestination(opts: {
   rtmpUrl: string;
   streamKey: string;
   profileTouched: boolean;
+  verbunden: boolean;
 }): boolean {
   const url = opts.rtmpUrl.trim();
   const key = opts.streamKey.trim();
   if (url && key) return true;
   if (!url && !key) return opts.profileTouched;
+  if (url && !key) return opts.verbunden && opts.profileTouched;
   return false;
+}
+
+export interface ZielEingabeWerte {
+  platform: string;
+  rtmpUrl: string;
+  streamKey: string;
+  width: string;
+  height: string;
+  fps: string;
+  bitrate: string;
+}
+
+/** Positive ganze Zahl aus einem Eingabefeld, sonst nichts. */
+function zahlAusFeld(wert: string): number | undefined {
+  const getrimmt = wert.trim();
+  if (!getrimmt) return undefined;
+  const zahl = Number(getrimmt);
+  return Number.isFinite(zahl) && zahl > 0 ? Math.round(zahl) : undefined;
+}
+
+/**
+ * Baut den Rumpf für ein Ziel.
+ *
+ * Adresse und Schlüssel stehen nur zusammen drin. Ein halb gefülltes Paar
+ * lehnt der Server ab, und ein reines Profil-Update auf ein gespeichertes Ziel
+ * braucht beides gar nicht.
+ */
+export function zielRumpf(werte: ZielEingabeWerte): {
+  platform: string;
+  rtmp_url?: string;
+  stream_key?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrate_kbps?: number;
+} {
+  const url = werte.rtmpUrl.trim();
+  const key = werte.streamKey.trim();
+  const rumpf: {
+    platform: string;
+    rtmp_url?: string;
+    stream_key?: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+    bitrate_kbps?: number;
+  } = { platform: werte.platform };
+  if (url && key) {
+    rumpf.rtmp_url = url;
+    rumpf.stream_key = key;
+  }
+  const breite = zahlAusFeld(werte.width);
+  const hoehe = zahlAusFeld(werte.height);
+  const bilder = zahlAusFeld(werte.fps);
+  const datenrate = zahlAusFeld(werte.bitrate);
+  if (breite !== undefined) rumpf.width = breite;
+  if (hoehe !== undefined) rumpf.height = hoehe;
+  if (bilder !== undefined) rumpf.fps = bilder;
+  if (datenrate !== undefined) rumpf.bitrate_kbps = datenrate;
+  return rumpf;
+}
+
+/**
+ * Die gespeicherten Grenzen als Formularwerte.
+ *
+ * Der Server darf die Werte anpassen. Ohne diesen Rückweg stünde im Feld
+ * weiter die Eingabe, und der Admin hielte sie für gespeichert.
+ */
+export function formularAusEinstellungen(
+  antwort: { max_points?: number | null; load_reject_threshold?: number | null } | null | undefined
+): { plaetze: string; lastgrenze: string } {
+  const alsText = (wert: number | null | undefined): string =>
+    typeof wert === 'number' && Number.isFinite(wert) ? String(wert) : '';
+  return {
+    plaetze: alsText(antwort?.max_points),
+    lastgrenze: alsText(antwort?.load_reject_threshold),
+  };
+}
+
+/** Der Stream steht noch, obwohl das Beenden schon raus ist. */
+export const UPLINK_KILL_LAEUFT_NOCH =
+  'Der Stream läuft noch. Wir haben das Beenden angesagt und warten auf die Bestätigung.';
+
+/**
+ * Ob der Stream wirklich steht.
+ *
+ * `ended` heißt nur, dass der Server es vermerkt hat. Erst `stopped` sagt,
+ * dass nichts mehr sendet. Ohne diese Trennung meldet das Dashboard Erfolg,
+ * während der Stream weiterläuft.
+ */
+export function killErfolgreich(
+  antwort: { stopped?: boolean | null } | null | undefined
+): boolean {
+  return antwort?.stopped === true;
+}
+
+/** Der Server sendet langsamer, als das Bild ankommt. */
+export const UPLINK_SPEED_HINTERHER =
+  'Unser Server kommt gerade nicht ganz mit. Wenn das so bleibt, kann dein Bild bei den Zuschauern stocken.';
+
+/** Der Server hält Schritt. */
+export const UPLINK_SPEED_MITHALTEN = 'Unser Server hält mühelos Schritt.';
+
+/**
+ * Lage des Servers in einem Satz, ohne Zahl und ohne Fachwort.
+ *
+ * Ohne brauchbaren Messwert kommt nichts zurück: eine erfundene Entwarnung
+ * wäre schlimmer als eine leere Zeile.
+ */
+export function speedLage(encoderSpeed: number | null | undefined): string | null {
+  if (encoderSpeed === null || encoderSpeed === undefined) return null;
+  const wert = Number(encoderSpeed);
+  if (!Number.isFinite(wert) || wert < 0) return null;
+  return wert < 1 ? UPLINK_SPEED_HINTERHER : UPLINK_SPEED_MITHALTEN;
+}
+
+/** Auslastung als lesbarer Prozentwert, sonst nichts. */
+export function lastProzent(cpuPct: number | null | undefined): string | null {
+  if (cpuPct === null || cpuPct === undefined) return null;
+  const wert = Number(cpuPct);
+  if (!Number.isFinite(wert) || wert < 0) return null;
+  return `${Math.round(wert)} %`;
+}
+
+export interface EgressZeile {
+  ziel: string;
+  kbps: number;
+}
+
+/**
+ * Ausgehende Datenrate je Plattform, mit dem Namen, den der Streamer kennt.
+ *
+ * Fehlende Messwerte fliegen raus statt als Null dazustehen.
+ */
+export function egressJeZiel(
+  rohwert: Record<string, unknown> | null | undefined
+): EgressZeile[] {
+  if (!rohwert || typeof rohwert !== 'object') return [];
+  const zeilen: EgressZeile[] = [];
+  for (const [schluessel, wert] of Object.entries(rohwert)) {
+    if (typeof wert !== 'number' || !Number.isFinite(wert)) continue;
+    const plattform = UPLINK_PLATFORMS.find((p) => p.id === schluessel);
+    zeilen.push({ ziel: plattform ? plattform.label : schluessel, kbps: wert });
+  }
+  return zeilen;
 }
 
 /**

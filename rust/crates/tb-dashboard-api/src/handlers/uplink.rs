@@ -104,21 +104,41 @@ impl RelayClient {
 ///
 /// Das Relay antwortet auf Fehler mit leerem Rumpf. Ohne diese Uebersetzung
 /// stuende im Dashboard nichts, und der Streamer saehe eine leere Karte.
+///
+/// Der Text kommt zu dem, was das Relay geschickt hat, statt es zu ersetzen:
+/// beim abgelehnten Beenden steckt die Auskunft, ob der Stream noch laeuft,
+/// genau in diesen Feldern, und die Oberflaeche braucht sie.
 fn fehlertext(code: StatusCode, roh: Value) -> Value {
     if roh.get("error").and_then(Value::as_str).is_some() {
         return roh;
     }
-    let text = match code {
-        StatusCode::BAD_REQUEST => {
-            "Die Angaben passen so nicht zusammen. Schau Adresse und Schlüssel noch einmal an."
+    let text = if beenden_laeuft_noch(&roh) {
+        "Der Stream läuft noch. Wir haben das Beenden angesagt und warten auf die Bestätigung."
+    } else {
+        match code {
+            StatusCode::BAD_REQUEST => {
+                "Die Angaben passen so nicht zusammen. Schau Adresse und Schlüssel noch einmal an."
+            }
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => "Uplink hat den Zugang abgelehnt.",
+            StatusCode::NOT_FOUND => "Dazu gibt es gerade nichts zu sehen.",
+            StatusCode::CONFLICT => "Das lässt sich so nicht ändern.",
+            StatusCode::SERVICE_UNAVAILABLE => "Uplink ist gerade nicht bereit.",
+            _ => "Uplink konnte das nicht ausführen.",
         }
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => "Uplink hat den Zugang abgelehnt.",
-        StatusCode::NOT_FOUND => "Dazu gibt es gerade nichts zu sehen.",
-        StatusCode::CONFLICT => "Das lässt sich so nicht ändern.",
-        StatusCode::SERVICE_UNAVAILABLE => "Uplink ist gerade nicht bereit.",
-        _ => "Uplink konnte das nicht ausführen.",
     };
-    json!({ "error": text })
+    let mut wert = roh;
+    match wert.as_object_mut() {
+        Some(obj) => {
+            obj.insert("error".into(), json!(text));
+            wert
+        }
+        None => json!({ "error": text }),
+    }
+}
+
+/// Erkennt die Absage auf ein Beenden, bei dem der Stream noch laeuft.
+fn beenden_laeuft_noch(roh: &Value) -> bool {
+    roh.get("stopped").and_then(Value::as_bool) == Some(false) && roh.get("ended").is_some()
 }
 
 fn relay_client() -> Result<RelayClient, Response> {
@@ -444,7 +464,13 @@ pub async fn twitch_auto_destination_handler(
                 .into_response()
         })?;
     let status = antwort.status();
+    // Erst den Rumpf als Text holen, dann protokollieren, dann lesen. So steht
+    // in jedem Fall Status und Groesse im Protokoll, auch wenn Twitch etwas
+    // schickt, das gar kein JSON ist.
+    let rumpf_text = antwort.text().await.unwrap_or_default();
+    let meldung = helix_log(status.as_u16(), rumpf_text.len());
     if status == reqwest::StatusCode::UNAUTHORIZED {
+        tracing::warn!("{meldung}");
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "reauth_required" })),
@@ -452,6 +478,7 @@ pub async fn twitch_auto_destination_handler(
             .into_response());
     }
     if status == reqwest::StatusCode::FORBIDDEN {
+        tracing::warn!("{meldung}");
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "scope_missing", "required_scope": STREAM_KEY_SCOPE })),
@@ -459,21 +486,25 @@ pub async fn twitch_auto_destination_handler(
             .into_response());
     }
     if !status.is_success() {
-        tracing::error!(status = %status, "Twitch-Streamkey-Abruf abgelehnt");
+        tracing::error!("{meldung}");
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": "twitch_unavailable" })),
         )
             .into_response());
     }
-    let rumpf = antwort.json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let rumpf = helix_rumpf_wert(&rumpf_text);
     let Some(stream_key) = helix_stream_key(&rumpf) else {
+        // 200 ohne brauchbaren Schluessel bleibt ein Fehlschlag. Ein leeres Ziel
+        // einzutragen waere schlimmer als die ehrliche Absage.
+        tracing::warn!("{meldung}");
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": "twitch_unavailable" })),
         )
             .into_response());
     };
+    tracing::info!("{meldung}");
 
     let wert = relay_client()?
         .call(
@@ -491,6 +522,23 @@ pub async fn twitch_auto_destination_handler(
         )
         .await?;
     Ok(Json(wert))
+}
+
+/// Baut die Protokollzeile fuer einen Helix-Abruf.
+///
+/// Hier steht bewusst nur der Statuscode und wie viele Bytes zurueckkamen.
+/// Der Rumpf traegt den Stream-Schluessel, und der gehoert in kein Protokoll.
+fn helix_log(status: u16, rumpf_laenge: usize) -> String {
+    format!("Twitch-Streamkey-Abruf: Status {status}, Rumpf {rumpf_laenge} Bytes")
+}
+
+/// Macht aus dem rohen Antworttext einen Wert.
+///
+/// Antwortet Twitch mit HTML oder einem Bruchstueck, gibt es `Null`. Daraus
+/// liest `helix_stream_key` nichts, und der Aufrufer meldet den Fehlschlag,
+/// statt ein leeres Ziel einzutragen.
+fn helix_rumpf_wert(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or(Value::Null)
 }
 
 /// Liest `data[0].stream_key` aus der Helix-Antwort.
@@ -812,6 +860,81 @@ mod tests {
         assert!(wert["error"].as_str().expect("text").len() > 10);
         let durchgereicht = fehlertext(StatusCode::BAD_REQUEST, json!({ "error": "eigen" }));
         assert_eq!(durchgereicht["error"], json!("eigen"));
+    }
+
+    #[test]
+    fn absage_behaelt_die_felder_der_kill_antwort() {
+        let roh = json!({
+            "session_id": 7,
+            "ended": true,
+            "end_reason": "admin_kill",
+            "stopped": false,
+        });
+        let wert = fehlertext(StatusCode::SERVICE_UNAVAILABLE, roh);
+        assert_eq!(wert["session_id"], json!(7));
+        assert_eq!(wert["ended"], json!(true));
+        assert_eq!(wert["end_reason"], json!("admin_kill"));
+        assert_eq!(wert["stopped"], json!(false));
+        assert_eq!(
+            wert["error"],
+            json!(
+                "Der Stream läuft noch. Wir haben das Beenden angesagt und warten auf die Bestätigung."
+            )
+        );
+    }
+
+    #[test]
+    fn absage_ohne_kill_felder_bleibt_beim_alten_text() {
+        let wert = fehlertext(StatusCode::SERVICE_UNAVAILABLE, json!({}));
+        assert_eq!(wert["error"], json!("Uplink ist gerade nicht bereit."));
+        let mit_stopped = fehlertext(StatusCode::SERVICE_UNAVAILABLE, json!({ "stopped": true }));
+        assert_eq!(
+            mit_stopped["error"],
+            json!("Uplink ist gerade nicht bereit.")
+        );
+        assert_eq!(mit_stopped["stopped"], json!(true));
+    }
+
+    #[test]
+    fn eigener_fehlertext_des_relays_bleibt_unangetastet() {
+        let roh = json!({ "error": "eigener Satz", "stopped": false, "ended": true });
+        let wert = fehlertext(StatusCode::SERVICE_UNAVAILABLE, roh.clone());
+        assert_eq!(wert, roh);
+    }
+
+    #[test]
+    fn helix_log_nennt_status_und_laenge_ohne_inhalt() {
+        let zeile = helix_log(200, 57);
+        assert!(zeile.contains("200"), "Status fehlt: {zeile}");
+        assert!(zeile.contains("57"), "Laenge fehlt: {zeile}");
+        assert!(
+            !zeile.contains("live_"),
+            "Schluessel darf nicht auftauchen: {zeile}"
+        );
+        assert!(
+            !zeile.contains("data"),
+            "Rumpf darf nicht auftauchen: {zeile}"
+        );
+        assert!(helix_log(503, 0).contains("503"));
+    }
+
+    #[test]
+    fn helix_ohne_brauchbaren_schluessel_gibt_nichts_zurueck() {
+        for roh in [
+            json!({}),
+            json!({ "data": [] }),
+            json!({ "data": [{}] }),
+            json!({ "data": [{ "stream_key": "   " }] }),
+        ] {
+            assert!(
+                helix_stream_key(&roh).is_none(),
+                "{roh} darf keinen Schlüssel liefern"
+            );
+        }
+        assert!(helix_stream_key(&helix_rumpf_wert("<html>kaputt</html>")).is_none());
+        assert!(helix_stream_key(&helix_rumpf_wert("")).is_none());
+        let gut = helix_rumpf_wert(r#"{"data":[{"stream_key":"live_42_abc"}]}"#);
+        assert_eq!(helix_stream_key(&gut).as_deref(), Some("live_42_abc"));
     }
 
     #[test]
