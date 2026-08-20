@@ -1186,35 +1186,19 @@ nicht erkannt."
         fehlschlaege.retain(|kanal, _| live.contains(kanal));
         gemeldet.retain(|kanal| live.contains(kanal));
 
-        // Laeuft unabhaengig vom Platten-Gate: sonst wuerde eine volle Platte
-        // nie einen beendeten Lauf freigeben und die Ende-DM ausbleiben - der
-        // Dienst verriegelt sich selbst, statt sich zu erholen.
-        let aktuelle_ids: std::collections::HashMap<String, String> = sendungen
-            .iter()
-            .map(|s| (s.user_login.to_lowercase(), s.id.trim().to_owned()))
-            .collect();
-        // Erst alle betroffenen Eintraege sammeln, dann die Sperre wieder
-        // freigeben: der Block haelt den Mutex-Guard sonst bis zum Ende der
-        // Schleife, und `freigeben`/`lauf_ende_melden` sperren darin erneut -
-        // ein nicht-reentranter Mutex blockiert dann beim ersten Sendungsende
-        // fuer immer.
-        let sperr_eintraege = { sperre.lock().await.eintraege() };
-        for (kanal, lauf) in sperr_eintraege {
-            let id = aktuelle_ids.get(&kanal).map(String::as_str);
-            if plan::lauf_ist_aktuelle_sendung(&lauf, id) {
-                continue;
-            }
-            sperre.lock().await.freigeben(&kanal, &lauf);
-            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
-        }
-
+        // Nur eine Bremse fuer neue Aufnahmen, kein `continue`: sonst wuerde
+        // eine volle Platte nie einen beendeten Lauf freigeben, den Abbruch
+        // bei einem Sendungswechsel ueberspringen und die Ende-DM ausbleiben
+        // lassen - der Dienst verriegelt sich dann selbst, statt sich zu
+        // erholen.
         let belegt = aufnahmen_bytes(&aufnahme_wurzel(&konfiguration)).await;
         plattenbelegung.store(belegt, std::sync::atomic::Ordering::Relaxed);
-        if !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES) {
+        let platte_voll = !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES);
+        if platte_voll {
             tracing::warn!(
                 belegt,
                 grenze = plan::MAX_AUFNAHME_BYTES,
-                "Aufnahme pausiert - Platte voll"
+                "Neue Aufnahmen pausiert - Platte voll"
             );
             if !platte_gemeldet {
                 let text = format!(
@@ -1240,10 +1224,9 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
-            continue;
+        } else {
+            platte_gemeldet = false;
         }
-        platte_gemeldet = false;
 
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
@@ -1274,6 +1257,11 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                 } else {
                     continue;
                 }
+            }
+            // Der Abbruch oben lief so oder so; nur der Neustart einer
+            // Aufnahme bleibt aus, solange die Platte voll ist.
+            if platte_voll {
+                continue;
             }
             // Ein Zustand aus einer anderen Sendung darf nicht weiterlaufen:
             // Endet ein Stream und startet zwischen zwei Takten neu, erbte die
@@ -1344,6 +1332,31 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
+        }
+
+        // Erst jetzt, nachdem ein Sendungswechsel oben seinen abgebrochenen
+        // Block bereits eingereiht hat: sonst ginge die Ende-DM eines Laufs
+        // raus, bevor sein letzter (angebrochener) Block ueberhaupt in der
+        // Warteschlange liegt, und der Lauf gaelte als fertig gemeldet, ohne
+        // dass der Nachzuegler noch eine korrigierte Abschluss-DM ausloesen
+        // koennte.
+        let aktuelle_ids: std::collections::HashMap<String, String> = sendungen
+            .iter()
+            .map(|s| (s.user_login.to_lowercase(), s.id.trim().to_owned()))
+            .collect();
+        // Erst alle betroffenen Eintraege sammeln, dann die Sperre wieder
+        // freigeben: der Block haelt den Mutex-Guard sonst bis zum Ende der
+        // Schleife, und `freigeben`/`lauf_ende_melden` sperren darin erneut -
+        // ein nicht-reentranter Mutex blockiert dann beim ersten Sendungsende
+        // fuer immer.
+        let sperr_eintraege = { sperre.lock().await.eintraege() };
+        for (kanal, lauf) in sperr_eintraege {
+            let id = aktuelle_ids.get(&kanal).map(String::as_str);
+            if plan::lauf_ist_aktuelle_sendung(&lauf, id) {
+                continue;
+            }
+            sperre.lock().await.freigeben(&kanal, &lauf);
+            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
         }
 
         tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
