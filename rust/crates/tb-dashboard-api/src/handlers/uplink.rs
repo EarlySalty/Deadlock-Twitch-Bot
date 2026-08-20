@@ -141,7 +141,7 @@ fn partner_user_id(auth: &DashboardAuthLevel) -> Result<String, Response> {
         DashboardAuthLevel::Admin { actor: None } => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "admin ohne twitch-identitaet" })),
+                Json(json!({ "error": "Für diesen Zugang fehlt die Twitch-Identität." })),
             )
                 .into_response());
         }
@@ -157,7 +157,7 @@ fn partner_user_id(auth: &DashboardAuthLevel) -> Result<String, Response> {
     if getrimmt.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "twitch user id fehlt" })),
+            Json(json!({ "error": "Für diesen Zugang fehlt die Twitch-Identität." })),
         )
             .into_response());
     }
@@ -168,7 +168,7 @@ fn partner_id(auth: &DashboardAuthLevel) -> Result<i64, Response> {
     partner_user_id(auth)?.parse::<i64>().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "twitch user id fehlt" })),
+            Json(json!({ "error": "Für diesen Zugang fehlt die Twitch-Identität." })),
         )
             .into_response()
     })
