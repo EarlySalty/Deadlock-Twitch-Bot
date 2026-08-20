@@ -239,6 +239,12 @@ fn correction_learn_pattern(content: &str) -> Option<String> {
     }
 }
 
+fn safe_feedback_pattern(outcome: &AiReviewOutcome, content: &str) -> Option<String> {
+    matches!(outcome, AiReviewOutcome::Safe { .. })
+        .then(|| correction_learn_pattern(content))
+        .flatten()
+}
+
 impl ModAlerter {
     pub fn new(http: reqwest::Client) -> Self {
         Self::with_endpoint(http, "http://localhost:8899/changelog")
@@ -364,6 +370,7 @@ impl ModAlerter {
 
         let mut ai_reason = String::new();
         let mut learned_entries: Vec<serde_json::Value> = Vec::new();
+        let mut safe_feedback_pattern_value = None;
         match outcome {
             AiReviewOutcome::Spam {
                 reason,
@@ -393,9 +400,11 @@ impl ModAlerter {
                     );
                 }
             }
-            AiReviewOutcome::Safe { reason } | AiReviewOutcome::Error { detail: reason } => {
+            AiReviewOutcome::Safe { reason } => {
                 ai_reason = reason.clone();
+                safe_feedback_pattern_value = safe_feedback_pattern(outcome, content);
             }
+            AiReviewOutcome::Error { detail: reason } => ai_reason = reason.clone(),
             AiReviewOutcome::Skipped => {}
         }
 
@@ -418,9 +427,10 @@ impl ModAlerter {
                 "verdict": verdict_key,
                 "ai_reason": ai_reason.chars().take(200).collect::<String>(),
                 "learned": learned_entries,
-                // Für „Als Spam korrigieren", wenn nichts gelernt wurde —
-                // reist in der Button-custom_id (restart-fest ohne Store).
-                "learn_pattern": correction_learn_pattern(content),
+                // Bei einem Safe-Urteil gibt es nur Safe-Feedback. Bei Fehlern
+                // und übersprungenen Reviews bleibt die Spam-Korrektur möglich.
+                "learn_pattern": (verdict_key != "safe").then(|| correction_learn_pattern(content)).flatten(),
+                "safe_feedback_pattern": safe_feedback_pattern_value,
             },
         });
         self.post("mod_alert", payload);
@@ -2979,6 +2989,33 @@ mod tests {
         assert!(correction_learn_pattern("@nur @mentions").is_none());
         let long = "x".repeat(300);
         assert_eq!(correction_learn_pattern(&long).unwrap().chars().count(), 78);
+    }
+
+    #[test]
+    fn safe_feedback_pattern_gibt_nur_safe_urteile_wieder() {
+        let content = "aha, so sammelt man also viewer Kappa";
+        assert_eq!(
+            safe_feedback_pattern(
+                &AiReviewOutcome::Safe {
+                    reason: "Gespräch".to_string()
+                },
+                content,
+            ),
+            Some(content.to_string())
+        );
+        assert_eq!(
+            safe_feedback_pattern(
+                &AiReviewOutcome::Spam {
+                    reason: "Angebot".to_string(),
+                    confidence: Some(0.9),
+                    learned: None,
+                    rejected_pattern: None,
+                    save_failed: false,
+                },
+                content,
+            ),
+            None
+        );
     }
 
     #[test]
