@@ -8,11 +8,11 @@
 //! # Ablauf
 //!
 //! Aufgenommen wird parallel, je sendendem Kanal ein eigener Task, und in
-//! Bloecke geschnitten. Ausgewertet wird seriell, ein Block nach dem anderen.
-//! Auf einer Maschine ohne GPU ist das der Unterschied zwischen "laeuft" und
-//! "kommt nicht hinterher": drei gleichzeitig transkribierte Streams teilten
-//! sich dieselben CPU-Kerne wie das Modell. Aufnehmen dagegen kostet fast
-//! nichts, und wer seriell aufnimmt, verpasst zwei Drittel jedes Streams.
+//! Bloecke geschnitten. Ausgewertet wird erst, wenn die Sendung vorbei ist,
+//! und dann seriell. Waehrend der Sendung bleibt STT fuer Reaktionen frei;
+//! drei gleichzeitig transkribierte Streams wuerden dieselben CPU-Kerne wie
+//! das Modell belasten. Aufnehmen kostet fast nichts, und wer seriell aufnimmt,
+//! verpasst zwei Drittel jedes Streams.
 //!
 //! Bloecke statt eines Mitschnitts am Stueck, weil das Modell darauf ausgelegt
 //! ist und ein abgebrochener Stream so nur den letzten Block kostet.
@@ -139,6 +139,32 @@ pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
     funde
 }
 
+/// Ob ein Fund den Streamer real eine Twitch-Sperre riskieren laesst.
+///
+/// Twitch ahndet Slurs, Herabwuerdigung geschuetzter Gruppen und Drohungen /
+/// Selbstverletzung als Hateful Conduct unabhaengig von der Schwere. Allgemeine
+/// Beleidigung (`harassment`) und sexuelle Sprache (`sexual_content`) greift
+/// Twitch nur auf, wenn sie deutlich wird; sie zaehlen darum erst ab `high`.
+/// Alles andere ist Coaching-Material im Protokoll, aber kein Grund fuer eine
+/// Admin-DM.
+pub fn tos_meldewuerdig(fund: &Fund) -> bool {
+    match fund.kategorie.as_str() {
+        "hate_speech_slur" | "discriminatory_speech" | "threat_or_self_harm" => true,
+        "harassment" | "sexual_content" => fund.schwere == "high",
+        _ => false,
+    }
+}
+
+/// Behaelt nur die Funde, die ein echtes Twitch-Bann-Risiko tragen. Der volle
+/// Fundsatz bleibt im Platten-Bericht.
+pub fn nur_tos_meldewuerdig(funde: &[Fund]) -> Vec<Fund> {
+    funde
+        .iter()
+        .filter(|f| tos_meldewuerdig(f))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +176,69 @@ mod tests {
             ende_sekunden: 30.0,
             text: text.to_owned(),
         }
+    }
+
+    fn fund(kategorie: &str, schwere: &str) -> Fund {
+        Fund {
+            segment_id: "s1".to_owned(),
+            start_sekunden: 0.0,
+            ende_sekunden: 30.0,
+            kategorie: kategorie.to_owned(),
+            schwere: schwere.to_owned(),
+            erkenner: "modell".to_owned(),
+            sicherheit: "high".to_owned(),
+            begruendung: String::new(),
+            zitat_redigiert: String::new(),
+            zitat_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn slurs_und_drohungen_sind_immer_meldewuerdig() {
+        for kat in [
+            "hate_speech_slur",
+            "discriminatory_speech",
+            "threat_or_self_harm",
+        ] {
+            assert!(
+                tos_meldewuerdig(&fund(kat, "low")),
+                "{kat} low sollte melden"
+            );
+            assert!(
+                tos_meldewuerdig(&fund(kat, "high")),
+                "{kat} high sollte melden"
+            );
+        }
+    }
+
+    #[test]
+    fn beleidigung_und_sex_erst_ab_high() {
+        for kat in ["harassment", "sexual_content"] {
+            assert!(!tos_meldewuerdig(&fund(kat, "low")));
+            assert!(!tos_meldewuerdig(&fund(kat, "medium")));
+            assert!(tos_meldewuerdig(&fund(kat, "high")));
+        }
+    }
+
+    #[test]
+    fn sonstiges_ist_nie_meldewuerdig() {
+        assert!(!tos_meldewuerdig(&fund("sonstiges", "high")));
+        assert!(!tos_meldewuerdig(&fund("sonstiges:politik", "high")));
+    }
+
+    #[test]
+    fn nur_tos_meldewuerdig_filtert_die_safe_dinger() {
+        let alle = vec![
+            fund("hate_speech_slur", "low"),
+            fund("harassment", "low"),
+            fund("sexual_content", "medium"),
+            fund("harassment", "high"),
+        ];
+        let gemeldet = nur_tos_meldewuerdig(&alle);
+        assert_eq!(gemeldet.len(), 2);
+        assert_eq!(gemeldet[0].kategorie, "hate_speech_slur");
+        assert_eq!(gemeldet[1].kategorie, "harassment");
+        assert_eq!(gemeldet[1].schwere, "high");
     }
 
     #[test]

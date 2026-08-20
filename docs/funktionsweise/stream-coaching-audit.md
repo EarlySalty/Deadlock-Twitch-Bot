@@ -11,9 +11,10 @@ keine Sanktionen und postet nichts öffentlich.
 ## Was der Bot tut
 
 - Er fragt jede Minute bei Twitch ab, welcher der eingetragenen Kanäle gerade
-  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit — parallel,
-  nicht nacheinander. Kurze Blöcke, weil die Spracherkennung mit anderen
-  Funktionen des Bots geteilt wird.
+  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit, parallel,
+  nicht nacheinander. Beim Start geht eine private Nachricht an den Admin.
+  Ausgewertet wird erst, wenn der Stream zu Ende ist, damit die
+  Spracherkennung während der Sendung frei bleibt.
 - Aufgenommen wird live, nicht aus dem VOD: ob ein Kanal seine VODs behält,
   entscheidet der Kanal, und ein Audit, das darauf baut, fällt still aus.
 - Die Aufnahme wird auf demselben Rechner in Text umgewandelt. Der Ton
@@ -24,8 +25,9 @@ keine Sanktionen und postet nichts öffentlich.
   über eine Stapelgrenze hinweg sieht das Modell keinen Zusammenhang. An das Modell gehen
   geschwärzte Ausschnitte mit anonymer Nummer, nicht der Kanalname und nicht
   die Stream-ID.
-- Pro Block entsteht ein Protokoll auf der Platte und, wenn es etwas zu melden
-  gibt, eine kurze private Nachricht an den Admin.
+- Pro Block entsteht ein Protokoll auf der Platte. Die private Nachricht an
+  den Admin kommt am Sendungsende und nennt nur Funde, die Twitch ahnden
+  würde.
 - Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
   Blöcke werden gelöscht.
 
@@ -33,12 +35,13 @@ keine Sanktionen und postet nichts öffentlich.
 
 - Der Dienst läuft dauerhaft unter systemd; es gibt keinen manuellen Aufruf
   mehr und keinen VOD- oder Datei-Modus.
-- Aufgenommen wird nur, solange ein Kanal sendet, höchstens sechs Stunden
-  Sendungszeit je Sendung.
-- Ist ein Kanal offline, wartet der Dienst auf den nächsten Live-Start.
-- Kommt die Auswertung nicht hinterher — 180 wartende Blöcke, also sechs
-  Stunden Ton —, startet keine
-  neue Aufnahme, bis der Rückstand abgebaut ist.
+- Aufgenommen wird nur, solange ein Kanal sendet, höchstens 24 Stunden
+  Mitschnitt je Sendung. Die Grenze zählt aufgenommene Zeit, nicht wie lange
+  die Sendung schon vor unserem Start lief.
+- Ist ein Kanal offline, wertet der Dienst die Aufnahme aus und schickt eine
+  Abschlussnachricht mit den ToS-Funden.
+- Die Aufnahme läuft weiter, wenn die Auswertung hinterherhinkt. Sie pausiert
+  nur, wenn die gespeicherten Mitschnitte 12 GB überschreiten.
 
 ## Was Streamer und Zuschauer sehen
 
@@ -100,8 +103,9 @@ oder blieb die Prüfung unvollständig, bleibt die Aufnahme bis zum Ablauf der
 Aufbewahrungsfrist liegen, damit jemand nachhören kann.
 
 **Warum kommt manchmal gar keine Meldung?**
-Weil nichts gefunden wurde. Ein Ausfall der Prüfung meldet sich dagegen
-ausdrücklich.
+Zum Start und zum Ende jeder Sendung kommt eine private Nachricht. Fehlt
+beides, ist der Dienst störanfällig: Twitch-Abfrage, streamlink oder
+Zustellung. Ein Ausfall der Prüfung meldet sich außerdem ausdrücklich.
 
 **Wie zuverlässig sind die Funde?**
 Es sind Hinweise, keine Urteile. Sprache-zu-Text und Modell können sich

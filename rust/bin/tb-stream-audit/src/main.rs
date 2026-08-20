@@ -117,18 +117,37 @@ Stream-Audio dorthin zu senden.",
 
     let abbruch = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let warteschlange = Arc::new(Mutex::new(plan::Warteschlange::new()));
+    let sperre = Arc::new(Mutex::new(plan::LaufSperre::new()));
+    let plattenbelegung = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // Wer gerade sendet, darf nicht schon beim Start transkribiert werden:
+    // sonst frisst STT die Kerne, waehrend streamlink daneben aufnimmt.
+    if let Ok(streams) = helix
+        .get_streams_by_logins(&konfiguration.kanaele, None)
+        .await
+    {
+        let mut s = sperre.lock().await;
+        for sendung in &streams {
+            let lauf = sendung.id.trim();
+            if !lauf.is_empty() {
+                s.sperren(sendung.user_login.to_lowercase(), lauf);
+            }
+        }
+    }
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
     let aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
         Arc::clone(&warteschlange),
         Arc::clone(&abbruch),
+        Arc::clone(&sperre),
+        Arc::clone(&plattenbelegung),
     ));
     let auswertung = tokio::spawn(auswertungs_schleife(
         transkribierer,
         konfiguration,
         Arc::clone(&warteschlange),
         Arc::clone(&abbruch),
+        Arc::clone(&sperre),
     ));
 
     // Beide Schleifen laufen endlos. Endet eine, ist der Dienst kaputt - er
@@ -866,12 +885,6 @@ const LANGE_MELDEPAUSE_SEKUNDEN: i64 = 6 * 60 * 60;
 /// Platte, den der naechste Start des Dienstes wieder aufgreift.
 const MAX_MELDEVERSUCHE_LANG: u32 = 12;
 
-/// Hoechststand der Warteschlange, ab dem keine neuen Aufnahmen mehr starten.
-///
-/// 180 Bloecke sind sechs Stunden Ton. Wer so weit zurueckhaengt, holt es nicht
-/// mehr auf; weiter aufzunehmen hiesse nur, die Platte vollzuschreiben.
-const MAX_WARTESCHLANGE: usize = 180;
-
 /// Wie lange die Sendung schon laeuft, aus `started_at` von Helix.
 ///
 /// Ein unlesbares oder fehlendes Datum ergibt 0 - dann zaehlen die Zeiten wie
@@ -954,31 +967,22 @@ async fn aufnahme_schleife(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
+    sperre: Arc<Mutex<plan::LaufSperre>>,
+    plattenbelegung: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let mut laufend: std::collections::HashMap<String, tokio::task::JoinHandle<plan::Aufnahme>> =
         Default::default();
     // Aufnahmestand je Kanal. Er lebt hier und nicht im Task, weil ein Task
     // auch mitten in der Sendung enden kann - etwa wenn streamlink kurz
     // abbricht. Legte der Neustart den Stand neu an, finge der
-    // Sechs-Stunden-Deckel jedes Mal von vorn an.
+    // Aufnahme-Deckel jedes Mal von vorn an.
     let mut staende: std::collections::HashMap<String, plan::Aufnahme> = Default::default();
     // Wie oft ein Kanal am Stueck nichts aufnehmen konnte, obwohl er sendet.
     let mut fehlschlaege: std::collections::HashMap<String, u32> = Default::default();
     // Schon gemeldete Dauerausfaelle, damit die DM nicht im Minutentakt kommt.
     let mut gemeldet: std::collections::HashSet<String> = Default::default();
-    // Laeuft gerade eine Pause wegen Rueckstands? Nur ihr Beginn wird gemeldet.
-    let mut rueckstand_gemeldet = false;
-    // Ausgelassene Minuten je Kanal, ueber die ganze Stauphase aufsummiert.
-    //
-    // Die Aufstellung geht erst raus, wenn der Rueckstand abgebaut ist: waehrend
-    // der Pause waechst sie ja noch. Frueher teilte sie sich die Marke mit der
-    // Rueckstandsmeldung, und weil die zuerst kommt, wurde die Aufstellung
-    // Takt fuer Takt verworfen statt gemeldet.
-    let mut ausgelassen_gesamt: std::collections::BTreeMap<String, usize> = Default::default();
-    // Wie viele Wartetakte je Kanal wegen Rueckstands vergingen. Ein Takt sind
-    // 60 Sekunden Sendezeit, die niemand aufgenommen hat.
-    let pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>> =
-        Arc::new(Mutex::new(Default::default()));
+    // Laeuft gerade eine Pause wegen voller Platte? Nur ihr Beginn wird gemeldet.
+    let mut platte_gemeldet = false;
     // Welche Sendung der laufende Task eines Kanals aufnimmt.
     let mut laufende_sendung: std::collections::HashMap<String, String> = Default::default();
     // Blockstand je Kanal beim Start des laufenden Tasks.
@@ -1031,6 +1035,27 @@ nicht erkannt."
                             tracing::error!(dm_fehler, "Helix-Ausfall nicht meldbar");
                             hinweis_aufheben(&konfiguration, "helix-ausfall", &schluessel, &text)
                                 .await;
+                        }
+                    }
+                }
+                // Fertige Tasks trotzdem einsammeln: sonst bleibt die Sperre
+                // und der Stand haengen, bis Helix wieder antwortet.
+                let fertige: Vec<String> = laufend
+                    .iter()
+                    .filter(|(_, handle)| handle.is_finished())
+                    .map(|(kanal, _)| kanal.clone())
+                    .collect();
+                for kanal in fertige {
+                    if let Some(handle) = laufend.remove(&kanal) {
+                        match handle.await {
+                            Ok(zustand) => {
+                                gestartet_mit.remove(&kanal);
+                                staende.insert(kanal, zustand);
+                            }
+                            Err(fehler) => {
+                                gestartet_mit.remove(&kanal);
+                                tracing::error!(kanal, ?fehler, "Aufnahme-Task abgestuerzt");
+                            }
                         }
                     }
                 }
@@ -1152,7 +1177,7 @@ nicht erkannt."
         }
 
         // Der Stand faellt erst, wenn der Kanal offline war. Wuerde er bei
-        // jedem Takt zuruecksetzen, waere die Sechs-Stunden-Grenze wirkungslos:
+        // jedem Takt zuruecksetzen, waere der Aufnahme-Deckel wirkungslos:
         // ein Dauerstream startete alle 60 Sekunden eine neue Aufnahme.
         staende.retain(|kanal, _| live.contains(kanal));
         // Auch Ausfallzaehler und Meldemarke gehoeren zum Kanal. Blieben sie
@@ -1161,98 +1186,42 @@ nicht erkannt."
         fehlschlaege.retain(|kanal, _| live.contains(kanal));
         gemeldet.retain(|kanal| live.contains(kanal));
 
-        // Die Transkription ist langsamer als Echtzeit; drei gleichzeitige
-        // Kanaele fuellen die Warteschlange schneller, als ein Auswerter sie
-        // leert. Ohne Grenze waechst der Rueckstand und mit ihm die Platte.
-        // Erreicht der Stau die Grenze, wird nicht mehr neu aufgenommen -
-        // laufende Bloecke laufen zu Ende.
-        let stau = warteschlange.lock().await.offene_auswertungen();
-        for (kanal, takte) in std::mem::take(&mut *pausen.lock().await) {
-            *ausgelassen_gesamt.entry(kanal).or_insert(0) += takte;
-        }
-        if stau >= MAX_WARTESCHLANGE {
+        let belegt = aufnahmen_bytes(&aufnahme_wurzel(&konfiguration)).await;
+        plattenbelegung.store(belegt, std::sync::atomic::Ordering::Relaxed);
+        if !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES) {
             tracing::warn!(
-                stau,
-                grenze = MAX_WARTESCHLANGE,
-                "Auswertung kommt nicht nach - keine neuen Aufnahmen"
+                belegt,
+                grenze = plan::MAX_AUFNAHME_BYTES,
+                "Aufnahme pausiert - Platte voll"
             );
-            // Eine Pause heisst: Sendezeit wird nicht geprueft. Ohne Meldung
-            // sieht das hinterher aus wie ein sauberer Stream.
-            if !rueckstand_gemeldet {
+            if !platte_gemeldet {
                 let text = format!(
-                    "Coaching-Audit: Rueckstand von {stau} Bloecken - Aufnahme pausiert. \
-Dieser Abschnitt wird nicht geprueft."
+                    "Coaching-Audit: Aufnahmen belegen {belegt} Bytes, Grenze {}. \
+Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
+                    plan::MAX_AUFNAHME_BYTES
                 );
-                let (schluessel, text) = match offener_hinweis(&konfiguration, "rueckstand").await {
+                let (schluessel, text) = match offener_hinweis(&konfiguration, "platte").await {
                     Some(offen) => offen,
                     None => (
-                        format!(
-                            "{}-rueckstand-{}",
-                            start_kennung(),
-                            naechste_vorfall_nummer()
-                        ),
+                        format!("{}-platte-{}", start_kennung(), naechste_vorfall_nummer()),
                         text,
                     ),
                 };
                 match dm_rohtext(&text, &schluessel).await {
-                    // Auch hier erst nach der Zustellung merken.
                     Ok(()) => {
-                        rueckstand_gemeldet = true;
-                        hinweis_erledigt(&konfiguration, "rueckstand").await;
+                        platte_gemeldet = true;
+                        hinweis_erledigt(&konfiguration, "platte").await;
                     }
                     Err(fehler) => {
-                        tracing::error!(fehler, "Rueckstand nicht meldbar");
-                        hinweis_aufheben(&konfiguration, "rueckstand", &schluessel, &text).await;
+                        tracing::error!(fehler, "Plattengrenze nicht meldbar");
+                        hinweis_aufheben(&konfiguration, "platte", &schluessel, &text).await;
                     }
                 }
             }
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
         }
-        // Der Rueckstand ist abgebaut. Jetzt steht fest, wie viel Sendezeit die
-        // Pause gekostet hat - und erst jetzt ist die Aufstellung vollstaendig.
-        // Sie geht auch dann raus, wenn die Warteschlange laengst wieder kurz
-        // ist: diese Minuten sind nie aufgenommen worden.
-        if !ausgelassen_gesamt.is_empty() {
-            let aufstellung: Vec<String> = ausgelassen_gesamt
-                .iter()
-                .map(|(kanal, takte)| format!("{kanal}: rund {takte} Minuten"))
-                .collect();
-            let text = format!(
-                "Coaching-Audit: Sendezeit wegen Rueckstand nicht aufgenommen ({}). \
-Sie wird nicht geprueft.",
-                aufstellung.join(", ")
-            );
-            let (schluessel, text) = match offener_hinweis(&konfiguration, "ausgelassen").await {
-                Some(offen) => offen,
-                None => (
-                    format!(
-                        "{}-ausgelassen-{}",
-                        start_kennung(),
-                        naechste_vorfall_nummer()
-                    ),
-                    text,
-                ),
-            };
-            match dm_rohtext(&text, &schluessel).await {
-                Ok(()) => {
-                    // Erst nach der Zustellung vergessen. Scheitert sie, bleiben
-                    // die Zahlen stehen und gehen beim naechsten Takt erneut
-                    // raus - sonst waere die verpasste Sendezeit still weg.
-                    ausgelassen_gesamt.clear();
-                    rueckstand_gemeldet = false;
-                    hinweis_erledigt(&konfiguration, "ausgelassen").await;
-                }
-                Err(fehler) => {
-                    tracing::error!(fehler, "ausgelassene Bloecke nicht meldbar");
-                    hinweis_aufheben(&konfiguration, "ausgelassen", &schluessel, &text).await;
-                }
-            }
-        } else {
-            // Stau ohne verpasste Aufnahme: die naechste Pause darf sich wieder
-            // melden.
-            rueckstand_gemeldet = false;
-        }
+        platte_gemeldet = false;
 
         for sendung in &sendungen {
             let kanal = sendung.user_login.to_lowercase();
@@ -1260,7 +1229,7 @@ Sie wird nicht geprueft.",
             if let Some(handle) = laufend.get(kanal) {
                 // Endet eine Sendung und beginnt zwischen zwei Takten eine
                 // neue, nimmt der laufende Task sie unter der alten Kennung
-                // auf - mit deren Zeiten und deren Sechs-Stunden-Budget. Dann
+                // auf - mit deren Zeiten und deren Aufnahme-Deckel. Dann
                 // lieber abbrechen; der naechste Takt startet sauber neu.
                 let bekannt = laufende_sendung.get(kanal).map(String::as_str);
                 let aktuell = sendung.id.trim();
@@ -1334,15 +1303,38 @@ Sie wird nicht geprueft.",
             // Vergleich waere bei jedem Takt ungleich - der Dienst haette sich
             // selbst im Minutentakt abgebrochen.
             laufende_sendung.insert(kanal.clone(), sendung.id.trim().to_owned());
+            sperre
+                .lock()
+                .await
+                .sperren(kanal.clone(), zustand.lauf.clone());
+            let konfig_dm = konfiguration.clone();
+            let kanal_dm = kanal.clone();
+            let lauf_dm = zustand.lauf.clone();
+            tokio::spawn(async move {
+                start_dm_einmal(&konfig_dm, &kanal_dm, &lauf_dm).await;
+            });
             let handle = tokio::spawn(kanal_aufnehmen(
                 zustand,
                 konfiguration.clone(),
                 Arc::clone(&warteschlange),
                 Arc::clone(&abbruch),
-                Arc::clone(&pausen),
+                Arc::clone(&plattenbelegung),
             ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
+        }
+
+        let aktuelle_ids: std::collections::HashMap<String, String> = sendungen
+            .iter()
+            .map(|s| (s.user_login.to_lowercase(), s.id.trim().to_owned()))
+            .collect();
+        for (kanal, lauf) in sperre.lock().await.eintraege() {
+            let id = aktuelle_ids.get(&kanal).map(String::as_str);
+            if plan::lauf_ist_aktuelle_sendung(&lauf, id) {
+                continue;
+            }
+            sperre.lock().await.freigeben(&kanal, &lauf);
+            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
         }
 
         tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
@@ -1361,7 +1353,7 @@ async fn kanal_aufnehmen(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
-    pausen: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
+    plattenbelegung: Arc<std::sync::atomic::AtomicU64>,
 ) -> plan::Aufnahme {
     let capturer = AudioCapturer::from_env();
     let kanal = zustand.kanal.clone();
@@ -1374,17 +1366,11 @@ async fn kanal_aufnehmen(
             return zustand;
         };
 
-        // Auch eine laufende Aufnahme muss auf den Rueckstand sehen. Die
-        // Pruefung in der Aufsicht verhindert nur neue Tasks; ein Kanal, der
-        // seit Stunden aufnimmt, schriebe sonst weiter auf die Platte,
-        // waehrend die Auswertung nicht hinterherkommt.
-        if warteschlange.lock().await.offene_auswertungen() >= MAX_WARTESCHLANGE {
-            // Die Aufsicht meldet den Rueckstand, sieht ihn aber nur alle 60
-            // Sekunden. Ist die Warteschlange bis dahin wieder unter der
-            // Grenze, faellt die uebersprungene Sendezeit sonst unter den
-            // Tisch. Deshalb zaehlt jede Pause hier mit.
-            *pausen.lock().await.entry(kanal.clone()).or_insert(0usize) += 1;
-            tracing::warn!(kanal, "Rueckstand zu gross - Aufnahme pausiert");
+        // Auswertung darf die Aufnahme nicht anhalten. Nur die Platte:
+        // ohne diese Pruefung schriebe ein Dauerstream den Rechner voll.
+        let belegt = plattenbelegung.load(std::sync::atomic::Ordering::Relaxed);
+        if !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES) {
+            tracing::warn!(kanal, belegt, "Platte voll - Aufnahme pausiert");
             tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
         }
@@ -1827,6 +1813,7 @@ async fn auswertungs_schleife(
     konfiguration: Konfiguration,
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
+    sperre: Arc<Mutex<plan::LaufSperre>>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
     // Wie viele Bloecke am Stueck je Kanal der Modellschritt ausfiel.
@@ -1880,7 +1867,13 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
         }
 
-        let naechster = warteschlange.lock().await.naechster();
+        if !plan::last_erlaubt(last_eins(), kernzahl()) {
+            tracing::info!("Auswertung wartet - Last zu hoch");
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            continue;
+        }
+        let snapshot = sperre.lock().await.clone();
+        let naechster = warteschlange.lock().await.naechster_ohne_sperre(&snapshot);
         let Some(block) = naechster else {
             tokio::time::sleep(Duration::from_secs(15)).await;
             continue;
@@ -1940,6 +1933,17 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 .await;
                 meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
+                if !block.nur_melden {
+                    akte_verbuchen(&konfiguration, &block, &bericht.funde).await;
+                }
+                lauf_ende_melden(
+                    &konfiguration,
+                    &block.kanal,
+                    &block.lauf,
+                    &sperre,
+                    &warteschlange,
+                )
+                .await;
                 tracing::info!(
                     block = %block.bezeichnung(),
                     "Aufnahme bleibt liegen - Fund oder unvollstaendige Pruefung"
@@ -1951,11 +1955,67 @@ geloescht. Sie sind als Beleg nicht mehr da."
                         .await;
                 }
                 meldung_erledigt(Path::new(&block.datei)).await;
-                // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
-                // weitere stumme Aufnahme liegen: sie ist der einzige Weg, die
-                // uebersprungene Sendezeit noch nachzuhoeren. Gezaehlt und
-                // gemeldet wurde schon vor der Verzweigung.
-                let aufnahme_behalten = segmente == 0 && stumm_am_stueck >= MAX_LEER_AM_STUECK;
+                // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
+                // nicht - dann liefert der STT-Dienst vermutlich fuer alles
+                // nichts, und ohne diesen Zaehler saehe das aus wie lauter
+                // ruhige Streams.
+                // Gezaehlt wird je Kanal. Ein gesunder Kanal darf den Zaehler
+                // eines anderen nicht zuruecksetzen - sonst bliebe genau der
+                // Kanal, dessen Ton nie ankommt, ohne Warnung.
+                let kanal = block.kanal.clone();
+                let mut aufnahme_behalten = false;
+                if segmente == 0 {
+                    let zaehler = leer_am_stueck.entry(kanal.clone()).or_insert(0usize);
+                    *zaehler += 1;
+                    let stumm = *zaehler;
+                    // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
+                    // weitere stumme Aufnahme liegen: sie ist der einzige Weg,
+                    // die uebersprungene Sendezeit noch nachzuhoeren.
+                    aufnahme_behalten = stumm >= MAX_LEER_AM_STUECK;
+                    // Gemeldet wird bei jedem Vielfachen, nicht nur beim
+                    // ersten Mal - eine Stoerung, die anhaelt, soll sich
+                    // wieder melden.
+                    if stumm.is_multiple_of(MAX_LEER_AM_STUECK) {
+                        let text = format!(
+                            "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
+einzigen erkannten Satz. STT-Dienst pruefen."
+                        );
+                        let ablage = format!("nur-stille-{kanal}");
+                        let (schluessel, text) =
+                            match offener_hinweis(&konfiguration, &ablage).await {
+                                Some(offen) => offen,
+                                None => (
+                                    format!(
+                                        "{}-{kanal}-nur-stille-{}",
+                                        start_kennung(),
+                                        naechste_vorfall_nummer()
+                                    ),
+                                    text,
+                                ),
+                            };
+                        if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
+                            // Nicht wieder loeschen, wenn spaeter etwas
+                            // ankommt: die Aufnahmen dieser Strecke sind dann
+                            // schon weg, und die Warnung ist der einzige
+                            // Hinweis darauf, dass sie ungeprueft blieben.
+                            tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
+                            hinweis_aufheben(&konfiguration, &ablage, &schluessel, &text).await;
+                        }
+                    }
+                } else {
+                    leer_am_stueck.remove(&kanal);
+                }
+                if !block.nur_melden {
+                    akte_verbuchen(&konfiguration, &block, &[]).await;
+                }
+                lauf_ende_melden(
+                    &konfiguration,
+                    &block.kanal,
+                    &block.lauf,
+                    &sperre,
+                    &warteschlange,
+                )
+                .await;
                 if aufnahme_behalten {
                     fertig_markieren(Path::new(&block.datei), &leerer_bericht(&block)).await;
                     tracing::warn!(
@@ -2047,6 +2107,7 @@ geloescht. Sie sind als Beleg nicht mehr da."
             Err(Auswertefehler::Auswertung(fehler)) => {
                 let bezeichnung = block.bezeichnung();
                 let kanal = block.kanal.clone();
+                let lauf = block.lauf.clone();
                 let versuch = block.versuche + 1;
                 let aufgegeben_datei = block.datei.clone();
                 let aufgegeben_bericht = leerer_bericht(&block);
@@ -2104,6 +2165,7 @@ Aufnahme liegt noch da.",
                             erneut versucht"
                         );
                     }
+                    lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
                 }
             }
         }
@@ -2830,43 +2892,150 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
     }
 }
 
-async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
-    // Ohne Funde gibt es nichts zu melden - je Block eine DM "alles ruhig"
-    // waere nur Rauschen. Ein ausgefallener Modellschritt wird nicht hier
-    // gemeldet, sondern gedrosselt in der Auswertungsschleife: er faellt
-    // typischerweise fuer *jeden* Block aus (fehlender Schluessel, gesperrter
-    // Anbieter), und eine DM je Block waere eine Mailbombe.
-    if bericht.funde.is_empty() {
-        return Ok(());
-    }
-    let Some(token) = melden::broker_token() else {
-        return Err("kein Broker-Token, Fund waere unbemerkt geblieben".to_owned());
-    };
-    let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(bericht, 5));
-    let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
-    let client = broker_client()
-        .ok_or_else(|| "HTTP-Client nicht baubar, Fund waere unbemerkt geblieben".to_owned())?;
-    match client
-        .post(&url)
-        .header("X-Internal-Token", token)
-        // Kommt die Antwort nicht an, obwohl die DM raus ist, laeuft der
-        // Block erneut. Der Schluessel haengt am Bericht, nicht am Versuch -
-        // der Broker erkennt die Wiederholung daran.
-        .header(
-            melden::IDEMPOTENZ_KOPF,
-            melden::idempotenz_schluessel(schluessel),
-        )
-        .json(&anfrage)
-        .send()
-        .await
-    {
-        Ok(antwort) if antwort.status().is_success() => {
-            broker_antwort_pruefen(antwort).await?;
-            tracing::info!("DM zugestellt");
-            Ok(())
+async fn dm_senden(_bericht: &Bericht, _schluessel: &str) -> Result<(), String> {
+    // Funde gehen nicht mehr je Block raus. Eine DM am Sendungsende sammelt
+    // die ToS-Treffer. Sonst waere jede ruhige Viertelstunde eine Nachricht,
+    // und drei parallele Kanaele eine Mailbombe.
+    Ok(())
+}
+
+/// Summe der Dateigroessen unter den Aufnahmen.
+async fn aufnahmen_bytes(wurzel: &Path) -> u64 {
+    let mut summe = 0u64;
+    let mut zu_lesen = vec![wurzel.to_path_buf()];
+    while let Some(aktuell) = zu_lesen.pop() {
+        let mut eintraege = match tokio::fs::read_dir(&aktuell).await {
+            Ok(eintraege) => eintraege,
+            Err(_) => continue,
+        };
+        while let Ok(Some(eintrag)) = eintraege.next_entry().await {
+            let pfad = eintrag.path();
+            match eintrag.file_type().await {
+                Ok(typ) if typ.is_dir() => zu_lesen.push(pfad),
+                Ok(_) => {
+                    if let Ok(daten) = eintrag.metadata().await {
+                        summe += daten.len();
+                    }
+                }
+                _ => {}
+            }
         }
-        Ok(antwort) => Err(format!("DM abgelehnt: HTTP {}", antwort.status().as_u16())),
-        Err(fehler) => Err(format!("DM fehlgeschlagen: {fehler}")),
+    }
+    summe
+}
+
+fn last_eins() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse().ok())
+        .unwrap_or(0.0)
+}
+
+fn kernzahl() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(1)
+}
+
+fn lauf_ordner(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> PathBuf {
+    aufnahme_wurzel(konfiguration).join(kanal).join(lauf)
+}
+
+const START_MARKE: &str = "start_gemeldet.json";
+const ENDE_MARKE: &str = "ende_gemeldet.json";
+const AKTE: &str = "akte.json";
+
+async fn start_dm_einmal(konfiguration: &Konfiguration, kanal: &str, lauf: &str) {
+    let ordner = lauf_ordner(konfiguration, kanal, lauf);
+    if let Err(fehler) = tokio::fs::create_dir_all(&ordner).await {
+        tracing::warn!(?fehler, kanal, "Startordner nicht anlegbar");
+    }
+    let marke = ordner.join(START_MARKE);
+    if tokio::fs::try_exists(&marke).await.unwrap_or(false) {
+        return;
+    }
+    let text = report::start_dm_text(kanal);
+    let schluessel = format!("{kanal}-{lauf}-start");
+    match dm_rohtext(&text, &schluessel).await {
+        Ok(()) => {
+            if let Err(fehler) = nur_fuer_mich(&marke, b"{}").await {
+                tracing::warn!(fehler, kanal, "Startmarke nicht schreibbar");
+            }
+        }
+        Err(fehler) => {
+            tracing::error!(fehler, kanal, "Start-DM nicht zustellbar");
+            hinweis_aufheben(
+                konfiguration,
+                &format!("start-{kanal}-{lauf}"),
+                &schluessel,
+                &text,
+            )
+            .await;
+        }
+    }
+}
+
+async fn akte_lesen(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> report::LaufAkte {
+    let pfad = lauf_ordner(konfiguration, kanal, lauf).join(AKTE);
+    match tokio::fs::read_to_string(&pfad).await {
+        Ok(roh) => serde_json::from_str(&roh).unwrap_or_default(),
+        Err(_) => report::LaufAkte::default(),
+    }
+}
+
+async fn akte_verbuchen(
+    konfiguration: &Konfiguration,
+    block: &plan::Block,
+    funde: &[tb_stream_audit::Fund],
+) {
+    let ordner = lauf_ordner(konfiguration, &block.kanal, &block.lauf);
+    let _ = tokio::fs::create_dir_all(&ordner).await;
+    let mut akte = akte_lesen(konfiguration, &block.kanal, &block.lauf).await;
+    akte.block_verbuchen(funde);
+    let pfad = ordner.join(AKTE);
+    if let Ok(json) = serde_json::to_string(&akte) {
+        if let Err(fehler) = atomar_schreiben(&pfad, json.as_bytes()).await {
+            tracing::warn!(fehler, "Laufakte nicht schreibbar");
+        }
+    }
+}
+
+async fn lauf_ende_melden(
+    konfiguration: &Konfiguration,
+    kanal: &str,
+    lauf: &str,
+    sperre: &Mutex<plan::LaufSperre>,
+    warteschlange: &Mutex<plan::Warteschlange>,
+) {
+    let gesperrt = sperre.lock().await.ist_gesperrt(kanal, lauf);
+    let offen = warteschlange.lock().await.offene_fuer_lauf(kanal, lauf);
+    if !plan::ende_dm_faellig(gesperrt, offen) {
+        return;
+    }
+    let marke = lauf_ordner(konfiguration, kanal, lauf).join(ENDE_MARKE);
+    if tokio::fs::try_exists(&marke).await.unwrap_or(false) {
+        return;
+    }
+    let akte = akte_lesen(konfiguration, kanal, lauf).await;
+    let text = report::ende_dm_text(kanal, akte.bloecke, &akte.funde, 8);
+    let schluessel = format!("{kanal}-{lauf}-ende");
+    match dm_rohtext(&text, &schluessel).await {
+        Ok(()) => {
+            let _ = tokio::fs::create_dir_all(lauf_ordner(konfiguration, kanal, lauf)).await;
+            if let Err(fehler) = nur_fuer_mich(&marke, b"{}").await {
+                tracing::warn!(fehler, kanal, "Endemarke nicht schreibbar");
+            }
+        }
+        Err(fehler) => {
+            tracing::error!(fehler, kanal, "Ende-DM nicht zustellbar");
+            hinweis_aufheben(
+                konfiguration,
+                &format!("ende-{kanal}-{lauf}"),
+                &schluessel,
+                &text,
+            )
+            .await;
+        }
     }
 }
 

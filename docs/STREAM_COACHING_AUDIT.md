@@ -26,17 +26,22 @@ im Deadlock-Docs-Korpus.
 
 1. Alle 60 Sekunden fragt der Dienst ueber Helix ab, wer sendet.
 2. Je sendendem Kanal laeuft eine eigene Aufnahmeschleife, in Bloecken von
-   2 Minuten, hoechstens 6 Stunden Sendungszeit je Sendung. Kurze Bloecke,
-   weil der lokale STT-Dienst mit Reaktionen und Smalltalk geteilt wird.
-3. Fertige Bloecke gehen in eine Warteschlange; ausgewertet wird seriell.
-4. Transkription: lokaler STT-Dienst (`deadlock-stt-server`, faster-whisper).
+   2 Minuten, hoechstens 24 Stunden aufgenommener Zeit je Sendung. Mehrere
+   Kanaele werden parallel mitgeschnitten. Die Aufnahme pausiert nicht, weil
+   die Auswertung hinterherhaengt; sie pausiert nur, wenn die Aufnahmen
+   12 GB ueberschreiten.
+3. Beim Start einer Aufnahme geht eine DM an den Admin. Fertige Bloecke
+   warten, bis der Kanal offline ist. Dann wird seriell transkribiert und
+   geprueft, und eine Abschluss-DM listet die ToS-Funde der ganzen Sendung.
+4. Transkription: lokaler STT-Dienst (`deadlock-stt-server`, faster-whisper),
+   nur wenn die Last unter 85 Prozent der Kerne liegt.
 5. Pruefung: drei feste Regeln ueber dem Transkript, danach ein Modellschritt
    ueber den Anbieter des Twitch-Bots. Er sieht alle Segmente des Blocks, nicht
    nur die ohne Regeltreffer, in Stapeln zu 20.
-6. Bericht als Markdown und JSON unter `STREAM_AUDIT_OUTPUT_DIR`, Kurzmeldung
-   als DM ueber den Master-Broker. Ein Block, dessen Transkription dreimal
-   scheiterte, kommt nie so weit: von ihm bleiben die Aufnahme und die
-   DM "aufgegeben".
+6. Bericht als Markdown und JSON unter `STREAM_AUDIT_OUTPUT_DIR`. Die
+   Abschluss-DM nennt nur Funde, die Twitch ahnden wuerde. Ein Block, dessen
+   Transkription dreimal scheiterte, kommt nie so weit: von ihm bleiben die
+   Aufnahme und die DM "aufgegeben".
 
 ## Datenschutz
 
@@ -122,8 +127,9 @@ journalctl --user -u deadlock-twitch-stream-coaching-watch -f
   Dienst startet also, findet aber nur dann etwas, wenn dort wirklich der
   STT-Dienst horcht.
 - Exit 1: eine der beiden Schleifen ist gestorben; systemd startet neu.
-- Keine DM heisst in aller Regel: nichts gefunden. Gemeldet wird auch, wenn der
-  Modellschritt ausfiel, ein Block aufgegeben wurde, die Aufnahme wegen
-  Rueckstands pausiert oder die Twitch-Abfrage scheitert. Nimmt der Broker die
+- Start und Ende jeder Sendung erzeugen eine DM. Die Abschluss-DM nennt ToS-Funde
+  oder sagt, dass keine vorlagen. Gemeldet wird ausserdem, wenn der
+  Modellschritt ausfiel, ein Block aufgegeben wurde, die Platte die
+  Aufnahmegrenze erreicht oder die Twitch-Abfrage scheitert. Nimmt der Broker die
   DM ueber Stunden nicht an, liegt der Bericht weiter im Ausgabeordner und der
   Aufraeumtakt bietet die Meldung erneut an - Stille ist dann kein Beweis.

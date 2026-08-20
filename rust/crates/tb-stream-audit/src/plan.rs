@@ -10,7 +10,7 @@
 //! offline gilt, wie ein Block heisst. Damit ist die Logik testbar, ohne einen
 //! Stream zu brauchen.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 /// Blocklaenge der Aufnahme.
 ///
@@ -22,9 +22,19 @@ use std::collections::VecDeque;
 /// dazwischen kommt jeder andere Aufrufer dran.
 pub const BLOCK_SEKUNDEN: u64 = 2 * 60;
 
-/// Obergrenze je Kanal und Sendung, aus `MAX_LIVE_SECONDS`. Ohne Deckel laeuft
-/// ein Dauerstream die Platte voll.
-pub const MAX_SEKUNDEN_JE_SENDUNG: u64 = 6 * 60 * 60;
+/// Obergrenze je Kanal an **aufgenommener** Zeit, nicht an Sendungszeit.
+///
+/// Der alte Deckel zaehlte ab Helix `started_at`. Wer mitten in einer langen
+/// Sendung dazukam, hoerte nach wenigen Minuten still auf. Der Deckel begrenzt
+/// jetzt nur unseren Mitschnitt; die Platte begrenzt `MAX_AUFNAHME_BYTES`.
+pub const MAX_SEKUNDEN_JE_SENDUNG: u64 = 24 * 60 * 60;
+
+/// Solange die Aufnahmen unter dieser Groesse bleiben, wird weiter
+/// mitgeschnitten. Darueber pausiert nur die Aufnahme, nie die Auswertung.
+pub const MAX_AUFNAHME_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+
+/// Anteil der Kerne, bis zu dem die Auswertung STT belasten darf.
+pub const LAST_KERNE_ANTEIL: f64 = 0.85;
 
 /// So oft wird geprueft, ob ein Kanal sendet.
 pub const LIVE_PRUEFUNG_SEKUNDEN: u64 = 60;
@@ -233,6 +243,89 @@ impl Warteschlange {
     pub fn ist_leer(&self) -> bool {
         self.eintraege.is_empty()
     }
+
+    /// Naechster Block, dessen Lauf nicht mehr aufgenommen wird.
+    ///
+    /// Waehrend der Sendung liegen die Bloecke schon in der Warteschlange,
+    /// werden aber nicht transkribiert: STT teilt sich mit Reaktionen, und
+    /// drei parallele Auswertungen wuerden den Rechner tragen. Nach dem
+    /// Freigeben kommt der aelteste freie Block zuerst.
+    pub fn naechster_ohne_sperre_um(&mut self, jetzt: i64, sperre: &LaufSperre) -> Option<Block> {
+        let stelle = self
+            .eintraege
+            .iter()
+            .position(|b| b.frueherstens <= jetzt && !sperre.ist_gesperrt(&b.kanal, &b.lauf))?;
+        self.eintraege.remove(stelle)
+    }
+
+    pub fn naechster_ohne_sperre(&mut self, sperre: &LaufSperre) -> Option<Block> {
+        self.naechster_ohne_sperre_um(chrono::Utc::now().timestamp(), sperre)
+    }
+
+    /// Offene Bloecke eines Laufs, Auswertung und Meldung zusammen.
+    pub fn offene_fuer_lauf(&self, kanal: &str, lauf: &str) -> usize {
+        self.eintraege
+            .iter()
+            .filter(|b| b.kanal == kanal && b.lauf == lauf)
+            .count()
+    }
+}
+
+/// Sendungen, deren Bloecke noch nicht ausgewertet werden duerfen.
+#[derive(Debug, Default, Clone)]
+pub struct LaufSperre {
+    gesperrt: HashSet<(String, String)>,
+}
+
+impl LaufSperre {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn sperren(&mut self, kanal: impl Into<String>, lauf: impl Into<String>) {
+        self.gesperrt.insert((kanal.into(), lauf.into()));
+    }
+
+    pub fn freigeben(&mut self, kanal: &str, lauf: &str) {
+        self.gesperrt.remove(&(kanal.to_owned(), lauf.to_owned()));
+    }
+
+    pub fn ist_gesperrt(&self, kanal: &str, lauf: &str) -> bool {
+        self.gesperrt.contains(&(kanal.to_owned(), lauf.to_owned()))
+    }
+
+    pub fn eintraege(&self) -> Vec<(String, String)> {
+        self.gesperrt.iter().cloned().collect()
+    }
+}
+
+/// Ob ein gesperrter Lauf noch die aktuelle Sendung ist.
+///
+/// `aktuelle_id` ist die Helix-Stream-ID, falls der Kanal sendet. `None`
+/// heisst offline: der Lauf ist zu Ende, Auswertung darf loslegen.
+pub fn lauf_ist_aktuelle_sendung(lauf: &str, aktuelle_id: Option<&str>) -> bool {
+    let Some(id) = aktuelle_id.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    lauf == id || lauf.starts_with(&format!("{id}-"))
+}
+
+/// Abschluss-DM nur, wenn nichts mehr aufgenommen wird und nichts mehr wartet.
+pub fn ende_dm_faellig(gesperrt: bool, offene_bloecke: usize) -> bool {
+    !gesperrt && offene_bloecke == 0
+}
+
+/// Ob noch Platz fuer weitere Aufnahmen ist.
+pub fn platte_reicht(belegt: u64, grenze: u64) -> bool {
+    belegt < grenze
+}
+
+/// Ob die Auswertung STT starten darf, ohne den Rechner zu traegen.
+pub fn last_erlaubt(load1: f64, kerne: u32) -> bool {
+    if kerne == 0 {
+        return true;
+    }
+    load1 < f64::from(kerne) * LAST_KERNE_ANTEIL
 }
 
 /// Laufender Aufnahmezustand eines Kanals.
@@ -302,15 +395,18 @@ impl Aufnahme {
 
     /// Wie lang der naechste Block werden darf. `None` heisst: Deckel erreicht,
     /// nicht weiter aufnehmen.
-    /// Der Deckel zaehlt Sendungszeit, nicht Aufnahmezeit. Ein Neustart des
-    /// Dienstes in Stunde sieben faengt damit nicht wieder von vorn an.
+    ///
+    /// Der Deckel zaehlt aufgenommene Zeit, nicht Sendungszeit. Wer mitten in
+    /// einer langen Sendung dazukommt, bekommt trotzdem den vollen Mitschnitt
+    /// bis zur Grenze; die Sendungszeiten im Bericht bleiben ueber
+    /// `versatz_basis` korrekt.
     pub fn naechste_blocklaenge(&self) -> Option<u64> {
         self.naechste_blocklaenge_um(chrono::Utc::now().timestamp())
     }
 
     /// Wie [`Aufnahme::naechste_blocklaenge`], mit vorgegebener Uhrzeit.
-    pub fn naechste_blocklaenge_um(&self, jetzt: i64) -> Option<u64> {
-        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.sendungssekunden_um(jetzt));
+    pub fn naechste_blocklaenge_um(&self, _jetzt: i64) -> Option<u64> {
+        let rest = MAX_SEKUNDEN_JE_SENDUNG.saturating_sub(self.aufgenommen_sekunden);
         match rest {
             r if r < MIND_BLOCK_SEKUNDEN => None,
             r if r < BLOCK_SEKUNDEN => Some(r),
@@ -522,15 +618,15 @@ mod tests {
 
     #[test]
     fn letzter_block_wird_am_deckel_gekuerzt() {
-        // Der Deckel zaehlt Sendungszeit an der Uhr: hier ist die Sendung
-        // seit MAX minus 90 Sekunden am Laufen.
-        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG - 90);
+        let mut a = Aufnahme::starten("k", "L1");
+        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG - 90;
         assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), Some(90));
     }
 
     #[test]
     fn am_deckel_wird_nicht_weiter_aufgenommen() {
-        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG);
+        let mut a = Aufnahme::starten("k", "L1");
+        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG;
         assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), None);
     }
 
@@ -547,7 +643,8 @@ mod tests {
 
     #[test]
     fn ueberschreitung_kippt_nicht_ins_negative() {
-        let a = Aufnahme::starten_bei("k", "L1", MAX_SEKUNDEN_JE_SENDUNG + 500);
+        let mut a = Aufnahme::starten("k", "L1");
+        a.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG + 500;
         assert_eq!(a.naechste_blocklaenge_um(a.gestartet_um), None);
     }
 
@@ -587,14 +684,18 @@ mod tests_versatz {
     }
 
     #[test]
-    fn deckel_zaehlt_sendungszeit() {
-        // Neustart in Stunde sieben: es wird nicht noch einmal aufgenommen.
+    fn deckel_zaehlt_aufgenommene_zeit_nicht_sendungsbeginn() {
+        // Mitten in einer langen Sendung dazukommen darf den Mitschnitt
+        // nicht nach wenigen Minuten beenden.
         let spaet = Aufnahme::starten_bei("ricky", "42", MAX_SEKUNDEN_JE_SENDUNG + 60);
-        assert_eq!(spaet.naechste_blocklaenge(), None);
+        assert_eq!(
+            spaet.naechste_blocklaenge_um(spaet.gestartet_um),
+            Some(BLOCK_SEKUNDEN)
+        );
 
-        // Kurz vor dem Deckel bleibt nur der Rest.
-        let knapp = Aufnahme::starten_bei("ricky", "42", MAX_SEKUNDEN_JE_SENDUNG - 120);
-        assert_eq!(knapp.naechste_blocklaenge(), Some(120));
+        let mut knapp = Aufnahme::starten("ricky", "42");
+        knapp.aufgenommen_sekunden = MAX_SEKUNDEN_JE_SENDUNG - 120;
+        assert_eq!(knapp.naechste_blocklaenge_um(knapp.gestartet_um), Some(120));
     }
 }
 
@@ -614,5 +715,96 @@ mod tests_gegendruck {
         w.einreihen(nur_meldung);
         assert_eq!(w.laenge(), 2);
         assert_eq!(w.offene_auswertungen(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_lauf_sperre {
+    use super::*;
+
+    fn block(kanal: &str, lauf: &str, nummer: u32) -> Block {
+        Block {
+            kanal: kanal.to_owned(),
+            lauf: lauf.to_owned(),
+            nummer,
+            versatz_sekunden: 0,
+            datei: format!("{nummer}.ts"),
+            versuche: 0,
+            frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
+            zeit_unsicher: false,
+        }
+    }
+
+    #[test]
+    fn gesperrter_lauf_wird_nicht_ausgewertet() {
+        let mut w = Warteschlange::new();
+        w.einreihen(block("ricky", "live1", 1));
+        w.einreihen(block("ski", "live2", 1));
+        let mut sperre = LaufSperre::new();
+        sperre.sperren("ricky", "live1");
+        let naechster = w.naechster_ohne_sperre_um(0, &sperre).unwrap();
+        assert_eq!(naechster.kanal, "ski");
+        assert!(w.naechster_ohne_sperre_um(0, &sperre).is_none());
+        assert_eq!(w.offene_fuer_lauf("ricky", "live1"), 1);
+    }
+
+    #[test]
+    fn nach_freigabe_kommt_der_gesperrte_block() {
+        let mut w = Warteschlange::new();
+        w.einreihen(block("ricky", "live1", 1));
+        let mut sperre = LaufSperre::new();
+        sperre.sperren("ricky", "live1");
+        assert!(w.naechster_ohne_sperre_um(0, &sperre).is_none());
+        sperre.freigeben("ricky", "live1");
+        assert_eq!(
+            w.naechster_ohne_sperre_um(0, &sperre).unwrap().kanal,
+            "ricky"
+        );
+    }
+
+    #[test]
+    fn zweiter_kanal_wird_nicht_von_ricky_gesperrt() {
+        let mut sperre = LaufSperre::new();
+        sperre.sperren("ricky", "1");
+        assert!(!sperre.ist_gesperrt("ski", "1"));
+        assert!(sperre.ist_gesperrt("ricky", "1"));
+        assert!(!sperre.ist_gesperrt("ricky", "2"));
+    }
+
+    #[test]
+    fn streamlink_hiccup_gibt_die_sperre_nicht_frei() {
+        assert!(lauf_ist_aktuelle_sendung("42", Some("42")));
+        assert!(lauf_ist_aktuelle_sendung("42-99", Some("42")));
+        assert!(!lauf_ist_aktuelle_sendung("42", Some("99")));
+        assert!(!lauf_ist_aktuelle_sendung("42", None));
+    }
+
+    #[test]
+    fn ende_dm_wartet_auf_letzte_auswertung() {
+        assert!(!ende_dm_faellig(true, 0));
+        assert!(!ende_dm_faellig(false, 3));
+        assert!(ende_dm_faellig(false, 0));
+    }
+}
+
+#[cfg(test)]
+mod tests_last_und_platte {
+    use super::*;
+
+    #[test]
+    fn platte_reicht_unter_der_grenze() {
+        assert!(platte_reicht(0, MAX_AUFNAHME_BYTES));
+        assert!(platte_reicht(MAX_AUFNAHME_BYTES - 1, MAX_AUFNAHME_BYTES));
+        assert!(!platte_reicht(MAX_AUFNAHME_BYTES, MAX_AUFNAHME_BYTES));
+        assert!(!platte_reicht(MAX_AUFNAHME_BYTES + 1, MAX_AUFNAHME_BYTES));
+    }
+
+    #[test]
+    fn last_erlaubt_unter_85_prozent() {
+        assert!(last_erlaubt(13.5, 16));
+        assert!(!last_erlaubt(13.7, 16));
+        assert!(last_erlaubt(100.0, 0));
     }
 }

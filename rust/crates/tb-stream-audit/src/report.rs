@@ -245,6 +245,55 @@ pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
     text
 }
 
+/// Startmeldung: der Admin soll sehen, dass der Mitschnitt laeuft, auch wenn
+/// spaeter nichts gefunden wird.
+pub fn start_dm_text(kanal: &str) -> String {
+    format!(
+        "Coaching-Audit {kanal}: Aufnahme läuft. Auswertung kommt, wenn der Stream zu Ende ist."
+    )
+}
+
+/// Abschlussmeldung einer Sendung. Nur ToS-relevante Funde, Zeitstempel zuerst.
+pub fn ende_dm_text(kanal: &str, bloecke: usize, funde: &[crate::Fund], grenze: usize) -> String {
+    let funde = crate::nur_tos_meldewuerdig(funde);
+    if funde.is_empty() {
+        return format!(
+            "Coaching-Audit {kanal}: Stream zu Ende, {bloecke} Blöcke geprüft, keine ToS-Verstöße."
+        );
+    }
+    let mut text = format!(
+        "Coaching-Audit {kanal}: Stream zu Ende, {bloecke} Blöcke geprüft, {} ToS-Verstöße.",
+        funde.len()
+    );
+    for fund in funde.iter().take(grenze) {
+        text.push_str(&format!(
+            "\n• {} {} ({})",
+            zeit(fund.start_sekunden),
+            fund.kategorie,
+            fund.schwere
+        ));
+    }
+    if funde.len() > grenze {
+        text.push_str(&format!("\n… {} weitere im Bericht", funde.len() - grenze));
+    }
+    text
+}
+
+/// Fortschritt eines Laufs, damit ein Neustart mitten in der Auswertung den
+/// Zaehler und die Funde nicht verliert.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LaufAkte {
+    pub bloecke: usize,
+    pub funde: Vec<crate::Fund>,
+}
+
+impl LaufAkte {
+    pub fn block_verbuchen(&mut self, funde: &[crate::Fund]) {
+        self.bloecke += 1;
+        self.funde.extend(funde.iter().cloned());
+    }
+}
+
 pub fn lauf_id(jetzt: DateTime<Utc>, kanal: &str) -> String {
     format!("{}-{}", jetzt.format("%Y%m%dT%H%M%SZ"), kanal)
 }
@@ -422,5 +471,49 @@ mod tests {
             text.contains("Modellschritt lief nicht"),
             "unerwartet: {text}"
         );
+    }
+
+    #[test]
+    fn start_dm_nennt_kanal_und_verweist_auf_das_ende() {
+        let text = start_dm_text("helmbombenricky");
+        assert!(text.contains("helmbombenricky"), "{text}");
+        assert!(text.contains("Aufnahme läuft"), "{text}");
+        assert!(text.contains("zu Ende"), "{text}");
+        assert!(!text.contains('—') && !text.contains('–'), "{text}");
+    }
+
+    #[test]
+    fn ende_dm_ohne_tos_sagt_keine_verstoesse() {
+        let safe = fund("low", 12.0, "harassment");
+        let text = ende_dm_text("helmbombenricky", 7, &[safe], 5);
+        assert!(text.contains("7 Blöcke geprüft"), "{text}");
+        assert!(text.contains("keine ToS-Verstöße"), "{text}");
+        assert!(!text.contains('•'), "{text}");
+    }
+
+    #[test]
+    fn ende_dm_listet_nur_tos_funde_mit_zeit() {
+        let funde = vec![
+            fund("low", 12.0, "harassment"),
+            fund("high", 125.0, "hate_speech_slur"),
+            fund("high", 400.0, "harassment"),
+        ];
+        let text = ende_dm_text("helmbombenricky", 12, &funde, 5);
+        assert!(text.contains("2 ToS-Verstöße"), "{text}");
+        assert!(text.contains("00:02:05"), "{text}");
+        assert!(text.contains("hate_speech_slur"), "{text}");
+        assert!(
+            !text.contains("00:00:12"),
+            "safe harassment darf nicht in die DM"
+        );
+    }
+
+    #[test]
+    fn laufakte_zaehlt_bloecke_und_sammelt_funde() {
+        let mut akte = LaufAkte::default();
+        akte.block_verbuchen(&[fund("high", 1.0, "hate_speech_slur")]);
+        akte.block_verbuchen(&[]);
+        assert_eq!(akte.bloecke, 2);
+        assert_eq!(akte.funde.len(), 1);
     }
 }
