@@ -12,6 +12,7 @@ import {
   UPLINK_SPEED_HINTERHER,
   UPLINK_SPEED_MITHALTEN,
   UPLINK_KILL_LAEUFT_NOCH,
+  UPLINK_LAST_LABEL,
   UPLINK_TWITCH_ALLGEMEINER_FEHLER,
   UPLINK_TWITCH_SCOPE_HINT,
   aktiveSessionId,
@@ -233,6 +234,14 @@ test('die Auslastung steht als lesbarer Prozentwert da oder gar nicht', () => {
   assert.equal(lastProzent(undefined), null);
   assert.equal(lastProzent(Number.NaN), null);
   assert.equal(lastProzent(-3), null);
+});
+
+test('die Auslastung ist die dieses Streams, nicht die der ganzen Maschine', () => {
+  // `cpu_pct` kommt aus den Werten der Session. Stünde "Server" davor, läse
+  // der Streamer die Last aller anderen mit und hielte sie für seine.
+  assert.match(UPLINK_LAST_LABEL, /Stream/);
+  assert.equal(/Server|Maschine|CPU/i.test(UPLINK_LAST_LABEL), false);
+  assert.equal(UPLINK_LAST_LABEL.includes('—'), false);
 });
 
 test('die Datenrate je Ziel trägt den Namen der Plattform', () => {

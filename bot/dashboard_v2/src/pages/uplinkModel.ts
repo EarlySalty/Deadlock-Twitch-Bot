@@ -285,6 +285,14 @@ export function speedLage(encoderSpeed: number | null | undefined): string | nul
   return wert < 1 ? UPLINK_SPEED_HINTERHER : UPLINK_SPEED_MITHALTEN;
 }
 
+/**
+ * Überschrift über dem Prozentwert aus `cpu_pct`.
+ *
+ * Der Wert gehört zur Session des Streamers, nicht zur ganzen Maschine. Die
+ * Beschriftung muss das sagen, sonst liest er die Last aller anderen mit.
+ */
+export const UPLINK_LAST_LABEL = 'Rechenlast für deinen Stream';
+
 /** Auslastung als lesbarer Prozentwert, sonst nichts. */
 export function lastProzent(cpuPct: number | null | undefined): string | null {
   if (cpuPct === null || cpuPct === undefined) return null;

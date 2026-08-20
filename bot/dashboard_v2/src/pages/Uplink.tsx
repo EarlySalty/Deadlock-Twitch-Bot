@@ -33,6 +33,7 @@ import {
 } from '@/api/uplink';
 import {
   UPLINK_KILL_LAEUFT_NOCH,
+  UPLINK_LAST_LABEL,
   UPLINK_PLATFORMS,
   UPLINK_REAUTH_HREF,
   UPLINK_TWITCH_SCOPE_HINT,
@@ -476,7 +477,7 @@ function StatusKarte({ sessionId }: { sessionId: number | null | undefined }) {
           </div>
           {auslastung && (
             <div>
-              <div className={LABEL_KLASSE}>Auslastung des Servers</div>
+              <div className={LABEL_KLASSE}>{UPLINK_LAST_LABEL}</div>
               <div className="text-sm text-white">{auslastung}</div>
             </div>
           )}
