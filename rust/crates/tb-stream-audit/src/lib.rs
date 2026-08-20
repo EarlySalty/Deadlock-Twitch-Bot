@@ -39,8 +39,15 @@ pub struct Segment {
     pub text: String,
 }
 
-/// Ein Fund. `zitat_roh` bleibt bewusst aussen vor: der Bericht traegt nur die
-/// geschwaerzte Fassung und den Hash des Originals.
+/// Ein Fund. Die persistente Akte (.md/.json) traegt nur die geschwaerzte
+/// Fassung und den Hash des Originals.
+///
+/// `zitat_roh` ist die einzige Ausnahme, und mit Absicht eng gehalten: es traegt
+/// den unredigierten Wortlaut nur im Speicher und nur bis zur Discord-DM an den
+/// Admin. `skip_serializing` haelt es aus jeder Datei heraus, `default` laesst
+/// einen von Platte nachgeladenen Bericht ohne dieses Feld weiter
+/// deserialisieren. Wer die Akte liest, sieht also weiter kein Rohzitat; nur der
+/// Admin, der den Fund melden soll, bekommt den Klartext einmalig zugestellt.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fund {
     pub segment_id: String,
@@ -52,6 +59,13 @@ pub struct Fund {
     pub sicherheit: String,
     pub begruendung: String,
     pub zitat_redigiert: String,
+    #[serde(default, skip_serializing)]
+    pub zitat_roh: String,
+    /// Sachlicher, vom zweiten LLM formulierter Meldegrund. Er enthaelt keine
+    /// Rohzitate und wird deshalb gemeinsam mit dem geschwaerzten Beleg
+    /// gespeichert.
+    #[serde(default)]
+    pub twitch_meldegrund: String,
     pub zitat_hash: String,
 }
 
@@ -70,6 +84,8 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
                 sicherheit: "high".to_owned(),
                 begruendung: treffer.begruendung.to_owned(),
                 zitat_redigiert: treffer.zitat_redigiert,
+                zitat_roh: treffer.zitat_roh,
+                twitch_meldegrund: String::new(),
                 zitat_hash: treffer.zitat_hash,
             });
         }
@@ -102,6 +118,35 @@ pub fn funde_zusammenfassen(mut funde: Vec<Fund>) -> Vec<Fund> {
     funde
 }
 
+/// Ob ein Fund den Streamer real eine Twitch-Sperre riskieren laesst.
+///
+/// Twitch ahndet Slurs, Herabwuerdigung geschuetzter Gruppen und Drohungen /
+/// Selbstverletzung als "Hateful Conduct" mit Nulltoleranz - unabhaengig von
+/// der Schwere, ein Slur bleibt ein Slur. Allgemeine Beleidigung
+/// (`harassment`) und sexuelle Sprache (`sexual_content`) greift Twitch nur
+/// auf, wenn sie deutlich wird; sie zaehlen darum erst ab `high`. Alles andere
+/// (`sonstiges`, `sonstiges:*`) ist Coaching-Material fuers Protokoll, aber
+/// kein Grund fuer eine Meldung - genau die "safe Dinger", die kein Bann-Risiko
+/// tragen.
+pub fn tos_meldewuerdig(fund: &Fund) -> bool {
+    match fund.kategorie.as_str() {
+        "hate_speech_slur" | "discriminatory_speech" | "threat_or_self_harm" => true,
+        "harassment" | "sexual_content" => fund.schwere == "high",
+        _ => false,
+    }
+}
+
+/// Behaelt nur die Funde, die ein echtes Twitch-Bann-Risiko tragen. Der volle
+/// Fundsatz bleibt im Platten-Bericht; die Admin-DM soll nur melden, wo Twitch
+/// tatsaechlich eingreifen wuerde.
+pub fn nur_tos_meldewuerdig(funde: &[Fund]) -> Vec<Fund> {
+    funde
+        .iter()
+        .filter(|f| tos_meldewuerdig(f))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +158,71 @@ mod tests {
             ende_sekunden: 30.0,
             text: text.to_owned(),
         }
+    }
+
+    fn fund(kategorie: &str, schwere: &str) -> Fund {
+        Fund {
+            segment_id: "s1".to_owned(),
+            start_sekunden: 0.0,
+            ende_sekunden: 30.0,
+            kategorie: kategorie.to_owned(),
+            schwere: schwere.to_owned(),
+            erkenner: "modell".to_owned(),
+            sicherheit: "high".to_owned(),
+            begruendung: String::new(),
+            zitat_redigiert: String::new(),
+            zitat_roh: String::new(),
+            twitch_meldegrund: String::new(),
+            zitat_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn slurs_und_drohungen_sind_immer_meldewuerdig() {
+        for kat in [
+            "hate_speech_slur",
+            "discriminatory_speech",
+            "threat_or_self_harm",
+        ] {
+            assert!(
+                tos_meldewuerdig(&fund(kat, "low")),
+                "{kat} low sollte melden"
+            );
+            assert!(
+                tos_meldewuerdig(&fund(kat, "high")),
+                "{kat} high sollte melden"
+            );
+        }
+    }
+
+    #[test]
+    fn beleidigung_und_sex_erst_ab_high() {
+        for kat in ["harassment", "sexual_content"] {
+            assert!(!tos_meldewuerdig(&fund(kat, "low")));
+            assert!(!tos_meldewuerdig(&fund(kat, "medium")));
+            assert!(tos_meldewuerdig(&fund(kat, "high")));
+        }
+    }
+
+    #[test]
+    fn sonstiges_ist_nie_meldewuerdig() {
+        assert!(!tos_meldewuerdig(&fund("sonstiges", "high")));
+        assert!(!tos_meldewuerdig(&fund("sonstiges:politik", "high")));
+    }
+
+    #[test]
+    fn nur_tos_meldewuerdig_filtert_die_safe_dinger() {
+        let alle = vec![
+            fund("hate_speech_slur", "low"),
+            fund("harassment", "low"),
+            fund("sexual_content", "medium"),
+            fund("harassment", "high"),
+        ];
+        let gemeldet = nur_tos_meldewuerdig(&alle);
+        assert_eq!(gemeldet.len(), 2);
+        assert_eq!(gemeldet[0].kategorie, "hate_speech_slur");
+        assert_eq!(gemeldet[1].kategorie, "harassment");
+        assert_eq!(gemeldet[1].schwere, "high");
     }
 
     #[test]
@@ -161,6 +271,8 @@ mod tests {
             sicherheit: "medium".to_owned(),
             begruendung: "Modellbegruendung".to_owned(),
             zitat_redigiert: rules::redact_text(ganzes_segment),
+            zitat_roh: ganzes_segment.to_owned(),
+            twitch_meldegrund: String::new(),
             zitat_hash: rules::evidence_hash(ganzes_segment),
         });
         assert_ne!(
@@ -192,6 +304,8 @@ immer das ganze Segment und darf keinen Regelfund verdraengen"
             sicherheit: "medium".to_owned(),
             begruendung: "andere Stelle".to_owned(),
             zitat_redigiert: "ganz andere Worte ohne Ueberschneidung".to_owned(),
+            zitat_roh: "ganz andere Worte ohne Ueberschneidung".to_owned(),
+            twitch_meldegrund: String::new(),
             zitat_hash: rules::evidence_hash("ganz andere Worte ohne Ueberschneidung"),
         });
         assert_eq!(
@@ -239,5 +353,32 @@ immer das ganze Segment und darf keinen Regelfund verdraengen"
             segment("s2", "du schwuchtel"),
         ]);
         assert_eq!(funde_zusammenfassen(funde).len(), 2);
+    }
+
+    #[test]
+    fn regelfund_traegt_rohzitat_fuer_den_admin() {
+        // Der Admin-Report braucht den Klartext, um einen Verstoss zu melden.
+        let funde = regelfunde(&[segment("s1", "so ein schwuchtel")]);
+        assert!(
+            funde[0].zitat_roh.to_lowercase().contains("schwuchtel"),
+            "das Rohzitat fehlt: {:?}",
+            funde[0].zitat_roh
+        );
+    }
+
+    #[test]
+    fn akte_traegt_kein_rohzitat() {
+        // Der eigentliche Vertrag: was auf die Platte geht, enthaelt den
+        // Wortlaut nicht - nur die fluechtige DM zeigt ihn.
+        let funde = regelfunde(&[segment("s1", "so ein schwuchtel")]);
+        let json = serde_json::to_string(&funde[0]).expect("JSON");
+        assert!(
+            !json.to_lowercase().contains("schwuchtel"),
+            "der Wortlaut steht in der Akte: {json}"
+        );
+        assert!(
+            !json.contains("zitat_roh"),
+            "das Rohzitat-Feld gehoert nicht in die Datei: {json}"
+        );
     }
 }

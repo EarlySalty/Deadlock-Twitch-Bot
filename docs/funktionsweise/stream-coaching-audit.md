@@ -4,14 +4,14 @@
 
 Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug. Es hört bei den
 Streams der eigenen Leute mit, sucht im gesprochenen Wort nach problematischen
-Stellen und legt dazu ein privates Protokoll mit Zeitstempeln an — als
+Stellen und legt dazu ein privates Protokoll mit Zeitstempeln an, als
 Grundlage für ein Coaching-Gespräch. Das Werkzeug moderiert nichts, verhängt
 keine Sanktionen und postet nichts öffentlich.
 
 ## Was der Bot tut
 
 - Er fragt jede Minute bei Twitch ab, welcher der eingetragenen Kanäle gerade
-  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit — parallel,
+  sendet, und nimmt jeden davon in Blöcken von zwei Minuten mit, parallel und
   nicht nacheinander. Kurze Blöcke, weil die Spracherkennung mit anderen
   Funktionen des Bots geteilt wird.
 - Aufgenommen wird live, nicht aus dem VOD: ob ein Kanal seine VODs behält,
@@ -20,12 +20,15 @@ keine Sanktionen und postet nichts öffentlich.
   verlässt die Maschine nicht.
 - Das Transkript läuft zweistufig durch die Prüfung: zuerst drei feste Regeln
   für eindeutige Fälle, danach ein Modellschritt über **alle** Segmente des
-  Blocks — nicht nur die ohne Reizwort. Er läuft in Stapeln von 20 Segmenten;
+  Blocks, nicht nur die ohne Reizwort. Er läuft in Stapeln von 20 Segmenten;
   über eine Stapelgrenze hinweg sieht das Modell keinen Zusammenhang. An das Modell gehen
   geschwärzte Ausschnitte mit anonymer Nummer, nicht der Kanalname und nicht
   die Stream-ID.
 - Pro Block entsteht ein Protokoll auf der Platte und, wenn es etwas zu melden
-  gibt, eine kurze private Nachricht an den Admin.
+  gibt, eine private Nachricht an den Admin. Sie enthält den erkannten
+  Wortlaut, das Datum und die UTC-Uhrzeit, ein ungefähres Stream-Zeitfenster
+  sowie einen kopierfertigen Twitch-Meldegrund. Dieser Grund wird in einem
+  zweiten DeepSeek-V4-Flash-Schritt aus geschwärzten Funddaten formuliert.
 - Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
   Blöcke werden gelöscht.
 
@@ -36,8 +39,8 @@ keine Sanktionen und postet nichts öffentlich.
 - Aufgenommen wird nur, solange ein Kanal sendet, höchstens sechs Stunden
   Sendungszeit je Sendung.
 - Ist ein Kanal offline, wartet der Dienst auf den nächsten Live-Start.
-- Kommt die Auswertung nicht hinterher — 180 wartende Blöcke, also sechs
-  Stunden Ton —, startet keine
+- Kommt die Auswertung nicht hinterher, bei 180 wartenden Blöcken und damit sechs
+  Stunden Ton, startet keine
   neue Aufnahme, bis der Rückstand abgebaut ist.
 
 ## Was Streamer und Zuschauer sehen
@@ -61,24 +64,27 @@ keine Sanktionen und postet nichts öffentlich.
   wurde, die Aufnahme wegen Rückstands pausiert oder die Twitch-Abfrage
   scheitert. Nimmt Discord über Stunden keine Nachricht an,
   bleibt der Befund im Protokoll auf der Platte stehen und wird weiter
-  angeboten — dann ist Stille kein Beweis für einen ruhigen Stream.
+  angeboten, dann ist Stille kein Beweis für einen ruhigen Stream.
 - An Blockgrenzen kann eine Äußerung ungünstig fallen. Die Zeitstempel im
   Protokoll zählen ab Sendungsbeginn, damit die Stelle im VOD wiederzufinden
-  ist, solange es das VOD gibt.
+  ist, solange es das VOD gibt. Fehlt der Twitch-Start, wird das Zeitfenster
+  ab Aufnahmebeginn markiert und nicht als sichere VOD-Zeit ausgegeben.
 
 ## Datenschutz
 
 - Der Ton verlässt den Rechner nicht. Zeigt die Transkriptions-URL nach außen,
   startet der Dienst gar nicht erst, außer das wurde ausdrücklich erlaubt.
-- An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
+- An das Bewertungsmodell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
-  anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
-  einzeln gesetzte Entscheidung.
+  anderer Wortlaut geht mit. Der zweite Modellschritt für den Twitch-Meldegrund
+  erhält ebenfalls nur geschwärzte Belege. Deshalb ist der fremde Anbieter eine
+  bewusste, einzeln gesetzte Entscheidung.
 - Jeder Beleg im Protokoll läuft durch die Schwärzung und trägt eine Prüfsumme
   des Originals. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut aus demselben Abschnitt steht im Protokoll. Es ist deshalb
   eine zugriffsbeschränkte Akte, kein zitatfreier Text. Die private Nachricht
-  enthält weder Zitat noch Prüfsumme.
+  zeigt den Rohwortlaut nur im flüchtigen Versandpfad; beim erneuten Versand
+  aus einem gespeicherten Bericht wird die geschwärzte Fassung verwendet.
 - Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich
   eingeschaltet ist. Standard ist: nicht speichern.
 - Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht

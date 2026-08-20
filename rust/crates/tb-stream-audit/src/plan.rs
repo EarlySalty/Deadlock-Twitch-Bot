@@ -63,6 +63,10 @@ pub struct Block {
     /// Passiert, wenn Twitch kein brauchbares `started_at` liefert. Der Bericht
     /// sagt es dann, statt eine Stelle im VOD zu behaupten, die nicht stimmt.
     pub zeit_unsicher: bool,
+    /// Absoluter Start der Twitch-Sendung, sofern Helix ihn geliefert hat.
+    pub stream_start_utc: Option<String>,
+    /// Absoluter Beginn dieses Aufnahmeprozesses als Ersatzbasis.
+    pub aufnahme_beginn_utc: Option<String>,
 }
 
 /// So oft wird ein Block mit halbstuendigem Abstand gemeldet, dessen Bericht
@@ -224,6 +228,8 @@ pub struct Aufnahme {
     /// einem Neustart des Dienstes faengt die Zaehlung erneut bei null an,
     /// samt Sechs-Stunden-Deckel.
     pub versatz_basis: u64,
+    /// Absoluter Start der Twitch-Sendung, sofern bekannt.
+    pub stream_start_utc: Option<String>,
     /// Ob die Zeitbasis geraten ist, weil `started_at` fehlte.
     pub zeit_unsicher: bool,
     /// Unix-Zeit, zu der diese Aufnahme angelegt wurde.
@@ -252,6 +258,7 @@ impl Aufnahme {
             bloecke: 0,
             aufgenommen_sekunden: 0,
             versatz_basis,
+            stream_start_utc: None,
             zeit_unsicher: false,
             gestartet_um: chrono::Utc::now().timestamp(),
         }
@@ -321,6 +328,12 @@ impl Aufnahme {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: self.zeit_unsicher,
+            stream_start_utc: self.stream_start_utc.clone(),
+            aufnahme_beginn_utc: chrono::DateTime::<chrono::Utc>::from_timestamp(
+                self.gestartet_um,
+                0,
+            )
+            .map(|zeitpunkt| zeitpunkt.to_rfc3339()),
         }
     }
 }
@@ -345,6 +358,8 @@ mod tests {
                     nur_melden: false,
                     meldeversuche: 0,
                     zeit_unsicher: false,
+                    stream_start_utc: None,
+                    aufnahme_beginn_utc: None,
                 }
                 .bezeichnung()
             })
@@ -375,6 +390,8 @@ mod tests {
                 nur_melden: false,
                 meldeversuche: 0,
                 zeit_unsicher: false,
+                stream_start_utc: None,
+                aufnahme_beginn_utc: None,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -400,6 +417,8 @@ mod tests {
                 nur_melden: false,
                 meldeversuche: 0,
                 zeit_unsicher: false,
+                stream_start_utc: None,
+                aufnahme_beginn_utc: None,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -497,6 +516,26 @@ mod tests {
     }
 
     #[test]
+    fn block_traegt_streambeginn_und_aufnahmebeginn() {
+        let mut aufnahme = Aufnahme::starten_bei("k", "L1", 120);
+        aufnahme.gestartet_um = chrono::DateTime::parse_from_rfc3339("2026-08-13T20:00:05Z")
+            .unwrap()
+            .timestamp();
+        aufnahme.stream_start_utc = Some("2026-08-13T20:00:00Z".to_owned());
+
+        let block = aufnahme.block_fertig("x.ts", 30);
+
+        assert_eq!(
+            block.stream_start_utc.as_deref(),
+            Some("2026-08-13T20:00:00Z")
+        );
+        assert_eq!(
+            block.aufnahme_beginn_utc.as_deref(),
+            Some("2026-08-13T20:00:05+00:00")
+        );
+    }
+
+    #[test]
     fn segment_id_enthaelt_kanal_und_block() {
         let block = Block {
             kanal: "deadlockgermany".to_owned(),
@@ -509,6 +548,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         };
         assert_eq!(
             block.segment_id(7),

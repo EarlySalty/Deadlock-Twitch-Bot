@@ -53,6 +53,21 @@ pub const SYSTEM_PROMPT: &str = concat!(
     "Erfinde keine IDs und zitiere keine problematischen Begriffe."
 );
 
+/// Zweiter Modellschritt: Aus einem bereits bewerteten Fund wird ein einzelner
+/// sachlicher Satz fuer das Twitch-Meldeformular. Die Zeitangaben setzt der
+/// Rust-Code ein, damit das Modell weder Zeiten erfindet noch aus dem Kontext
+/// falsch uebernimmt.
+pub const MELDEGRUND_SYSTEM_PROMPT: &str = concat!(
+    "Formuliere fuer jeden Fund genau einen kurzen, sachlichen deutschen Satz ",
+    "als Grund fuer eine Twitch-Meldung. Nutze nur die gelieferten, bereits ",
+    "geschwärzten Angaben. Behaupte keine neuen Tatsachen, nenne keine Namen ",
+    "und wiederhole keine Schimpfwörter oder Schimpfwort-Platzhalter. Keine ",
+    "Zeitangaben, keine Aufforderung zu einer Maßnahme, kein Markdown und keine ",
+    "Anrede. Antworte ausschliesslich als JSON: ",
+    "{\"reasons\":[{\"id\":\"f00001\",\"text\":\"ein sachlicher Satz\"}]}. ",
+    "Liefere genau eine Antwort fuer jede ID und erfinde keine IDs."
+);
+
 #[derive(Debug, Deserialize)]
 pub struct ModellFund {
     pub segment_id: String,
@@ -70,6 +85,17 @@ pub struct ModellFund {
 #[derive(Debug, Deserialize)]
 pub struct ModellAntwort {
     pub findings: Vec<ModellFund>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MeldegrundAntwort {
+    pub reasons: Vec<Meldegrund>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Meldegrund {
+    pub id: String,
+    pub text: String,
 }
 
 /// Segmente in Anfragegroessen schneiden.
@@ -138,6 +164,11 @@ pub fn anfrage_id(stelle: usize) -> String {
     format!("s{:05}", stelle + 1)
 }
 
+/// Lokale, nicht rueckverfolgbare ID fuer die zweite LLM-Anfrage.
+pub fn meldegrund_id(stelle: usize) -> String {
+    format!("f{:05}", stelle + 1)
+}
+
 /// Die Nutzlast einer Anfrage: laufende Nummer, Zeitfenster und
 /// **geschwaerzter** Text.
 ///
@@ -157,6 +188,26 @@ pub fn anfrage_json(stapel: &[Segment]) -> String {
         })
         .collect();
     serde_json::json!({ "segments": eintraege }).to_string()
+}
+
+/// Nur geschwaerzte Funddaten an den zweiten Modellschritt senden. Das
+/// Rohzitat bleibt in der Anwendung und erreicht den entfernten Anbieter nie.
+pub fn meldegrund_anfrage_json(funde: &[Fund]) -> String {
+    let eintraege: Vec<_> = funde
+        .iter()
+        .enumerate()
+        .map(|(i, fund)| {
+            serde_json::json!({
+                "id": meldegrund_id(i),
+                "category": fund.kategorie,
+                "severity": fund.schwere,
+                "detector": fund.erkenner,
+                "reason": crate::rules::redact_text(&fund.begruendung),
+                "quote": crate::rules::redact_text(&fund.zitat_redigiert),
+            })
+        })
+        .collect();
+    serde_json::json!({ "findings": eintraege }).to_string()
 }
 
 /// Erstes JSON-Objekt aus einer Modellantwort schneiden. Modelle rahmen die
@@ -224,6 +275,9 @@ pub fn zu_funden_gezaehlt(antwort: &ModellAntwort, segmente: &[Segment]) -> (Vec
             // Bericht, den der Beleg daneben verdeckt.
             begruendung: crate::rules::redact_text(&treffer.reason),
             zitat_redigiert: crate::rules::redact_text(&segment.text),
+            // Nur fuer die fluechtige Admin-DM, nie in die Akte: siehe Fund.
+            zitat_roh: segment.text.clone(),
+            twitch_meldegrund: String::new(),
             zitat_hash: crate::rules::evidence_hash(&segment.text),
         });
     }
@@ -481,5 +535,51 @@ mod tests_host {
         assert!(ist_lokal("http://127.0.0.1:8791/v1/audio/transcriptions"));
         assert!(ist_lokal("http://localhost:8791/v1"));
         assert!(!ist_lokal("http://user@evil.example/v1"));
+    }
+}
+
+#[cfg(test)]
+mod tests_meldegrund {
+    use super::*;
+
+    fn fund() -> Fund {
+        Fund {
+            segment_id: "kanal-lauf-t000012-s00001".to_owned(),
+            start_sekunden: 12.0,
+            ende_sekunden: 42.0,
+            kategorie: "hate_speech_slur".to_owned(),
+            schwere: "high".to_owned(),
+            erkenner: "regel".to_owned(),
+            sicherheit: "high".to_owned(),
+            begruendung: "Mögliche rassistische Beleidigung".to_owned(),
+            zitat_redigiert: "der [REDACTED] wurde beleidigt".to_owned(),
+            zitat_roh: "der nigga wurde beleidigt".to_owned(),
+            twitch_meldegrund: String::new(),
+            zitat_hash: "a".repeat(64),
+        }
+    }
+
+    #[test]
+    fn meldegrund_anfrage_verwendet_redigierten_beleg() {
+        let json = meldegrund_anfrage_json(&[fund()]);
+        assert!(
+            json.contains("[REDACTED]"),
+            "geschwärzter Beleg fehlt: {json}"
+        );
+        assert!(!json.contains("nigga"), "Rohzitat gelangt ins LLM: {json}");
+        assert!(
+            json.contains("f00001"),
+            "stabile lokale Fund-ID fehlt: {json}"
+        );
+    }
+
+    #[test]
+    fn meldegrund_antwort_erwartet_reasons() {
+        let antwort: MeldegrundAntwort = serde_json::from_str(
+            r#"{"reasons":[{"id":"f00001","text":"Eine rassistische Beleidigung wurde verwendet"}]}"#,
+        )
+        .expect("Meldegrund-Antwort");
+        assert_eq!(antwort.reasons.len(), 1);
+        assert_eq!(antwort.reasons[0].id, "f00001");
     }
 }

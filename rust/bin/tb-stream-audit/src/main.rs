@@ -484,22 +484,27 @@ const LAEUFT: &str = "aufnahme_laeuft.json";
 /// stammt und an welcher Stelle der Sendung sie sass. Ein Stopp durch systemd
 /// trifft mitten in den Block - wer den Zettel erst danach schreibt,
 /// laesst genau die angebrochene Aufnahme ohne Zuordnung zurueck.
-async fn zettel_schreiben(
-    blockordner: &Path,
-    kanal: &str,
-    lauf: &str,
+struct ZettelDaten<'a> {
+    kanal: &'a str,
+    lauf: &'a str,
     nummer: u32,
     versatz_sekunden: u64,
     zeit_unsicher: bool,
-) -> bool {
+    stream_start_utc: Option<&'a str>,
+    aufnahme_beginn_utc: Option<&'a str>,
+}
+
+async fn zettel_schreiben(blockordner: &Path, daten: &ZettelDaten<'_>) -> bool {
     let inhalt = serde_json::json!({
-        "kanal": kanal,
-        "lauf": lauf,
-        "nummer": nummer,
-        "versatz_sekunden": versatz_sekunden,
+        "kanal": daten.kanal,
+        "lauf": daten.lauf,
+        "nummer": daten.nummer,
+        "versatz_sekunden": daten.versatz_sekunden,
         // Ohne diese Angabe behauptete ein wiederaufgenommener Block, seine
         // Zeiten seien Sendungszeiten - auch wenn sie es nie waren.
-        "zeit_unsicher": zeit_unsicher,
+        "zeit_unsicher": daten.zeit_unsicher,
+        "stream_start_utc": daten.stream_start_utc,
+        "aufnahme_beginn_utc": daten.aufnahme_beginn_utc,
     });
     match nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await {
         Ok(()) => true,
@@ -660,6 +665,8 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
     Bericht {
         lauf_id: block.bezeichnung(),
         erstellt_am: chrono::Utc::now().to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: "kein Text".to_owned(),
         kanal: block.kanal.clone(),
         transkription: String::new(),
@@ -671,6 +678,8 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
         segmente: 0,
         modell_geprueft: false,
         modell_hinweis: "kein Text im Block".to_owned(),
+        meldegrund_aufbereitet: true,
+        meldegrund_hinweis: String::new(),
         funde: Vec::new(),
     }
 }
@@ -746,6 +755,8 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         // Fehlt die Angabe (Zettel aus einer aelteren Fassung), gilt die
         // vorsichtige Annahme: die Zeiten koennten geraten sein.
         zeit_unsicher: json["zeit_unsicher"].as_bool().unwrap_or(true),
+        stream_start_utc: json["stream_start_utc"].as_str().map(str::to_owned),
+        aufnahme_beginn_utc: json["aufnahme_beginn_utc"].as_str().map(str::to_owned),
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
         frueherstens: 0,
@@ -815,6 +826,13 @@ fn sendungssekunden(sendung: &tb_transport_twitch::streams::HelixStream) -> u64 
     (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
         .num_seconds()
         .max(0) as u64
+}
+
+/// Absoluten Stream-Beginn fuer Bericht und DM normalisieren.
+fn stream_beginn_utc(sendung: &tb_transport_twitch::streams::HelixStream) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(sendung.started_at.trim())
+        .ok()
+        .map(|wert| wert.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
 /// Zeitgrenze fuer eine Transkriptionsanfrage.
@@ -1224,20 +1242,23 @@ Dieser Abschnitt wird nicht geprueft."
                 // Zeitversatz macht die Zeiten im Bericht zu Sendungszeiten -
                 // "hoer dir Minute 12 an" trifft dann im VOD auch Minute 12.
                 let basis = sendungssekunden(sendung);
-                let lauf = match (sendung.id.trim(), basis) {
+                let stream_start_utc = stream_beginn_utc(sendung);
+                let zeit_unsicher = stream_start_utc.is_none();
+                let lauf = match (sendung.id.trim(), zeit_unsicher) {
                     ("", _) => chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
                     // Ohne brauchbares started_at faengt der Versatz wieder bei
                     // null an. Damit ein Neustart in derselben Sendung nicht
                     // dieselben Berichtsnamen erzeugt, bekommt die Kennung dann
                     // einen Zeitanhang.
-                    (id, 0) => format!("{id}-{}", chrono::Utc::now().timestamp()),
+                    (id, true) => format!("{id}-{}", chrono::Utc::now().timestamp()),
                     (id, _) => id.to_owned(),
                 };
                 let mut zustand = plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis);
+                zustand.stream_start_utc = stream_start_utc;
                 // Ohne brauchbares started_at zaehlen die Zeiten ab
                 // Aufnahmebeginn. Das gehoert in den Bericht, sonst schickt er
                 // jemanden im VOD an die falsche Stelle.
-                zustand.zeit_unsicher = basis == 0;
+                zustand.zeit_unsicher = zeit_unsicher;
                 zustand
             });
             if zustand.naechste_blocklaenge().is_none() {
@@ -1325,16 +1346,19 @@ async fn kanal_aufnehmen(
         if let Err(fehler) = nur_fuer_mich(&laeuft, b"{}").await {
             tracing::warn!(fehler, "Laufmarke nicht schreibbar");
         }
-        if !zettel_schreiben(
-            &blockordner,
-            &kanal,
-            &zustand.lauf,
-            zustand.bloecke + 1,
-            versatz,
-            zustand.zeit_unsicher,
-        )
-        .await
-        {
+        let aufnahme_beginn_utc =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(zustand.gestartet_um, 0)
+                .map(|wert| wert.to_rfc3339());
+        let zetteldaten = ZettelDaten {
+            kanal: &kanal,
+            lauf: &zustand.lauf,
+            nummer: zustand.bloecke + 1,
+            versatz_sekunden: versatz,
+            zeit_unsicher: zustand.zeit_unsicher,
+            stream_start_utc: zustand.stream_start_utc.as_deref(),
+            aufnahme_beginn_utc: aufnahme_beginn_utc.as_deref(),
+        };
+        if !zettel_schreiben(&blockordner, &zetteldaten).await {
             // Ohne Zettel waere die Aufnahme nach einem Neustart nicht mehr
             // zuzuordnen: falscher Kanal, Zeitversatz 0. Dann lieber gar nicht
             // erst aufnehmen - und der Task endet, damit die Aufsicht den
@@ -1975,13 +1999,16 @@ async fn block_auswerten(
         }
         (false, fehler) => fehler,
     };
-    let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
+    let mut funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
+    let meldegrund_hinweis = meldegruende_aufbereiten(&mut funde).await;
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
     let jetzt = chrono::Utc::now();
     let bericht = Bericht {
         lauf_id: report::lauf_id(jetzt, &block.kanal),
         erstellt_am: jetzt.to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: if block.zeit_unsicher {
             format!(
                 "live, Block {} - Zeiten ab Aufnahmebeginn, nicht ab Sendungsbeginn",
@@ -2000,6 +2027,8 @@ async fn block_auswerten(
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
         modell_hinweis: modell_hinweis.unwrap_or_default(),
+        meldegrund_aufbereitet: meldegrund_hinweis.is_none(),
+        meldegrund_hinweis: meldegrund_hinweis.unwrap_or_default(),
         funde,
     };
 
@@ -2125,100 +2154,135 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
     raus
 }
 
+struct AuditLlmClient {
+    provider: &'static str,
+    model: String,
+    base_url: String,
+    api_key: String,
+    client: reqwest::Client,
+}
+
+impl AuditLlmClient {
+    fn from_env() -> Result<Self, String> {
+        let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
+        if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
+            return Err(format!(
+                "Anbieter {} liegt ausserhalb dieses Rechners; {}=1 setzen, um geschwärzte Funddaten dorthin zu senden",
+                endpunkt.provider,
+                llm::REMOTE_ERLAUBT_ENV
+            ));
+        }
+        let Some(api_key) = endpunkt.api_key else {
+            return Err(format!("kein Schluessel fuer {}", endpunkt.provider));
+        };
+        // Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307
+        // nach draussen zeigen - und die Pruefung auf "lokal" waere umsonst.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|fehler| {
+                tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
+                "HTTP-Client nicht baubar".to_owned()
+            })?;
+        Ok(Self {
+            provider: endpunkt.provider,
+            model: endpunkt.model,
+            base_url: endpunkt.base_url,
+            api_key,
+            client,
+        })
+    }
+
+    async fn json_antwort(&self, system_prompt: &str, nutzlast: String) -> Result<String, String> {
+        let anfrage = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": nutzlast},
+            ],
+            "response_format": {"type": "json_object"},
+        });
+        let antwort = self
+            .client
+            .post(format!(
+                "{}/chat/completions",
+                self.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&self.api_key)
+            .json(&anfrage)
+            .send()
+            .await
+            .map_err(|fehler| {
+                tracing::warn!(
+                    provider = self.provider,
+                    model = %self.model,
+                    ?fehler,
+                    "Modellaufruf fehlgeschlagen"
+                );
+                "Modellaufruf fehlgeschlagen".to_owned()
+            })?;
+        if !antwort.status().is_success() {
+            let status = antwort.status().as_u16();
+            tracing::warn!(
+                provider = self.provider,
+                model = %self.model,
+                status,
+                "Modellaufruf abgelehnt"
+            );
+            return Err(format!("Modellaufruf HTTP {status}"));
+        }
+        let roh = antwort.text().await.map_err(|fehler| {
+            tracing::warn!(
+                provider = self.provider,
+                model = %self.model,
+                ?fehler,
+                "Modellantwort nicht lesbar"
+            );
+            "Modellantwort nicht lesbar".to_owned()
+        })?;
+        serde_json::from_str::<serde_json::Value>(&roh)
+            .ok()
+            .and_then(|wert| {
+                wert["choices"][0]["message"]["content"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .filter(|inhalt| !inhalt.trim().is_empty())
+            .ok_or_else(|| "Modellantwort ohne Inhalt".to_owned())
+    }
+}
+
 /// Modellfunde ueber den im Bot konfigurierten Anbieter. Faellt der Aufruf aus,
 /// bleibt es bei den Regelfunden - ein Audit ohne Modell ist duenner, aber
 /// besser als keines.
 async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Option<String>) {
-    let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
-    if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
-        return (
-            Vec::new(),
-            Some(format!(
-                "Anbieter {} liegt ausserhalb dieses Rechners; {}=1 setzen, um Transkriptausschnitte dorthin zu senden",
-                endpunkt.provider,
-                llm::REMOTE_ERLAUBT_ENV
-            )),
-        );
-    }
-    let Some(schluessel) = endpunkt.api_key.clone() else {
-        return (
-            Vec::new(),
-            Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
-        );
-    };
-    // Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307
-    // nach draussen zeigen - und die Pruefung auf "lokal" waere umsonst.
-    // Deshalb hier kein Ersatzclient: `Client::default()` ist `Client::new()`
-    // und paniert im Fehlerfall, und ein Client ohne diese Einstellungen waere
-    // schlimmer als keiner.
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
+    let client = match AuditLlmClient::from_env() {
         Ok(client) => client,
-        Err(fehler) => {
-            tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
-            return (Vec::new(), Some("HTTP-Client nicht baubar".to_owned()));
-        }
+        Err(fehler) => return (Vec::new(), Some(fehler)),
     };
-
     let mut raus = Vec::new();
     let mut fehler_gesehen: Option<String> = None;
     for stapel in llm::stapel(segmente) {
-        let anfrage = serde_json::json!({
-            "model": endpunkt.model,
-            "messages": [
-                {"role": "system", "content": llm::SYSTEM_PROMPT},
-                {"role": "user", "content": llm::anfrage_json(stapel)},
-            ],
-            "response_format": {"type": "json_object"},
-        });
-        let antwort = client
-            .post(format!(
-                "{}/chat/completions",
-                endpunkt.base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(&schluessel)
-            .json(&anfrage)
-            .send()
-            .await;
-        let roh = match antwort {
-            // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
-            // JSON - und der Bericht nennt den falschen Grund.
-            Ok(r) if !r.status().is_success() => {
-                let status = r.status().as_u16();
-                tracing::warn!(status, "Modellaufruf abgelehnt");
-                fehler_gesehen.get_or_insert_with(|| format!("Modellaufruf HTTP {status}"));
-                continue;
-            }
-            Ok(r) => r.text().await.unwrap_or_default(),
+        let inhalt = match client
+            .json_antwort(llm::SYSTEM_PROMPT, llm::anfrage_json(stapel))
+            .await
+        {
+            Ok(inhalt) => inhalt,
             Err(fehler) => {
-                tracing::warn!(?fehler, "Modellaufruf fehlgeschlagen");
-                fehler_gesehen.get_or_insert_with(|| "Modellaufruf fehlgeschlagen".to_owned());
+                fehler_gesehen.get_or_insert(fehler);
                 continue;
             }
         };
-        let inhalt = serde_json::from_str::<serde_json::Value>(&roh)
-            .ok()
-            .and_then(|v| {
-                v["choices"][0]["message"]["content"]
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
         let Some(json) = llm::json_objekt_ausschneiden(&inhalt) else {
             tracing::warn!("Modellantwort ohne JSON");
-            fehler_gesehen.get_or_insert_with(|| "Modellantwort ohne JSON".to_owned());
+            fehler_gesehen.get_or_insert("Modellantwort ohne JSON".to_owned());
             continue;
         };
         match serde_json::from_str::<llm::ModellAntwort>(json) {
             Ok(geparst) => {
                 let (funde, verworfen) = llm::zu_funden_gezaehlt(&geparst, stapel);
                 if verworfen > 0 {
-                    // Erfundene Segment-IDs heissen: die Antwort passt nicht
-                    // zur Anfrage. Das darf nicht als saubere Pruefung
-                    // durchgehen.
                     tracing::warn!(verworfen, "Modellfunde mit unbekannter Segment-ID");
                     fehler_gesehen.get_or_insert_with(|| {
                         format!("{verworfen} Modellfunde mit unbekannter Segment-ID verworfen")
@@ -2228,11 +2292,97 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             }
             Err(fehler) => {
                 tracing::warn!(?fehler, "Modellantwort unlesbar");
-                fehler_gesehen.get_or_insert_with(|| "Modellantwort unlesbar".to_owned());
+                fehler_gesehen.get_or_insert("Modellantwort unlesbar".to_owned());
             }
         }
     }
     (raus, fehler_gesehen)
+}
+
+fn meldegrund_index(id: &str) -> Option<usize> {
+    id.strip_prefix('f')?.parse::<usize>().ok()?.checked_sub(1)
+}
+
+fn gleicher_fund(a: &tb_stream_audit::Fund, b: &tb_stream_audit::Fund) -> bool {
+    a.segment_id == b.segment_id
+        && a.kategorie == b.kategorie
+        && a.erkenner == b.erkenner
+        && a.zitat_hash == b.zitat_hash
+}
+
+/// Formuliert die kopierfertigen Twitch-Gruende. Der Rust-Code setzt vor dem
+/// Aufruf Rueckfalltexte und prueft jede Antwort-ID, damit ein LLM-Aussetzer
+/// nie einen Fund ohne verwendbaren Grund in die DM schickt.
+async fn meldegruende_aufbereiten(funde: &mut [tb_stream_audit::Fund]) -> Option<String> {
+    let meldefunde = tb_stream_audit::nur_tos_meldewuerdig(funde);
+    if meldefunde.is_empty() {
+        return None;
+    }
+    for fund in funde
+        .iter_mut()
+        .filter(|fund| tb_stream_audit::tos_meldewuerdig(fund))
+    {
+        fund.twitch_meldegrund = report::fallback_meldegrund(fund);
+    }
+
+    let client = match AuditLlmClient::from_env() {
+        Ok(client) => client,
+        Err(fehler) => return Some(fehler),
+    };
+    let inhalt = match client
+        .json_antwort(
+            llm::MELDEGRUND_SYSTEM_PROMPT,
+            llm::meldegrund_anfrage_json(&meldefunde),
+        )
+        .await
+    {
+        Ok(inhalt) => inhalt,
+        Err(fehler) => return Some(fehler),
+    };
+    let Some(json) = llm::json_objekt_ausschneiden(&inhalt) else {
+        return Some("Modellantwort ohne JSON".to_owned());
+    };
+    let antwort = match serde_json::from_str::<llm::MeldegrundAntwort>(json) {
+        Ok(antwort) => antwort,
+        Err(fehler) => {
+            tracing::warn!(?fehler, "Meldegrund-Antwort unlesbar");
+            return Some("Modellantwort unlesbar".to_owned());
+        }
+    };
+    let mut beantwortet = vec![false; meldefunde.len()];
+    for grund in antwort.reasons {
+        let Some(index) = meldegrund_index(&grund.id) else {
+            tracing::warn!(id = %grund.id, "Meldegrund mit unbekannter Fund-ID");
+            continue;
+        };
+        let Some(vorlage) = meldefunde.get(index) else {
+            tracing::warn!(id = %grund.id, "Meldegrund-ID ausserhalb der Anfrage");
+            continue;
+        };
+        let text = tb_stream_audit::rules::redact_text(&grund.text)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Some(ziel) = funde.iter_mut().find(|fund| gleicher_fund(fund, vorlage)) {
+            ziel.twitch_meldegrund = text;
+            beantwortet[index] = true;
+        }
+    }
+    let fehlend = beantwortet
+        .iter()
+        .filter(|beantwortet| !**beantwortet)
+        .count();
+    if fehlend == 0 {
+        None
+    } else {
+        Some(format!(
+            "unvollständig: {fehlend} von {} Funden nutzen den Rückfallgrund",
+            meldefunde.len()
+        ))
+    }
 }
 
 /// Pfad des Berichts zu einem Block.
@@ -2558,10 +2708,25 @@ async fn dm_senden(bericht: &Bericht, schluessel: &str) -> Result<(), String> {
     if bericht.funde.is_empty() {
         return Ok(());
     }
+    // Nur was Twitch real ahnden wuerde, geht als DM raus - Slurs, Herabwuerdigung
+    // geschuetzter Gruppen, Drohungen sowie deutliche Beleidigung/Sexualsprache.
+    // "Safe Dinger" (harmlose harassment/sexual_content, Ingame-Slang, sonstiges)
+    // bleiben nur im Platten-Bericht als Coaching-Material und loesen keine DM aus.
+    let meldefunde = tb_stream_audit::nur_tos_meldewuerdig(&bericht.funde);
+    if meldefunde.is_empty() {
+        return Ok(());
+    }
+    let melde_bericht = Bericht {
+        funde: meldefunde,
+        ..bericht.clone()
+    };
     let Some(token) = melden::broker_token() else {
         return Err("kein Broker-Token, Fund waere unbemerkt geblieben".to_owned());
     };
-    let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(bericht, 5));
+    // Die neue Copy-Paste-Struktur ist deutlich laenger als die alte Kurzzeile.
+    // Zwei Funde passen damit als vollstaendige Bloecke in die Discord-Grenze;
+    // weitere Funde werden mit ihrem Berichtspfad angekuendigt.
+    let anfrage = melden::anfrage(melden::empfaenger(), &report::dm_text(&melde_bericht, 2));
     let url = format!("{}{}", melden::broker_basis_url(), melden::BROKER_DM_PFAD);
     // Kein Ersatzclient: `Client::default()` ist `Client::new()` und paniert
     // im selben Fehlerfall, und ein Client ohne Zeitgrenze bliebe im seriellen
@@ -2611,6 +2776,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         }
     }
 
@@ -2754,13 +2921,30 @@ mod tests {
             .await
             .expect("schreiben");
 
-        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600, false).await;
+        let zetteldaten = ZettelDaten {
+            kanal: "helmbombenricky",
+            lauf: "4711",
+            nummer: 7,
+            versatz_sekunden: 3600,
+            zeit_unsicher: false,
+            stream_start_utc: Some("2026-08-13T20:00:00Z"),
+            aufnahme_beginn_utc: Some("2026-08-13T20:00:05Z"),
+        };
+        zettel_schreiben(&blockordner, &zetteldaten).await;
 
         let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
         assert_eq!(gelesen.kanal, "helmbombenricky");
         assert_eq!(gelesen.lauf, "4711");
         assert_eq!(gelesen.nummer, 7);
         assert_eq!(gelesen.versatz_sekunden, 3600);
+        assert_eq!(
+            gelesen.stream_start_utc.as_deref(),
+            Some("2026-08-13T20:00:00Z")
+        );
+        assert_eq!(
+            gelesen.aufnahme_beginn_utc.as_deref(),
+            Some("2026-08-13T20:00:05Z")
+        );
         assert_eq!(
             gelesen.versuche, 0,
             "Versuche zaehlen nach dem Neustart neu"
@@ -2810,6 +2994,8 @@ mod tests {
         let bericht = Bericht {
             lauf_id: "20260813T120000Z-ricky".to_owned(),
             erstellt_am: "2026-08-13T12:00:00Z".to_owned(),
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
             quelle: "live, Block 1".to_owned(),
             kanal: "ricky".to_owned(),
             transkription: "openai_api".to_owned(),
@@ -2821,6 +3007,8 @@ mod tests {
             segmente: 3,
             modell_geprueft: true,
             modell_hinweis: String::new(),
+            meldegrund_aufbereitet: true,
+            meldegrund_hinweis: String::new(),
             funde: Vec::new(),
         };
         fertig_markieren(&aufnahme, &bericht).await;
