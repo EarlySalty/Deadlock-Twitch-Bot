@@ -48,17 +48,18 @@ Audit, das darauf baut, faellt still aus.
 1. **Aufsicht** fragt alle 60 Sekunden Helix ab. Je sendendem Kanal laeuft ein
    eigener Aufnahme-Task; der Aufnahmestand (Stream-ID, Zeitversatz) liegt bei
    der Aufsicht, damit ein abgebrochener Task nicht bei null anfaengt.
-2. **Aufnahme** in Bloecken von 2 Minuten, hoechstens 6 Stunden Sendungszeit.
-   Kurze Bloecke, weil der lokale STT-Dienst geteilt wird und eine Anfrage nach
-   der anderen abarbeitet.
+2. **Aufnahme** in Bloecken von 2 Minuten, hoechstens 24 Stunden aufgenommener
+   Zeit. Kurze Bloecke bleiben, weil ein Abbruch nur den letzten Block kostet.
    Vor jedem Block entsteht `<kanal>/<stream-id>/t<sekunde>-b<nummer>/block.json`;
    Zeit und Nummer zusammen, weil zwei sofort abgebrochene Aufnahmen dieselbe
-   Sekunde treffen koennen.
-3. **Warteschlange** im Speicher, mit Wartezeiten je Block. Ab 180 wartenden
-   Bloecken pausiert die Aufnahme, und der Admin bekommt eine DM.
-4. **Auswertung** seriell: Transkription (30 Minuten Zeitgrenze), Regelfunde,
-   Modellschritt in Stapeln zu 20 Segmenten, Zusammenfassen, Bericht schreiben
-   (JSON zuletzt und ueber `rename`), DM senden.
+   Sekunde treffen koennen. Start-DM an den Admin. Die Aufnahme pausiert nur
+   bei 12 GB Mitschnitt, nicht weil die Auswertung hinterherhaengt.
+3. **Warteschlange** im Speicher. Bloecke eines noch sendenden Kanals bleiben
+   liegen, bis der Lauf freigegeben ist.
+4. **Auswertung** nach Sendungsende, seriell, nur wenn die Last unter 85
+   Prozent der Kerne liegt: Transkription, Regelfunde, Modellschritt in Stapeln
+   zu 20 Segmenten, Zusammenfassen, Bericht schreiben (JSON zuletzt und ueber
+   `rename`), eine Abschluss-DM mit ToS-Funden.
 5. **Ablage**: sauberer Block — Aufnahme weg, auch wenn kein Wort fiel. Fund
    oder unvollstaendige Pruefung — Aufnahme bleibt als Beleg, markiert mit
    `ausgewertet.json`.
