@@ -198,6 +198,10 @@ pub fn build_internal_router(
             post(spam_learning::learn_handler),
         )
         .route(
+            &format!("{base}/spam-learning/safe"),
+            post(spam_learning::safe_handler),
+        )
+        .route(
             &format!("{base}/spam-learning/correct"),
             post(spam_learning::correct_handler),
         )

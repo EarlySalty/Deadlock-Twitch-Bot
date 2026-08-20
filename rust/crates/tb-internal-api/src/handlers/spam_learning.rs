@@ -6,6 +6,9 @@
 //!   lernt ein Spam-Muster — nur `verdict=spam`, Safe-Lernen ist abgeschafft
 //!   (Safe-List-Poisoning, 11.07.2026). Das Distinktivitäts-Gate aus
 //!   tb-chat gilt auch hier (ein Gate, beide Schreibwege).
+//! - `POST …/spam-learning/safe` („Als harmlos bestätigen" bei einem
+//!   Harmlos-Urteil): schreibt menschliches `clean`-Feedback in das bestehende
+//!   Review-Log, aber kein Safe-Pattern in den aktiven Filter.
 //! - `POST …/spam-learning/correct` („Als harmlos korrigieren" bei
 //!   Spam-Urteil): löscht die gelernte Zeile anhand ihrer Row-ID.
 
@@ -42,6 +45,25 @@ pub struct SpamLearningResponse {
     /// false, wenn das Distinktivitäts-Gate das Muster abgelehnt hat
     /// (generisches Vokabular) — Request ok, aber nichts gespeichert.
     pub learned: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpamSafeFeedbackRequest {
+    #[serde(default)]
+    pub verdict: Option<String>,
+    pub pattern: String,
+    #[serde(default)]
+    pub source_channel: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SpamSafeFeedbackResponse {
+    pub ok: bool,
+    pub recorded: bool,
+    pub pattern: String,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +104,33 @@ fn normalize_pattern_type(raw: Option<String>) -> String {
 fn normalize_optional(raw: Option<String>, max: usize) -> Option<String> {
     let text = truncate_chars(raw.as_deref().unwrap_or(""), max);
     (!text.is_empty()).then_some(text)
+}
+
+struct NormalizedSafeFeedback {
+    pattern: String,
+    source_message: String,
+    source_channel: String,
+    reason: String,
+}
+
+fn normalize_safe_feedback(
+    raw_pattern: &str,
+    raw_source_channel: Option<String>,
+    raw_reason: Option<String>,
+) -> Result<NormalizedSafeFeedback, ApiError> {
+    let pattern = normalize_pattern(raw_pattern)?;
+    let source_channel = normalize_optional(raw_source_channel, 100)
+        .map(|value| value.trim_start_matches(['#', '@']).trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "discord-correction".to_string());
+    let reason = normalize_optional(raw_reason, MAX_REASON_CHARS)
+        .unwrap_or_else(|| "Manuelle Harmlos-Bestätigung (Discord)".to_string());
+    Ok(NormalizedSafeFeedback {
+        source_message: pattern.clone(),
+        pattern,
+        source_channel,
+        reason,
+    })
 }
 
 /// `POST /internal/twitch/v1/spam-learning`
@@ -151,6 +200,56 @@ pub async fn learn_handler(
     }))
 }
 
+/// `POST /internal/twitch/v1/spam-learning/safe`
+///
+/// Speichert bewusst nur menschliches Review-Feedback. Die Zeile wird nicht
+/// als Safe-Muster geladen und verändert daher weder Score noch Filter.
+pub async fn safe_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<SpamSafeFeedbackRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    if body
+        .verdict
+        .as_deref()
+        .is_some_and(|verdict| !verdict.trim().eq_ignore_ascii_case("clean"))
+    {
+        return Err(ApiError::bad_request("verdict must be clean"));
+    }
+
+    let feedback = normalize_safe_feedback(&body.pattern, body.source_channel, body.reason)?;
+    sqlx::query(
+        "INSERT INTO twitch_spam_review_decisions \
+         (channel_login, chatter_login, chatter_id, source_message, verdict, confidence, reason) \
+         VALUES ($1, $2, $3, $4, 'clean', NULL, $5)",
+    )
+    .bind(&feedback.source_channel)
+    .bind("discord-moderator")
+    .bind(Option::<String>::None)
+    .bind(&feedback.source_message)
+    .bind(&feedback.reason)
+    .execute(&pool)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "spam-learning safe feedback DB-Fehler");
+        ApiError::internal()
+    })?;
+
+    tracing::info!(
+        pattern = %feedback.pattern,
+        source_channel = %feedback.source_channel,
+        "spam-learning: menschliches Harmlos-Feedback gespeichert"
+    );
+    Ok(Json(SpamSafeFeedbackResponse {
+        ok: true,
+        recorded: true,
+        pattern: feedback.pattern,
+    }))
+}
+
 /// `POST /internal/twitch/v1/spam-learning/correct`
 ///
 /// „Als harmlos korrigieren": löscht ein vom Judge gelerntes Spam-Muster
@@ -202,7 +301,13 @@ pub async fn correct_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_pattern, normalize_pattern_type};
+    use super::{
+        normalize_pattern, normalize_pattern_type, normalize_safe_feedback, safe_handler,
+        SpamSafeFeedbackRequest,
+    };
+    use axum::{extract::State, response::IntoResponse, Json};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
 
     #[test]
     fn pattern_wird_getrimmt_gekappt_und_kleingeschrieben() {
@@ -222,5 +327,99 @@ mod tests {
         assert_eq!(normalize_pattern_type(Some("phrase".into())), "phrase");
         assert_eq!(normalize_pattern_type(Some("x".into())), "fragment");
         assert_eq!(normalize_pattern_type(None), "fragment");
+    }
+
+    #[test]
+    fn safe_feedback_normalisiert_quelle_und_grund() {
+        let feedback = normalize_safe_feedback(
+            "  Aha, so sammelt man Viewer  ",
+            Some(" #DeuSta ".to_string()),
+            None,
+        )
+        .expect("feedback");
+        assert_eq!(feedback.pattern, "aha, so sammelt man viewer");
+        assert_eq!(feedback.source_channel, "deusta");
+        assert_eq!(feedback.source_message, "aha, so sammelt man viewer");
+        assert_eq!(feedback.reason, "Manuelle Harmlos-Bestätigung (Discord)");
+    }
+
+    #[tokio::test]
+    async fn safe_handler_persistiert_clean_feedback() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let schema = format!("spam_safe_feedback_{}", std::process::id());
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("DB-Verbindung");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .expect("Schema löschen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .expect("Schema anlegen");
+        admin.close().await;
+
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                PgConnectOptions::from_str(&dsn)
+                    .expect("DSN")
+                    .options([("search_path", schema.as_str())]),
+            )
+            .await
+            .expect("Testpool");
+        sqlx::query(
+            "CREATE TABLE twitch_spam_review_decisions (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                chatter_id TEXT,
+                source_message TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                confidence REAL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("Review-Tabelle");
+
+        let response = safe_handler(
+            tb_http_core::AuthLevel::Admin,
+            State(pool.clone()),
+            Json(SpamSafeFeedbackRequest {
+                verdict: Some("clean".to_string()),
+                pattern: "Aha, so sammelt man Viewer".to_string(),
+                source_channel: Some("#DeuSta".to_string()),
+                reason: None,
+            }),
+        )
+        .await
+        .expect("Safe-Feedback");
+        assert_eq!(
+            response.into_response().status(),
+            axum::http::StatusCode::OK
+        );
+
+        let row: (String, String, Option<String>, String, String, String) = sqlx::query_as(
+            "SELECT channel_login, chatter_login, chatter_id, source_message, verdict, reason
+             FROM twitch_spam_review_decisions",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Feedback-Zeile");
+        assert_eq!(row.0, "deusta");
+        assert_eq!(row.1, "discord-moderator");
+        assert_eq!(row.2, None);
+        assert_eq!(row.3, "aha, so sammelt man viewer");
+        assert_eq!(row.4, "clean");
+        assert_eq!(row.5, "Manuelle Harmlos-Bestätigung (Discord)");
     }
 }
