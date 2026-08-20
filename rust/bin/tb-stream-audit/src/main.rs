@@ -1186,6 +1186,28 @@ nicht erkannt."
         fehlschlaege.retain(|kanal, _| live.contains(kanal));
         gemeldet.retain(|kanal| live.contains(kanal));
 
+        // Laeuft unabhaengig vom Platten-Gate: sonst wuerde eine volle Platte
+        // nie einen beendeten Lauf freigeben und die Ende-DM ausbleiben - der
+        // Dienst verriegelt sich selbst, statt sich zu erholen.
+        let aktuelle_ids: std::collections::HashMap<String, String> = sendungen
+            .iter()
+            .map(|s| (s.user_login.to_lowercase(), s.id.trim().to_owned()))
+            .collect();
+        // Erst alle betroffenen Eintraege sammeln, dann die Sperre wieder
+        // freigeben: der Block haelt den Mutex-Guard sonst bis zum Ende der
+        // Schleife, und `freigeben`/`lauf_ende_melden` sperren darin erneut -
+        // ein nicht-reentranter Mutex blockiert dann beim ersten Sendungsende
+        // fuer immer.
+        let sperr_eintraege = { sperre.lock().await.eintraege() };
+        for (kanal, lauf) in sperr_eintraege {
+            let id = aktuelle_ids.get(&kanal).map(String::as_str);
+            if plan::lauf_ist_aktuelle_sendung(&lauf, id) {
+                continue;
+            }
+            sperre.lock().await.freigeben(&kanal, &lauf);
+            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
+        }
+
         let belegt = aufnahmen_bytes(&aufnahme_wurzel(&konfiguration)).await;
         plattenbelegung.store(belegt, std::sync::atomic::Ordering::Relaxed);
         if !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES) {
@@ -1322,19 +1344,6 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             ));
             laufend.insert(kanal.clone(), handle);
             tracing::info!(kanal, "Aufnahme gestartet");
-        }
-
-        let aktuelle_ids: std::collections::HashMap<String, String> = sendungen
-            .iter()
-            .map(|s| (s.user_login.to_lowercase(), s.id.trim().to_owned()))
-            .collect();
-        for (kanal, lauf) in sperre.lock().await.eintraege() {
-            let id = aktuelle_ids.get(&kanal).map(String::as_str);
-            if plan::lauf_ist_aktuelle_sendung(&lauf, id) {
-                continue;
-            }
-            sperre.lock().await.freigeben(&kanal, &lauf);
-            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
         }
 
         tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
@@ -1955,56 +1964,11 @@ geloescht. Sie sind als Beleg nicht mehr da."
                         .await;
                 }
                 meldung_erledigt(Path::new(&block.datei)).await;
-                // Ein Block ohne Sprache ist normal. Zwanzig am Stueck sind es
-                // nicht - dann liefert der STT-Dienst vermutlich fuer alles
-                // nichts, und ohne diesen Zaehler saehe das aus wie lauter
-                // ruhige Streams.
-                // Gezaehlt wird je Kanal. Ein gesunder Kanal darf den Zaehler
-                // eines anderen nicht zuruecksetzen - sonst bliebe genau der
-                // Kanal, dessen Ton nie ankommt, ohne Warnung.
-                let kanal = block.kanal.clone();
-                let mut aufnahme_behalten = false;
-                if segmente == 0 {
-                    let zaehler = leer_am_stueck.entry(kanal.clone()).or_insert(0usize);
-                    *zaehler += 1;
-                    let stumm = *zaehler;
-                    // Ab dem Verdacht auf einen kaputten STT-Dienst bleibt jede
-                    // weitere stumme Aufnahme liegen: sie ist der einzige Weg,
-                    // die uebersprungene Sendezeit noch nachzuhoeren.
-                    aufnahme_behalten = stumm >= MAX_LEER_AM_STUECK;
-                    // Gemeldet wird bei jedem Vielfachen, nicht nur beim
-                    // ersten Mal - eine Stoerung, die anhaelt, soll sich
-                    // wieder melden.
-                    if stumm.is_multiple_of(MAX_LEER_AM_STUECK) {
-                        let text = format!(
-                            "Coaching-Audit {kanal}: {stumm} Bloecke am Stueck ohne einen \
-einzigen erkannten Satz. STT-Dienst pruefen."
-                        );
-                        let ablage = format!("nur-stille-{kanal}");
-                        let (schluessel, text) =
-                            match offener_hinweis(&konfiguration, &ablage).await {
-                                Some(offen) => offen,
-                                None => (
-                                    format!(
-                                        "{}-{kanal}-nur-stille-{}",
-                                        start_kennung(),
-                                        naechste_vorfall_nummer()
-                                    ),
-                                    text,
-                                ),
-                            };
-                        if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
-                            // Nicht wieder loeschen, wenn spaeter etwas
-                            // ankommt: die Aufnahmen dieser Strecke sind dann
-                            // schon weg, und die Warnung ist der einzige
-                            // Hinweis darauf, dass sie ungeprueft blieben.
-                            tracing::error!(fehler, kanal, "Stille-Verdacht nicht meldbar");
-                            hinweis_aufheben(&konfiguration, &ablage, &schluessel, &text).await;
-                        }
-                    }
-                } else {
-                    leer_am_stueck.remove(&kanal);
-                }
+                // Gezaehlt und gemeldet wurde schon vor der Verzweigung: dort
+                // laeuft derselbe Zaehler fuer beide Auswertungsergebnisse,
+                // ein zweites Mal zaehlen wuerde ihn doppelt so schnell laufen
+                // lassen wie die Meldung, die davon spricht.
+                let aufnahme_behalten = segmente == 0 && stumm_am_stueck >= MAX_LEER_AM_STUECK;
                 if !block.nur_melden {
                     akte_verbuchen(&konfiguration, &block, &[]).await;
                 }
