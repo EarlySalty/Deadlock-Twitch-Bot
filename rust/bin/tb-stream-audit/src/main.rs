@@ -3861,8 +3861,14 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
             // Sweep ihn nicht stuendlich wieder aufgreift - aber nur, wenn ihn
             // nicht gerade ein startender Recorder angelegt hat. Sonst schriebe
             // ffmpeg gleich darauf in einen geloeschten Inode.
+            // Und erst recht nicht, wenn eine Aufnahme darin liegt: seit
+            // neuestem meldet `drive_archiv_durchfuehren` auch dann `Ok(false)`,
+            // wenn waehrend des Uploads ein neuer Teil entstanden ist.
             let mit_dir = mitschnitt_ordner(&konfiguration, &kanal, &lauf);
-            if !ordner_frisch_angelegt(&mit_dir).await {
+            let leer = mitschnitt_dateien_sammeln(&mit_dir)
+                .await
+                .is_some_and(|rest| rest.is_empty());
+            if leer && !ordner_frisch_angelegt(&mit_dir).await {
                 let _ = tokio::fs::remove_dir_all(&mit_dir).await;
             }
             // Und den Lauf-Ordner unter `aufnahmen/`, falls dieser Aufruf ihn
@@ -4023,10 +4029,16 @@ async fn drive_archiv_durchfuehren(
     // Einsammeln entstanden ist - etwa weil derselbe Lauf nach kurzem Abriss
     // erneut aufnimmt. ffmpeg schriebe dann in einen geloeschten Inode, und die
     // Archiv-Marke verhinderte jede Nachholung.
-    if mitschnitt_dateien_sammeln(&mit_dir)
+    // Und zugleich der Beleg, dass in der Zwischenzeit keine neue Aufnahme
+    // entstanden ist: kommt der Kanal waehrend des Uploads unter derselben
+    // Twitch-Stream-ID zurueck, raeumt der startende Recorder beide Marken weg
+    // und schreibt Teil 2 in denselben Ordner. Wuerde der Aufrufer danach die
+    // Archiv-Marke trotzdem setzen, waere Teil 2 fuer das Nachholen unsichtbar
+    // und verloere obendrein den Aufbewahrungsschutz.
+    let ordner_leer = mitschnitt_dateien_sammeln(&mit_dir)
         .await
-        .is_some_and(|rest| rest.is_empty())
-    {
+        .is_some_and(|rest| rest.is_empty());
+    if ordner_leer {
         let _ = tokio::fs::remove_dir_all(&mit_dir).await;
     }
     for bericht in &berichte {
@@ -4057,6 +4069,17 @@ async fn drive_archiv_durchfuehren(
     }
     if !sauber {
         return Err("Upload lag oben, aber lokal blieb etwas liegen".to_string());
+    }
+    if !ordner_leer {
+        // Der Upload selbst war vollstaendig, deshalb kein Fehler - aber der
+        // Lauf ist nicht abgeschlossen. Kein `Ok(true)`, also keine
+        // Archiv-Marke: der naechste Sweep holt den neuen Teil nach.
+        tracing::info!(
+            kanal,
+            lauf,
+            "waehrend des Uploads ist eine neue Aufnahme entstanden - Lauf bleibt offen"
+        );
+        return Ok(false);
     }
     Ok(true)
 }
@@ -5979,6 +6002,54 @@ mod tests {
             !mitschnitt.exists(),
             "Original blieb nach dem Upload liegen"
         );
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn eine_waehrend_des_uploads_entstandene_aufnahme_schliesst_den_lauf_nicht() {
+        let wurzel = test_ordner("archiv-neuer-teil-im-upload");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "lauf1", true).await;
+        tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+        let teil2 = dir.join(archiv::mitschnitt_name(2));
+
+        // Der Kanal kommt waehrend des Uploads unter derselben Stream-ID
+        // zurueck: das Fake-rclone legt dabei Teil 2 an. Wuerde der Lauf danach
+        // als archiviert gelten, ginge Teil 2 nie hoch und verloere zusaetzlich
+        // seinen Aufbewahrungsschutz.
+        let bin = wurzel.join("fake-rclone-rennen");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n: > '{}'\nif [ \"$1\" = lsf ]; then printf 'mitschnitt-1.aac;3\\n'; fi\nexit 0\n",
+                teil2.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut rechte = std::fs::metadata(&bin).unwrap().permissions();
+            rechte.set_mode(0o700);
+            std::fs::set_permissions(&bin, rechte).unwrap();
+        }
+
+        let ergebnis = drive_archiv_durchfuehren(
+            &konfiguration,
+            "kanal",
+            "lauf1",
+            &bin.to_string_lossy(),
+            "gdrive:Test",
+        )
+        .await;
+
+        assert_eq!(
+            ergebnis,
+            Ok(false),
+            "ein waehrend des Uploads entstandener Teil darf den Lauf nicht schliessen"
+        );
+        assert!(teil2.exists(), "Teil 2 wurde weggeraeumt");
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 
