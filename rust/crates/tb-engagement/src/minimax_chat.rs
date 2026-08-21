@@ -11,10 +11,6 @@ use std::time::Duration;
 
 use regex::Regex;
 
-/// Default-Endpunkt (OpenAI-kompatibel).
-pub const DEFAULT_BASE_URL: &str = "https://api.minimax.io/v1";
-/// Default-Modell-Lock.
-pub const DEFAULT_MODEL: &str = "MiniMax-M3";
 /// Marker, mit dem das Modell bewusstes Schweigen signalisiert.
 pub const SILENT_MARKER: &str = "<silent>";
 const MAX_CHAT_TEXT_CHARS: usize = 120;
@@ -658,83 +654,66 @@ impl std::fmt::Display for GenerateError {
 
 impl std::error::Error for GenerateError {}
 
-/// Async-Client für MiniMax M3 über den OpenAI-kompatiblen `/chat/completions`-
-/// Endpunkt (Port von `EngagementMinimaxClient`).
+/// Anwendungsfall dieses Clients in der gemeinsamen Anbieterauswahl.
+const USE_CASE: &str = "engagement";
+
+impl From<tb_llm::LlmError> for GenerateError {
+    fn from(error: tb_llm::LlmError) -> Self {
+        match error {
+            tb_llm::LlmError::Unavailable(detail) => {
+                Self::Unavailable(LlmProviderUnavailable(detail))
+            }
+            other => Self::Http(other.to_string()),
+        }
+    }
+}
+
+/// Chat-Client der Engagement-Schicht.
+///
+/// Der HTTP-Weg liegt in [`tb_llm::complete`]; hier bleibt nur, was fachlich
+/// zum Engagement gehört: Verlauf falten, Temperatur, Nachbehandlung des Textes
+/// und die Fehlerform, die die Aufrufer kennen.
+///
+/// Anbieter, Adresse und Modell kommen aus der gemeinsamen Auswahl unter dem
+/// Anwendungsfall `engagement`. Der frühere MiniMax-Sonderpfad
+/// (`MINIMAX_TOKEN_PLAN_KEY`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL` mit eigener
+/// Rangfolge, dazu `ENGAGEMENT_MINIMAX_MODEL`) ist weg: dieselben Variablen
+/// wirken weiter, aber nur noch mit der Rangfolge aus `tb_llm::selection`. Zwei
+/// Rangfolgen für dieselben Variablen sind eine Fehlerquelle, kein Netz. Das
+/// Modell dieses Anwendungsfalls stellt `TB_LLM_MODEL_ENGAGEMENT` um.
 pub struct EngagementMinimaxClient {
-    api_key: Option<String>,
-    base_url: String,
-    model: String,
+    endpoint: tb_llm::LlmEndpoint,
     timeout: Duration,
 }
 
 impl EngagementMinimaxClient {
     /// Baut den Client. Explizite Parameter gewinnen immer; sonst entscheidet
-    /// die gemeinsame Provider-Auswahl ([`tb_llm::endpoint_for`]) über Anbieter,
-    /// Adresse, Modell und Key — heute Fireworks/DeepSeek, solange ein
-    /// Fireworks-Key gesetzt ist, sonst weiterhin MiniMax.
-    ///
-    /// Die alten MiniMax-Variablen bleiben wirksam: `MINIMAX_TOKEN_PLAN_KEY`,
-    /// `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` und `ENGAGEMENT_MINIMAX_MODEL`
-    /// überschreiben die Auswahl, damit ein Rückfall ohne Deploy möglich ist.
+    /// die gemeinsame Provider-Auswahl ([`tb_llm::endpoint_for`]).
     pub fn new(
         api_key: Option<String>,
         base_url: Option<String>,
         model: Option<String>,
         timeout: Option<Duration>,
     ) -> Self {
-        let endpoint = tb_llm::endpoint_for("engagement");
-        // Key, Adresse und Modell gehören zusammen: die MiniMax-Variablen
-        // greifen nur, wenn die Auswahl auch MiniMax ergeben hat. Sonst
-        // entstünde ein MiniMax-Key an der Fireworks-Adresse.
-        let is_minimax = endpoint.provider == "minimax";
-        let api_key = api_key
-            .filter(|k| !k.is_empty())
-            .or_else(|| {
-                is_minimax
-                    .then(|| nonempty_env("MINIMAX_TOKEN_PLAN_KEY"))
-                    .flatten()
-            })
-            .or_else(|| {
-                is_minimax
-                    .then(|| nonempty_env("MINIMAX_API_KEY"))
-                    .flatten()
-            })
-            .or(endpoint.api_key);
-        let base_url = base_url
-            .filter(|u| !u.is_empty())
-            .or_else(|| {
-                is_minimax
-                    .then(|| nonempty_env("MINIMAX_BASE_URL"))
-                    .flatten()
-            })
-            .unwrap_or(endpoint.base_url);
-        let model = model
-            .filter(|m| !m.is_empty())
-            .or_else(|| {
-                is_minimax
-                    .then(|| nonempty_env("ENGAGEMENT_MINIMAX_MODEL"))
-                    .flatten()
-            })
-            .unwrap_or(endpoint.model);
+        let mut endpoint = tb_llm::endpoint_for(USE_CASE);
+        if let Some(api_key) = api_key.filter(|k| !k.is_empty()) {
+            endpoint.api_key = Some(api_key);
+        }
+        if let Some(base_url) = base_url.filter(|u| !u.is_empty()) {
+            endpoint.base_url = base_url;
+        }
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            endpoint.model = model;
+        }
         Self {
-            api_key,
-            base_url,
-            model,
+            endpoint,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
         }
     }
 
     /// Das gelockte Modell (für Logging/Persistenz).
     pub fn model(&self) -> &str {
-        &self.model
-    }
-
-    /// Ob dieser Client wirklich Fireworks bedient. Entscheidet, ob ein 404
-    /// den Fireworks-Resolver anstoßen darf — bei MiniMax wäre das ein
-    /// zweiter Fehlschlag gegen die falsche Adresse.
-    fn serves_fireworks(&self) -> bool {
-        self.model.starts_with("accounts/fireworks/models/")
-            || self.base_url.contains("fireworks.ai")
+        &self.endpoint.model
     }
 
     /// Generiert eine Chat-Antwort. `messages = [system] + history` (Sprecher
@@ -784,43 +763,44 @@ impl EngagementMinimaxClient {
         max_answer_len: usize,
         process: fn(&str, usize) -> Option<String>,
     ) -> Result<ChatResponse, GenerateError> {
-        let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt})];
-        for turn in history {
-            // Sprecher in den Content falten statt ins name-Feld: MiniMax verlangt
-            // über alle Messages konsistente name-Werte (Fehler 2013), was bei
-            // Multi-User-Chat bricht.
-            let content = match &turn.name {
-                Some(name) => format!("{name}: {}", turn.content),
-                None => turn.content.clone(),
-            };
-            messages.push(serde_json::json!({"role": turn.role, "content": content}));
-        }
-        let (raw_text, prompt_tokens, completion_tokens, latency_ms) = self
-            .post_completion(serde_json::Value::Array(messages), max_output_tokens, 0.7)
+        let messages = history
+            .iter()
+            .map(|turn| {
+                // Sprecher in den Content falten statt ins name-Feld: MiniMax
+                // verlangt über alle Messages konsistente name-Werte (Fehler
+                // 2013), was bei Multi-User-Chat bricht.
+                let content = match &turn.name {
+                    Some(name) => format!("{name}: {}", turn.content),
+                    None => turn.content.clone(),
+                };
+                tb_llm::Message {
+                    role: turn.role.clone(),
+                    content,
+                }
+            })
+            .collect();
+
+        // Verbrauch ins gemeinsame Usage-Ledger (Parität zu Pythons
+        // `minimax_usage.record(...)`-Seiteneffekt). Tokens auch bei `<silent>`
+        // verbuchen, denn verbraucht sind sie ohnehin.
+        let response = self
+            .call(
+                tb_llm::Request::history(messages)
+                    .system(system_prompt)
+                    .max_tokens(max_output_tokens)
+                    .temperature(0.7),
+            )
             .await?;
 
-        // Verbrauch ins gemeinsame MiniMax-Usage-Ledger (Parität zu Pythons
-        // `minimax_usage.record(...)`-Seiteneffekt). Best-effort — `record`
-        // verschluckt jeden DB-Fehler intern und kippt den Call nie. Tokens auch
-        // bei `<silent>` verbuchen, denn verbraucht sind sie ohnehin.
-        tb_llm::ledger::record(
-            "engagement",
-            &self.model,
-            prompt_tokens.unwrap_or(0),
-            completion_tokens.unwrap_or(0),
-            true,
-        )
-        .await;
-
-        let review_text = prepare_response_text(&raw_text);
-        let text = process(&raw_text, max_answer_len);
+        let review_text = prepare_response_text(&response.text);
+        let text = process(&response.text, max_answer_len);
         Ok(ChatResponse {
             text,
             raw_text: review_text,
-            model: self.model.clone(),
-            prompt_tokens,
-            completion_tokens,
-            latency_ms,
+            model: response.model,
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            latency_ms: response.latency_ms,
         })
     }
 
@@ -828,8 +808,7 @@ impl EngagementMinimaxClient {
     /// [`process_response_text`] — für Jobs wie die Soul-Reflexion.
     ///
     /// Verbucht KEINEN Token-Verbrauch im Ledger. Aufrufer, die ihren Verbrauch
-    /// kosten-attribuieren wollen (z. B. der Chat-Deep-Endpoint, Python
-    /// `_track_minimax_completion(purpose="chat-deep-analysis")`), nutzen
+    /// kosten-attribuieren wollen (z. B. der Chat-Deep-Endpoint), nutzen
     /// [`Self::raw_completion_tracked`].
     pub async fn raw_completion(
         &self,
@@ -838,24 +817,20 @@ impl EngagementMinimaxClient {
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<String, GenerateError> {
-        let messages = serde_json::json!([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]);
-        let (raw_text, _, _, _) = self
-            .post_completion(messages, max_output_tokens, temperature)
+        let response = self
+            .call(
+                tb_llm::Request::simple(system, user)
+                    .max_tokens(max_output_tokens)
+                    .temperature(temperature)
+                    .no_ledger(),
+            )
             .await?;
-        Ok(raw_text)
+        Ok(response.text)
     }
 
     /// Wie [`Self::raw_completion`], verbucht aber zusätzlich den echten
-    /// Token-Verbrauch im geteilten MiniMax-Usage-Ledger unter dem gegebenen
-    /// `purpose` (Parität zu Pythons `_track_minimax_completion(response,
-    /// purpose=…)`-Seiteneffekt, z. B. `purpose="chat-deep-analysis"`).
-    ///
-    /// Best-effort: `record` verschluckt jeden DB-Fehler intern und kippt den
-    /// Call nie. Tokens werden auch bei leerem Antwort-Text verbucht — verbraucht
-    /// sind sie ohnehin.
+    /// Token-Verbrauch im geteilten Usage-Ledger unter dem gegebenen `purpose`
+    /// (z. B. `purpose="chat-deep-analysis"`).
     pub async fn raw_completion_tracked(
         &self,
         system: &str,
@@ -864,39 +839,35 @@ impl EngagementMinimaxClient {
         temperature: f64,
         purpose: &str,
     ) -> Result<String, GenerateError> {
-        let messages = serde_json::json!([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]);
-        let (raw_text, prompt_tokens, completion_tokens, _) = self
-            .post_completion(messages, max_output_tokens, temperature)
+        let response = self
+            .call(
+                tb_llm::Request::simple(system, user)
+                    .max_tokens(max_output_tokens)
+                    .temperature(temperature)
+                    .ledger_purpose(purpose),
+            )
             .await?;
-
-        tb_llm::ledger::record(
-            purpose,
-            &self.model,
-            prompt_tokens.unwrap_or(0),
-            completion_tokens.unwrap_or(0),
-            true,
-        )
-        .await;
-
-        Ok(raw_text)
+        Ok(response.text)
     }
 
     /// Completion über ein vollständiges `messages`-Array (system + history +
-    /// user) → getrimmter Antwort-Text. Für Multi-Turn-Calls wie den KI-Folgechat
-    /// (`client.chat.completions.create(messages=…)`).
+    /// user) → getrimmter Antwort-Text. Für Multi-Turn-Calls wie den
+    /// KI-Folgechat.
     pub async fn messages_completion(
         &self,
         messages: serde_json::Value,
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<String, GenerateError> {
-        let (raw_text, _, _, _) = self
-            .post_completion(messages, max_output_tokens, temperature)
+        let response = self
+            .call(
+                request_from_messages(&messages)
+                    .max_tokens(max_output_tokens)
+                    .temperature(temperature)
+                    .no_ledger(),
+            )
             .await?;
-        Ok(raw_text)
+        Ok(response.text)
     }
 
     /// Completion über ein vollständiges `messages`-Array ohne `max_tokens`
@@ -906,121 +877,59 @@ impl EngagementMinimaxClient {
         messages: serde_json::Value,
         temperature: f64,
     ) -> Result<String, GenerateError> {
-        let (raw_text, _, _, _) = self
-            .post_completion_with_limit(messages, None, temperature)
+        let response = self
+            .call(
+                request_from_messages(&messages)
+                    .temperature(temperature)
+                    .no_ledger(),
+            )
             .await?;
-        Ok(raw_text)
+        Ok(response.text)
     }
 
-    /// POST an `/chat/completions`; gibt (Roh-Text, prompt_tokens,
-    /// completion_tokens, Latenz) zurück. Gemeinsame Basis von [`Self::generate`]
-    /// und [`Self::raw_completion`].
-    async fn post_completion(
-        &self,
-        messages: serde_json::Value,
-        max_output_tokens: i64,
-        temperature: f64,
-    ) -> Result<(String, Option<i64>, Option<i64>, i64), GenerateError> {
-        self.post_completion_with_limit(messages, Some(max_output_tokens), temperature)
-            .await
-    }
-
-    async fn post_completion_with_limit(
-        &self,
-        messages: serde_json::Value,
-        max_output_tokens: Option<i64>,
-        temperature: f64,
-    ) -> Result<(String, Option<i64>, Option<i64>, i64), GenerateError> {
-        let api_key = self.api_key.as_deref().ok_or_else(|| {
-            GenerateError::Unavailable(LlmProviderUnavailable(
-                "MINIMAX_API_KEY not set".to_string(),
-            ))
-        })?;
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-        });
-        if let Some(max_output_tokens) = max_output_tokens {
-            body["max_tokens"] = serde_json::json!(max_output_tokens);
-        }
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(|e| GenerateError::Http(e.to_string()))?;
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let started = std::time::Instant::now();
-        let mut versuch = 0;
-        let resp = loop {
-            let antwort = client
-                .post(&url)
-                .header("Authorization", format!("Bearer {api_key}"))
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| GenerateError::Http(e.to_string()))?;
-            let status = antwort.status();
-            match antwort.error_for_status() {
-                Ok(ok) => break ok,
-                Err(e) => {
-                    // Ein 404 auf `/chat/completions` heisst bei Fireworks:
-                    // das Modell gibt es nicht mehr. Genau so ist am 15.08.2026
-                    // `deepseek-v4-flash` verschwunden. Nur dieser Anbieter
-                    // dreht Namen unter uns weg; bei MiniMax würde der Resolver
-                    // einen Fireworks-Pfad in den MiniMax-Call schreiben.
-                    let modell_weg = status == reqwest::StatusCode::NOT_FOUND
-                        && versuch == 0
-                        && self.serves_fireworks();
-                    if !modell_weg {
-                        return Err(GenerateError::Http(e.to_string()));
-                    }
-                    versuch += 1;
-                    let aktuelles = body["model"].as_str().unwrap_or_default().to_string();
-                    match tb_llm::invalidate_and_refresh(tb_llm::model_cache_pool(), &aktuelles)
-                        .await
-                    {
-                        Some(neu) => {
-                            tracing::warn!(
-                                alt = %aktuelles,
-                                neu = %neu,
-                                "Modell war weg, wiederhole Call mit aufgeloestem Namen"
-                            );
-                            body["model"] = serde_json::json!(neu);
-                        }
-                        None => return Err(GenerateError::Http(e.to_string())),
-                    }
-                }
-            }
-        };
-        let payload: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| GenerateError::Http(e.to_string()))?;
-        let latency_ms = started.elapsed().as_millis() as i64;
-        let raw_text = payload
-            .get("choices")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let usage = payload.get("usage");
-        let prompt_tokens = usage
-            .and_then(|u| u.get("prompt_tokens"))
-            .and_then(serde_json::Value::as_i64);
-        let completion_tokens = usage
-            .and_then(|u| u.get("completion_tokens"))
-            .and_then(serde_json::Value::as_i64);
-        Ok((raw_text, prompt_tokens, completion_tokens, latency_ms))
+    /// Einziger Weg nach draußen: Endpunkt und Zeitgrenze dieses Clients an den
+    /// gemeinsamen Eingang, Fehler in die Form bringen, die die Aufrufer kennen.
+    async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
+        tb_llm::complete(
+            USE_CASE,
+            request
+                .timeout(self.timeout)
+                .endpoint(self.endpoint.clone()),
+        )
+        .await
+        .map_err(GenerateError::from)
     }
 }
 
-/// Env-Var nur wenn gesetzt UND nicht leer (mirror von Pythons `or`-Kette).
-fn nonempty_env(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|v| !v.is_empty())
+/// Macht aus einem fertigen `messages`-Array eine Anfrage. Eine führende
+/// `system`-Nachricht wandert ins System-Feld: nur so kommt sie auch bei einem
+/// Anbieter an, der `system` getrennt erwartet.
+fn request_from_messages(messages: &serde_json::Value) -> tb_llm::Request {
+    let mut system = None;
+    let mut turns = Vec::new();
+    for message in messages.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let role = message
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("user");
+        let content = message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if role == "system" && system.is_none() && turns.is_empty() {
+            system = Some(content.to_string());
+            continue;
+        }
+        turns.push(tb_llm::Message {
+            role: role.to_string(),
+            content: content.to_string(),
+        });
+    }
+    let request = tb_llm::Request::history(turns);
+    match system {
+        Some(system) => request.system(system),
+        None => request,
+    }
 }
 
 /// Neutralisiert das geteilte MiniMax-Usage-Ledger für die Lib-Unit-Tests: entfernt
@@ -1072,7 +981,7 @@ mod tests {
             "MINIMAX_API_KEY",
             "MINIMAX_TOKEN_PLAN_KEY",
             "MINIMAX_BASE_URL",
-            "ENGAGEMENT_MINIMAX_MODEL",
+            "TB_LLM_MODEL_ENGAGEMENT",
         ] {
             std::env::remove_var(v);
         }
@@ -1088,42 +997,37 @@ mod tests {
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
 
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.api_key.as_deref(), Some("fireworks-key"));
+        assert_eq!(client.endpoint.provider, "fireworks");
+        assert_eq!(client.endpoint.api_key.as_deref(), Some("fireworks-key"));
         assert!(
-            client.base_url.contains("fireworks.ai"),
+            client.endpoint.base_url.contains("fireworks.ai"),
             "falsche Adresse: {}",
-            client.base_url
+            client.endpoint.base_url
         );
         assert!(
-            client.model.contains("deepseek"),
+            client.model().contains("deepseek"),
             "falsches Modell: {}",
-            client.model
+            client.model()
         );
         clear_provider_env();
     }
 
-    /// Die Legacy-Variable darf ein MiniMax-Modell nicht an die
-    /// Fireworks-Adresse haengen — sonst antwortet der Anbieter mit einem
-    /// Modellfehler und der Engagement-Pfad ist stumm.
+    /// Die Modellvariable dieses Anwendungsfalls gilt fuer jeden Anbieter. Der
+    /// frueher noetige Sonderpfad ("nur wenn die Auswahl MiniMax ergab") ist
+    /// weg; wer das Modell umstellt, meint genau dieses Modell.
     #[test]
-    fn engagement_modell_variable_greift_nur_bei_minimax() {
+    fn modellvariable_des_anwendungsfalls_gilt_fuer_jeden_anbieter() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
-        std::env::set_var("ENGAGEMENT_MINIMAX_MODEL", "MiniMax-M3");
+        assert!(EngagementMinimaxClient::new(None, None, None, None)
+            .model()
+            .contains("deepseek"));
 
+        std::env::set_var("TB_LLM_MODEL_ENGAGEMENT", "accounts/fireworks/models/anders");
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert!(
-            client.model.contains("deepseek"),
-            "MiniMax-Modell an der Fireworks-Adresse: {}",
-            client.model
-        );
-
-        // Auf MiniMax zurueckgeschaltet gilt die Variable weiterhin.
-        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
-        std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
-        let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.model, "MiniMax-M3");
+        assert_eq!(client.endpoint.provider, "fireworks");
+        assert_eq!(client.model(), "accounts/fireworks/models/anders");
         clear_provider_env();
     }
 
@@ -1134,9 +1038,9 @@ mod tests {
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
-        assert_eq!(client.base_url, DEFAULT_BASE_URL);
-        assert_eq!(client.model, DEFAULT_MODEL);
+        assert_eq!(client.endpoint.api_key.as_deref(), Some("minimax-key"));
+        assert_eq!(client.endpoint.base_url, tb_llm::selection::MINIMAX_BASE_URL);
+        assert_eq!(client.model(), tb_llm::selection::MINIMAX_DEFAULT_MODEL);
         clear_provider_env();
     }
 
@@ -1149,8 +1053,8 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
 
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.api_key.as_deref(), Some("minimax-key"));
-        assert_eq!(client.base_url, DEFAULT_BASE_URL);
+        assert_eq!(client.endpoint.api_key.as_deref(), Some("minimax-key"));
+        assert_eq!(client.endpoint.base_url, tb_llm::selection::MINIMAX_BASE_URL);
         clear_provider_env();
     }
 

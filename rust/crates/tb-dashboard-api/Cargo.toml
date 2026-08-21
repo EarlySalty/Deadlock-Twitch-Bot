@@ -41,6 +41,7 @@ tb-http-core  = { workspace = true }
 tb-crypto     = { workspace = true }
 tb-chat       = { workspace = true }
 tb-engagement = { workspace = true }
+tb-llm        = { workspace = true }
 tb-knowledge  = { workspace = true }
 tb-raid       = { workspace = true }
 tb-scout      = { workspace = true }
