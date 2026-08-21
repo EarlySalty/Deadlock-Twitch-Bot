@@ -45,7 +45,7 @@ pub mod ledger;
 pub mod selection;
 
 pub use hub::{
-    complete, extract_anthropic_text, strip_think, Accept, Ledger, LlmError, Message, Request,
-    Response,
+    complete, complete_detailed, extract_anthropic_text, strip_think, Accept, Ledger, LlmError,
+    LlmFailure, Message, Request, Response,
 };
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};
