@@ -284,6 +284,11 @@ impl LlmProvider for ExternalProvider {
                 self.name
             )));
         }
+        // Achtung Vokabular: `clip_enrichments.llm_provider` traegt seit der
+        // Zentralisierung den antwortenden Anbieter (`fireworks`, `minimax`,
+        // `anthropic`), vorher den Bahn-Namen (`minimax`, `claude_haiku`).
+        // Altzeilen werden nicht nachgezogen; Auswertungen muessen beide
+        // Schreibweisen kennen (siehe llm-zentral.md, Verhaltensaenderungen).
         // Anbieter und Preis vom tatsaechlich antwortenden Endpunkt, nicht
         // von der Bahn: so steht in `clip_enrichments.llm_provider` der echte
         // Absender und die Kostenschaetzung passt zu ihm.

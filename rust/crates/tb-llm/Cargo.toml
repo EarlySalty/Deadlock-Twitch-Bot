@@ -3,9 +3,11 @@ name = "tb-llm"
 version = "0.1.0"
 edition.workspace = true
 
-# Gemeinsame LLM-Client-Schicht (Phase-0-Foundation): genau zwei Provider —
-# MiniMax (Primär) + Anthropic (Premium). Jeder erfolgreiche Call verbucht
-# Tokens best-effort ins gemeinsame MiniMax-Usage-Ledger (zentrale Postgres).
+# Gemeinsame LLM-Schicht des Twitch-Bots: ein HTTP-Weg (`hub`) und eine
+# Anbieterauswahl je Use-Case (`selection`) fuer drei Anbieter: Fireworks/DeepSeek
+# (Standard, wenn ein Key da ist), MiniMax (Ausweichweg) und Anthropic
+# (Premium-Use-Cases). Jeder erfolgreiche Call verbucht Tokens best-effort ins
+# gemeinsame Usage-Ledger (Tabelle `minimax_usage`, zentrale Postgres).
 [dependencies]
 chrono      = { workspace = true }
 regex       = { workspace = true }

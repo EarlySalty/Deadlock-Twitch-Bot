@@ -62,6 +62,7 @@ tb_llm::complete(use_case: &str, request: Request) -> Result<Response, LlmError>
 | `json_object` | setzt `response_format` |
 | `timeout` | pro Aufruf, sonst 240 s |
 | `ledger` | `Off` oder `Purpose(name)`; Default ist der Use-Case-Name |
+| `total_deadline` | Gesamtfrist ueber die ganze Kette; ohne Angabe die Summe der Einzelfristen. Der Engagement-Client setzt seine Client-Frist (Chat 30 s, Dashboard-Folgechat 240 s) als Gesamtfrist, damit eine Antwort nicht erst nach zwei vollen Fristen kommt |
 | `strip_think` | entfernt geschlossene `<think>...</think>`-Bloecke aus dem Antworttext; ein offener Block bleibt stehen, damit JSON nach einer abgeschnittenen Ueberlegung erreichbar bleibt |
 | `allow_reasoning_content` | Opt-in: faellt auf `reasoning_content` zurueck, wenn `content` leer ist. Standard aus, damit kein Denktext im Chat landet; nur der Spam-Judge setzt es |
 | `accept` | Praedikat auf dem Antworttext; schlaegt es fehl, geht der Hub zum naechsten Anbieter der Kette |
@@ -118,7 +119,6 @@ Entfallen mit diesem Umbau:
 Ist eine dieser drei Altvariablen noch gesetzt, warnt `endpoint_for` einmal je
 Prozess mit dem neuen Namen (`selection.rs`, `ALTVARIABLEN`); still ignoriert
 wird nichts mehr.
-| MiniMax-Sonderpfad in `minimax_chat.rs` (`MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` nur wenn die Auswahl MiniMax ergab) | faellt weg; die Variablen wirken weiterhin, aber ueber die zentrale Auswahl in `selection.rs` |
 
 Bleiben unveraendert:
 
@@ -146,8 +146,14 @@ als Ausweichweg), und nur der Self-Explainer bekommt MiniMax-Text-01.
 Der `EngagementMinimaxClient` arbeitet ohne explizite Parameter die
 Ausweichkette (`endpoint_chain`) ab, statt sich auf einen Endpunkt
 festzunageln: faellt Fireworks aus, antwortet MiniMax. Nur ein Client mit
-explizit gesetztem Schluessel, Adresse oder Modell (Tests, Sonderfaelle) bleibt
-auf diesem einen Endpunkt.
+explizit gesetztem Schluessel, Adresse oder Modell (Tests, Sonderfaelle) oder
+ein Client aus `for_use_case` (Self-Explainer) bleibt auf diesem einen
+Endpunkt; beim Self-Explainer bewusst, weil das Ausweichglied Fireworks/DeepSeek
+genau das Reasoning-Modell waere, das der Wrapper vermeiden will.
+
+Fehlt fuer einen Use-Case jeder Anbieter (kein Schluessel), warnt der Hub
+selbst (`kein LLM-Anbieter konfiguriert`), gedrosselt auf einmal je fuenf
+Minuten und Use-Case; die Aufrufer warnen dafuer nicht mehr.
 
 Der Schluessel eines Anbieters kommt jetzt ueberall aus `tb_llm::keys`. Fuer
 Fireworks heisst das: `FIREWORK_API_KEY` gewinnt vor `FIREWORKS_API_KEY`. Das
@@ -191,7 +197,7 @@ Fehlerquelle, kein Sicherheitsnetz.
 
 ## Bewusste Verhaltensaenderungen
 
-Drei Dinge verhalten sich nach dem Umbau anders als vorher. Alle drei sind
+Vier Dinge verhalten sich nach dem Umbau anders als vorher. Alle vier sind
 gewollt; wer Logs, Kostenauswertungen oder Dashboards darauf gebaut hat, muss
 sie kennen.
 
@@ -232,16 +238,17 @@ nicht dem Bahn-Namen aus den Einstellungen. Die Preistabelle in
 Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
 
 - `ricky_crew_review` und `outreach_shadow`: Schatten-Reviews, die nie an einem
-  Streamer-Budget hingen. Beide sind gleich fail-closed: Anbieter, Adresse und
-  Modell muessen dem Fireworks-Standard entsprechen, sonst startet der Client
-  nicht (`Unavailable`). Damit ein globales `TB_LLM_PROVIDER_DEFAULT=minimax`
-  sie nicht still abschaltet, stehen beide in `FIREWORKS_ONLY_USE_CASES`
-  (`selection.rs`) und ignorieren den Default; nur die eigene
-  `TB_LLM_PROVIDER_<USE_CASE>`-Variable lenkt sie um, mit `warn!` beim
-  Aufloesen. Ein `TB_LLM_MODEL_RICKY_CREW_REVIEW` oder
-  `TB_LLM_MODEL_OUTREACH_SHADOW` mit fremdem Modell schaltet das Review also
-  ab, statt still ein anderes Modell zu nehmen; ein fehlendes Modell gibt es
-  nicht, die Auswahl liefert immer den Standard.
+  Streamer-Budget hingen. Beide sind gleich fail-closed und laufen immer an
+  der Fireworks-Standardadresse mit dem Standardmodell (im Code
+  festgenagelt). Abgeschaltet (`Unavailable`) werden sie durch genau zwei
+  Dinge: keinen Fireworks-Schluessel (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`
+  leer) oder eine eigene `TB_LLM_PROVIDER_RICKY_CREW_REVIEW` bzw.
+  `TB_LLM_PROVIDER_OUTREACH_SHADOW`, die auf einen anderen Anbieter zeigt
+  (mit `warn!` beim Aufloesen). Nicht abschaltend: `TB_LLM_PROVIDER_DEFAULT`
+  (beide stehen in `FIREWORKS_ONLY_USE_CASES` und ignorieren ihn), globale
+  `FIREWORKS_MODEL`/`FIREWORK_MODEL`, `FIREWORK_BASE_URL`/`FIREWORKS_BASE_URL`
+  und `TB_LLM_MODEL_<USE_CASE>`; diese Werte werden fuer die Schatten-Reviews
+  schlicht nicht uebernommen.
 - `crew_guard`: laeuft ueber einen fremden Schluessel, dessen Kosten nicht in
   diesem Ledger stehen.
 - `stream_audit`: laeuft ausserhalb des Bots und gehoert zu keinem Streamer.
@@ -271,6 +278,18 @@ Eingangs statt eigener Namen:
 Alle Aufrufer teilen sich damit dasselbe Fehlervokabular. Wer auf
 `error_kind="http_transport"` oder `error_kind="response_json"` filtert, muss
 die Filter nachziehen.
+
+### (d) `clip_enrichments.llm_provider` nennt den antwortenden Anbieter
+
+Vorher stand in `clip_enrichments.llm_provider` der Bahn-Name aus den
+Einstellungen (`minimax`, `claude_haiku`, `ollama`). Jetzt steht dort der
+Anbieter, der wirklich geantwortet hat: `fireworks`, `minimax` oder
+`anthropic` (`ollama` bleibt `ollama`). Die Bahn `minimax` landet ueber die
+zentrale Auswahl meist auf Fireworks/DeepSeek, und genau das soll die Spalte
+zeigen, auch fuer die Kostenschaetzung. Kein Backfill: Altzeilen behalten
+`minimax`/`claude_haiku`. Auswertungen ueber diese Spalte muessen beide
+Vokabulare kennen (`claude_haiku` entspricht `anthropic`). Kommentar am
+Schreibpfad in `llm_dispatch.rs`.
 
 ## Bewusst nicht migriert
 
