@@ -2325,10 +2325,33 @@ mod tests {
 
     static PROVIDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Haelt die Env-Sperre und raeumt alle Anbieter-Variablen beim Verlassen
+    /// des Tests auf, auch bei Panik. Ohne Drop blieb nach einem roten Test
+    /// ein gesetztes `TB_LLM_MODEL_POST_STREAM*` liegen und faerbte den
+    /// naechsten Test.
+    struct ProviderEnvGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl Drop for ProviderEnvGuard {
+        fn drop(&mut self) {
+            clear_provider_env();
+        }
+    }
+
+    fn provider_env() -> ProviderEnvGuard {
+        let guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        ProviderEnvGuard(guard)
+    }
+
     fn clear_provider_env() {
         for name in [
             "TB_LLM_PROVIDER_DEFAULT",
             "TB_LLM_PROVIDER_POST_STREAM",
+            "TB_LLM_PROVIDER_POST_STREAM_OPUS",
+            "TB_LLM_MODEL_POST_STREAM",
+            "TB_LLM_MODEL_POST_STREAM_OPUS",
             "FIREWORK_API_KEY",
             "FIREWORKS_API_KEY",
             "FIREWORK_BASE_URL",
@@ -2343,7 +2366,6 @@ mod tests {
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
             "ANTHROPIC_MODEL",
-            "TB_LLM_PROVIDER_POST_STREAM_OPUS",
         ] {
             std::env::remove_var(name);
         }
@@ -2357,10 +2379,7 @@ mod tests {
         use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        let _guard = PROVIDER_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        clear_provider_env();
+        let _guard = provider_env();
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
 
         let endpoint = tb_llm::endpoint_for("post_stream");
@@ -2397,7 +2416,6 @@ mod tests {
         let endpoint = tb_llm::endpoint_for("post_stream");
         assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
         assert_eq!(endpoint.model, "MiniMax-M3");
-        clear_provider_env();
     }
 
     fn msg(content: &str, author: &str, minute: Option<i64>) -> ChatMessageRow {
@@ -2451,10 +2469,7 @@ mod tests {
     async fn call_ai_minimax_liefert_content() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        let _guard = PROVIDER_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        clear_provider_env();
+        let _guard = provider_env();
         // Ledger NIE die echte zentrale DB anfassen lassen: vor dem ersten
         // record() (lazy Pool-Bind) den zentralen DSN aus der Umgebung nehmen,
         // damit der best-effort-`record()` keinen Pool baut und zum No-op wird.
@@ -2473,7 +2488,6 @@ mod tests {
 
         let out = call_ai(AiModel::Minimax, "prompt").await.unwrap();
         assert_eq!(out, "ANTWORT");
-        clear_provider_env();
     }
 
     #[test]
@@ -2503,10 +2517,7 @@ mod tests {
     async fn call_ai_opus_setzt_kopfzeilen_und_liefert_content() {
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        let _guard = PROVIDER_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        clear_provider_env();
+        let _guard = provider_env();
         std::env::remove_var("TWITCH_ANALYTICS_DSN");
         std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
@@ -2523,7 +2534,6 @@ mod tests {
 
         let out = call_ai(AiModel::Opus, "prompt").await.unwrap();
         assert_eq!(out, "CLAUDE-ANTWORT");
-        clear_provider_env();
     }
 
     // Die Env-Werte muessen bis nach dem HTTP-Call exklusiv bleiben; sonst
@@ -2534,10 +2544,7 @@ mod tests {
     async fn call_ai_fehlerbody_landet_in_der_meldung() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        let _guard = PROVIDER_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        clear_provider_env();
+        let _guard = provider_env();
         std::env::remove_var("TWITCH_ANALYTICS_DSN");
         std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
@@ -2558,7 +2565,6 @@ mod tests {
         assert!(err.contains("400"), "Status fehlt: {err}");
         assert!(err.contains("invalid_request_error"), "Body fehlt: {err}");
         assert!(err.contains("model: unknown-model"), "Body fehlt: {err}");
-        clear_provider_env();
     }
 
     #[test]

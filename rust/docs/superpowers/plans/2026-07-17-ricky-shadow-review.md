@@ -497,7 +497,7 @@ Konfiguration:
 ```text
 FIREWORKS_API_KEY (Fallback nur auf vorhandenen Legacy-Namen FIREWORK_API_KEY)
 FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
-FIREWORKS_RICKY_REVIEW_MODEL=accounts/fireworks/models/deepseek-v4-flash
+TB_LLM_MODEL_RICKY_CREW_REVIEW=accounts/fireworks/models/deepseek-v4-flash
 ```
 
 POST ausschließlich an `/chat/completions`, ohne Provider-Fallback. Fehler werden auf `unavailable`, `timeout`, `http_status`, `decode` oder `validation` reduziert. Weder Antwortbody noch Requestprompt werden im Fehlerstring gespeichert.
@@ -641,7 +641,7 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 export RICKY_SHADOW_REVIEW_YTDLP_BIN="${RICKY_SHADOW_REVIEW_YTDLP_BIN:-$ROOT_DIR/.venv/bin/yt-dlp}"
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}"
-export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}"
+export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-accounts/fireworks/models/deepseek-v4-flash}"
 ```
 
 Keine Secret-Werte oder Secret-Defaults ergänzen. Vor Deploy wird über den
