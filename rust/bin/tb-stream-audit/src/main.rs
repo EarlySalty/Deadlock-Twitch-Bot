@@ -1019,6 +1019,9 @@ async fn aufnahme_schleife(
     // Ist die Platzknappheit fuer Mitschnitte schon gemeldet? Die Live-Pruefung
     // laeuft im Minutentakt; eine Zeile je Takt waere Rauschen.
     let mut platz_knapp_gemeldet = false;
+    // Wer im vorigen Takt live war. Schuetzt das Versiegeln vor einem
+    // einzelnen Helix-Aussetzer.
+    let mut zuvor_live: Vec<String> = Vec::new();
     // Aktuell live sendender Lauf je Kanal. Die Recorder-Wartung sorgt dafuer,
     // dass fuer jeden Eintrag ein Recorder laeuft - so wird auch ein
     // fehlgeschlagener Erststart im naechsten Takt nachgeholt.
@@ -1480,6 +1483,33 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                     aufnahme_fertig_markieren(&konfiguration, &kanal, &lauf).await;
                 }
             }
+            // 1b. Recorder, dessen Lauf-Kennung nicht mehr die aktuelle ist.
+            //     Die Kennung kann sich ohne Sendungswechsel aendern (fehlt
+            //     `started_at`, traegt sie einen Zeitstempel). Bliebe der alte
+            //     Recorder stehen, schriebe er den Ton unter der alten Kennung,
+            //     waehrend die Berichte unter der neuen entstehen - das Archiv
+            //     haette dann fuer keinen der beiden einen vollstaendigen Vorgang.
+            let veraltet: Vec<String> = mitschnitte
+                .iter()
+                .filter(|(kanal, rec)| {
+                    live_lauf
+                        .get(*kanal)
+                        .is_some_and(|aktuell| *aktuell != rec.lauf)
+                })
+                .map(|(kanal, _)| kanal.clone())
+                .collect();
+            for kanal in veraltet {
+                if let Some(rec) = mitschnitte.remove(&kanal) {
+                    let alter_lauf = rec.lauf.clone();
+                    drop(rec);
+                    tracing::info!(
+                        kanal,
+                        lauf = alter_lauf,
+                        "Lauf-Kennung gewechselt - alter Ton-Mitschnitt wird abgeschlossen"
+                    );
+                    aufnahme_fertig_markieren(&konfiguration, &kanal, &alter_lauf).await;
+                }
+            }
             // 2. Jeder live sendende Lauf ohne aktiven Recorder bekommt einen -
             //    solange genug Platz frei ist, die Wartezeit aus einem
             //    Fehlversuch abgelaufen ist und der Lauf den Versuchs-Deckel
@@ -1572,7 +1602,19 @@ Versuch fuer diesen Lauf"
         // laesst einen unversiegelten Ordner zurueck; wird das Archiv danach
         // abgeschaltet, liefe weder Versiegelung noch Upload noch Loeschung,
         // und die Aufnahme laege unbefristet da.
-        mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte, &live).await;
+        // Als "sendet noch" gilt auch, wer im vorigen Takt live war. Ein
+        // einzelner Helix-Erfolg, der einen sendenden Kanal nicht auffuehrt,
+        // wuerde sonst mitten in der Sendung versiegeln - dieselbe Luecke, die
+        // fuer `live_lauf` und `mitschnitt_fehler` schon abgefangen ist.
+        let noch_live: Vec<String> = live
+            .iter()
+            .chain(zuvor_live.iter())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte, &noch_live).await;
+        zuvor_live = live.clone();
 
         // Erst jetzt, nachdem ein Sendungswechsel oben seinen abgebrochenen
         // Block bereits eingereiht hat: sonst ginge die Ende-DM eines Laufs
@@ -2131,6 +2173,10 @@ async fn auswertungs_schleife(
             // sensibelste Artefakt die Aufbewahrungsfrist ueberleben, sobald
             // der Drive-Upload dauerhaft scheitert.
             alte_mitschnitte_loeschen(&konfiguration).await;
+            // Sammelordner eines abgestuerzten Uploads: die fallen unter keine
+            // Aufbewahrung, und bis zum naechsten Dienststart zu warten waere
+            // zu lange fuer Kopien mit vollem Transkript.
+            zwischendateien_aufraeumen(&konfiguration.ausgabe.join("zwischendateien")).await;
             // Erst die Frist, dann die Gesamtgrenze: was ohnehin abgelaufen
             // ist, soll nicht als "wegen Platzmangel geloescht" gemeldet
             // werden.
@@ -3602,6 +3648,8 @@ const AUFNAHME_FERTIG: &str = "aufnahme_fertig.json";
 /// gesetzt und soll nur verhindern, dass ein haengender Prozess das Archiv fuer
 /// immer blockiert.
 const RCLONE_ZEITGRENZE: Duration = Duration::from_secs(6 * 60 * 60);
+/// Zeitgrenze fuer `df`. Kurz, weil der Aufruf in der Aufnahme-Schleife haengt.
+const DF_ZEITGRENZE: Duration = Duration::from_secs(10);
 
 /// Schiebt einen fertigen Stream (Mitschnitt als ein File plus Berichte) in
 /// seinen eigenen Ordner auf Google Drive und raeumt danach lokal auf. Idempotent
@@ -4327,14 +4375,23 @@ async fn offene_archive_nachholen(
 /// Freier Platz in Bytes auf dem Dateisystem des Pfades, ueber `df`. `None`,
 /// wenn `df` fehlt oder unerwartet aussieht.
 async fn freier_platz_bytes(pfad: &Path) -> Option<u64> {
-    let ausgabe = tokio::process::Command::new("df")
+    let lauf = tokio::process::Command::new("df")
         .arg("-kP")
         .arg(pfad)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
-        .output()
-        .await
-        .ok()?;
+        .output();
+    // Mit Zeitgrenze: dieser Aufruf haengt mitten in der Aufnahme-Schleife.
+    // Steht `df` (Mount weg, NFS tot), stuende sonst der ganze Dienst - ohne
+    // Fehlerexit, also greift auch `Restart=on-failure` nicht.
+    let ausgabe = match tokio::time::timeout(DF_ZEITGRENZE, lauf).await {
+        Ok(Ok(ausgabe)) => ausgabe,
+        Ok(Err(_)) => return None,
+        Err(_) => {
+            tracing::warn!(?pfad, "df antwortet nicht - freier Platz unbekannt");
+            return None;
+        }
+    };
     if !ausgabe.status.success() {
         return None;
     }
@@ -4629,6 +4686,16 @@ async fn mitschnitt_starten(
     // Aussetzer) muss weg: hier wird gerade wieder aufgenommen, der Lauf ist
     // nicht fertig. Sonst koennte das Archiv ihn mitten in der Aufnahme abholen.
     let _ = tokio::fs::remove_file(dir.join(AUFNAHME_FERTIG)).await;
+    // Und die Archiv-Marke gleich mit. Genau der Fall, fuer den die Zeile
+    // darueber gebaut ist - derselbe Lauf nimmt nach kurzem Abriss erneut auf -
+    // ist der Fall, in dem der Lauf zwischendurch schon archiviert sein kann.
+    // Bliebe die Marke stehen, ginge Teil 2 nie hoch, die Berichte danach
+    // verloeren ihren Aufbewahrungsschutz, und die Rueckstau-Warnung schickte
+    // den Betreiber zu einem rclone, an dem nichts kaputt ist.
+    let _ = tokio::fs::remove_file(
+        lauf_ordner(konfiguration, kanal, lauf).join(ARCHIV_MARKE),
+    )
+    .await;
     let ziel = dir.join(archiv::mitschnitt_name(chrono::Utc::now().timestamp()));
     let url = format!("https://twitch.tv/{kanal}");
     let bin = std::env::var("VOICE_REACTION_STREAMLINK_BIN")
@@ -4639,7 +4706,11 @@ async fn mitschnitt_starten(
         Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut streamlink = match tokio::process::Command::new(&bin)
         .arg("--twitch-disable-ads")
-        .arg("--quiet")
+        // Nicht `--quiet`: dann schwiege streamlink auch bei einem Fehler
+        // (kein `audio_only`, Token, 403), und die Diagnose unten haette nichts
+        // zu melden. `error` haelt den normalen Fortschritt trotzdem draussen.
+        .arg("--loglevel")
+        .arg("error")
         .arg("--stdout")
         .arg(&url)
         // Nur die Tonspur: `best` zoege das volle Video, das `-vn` gleich wieder
@@ -5546,6 +5617,51 @@ mod tests {
         alte_mitschnitte_loeschen(&konfiguration).await;
 
         assert!(!datei.exists(), "unversiegelte Altlast blieb liegen");
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn ein_live_sendender_kanal_wird_nicht_versiegelt() {
+        let wurzel = test_ordner("versiegeln-live");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "lauf1", true).await;
+        let aktive = std::collections::HashMap::new();
+
+        // Sendet noch: nicht versiegeln. Sonst wuerde der Lauf mitten in der
+        // Sendung als fertig gelten, hochgeladen und lokal geloescht.
+        mitschnitt_ordner_versiegeln(&konfiguration, &aktive, &["kanal".to_string()]).await;
+        assert!(!dir.join(AUFNAHME_FERTIG).exists());
+
+        // Offline: jetzt darf versiegelt werden.
+        mitschnitt_ordner_versiegeln(&konfiguration, &aktive, &[]).await;
+        assert!(dir.join(AUFNAHME_FERTIG).exists());
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn ein_wiederaufgenommener_lauf_verliert_seine_archiv_marke() {
+        let wurzel = test_ordner("wiederaufnahme-archivmarke");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "lauf1", true).await;
+        tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+        // Teil 1 wurde schon archiviert. Bliebe die Marke stehen, ginge der
+        // jetzt entstehende Teil 2 nie hoch.
+        let lauf_dir = lauf_ordner(&konfiguration, "kanal", "lauf1");
+        tokio::fs::create_dir_all(&lauf_dir).await.unwrap();
+        tokio::fs::write(lauf_dir.join(ARCHIV_MARKE), b"{}")
+            .await
+            .unwrap();
+
+        // Kein echter Recorder noetig: der Start scheitert an einem Binary,
+        // das es nicht gibt - die Marken raeumt er vorher weg.
+        std::env::set_var("VOICE_REACTION_STREAMLINK_BIN", "/nicht/vorhanden");
+        let _ = mitschnitt_starten(&konfiguration, "kanal", "lauf1").await;
+        std::env::remove_var("VOICE_REACTION_STREAMLINK_BIN");
+
+        assert!(!dir.join(AUFNAHME_FERTIG).exists(), "Fertig-Marke blieb");
+        assert!(!lauf_dir.join(ARCHIV_MARKE).exists(), "Archiv-Marke blieb");
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 
