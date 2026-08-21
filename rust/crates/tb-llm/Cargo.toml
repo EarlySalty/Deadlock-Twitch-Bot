@@ -8,6 +8,7 @@ edition.workspace = true
 # Tokens best-effort ins gemeinsame MiniMax-Usage-Ledger (zentrale Postgres).
 [dependencies]
 chrono      = { workspace = true }
+regex       = { workspace = true }
 reqwest     = { workspace = true }
 serde_json  = { workspace = true }
 tokio       = { workspace = true, features = ["time", "sync"] }
