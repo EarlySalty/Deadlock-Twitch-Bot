@@ -24,7 +24,7 @@ im Umbau "LLM zentral" umgestellt.
 | `ledger` | Best-effort-Writer ins geteilte Usage-Ledger (Postgres, Tabelle `minimax_usage`). |
 
 Genau **drei** Anbieter (Fireworks, MiniMax, Anthropic). **Kein OpenAI** (Client,
-Pfad oder Dep) — Querschnitts-Direktive 2 des Grillme-Audits. (Die
+Pfad oder Dep), Querschnitts-Direktive 2 des Grillme-Audits. (Die
 `openai`-Erwähnungen in den Doc-Comments betreffen nur das *OpenAI-kompatible*
 Endpunkt-Schema von Fireworks und MiniMax.)
 
