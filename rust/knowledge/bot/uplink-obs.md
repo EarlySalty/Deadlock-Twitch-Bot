@@ -7,7 +7,7 @@ last_updated: 2026-08-21
 source: rs-relay/docs/obs.html
 tip_eligible: false
 ---
-Du stellst den Weg zu uns ein. CBR, das 1080p-Limit und das Keyframe für Twitch musst du nicht nachbauen. Ziel ist viel Bild bei wenig Upload und wenig Last neben dem Spiel.
+Du stellst den Weg zu uns ein. CBR, das 1080p-Limit und das Keyframe für Twitch musst du nicht übernehmen. Ziel ist viel Bild bei wenig Upload und wenig Last neben dem Spiel.
 
 ### 1. Ausgabe
 
@@ -53,7 +53,7 @@ CBR, VBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. Sie
 - NVIDIA: CQP 18 bis 20
 - x264 als Notnagel: CRF 20
 
-Spiele danach eine echte Runde. Steigt die Bitrate in OBS dauerhaft über deine Leitung, wechsel zurück zu VBR.
+Spiele danach eine echte Runde. Steigt die Bitrate in OBS ständig über deine Leitung, wechsel zurück zu VBR.
 
 Setze das Keyframeintervall auf **2 s**, nicht auf 0 für automatisch.
 
