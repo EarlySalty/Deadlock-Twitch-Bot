@@ -196,6 +196,16 @@ impl ExternalProvider {
         })
     }
 
+    /// Ledger-Zweck dieses Aufrufs: Bahn plus tatsaechlich antwortender
+    /// Anbieter, zum Beispiel `social-media-claude_haiku-anthropic`.
+    ///
+    /// Die Bahn allein reicht nicht: hinter `social_media` kann Fireworks oder
+    /// MiniMax stehen, und in der Kostenauswertung waeren beide dann eine
+    /// Summe. Das Schema bleibt unberuehrt, der Zweck traegt die Unterscheidung.
+    fn ledger_purpose(&self) -> String {
+        format!("social-media-{}-{}", self.name, self.endpoint.provider)
+    }
+
     /// Expliziter Endpunkt, fuer Tests.
     pub fn new(
         name: &'static str,
@@ -244,7 +254,7 @@ impl LlmProvider for ExternalProvider {
             .max_tokens(max_tokens)
             .temperature(temperature)
             .timeout(std::time::Duration::from_secs(EXTERNAL_TIMEOUT_SECONDS))
-            .ledger_purpose(self.use_case)
+            .ledger_purpose(self.ledger_purpose())
             .endpoint(self.endpoint.clone());
         // format=json nur, wenn der System-Prompt strikten JSON verlangt.
         if system_prompt.to_lowercase().contains("strict json") {
@@ -499,6 +509,37 @@ mod tests {
         assert_eq!(resp.provider, "claude_haiku");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
         assert!(resp.cost_usd_estimate.is_some());
+    }
+
+    #[test]
+    fn ledger_zweck_nennt_bahn_und_antwortenden_anbieter() {
+        // Hinter der Bahn `social_media` kann Fireworks oder MiniMax stehen; in
+        // der Kostenauswertung muessen beide auseinanderzuhalten sein.
+        let p = ExternalProvider::new(
+            "minimax",
+            USE_CASE_MINIMAX,
+            tb_llm::LlmEndpoint {
+                provider: "fireworks",
+                base_url: "http://127.0.0.1:1".into(),
+                model: "m".into(),
+                api_key: Some("k".into()),
+            },
+            0.4,
+        );
+        assert_eq!(p.ledger_purpose(), "social-media-minimax-fireworks");
+
+        let p = ExternalProvider::new(
+            "claude_haiku",
+            USE_CASE_CLAUDE,
+            tb_llm::LlmEndpoint {
+                provider: "anthropic",
+                base_url: "http://127.0.0.1:1".into(),
+                model: "m".into(),
+                api_key: Some("k".into()),
+            },
+            0.4,
+        );
+        assert_eq!(p.ledger_purpose(), "social-media-claude_haiku-anthropic");
     }
 
     #[test]
