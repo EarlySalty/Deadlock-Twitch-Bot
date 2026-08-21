@@ -200,7 +200,12 @@ stehen kann. Ohne diesen Zusatz waeren beide in der Auswertung eine Summe.
 Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
 
 - `ricky_crew_review` und `outreach_shadow`: Schatten-Reviews, die nie an einem
-  Streamer-Budget hingen.
+  Streamer-Budget hingen. Beide sind gleich fail-closed: Anbieter, Adresse und
+  Modell muessen dem Fireworks-Standard entsprechen, sonst startet der Client
+  nicht (`Unavailable`). Ein `TB_LLM_MODEL_RICKY_CREW_REVIEW` oder
+  `TB_LLM_MODEL_OUTREACH_SHADOW` mit fremdem Modell schaltet das Review also
+  ab, statt still ein anderes Modell zu nehmen; ein fehlendes Modell gibt es
+  nicht, die Auswahl liefert immer den Standard.
 - `crew_guard`: laeuft ueber einen fremden Schluessel, dessen Kosten nicht in
   diesem Ledger stehen.
 - `stream_audit`: laeuft ausserhalb des Bots und gehoert zu keinem Streamer.
