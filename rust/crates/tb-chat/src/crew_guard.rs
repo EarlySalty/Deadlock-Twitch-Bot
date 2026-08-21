@@ -478,15 +478,23 @@ impl OpenAiCrewJudge {
     pub fn from_env() -> Self {
         // Ohne Schlüssel ODER ohne Modell gibt es keinen Endpunkt: der Judge
         // antwortet dann fail-safe `unsure`, statt zu raten.
-        let endpoint = non_empty_env("OPENAI_API_KEY").zip(non_empty_env("CREW_GUARD_MODEL")).map(
-            |(api_key, model)| tb_llm::LlmEndpoint {
-                provider: "openai_kompatibel",
-                base_url: non_empty_env("OPENAI_BASE_URL")
-                    .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
-                model,
-                api_key: Some(api_key),
-            },
-        );
+        // Jede Luecke bekommt ihre eigene Warnung, damit im Log sofort
+        // sichtbar ist, welche der beiden Variablen fehlt.
+        let api_key = non_empty_env("OPENAI_API_KEY");
+        if api_key.is_none() {
+            warn!("crew_guard: OPENAI_API_KEY nicht gesetzt, Crew-Judge antwortet fail-safe unsure");
+        }
+        let model = non_empty_env("CREW_GUARD_MODEL");
+        if model.is_none() {
+            warn!("crew_guard: CREW_GUARD_MODEL nicht gesetzt, Crew-Judge antwortet fail-safe unsure");
+        }
+        let endpoint = api_key.zip(model).map(|(api_key, model)| tb_llm::LlmEndpoint {
+            provider: "openai_kompatibel",
+            base_url: non_empty_env("OPENAI_BASE_URL")
+                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+            model,
+            api_key: Some(api_key),
+        });
         Self {
             endpoint,
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
