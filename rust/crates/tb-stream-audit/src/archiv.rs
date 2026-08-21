@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn rclone_argumente_stimmen() {
-        let d = rclone_datei_args(Path::new("/tmp/mitschnitt-1.ts"), "gdrive:X/k/l");
-        assert_eq!(d, vec!["copy", "/tmp/mitschnitt-1.ts", "gdrive:X/k/l"]);
+        let d = rclone_datei_args(Path::new("/tmp/mitschnitt-1.aac"), "gdrive:X/k/l");
+        assert_eq!(d, vec!["copy", "/tmp/mitschnitt-1.aac", "gdrive:X/k/l"]);
         let o = rclone_ordner_args(Path::new("/tmp/stage"), "gdrive:X/k/l");
         assert_eq!(o, vec!["copy", "/tmp/stage", "gdrive:X/k/l"]);
         let l = rclone_lsf_args("gdrive:X/k/l");

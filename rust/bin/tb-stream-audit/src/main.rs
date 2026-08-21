@@ -1375,7 +1375,9 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             tracing::info!(kanal, "Aufnahme gestartet");
             // Diesen Lauf als live vermerken; den Recorder startet die Wartung
             // unten (so wird auch ein fehlgeschlagener Start nachgeholt). Ein
-            // Recorder eines alten Laufs wird dort ersetzt.
+            // Recorder eines alten Laufs desselben Kanals endet mit dem Stream
+            // und wird von der Wartung als fertig markiert und entfernt; danach
+            // greift hier der neue Lauf.
             live_lauf.insert(kanal.clone(), lauf_ms.clone());
         }
 
@@ -1422,7 +1424,7 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             }
             // 3. Verwaiste Mitschnitt-Ordner (Dienst-Neustart, Absturz) nachziehen:
             //    jeder Ordner ohne aktiven Recorder und ohne Fertig-Marke ist fertig.
-            mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte).await;
+            mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte, &live).await;
         }
 
         // Erst jetzt, nachdem ein Sendungswechsel oben seinen abgebrochenen
@@ -3233,6 +3235,7 @@ async fn aufnahme_fertig_markieren(konfiguration: &Konfiguration, kanal: &str, l
 async fn mitschnitt_ordner_versiegeln(
     konfiguration: &Konfiguration,
     aktive: &std::collections::HashMap<String, Recorder>,
+    live: &[String],
 ) {
     let wurzel = konfiguration.ausgabe.join("mitschnitte");
     let Ok(mut kanaele) = tokio::fs::read_dir(&wurzel).await else {
@@ -3248,6 +3251,14 @@ async fn mitschnitt_ordner_versiegeln(
             continue;
         }
         let kanal = kanal_e.file_name().to_string_lossy().into_owned();
+        // Sendet der Kanal noch, ist NICHTS in seinem Ordner "fertig" - auch
+        // wenn gerade kein Recorder laeuft (etwa weil bei knapper Platte keiner
+        // neu startet). Sonst wuerde ein laufender Stream vorzeitig als fertig
+        // versiegelt, archiviert und endgueltig geschlossen. Erst wenn er offline
+        // ist, darf versiegelt werden.
+        if live.contains(&kanal) {
+            continue;
+        }
         let Ok(mut laeufe) = tokio::fs::read_dir(kanal_e.path()).await else {
             continue;
         };
@@ -3387,8 +3398,23 @@ const ARCHIV_LAEUFT: &str = "archiv_laeuft.json";
 const ARCHIV_LAEUFT_FRISCH_SEKUNDEN: u64 = 30 * 60;
 /// Takt, in dem ein laufendes Archiv seine Laufmarke auffrischt.
 const ARCHIV_HERZSCHLAG_SEKUNDEN: u64 = 10 * 60;
-const RCLONE_PFAD: &str = "/usr/local/bin/rclone";
-const FFMPEG_PFAD: &str = "/usr/bin/ffmpeg";
+/// Pfad zum rclone-Binary, ueberschreibbar per `STREAM_AUDIT_RCLONE_BIN`. Ein
+/// fester Pfad wuerde das Archiv dauerhaft scheitern lassen, wenn rclone
+/// woanders liegt.
+fn rclone_pfad() -> String {
+    std::env::var("STREAM_AUDIT_RCLONE_BIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "/usr/local/bin/rclone".to_string())
+}
+
+/// Pfad zum ffmpeg-Binary, ueberschreibbar per `STREAM_AUDIT_FFMPEG_BIN`.
+fn ffmpeg_pfad() -> String {
+    std::env::var("STREAM_AUDIT_FFMPEG_BIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "/usr/bin/ffmpeg".to_string())
+}
 /// Marke im Mitschnitt-Ordner: der Recorder ist fertig, die Aufnahme ist
 /// abgeschlossen und darf hochgeladen werden. Erst dieses Signal - nicht eine
 /// Vermutung ueber die letzte Aenderung - gibt einen Lauf zum Archivieren frei.
@@ -3508,7 +3534,7 @@ async fn drive_archiv_durchfuehren(
     // Die grossen Mitschnitte gehen direkt hoch, ohne Umweg ueber einen
     // Sammelordner - sonst laege der Stream kurz doppelt auf der Platte.
     for datei in &mitschnitte {
-        befehl_pruefen(RCLONE_PFAD, &archiv::rclone_datei_args(datei, &ordner)).await?;
+        befehl_pruefen(&rclone_pfad(), &archiv::rclone_datei_args(datei, &ordner)).await?;
     }
 
     // Die kleinen Berichte und die Akte sammeln und in einem Rutsch hoch. Jede
@@ -3537,11 +3563,15 @@ async fn drive_archiv_durchfuehren(
         kleinkram += 1;
     }
     if kleinkram > 0 {
-        befehl_pruefen(RCLONE_PFAD, &archiv::rclone_ordner_args(&staging, &ordner)).await?;
+        befehl_pruefen(
+            &rclone_pfad(),
+            &archiv::rclone_ordner_args(&staging, &ordner),
+        )
+        .await?;
     }
 
     // Vor dem Loeschen belegen, dass wirklich etwas oben liegt.
-    let liste = befehl_ausgabe(RCLONE_PFAD, &archiv::rclone_lsf_args(&ordner)).await?;
+    let liste = befehl_ausgabe(&rclone_pfad(), &archiv::rclone_lsf_args(&ordner)).await?;
     if liste.trim().is_empty() {
         let _ = tokio::fs::remove_dir_all(&staging).await;
         return Err(format!("Zielordner {ordner} nach Upload leer"));
@@ -3943,7 +3973,10 @@ async fn mitschnitt_starten(
         .arg("--quiet")
         .arg("--stdout")
         .arg(&url)
-        .arg("best")
+        // Nur die Tonspur: `best` zoege das volle Video, das `-vn` gleich wieder
+        // wegwirft - GBs Wegwerf-Traffic und Demux-Last am Last-Gate vorbei.
+        // `audio_only` ist Twitchs reine Tonspur, `worst` der Rueckfall.
+        .arg("audio_only,worst")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -3964,7 +3997,7 @@ async fn mitschnitt_starten(
             return None;
         }
     };
-    match tokio::process::Command::new(FFMPEG_PFAD)
+    match tokio::process::Command::new(ffmpeg_pfad())
         .arg("-nostdin")
         .arg("-loglevel")
         .arg("error")

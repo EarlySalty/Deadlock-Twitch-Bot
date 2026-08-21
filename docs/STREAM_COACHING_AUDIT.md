@@ -122,6 +122,8 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
 | `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
 | `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz; darunter startet kein neuer Recorder | 20 |
+| `STREAM_AUDIT_RCLONE_BIN` | Pfad zum rclone-Binary | `/usr/local/bin/rclone` |
+| `STREAM_AUDIT_FFMPEG_BIN` | Pfad zum ffmpeg-Binary | `/usr/bin/ffmpeg` |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 
