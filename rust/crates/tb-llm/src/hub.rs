@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -88,6 +88,11 @@ pub struct Request {
     /// Setzt `response_format: {"type": "json_object"}`.
     pub json_object: bool,
     pub timeout: Option<Duration>,
+    /// Gesamtfrist ueber die ganze Kette (alle Glieder, alle Wiederholungen).
+    /// `None` heisst: Summe der Einzelfristen der Glieder. Der Chat-Pfad setzt
+    /// 30 s, damit eine Twitch-Antwort nicht erst nach zwei vollen Fristen
+    /// ankommt.
+    pub total_deadline: Option<Duration>,
     /// `None` bedeutet: unter dem Namen des Anwendungsfalls verbuchen.
     pub ledger: Option<Ledger>,
     /// Entfernt `<think>`-Bloecke aus dem Antworttext.
@@ -155,6 +160,10 @@ impl Request {
     }
     pub fn timeout_secs(self, secs: u64) -> Self {
         self.timeout(Duration::from_secs(secs))
+    }
+    pub fn total_deadline(mut self, total: Duration) -> Self {
+        self.total_deadline = Some(total);
+        self
     }
     /// Verbucht unter einem anderen Zweck als dem Namen des Anwendungsfalls.
     pub fn ledger_purpose(mut self, purpose: impl Into<String>) -> Self {
@@ -300,7 +309,43 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
             }
         }
     };
+    complete_chain(use_case, request, chain).await
+}
+
+/// Mindestabstand zwischen zwei Warnungen "kein Anbieter konfiguriert" je
+/// Anwendungsfall. Ohne Drossel stuende die Zeile bei jedem Chat-Event im
+/// Journal, mit Drossel faellt sie trotzdem auf.
+const KEIN_ANBIETER_WARNABSTAND: Duration = Duration::from_secs(300);
+
+/// Ob fuer diesen Anwendungsfall gerade wieder gewarnt werden darf.
+fn kein_anbieter_warnung_faellig(use_case: &str, jetzt: Instant) -> bool {
+    static ZULETZT: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let mut zuletzt = ZULETZT
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    match zuletzt.get(use_case) {
+        Some(letzte) if jetzt.duration_since(*letzte) < KEIN_ANBIETER_WARNABSTAND => false,
+        _ => {
+            zuletzt.insert(use_case.to_string(), jetzt);
+            true
+        }
+    }
+}
+
+/// Arbeitet eine fertige Kette ab. Getrennt von [`complete_detailed`], damit
+/// Tests eine Kette vorgeben koennen, ohne an Umgebungsvariablen zu drehen.
+async fn complete_chain(
+    use_case: &str,
+    request: Request,
+    chain: Vec<LlmEndpoint>,
+) -> Result<Response, LlmFailure> {
     if chain.is_empty() {
+        // Die Aufrufer haben ihre eigene Warnung abgegeben, weil der Hub pro
+        // Fehlversuch warnt. Eine leere Kette ist auch ein Fehlversuch.
+        if kein_anbieter_warnung_faellig(use_case, Instant::now()) {
+            tracing::warn!(use_case, "kein LLM-Anbieter konfiguriert");
+        }
         return Err(LlmFailure {
             provider: "keiner".to_string(),
             model: String::new(),
@@ -314,9 +359,39 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
         None => Some(use_case.to_string()),
     };
 
+    // Gesamtfrist: ohne Angabe die Summe der Einzelfristen, also das
+    // bisherige Verhalten. Mit Angabe bekommt jedes weitere Glied nur noch,
+    // was uebrig ist, und die Kette bricht ab, wenn nichts uebrig ist.
+    let einzelfrist = request.timeout.unwrap_or(DEFAULT_TIMEOUT);
+    let gesamtfrist = request
+        .total_deadline
+        .unwrap_or_else(|| einzelfrist.saturating_mul(chain.len() as u32));
+    let start = Instant::now();
+
     let mut last: Option<LlmFailure> = None;
     for endpoint in &chain {
-        match call_endpoint(endpoint, &request, purpose.as_deref()).await {
+        let verbraucht = start.elapsed();
+        if verbraucht >= gesamtfrist {
+            tracing::warn!(
+                use_case,
+                provider = endpoint.provider,
+                gesamtfrist_ms = gesamtfrist.as_millis() as u64,
+                "LLM-Kette abgebrochen: Gesamtfrist erschoepft"
+            );
+            // Der Fehler des letzten echten Versuchs bleibt der Absender;
+            // nur ohne einen solchen steht das uebersprungene Glied drin.
+            last.get_or_insert_with(|| LlmFailure {
+                provider: endpoint.provider.to_string(),
+                model: endpoint.model.clone(),
+                error: LlmError::Timeout(format!(
+                    "Gesamtfrist von {} ms erschoepft",
+                    gesamtfrist.as_millis()
+                )),
+            });
+            break;
+        }
+        let frist = einzelfrist.min(gesamtfrist - verbraucht);
+        match call_endpoint(endpoint, &request, purpose.as_deref(), frist).await {
             Ok(response) => return Ok(response),
             Err(error) => {
                 // Die Warnung traegt Klasse, Status und Body-Laenge; der
@@ -356,6 +431,7 @@ async fn call_endpoint(
     endpoint: &LlmEndpoint,
     request: &Request,
     purpose: Option<&str>,
+    frist: Duration,
 ) -> Result<Response, LlmError> {
     let Some(api_key) = endpoint.api_key.as_deref() else {
         return Err(LlmError::Unavailable(format!(
@@ -363,16 +439,29 @@ async fn call_endpoint(
             endpoint.provider
         )));
     };
-    let timeout = request.timeout.unwrap_or(DEFAULT_TIMEOUT);
-    let client = http_client(timeout)?;
+    let client = http_client()?;
 
     let mut versuch = 0u8;
     let raw = loop {
-        let started = std::time::Instant::now();
-        let outcome = if endpoint.provider == "anthropic" {
-            send_anthropic(&client, endpoint, api_key, request).await
-        } else {
-            send_openai_compatible(&client, endpoint, api_key, request).await
+        let started = Instant::now();
+        // Die Frist liegt um den ganzen Request (Senden, Warten, Body lesen),
+        // nicht im Client: so reicht ein einziger Client fuer alle Fristen.
+        let senden = async {
+            if endpoint.provider == "anthropic" {
+                send_anthropic(&client, endpoint, api_key, request).await
+            } else {
+                send_openai_compatible(&client, endpoint, api_key, request).await
+            }
+        };
+        let outcome = match tokio::time::timeout(frist, senden).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                return Err(LlmError::Timeout(format!(
+                    "{} antwortete nicht innerhalb von {} ms",
+                    endpoint.provider,
+                    frist.as_millis()
+                )))
+            }
         };
         match outcome {
             Ok(payload) => break (payload, started.elapsed().as_millis() as i64),
@@ -395,15 +484,15 @@ async fn call_endpoint(
         let usage = payload.get("usage");
         (
             extract_anthropic_text(payload.get("content").unwrap_or(&Value::Null)),
-            usage_field(usage, "input_tokens"),
-            usage_field(usage, "output_tokens"),
+            usage_field(usage, &["input_tokens", "tokens_in"]),
+            usage_field(usage, &["output_tokens", "tokens_out"]),
         )
     } else {
         let usage = payload.get("usage");
         (
             extract_openai_text(&payload, request.allow_reasoning_content),
-            usage_field(usage, "prompt_tokens"),
-            usage_field(usage, "completion_tokens"),
+            usage_field(usage, &["prompt_tokens", "tokens_in"]),
+            usage_field(usage, &["completion_tokens", "tokens_out"]),
         )
     };
 
@@ -581,10 +670,14 @@ fn transport_error(error: &reqwest::Error) -> LlmError {
     }
 }
 
-fn usage_field(usage: Option<&Value>, name: &str) -> Option<i64> {
-    usage
-        .and_then(|u| u.get(name))
-        .and_then(Value::as_i64)
+/// Token-Zahl aus dem `usage`-Block; der erste vorhandene Name gewinnt.
+/// Manche Anbieter schreiben `tokens_in`/`tokens_out` statt der
+/// OpenAI-Namen, so wie es frueher `title_ai::usage_i64` schon abfing.
+fn usage_field(usage: Option<&Value>, names: &[&str]) -> Option<i64> {
+    let usage = usage?;
+    names
+        .iter()
+        .find_map(|name| usage.get(name).and_then(Value::as_i64))
         .map(|v| v.max(0))
 }
 
@@ -652,27 +745,26 @@ regex::Regex::new(r"(?si)<think>.*?</think>").expect("think-Regex ist konstant")
     re.replace_all(raw, "").trim().to_string()
 }
 
-/// HTTP-Clients nach Zeitgrenze zwischengespeichert.
-///
-/// Ein Client je Aufruf hiesse ein neuer Verbindungspool je Aufruf. Die
-/// Zeitgrenze steckt im Client, deshalb ist sie der Schluessel.
-fn http_client(timeout: Duration) -> Result<reqwest::Client, LlmError> {
-    static CACHE: OnceLock<Mutex<HashMap<u64, reqwest::Client>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = timeout.as_millis() as u64;
-    let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(client) = guard.get(&key) {
-        return Ok(client.clone());
-    }
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        // Umleitungen sind bei einem API-Endpunkt kein normaler Fall: sie
-        // koennten den Schluessel an eine fremde Adresse tragen.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| LlmError::Transport(error.to_string()))?;
-    guard.insert(key, client.clone());
-    Ok(client)
+/// Ein HTTP-Client fuer alle Aufrufe (ein Verbindungspool). Die Zeitgrenze
+/// liegt nicht im Client, sondern um jeden Request, deshalb braucht es keinen
+/// Client je Frist.
+fn http_client() -> Result<reqwest::Client, LlmError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                // Keine Gesamtfrist im Client: die legt `call_endpoint` per
+                // `tokio::time::timeout` um jeden Request. Nur der
+                // Verbindungsaufbau hat eine feste Grenze.
+                .connect_timeout(Duration::from_secs(10))
+                // Umleitungen sind bei einem API-Endpunkt kein normaler Fall:
+                // sie koennten den Schluessel an eine fremde Adresse tragen.
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(LlmError::Transport)
 }
 
 #[cfg(test)]
@@ -987,5 +1079,101 @@ mod tests {
                 body: "rate limit: quota exhausted".to_string()
             }
         );
+    }
+
+    #[test]
+    fn token_zahlen_mit_alternativnamen() {
+        let usage = json!({"tokens_in": 12, "tokens_out": 3});
+        assert_eq!(usage_field(Some(&usage), &["prompt_tokens", "tokens_in"]), Some(12));
+        assert_eq!(
+            usage_field(Some(&usage), &["completion_tokens", "tokens_out"]),
+            Some(3)
+        );
+        // Der OpenAI-Name gewinnt, wenn beide da sind.
+        let beide = json!({"prompt_tokens": 5, "tokens_in": 99});
+        assert_eq!(usage_field(Some(&beide), &["prompt_tokens", "tokens_in"]), Some(5));
+        assert_eq!(usage_field(None, &["prompt_tokens"]), None);
+    }
+
+    #[test]
+    fn warnung_ohne_anbieter_ist_je_anwendungsfall_gedrosselt() {
+        let t0 = Instant::now();
+        assert!(kein_anbieter_warnung_faellig("drossel_a", t0));
+        assert!(!kein_anbieter_warnung_faellig("drossel_a", t0 + Duration::from_secs(10)));
+        // Anderer Anwendungsfall, eigene Drossel.
+        assert!(kein_anbieter_warnung_faellig("drossel_b", t0));
+        // Nach dem Abstand darf wieder gewarnt werden.
+        assert!(kein_anbieter_warnung_faellig(
+            "drossel_a",
+            t0 + KEIN_ANBIETER_WARNABSTAND + Duration::from_secs(1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn leere_kette_liefert_unavailable() {
+        let failure = complete_chain("ohne_anbieter", Request::prompt("hi").no_ledger(), vec![])
+            .await
+            .expect_err("keine Kette");
+        assert_eq!(failure.provider, "keiner");
+        assert!(matches!(failure.error, LlmError::Unavailable(_)));
+    }
+
+    #[tokio::test]
+    async fn gesamtfrist_bricht_die_kette_ab() {
+        // Erstes Glied braucht laenger als die Gesamtfrist; das zweite darf
+        // dann nicht mehr drankommen.
+        let langsam = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(600))
+                    .set_body_json(json!({"choices": [{"message": {"content": "spaet"}}]})),
+            )
+            .mount(&langsam)
+            .await;
+        let schnell = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "schnell"}}]
+            })))
+            .expect(0)
+            .mount(&schnell)
+            .await;
+
+        let kette = vec![endpoint(&langsam, "fireworks"), endpoint(&schnell, "minimax")];
+        let failure = complete_chain(
+            "test",
+            Request::prompt("hi")
+                .no_ledger()
+                .timeout(Duration::from_secs(5))
+                .total_deadline(Duration::from_millis(300)),
+            kette.clone(),
+        )
+        .await
+        .expect_err("Gesamtfrist reisst");
+        assert!(matches!(failure.error, LlmError::Timeout(_)), "{failure}");
+        assert_eq!(failure.provider, "fireworks");
+
+        // Ohne Gesamtfrist gilt die Summe der Einzelfristen: das zweite Glied
+        // kommt dran und antwortet.
+        let schnell2 = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "schnell"}}]
+            })))
+            .mount(&schnell2)
+            .await;
+        let response = complete_chain(
+            "test",
+            Request::prompt("hi")
+                .no_ledger()
+                .timeout(Duration::from_millis(200))
+                .accept(|text| text == "schnell"),
+            vec![endpoint(&langsam, "fireworks"), endpoint(&schnell2, "minimax")],
+        )
+        .await
+        .expect("zweites Glied antwortet");
+        assert_eq!(response.text, "schnell");
+        assert_eq!(response.provider, "minimax");
     }
 }
