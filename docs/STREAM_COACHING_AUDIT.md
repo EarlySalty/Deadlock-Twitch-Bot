@@ -57,7 +57,11 @@ im Deadlock-Docs-Korpus.
    zusammengestueckelt. Im Normalfall ist es eine Datei; ein Dienst-Neustart oder
    ein streamlink-Aussetzer waehrend der Sendung erzeugt wenige Teile (jeweils
    mit eigenem Zeitstempel), die alle in denselben Stream-Ordner hochgeladen
-   werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig. Ist der Stream vorbei und jeder Block ausgewertet, wird
+   werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig.
+   Faellt Twitchs `audio_only` aus, greift der Rueckfall `worst` und zieht doch
+   die Videospur, die `-vn` sofort wegwirft: die Datei bleibt klein, Bandbreite
+   und Demux-Last nicht. Dieser Pfad laeuft am Lastwaechter vorbei.
+   Ist der Stream vorbei und jeder Block ausgewertet, wird
    diese Aufnahme im naechsten stuendlichen Aufraeumtakt zusammen mit den
    Berichten in einen eigenen Ordner je Stream
    unter `STREAM_AUDIT_DRIVE_REMOTE` geladen (rclone-Remote `gdrive:`). Erst wenn
@@ -116,6 +120,18 @@ im Deadlock-Docs-Korpus.
    getrennt: reisst er ihn, startet kein neuer Recorder, unabhaengig davon, ob
    `df` messbar ist. `0` heisst dort wie ueberall "keine Grenze"; dann bremst
    nur noch `STREAM_AUDIT_DRIVE_MIN_FREE_GB`.
+
+## Grenzen, die man kennen sollte
+
+- `STREAM_AUDIT_RETENTION_DAYS=0` heisst "unbegrenzt aufbewahren" und schaltet
+  damit auch den Ablauf der Ton-Mitschnitte ab. Der Dienst warnt beim
+  Aufraeumen darueber, aber die Zusage an die Streamer ("liegen bleibt sie
+  nicht") gilt dann nicht mehr. Standard ist 30, die Unit setzt nichts.
+- `drive_archiviert.json` ist endgueltig. Ein Bericht, der **nach** dem
+  Archivieren entsteht (eine spaeter nachgeholte Meldung), geht nicht mehr hoch
+  und faellt der normalen Aufbewahrung zu. Der haeufige Fall ist abgedeckt: ein
+  Block in Auswertung haelt seinen Lauf offen, der Sweep greift ihn also nicht
+  vorzeitig ab.
 
 ## Aufbewahrung im Drive
 
@@ -176,7 +192,7 @@ zusagt.
 | `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
 | `STREAM_AUDIT_DRIVE_EXCLUDE` | Kanaele ohne Ton-Mitschnitt (Widerspruch), kommagetrennt | leer |
 | `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
-| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz in ganzen GB; darunter startet kein neuer Recorder | 20 |
+| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz in ganzen GiB (1024^3); darunter startet kein neuer Recorder | 20 |
 | `STREAM_AUDIT_RCLONE_BIN` | rclone-Binaerprogramm | PATH-Aufloesung `rclone`, in der Unit auf `/usr/local/bin/rclone` gepinnt |
 | `STREAM_AUDIT_FFMPEG_BIN` | ffmpeg fuer den Recorder | `FFMPEG_BIN`, sonst `/usr/bin/ffmpeg` |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |

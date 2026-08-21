@@ -1738,7 +1738,7 @@ Versuch fuer diesen Lauf"
                 continue;
             }
             sperre.lock().await.freigeben(&kanal, &lauf);
-            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
+            lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange, None).await;
         }
 
         tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
@@ -2406,6 +2406,7 @@ geloescht. Sie sind als Beleg nicht mehr da."
                     &block.lauf,
                     &sperre,
                     &warteschlange,
+                    Some(&in_arbeit_datei),
                 )
                 .await;
                 tracing::info!(
@@ -2434,6 +2435,7 @@ geloescht. Sie sind als Beleg nicht mehr da."
                     &block.lauf,
                     &sperre,
                     &warteschlange,
+                    Some(&in_arbeit_datei),
                 )
                 .await;
                 if aufnahme_behalten {
@@ -2585,7 +2587,15 @@ Aufnahme liegt noch da.",
                             erneut versucht"
                         );
                     }
-                    lauf_ende_melden(&konfiguration, &kanal, &lauf, &sperre, &warteschlange).await;
+                    lauf_ende_melden(
+                        &konfiguration,
+                        &kanal,
+                        &lauf,
+                        &sperre,
+                        &warteschlange,
+                        Some(&in_arbeit_datei),
+                    )
+                    .await;
                 }
             }
         }
@@ -3655,9 +3665,17 @@ async fn lauf_ende_melden(
     lauf: &str,
     sperre: &Mutex<plan::LaufSperre>,
     warteschlange: &Mutex<plan::Warteschlange>,
+    // Die Datei des Blocks, aus dessen Auswertung dieser Aufruf kommt. Sie
+    // steht noch als "in Arbeit" in der Schlange; ohne diese Ausnahme zaehlte
+    // sich der ausloesende Block selbst als offen und die Abschluss-DM waere
+    // nie faellig - der letzte Block ist immer der, der sie ausloest.
+    eigene_datei: Option<&str>,
 ) {
     let gesperrt = sperre.lock().await.ist_gesperrt(kanal, lauf);
-    let offen = warteschlange.lock().await.offene_fuer_lauf(kanal, lauf);
+    let offen = warteschlange
+        .lock()
+        .await
+        .offene_fuer_lauf_ohne(kanal, lauf, eigene_datei);
     if !plan::ende_dm_faellig(gesperrt, offen) {
         return;
     }
@@ -3721,10 +3739,12 @@ const ARCHIV_HERZSCHLAG_SEKUNDEN: u64 = 10 * 60;
 const ARCHIV_ENDE_GEDULD_SEKUNDEN: u64 = 6 * 60 * 60;
 /// Pfad zum rclone-Binary, ueberschreibbar per `STREAM_AUDIT_RCLONE_BIN`.
 /// Vorgabe ist die PATH-Aufloesung `rclone` - dieselbe Annahme wie beim
-/// bereits produktiven VOD-Export (`tb-bot/src/eventsub_hooks.rs`). Ein hart
-/// verdrahteter Pfad waere eine zweite, abweichende Annahme ueber dasselbe
-/// Binaerprogramm auf derselben Maschine; die Unit pinnt den Pfad stattdessen
-/// sichtbar.
+/// bereits produktiven VOD-Export (`tb-bot/src/eventsub_hooks.rs`). Die Unit
+/// pinnt zusaetzlich `/usr/local/bin/rclone`: der systemd-Benutzer-PATH ist ein
+/// anderer als der der Shell, und derselbe Unterschied hat bei ffmpeg schon
+/// einmal jeden Block scheitern lassen. Der Pfad dort ist auf der Zielmaschine
+/// geprueft; stimmt er nicht mehr, faellt es beim Start auf
+/// ([`drive_ziel_pruefen`]) und nicht erst nach Wochen.
 fn rclone_pfad() -> String {
     std::env::var("STREAM_AUDIT_RCLONE_BIN")
         .ok()
@@ -4554,7 +4574,12 @@ async fn offene_archive_nachholen(
             let ende_da = tokio::fs::try_exists(lauf_dir.join(ENDE_MARKE))
                 .await
                 .unwrap_or(false);
-            if !ende_da && !zu_alt_sekunden(&lauf_e.path(), ARCHIV_ENDE_GEDULD_SEKUNDEN).await {
+            // Gemessen an der Fertig-Marke, nicht am Ordner: dessen Zeitstempel
+            // springt bei jeder neu angelegten Datei darin vor (Rueckstau- oder
+            // Ausfall-Marke), und dann bliebe ausgerechnet ein Lauf, bei dem
+            // schon etwas klemmt, weitere sechs Stunden unarchiviert.
+            let fertig_marke = lauf_e.path().join(AUFNAHME_FERTIG);
+            if !ende_da && !zu_alt_sekunden(&fertig_marke, ARCHIV_ENDE_GEDULD_SEKUNDEN).await {
                 continue;
             }
             faellig.push((kanal.clone(), lauf));

@@ -285,15 +285,27 @@ impl Warteschlange {
     /// waehrend der letzte Bericht noch geschrieben wird. Der ginge dann nie
     /// hoch und verloere zusaetzlich seinen Aufbewahrungsschutz.
     pub fn offene_fuer_lauf(&self, kanal: &str, lauf: &str) -> usize {
+        self.offene_fuer_lauf_ohne(kanal, lauf, None)
+    }
+
+    /// Wie [`Warteschlange::offene_fuer_lauf`], laesst aber eine Datei aussen
+    /// vor.
+    ///
+    /// Fuer den Aufrufer, der selbst gerade diesen Block auswertet. Ohne die
+    /// Ausnahme zaehlte er sich selbst als "noch offen", und die Abschluss-DM
+    /// eines Laufs koennte nie faellig werden: der letzte Block ist immer der,
+    /// der sie ausloest.
+    pub fn offene_fuer_lauf_ohne(&self, kanal: &str, lauf: &str, ausser: Option<&str>) -> usize {
         let wartend = self
             .eintraege
             .iter()
             .filter(|b| b.kanal == kanal && b.lauf == lauf)
+            .filter(|b| ausser != Some(b.datei.as_str()))
             .count();
         let laufend = self
             .in_arbeit
-            .values()
-            .filter(|(k, l)| k == kanal && l == lauf)
+            .iter()
+            .filter(|(datei, (k, l))| k == kanal && l == lauf && ausser != Some(datei.as_str()))
             .count();
         wartend + laufend
     }
@@ -567,6 +579,15 @@ mod tests {
             w.offene_fuer_lauf("kanal", "lauf1"),
             1,
             "Block in Auswertung muss den Lauf offen halten"
+        );
+
+        // Aber der Auswerter dieses Blocks darf sich nicht selbst als offen
+        // zaehlen - sonst waere die Abschluss-DM nie faellig, denn der letzte
+        // Block ist immer der, der sie ausloest.
+        assert_eq!(
+            w.offene_fuer_lauf_ohne("kanal", "lauf1", Some(&genommen.datei)),
+            0,
+            "der eigene Block darf sich nicht selbst blockieren"
         );
 
         w.freigeben(&genommen.datei);

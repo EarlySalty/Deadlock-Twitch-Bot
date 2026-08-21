@@ -95,8 +95,10 @@ Audit, das darauf baut, faellt still aus.
   `STREAM_AUDIT_DRIVE_EXCLUDE` bekommt gar keinen Recorder.
 - Mit hoch gehen die Berichte des Laufs (`.json`, `.md`) und, wenn
   `STREAM_AUDIT_KEEP_TRANSCRIPT=1` gesetzt ist, das `.txt` mit dem
-  ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der komplette
-  Vorgang, nicht nur der Ton.
+  ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der Vorgang zum
+  Zeitpunkt des Uploads, nicht nur der Ton. Ein Nachzuegler nach gesetzter
+  `drive_archiviert.json` geht nicht mehr hoch; der haeufige Fall (letzter Block
+  noch in Auswertung) ist ueber `offene_fuer_lauf` abgedeckt.
 - Geht der Upload nie durch, faellt der Mitschnitt derselben Aufbewahrung zu
   wie die Berichte: `STREAM_AUDIT_RETENTION_DAYS` plus 14 Tage Gnadenfrist
   (`ARCHIV_RUECKSTAU_GNADE_TAGE`). Die Aufnahme ist der Anker, an dem ein
