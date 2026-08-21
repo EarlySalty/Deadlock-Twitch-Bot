@@ -9,6 +9,8 @@ tip_eligible: false
 ---
 Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS.
 
+Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Plattformen senden möchten.
+
 ### Wie läuft Uplink ab?
 
 1. Lass den Dienst im Dashboard freischalten und kopiere die SRT-Adresse.
