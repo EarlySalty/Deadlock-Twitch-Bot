@@ -20,6 +20,10 @@ Deutsche Deadlock Community ist eine kostenlose Plattform für Deadlock-Streamer
 [Onboarding](https://deutsche-deadlock-community.de/twitch/onboarding)
 [Demo Dashboard](https://deutsche-deadlock-community.de/demo/twitch/demo/)
 
+### Wie richte ich OBS für Uplink ein?
+
+Öffne im Dashboard die Uplink-Hilfe und kopiere die SRT-Adresse in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/uplink) führt dich durch die Einrichtung und nennt die nächsten Schritte bei Störungen.
+
 ### Wie starte ich?
 
 Klick auf "Bot für deinen Kanal aktivieren" und verbinde deinen Twitch-Kanal mit dem Deadlock-Partnernetzwerk. Danach landest du direkt im Dashboard.
