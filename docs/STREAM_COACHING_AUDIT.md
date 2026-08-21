@@ -117,6 +117,14 @@ im Deadlock-Docs-Korpus.
    `df` messbar ist. `0` heisst dort wie ueberall "keine Grenze"; dann bremst
    nur noch `STREAM_AUDIT_DRIVE_MIN_FREE_GB`.
 
+## Aufbewahrung im Drive
+
+Der Dienst loescht im Drive **nichts**. `STREAM_AUDIT_RETENTION_DAYS` und der
+14-Tage-Aufschlag gelten ausschliesslich fuer die lokale Platte. Was einmal
+oben liegt, bleibt dort, bis es jemand von Hand entfernt. Das ist Absicht (das
+Archiv ist der Zweck), muss aber jedem klar sein, der einem Streamer eine Frist
+zusagt.
+
 ## Datenschutz
 
 - **Zur Transkription verlaesst das Audio den Rechner nie.** Zeigt

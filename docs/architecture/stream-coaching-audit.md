@@ -97,8 +97,11 @@ Audit, das darauf baut, faellt still aus.
   `STREAM_AUDIT_KEEP_TRANSCRIPT=1` gesetzt ist, das `.txt` mit dem
   ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der komplette
   Vorgang, nicht nur der Ton.
-- Geht der Upload nie durch, faellt der Mitschnitt nach
-  `STREAM_AUDIT_RETENTION_DAYS` derselben Aufbewahrung zu wie die Berichte.
+- Geht der Upload nie durch, faellt der Mitschnitt derselben Aufbewahrung zu
+  wie die Berichte: `STREAM_AUDIT_RETENTION_DAYS` plus 14 Tage Gnadenfrist
+  (`ARCHIV_RUECKSTAU_GNADE_TAGE`). Die Aufnahme ist der Anker, an dem ein
+  offener Upload erkannt wird, und darf deshalb nicht frueher verschwinden.
+- Im Drive selbst laeuft nichts ab. Der Dienst loescht dort nie etwas.
 - An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die
   Schwaerzung kennt die drei Muster aus `rules.rs`; anderer Wortlaut geht mit.
   Deshalb ist `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` eine bewusste Einstellung der
