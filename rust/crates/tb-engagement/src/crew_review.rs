@@ -577,6 +577,13 @@ pub struct ExpiredDiscordGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crew_review_steht_in_der_nur_fireworks_liste() {
+        // Sonst wuerde ein globales TB_LLM_PROVIDER_DEFAULT das fail-closed-Gate
+        // still ausloesen.
+        assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&USE_CASE));
+    }
     use serde_json::{json, Value};
     use std::ffi::OsString;
     use std::sync::Mutex;

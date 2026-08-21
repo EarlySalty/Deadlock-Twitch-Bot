@@ -630,6 +630,13 @@ impl NewOutreachEvent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn outreach_shadow_steht_in_der_nur_fireworks_liste() {
+        // Sonst wuerde ein globales TB_LLM_PROVIDER_DEFAULT das fail-closed-Gate
+        // still ausloesen.
+        assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&super::USE_CASE));
+    }
+
     use chrono::{TimeZone, Utc};
     use serde_json::Value;
     use uuid::Uuid;

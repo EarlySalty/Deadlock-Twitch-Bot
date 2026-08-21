@@ -97,8 +97,8 @@ ein anderes Produkt. Umgelenkt werden sie nur ueber ihre eigene
 
 | Variable | Wirkung |
 |---|---|
-| `TB_LLM_PROVIDER_DEFAULT` | Anbieter fuer alles ausser den Anthropic-Use-Cases |
-| `TB_LLM_PROVIDER_<USE_CASE>` | Anbieter fuer einen Use-Case; einziger Weg, einen Anthropic-Use-Case umzulenken |
+| `TB_LLM_PROVIDER_DEFAULT` | Anbieter fuer alles ausser den Anthropic-Use-Cases und den Nur-Fireworks-Use-Cases (`ricky_crew_review`, `outreach_shadow`) |
+| `TB_LLM_PROVIDER_<USE_CASE>` | Anbieter fuer einen Use-Case; einziger Weg, einen Anthropic- oder Nur-Fireworks-Use-Case umzulenken (Letzteres schaltet das Schatten-Review ab und wird gewarnt) |
 | `TB_LLM_MODEL_<USE_CASE>` | Modell fuer einen Use-Case, unabhaengig vom Anbieter, gilt auch fuer das Ausweichglied der Kette |
 | `FIREWORK_API_KEY`, `FIREWORKS_API_KEY` | Fireworks-Key |
 | `FIREWORK_BASE_URL`, `FIREWORKS_BASE_URL`, `FIREWORK_MODEL`, `FIREWORKS_MODEL` | Fireworks-Adresse und -Modell |
@@ -224,7 +224,11 @@ Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
 - `ricky_crew_review` und `outreach_shadow`: Schatten-Reviews, die nie an einem
   Streamer-Budget hingen. Beide sind gleich fail-closed: Anbieter, Adresse und
   Modell muessen dem Fireworks-Standard entsprechen, sonst startet der Client
-  nicht (`Unavailable`). Ein `TB_LLM_MODEL_RICKY_CREW_REVIEW` oder
+  nicht (`Unavailable`). Damit ein globales `TB_LLM_PROVIDER_DEFAULT=minimax`
+  sie nicht still abschaltet, stehen beide in `FIREWORKS_ONLY_USE_CASES`
+  (`selection.rs`) und ignorieren den Default; nur die eigene
+  `TB_LLM_PROVIDER_<USE_CASE>`-Variable lenkt sie um, mit `warn!` beim
+  Aufloesen. Ein `TB_LLM_MODEL_RICKY_CREW_REVIEW` oder
   `TB_LLM_MODEL_OUTREACH_SHADOW` mit fremdem Modell schaltet das Review also
   ab, statt still ein anderes Modell zu nehmen; ein fehlendes Modell gibt es
   nicht, die Auswahl liefert immer den Standard.

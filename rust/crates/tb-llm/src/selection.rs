@@ -5,7 +5,8 @@
 //! Feature auf einen anderen Anbieter ziehen, ohne den Rest anzufassen.
 //!
 //! - `TB_LLM_PROVIDER_DEFAULT`: Basis für alles außer den Anthropic-Fällen
-//!   in [`ANTHROPIC_USE_CASES`]; die ignorieren den globalen Default.
+//!   in [`ANTHROPIC_USE_CASES`] und den Nur-Fireworks-Fällen in
+//!   [`FIREWORKS_ONLY_USE_CASES`]; die ignorieren den globalen Default.
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
 //!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`. Nur so lässt sich ein
 //!   Anthropic-Fall auf einen anderen Anbieter legen.
@@ -59,6 +60,14 @@ pub const ANTHROPIC_USE_CASES: &[(&str, Option<&str>)] = &[
     ("social_media_claude", Some(ANTHROPIC_HAIKU_MODEL)),
 ];
 
+/// Anwendungsfaelle, die nur auf Fireworks laufen duerfen (fail-closed in
+/// `crew_review.rs` und `outreach_shadow.rs`). Wie die Anthropic-Faelle
+/// ignorieren sie `TB_LLM_PROVIDER_DEFAULT`: ein globales `minimax` fuer den
+/// Rest des Bots wuerde beide Schatten-Reviews sonst still abschalten.
+/// Umgelenkt (und damit abgeschaltet) werden sie nur ueber ihre eigene
+/// `TB_LLM_PROVIDER_<USE_CASE>`-Variable; das wird beim Aufloesen gewarnt.
+pub const FIREWORKS_ONLY_USE_CASES: &[&str] = &["ricky_crew_review", "outreach_shadow"];
+
 /// Adresse, Modell und Key eines Anbieters — alles, was ein
 /// OpenAI-kompatibler Call braucht. Der Key wird nie geloggt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,14 +85,23 @@ pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
     // `TB_LLM_PROVIDER_DEFAULT` (z. B. "minimax" fuer den Rest des Bots) darf
     // sie nicht stillschweigend auf ein anderes Produkt ziehen; umgelenkt
     // werden sie nur ueber ihre eigene `TB_LLM_PROVIDER_<USE_CASE>`-Variable.
-    let configured = nonempty_env(&env_name).or_else(|| {
-        if anthropic_default_model(use_case).is_some() {
+    let eigene_variable = nonempty_env(&env_name);
+    let configured = eigene_variable.clone().or_else(|| {
+        if anthropic_default_model(use_case).is_some() || ist_nur_fireworks(use_case) {
             None
         } else {
             nonempty_env(PROVIDER_DEFAULT_ENV)
         }
     });
     let mut endpoint = resolve(configured.as_deref(), use_case);
+    if ist_nur_fireworks(use_case) && endpoint.provider != "fireworks" {
+        warn!(
+            use_case,
+            provider = endpoint.provider,
+            variable = %env_name,
+            "Nur-Fireworks-Anwendungsfall auf anderen Anbieter gelenkt; der Aufrufer schaltet sich damit ab"
+        );
+    }
     apply_model_override(&mut endpoint, use_case);
     endpoint
 }
@@ -122,6 +140,10 @@ pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
         .into_iter()
         .filter(|endpoint| endpoint.api_key.is_some())
         .collect()
+}
+
+fn ist_nur_fireworks(use_case: &str) -> bool {
+    FIREWORKS_ONLY_USE_CASES.contains(&use_case)
 }
 
 fn resolve(configured: Option<&str>, use_case: &str) -> LlmEndpoint {
@@ -241,6 +263,7 @@ mod tests {
             "TB_LLM_PROVIDER_AI_ANALYSIS",
             "TB_LLM_MODEL_TITLE_AI",
             "TB_LLM_MODEL_SPAM_JUDGE",
+            "TB_LLM_PROVIDER_OUTREACH_SHADOW",
         ] {
             std::env::remove_var(v);
         }
@@ -398,6 +421,26 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_AI_ANALYSIS", "minimax");
         assert_eq!(endpoint_for("ai_analysis").provider, "minimax");
         assert_eq!(endpoint_for("ai_chat").provider, "anthropic");
+        clear();
+    }
+
+    #[test]
+    fn provider_default_zieht_nur_fireworks_faelle_nicht_um() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("FIREWORK_API_KEY", "f");
+        std::env::set_var("MINIMAX_API_KEY", "m");
+        std::env::set_var(PROVIDER_DEFAULT_ENV, "minimax");
+
+        assert_eq!(endpoint_for("title_ai").provider, "minimax");
+        for use_case in FIREWORKS_ONLY_USE_CASES {
+            assert_eq!(endpoint_for(use_case).provider, "fireworks", "{use_case}");
+        }
+
+        // Nur die eigene Variable lenkt um (und schaltet den Aufrufer ab).
+        std::env::set_var("TB_LLM_PROVIDER_OUTREACH_SHADOW", "minimax");
+        assert_eq!(endpoint_for("outreach_shadow").provider, "minimax");
+        assert_eq!(endpoint_for("ricky_crew_review").provider, "fireworks");
         clear();
     }
 
