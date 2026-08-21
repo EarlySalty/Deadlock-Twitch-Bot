@@ -157,6 +157,75 @@ Fehlerquelle, kein Sicherheitsnetz.
   Antwort-Structs, vier Kopien des Token-Auslesens und drei Kopien der
   Env-Fallback-Kette.
 
+## Bewusste Verhaltensaenderungen
+
+Drei Dinge verhalten sich nach dem Umbau anders als vorher. Alle drei sind
+gewollt; wer Logs, Kostenauswertungen oder Dashboards darauf gebaut hat, muss
+sie kennen.
+
+### (a) Das Ledger erfasst jetzt alle Anbieter, auch Anthropic
+
+Vorher verbuchte nur der MiniMax-Pfad. `claude_chat.rs`, der Opus-Zweig des
+Post-Stream-Reports und der Haiku-Zweig der Clip-Anreicherung schrieben nichts:
+genau die teuersten Aufrufe tauchten in der Kostenerfassung nicht auf. Der
+gemeinsame Eingang verbucht jeden erfolgreichen Aufruf, unabhaengig vom
+Anbieter. Best-effort wie bisher, ein DB-Fehler kippt den Aufruf nie.
+
+Die Zwecke sind so gewaehlt, dass sich teure und guenstige Anteile trennen
+lassen, ohne das Schema anzufassen:
+
+| Zweck (`purpose`) | Aufrufer | Vorher |
+|---|---|---|
+| `engagement` | `minimax_chat.rs`, Standardweg | unveraendert |
+| `chat-deep-analysis` und andere Zwecke des Aufrufers | `raw_completion_tracked` | unveraendert |
+| `title` | `title_ai.rs`, Titelgenerierung | unveraendert |
+| `title-insight` | `title_ai.rs`, Wochenauswertung | unveraendert |
+| `spam-review` | `scam_pitch.rs` | unveraendert |
+| `post-stream-report` | `post_stream.rs`, MiniMax-/Fireworks-Zweig | unveraendert |
+| `post-stream-report-claude` | `post_stream.rs`, Opus-Zweig | **neu**, vorher gar nicht verbucht |
+| `ai_analysis` | Dashboard-KI-Analyse | **neu**, vorher gar nicht verbucht |
+| `ai_chat` | Dashboard-Folgechat | **neu**, vorher gar nicht verbucht |
+| `social-media-minimax-<anbieter>` | Clip-Anreicherung, MiniMax-Bahn | **neu**, vorher gar nicht verbucht |
+| `social-media-claude_haiku-anthropic` | Clip-Anreicherung, Haiku-Bahn | **neu**, vorher gar nicht verbucht |
+
+Der Zweck der Clip-Anreicherung nennt Bahn und tatsaechlich antwortenden
+Anbieter, weil hinter der Bahn `social_media` sowohl Fireworks als auch MiniMax
+stehen kann. Ohne diesen Zusatz waeren beide in der Auswertung eine Summe.
+
+Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
+
+- `ricky_crew_review` und `outreach_shadow`: Schatten-Reviews, die nie an einem
+  Streamer-Budget hingen.
+- `crew_guard`: laeuft ueber einen fremden Schluessel, dessen Kosten nicht in
+  diesem Ledger stehen.
+- `stream_audit`: laeuft ausserhalb des Bots und gehoert zu keinem Streamer.
+
+### (b) Fireworks-Schluessel: `FIREWORK_API_KEY` gewinnt ueberall
+
+Der Schluessel kommt jetzt ueberall aus `tb_llm::keys`, und dort gilt die
+Reihenfolge des Discord-Bots: `FIREWORK_API_KEY` vor `FIREWORKS_API_KEY`. Das
+Crew-Review und das Ansprache-Review bevorzugten vorher den Plural, der Rest des
+Bots schon immer den Singular. Solange beide Variablen auf dasselbe
+Fireworks-Konto zeigen, aendert sich nichts; liegen unterschiedliche Werte im
+Tresor, gewinnt jetzt der Singular.
+
+### (c) Der Crew-Judge meldet die Fehlernamen des Eingangs
+
+`error_kind` im Log des Crew-Judges traegt jetzt die Codes des gemeinsamen
+Eingangs statt eigener Namen:
+
+| Alt | Neu |
+|---|---|
+| `http_transport` | `transport`, bei Zeitgrenze `timeout` |
+| `http_status` | `http_status` (unveraendert) |
+| `response_json` | `unparsable` |
+| (kein eigener Name) | `unavailable` |
+| `verdict_json` | `verdict_json` (unveraendert, das Urteil parst der Judge selbst) |
+
+Alle Aufrufer teilen sich damit dasselbe Fehlervokabular. Wer auf
+`error_kind="http_transport"` oder `error_kind="response_json"` filtert, muss
+die Filter nachziehen.
+
 ## Bewusst nicht migriert
 
 - **Ollama-Zweig in `llm_dispatch.rs`.** Ein lokaler Dienst mit eigenem
