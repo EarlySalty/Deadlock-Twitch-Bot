@@ -20,7 +20,6 @@ use sqlx::PgPool;
 use crate::ai_state::{chat_session_key, ChatSession, AI_MODEL_MINIMAX, AI_MODEL_OPUS, AI_STATE};
 use crate::auth::level::DashboardAuthLevel;
 use tb_analytics::ai_analysis::{extract_text_response, plan_ai_model};
-use tb_engagement::claude_chat::ClaudeClient;
 use tb_engagement::minimax_chat::EngagementMinimaxClient;
 
 fn json_err(status: StatusCode, body: Value) -> Response {
@@ -84,12 +83,24 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, St
         // Opus: system separat, messages = History + neue User-Message.
         let mut messages = history;
         messages.push(json!({ "role": "user", "content": message }));
-        let client = ClaudeClient::new(None, None, None, None);
-        let content = client
-            .create_message(Some(&system_prompt), Value::Array(messages), 4000)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(extract_text_response(&content))
+        let messages = messages
+            .iter()
+            .map(|m| tb_llm::Message {
+                role: m["role"].as_str().unwrap_or("user").to_string(),
+                content: m["content"].as_str().unwrap_or_default().to_string(),
+            })
+            .collect();
+        let response = tb_llm::complete(
+            "ai_chat",
+            tb_llm::Request::history(messages)
+                .system(&system_prompt)
+                .max_tokens(4000),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // Der Hub hat die Text-Bloecke bereits zusammengesetzt; der Aufruf
+        // haelt die Paritaet zur frueheren Auswertung des content-Arrays.
+        Ok(extract_text_response(&Value::String(response.text)))
     } else {
         // MiniMax: messages = [system] + History + neue User-Message.
         let mut messages = vec![json!({ "role": "system", "content": system_prompt })];

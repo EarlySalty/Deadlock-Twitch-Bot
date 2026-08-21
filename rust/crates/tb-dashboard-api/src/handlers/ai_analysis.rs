@@ -26,7 +26,6 @@ use tb_analytics::ai_analysis::{
     parse_ai_analysis_points_with_context, plan_ai_model,
 };
 use tb_analytics::ai_history::save_analysis;
-use tb_engagement::claude_chat::ClaudeClient;
 use tb_engagement::minimax_chat::EngagementMinimaxClient;
 
 const MAX_USER_CONTEXT_CHARS: usize = 2000;
@@ -144,13 +143,14 @@ pub async fn ai_analysis_handler(
 /// String (Aufrufer prüft „credit balance is too low").
 async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
     if ai_model == AI_MODEL_OPUS {
-        let client = ClaudeClient::new(None, None, None, None);
-        let content = client
-            .create_message(None, json!([{ "role": "user", "content": prompt }]), 60000)
-            .await
-            .map_err(|e| e.to_string())?;
+        let response = tb_llm::complete(
+            "ai_analysis",
+            tb_llm::Request::prompt(prompt).max_tokens(60000),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(parse_ai_analysis_points_with_context(
-            &extract_text_response(&content),
+            &extract_text_response(&Value::String(response.text)),
             ai_model,
             "ai-analysis",
         ))

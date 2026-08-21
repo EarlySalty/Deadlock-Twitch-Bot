@@ -2,11 +2,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::crew_review::{
-    build_fireworks_http_client, FIREWORKS_DEFAULT_BASE_URL, FIREWORKS_DEFAULT_MODEL,
+    FIREWORKS_DEFAULT_BASE_URL, FIREWORKS_DEFAULT_MODEL,
 };
 
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
@@ -190,9 +192,13 @@ impl OutreachError {
     }
 }
 
+/// Anwendungsfall in der gemeinsamen Anbieterauswahl.
+pub const USE_CASE: &str = "outreach_shadow";
+
+/// Schatten-Review der Ansprache. Wie das Crew-Review fail-closed auf Adresse
+/// und Modell festgenagelt; der HTTP-Weg liegt in [`tb_llm::complete`].
 pub struct OutreachReviewClient {
-    client: reqwest::Client,
-    api_key: String,
+    endpoint: tb_llm::LlmEndpoint,
 }
 
 impl OutreachReviewClient {
@@ -200,18 +206,20 @@ impl OutreachReviewClient {
         if OUTREACH_SYSTEM_PROMPT.trim().is_empty() {
             return Err(OutreachError::Unavailable);
         }
-        let api_key = ["FIREWORKS_API_KEY", "FIREWORK_API_KEY"]
-            .iter()
-            .find_map(|name| nonempty_env(name))
-            .ok_or(OutreachError::Unavailable)?;
-        if nonempty_env("FIREWORKS_BASE_URL")
-            .is_some_and(|url| url.trim_end_matches('/') != FIREWORKS_DEFAULT_BASE_URL)
+        let endpoint = tb_llm::endpoint_for(USE_CASE);
+        if endpoint.provider != "fireworks"
+            || endpoint.base_url.trim_end_matches('/') != FIREWORKS_DEFAULT_BASE_URL
+            || endpoint.api_key.is_none()
         {
             return Err(OutreachError::Unavailable);
         }
-        let client = build_fireworks_http_client(FIREWORKS_TIMEOUT)
-            .map_err(|_| OutreachError::Unavailable)?;
-        Ok(Self { client, api_key })
+        Ok(Self {
+            endpoint: tb_llm::LlmEndpoint {
+                model: FIREWORKS_DEFAULT_MODEL.to_string(),
+                base_url: FIREWORKS_DEFAULT_BASE_URL.to_string(),
+                ..endpoint
+            },
+        })
     }
 
     pub async fn decide(
@@ -220,64 +228,35 @@ impl OutreachReviewClient {
         evidence: &SessionEvidence,
     ) -> Result<OutreachDecision, OutreachError> {
         let user_data = serde_json::to_string(input).map_err(|_| OutreachError::Decode)?;
-        let response = self
-            .client
-            .post(format!("{FIREWORKS_DEFAULT_BASE_URL}/chat/completions"))
-            .bearer_auth(&self.api_key)
-            .json(&json!({
-                "model": FIREWORKS_DEFAULT_MODEL,
-                "messages": [
-                    {"role": "system", "content": OUTREACH_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_data}
-                ],
-                "temperature": 0.0,
-                "response_format": {"type": "json_object"}
-            }))
-            .send()
-            .await
-            .map_err(|error| {
-                if error.is_timeout() {
-                    OutreachError::Timeout
-                } else {
-                    OutreachError::Unavailable
-                }
-            })?;
-        if !response.status().is_success() {
-            return Err(OutreachError::HttpStatus);
+        let response = tb_llm::complete(
+            USE_CASE,
+            tb_llm::Request::simple(OUTREACH_SYSTEM_PROMPT, user_data)
+                .temperature(0.0)
+                .json_object()
+                .timeout(FIREWORKS_TIMEOUT)
+                .no_ledger()
+                .endpoint(self.endpoint.clone()),
+        )
+        .await
+        .map_err(outreach_error)?;
+        if response.text.trim().is_empty() {
+            return Err(OutreachError::Decode);
         }
-        let completion = response.json::<ChatCompletion>().await.map_err(|error| {
-            if error.is_timeout() {
-                OutreachError::Timeout
-            } else if error.is_decode() {
-                OutreachError::Decode
-            } else {
-                OutreachError::Unavailable
-            }
-        })?;
-        let raw = completion
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|choice| choice.message.content)
-            .filter(|content| !content.trim().is_empty())
-            .ok_or(OutreachError::Decode)?;
-        parse_outreach_decision(&raw, evidence)
+        parse_outreach_decision(&response.text, evidence)
     }
 }
 
-#[derive(Deserialize)]
-struct ChatCompletion {
-    choices: Vec<ChatCompletionChoice>,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionChoice {
-    message: ChatCompletionMessage,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionMessage {
-    content: Option<String>,
+/// Uebersetzt den Fehler des gemeinsamen Eingangs in die Fehlerklassen, die der
+/// Ansprache-Pfad meldet und zaehlt.
+fn outreach_error(error: tb_llm::LlmError) -> OutreachError {
+    match error {
+        tb_llm::LlmError::Timeout(_) => OutreachError::Timeout,
+        tb_llm::LlmError::Http { .. } => OutreachError::HttpStatus,
+        tb_llm::LlmError::Unparsable(_) => OutreachError::Decode,
+        tb_llm::LlmError::Unavailable(_) | tb_llm::LlmError::Transport(_) => {
+            OutreachError::Unavailable
+        }
+    }
 }
 
 pub fn parse_outreach_decision(
@@ -515,13 +494,6 @@ fn contains_forbidden_emoji(opener: &str) -> bool {
     })
 }
 
-fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutreachSession {
     pub id: Uuid,
@@ -654,7 +626,7 @@ impl NewOutreachEvent {
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
-    use serde_json::{json, Value};
+    use serde_json::Value;
     use uuid::Uuid;
 
     use super::*;
