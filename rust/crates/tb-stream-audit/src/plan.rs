@@ -33,9 +33,6 @@ pub const MAX_SEKUNDEN_JE_SENDUNG: u64 = 24 * 60 * 60;
 /// mitgeschnitten. Darueber pausiert nur die Aufnahme, nie die Auswertung.
 pub const MAX_AUFNAHME_BYTES: u64 = 12 * 1024 * 1024 * 1024;
 
-/// Anteil der Kerne, bis zu dem die Auswertung STT belasten darf.
-pub const LAST_KERNE_ANTEIL: f64 = 0.85;
-
 /// So oft wird geprueft, ob ein Kanal sendet.
 pub const LIVE_PRUEFUNG_SEKUNDEN: u64 = 60;
 
@@ -322,14 +319,6 @@ pub fn ende_dm_faellig(gesperrt: bool, offene_bloecke: usize) -> bool {
 /// Ob noch Platz fuer weitere Aufnahmen ist.
 pub fn platte_reicht(belegt: u64, grenze: u64) -> bool {
     belegt < grenze
-}
-
-/// Ob die Auswertung STT starten darf, ohne den Rechner zu traegen.
-pub fn last_erlaubt(load1: f64, kerne: u32) -> bool {
-    if kerne == 0 {
-        return true;
-    }
-    load1 < f64::from(kerne) * LAST_KERNE_ANTEIL
 }
 
 /// Laufender Aufnahmezustand eines Kanals.
@@ -815,7 +804,7 @@ mod tests_lauf_sperre {
 }
 
 #[cfg(test)]
-mod tests_last_und_platte {
+mod tests_platte {
     use super::*;
 
     #[test]
@@ -824,12 +813,5 @@ mod tests_last_und_platte {
         assert!(platte_reicht(MAX_AUFNAHME_BYTES - 1, MAX_AUFNAHME_BYTES));
         assert!(!platte_reicht(MAX_AUFNAHME_BYTES, MAX_AUFNAHME_BYTES));
         assert!(!platte_reicht(MAX_AUFNAHME_BYTES + 1, MAX_AUFNAHME_BYTES));
-    }
-
-    #[test]
-    fn last_erlaubt_unter_85_prozent() {
-        assert!(last_erlaubt(13.5, 16));
-        assert!(!last_erlaubt(13.7, 16));
-        assert!(last_erlaubt(100.0, 0));
     }
 }

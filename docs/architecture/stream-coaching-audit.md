@@ -56,8 +56,13 @@ Audit, das darauf baut, faellt still aus.
    bei 12 GB Mitschnitt, nicht weil die Auswertung hinterherhaengt.
 3. **Warteschlange** im Speicher. Bloecke eines noch sendenden Kanals bleiben
    liegen, bis der Lauf freigegeben ist.
-4. **Auswertung** nach Sendungsende, seriell, nur wenn die Last unter 85
-   Prozent der Kerne liegt: Transkription, Regelfunde, Modellschritt in Stapeln
+4. **Auswertung** nach Sendungsende, seriell. Ein Last-Gate stellt sie
+   zurueck, wenn die hoehere von CPU- und RAM-Auslastung ein volles Fenster
+   (Standard 240 s) ueber der Grenze (Standard 90 Prozent) liegt, und gibt sie
+   unter der
+   Freigabe (80 Prozent) wieder frei; ein Deckel (1800 s) loest auch unter
+   Dauerlast. Aufgenommen wird derweil weiter. Dann: Transkription,
+   Regelfunde, Modellschritt in Stapeln
    zu 20 Segmenten, Zusammenfassen, Bericht schreiben (JSON zuletzt und ueber
    `rename`), eine Abschluss-DM mit ToS-Funden.
 5. **Ablage**: sauberer Block — Aufnahme weg, auch wenn kein Wort fiel. Fund
