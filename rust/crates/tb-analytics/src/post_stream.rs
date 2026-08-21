@@ -348,18 +348,23 @@ pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiMod
     }
 }
 
-/// Ledger-Zweck aller Post-Stream-Calls (Python
+/// Ledger-Zweck des MiniMax-/Fireworks-Zweigs (Python
 /// `_track_minimax_completion(..., purpose="post-stream-report")`).
 const LEDGER_PURPOSE: &str = "post-stream-report";
+/// Ledger-Zweck des Opus-Zweigs. Eigener Name, weil Opus um Groessenordnungen
+/// teurer ist: unter einem gemeinsamen Zweck waere in der Kostenauswertung
+/// nicht mehr zu sehen, welcher Anteil auf den Premium-Plan entfaellt.
+const LEDGER_PURPOSE_OPUS: &str = "post-stream-report-claude";
 
 /// KI-Aufruf des Post-Stream-Reports über den gemeinsamen Eingang.
 ///
 /// Der MiniMax-Zweig darf lange laufen (grosse Reports, 16000 Tokens), der
 /// Opus-Zweig ist auf 6000 begrenzt — beides wie bisher.
 pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
-    let (use_case, request) = match model {
+    let (use_case, purpose, request) = match model {
         AiModel::Minimax => (
             USE_CASE_MINIMAX,
+            LEDGER_PURPOSE,
             tb_llm::Request::prompt(prompt)
                 .temperature(0.3)
                 .max_tokens(16000)
@@ -367,11 +372,12 @@ pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
         ),
         AiModel::Opus => (
             USE_CASE_OPUS,
+            LEDGER_PURPOSE_OPUS,
             // KEINE temperature (Anthropic-Default, 1:1 Python).
             tb_llm::Request::prompt(prompt).max_tokens(6000).timeout_secs(240),
         ),
     };
-    let response = tb_llm::complete(use_case, request.ledger_purpose(LEDGER_PURPOSE))
+    let response = tb_llm::complete(use_case, request.ledger_purpose(purpose))
         .await
         .map_err(|error| match error {
             // Der Fehlerbody nennt die Ursache (ungueltiges Modell, Limit, ...);
@@ -2481,9 +2487,13 @@ mod tests {
     }
 
     #[test]
-    fn ledger_purpose_ist_post_stream_report() {
+    fn ledger_zwecke_sind_je_anbieter_unterscheidbar() {
         // Vertrag mit dem Audit (P2.70): purpose='post-stream-report'.
         assert_eq!(LEDGER_PURPOSE, "post-stream-report");
+        // Opus getrennt ausweisen: sonst verschwindet der teure Anteil in der
+        // Summe des guenstigen.
+        assert_eq!(LEDGER_PURPOSE_OPUS, "post-stream-report-claude");
+        assert_ne!(LEDGER_PURPOSE, LEDGER_PURPOSE_OPUS);
     }
 
     #[test]
