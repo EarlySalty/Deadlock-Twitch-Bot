@@ -60,7 +60,8 @@ im Deadlock-Docs-Korpus.
    werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig. Ist der Stream vorbei und jeder Block ausgewertet, wird
    diese Aufnahme zusammen mit den Berichten in einen eigenen Ordner je Stream
    unter `STREAM_AUDIT_DRIVE_REMOTE` geladen (rclone-Remote `gdrive:`). Erst wenn
-   der Upload belegt ist (`rclone lsf`), wird lokal geloescht - so bleibt die
+   der Upload belegt ist (`rclone lsf` fuehrt jede einzelne hochgeladene Datei
+   namentlich auf), wird lokal geloescht - so bleibt die
    Platte frei. Scheitert der Upload, bleibt alles liegen und der stuendliche
    Aufraeumtakt versucht es erneut; noch nicht hochgeladene Aufnahmen werden nie
    geloescht. Faellt der freie Platz unter `STREAM_AUDIT_DRIVE_MIN_FREE_GB`,
@@ -70,6 +71,19 @@ im Deadlock-Docs-Korpus.
    der normalen Aufbewahrung. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet Recorder
    und Upload ab. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
    wie bisher nach der Pruefung lokal geloescht.
+8. **Wenn der Recorder scheitert.** Ein Recorder, der kurz nach dem Start endet,
+   mit Fehler abbricht oder haengt (die Aufnahmedatei waechst 15 Minuten lang
+   nicht), gilt als Fehlversuch: er wird abgeraeumt, die letzten
+   stderr-Zeilen von streamlink und ffmpeg stehen in der Meldung, und der
+   Wiederanlauf wartet mit sich verdoppelnder Pause. Nach fuenf Fehlversuchen
+   startet fuer diesen Lauf kein Recorder mehr, und es gibt eine Fehlermeldung.
+   Ohne diesen Deckel wuerde ein dauerhaft kaputtes ffmpeg im Minutentakt neu
+   starten und jedes Mal Erfolg melden.
+9. **Wenn der Upload haengt.** Solange das Drive-Archiv eines Laufs aussteht,
+   bleiben seine Berichte von der Aufbewahrung verschont - aber hoechstens
+   14 Tage. Danach greift `STREAM_AUDIT_RETENTION_DAYS` wieder, mit einer
+   Warnung im Protokoll. Sonst waere die Aufbewahrungsfrist bei kaputtem rclone
+   still ausser Kraft, und Berichte mit vollem Wortlaut laegen unbegrenzt da.
 
 ## Datenschutz
 
@@ -121,9 +135,9 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_LOAD_MAX_HOLD_SECS` | Deckel, wie lange das Gate am Stueck haelt, `0` = kein Deckel | 1800 |
 | `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
 | `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
-| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz; darunter startet kein neuer Recorder | 20 |
-| `STREAM_AUDIT_RCLONE_BIN` | Pfad zum rclone-Binary | `/usr/local/bin/rclone` |
-| `STREAM_AUDIT_FFMPEG_BIN` | Pfad zum ffmpeg-Binary | `/usr/bin/ffmpeg` |
+| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz in ganzen GB; darunter startet kein neuer Recorder | 20 |
+| `STREAM_AUDIT_RCLONE_BIN` | rclone-Binaerprogramm | PATH-Aufloesung `rclone`, in der Unit auf `/usr/local/bin/rclone` gepinnt |
+| `STREAM_AUDIT_FFMPEG_BIN` | ffmpeg fuer den Recorder | `FFMPEG_BIN`, sonst `/usr/bin/ffmpeg` |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 

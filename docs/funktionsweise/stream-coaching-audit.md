@@ -73,8 +73,14 @@ keine Sanktionen und postet nichts öffentlich.
 
 ## Datenschutz
 
-- Der Ton verlässt den Rechner nicht. Zeigt die Transkriptions-URL nach außen,
-  startet der Dienst gar nicht erst, außer das wurde ausdrücklich erlaubt.
+- Zum Aufschreiben des Gesagten verlässt der Ton den Rechner nicht. Zeigt die
+  Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
+  wurde ausdrücklich erlaubt.
+- Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt. Die
+  liegt nach dem Stream nicht auf dem Rechner, sondern in unserem eigenen
+  Google Drive, damit später jemand nachhören kann. Wer das nicht will, sagt
+  Bescheid: mit `STREAM_AUDIT_DRIVE_ARCHIVE=0` entsteht diese Aufnahme gar
+  nicht erst.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,

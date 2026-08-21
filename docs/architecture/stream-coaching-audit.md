@@ -87,8 +87,11 @@ Audit, das darauf baut, faellt still aus.
 
 ## 6. Datenschutz
 
-- Audio verlaesst den Rechner nicht; ein entfernter STT-Endpunkt bricht den
-  Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
+- Auf dem STT-Weg verlaesst Audio den Rechner nicht; ein entfernter
+  STT-Endpunkt bricht den Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
+- Der durchgehende 1:1-Ton-Mitschnitt geht dagegen nach dem Stream bewusst per
+  rclone in den eigenen Google-Drive-Ordner (`STREAM_AUDIT_DRIVE_ARCHIVE`,
+  Standard an) und wird lokal erst nach belegtem Upload geloescht.
 - An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die
   Schwaerzung kennt die drei Muster aus `rules.rs`; anderer Wortlaut geht mit.
   Deshalb ist `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` eine bewusste Einstellung der

@@ -43,12 +43,35 @@ pub const MIN_FREE_ENV: &str = "STREAM_AUDIT_DRIVE_MIN_FREE_GB";
 pub const MIN_FREE_STANDARD_GB: u64 = 20;
 
 /// Mindest-Freiplatz in Bytes aus der Umgebung oder Standard.
+///
+/// Ein unlesbarer Wert faellt auf den Standard zurueck, aber nicht still: wer
+/// `200G` oder `100.5` schreibt, wollte die Untergrenze anheben und bekaeme
+/// sonst wortlos die 20 GB der Vorgabe.
 pub fn min_frei_bytes() -> u64 {
-    let gb = match std::env::var(MIN_FREE_ENV) {
-        Ok(v) => v.trim().parse::<u64>().unwrap_or(MIN_FREE_STANDARD_GB),
-        Err(_) => MIN_FREE_STANDARD_GB,
+    gb_aus_wort(std::env::var(MIN_FREE_ENV).ok().as_deref())
+        .saturating_mul(1024 * 1024 * 1024)
+}
+
+/// Reine Wortlogik hinter [`min_frei_bytes`], ohne Umgebungszugriff.
+fn gb_aus_wort(wert: Option<&str>) -> u64 {
+    let Some(wert) = wert else {
+        return MIN_FREE_STANDARD_GB;
     };
-    gb.saturating_mul(1024 * 1024 * 1024)
+    let wert = wert.trim();
+    if wert.is_empty() {
+        return MIN_FREE_STANDARD_GB;
+    }
+    match wert.parse::<u64>() {
+        Ok(gb) => gb,
+        Err(_) => {
+            tracing::warn!(
+                wert,
+                standard_gb = MIN_FREE_STANDARD_GB,
+                "{MIN_FREE_ENV} ist keine ganze Zahl in GB - Vorgabe greift"
+            );
+            MIN_FREE_STANDARD_GB
+        }
+    }
 }
 
 /// Ob nach dem Stream ueberhaupt archiviert wird.
@@ -159,6 +182,17 @@ mod tests {
         assert_eq!(o, vec!["copy", "/tmp/stage", "gdrive:X/k/l"]);
         let l = rclone_lsf_args("gdrive:X/k/l");
         assert_eq!(l, vec!["lsf", "gdrive:X/k/l"]);
+    }
+
+    #[test]
+    fn mindestplatz_faellt_nur_bei_unsinn_zurueck() {
+        assert_eq!(gb_aus_wort(None), MIN_FREE_STANDARD_GB);
+        assert_eq!(gb_aus_wort(Some("  ")), MIN_FREE_STANDARD_GB);
+        assert_eq!(gb_aus_wort(Some(" 200 ")), 200);
+        // Einheit oder Komma sind kein gueltiger Wert und ergeben die Vorgabe -
+        // sichtbar im Protokoll, nicht stillschweigend.
+        assert_eq!(gb_aus_wort(Some("200G")), MIN_FREE_STANDARD_GB);
+        assert_eq!(gb_aus_wort(Some("100.5")), MIN_FREE_STANDARD_GB);
     }
 
     #[test]
