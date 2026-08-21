@@ -3789,6 +3789,22 @@ const DF_ZEITGRENZE: Duration = Duration::from_secs(10);
 /// ueber die Marke `drive_archiviert.json`; ein zweiter Lauf desselben Streams
 /// wird ueber `archiv_laeuft.json` abgefangen.
 async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lauf: String) {
+    // Pfad und Ziel einmal hier aus der Umgebung holen und durchreichen: der
+    // Kern bleibt so ohne prozessweiten Zustand und im Test ohne `set_var`
+    // pruefbar.
+    let rclone = rclone_pfad();
+    let remote = archiv::remote_basis();
+    nach_drive_archivieren_mit(konfiguration, kanal, lauf, rclone, remote).await
+}
+
+/// Wie [`nach_drive_archivieren`], mit ausdruecklichen Zielangaben.
+async fn nach_drive_archivieren_mit(
+    konfiguration: Konfiguration,
+    kanal: String,
+    lauf: String,
+    rclone: String,
+    remote_basis: String,
+) {
     if !archiv::archiv_aktiv_fuer(&kanal) {
         return;
     }
@@ -3824,17 +3840,8 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
             }
         })
     };
-    // Pfad und Ziel einmal hier aus der Umgebung holen und durchreichen: der
-    // Kern bleibt so ohne prozessweiten Zustand und im Test ohne `set_var`
-    // pruefbar.
-    let ergebnis = drive_archiv_durchfuehren(
-        &konfiguration,
-        &kanal,
-        &lauf,
-        &rclone_pfad(),
-        &archiv::remote_basis(),
-    )
-    .await;
+    let ergebnis =
+        drive_archiv_durchfuehren(&konfiguration, &kanal, &lauf, &rclone, &remote_basis).await;
     herzschlag.abort();
     // Der Sammelordner haelt Kopien der Berichte, beim eingeschalteten
     // Transkript auch den vollen Wortlaut. Jeder `?`-Ausstieg oben laesst ihn
@@ -3844,7 +3851,7 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
     let _ = tokio::fs::remove_file(&laeuft).await;
 
     match ergebnis {
-        Ok(true) => {
+        Ok(Archivstand::Archiviert) => {
             if let Err(fehler) = nur_fuer_mich(&fertig, b"{}").await {
                 tracing::warn!(fehler, kanal, "Archiv-Marke nicht schreibbar");
             }
@@ -3854,16 +3861,13 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
                 "Stream nach Drive archiviert und lokal geraeumt"
             );
         }
-        Ok(false) => {
-            // Nichts da zum Archivieren. KEINE endgueltige Archiv-Marke - ein
-            // transienter Leerbefund schloesse sonst einen echten Lauf fuer immer
-            // aus. Stattdessen den leeren Mitschnitt-Ordner wegraeumen, damit der
-            // Sweep ihn nicht stuendlich wieder aufgreift - aber nur, wenn ihn
-            // nicht gerade ein startender Recorder angelegt hat. Sonst schriebe
-            // ffmpeg gleich darauf in einen geloeschten Inode.
-            // Und erst recht nicht, wenn eine Aufnahme darin liegt: seit
-            // neuestem meldet `drive_archiv_durchfuehren` auch dann `Ok(false)`,
-            // wenn waehrend des Uploads ein neuer Teil entstanden ist.
+        Ok(Archivstand::NichtsDa) => {
+            // KEINE endgueltige Archiv-Marke - ein transienter Leerbefund
+            // schloesse sonst einen echten Lauf fuer immer aus. Stattdessen den
+            // leeren Mitschnitt-Ordner wegraeumen, damit der Sweep ihn nicht
+            // stuendlich wieder aufgreift - aber nur, wenn ihn nicht gerade ein
+            // startender Recorder angelegt hat. Sonst schriebe ffmpeg gleich
+            // darauf in einen geloeschten Inode.
             let mit_dir = mitschnitt_ordner(&konfiguration, &kanal, &lauf);
             let leer = mitschnitt_dateien_sammeln(&mit_dir)
                 .await
@@ -3876,6 +3880,10 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
             // sobald noch etwas darin liegt.
             let _ = tokio::fs::remove_dir(&lauf_dir).await;
         }
+        // Hochgeladen, aber nicht abgeschlossen: nichts markieren, nichts
+        // wegraeumen. Beides waere hier ein Datenverlust, denn im Ordner liegt
+        // (oder entsteht gerade) der naechste Teil.
+        Ok(Archivstand::NeuerTeil | Archivstand::Unklar) => {}
         Err(fehler) => {
             tracing::error!(
                 fehler,
@@ -3887,16 +3895,42 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
     }
 }
 
-/// Fuehrt Zusammenfuegen, Upload und Aufraeumen aus. `Ok(true)` = archiviert und
-/// geraeumt, `Ok(false)` = es gab nichts zu archivieren, `Err` = Upload
-/// gescheitert, lokal bleibt alles liegen.
+/// Ausgang eines Archivlaufs.
+///
+/// Bewusst ein Enum und kein `bool`: der Rueckgabewert entscheidet darueber, ob
+/// gelaufen wird, und "es gab nichts zu tun" und "alles hochgeladen, aber der
+/// Lauf ist noch nicht zu Ende" verlangen entgegengesetzte Behandlung. Als
+/// `Ok(false)` waeren beide dasselbe, und der naechste Leser raeumte im
+/// zweiten Fall eine gerade entstehende Aufnahme weg.
+#[derive(Debug, PartialEq, Eq)]
+enum Archivstand {
+    /// Nichts vorhanden: kein Mitschnitt, keine Berichte, keine Akte. Lokal ist
+    /// nichts passiert, der Aufrufer darf einen leeren Ordner wegraeumen.
+    NichtsDa,
+    /// Vollstaendig hochgeladen und lokal geraeumt. Der Lauf ist zu, die
+    /// Archiv-Marke darf gesetzt werden.
+    Archiviert,
+    /// Der Upload war vollstaendig, aber im Mitschnitt-Ordner liegt schon
+    /// wieder etwas: derselbe Stream nimmt unter derselben Kennung erneut auf.
+    /// Kein Fehler, aber auch **kein** Abschluss - keine Archiv-Marke, nichts
+    /// wegraeumen, der naechste Sweep holt den neuen Teil nach.
+    NeuerTeil,
+    /// Ordnerstand nicht lesbar. Wie [`Archivstand::NeuerTeil`] behandelt
+    /// (nichts abschliessen, nichts wegraeumen), aber ausdruecklich getrennt,
+    /// damit das Protokoll nicht eine Aufnahme behauptet, die niemand gesehen
+    /// hat.
+    Unklar,
+}
+
+/// Fuehrt Zusammenfuegen, Upload und Aufraeumen aus. `Err` = Upload
+/// gescheitert, lokal bleibt alles liegen; sonst siehe [`Archivstand`].
 async fn drive_archiv_durchfuehren(
     konfiguration: &Konfiguration,
     kanal: &str,
     lauf: &str,
     rclone: &str,
     remote_basis: &str,
-) -> Result<bool, String> {
+) -> Result<Archivstand, String> {
     let lauf_dir = lauf_ordner(konfiguration, kanal, lauf);
     let mit_dir = mitschnitt_ordner(konfiguration, kanal, lauf);
     let Some(mitschnitte) = mitschnitt_dateien_sammeln(&mit_dir).await else {
@@ -3908,7 +3942,7 @@ async fn drive_archiv_durchfuehren(
     let akte = lauf_dir.join(AKTE);
     let akte_da = tokio::fs::try_exists(&akte).await.unwrap_or(false);
     if mitschnitte.is_empty() && berichte.is_empty() && !akte_da {
-        return Ok(false);
+        return Ok(Archivstand::NichtsDa);
     }
     // Nur archivieren, wenn die Aufnahme abgeschlossen ist. Die Fertig-Marke
     // wird gesetzt, sobald der Recorder-Prozess beendet ist - ein noch laufender
@@ -4035,10 +4069,13 @@ async fn drive_archiv_durchfuehren(
     // und schreibt Teil 2 in denselben Ordner. Wuerde der Aufrufer danach die
     // Archiv-Marke trotzdem setzen, waere Teil 2 fuer das Nachholen unsichtbar
     // und verloere obendrein den Aufbewahrungsschutz.
-    let ordner_leer = mitschnitt_dateien_sammeln(&mit_dir)
-        .await
-        .is_some_and(|rest| rest.is_empty());
-    if ordner_leer {
+    let rest = mitschnitt_dateien_sammeln(&mit_dir).await;
+    // Nur der Dateibestand entscheidet. Ein Frische-Test auf den Ordner waere
+    // hier wertlos: die Loeschungen direkt darueber haben seinen Zeitstempel
+    // gerade selbst auf "jetzt" gesetzt, er gaelte also immer als frisch und
+    // kein Lauf wuerde je abgeschlossen.
+    let ordner_frei = matches!(&rest, Some(r) if r.is_empty());
+    if ordner_frei {
         let _ = tokio::fs::remove_dir_all(&mit_dir).await;
     }
     for bericht in &berichte {
@@ -4070,18 +4107,39 @@ async fn drive_archiv_durchfuehren(
     if !sauber {
         return Err("Upload lag oben, aber lokal blieb etwas liegen".to_string());
     }
-    if !ordner_leer {
+    if rest.is_none() {
+        tracing::warn!(
+            kanal,
+            lauf,
+            "Mitschnitt-Ordner nach dem Upload nicht lesbar - Lauf bleibt offen"
+        );
+        return Ok(Archivstand::Unklar);
+    }
+    if !ordner_frei {
         // Der Upload selbst war vollstaendig, deshalb kein Fehler - aber der
-        // Lauf ist nicht abgeschlossen. Kein `Ok(true)`, also keine
-        // Archiv-Marke: der naechste Sweep holt den neuen Teil nach.
+        // Lauf ist nicht abgeschlossen: keine Archiv-Marke, der naechste Sweep
+        // holt den neuen Teil nach.
         tracing::info!(
             kanal,
             lauf,
             "waehrend des Uploads ist eine neue Aufnahme entstanden - Lauf bleibt offen"
         );
-        return Ok(false);
+        return Ok(Archivstand::NeuerTeil);
     }
-    Ok(true)
+    // Letzter Blick unmittelbar vor der Rueckgabe: zwischen dem Aufraeumen oben
+    // und dem Setzen der Marke im Aufrufer liegen noch ein paar await-Punkte.
+    // Enger als ein zweiter Blick geht es ohne Sperre auf dem Dateisystem nicht.
+    if !matches!(mitschnitt_dateien_sammeln(&mit_dir).await, Some(r) if r.is_empty())
+        && tokio::fs::try_exists(&mit_dir).await.unwrap_or(false)
+    {
+        tracing::info!(
+            kanal,
+            lauf,
+            "neue Aufnahme kurz vor dem Abschluss entstanden - Lauf bleibt offen"
+        );
+        return Ok(Archivstand::NeuerTeil);
+    }
+    Ok(Archivstand::Archiviert)
 }
 
 /// Der Zwischenordner, in dem die kleinen Berichte fuer einen Rutsch
@@ -5997,7 +6055,11 @@ mod tests {
             "gdrive:Test",
         )
         .await;
-        assert_eq!(ergebnis, Ok(true), "belegter Upload muss durchgehen");
+        assert_eq!(
+            ergebnis,
+            Ok(Archivstand::Archiviert),
+            "belegter Upload muss durchgehen"
+        );
         assert!(
             !mitschnitt.exists(),
             "Original blieb nach dem Upload liegen"
@@ -6013,18 +6075,26 @@ mod tests {
         tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
             .await
             .unwrap();
+        let teil1 = dir.join(archiv::mitschnitt_name(1));
         let teil2 = dir.join(archiv::mitschnitt_name(2));
 
         // Der Kanal kommt waehrend des Uploads unter derselben Stream-ID
         // zurueck: das Fake-rclone legt dabei Teil 2 an. Wuerde der Lauf danach
         // als archiviert gelten, ginge Teil 2 nie hoch und verloere zusaetzlich
         // seinen Aufbewahrungsschutz.
+        //
+        // Der lsf-Beleg kommt aus `lsf_zeile_fuer`, nicht aus einer getippten
+        // Groesse: sonst scheiterte der Test an der Groessenpruefung, sobald
+        // sich der Testinhalt aendert, und behauptete dabei etwas ueber das
+        // Rennen.
+        let echt = fake_rclone(&wurzel, &lsf_zeile_fuer(&teil1));
         let bin = wurzel.join("fake-rclone-rennen");
         std::fs::write(
             &bin,
             format!(
-                "#!/bin/sh\n: > '{}'\nif [ \"$1\" = lsf ]; then printf 'mitschnitt-1.aac;3\\n'; fi\nexit 0\n",
-                teil2.display()
+                "#!/bin/sh\n: > '{}'\nexec '{}' \"$@\"\n",
+                teil2.display(),
+                echt.display()
             ),
         )
         .unwrap();
@@ -6046,10 +6116,78 @@ mod tests {
 
         assert_eq!(
             ergebnis,
-            Ok(false),
+            Ok(Archivstand::NeuerTeil),
             "ein waehrend des Uploads entstandener Teil darf den Lauf nicht schliessen"
         );
+        // Der Upload lief wirklich durch - sonst traegt der Rueckgabewert
+        // nichts und der Test haette auch unter dem alten Code gehalten.
+        assert!(
+            !teil1.exists(),
+            "Teil 1 wurde nicht hochgeladen und geraeumt"
+        );
         assert!(teil2.exists(), "Teil 2 wurde weggeraeumt");
+        assert!(dir.exists(), "der Mitschnitt-Ordner wurde weggeraeumt");
+
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn der_aufrufer_schliesst_einen_offenen_lauf_nicht_ab() {
+        // Zweite Haelfte desselben Fixes: in `nach_drive_archivieren` steht die
+        // loeschende Operation und das Setzen der Archiv-Marke. Der Test geht
+        // deshalb ueber den Aufrufer, nicht ueber den Kern - sonst laeuft er am
+        // eigentlichen Risiko vorbei.
+        let wurzel = test_ordner("archiv-aufrufer-offener-lauf");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "lauf1", true).await;
+        tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+        let teil1 = dir.join(archiv::mitschnitt_name(1));
+        let teil2 = dir.join(archiv::mitschnitt_name(2));
+
+        let echt = fake_rclone(&wurzel, &lsf_zeile_fuer(&teil1));
+        let bin = wurzel.join("fake-rclone-rennen-aufrufer");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n: > '{}'\nexec '{}' \"$@\"\n",
+                teil2.display(),
+                echt.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut rechte = std::fs::metadata(&bin).unwrap().permissions();
+            rechte.set_mode(0o700);
+            std::fs::set_permissions(&bin, rechte).unwrap();
+        }
+
+        nach_drive_archivieren_mit(
+            konfiguration.clone(),
+            "kanal".into(),
+            "lauf1".into(),
+            bin.to_string_lossy().into_owned(),
+            "gdrive:Test".into(),
+        )
+        .await;
+
+        assert!(
+            !teil1.exists(),
+            "Teil 1 wurde nicht hochgeladen und geraeumt"
+        );
+        assert!(teil2.exists(), "der Aufrufer hat Teil 2 weggeraeumt");
+        assert!(
+            dir.exists(),
+            "der Aufrufer hat den Mitschnitt-Ordner geraeumt"
+        );
+        assert!(
+            !lauf_ordner(&konfiguration, "kanal", "lauf1")
+                .join(ARCHIV_MARKE)
+                .exists(),
+            "der Aufrufer hat den offenen Lauf als archiviert markiert"
+        );
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 
