@@ -145,15 +145,16 @@ fn dispatch_error(provider: &str, error: tb_llm::LlmError) -> LlmError {
 /// Beide Anbieter unterscheiden sich nur noch in Name, Anwendungsfall und
 /// Preisschluesseln; der HTTP-Weg liegt in [`tb_llm::complete`].
 pub struct ExternalProvider {
+    /// Name der Bahn in den Einstellungen (`minimax`, `claude_haiku`). Welcher
+    /// Anbieter dahinter wirklich antwortet, entscheidet die zentrale Auswahl;
+    /// gespeichert und bepreist wird der antwortende Anbieter, nicht die Bahn.
     name: &'static str,
     use_case: &'static str,
     endpoint: tb_llm::LlmEndpoint,
     temperature: f64,
-    preis_eingang: (&'static str, f64),
-    preis_ausgang: (&'static str, f64),
 }
 
-/// Preisschluessel und Standardrate (USD je 1000 Tokens) einer Bahn:
+/// Preisschluessel und Standardrate (USD je 1000 Tokens) eines Anbieters:
 /// Umgebungsvariable fuer Eingang, Standard Eingang, Variable Ausgang,
 /// Standard Ausgang.
 type Preise = ((&'static str, f64), (&'static str, f64));
@@ -162,51 +163,51 @@ const MINIMAX_PREISE: Preise = (
     ("MINIMAX_PRICE_INPUT_PER_1K", 0.0006),
     ("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024),
 );
+/// DeepSeek ueber Fireworks; Listenpreis, per Env ueberschreibbar.
+const FIREWORKS_PREISE: Preise = (
+    ("FIREWORKS_PRICE_INPUT_PER_1K", 0.0009),
+    ("FIREWORKS_PRICE_OUTPUT_PER_1K", 0.0009),
+);
 const CLAUDE_HAIKU_PREISE: Preise = (
     ("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001),
     ("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005),
 );
 
+/// Preistabelle je antwortendem Anbieter. Die Bahn `minimax` landet ueber die
+/// zentrale Auswahl live meist auf Fireworks/DeepSeek; mit MiniMax-Raten
+/// gerechnet waere die Kostenschaetzung falsch.
+fn preise_fuer_anbieter(provider: &str) -> Preise {
+    match provider {
+        "minimax" => MINIMAX_PREISE,
+        "anthropic" => CLAUDE_HAIKU_PREISE,
+        _ => FIREWORKS_PREISE,
+    }
+}
+
 impl ExternalProvider {
-    /// MiniMax; ohne Schluessel `Unavailable`, damit die Kette weiterschaltet.
+    /// MiniMax-Bahn; ohne Schluessel `Unavailable`, damit die Kette weiterschaltet.
     pub fn minimax_from_env() -> Result<Self, LlmError> {
-        Self::from_env("minimax", USE_CASE_MINIMAX, MINIMAX_PREISE)
+        Self::from_env("minimax", USE_CASE_MINIMAX)
     }
 
-    /// Claude Haiku; ohne Schluessel `Unavailable`.
+    /// Claude-Haiku-Bahn; ohne Schluessel `Unavailable`.
     pub fn claude_haiku_from_env() -> Result<Self, LlmError> {
-        Self::from_env("claude_haiku", USE_CASE_CLAUDE, CLAUDE_HAIKU_PREISE)
+        Self::from_env("claude_haiku", USE_CASE_CLAUDE)
     }
 
-    fn from_env(
-        name: &'static str,
-        use_case: &'static str,
-        preise: Preise,
-    ) -> Result<Self, LlmError> {
+    fn from_env(name: &'static str, use_case: &'static str) -> Result<Self, LlmError> {
         let endpoint = tb_llm::endpoint_for(use_case);
         if endpoint.api_key.is_none() {
             return Err(LlmError::ProviderUnavailable(format!(
                 "kein Schluessel fuer {name}"
             )));
         }
-        Ok(Self::with_endpoint(name, use_case, endpoint, 0.4, preise))
-    }
-
-    fn with_endpoint(
-        name: &'static str,
-        use_case: &'static str,
-        endpoint: tb_llm::LlmEndpoint,
-        temperature: f64,
-        (preis_eingang, preis_ausgang): Preise,
-    ) -> Self {
-        Self {
+        Ok(Self {
             name,
             use_case,
             endpoint,
-            temperature,
-            preis_eingang,
-            preis_ausgang,
-        }
+            temperature: 0.4,
+        })
     }
 
     /// Ledger-Zweck dieses Aufrufs: Bahn plus tatsaechlich antwortender
@@ -219,9 +220,8 @@ impl ExternalProvider {
         format!("social-media-{}-{}", self.name, self.endpoint.provider)
     }
 
-    /// Expliziter Endpunkt fuer Tests, mit den produktiven Preisraten der
-    /// jeweiligen Bahn. Nicht `pub`: ein Produktionspfad soll die Raten nie
-    /// am `from_env` vorbei setzen koennen.
+    /// Expliziter Endpunkt fuer Tests. Nicht `pub`: produktiv kommt der
+    /// Endpunkt immer aus `from_env`.
     #[cfg(test)]
     pub(crate) fn for_test(
         name: &'static str,
@@ -229,11 +229,12 @@ impl ExternalProvider {
         endpoint: tb_llm::LlmEndpoint,
         temperature: f64,
     ) -> Self {
-        let preise = match name {
-            "claude_haiku" => CLAUDE_HAIKU_PREISE,
-            _ => MINIMAX_PREISE,
-        };
-        Self::with_endpoint(name, use_case, endpoint, temperature, preise)
+        Self {
+            name,
+            use_case,
+            endpoint,
+            temperature,
+        }
     }
 }
 
@@ -250,8 +251,8 @@ impl LlmProvider for ExternalProvider {
             .await?;
         parse_llm_payload(
             &text.content,
-            self.name,
-            &self.endpoint.model,
+            &text.provider,
+            &text.model,
             text.cost_usd_estimate,
         )
     }
@@ -283,15 +284,19 @@ impl LlmProvider for ExternalProvider {
                 self.name
             )));
         }
+        // Anbieter und Preis vom tatsaechlich antwortenden Endpunkt, nicht
+        // von der Bahn: so steht in `clip_enrichments.llm_provider` der echte
+        // Absender und die Kostenschaetzung passt zu ihm.
+        let (preis_eingang, preis_ausgang) = preise_fuer_anbieter(&response.provider);
         let cost = estimate_cost(
             response.prompt_tokens.unwrap_or(0),
             response.completion_tokens.unwrap_or(0),
-            env_rate(self.preis_eingang.0, self.preis_eingang.1),
-            env_rate(self.preis_ausgang.0, self.preis_ausgang.1),
+            env_rate(preis_eingang.0, preis_eingang.1),
+            env_rate(preis_ausgang.0, preis_ausgang.1),
         );
         Ok(LlmTextResponse {
             content: response.text,
-            provider: self.name.to_string(),
+            provider: response.provider,
             model: response.model,
             cost_usd_estimate: Some(cost),
         })
@@ -500,6 +505,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn minimax_bahn_auf_fireworks_nennt_fireworks_und_rechnet_fireworks_preis() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": inner_json()}}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 1000}
+            })))
+            .mount(&server).await;
+        // Bahn `minimax`, aber die zentrale Auswahl hat Fireworks/DeepSeek
+        // ergeben: llm_provider und Preis muessen Fireworks folgen.
+        let p = ExternalProvider::for_test(
+            "minimax",
+            USE_CASE_MINIMAX,
+            tb_llm::LlmEndpoint {
+                provider: "fireworks",
+                base_url: server.uri(),
+                model: "accounts/fireworks/models/deepseek-v4-flash".into(),
+                api_key: Some("k".into()),
+            },
+            0.4,
+        );
+        let resp = p.generate(&LlmRequest::default()).await.unwrap();
+        assert_eq!(resp.provider, "fireworks");
+        assert_eq!(resp.model, "accounts/fireworks/models/deepseek-v4-flash");
+        let kosten = resp.cost_usd_estimate.expect("Kostenschaetzung");
+        // 1000/1000 Tokens zu den Fireworks-Raten 0.0009 / 0.0009.
+        assert!((kosten - 0.0018).abs() < 1e-9, "kosten={kosten}");
+        assert!((kosten - 0.003).abs() > 1e-6, "darf nicht mit MiniMax-Raten rechnen");
+    }
+
+    #[tokio::test]
     async fn claude_generate_konkateniert_textblocks() {
         let server = MockServer::start().await;
         Mock::given(method("POST")).and(path("/messages"))
@@ -520,7 +556,8 @@ mod tests {
             0.4,
         );
         let resp = p.generate(&LlmRequest::default()).await.unwrap();
-        assert_eq!(resp.provider, "claude_haiku");
+        // Gespeichert wird der antwortende Anbieter, nicht der Bahn-Name.
+        assert_eq!(resp.provider, "anthropic");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
         // 100 Eingangs- und 50 Ausgangstokens zu den Haiku-Standardraten
         // 0.001 / 0.005 je 1000 Tokens.
