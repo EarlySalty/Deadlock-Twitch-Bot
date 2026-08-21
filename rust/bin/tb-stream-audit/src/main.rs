@@ -282,8 +282,13 @@ async fn zwischendateien_aufraeumen(ordner: &Path) {
         // Aufbewahrung - ein Absturz mitten im Upload liesse sie sonst
         // unbefristet liegen. Nur alte: ein Upload, der gerade laeuft, hat
         // seinen Ordner frisch angelegt.
+        // Ein `archiv-*`-Ordner darf weg, sobald kein Upload mehr an ihm haengt.
+        // Das steht in der Laufmarke des Laufs; nur wenn die frisch ist, laeuft
+        // gerade wirklich einer. Eine feste Wartezeit waere entweder zu kurz
+        // (raeumt unter einem laufenden Upload weg) oder zu lang (Volltext-
+        // Kopien liegen einen Tag ausserhalb jeder Aufbewahrung).
         let ist_zwischenordner = name.starts_with("eng-whisper-")
-            || (name.starts_with("archiv-") && zu_alt_sekunden(&pfad, 24 * 60 * 60).await);
+            || (name.starts_with("archiv-") && !archivlauf_haengt_dran(ordner, name).await);
         if ist_zwischenordner && tokio::fs::remove_dir_all(&pfad).await.is_ok() {
             geloescht += 1;
         }
@@ -291,6 +296,30 @@ async fn zwischendateien_aufraeumen(ordner: &Path) {
     if geloescht > 0 {
         tracing::info!(geloescht, "Zwischendateien eines frueheren Laufs entfernt");
     }
+}
+
+/// Ob zu einem Sammelordner `archiv-<kanal>-<lauf>` noch ein laufender Upload
+/// gehoert. Grundlage ist die frische Laufmarke im Lauf-Ordner; der Herzschlag
+/// des Archivs frischt sie waehrend des Uploads auf.
+async fn archivlauf_haengt_dran(zwischenordner: &Path, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("archiv-") else {
+        return false;
+    };
+    // `<kanal>-<lauf>`: der Lauf kann selbst Bindestriche tragen, der Kanal
+    // nicht - also am ersten trennen.
+    let Some((kanal, lauf)) = rest.split_once('-') else {
+        return false;
+    };
+    // `zwischendateien/` liegt direkt unter der Ausgabe, `aufnahmen/` daneben.
+    let Some(ausgabe) = zwischenordner.parent() else {
+        return false;
+    };
+    let marke = ausgabe
+        .join("aufnahmen")
+        .join(kanal)
+        .join(lauf)
+        .join(ARCHIV_LAEUFT);
+    marke_frisch(&marke, ARCHIV_LAEUFT_FRISCH_SEKUNDEN).await
 }
 
 /// Wartet auf SIGTERM.
@@ -1249,7 +1278,8 @@ nicht erkannt."
             tracing::warn!(
                 belegt,
                 grenze = plan::MAX_AUFNAHME_BYTES,
-                "Neue Aufnahmen pausiert - Platte voll"
+                "Neue Aufnahmen pausiert - Platte voll. Betrifft auch den durchgehenden \
+Ton-Mitschnitt: fuer eine Sendung, die jetzt beginnt, startet keiner"
             );
             if !platte_gemeldet {
                 let text = format!(
@@ -1569,7 +1599,6 @@ Versuch fuer diesen Lauf"
                     tracing::warn!("Platz knapp - kein neuer Ton-Mitschnitt gestartet");
                     platz_knapp_gemeldet = true;
                 }
-
             }
             // Fehlerzaehler von Laeufen wegraeumen, die nicht mehr live sind -
             // sonst waechst die Tabelle ueber die Laufzeit des Dienstes.
@@ -3825,8 +3854,10 @@ async fn drive_archiv_durchfuehren(
     // frueher abgebrochenen Anlauf als Beleg fuer einen komplett gescheiterten
     // Lauf durchgehen lassen - und danach wird lokal geloescht.
     let liste = befehl_ausgabe(rclone, &archiv::rclone_lsf_args(&ordner)).await?;
-    let oben: std::collections::HashSet<&str> =
-        liste.lines().map(|z| z.trim().trim_end_matches('/')).collect();
+    let oben: std::collections::HashSet<&str> = liste
+        .lines()
+        .map(|z| z.trim().trim_end_matches('/'))
+        .collect();
     let erwartet: Vec<String> = mitschnitte
         .iter()
         .chain(berichte.iter())
@@ -3983,9 +4014,7 @@ async fn bericht_dateien_sammeln(
             Ok(Some(eintrag)) => {
                 let name = eintrag.file_name().to_string_lossy().into_owned();
                 if bericht_gehoert_zu(&name, kanal, lauf)
-                    && (name.ends_with(".json")
-                        || name.ends_with(".md")
-                        || name.ends_with(".txt"))
+                    && (name.ends_with(".json") || name.ends_with(".md") || name.ends_with(".txt"))
                 {
                     raus.push(eintrag.path());
                 }
@@ -4022,10 +4051,26 @@ fn bericht_gehoert_zu(dateiname: &str, kanal: &str, lauf: &str) -> bool {
 /// Es wird laut geloescht. Eine Aufnahme, die die Frist erreicht, ist ein
 /// gescheiterter Upload, kein Normalfall.
 async fn alte_mitschnitte_loeschen(konfiguration: &Konfiguration) {
-    let tage = konfiguration.aufbewahrung_tage;
-    if tage == 0 {
+    if konfiguration.aufbewahrung_tage == 0 {
+        // `0` heisst "unbegrenzt aufbewahren". Fuer 1:1-Tonaufnahmen fremder
+        // Streams heisst das aber auch: kein Ablauf, keine Rueckstau-Meldung,
+        // unbeaufsichtigtes Sammeln auf einer geteilten Platte. Das soll nicht
+        // schweigend passieren.
+        tracing::warn!(
+            "Aufbewahrung ist abgeschaltet - Ton-Mitschnitte laufen nie ab und werden bei \
+haengendem Upload auch nicht gemeldet"
+        );
         return;
     }
+    // Dieselbe Frist wie fuer die Berichte eines ausstehenden Uploads, und das
+    // ist zwingend: die Mitschnitt-Datei ist der **Anker** dieser Schonfrist
+    // (`pending_archiv_laeufe` erkennt einen offenen Lauf nur an ihr). Wuerde
+    // sie frueher geloescht, faende der naechste Takt keinen Anker mehr, die
+    // Berichte fielen sofort weg, und aus vierzehn Tagen Gnadenfrist wuerde ein
+    // einziger Aufraeumtakt.
+    let tage = konfiguration
+        .aufbewahrung_tage
+        .saturating_add(ARCHIV_RUECKSTAU_GNADE_TAGE);
     let wurzel = konfiguration.ausgabe.join("mitschnitte");
     let Ok(mut kanaele) = tokio::fs::read_dir(&wurzel).await else {
         return;
@@ -4142,6 +4187,9 @@ const ARCHIV_RUECKSTAU_WARNUNG_TAGE: u64 = 14;
 /// Marke im Mitschnitt-Ordner: der Rueckstau ist gemeldet. Verhindert eine
 /// Warnung je Aufraeumtakt.
 const RUECKSTAU_GEMELDET: &str = "rueckstau_gemeldet.json";
+/// Dienstweite Marke: der Rueckstau ist gemeldet. Eine DM je Tag fuer alle
+/// betroffenen Laeufe zusammen.
+const ARCHIVSTAU_GEMELDET: &str = "archivstau_gemeldet.json";
 const RUECKSTAU_MELDE_TAKT_SEKUNDEN: u64 = 24 * 60 * 60;
 
 /// Laeufe (Kanal, Lauf) mit einer echten, noch nicht hochgeladenen Aufnahme -
@@ -4156,10 +4204,23 @@ const RUECKSTAU_MELDE_TAKT_SEKUNDEN: u64 = 24 * 60 * 60;
 async fn pending_archiv_laeufe(
     konfiguration: &Konfiguration,
 ) -> std::collections::HashSet<(String, String)> {
+    let (raus, stau) = pending_archiv_laeufe_mit_stau(konfiguration).await;
+    if stau > 0 {
+        archivstau_melden(konfiguration, stau).await;
+    }
+    raus
+}
+
+/// Wie [`pending_archiv_laeufe`], gibt zusaetzlich zurueck, wie viele Laeufe
+/// laenger als [`ARCHIV_RUECKSTAU_WARNUNG_TAGE`] auf ihren Upload warten.
+async fn pending_archiv_laeufe_mit_stau(
+    konfiguration: &Konfiguration,
+) -> (std::collections::HashSet<(String, String)>, usize) {
     let mut raus = std::collections::HashSet::new();
+    let mut stau = 0usize;
     let wurzel = konfiguration.ausgabe.join("mitschnitte");
     let Ok(mut kanaele) = tokio::fs::read_dir(&wurzel).await else {
-        return raus;
+        return (raus, stau);
     };
     while let Ok(Some(kanal_e)) = kanaele.next_entry().await {
         if !kanal_e
@@ -4221,29 +4282,13 @@ async fn pending_archiv_laeufe(
                         tage = ARCHIV_RUECKSTAU_WARNUNG_TAGE,
                         "Drive-Upload haengt seit Wochen - rclone pruefen"
                     );
-                    // Und eskalieren, nicht nur ins Journal schreiben. Jeder
-                    // andere Ausfall dieses Dienstes meldet sich per DM. Ohne
-                    // sie liefen hier Wochen ins Land, an deren Ende die
-                    // Aufnahmen ungesichert geloescht werden und niemand etwas
-                    // gemerkt hat.
-                    let text = format!(
-                        "Coaching-Audit: Der Upload nach Drive haengt seit ueber {} Tagen \
-(Kanal {kanal}). Bis dahin liegen die Aufnahmen lokal; nach Ablauf der \
-Aufbewahrung werden sie ungesichert geloescht. Bitte rclone pruefen.",
-                        ARCHIV_RUECKSTAU_WARNUNG_TAGE
-                    );
-                    let schluessel = format!("{kanal}-{lauf}-archivstau");
-                    if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
-                        tracing::error!(fehler, kanal, "Archivstau nicht meldbar");
-                        hinweis_aufheben(
-                            konfiguration,
-                            &format!("archivstau-{kanal}-{lauf}"),
-                            &schluessel,
-                            &text,
-                        )
-                        .await;
-                    }
                     let _ = nur_fuer_mich(&gemeldet, b"{}").await;
+                    // Gemeldet wird nicht hier, sondern gesammelt: eine DM je
+                    // Lauf waere bei drei taeglich sendenden Kanaelen und zwei
+                    // Wochen Rueckstau eine Mailbombe, und ein ueber die ganze
+                    // Lebensdauer konstanter Schluessel liesse den Broker
+                    // stattdessen alles nach der ersten Nachricht schlucken.
+                    stau += 1;
                 }
             }
             // Deckel: irgendwann muss die Aufbewahrung wieder ziehen, sonst
@@ -4263,7 +4308,44 @@ Aufbewahrung werden sie ungesichert geloescht. Bitte rclone pruefen.",
             raus.insert((kanal.clone(), lauf));
         }
     }
-    raus
+    (raus, stau)
+}
+
+/// Eine DM je Tag fuer den gesamten Rueckstau, nicht je Lauf.
+///
+/// Der Schluessel traegt Startkennung und laufende Vorfallnummer wie jeder
+/// andere Alarm dieses Dienstes: ein ueber die Lebensdauer konstanter
+/// Schluessel liesse den Broker nach der ersten Nachricht alles schlucken -
+/// ausgerechnet bei einem Ausfall, der ueber Wochen eskaliert.
+async fn archivstau_melden(konfiguration: &Konfiguration, laeufe: usize) {
+    let marke = konfiguration.ausgabe.join(ARCHIVSTAU_GEMELDET);
+    if marke_frisch(&marke, RUECKSTAU_MELDE_TAKT_SEKUNDEN).await {
+        return;
+    }
+    let text = format!(
+        "Coaching-Audit: Der Upload nach Google Drive haengt. {laeufe} Stream(s) warten seit \
+ueber {} Tagen. Solange liegen die Tonaufnahmen lokal; nach Ablauf der Aufbewahrung werden \
+sie ungesichert geloescht. Bitte rclone pruefen.",
+        ARCHIV_RUECKSTAU_WARNUNG_TAGE
+    );
+    let schluessel = format!(
+        "{}-archivstau-{}",
+        start_kennung(),
+        naechste_vorfall_nummer()
+    );
+    match dm_rohtext(&text, &schluessel).await {
+        // Erst nach der Zustellung merken, sonst faellt die Meldung bei einer
+        // Broker-Stoerung ganz aus.
+        Ok(()) => {
+            if let Err(fehler) = nur_fuer_mich(&marke, b"{}").await {
+                tracing::warn!(fehler, "Archivstau-Marke nicht schreibbar");
+            }
+        }
+        Err(fehler) => {
+            tracing::error!(fehler, laeufe, "Archivstau nicht meldbar");
+            hinweis_aufheben(konfiguration, "archivstau", &schluessel, &text).await;
+        }
+    }
 }
 
 /// Holt Streams nach, deren Archiv noch aussteht. Grundlage ist der
@@ -4347,9 +4429,7 @@ async fn offene_archive_nachholen(
             let ende_da = tokio::fs::try_exists(lauf_dir.join(ENDE_MARKE))
                 .await
                 .unwrap_or(false);
-            if !ende_da
-                && !zu_alt_sekunden(&lauf_e.path(), ARCHIV_ENDE_GEDULD_SEKUNDEN).await
-            {
+            if !ende_da && !zu_alt_sekunden(&lauf_e.path(), ARCHIV_ENDE_GEDULD_SEKUNDEN).await {
                 continue;
             }
             faellig.push((kanal.clone(), lauf));
@@ -4725,7 +4805,14 @@ async fn mitschnitt_starten(
     kanal: &str,
     lauf: &str,
 ) -> Option<Recorder> {
-    mitschnitt_starten_mit(konfiguration, kanal, lauf, &streamlink_pfad(), &ffmpeg_pfad()).await
+    mitschnitt_starten_mit(
+        konfiguration,
+        kanal,
+        lauf,
+        &streamlink_pfad(),
+        &ffmpeg_pfad(),
+    )
+    .await
 }
 
 /// Pfad zum streamlink-Binaerprogramm, wie im Rest des Dienstes.
@@ -4774,10 +4861,8 @@ async fn mitschnitt_starten_mit(
     // Bliebe die Marke stehen, ginge Teil 2 nie hoch, die Berichte danach
     // verloeren ihren Aufbewahrungsschutz, und die Rueckstau-Warnung schickte
     // den Betreiber zu einem rclone, an dem nichts kaputt ist.
-    let _ = tokio::fs::remove_file(
-        lauf_ordner(konfiguration, kanal, lauf).join(ARCHIV_MARKE),
-    )
-    .await;
+    let _ =
+        tokio::fs::remove_file(lauf_ordner(konfiguration, kanal, lauf).join(ARCHIV_MARKE)).await;
     let ziel = dir.join(archiv::mitschnitt_name(chrono::Utc::now().timestamp()));
     let url = format!("https://twitch.tv/{kanal}");
     let fehlerzeilen: Arc<std::sync::Mutex<Vec<String>>> =
@@ -5386,9 +5471,8 @@ mod tests {
     async fn die_rueckstau_ausnahme_wirkt_und_endet() {
         let wurzel = test_ordner("pending-rueckstau-deckel");
         let konfiguration = test_konfiguration(&wurzel);
-        let vor_tagen = |tage: u64| {
-            std::time::SystemTime::now() - Duration::from_secs(tage * 24 * 60 * 60)
-        };
+        let vor_tagen =
+            |tage: u64| std::time::SystemTime::now() - Duration::from_secs(tage * 24 * 60 * 60);
         let frist = konfiguration.aufbewahrung_tage;
 
         // Im Fenster: die Aufbewahrungsfrist ist abgelaufen, der Aufschlag noch
@@ -5636,7 +5720,10 @@ mod tests {
         )
         .await;
         assert_eq!(ergebnis, Ok(true), "belegter Upload muss durchgehen");
-        assert!(!mitschnitt.exists(), "Original blieb nach dem Upload liegen");
+        assert!(
+            !mitschnitt.exists(),
+            "Original blieb nach dem Upload liegen"
+        );
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 
@@ -5649,8 +5736,16 @@ mod tests {
             .await
             .unwrap();
         let datei = dir.join(archiv::mitschnitt_name(1));
+        // Die Frist ist Aufbewahrung plus Gnadenfrist: die Aufnahme ist der
+        // Anker, an dem der Dienst einen offenen Upload erkennt, und darf
+        // deshalb nicht vor den Berichten verschwinden.
         let lange_her = std::time::SystemTime::now()
-            - Duration::from_secs((konfiguration.aufbewahrung_tage + 1) * 24 * 60 * 60);
+            - Duration::from_secs(
+                (konfiguration.aufbewahrung_tage + ARCHIV_RUECKSTAU_GNADE_TAGE + 1)
+                    * 24
+                    * 60
+                    * 60,
+            );
         mtime_setzen(&datei, lange_her);
 
         // Frischer Lauf desselben Kanals: bleibt unangetastet.
@@ -5693,7 +5788,12 @@ mod tests {
         let datei = dir.join(archiv::mitschnitt_name(1));
         assert!(!dir.join(AUFNAHME_FERTIG).exists());
         let lange_her = std::time::SystemTime::now()
-            - Duration::from_secs((konfiguration.aufbewahrung_tage + 1) * 24 * 60 * 60);
+            - Duration::from_secs(
+                (konfiguration.aufbewahrung_tage + ARCHIV_RUECKSTAU_GNADE_TAGE + 1)
+                    * 24
+                    * 60
+                    * 60,
+            );
         mtime_setzen(&datei, lange_her);
 
         alte_mitschnitte_loeschen(&konfiguration).await;

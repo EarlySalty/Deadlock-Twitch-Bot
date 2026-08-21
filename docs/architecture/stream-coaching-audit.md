@@ -93,6 +93,10 @@ Audit, das darauf baut, faellt still aus.
   rclone in den eigenen Google-Drive-Ordner (`STREAM_AUDIT_DRIVE_ARCHIVE`,
   Standard an) und wird lokal erst nach belegtem Upload geloescht. Ein Kanal in
   `STREAM_AUDIT_DRIVE_EXCLUDE` bekommt gar keinen Recorder.
+- Mit hoch gehen die Berichte des Laufs (`.json`, `.md`) und, wenn
+  `STREAM_AUDIT_KEEP_TRANSCRIPT=1` gesetzt ist, das `.txt` mit dem
+  ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der komplette
+  Vorgang, nicht nur der Ton.
 - Geht der Upload nie durch, faellt der Mitschnitt nach
   `STREAM_AUDIT_RETENTION_DAYS` derselben Aufbewahrung zu wie die Berichte.
 - An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die

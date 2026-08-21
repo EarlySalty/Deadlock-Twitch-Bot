@@ -67,7 +67,9 @@ im Deadlock-Docs-Korpus.
    Aufraeumtakt versucht es erneut; noch nicht hochgeladene Aufnahmen werden nie
    geloescht. Faellt der freie Platz unter `STREAM_AUDIT_DRIVE_MIN_FREE_GB`,
    startet **kein neuer** Recorder mehr (bestehende laufen weiter), damit die
-   geteilte Platte nicht volllaeuft. Laesst sich der freie Platz nicht messen
+   geteilte Platte nicht volllaeuft. Dieselbe Wirkung hat die Plattengrenze des
+   Auswertungs-Baums: ist sie erreicht, startet fuer diese Sendung auch kein
+   Ton-Recorder. Laesst sich der freie Platz nicht messen
    (kein `df`), wird trotzdem aufgenommen und das im Protokoll vermerkt: der Ton
    ist winzig, und ein df-Aussetzer soll die Aufnahme nicht abwuergen. Archiviert werden nur Streams **mit**
    Aufnahme; faellt der Recorder ganz aus, bleiben allein die lokalen Berichte
@@ -94,9 +96,13 @@ im Deadlock-Docs-Korpus.
    und Tag. Sonst waere die
    Aufbewahrungsfrist bei kaputtem rclone still ausser Kraft, und Berichte mit
    vollem Wortlaut laegen unbegrenzt da. Dasselbe gilt fuer die
-   1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie nach
-   `STREAM_AUDIT_RETENTION_DAYS` lokal geloescht, mit deutlicher Warnung. Ohne
-   das ueberlebte ausgerechnet das sensibelste Artefakt jede Frist.
+   1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie zum selben Zeitpunkt
+   geloescht wie die Berichte, also nach `STREAM_AUDIT_RETENTION_DAYS` plus den
+   14 Tagen Aufschlag. Frueher geht nicht: die Aufnahme ist der Anker, an dem
+   der Dienst einen offenen Upload ueberhaupt erkennt. Ab 14 Tagen Rueckstau
+   gibt es zusaetzlich eine DM, hoechstens eine am Tag fuer alle betroffenen
+   Streams zusammen. Ohne das ueberlebte ausgerechnet das sensibelste Artefakt
+   jede Frist.
 10. **Wann der Upload laeuft.** Ausschliesslich im stuendlichen Aufraeumtakt,
    und nur wenn die Abschluss-DM des Laufs raus ist. Bleibt sie aus (etwa nach
    einem Dienst-Neustart mitten im Stream), wartet der Takt sechs Stunden und

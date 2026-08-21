@@ -77,10 +77,13 @@ keine Sanktionen und postet nichts öffentlich.
   Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
   wurde ausdrücklich erlaubt.
 - Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt.
-  Nach dem Stream wandert sie in unseren eigenen Speicher, damit später jemand
+  Nach dem Stream wandert sie in unser Google Drive, damit später jemand
   nachhören kann. Das passiert nicht sofort, sondern beim nächsten
-  Aufräumdurchgang, meist innerhalb weniger Stunden. Wer das für seinen Kanal
-  nicht will, sagt Bescheid: dann wird diese Aufnahme gar nicht erst gemacht.
+  Aufräumdurchgang, meist innerhalb weniger Stunden.
+- Zusammen mit der Tonaufnahme gehen auch die Protokolle des Streams dorthin.
+  Ist das Mitschreiben des Gesagten eingeschaltet, ist der vollständige
+  Wortlaut dabei, ungekürzt und ohne Schwärzung. Wer das für seinen Kanal nicht
+  will, sagt Bescheid: dann wird weder aufgenommen noch etwas hochgeladen.
 - Kommt die Aufnahme nicht in den Speicher, wird sie nach derselben Frist
   gelöscht wie alles andere. Liegen bleibt sie nicht.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung

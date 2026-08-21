@@ -55,8 +55,7 @@ pub const MIN_FREE_STANDARD_GB: u64 = 20;
 /// `200G` oder `100.5` schreibt, wollte die Untergrenze anheben und bekaeme
 /// sonst wortlos die 20 GB der Vorgabe.
 pub fn min_frei_bytes() -> u64 {
-    gb_aus_wort(std::env::var(MIN_FREE_ENV).ok().as_deref())
-        .saturating_mul(1024 * 1024 * 1024)
+    gb_aus_wort(std::env::var(MIN_FREE_ENV).ok().as_deref()).saturating_mul(1024 * 1024 * 1024)
 }
 
 /// Reine Wortlogik hinter [`min_frei_bytes`], ohne Umgebungszugriff.
@@ -97,8 +96,7 @@ pub fn archiv_aktiv() -> bool {
 /// Ob fuer diesen Kanal aufgenommen und archiviert wird. Prueft den globalen
 /// Schalter und die kanalweise Ausnahmeliste.
 pub fn archiv_aktiv_fuer(kanal: &str) -> bool {
-    archiv_aktiv()
-        && !kanal_ausgenommen(kanal, std::env::var(AUSNAHME_ENV).ok().as_deref())
+    archiv_aktiv() && !kanal_ausgenommen(kanal, std::env::var(AUSNAHME_ENV).ok().as_deref())
 }
 
 /// Reine Wortlogik hinter [`archiv_aktiv_fuer`], ohne Umgebungszugriff.
