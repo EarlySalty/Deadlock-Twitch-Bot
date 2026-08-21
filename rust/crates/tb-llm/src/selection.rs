@@ -10,7 +10,7 @@
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
 //!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`. Nur so lässt sich ein
 //!   Anthropic-Fall auf einen anderen Anbieter legen.
-//! - `TB_LLM_MODEL_<USE_CASE>` — überschreibt das Modell eines Anwendungsfalls
+//! - `TB_LLM_MODEL_<USE_CASE>`: überschreibt das Modell eines Anwendungsfalls
 //!   beim gewählten Anbieter; das Ausweichglied einer Kette behält sein
 //!   eigenes Standardmodell.
 //!
