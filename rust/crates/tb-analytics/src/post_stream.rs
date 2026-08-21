@@ -2447,6 +2447,10 @@ mod tests {
         assert_eq!(digest["representative_examples"][0]["author"], "a");
     }
 
+    // Die Env-Werte muessen bis nach dem HTTP-Call exklusiv bleiben; sonst
+    // koennen parallele Tests den ausgewaehlten Endpunkt waehrend des Calls
+    // aendern.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn call_ai_minimax_liefert_content() {
         use wiremock::matchers::{method, path};
@@ -2491,6 +2495,10 @@ mod tests {
         assert!(post_stream_reports_enabled_value(Some("on")));
     }
 
+    // Die Env-Werte muessen bis nach dem HTTP-Call exklusiv bleiben; sonst
+    // koennen parallele Tests den ausgewaehlten Endpunkt waehrend des Calls
+    // aendern.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn call_ai_opus_setzt_kopfzeilen_und_liefert_content() {
         use wiremock::matchers::{header, method, path};
@@ -2518,6 +2526,10 @@ mod tests {
         clear_provider_env();
     }
 
+    // Die Env-Werte muessen bis nach dem HTTP-Call exklusiv bleiben; sonst
+    // koennen parallele Tests den ausgewaehlten Endpunkt waehrend des Calls
+    // aendern.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn call_ai_fehlerbody_landet_in_der_meldung() {
         use wiremock::matchers::{method, path};
