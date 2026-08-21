@@ -1638,7 +1638,9 @@ impl SpamAiReviewer {
         }
 
         // Die Kette arbeitet der gemeinsame Eingang ab; hier bleibt nur die
-        // Fachauswertung des Urteils.
+        // Fachauswertung des Urteils. `providers` dient oben nur der
+        // Vorabpruefung, ob ueberhaupt ein Schluessel da ist.
+        drop(providers);
         let (last_error, last_verdict) = match call_judge(None, true, &content).await {
             Ok(review) => {
                 let (learned, rejected_pattern, save_failed) =
@@ -1669,20 +1671,16 @@ impl SpamAiReviewer {
                     .record_and_return(event, outcome, verdict, confidence, persisted_reason)
                     .await;
             }
-            Err(error) => {
-                let (verdict, detail) = match error {
+            Err(failure) => {
+                let modell = failure.model;
+                let (verdict, detail) = match failure.error {
                     JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
                     JudgeCallError::Provider(detail) => (SpamReviewVerdict::ProviderError, detail),
                     JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
                 };
-                // Der Eingang gibt den Fehler des letzten Kettenglieds zurueck;
-                // dessen Modell gehoert in die Meldung, sonst steht im Bericht
-                // ein Fehler ohne Absender.
-                let modell = providers
-                    .last()
-                    .map(|endpoint| endpoint.model.as_str())
-                    .unwrap_or("unbekannt");
-                warn!(model = modell, fehler = %detail, "Judge-Call fehlgeschlagen");
+                // Der Eingang hat pro Kettenglied schon gewarnt (mit
+                // Anbieter-Body); hier nur noch der Spur halber.
+                debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
                 (format!("{modell}: {detail}"), verdict)
             }
         };
@@ -1739,10 +1737,20 @@ struct AiReview {
 #[derive(Debug)]
 enum JudgeCallError {
     Timeout(String),
+    /// Nur `HTTP <status>` oder ein Transportfehler, nie der Anbieter-Body:
+    /// das Detail landet in DB und Alert, der Body gehoert ins Log.
     Provider(String),
     /// Antwort kam an, trug aber kein verwertbares Urteil. Eigene Klasse, weil
     /// der Bericht "kaputt" und "nicht verwertbar" unterscheiden muss.
     Parse(String),
+}
+
+/// Fehler samt Modell des letzten Versuchs, vom Eingang geliefert statt aus
+/// der Kette geraten.
+#[derive(Debug)]
+struct JudgeFailure {
+    model: String,
+    error: JudgeCallError,
 }
 
 /// Persistiert das Lern-Ergebnis eines Judge-Urteils.
@@ -1940,7 +1948,7 @@ async fn call_judge(
     endpoint: Option<&tb_llm::LlmEndpoint>,
     record_usage: bool,
     content: &str,
-) -> Result<AiReview, JudgeCallError> {
+) -> Result<AiReview, JudgeFailure> {
     let truncated: String = content.chars().take(500).collect();
     let mut request = tb_llm::Request::simple(
         SPAM_REVIEW_SYSTEM_PROMPT,
@@ -1962,18 +1970,28 @@ async fn call_judge(
         request.no_ledger()
     };
 
-    let response = tb_llm::complete(JUDGE_USE_CASE, request)
+    let response = tb_llm::complete_detailed(JUDGE_USE_CASE, request)
         .await
-        .map_err(|error| match error {
-            tb_llm::LlmError::Timeout(detail) => JudgeCallError::Timeout(detail),
-            tb_llm::LlmError::Unparsable(detail) => JudgeCallError::Parse(detail),
-            other => JudgeCallError::Provider(other.to_string()),
+        .map_err(|failure| JudgeFailure {
+            model: failure.model,
+            error: match failure.error {
+                tb_llm::LlmError::Timeout(detail) => JudgeCallError::Timeout(detail),
+                tb_llm::LlmError::Unparsable(detail) => JudgeCallError::Parse(detail),
+                // Der Body steht schon in der Warnung des Eingangs; in DB und
+                // Alert geht nur der Status.
+                tb_llm::LlmError::Http { status, .. } => {
+                    JudgeCallError::Provider(format!("HTTP {status}"))
+                }
+                other => JudgeCallError::Provider(other.to_string()),
+            },
         })?;
 
     // Das Praedikat oben hat schon geprueft; die zweite Pruefung haelt den
     // Rueckgabetyp ehrlich, statt hier zu entpacken.
-    extract_verdict(&response.text)
-        .ok_or_else(|| JudgeCallError::Parse(format!("{}: kein parsebares JSON", response.model)))
+    extract_verdict(&response.text).ok_or_else(|| JudgeFailure {
+        model: response.model,
+        error: JudgeCallError::Parse("kein parsebares JSON".to_string()),
+    })
 }
 
 /// Extrahiert das Urteil aus der Modellantwort: Reasoning-Modelle schreiben

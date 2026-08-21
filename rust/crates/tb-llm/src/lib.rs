@@ -49,7 +49,7 @@ pub use model_resolver::{
     invalidate_and_refresh, model_cache_pool, refresh_fireworks, spawn_refresh_loop,
 };
 pub use hub::{
-    complete, extract_anthropic_text, strip_think, Accept, Ledger, LlmError, Message, Request,
-    Response,
+    complete, complete_detailed, extract_anthropic_text, strip_think, Accept, Ledger, LlmError,
+    LlmFailure, Message, Request, Response,
 };
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

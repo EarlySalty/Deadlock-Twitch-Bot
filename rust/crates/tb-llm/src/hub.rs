@@ -239,12 +239,40 @@ impl std::fmt::Display for LlmError {
 
 impl std::error::Error for LlmError {}
 
+/// Fehler samt Absender: welcher Anbieter und welches Modell zuletzt
+/// geantwortet (oder nicht geantwortet) hat. Der Aufrufer muss den Absender
+/// so nicht aus der Kette raten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmFailure {
+    pub provider: String,
+    pub model: String,
+    pub error: LlmError,
+}
+
+impl std::fmt::Display for LlmFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}): {}", self.provider, self.model, self.error)
+    }
+}
+
+impl std::error::Error for LlmFailure {}
+
 /// Fuehrt einen Aufruf fuer einen Anwendungsfall aus.
 ///
 /// Ohne `failover` zaehlt nur der gewaehlte Anbieter. Mit `failover` wird die
 /// Kette aus [`endpoint_chain`] abgearbeitet, bis einer eine brauchbare Antwort
 /// liefert; der Fehler des letzten Versuchs kommt zurueck.
 pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmError> {
+    complete_detailed(use_case, request)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// Wie [`complete`], liefert im Fehlerfall aber auch Anbieter und Modell des
+/// letzten Versuchs mit. Jeder fehlgeschlagene Versuch wird hier einmal mit
+/// `warn!` geloggt (inklusive Anbieter-Body); Aufrufer sollen nicht erneut
+/// warnen, sondern hoechstens auf `debug!` ergaenzen.
+pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
     let chain: Vec<LlmEndpoint> = match &request.endpoint {
         Some(endpoint) => vec![endpoint.clone()],
         None if request.failover => endpoint_chain(use_case),
@@ -258,9 +286,11 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
         }
     };
     if chain.is_empty() {
-        return Err(LlmError::Unavailable(format!(
-            "kein Schluessel fuer {use_case}"
-        )));
+        return Err(LlmFailure {
+            provider: "keiner".to_string(),
+            model: String::new(),
+            error: LlmError::Unavailable(format!("kein Schluessel fuer {use_case}")),
+        });
     }
 
     let purpose = match &request.ledger {
@@ -269,7 +299,7 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
         None => Some(use_case.to_string()),
     };
 
-    let mut last = LlmError::Unavailable(format!("kein Schluessel fuer {use_case}"));
+    let mut last: Option<LlmFailure> = None;
     for endpoint in &chain {
         match call_endpoint(endpoint, &request, purpose.as_deref()).await {
             Ok(response) => return Ok(response),
@@ -282,11 +312,15 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
                     fehler = %error,
                     "LLM-Aufruf fehlgeschlagen"
                 );
-                last = error;
+                last = Some(LlmFailure {
+                    provider: endpoint.provider.to_string(),
+                    model: endpoint.model.clone(),
+                    error,
+                });
             }
         }
     }
-    Err(last)
+    Err(last.expect("Kette ist nicht leer, also gab es mindestens einen Versuch"))
 }
 
 /// Ein Anbieter, inklusive Wiederholung bei 429.
@@ -314,18 +348,15 @@ async fn call_endpoint(
         };
         match outcome {
             Ok(payload) => break (payload, started.elapsed().as_millis() as i64),
-            Err(RawError::TooManyRequests { retry_after }) if versuch < request.retry_on_429 => {
+            Err(RawError::TooManyRequests { retry_after, .. }) if versuch < request.retry_on_429 => {
                 versuch += 1;
                 let wartezeit = retry_after
                     .unwrap_or(1u64 << (versuch - 1))
                     .min(MAX_RETRY_AFTER_SECS);
                 tokio::time::sleep(Duration::from_secs(wartezeit)).await;
             }
-            Err(RawError::TooManyRequests { .. }) => {
-                return Err(LlmError::Http {
-                    status: 429,
-                    body: String::new(),
-                })
+            Err(RawError::TooManyRequests { body, .. }) => {
+                return Err(LlmError::Http { status: 429, body })
             }
             Err(RawError::Fehler(error)) => return Err(error),
         }
@@ -371,10 +402,9 @@ async fn call_endpoint(
 
     if let Some(accept) = &request.accept {
         if !accept(&text) {
-            return Err(LlmError::Unparsable(format!(
-                "{} lieferte keine verwertbare Antwort",
-                endpoint.model
-            )));
+            return Err(LlmError::Unparsable(
+                "keine verwertbare Antwort".to_string(),
+            ));
         }
     }
 
@@ -391,7 +421,9 @@ async fn call_endpoint(
 /// Transportfehler mit gesondertem 429-Fall, damit die Wiederholung oben
 /// entscheiden kann.
 enum RawError {
-    TooManyRequests { retry_after: Option<u64> },
+    /// Der Body kommt mit, damit er bei erschoepften Wiederholungen im
+    /// Fehler steht wie bei jedem anderen 4xx.
+    TooManyRequests { retry_after: Option<u64>, body: String },
     Fehler(LlmError),
 }
 
@@ -485,19 +517,29 @@ async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok());
-        return Err(RawError::TooManyRequests { retry_after });
+        let body = response.text().await.unwrap_or_default();
+        return Err(RawError::TooManyRequests {
+            retry_after,
+            body: kurz(&body),
+        });
     }
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         return Err(RawError::Fehler(LlmError::Http {
             status: status.as_u16(),
-            body: body.chars().take(500).collect(),
+            body: kurz(&body),
         }));
     }
     response
         .json::<Value>()
         .await
         .map_err(|error| RawError::Fehler(transport_error(&error)))
+}
+
+/// Anbieter-Body auf 500 Zeichen gekuerzt: genug fuer "credit balance is too
+/// low", zu wenig fuer eine ganze HTML-Fehlerseite im Log.
+fn kurz(body: &str) -> String {
+    body.chars().take(500).collect()
 }
 
 fn transport_error(error: &reqwest::Error) -> LlmError {
@@ -866,5 +908,37 @@ mod tests {
         .await
         .expect("Antwort");
         assert_eq!(response.text, "Titel");
+    }
+
+    #[tokio::test]
+    async fn erschoepfte_429_wiederholung_traegt_body_und_absender() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "0")
+                    .set_body_string("rate limit: quota exhausted"),
+            )
+            .mount(&server)
+            .await;
+
+        let failure = complete_detailed(
+            "test",
+            Request::prompt("hi")
+                .no_ledger()
+                .retry_on_429(1)
+                .endpoint(endpoint(&server, "fireworks")),
+        )
+        .await
+        .expect_err("429 ohne Erfolg");
+        assert_eq!(failure.provider, "fireworks");
+        assert_eq!(failure.model, "test-model");
+        assert_eq!(
+            failure.error,
+            LlmError::Http {
+                status: 429,
+                body: "rate limit: quota exhausted".to_string()
+            }
+        );
     }
 }
