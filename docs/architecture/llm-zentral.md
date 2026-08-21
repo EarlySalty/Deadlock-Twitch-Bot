@@ -196,6 +196,11 @@ lassen, ohne das Schema anzufassen:
 Der Zweck der Clip-Anreicherung nennt Bahn und tatsaechlich antwortenden
 Anbieter, weil hinter der Bahn `social_media` sowohl Fireworks als auch MiniMax
 stehen kann. Ohne diesen Zusatz waeren beide in der Auswertung eine Summe.
+Dasselbe gilt fuer `clip_enrichments.llm_provider` und die Kostenschaetzung:
+beide folgen dem antwortenden Anbieter (`fireworks`, `minimax`, `anthropic`),
+nicht dem Bahn-Namen aus den Einstellungen. Die Preistabelle in
+`llm_dispatch.rs` ist deshalb je Anbieter gefuehrt (`MINIMAX_PRICE_*`,
+`FIREWORKS_PRICE_*`, `CLAUDE_HAIKU_PRICE_*`).
 
 Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
 
