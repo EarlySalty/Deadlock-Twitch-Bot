@@ -58,7 +58,8 @@ im Deadlock-Docs-Korpus.
    ein streamlink-Aussetzer waehrend der Sendung erzeugt wenige Teile (jeweils
    mit eigenem Zeitstempel), die alle in denselben Stream-Ordner hochgeladen
    werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig. Ist der Stream vorbei und jeder Block ausgewertet, wird
-   diese Aufnahme zusammen mit den Berichten in einen eigenen Ordner je Stream
+   diese Aufnahme im naechsten stuendlichen Aufraeumtakt zusammen mit den
+   Berichten in einen eigenen Ordner je Stream
    unter `STREAM_AUDIT_DRIVE_REMOTE` geladen (rclone-Remote `gdrive:`). Erst wenn
    der Upload belegt ist (`rclone lsf` fuehrt jede einzelne hochgeladene Datei
    namentlich auf), wird lokal geloescht - so bleibt die
@@ -94,10 +95,18 @@ im Deadlock-Docs-Korpus.
    1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie nach
    `STREAM_AUDIT_RETENTION_DAYS` lokal geloescht, mit deutlicher Warnung. Ohne
    das ueberlebte ausgerechnet das sensibelste Artefakt jede Frist.
-10. **Nachholen laeuft nacheinander.** Der stuendliche Takt arbeitet
-   ausstehende Uploads in einem einzigen Hintergrund-Task nacheinander ab. Nach
-   einem mehrtaegigen rclone-Ausfall waeren es sonst Dutzende gleichzeitiger
+10. **Wann der Upload laeuft.** Ausschliesslich im stuendlichen Aufraeumtakt,
+   und nur wenn die Abschluss-DM des Laufs raus ist. Bleibt sie aus (etwa nach
+   einem Dienst-Neustart mitten im Stream), wartet der Takt sechs Stunden und
+   archiviert dann trotzdem; die Akte des Laufs bleibt in dem Fall lokal
+   liegen, damit eine spaetere Abschluss-DM noch die richtigen Zahlen nennt.
+   Nachgeholt wird in einem einzigen Hintergrund-Task nacheinander: nach einem
+   mehrtaegigen rclone-Ausfall waeren es sonst Dutzende gleichzeitiger
    rclone-Prozesse auf der geteilten Maschine.
+11. **Eigener Plattendeckel.** Der Mitschnitt-Baum faellt nicht unter
+   `STREAM_AUDIT_MAX_KEEP_GB` (das misst nur `aufnahmen/`). Er hat denselben
+   Deckel fuer sich: reisst er ihn, startet kein neuer Recorder, unabhaengig
+   davon, ob `df` messbar ist.
 
 ## Datenschutz
 
