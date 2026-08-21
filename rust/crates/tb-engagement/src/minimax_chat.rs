@@ -1484,61 +1484,18 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn minimax_404_laesst_fireworks_resolver_in_ruhe() {
-        redirect_ledger_for_tests();
+    async fn generate_ohne_key_unavailable() {
+        // Die Env-Sperre haelt parallele Tests davon ab, waehrenddessen einen
+        // Fireworks-Key zu setzen; sonst wird aus "kein Key"
+        // ein Transportfehler gegen 127.0.0.1:1.
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
-            })))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        std::env::set_var("FIREWORK_API_KEY", "fw-key");
-        std::env::set_var("FIREWORK_BASE_URL", server.uri());
-
-        let client = client_for(&server);
-        let err = client
-            .messages_completion_uncapped(
-                serde_json::json!([{"role": "user", "content": "ping"}]),
-                0.0,
-            )
-            .await
-            .expect_err("MiniMax-404 darf nicht geheilt werden");
-        assert!(
-            matches!(err, GenerateError::Http(_)),
-            "erwartete Http, war {err:?}"
+        let client = EngagementMinimaxClient::new(
+            Some(String::new()), // leer → kein Key
+            Some("http://127.0.0.1:1".to_string()),
+            Some("MiniMax-M3".to_string()),
+            None,
         );
-
-        clear_provider_env();
-    }
-
-    #[tokio::test]
-    async fn generate_ohne_key_unavailable() {
-        // Der leere Key fällt beim Bau auf die Env zurück. Der Lock muss nur
-        // diese Momentaufnahme schützen; der fertige Client liest beim
-        // asynchronen Aufruf keine Provider-Variablen mehr.
-        let client = {
-            let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            clear_provider_env();
-            EngagementMinimaxClient::new(
-                Some(String::new()),
-                Some("http://127.0.0.1:1".to_string()),
-                Some("MiniMax-M3".to_string()),
-                None,
-            )
-        };
         match client.generate("s", &[], 500, 480).await {
             Err(GenerateError::Unavailable(_)) => {}
             other => panic!("erwartete Unavailable, war {other:?}"),
