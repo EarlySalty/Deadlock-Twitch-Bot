@@ -284,8 +284,15 @@ fn knowledge_base() -> &'static KnowledgeBase {
     })
 }
 
+/// Eigener Anwendungsfall in der Anbieterauswahl: der Self-Explainer braucht
+/// ein Modell ohne `<think>`-Block (MiniMax-Text-01), der Rest des
+/// `engagement`-Pfads nicht. Gesetzt im Start-Skript des Dashboards ueber
+/// `TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER` und
+/// `TB_LLM_MODEL_DASHBOARD_SELF_EXPLAINER`.
+const SELF_EXPLAINER_USE_CASE: &str = "dashboard_self_explainer";
+
 async fn minimax_generate(facts: &str, question_clean: &str) -> Option<String> {
-    let client = EngagementMinimaxClient::new(None, None, None, None);
+    let client = EngagementMinimaxClient::for_use_case(SELF_EXPLAINER_USE_CASE, None);
     let history = [ChatMessage {
         role: "user".to_string(),
         content: question_clean.to_string(),
