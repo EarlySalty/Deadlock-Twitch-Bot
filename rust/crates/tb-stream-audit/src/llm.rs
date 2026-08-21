@@ -224,6 +224,7 @@ pub fn zu_funden_gezaehlt(antwort: &ModellAntwort, segmente: &[Segment]) -> (Vec
             // Bericht, den der Beleg daneben verdeckt.
             begruendung: crate::rules::redact_text(&treffer.reason),
             zitat_redigiert: crate::rules::redact_text(&segment.text),
+            zitat_roh: segment.text.clone(),
             zitat_hash: crate::rules::evidence_hash(&segment.text),
         });
     }

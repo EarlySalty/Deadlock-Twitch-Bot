@@ -27,7 +27,9 @@ keine Sanktionen und postet nichts öffentlich.
   die Stream-ID.
 - Pro Block entsteht ein Protokoll auf der Platte. Die private Nachricht an
   den Admin kommt am Sendungsende und nennt nur Funde, die Twitch ahnden
-  würde.
+  würde. Jeder Fund enthält den erkannten Wortlaut, Datum und UTC-Uhrzeit,
+  ein ungefähres Stream-Zeitfenster und direkt darunter einen fertigen
+  Copy-Paste-Grund für die Twitch-Meldung.
 - Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
   Blöcke werden gelöscht.
 
@@ -81,7 +83,8 @@ keine Sanktionen und postet nichts öffentlich.
   des Originals. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut aus demselben Abschnitt steht im Protokoll. Es ist deshalb
   eine zugriffsbeschränkte Akte, kein zitatfreier Text. Die private Nachricht
-  enthält weder Zitat noch Prüfsumme.
+  enthält den Klartext nur flüchtig in der privaten Admin-Nachricht. Die
+  persistente Akte enthält weiter nur das geschwärzte Zitat und die Prüfsumme.
 - Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich
   eingeschaltet ist. Standard ist: nicht speichern.
 - Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht

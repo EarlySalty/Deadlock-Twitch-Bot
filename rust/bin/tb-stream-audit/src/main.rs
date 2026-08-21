@@ -511,22 +511,27 @@ const LAEUFT: &str = "aufnahme_laeuft.json";
 /// stammt und an welcher Stelle der Sendung sie sass. Ein Stopp durch systemd
 /// trifft mitten in den Block - wer den Zettel erst danach schreibt,
 /// laesst genau die angebrochene Aufnahme ohne Zuordnung zurueck.
-async fn zettel_schreiben(
-    blockordner: &Path,
-    kanal: &str,
-    lauf: &str,
+struct ZettelDaten<'a> {
+    kanal: &'a str,
+    lauf: &'a str,
     nummer: u32,
     versatz_sekunden: u64,
     zeit_unsicher: bool,
-) -> bool {
+    stream_start_utc: Option<&'a str>,
+    aufnahme_beginn_utc: Option<&'a str>,
+}
+
+async fn zettel_schreiben(blockordner: &Path, daten: ZettelDaten<'_>) -> bool {
     let inhalt = serde_json::json!({
-        "kanal": kanal,
-        "lauf": lauf,
-        "nummer": nummer,
-        "versatz_sekunden": versatz_sekunden,
+        "kanal": daten.kanal,
+        "lauf": daten.lauf,
+        "nummer": daten.nummer,
+        "versatz_sekunden": daten.versatz_sekunden,
         // Ohne diese Angabe behauptete ein wiederaufgenommener Block, seine
         // Zeiten seien Sendungszeiten - auch wenn sie es nie waren.
-        "zeit_unsicher": zeit_unsicher,
+        "zeit_unsicher": daten.zeit_unsicher,
+        "stream_start_utc": daten.stream_start_utc,
+        "aufnahme_beginn_utc": daten.aufnahme_beginn_utc,
     });
     match nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await {
         Ok(()) => true,
@@ -724,6 +729,8 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
     Bericht {
         lauf_id: block.bezeichnung(),
         erstellt_am: chrono::Utc::now().to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: "kein Text".to_owned(),
         kanal: block.kanal.clone(),
         transkription: String::new(),
@@ -816,6 +823,8 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         // Fehlt die Angabe (Zettel aus einer aelteren Fassung), gilt die
         // vorsichtige Annahme: die Zeiten koennten geraten sein.
         zeit_unsicher: json["zeit_unsicher"].as_bool().unwrap_or(true),
+        stream_start_utc: json["stream_start_utc"].as_str().map(str::to_owned),
+        aufnahme_beginn_utc: json["aufnahme_beginn_utc"].as_str().map(str::to_owned),
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
         frueherstens: 0,
@@ -1295,6 +1304,10 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                     (id, _) => id.to_owned(),
                 };
                 let mut zustand = plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis);
+                zustand.stream_start_utc =
+                    chrono::DateTime::parse_from_rfc3339(sendung.started_at.trim())
+                        .ok()
+                        .map(|zeitpunkt| zeitpunkt.with_timezone(&chrono::Utc).to_rfc3339());
                 // Ohne brauchbares started_at zaehlen die Zeiten ab
                 // Aufnahmebeginn. Das gehoert in den Bericht, sonst schickt er
                 // jemanden im VOD an die falsche Stelle.
@@ -1415,13 +1428,20 @@ async fn kanal_aufnehmen(
         if let Err(fehler) = nur_fuer_mich(&laeuft, b"{}").await {
             tracing::warn!(fehler, "Laufmarke nicht schreibbar");
         }
+        let aufnahme_beginn_utc =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(zustand.gestartet_um, 0)
+                .map(|zeitpunkt| zeitpunkt.to_rfc3339());
         if !zettel_schreiben(
             &blockordner,
-            &kanal,
-            &zustand.lauf,
-            zustand.bloecke + 1,
-            versatz,
-            zustand.zeit_unsicher,
+            ZettelDaten {
+                kanal: &kanal,
+                lauf: &zustand.lauf,
+                nummer: zustand.bloecke + 1,
+                versatz_sekunden: versatz,
+                zeit_unsicher: zustand.zeit_unsicher,
+                stream_start_utc: zustand.stream_start_utc.as_deref(),
+                aufnahme_beginn_utc: aufnahme_beginn_utc.as_deref(),
+            },
         )
         .await
         {
@@ -1956,7 +1976,7 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
                 if !block.nur_melden {
-                    akte_verbuchen(&konfiguration, &block, &bericht.funde).await;
+                    akte_verbuchen(&konfiguration, &block, &bericht).await;
                 }
                 lauf_ende_melden(
                     &konfiguration,
@@ -1983,7 +2003,8 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 // lassen wie die Meldung, die davon spricht.
                 let aufnahme_behalten = segmente == 0 && stumm_am_stueck >= MAX_LEER_AM_STUECK;
                 if !block.nur_melden {
-                    akte_verbuchen(&konfiguration, &block, &[]).await;
+                    let bericht = leerer_bericht(&block);
+                    akte_verbuchen(&konfiguration, &block, &bericht).await;
                 }
                 lauf_ende_melden(
                     &konfiguration,
@@ -2256,6 +2277,8 @@ async fn block_auswerten(
     let bericht = Bericht {
         lauf_id: report::lauf_id(jetzt, &block.kanal),
         erstellt_am: jetzt.to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: if block.zeit_unsicher {
             format!(
                 "live, Block {} - Zeiten ab Aufnahmebeginn, nicht ab Sendungsbeginn",
@@ -2960,15 +2983,11 @@ async fn akte_lesen(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> r
     }
 }
 
-async fn akte_verbuchen(
-    konfiguration: &Konfiguration,
-    block: &plan::Block,
-    funde: &[tb_stream_audit::Fund],
-) {
+async fn akte_verbuchen(konfiguration: &Konfiguration, block: &plan::Block, bericht: &Bericht) {
     let ordner = lauf_ordner(konfiguration, &block.kanal, &block.lauf);
     let _ = tokio::fs::create_dir_all(&ordner).await;
     let mut akte = akte_lesen(konfiguration, &block.kanal, &block.lauf).await;
-    akte.block_verbuchen(funde);
+    akte.block_verbuchen(bericht);
     let pfad = ordner.join(AKTE);
     if let Ok(json) = serde_json::to_string(&akte) {
         if let Err(fehler) = atomar_schreiben(&pfad, json.as_bytes()).await {
@@ -2994,7 +3013,7 @@ async fn lauf_ende_melden(
         return;
     }
     let akte = akte_lesen(konfiguration, kanal, lauf).await;
-    let text = report::ende_dm_text(kanal, akte.bloecke, &akte.funde, 8);
+    let text = report::ende_dm_text(kanal, &akte, 2);
     let schluessel = format!("{kanal}-{lauf}-ende");
     match dm_rohtext(&text, &schluessel).await {
         Ok(()) => {
@@ -3032,6 +3051,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         }
     }
 
@@ -3178,7 +3199,19 @@ mod tests {
             .await
             .expect("schreiben");
 
-        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600, false).await;
+        zettel_schreiben(
+            &blockordner,
+            ZettelDaten {
+                kanal: "helmbombenricky",
+                lauf: "4711",
+                nummer: 7,
+                versatz_sekunden: 3600,
+                zeit_unsicher: false,
+                stream_start_utc: Some("2026-08-13T20:00:00Z"),
+                aufnahme_beginn_utc: Some("2026-08-13T20:00:05Z"),
+            },
+        )
+        .await;
 
         let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
         assert_eq!(gelesen.kanal, "helmbombenricky");
@@ -3234,6 +3267,8 @@ mod tests {
         let bericht = Bericht {
             lauf_id: "20260813T120000Z-ricky".to_owned(),
             erstellt_am: "2026-08-13T12:00:00Z".to_owned(),
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
             quelle: "live, Block 1".to_owned(),
             kanal: "ricky".to_owned(),
             transkription: "openai_api".to_owned(),
