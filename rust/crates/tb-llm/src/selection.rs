@@ -280,10 +280,23 @@ fn anthropic_endpoint(use_case: &str) -> LlmEndpoint {
     };
     LlmEndpoint {
         provider: "anthropic",
-        base_url: nonempty_env("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string()),
+        base_url: anthropic_messages_url(
+            &nonempty_env("ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string()),
+        ),
         model,
         api_key: crate::keys::anthropic_api_key(),
+    }
+}
+
+/// `ANTHROPIC_BASE_URL` gilt wie im SDK als Host-Wurzel
+/// (`https://api.anthropic.com`); der Messages-Pfad wird angehaengt. Steht er
+/// schon drin (alte Konfigurationen, Tests mit Mock-Server), bleibt er einfach.
+fn anthropic_messages_url(raw: &str) -> String {
+    let wurzel = raw.trim().trim_end_matches('/');
+    if wurzel.ends_with("/v1/messages") {
+        wurzel.to_string()
+    } else {
+        format!("{wurzel}/v1/messages")
     }
 }
 
@@ -314,6 +327,7 @@ mod tests {
             "MINMAX",
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_MODEL",
+            "ANTHROPIC_BASE_URL",
             "TB_LLM_PROVIDER_AI_ANALYSIS",
             "TB_LLM_MODEL_TITLE_AI",
             "TB_LLM_MODEL_SPAM_JUDGE",
@@ -545,6 +559,35 @@ mod tests {
         assert!(warne_altvariablen().is_empty(), "zweiter Aufruf warnt nicht erneut");
         std::env::remove_var("ENGAGEMENT_MINIMAX_MODEL");
         std::env::remove_var("FIREWORKS_RICKY_REVIEW_MODEL");
+        clear();
+    }
+
+    #[test]
+    fn anthropic_base_url_ist_host_wurzel_oder_voller_pfad() {
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://proxy.example/"),
+            "https://proxy.example/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com/v1/messages"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com/v1/messages/"),
+            "https://api.anthropic.com/v1/messages"
+        );
+
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("ANTHROPIC_API_KEY", "a");
+        std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/");
+        assert_eq!(endpoint_for("ai_chat").base_url, "http://127.0.0.1:9/v1/messages");
+        std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/v1/messages");
+        assert_eq!(endpoint_for("ai_chat").base_url, "http://127.0.0.1:9/v1/messages");
         clear();
     }
 
