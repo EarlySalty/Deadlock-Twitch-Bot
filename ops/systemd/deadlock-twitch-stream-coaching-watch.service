@@ -37,6 +37,14 @@ Environment=FFMPEG_BIN=/usr/bin/ffmpeg
 # damit ein PATH-Unterschied zwischen Shell und systemd-Benutzer nicht dazu
 # fuehrt, dass jeder Upload stuendlich scheitert und lokal alles liegen bleibt.
 Environment=STREAM_AUDIT_RCLONE_BIN=/usr/local/bin/rclone
+# Der durchgehende 1:1-Ton-Mitschnitt ist im Code per Vorgabe an. Hier steht er
+# trotzdem: mit dem Deploy nimmt der Dienst den Ton fremder Streams durchgehend
+# auf und laedt ihn hoch. Das soll in der Unit sichtbar sein und nicht
+# implizit gelten. `0` schaltet ihn fuer alle ab.
+Environment=STREAM_AUDIT_DRIVE_ARCHIVE=1
+# Kanaele, die widersprochen haben, kommen hier rein (kommagetrennt). Fuer sie
+# startet kein Recorder und es geht nichts hoch.
+Environment=STREAM_AUDIT_DRIVE_EXCLUDE=
 
 Environment=RUST_LOG=info
 

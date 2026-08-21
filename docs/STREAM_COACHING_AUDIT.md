@@ -79,12 +79,14 @@ im Deadlock-Docs-Korpus.
    wie bisher nach der Pruefung lokal geloescht.
 8. **Wenn der Recorder scheitert.** Ein Recorder, der kurz nach dem Start endet,
    mit Fehler abbricht oder haengt (die Aufnahmedatei waechst 15 Minuten lang
-   nicht), gilt als Fehlversuch: er wird abgeraeumt, die letzten
+   nicht), gilt als Fehlversuch: seine Prozesse werden beendet, die letzten
    stderr-Zeilen von streamlink und ffmpeg stehen in der Meldung, und der
    Wiederanlauf wartet mit sich verdoppelnder Pause. Nach fuenf Fehlversuchen
    startet fuer diesen Lauf kein Recorder mehr, und es gibt eine Fehlermeldung.
    Ohne diesen Deckel wuerde ein dauerhaft kaputtes ffmpeg im Minutentakt neu
-   starten und jedes Mal Erfolg melden.
+   starten und jedes Mal Erfolg melden. Ein bereits geschriebener Stummel
+   bleibt liegen und geht mit ins Archiv; verworfen wird nur eine leere Datei.
+   Zerhackt sich ein Stream immer wieder, ist bei 24 Teilen je Lauf Schluss.
 9. **Wenn der Upload haengt.** Solange das Drive-Archiv eines Laufs aussteht,
    bleiben seine Berichte von der Aufbewahrung verschont - aber hoechstens
    14 Tage ueber die Frist hinaus. Danach greift `STREAM_AUDIT_RETENTION_DAYS`
@@ -103,10 +105,11 @@ im Deadlock-Docs-Korpus.
    Nachgeholt wird in einem einzigen Hintergrund-Task nacheinander: nach einem
    mehrtaegigen rclone-Ausfall waeren es sonst Dutzende gleichzeitiger
    rclone-Prozesse auf der geteilten Maschine.
-11. **Eigener Plattendeckel.** Der Mitschnitt-Baum faellt nicht unter
-   `STREAM_AUDIT_MAX_KEEP_GB` (das misst nur `aufnahmen/`). Er hat denselben
-   Deckel fuer sich: reisst er ihn, startet kein neuer Recorder, unabhaengig
-   davon, ob `df` messbar ist.
+11. **Eigener Plattendeckel.** `STREAM_AUDIT_MAX_KEEP_GB` misst nur
+   `aufnahmen/`. Derselbe Zahlenwert gilt zusaetzlich fuer den Mitschnitt-Baum
+   getrennt: reisst er ihn, startet kein neuer Recorder, unabhaengig davon, ob
+   `df` messbar ist. `0` heisst dort wie ueberall "keine Grenze"; dann bremst
+   nur noch `STREAM_AUDIT_DRIVE_MIN_FREE_GB`.
 
 ## Datenschutz
 

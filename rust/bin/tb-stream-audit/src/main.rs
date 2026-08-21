@@ -276,11 +276,14 @@ async fn zwischendateien_aufraeumen(ordner: &Path) {
     let mut geloescht = 0usize;
     while let Ok(Some(eintrag)) = eintraege.next_entry().await {
         let pfad = eintrag.path();
-        let ist_zwischenordner = pfad
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with("eng-whisper-"))
-            .unwrap_or(false);
+        let name = pfad.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // `archiv-*` sind die Sammelordner des Drive-Archivs. Sie halten
+        // Kopien der Berichte samt vollem Transkript und faellen unter keine
+        // Aufbewahrung - ein Absturz mitten im Upload liesse sie sonst
+        // unbefristet liegen. Nur alte: ein Upload, der gerade laeuft, hat
+        // seinen Ordner frisch angelegt.
+        let ist_zwischenordner = name.starts_with("eng-whisper-")
+            || (name.starts_with("archiv-") && zu_alt_sekunden(&pfad, 24 * 60 * 60).await);
         if ist_zwischenordner && tokio::fs::remove_dir_all(&pfad).await.is_ok() {
             geloescht += 1;
         }
@@ -1490,12 +1493,10 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                 // erst aufgenommen - ohne den Dienst fuer alle abzuschalten.
                 .filter(|(kanal, _)| archiv::archiv_aktiv_fuer(kanal))
                 .filter(|(kanal, lauf)| {
-                    match mitschnitt_fehler.get(&format!("{kanal}/{lauf}")) {
-                        Some(f) => {
-                            f.versuche < MITSCHNITT_MAX_VERSUCHE && jetzt >= f.naechster_versuch
-                        }
-                        None => true,
-                    }
+                    RecorderFehler::darf_starten(
+                        mitschnitt_fehler.get(&format!("{kanal}/{lauf}")),
+                        jetzt,
+                    )
                 })
                 .map(|(kanal, lauf)| (kanal.clone(), lauf.clone()))
                 .collect();
@@ -1518,6 +1519,18 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                             eintrag.versuche += 1;
                             eintrag.naechster_versuch =
                                 std::time::Instant::now() + backoff_wartezeit(eintrag.versuche);
+                            if eintrag.versuche >= MITSCHNITT_MAX_VERSUCHE {
+                                // Fehlt streamlink dauerhaft, kommt der
+                                // Recorder nie bis zum Teardown-Pfad - ohne
+                                // diese Zeile endete es in Stille.
+                                tracing::error!(
+                                    kanal,
+                                    lauf,
+                                    versuche = eintrag.versuche,
+                                    "Ton-Mitschnitt laesst sich nicht starten - kein weiterer \
+Versuch fuer diesen Lauf"
+                                );
+                            }
                         }
                     }
                 } else if !platz_knapp_gemeldet {
@@ -3639,6 +3652,11 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
     )
     .await;
     herzschlag.abort();
+    // Der Sammelordner haelt Kopien der Berichte, beim eingeschalteten
+    // Transkript auch den vollen Wortlaut. Jeder `?`-Ausstieg oben laesst ihn
+    // stehen, und keine Aufbewahrung greift dort - also hier raeumen,
+    // unabhaengig vom Ausgang.
+    let _ = tokio::fs::remove_dir_all(sammelordner(&konfiguration, &kanal, &lauf)).await;
     let _ = tokio::fs::remove_file(&laeuft).await;
 
     match ergebnis {
@@ -3725,10 +3743,7 @@ async fn drive_archiv_durchfuehren(
     // Kopie ist geprueft: schlaegt eine fehl, brechen wir ab, bevor lokal etwas
     // geloescht wird - sonst laege ein unvollstaendiges Archiv oben und das
     // Original waere weg.
-    let staging = konfiguration
-        .ausgabe
-        .join("zwischendateien")
-        .join(format!("archiv-{kanal}-{lauf}"));
+    let staging = sammelordner(konfiguration, kanal, lauf);
     sammelordner_frisch(&staging).await?;
     let mut kleinkram = 0usize;
     for bericht in &berichte {
@@ -3789,9 +3804,17 @@ async fn drive_archiv_durchfuehren(
             }
         }
     }
-    // Der Mitschnitt-Ordner (jetzt nur noch die Fertig-Marke) darf weg; schlaegt
-    // es fehl, ist das kein Grund, den Lauf als ungesichert zu behandeln.
-    let _ = tokio::fs::remove_dir_all(&mit_dir).await;
+    // Den Ordner nur wegraeumen, wenn keine Aufnahme mehr darin liegt.
+    // `remove_dir_all` wuerde auch eine Datei mitnehmen, die nach dem
+    // Einsammeln entstanden ist - etwa weil derselbe Lauf nach kurzem Abriss
+    // erneut aufnimmt. ffmpeg schriebe dann in einen geloeschten Inode, und die
+    // Archiv-Marke verhinderte jede Nachholung.
+    if mitschnitt_dateien_sammeln(&mit_dir)
+        .await
+        .is_some_and(|rest| rest.is_empty())
+    {
+        let _ = tokio::fs::remove_dir_all(&mit_dir).await;
+    }
     for bericht in &berichte {
         if let Err(fehler) = tokio::fs::remove_file(bericht).await {
             if fehler.kind() != std::io::ErrorKind::NotFound {
@@ -3822,6 +3845,15 @@ async fn drive_archiv_durchfuehren(
         return Err("Upload lag oben, aber lokal blieb etwas liegen".to_string());
     }
     Ok(true)
+}
+
+/// Der Zwischenordner, in dem die kleinen Berichte fuer einen Rutsch
+/// gesammelt werden. Deterministisch, damit ihn auch der Fehlerpfad findet.
+fn sammelordner(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> PathBuf {
+    konfiguration
+        .ausgabe
+        .join("zwischendateien")
+        .join(format!("archiv-{kanal}-{lauf}"))
 }
 
 /// Legt den Sammelordner frisch an: ein etwaiger Rest aus einem abgebrochenen
@@ -4322,14 +4354,19 @@ async fn freier_platz_bytes(pfad: &Path) -> Option<u64> {
 /// neue, potenziell groesste Baum von der bestehenden Plattengrenze gar nicht
 /// erfasst: `aufnahmen_bytes(&aufnahme_wurzel(...))` sieht ihn nicht.
 async fn platz_fuer_mitschnitt(konfiguration: &Konfiguration) -> bool {
-    let belegt = aufnahmen_bytes(&konfiguration.ausgabe.join("mitschnitte")).await;
-    if !plan::platte_reicht(belegt, plan::MAX_AUFNAHME_BYTES) {
-        tracing::warn!(
-            belegt,
-            grenze = plan::MAX_AUFNAHME_BYTES,
-            "Ton-Mitschnitte haben ihren Deckel erreicht - kein neuer Recorder"
-        );
-        return false;
+    // Dieselbe Grenze, die der Nutzer fuer die Aufnahmen gesetzt hat
+    // (`STREAM_AUDIT_MAX_KEEP_GB`), hier auf den Mitschnitt-Baum angewandt.
+    // `0` heisst dort ausdruecklich "keine Grenze"; dann bleibt nur `df`.
+    if konfiguration.behalten_grenze_bytes > 0 {
+        let belegt = aufnahmen_bytes(&konfiguration.ausgabe.join("mitschnitte")).await;
+        if belegt >= konfiguration.behalten_grenze_bytes {
+            tracing::warn!(
+                belegt,
+                grenze = konfiguration.behalten_grenze_bytes,
+                "Ton-Mitschnitte haben ihren Deckel erreicht - kein neuer Recorder"
+            );
+            return false;
+        }
     }
     match freier_platz_bytes(&aufnahme_wurzel(konfiguration)).await {
         Some(frei) => frei >= archiv::min_frei_bytes(),
@@ -4436,6 +4473,12 @@ const MITSCHNITT_STILLSTAND: Duration = Duration::from_secs(15 * 60);
 /// So viele stderr-Zeilen je Prozess werden fuer die Fehlermeldung aufgehoben.
 const MITSCHNITT_FEHLERZEILEN: usize = 5;
 
+/// Hoechstzahl der Mitschnitt-Teile eines Laufs. Ein streamlink, das nach gut
+/// einer Minute sauber endet (Werbepause, kurzer Abriss), gilt nicht als
+/// Fehlstart und setzt den Versuchszaehler zurueck. Ohne diesen Deckel
+/// entstuenden bei einem zerhackten Stream beliebig viele Teile.
+const MITSCHNITT_MAX_TEILE: usize = 24;
+
 /// Ob ein beendeter oder haengender Recorder als Fehlstart zaehlt.
 ///
 /// Ein Stream endet irgendwann, und dann endet ffmpeg mit Erfolg - das ist kein
@@ -4457,6 +4500,17 @@ fn backoff_wartezeit(versuche: u32) -> Duration {
 struct RecorderFehler {
     versuche: u32,
     naechster_versuch: std::time::Instant,
+}
+
+impl RecorderFehler {
+    /// Ob nach diesem Fehlerstand jetzt ein neuer Anlauf erlaubt ist. Kein
+    /// Eintrag heisst: noch kein Fehler, also los.
+    fn darf_starten(eintrag: Option<&Self>, jetzt: std::time::Instant) -> bool {
+        match eintrag {
+            Some(f) => f.versuche < MITSCHNITT_MAX_VERSUCHE && jetzt >= f.naechster_versuch,
+            None => true,
+        }
+    }
 }
 
 /// Ein laufender durchgehender Ton-Recorder. streamlink liefert den Stream,
@@ -4557,6 +4611,19 @@ async fn mitschnitt_starten(
     let dir = mitschnitt_ordner(konfiguration, kanal, lauf);
     if tokio::fs::create_dir_all(&dir).await.is_err() {
         return None;
+    }
+    // Zerhackt sich ein Stream immer wieder, waeren es sonst beliebig viele
+    // Teile - die Doku verspricht "wenige".
+    if let Some(teile) = mitschnitt_dateien_sammeln(&dir).await {
+        if teile.len() >= MITSCHNITT_MAX_TEILE {
+            tracing::error!(
+                kanal,
+                lauf,
+                teile = teile.len(),
+                "Ton-Mitschnitt hat zu viele Teile - kein weiterer Recorder fuer diesen Lauf"
+            );
+            return None;
+        }
     }
     // Ein alter Fertig-Marker desselben Laufs (etwa vom Versiegeln nach einem
     // Aussetzer) muss weg: hier wird gerade wieder aufgenommen, der Lauf ist
@@ -5310,6 +5377,31 @@ mod tests {
     }
 
     #[test]
+    fn der_versuchs_deckel_und_die_wartezeit_halten_den_neustart_auf() {
+        let jetzt = std::time::Instant::now();
+        // Kein Fehler bisher: sofort starten.
+        assert!(RecorderFehler::darf_starten(None, jetzt));
+        // Wartezeit laeuft noch.
+        let wartend = RecorderFehler {
+            versuche: 1,
+            naechster_versuch: jetzt + Duration::from_secs(30),
+        };
+        assert!(!RecorderFehler::darf_starten(Some(&wartend), jetzt));
+        // Wartezeit abgelaufen.
+        let bereit = RecorderFehler {
+            versuche: 1,
+            naechster_versuch: jetzt - Duration::from_secs(1),
+        };
+        assert!(RecorderFehler::darf_starten(Some(&bereit), jetzt));
+        // Deckel gerissen: auch nach abgelaufener Wartezeit nicht mehr.
+        let erschoepft = RecorderFehler {
+            versuche: MITSCHNITT_MAX_VERSUCHE,
+            naechster_versuch: jetzt - Duration::from_secs(1),
+        };
+        assert!(!RecorderFehler::darf_starten(Some(&erschoepft), jetzt));
+    }
+
+    #[test]
     fn der_backoff_verdoppelt_und_deckelt() {
         assert_eq!(backoff_wartezeit(1), MITSCHNITT_BACKOFF_START);
         assert_eq!(backoff_wartezeit(2), MITSCHNITT_BACKOFF_START * 2);
@@ -5326,18 +5418,31 @@ mod tests {
     #[tokio::test]
     async fn der_mitschnitt_baum_hat_einen_eigenen_deckel() {
         let wurzel = test_ordner("mitschnitt-deckel");
-        let konfiguration = test_konfiguration(&wurzel);
+        let mut konfiguration = test_konfiguration(&wurzel);
+        // Grenze knapp ueber Null: der Auswertungs-Baum bleibt leer, trotzdem
+        // muss sie greifen - `aufnahmen_bytes(&aufnahme_wurzel(...))` sieht die
+        // Mitschnitte nicht.
+        konfiguration.behalten_grenze_bytes = 512;
         let dir = mitschnitt_ordner(&konfiguration, "kanal", "lauf1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        // Der Auswertungs-Baum ist leer, trotzdem muss der Deckel greifen:
-        // `aufnahmen_bytes(&aufnahme_wurzel(...))` sieht die Mitschnitte nicht.
-        let gross = vec![0u8; 1024];
-        tokio::fs::write(dir.join(archiv::mitschnitt_name(1)), &gross)
+        tokio::fs::write(dir.join(archiv::mitschnitt_name(1)), vec![0u8; 1024])
             .await
             .unwrap();
-        assert!(
-            platz_fuer_mitschnitt(&konfiguration).await,
-            "ein Kilobyte darf keinen Deckel reissen"
+
+        // Gerissene Grenze schlaegt jede df-Messung, der Test haengt also
+        // nicht am freien Platz der Maschine.
+        assert!(!platz_fuer_mitschnitt(&konfiguration).await);
+
+        // `0` heisst laut Doku ausdruecklich "keine Grenze".
+        konfiguration.behalten_grenze_bytes = 0;
+        let ohne_grenze = platz_fuer_mitschnitt(&konfiguration).await;
+        assert_eq!(
+            ohne_grenze,
+            freier_platz_bytes(&aufnahme_wurzel(&konfiguration))
+                .await
+                .map(|frei| frei >= archiv::min_frei_bytes())
+                .unwrap_or(true),
+            "ohne Grenze darf nur noch df entscheiden"
         );
         let _ = std::fs::remove_dir_all(&wurzel);
     }
