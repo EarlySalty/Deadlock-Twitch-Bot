@@ -100,9 +100,15 @@ export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 # als <think>-Block, den process_response_text entfernt -> leerer Text ->
 # grounded:false -> Dauer-Fallback ("Das kann ich dir hier nicht sicher sagen").
 # MiniMax-Text-01 antwortet direkt (kein <think>) und ist das passende Modell.
-# HART gesetzt (kein :- Default): der Infisical-Bulk-Load oben setzt
-# ENGAGEMENT_MINIMAX_MODEL bereits auf das Reasoning-Modell; hier bewusst
-# uebersteuert, weil es den self-explainer sonst dauerhaft verstummen laesst.
-export ENGAGEMENT_MINIMAX_MODEL="MiniMax-Text-01"
+# HART gesetzt (kein :- Default): der Infisical-Bulk-Load oben setzt das Modell
+# ggf. auf das Reasoning-Modell; hier bewusst uebersteuert, weil es den
+# self-explainer sonst dauerhaft verstummen laesst.
+# Die Variable heisst seit der LLM-Zentralisierung TB_LLM_MODEL_<USE_CASE>;
+# ENGAGEMENT_MINIMAX_MODEL wirkt nicht mehr. Der Anbieter wird mitgesetzt:
+# TB_LLM_MODEL_ENGAGEMENT gilt fuer jeden Anbieter, und ein MiniMax-Modellname
+# an einer Fireworks-Adresse waere ein Modellfehler. Frueher erledigte das ein
+# Sonderpfad im Code; jetzt steht es hier, wo man es sieht.
+export TB_LLM_PROVIDER_ENGAGEMENT="minimax"
+export TB_LLM_MODEL_ENGAGEMENT="MiniMax-Text-01"
 
 exec "$ROOT_DIR/rust/target/release/tb-dashboard"
