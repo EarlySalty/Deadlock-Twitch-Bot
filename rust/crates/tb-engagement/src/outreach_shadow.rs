@@ -206,16 +206,21 @@ impl OutreachReviewClient {
         if OUTREACH_SYSTEM_PROMPT.trim().is_empty() {
             return Err(OutreachError::Unavailable);
         }
+        // Gleiches Verhalten wie `crew_review::FireworksReviewClient::from_env`:
+        // Adresse und Modell kommen aus der zentralen Auswahl, und weichen
+        // sie vom Standard ab (etwa per `TB_LLM_MODEL_OUTREACH_SHADOW`),
+        // startet das Review nicht. Ein fehlendes oder fremdes Modell wird
+        // nicht still durch den Standard ersetzt, sondern ist `Unavailable`.
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks"
             || endpoint.base_url.trim_end_matches('/') != FIREWORKS_DEFAULT_BASE_URL
-            || endpoint.api_key.is_none()
+            || endpoint.model != FIREWORKS_DEFAULT_MODEL
+            || endpoint.api_key.as_deref().is_none_or(|key| key.trim().is_empty())
         {
             return Err(OutreachError::Unavailable);
         }
         Ok(Self {
             endpoint: tb_llm::LlmEndpoint {
-                model: FIREWORKS_DEFAULT_MODEL.to_string(),
                 base_url: FIREWORKS_DEFAULT_BASE_URL.to_string(),
                 ..endpoint
             },
