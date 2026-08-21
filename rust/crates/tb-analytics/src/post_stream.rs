@@ -317,10 +317,12 @@ pub fn normalize_word_groups(value: &serde_json::Value) -> Vec<WordGroup> {
 // KI-Aufruf + Modellwahl (Python `_call_minimax` / `_call_claude` / `_plan_ai_model`)
 // ---------------------------------------------------------------------------
 
-/// Anthropic-Messages-API-Basis (der SDK-Default-Host).
-const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
-const CLAUDE_MODEL: &str = "claude-opus-4-6";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Anwendungsfaelle in der gemeinsamen Anbieterauswahl. Zwei Namen, weil zwei
+/// Plaene: der MiniMax-Zweig ist die Legacy-Variante, der Opus-Zweig gehoert
+/// zum `analytics`-Flag. Welcher Anbieter dahinter steckt, entscheidet
+/// `tb_llm::selection`, nicht diese Datei.
+const USE_CASE_MINIMAX: &str = "post_stream";
+const USE_CASE_OPUS: &str = "post_stream_opus";
 
 /// Plan-basiertes KI-Modell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,147 +348,43 @@ pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiMod
     }
 }
 
-fn resolve_anthropic_key() -> Option<String> {
-    std::env::var("ANTHROPIC_API_KEY")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-/// Ledger-Zweck aller Post-Stream-MiniMax-Calls (Python
+/// Ledger-Zweck aller Post-Stream-Calls (Python
 /// `_track_minimax_completion(..., purpose="post-stream-report")`).
-const MINIMAX_LEDGER_PURPOSE: &str = "post-stream-report";
+const LEDGER_PURPOSE: &str = "post-stream-report";
 
-#[derive(serde::Deserialize)]
-struct MinimaxResponse {
-    #[serde(default)]
-    choices: Vec<MinimaxChoice>,
-    /// Token-Verbrauch aus der OpenAI-kompatiblen Antwort (best-effort; fehlt bei
-    /// manchen Fehler-/Stub-Antworten → wird als 0 verbucht).
-    #[serde(default)]
-    usage: Option<MinimaxUsage>,
-}
-#[derive(serde::Deserialize)]
-struct MinimaxChoice {
-    message: MinimaxMessage,
-}
-#[derive(serde::Deserialize)]
-struct MinimaxMessage {
-    content: Option<String>,
-}
-
-/// `usage`-Block der MiniMax-Antwort (Python liest `prompt_tokens`/`completion_tokens`).
-#[derive(serde::Deserialize, Default)]
-struct MinimaxUsage {
-    #[serde(default)]
-    prompt_tokens: i64,
-    #[serde(default)]
-    completion_tokens: i64,
-}
-
-/// MiniMax-Chat-Completion für den Post-Stream-Report (Python `_call_minimax`:
-/// temp 0.3, max_tokens 16000, Timeout 180s). Liefert `choices[0].message.content`.
+/// KI-Aufruf des Post-Stream-Reports über den gemeinsamen Eingang.
 ///
-/// Jeder Call wird — wie in Python via `_track_minimax_completion` — best-effort
-/// ins MiniMax-Usage-Ledger verbucht (`purpose=post-stream-report`), mit den
-/// echten Token-Zahlen aus dem `usage`-Block der Antwort.
-pub async fn call_minimax(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    prompt: &str,
-) -> Result<String, String> {
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 16000,
-    });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&url)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
+/// Der MiniMax-Zweig darf lange laufen (grosse Reports, 16000 Tokens), der
+/// Opus-Zweig ist auf 6000 begrenzt — beides wie bisher.
+pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
+    let (use_case, request) = match model {
+        AiModel::Minimax => (
+            USE_CASE_MINIMAX,
+            tb_llm::Request::prompt(prompt)
+                .temperature(0.3)
+                .max_tokens(16000)
+                .timeout_secs(180),
+        ),
+        AiModel::Opus => (
+            USE_CASE_OPUS,
+            // KEINE temperature (Anthropic-Default, 1:1 Python).
+            tb_llm::Request::prompt(prompt).max_tokens(6000).timeout_secs(240),
+        ),
+    };
+    let response = tb_llm::complete(use_case, request.ledger_purpose(LEDGER_PURPOSE))
         .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let parsed: MinimaxResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let (content, tokens_in, tokens_out) = split_minimax_response(parsed);
-    // Best-effort-Verbuchung (Python `_track_minimax_completion`): wirft nie und
-    // kippt den Call nicht — die echte Persistenz/Isolation testet `tb-llm`.
-    tb_llm::ledger::record(MINIMAX_LEDGER_PURPOSE, model, tokens_in, tokens_out, true).await;
-    Ok(content)
-}
-
-/// Zerlegt die geparste MiniMax-Antwort in `(content, tokens_in, tokens_out)`.
-/// Pure Funktion (Python `_track_minimax_completion` liest `usage.prompt_tokens`/
-/// `usage.completion_tokens`; fehlt `usage`, werden 0/0 verbucht).
-fn split_minimax_response(parsed: MinimaxResponse) -> (String, i64, i64) {
-    let usage = parsed.usage.unwrap_or_default();
-    let content = parsed
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|c| c.message.content)
-        .unwrap_or_default();
-    (content, usage.prompt_tokens, usage.completion_tokens)
-}
-
-#[derive(serde::Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ClaudeBlock>,
-}
-#[derive(serde::Deserialize)]
-struct ClaudeBlock {
-    #[serde(default)]
-    text: Option<String>,
-}
-
-/// Claude/Anthropic-Messages-Call (Python `_call_claude`: max_tokens 6000).
-/// `POST {base_url}/v1/messages` mit `x-api-key` + `anthropic-version`. Liefert
-/// `content[0].text`.
-pub async fn call_claude(base_url: &str, api_key: &str, prompt: &str) -> Result<String, String> {
-    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 6000,
-        "messages": [{"role": "user", "content": prompt}],
-    });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(240))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&url)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        // Der Fehlerbody nennt die Ursache (ungueltiges Modell, Limit, ...);
-        // ohne ihn ist ein 4xx im Journal nicht diagnostizierbar. Er enthaelt
-        // keine Credentials — die API echot den Key nicht zurueck.
-        let body = resp.text().await.unwrap_or_default();
-        let body = body.chars().take(300).collect::<String>();
-        return Err(format!("HTTP {status} — {body}"));
-    }
-    let parsed: ClaudeResponse = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(parsed
-        .content
-        .into_iter()
-        .next()
-        .and_then(|b| b.text)
-        .unwrap_or_default())
+        .map_err(|error| match error {
+            // Der Fehlerbody nennt die Ursache (ungueltiges Modell, Limit, ...);
+            // ohne ihn ist ein 4xx im Journal nicht diagnostizierbar. Er enthaelt
+            // keine Credentials — die API echot den Key nicht zurueck.
+            tb_llm::LlmError::Http { status, body } if !body.is_empty() => {
+                let body: String = body.chars().take(300).collect();
+                format!("HTTP {status} — {body}")
+            }
+            tb_llm::LlmError::Http { status, .. } => format!("HTTP {status}"),
+            other => other.to_string(),
+        })?;
+    Ok(response.text)
 }
 
 /// Verarbeitet die KI-Antwort zu Wortgruppen (Python-Pfad nach `call_ai`):
@@ -513,25 +411,7 @@ pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<Wo
         return Vec::new();
     }
     let prompt = build_word_group_prompt(messages.len(), messages);
-    let raw = match model {
-        AiModel::Minimax => {
-            let endpoint = tb_llm::endpoint_for("post_stream");
-            let Some(key) = endpoint.api_key.as_deref() else {
-                return Vec::new();
-            };
-            call_minimax(&endpoint.base_url, key, &endpoint.model, &prompt)
-                .await
-                .unwrap_or_default()
-        }
-        AiModel::Opus => {
-            let Some(key) = resolve_anthropic_key() else {
-                return Vec::new();
-            };
-            call_claude(ANTHROPIC_BASE_URL, &key, &prompt)
-                .await
-                .unwrap_or_default()
-        }
-    };
+    let raw = call_ai(model, &prompt).await.unwrap_or_default();
     process_word_group_response(&raw)
 }
 
@@ -1924,40 +1804,15 @@ pub fn process_report_v2_response(raw: &str, snapshot: &serde_json::Value) -> se
 /// Fehlender Key / KI-Fehler → Fallback-Report.
 pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) -> serde_json::Value {
     let prompt = build_report_v2_prompt(snapshot);
-    let raw = match model {
-        AiModel::Minimax => {
-            let endpoint = tb_llm::endpoint_for("post_stream");
-            let Some(key) = endpoint.api_key.as_deref() else {
-                tracing::warn!(
-                    provider = endpoint.provider,
-                    "PostStream: LLM-Key fehlt, Fallback-Report aktiv"
-                );
-                return report_v2_fallback(snapshot);
-            };
-            match call_minimax(&endpoint.base_url, key, &endpoint.model, &prompt).await {
-                Ok(r) => r,
-                Err(error) => {
-                    tracing::warn!(
-                        provider = endpoint.provider,
-                        %error,
-                        "PostStream: LLM-Aufruf fehlgeschlagen"
-                    );
-                    return report_v2_fallback(snapshot);
-                }
-            }
-        }
-        AiModel::Opus => {
-            let Some(key) = resolve_anthropic_key() else {
-                tracing::warn!("PostStream: Anthropic-Key fehlt, Fallback-Report aktiv");
-                return report_v2_fallback(snapshot);
-            };
-            match call_claude(ANTHROPIC_BASE_URL, &key, &prompt).await {
-                Ok(r) => r,
-                Err(error) => {
-                    tracing::warn!(%error, "PostStream: Claude-Aufruf fehlgeschlagen");
-                    return report_v2_fallback(snapshot);
-                }
-            }
+    let raw = match call_ai(model, &prompt).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!(
+                modell = model.as_str(),
+                %error,
+                "PostStream: KI-Aufruf fehlgeschlagen, Fallback-Report aktiv"
+            );
+            return report_v2_fallback(snapshot);
         }
     };
     process_report_v2_response(&raw, snapshot)
@@ -2477,6 +2332,10 @@ mod tests {
             "MINIMAX_BASE_URL",
             "MINIMAX_MODEL",
             "MINMAX",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL",
+            "TB_LLM_PROVIDER_POST_STREAM_OPUS",
         ] {
             std::env::remove_var(name);
         }
@@ -2577,13 +2436,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn call_minimax_liefert_content() {
+    async fn call_ai_minimax_liefert_content() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        // Ledger NIE die echte zentrale DB anfassen lassen: vor dem ersten record()
-        // (lazy Pool-Bind) den zentralen DSN aus der Umgebung nehmen, damit der
-        // best-effort-`record()` keinen Pool baut und zum No-op wird. Dieser Test
-        // prüft nur `call_minimax`, nicht den Ledger-Seiteneffekt.
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        // Ledger NIE die echte zentrale DB anfassen lassen: vor dem ersten
+        // record() (lazy Pool-Bind) den zentralen DSN aus der Umgebung nehmen,
+        // damit der best-effort-`record()` keinen Pool baut und zum No-op wird.
         std::env::remove_var("TWITCH_ANALYTICS_DSN");
         std::env::remove_var("DATABASE_URL");
         std::env::remove_var("MINIMAX_USAGE_DB");
@@ -2594,42 +2456,18 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let out = call_minimax(&server.uri(), "k", "MiniMax-M3", "prompt")
-            .await
-            .unwrap();
+        std::env::set_var("MINIMAX_API_KEY", "k");
+        std::env::set_var("MINIMAX_BASE_URL", server.uri());
+
+        let out = call_ai(AiModel::Minimax, "prompt").await.unwrap();
         assert_eq!(out, "ANTWORT");
-    }
-
-    #[test]
-    fn split_minimax_response_liest_usage_tokens() {
-        // usage-Block vorhanden → Token-Zahlen werden für das Ledger extrahiert.
-        let parsed: MinimaxResponse = serde_json::from_value(serde_json::json!({
-            "choices": [{"message": {"content": "ANTWORT"}}],
-            "usage": {"prompt_tokens": 321, "completion_tokens": 123},
-        }))
-        .unwrap();
-        let (content, tin, tout) = split_minimax_response(parsed);
-        assert_eq!(content, "ANTWORT");
-        assert_eq!(tin, 321, "tokens_in aus usage.prompt_tokens");
-        assert_eq!(tout, 123, "tokens_out aus usage.completion_tokens");
-    }
-
-    #[test]
-    fn split_minimax_response_ohne_usage_ist_null() {
-        // Fehlt usage (Fehler-/Stub-Antwort) → 0/0 verbucht, Call läuft weiter.
-        let parsed: MinimaxResponse = serde_json::from_value(serde_json::json!({
-            "choices": [{"message": {"content": "X"}}],
-        }))
-        .unwrap();
-        let (content, tin, tout) = split_minimax_response(parsed);
-        assert_eq!(content, "X");
-        assert_eq!((tin, tout), (0, 0));
+        clear_provider_env();
     }
 
     #[test]
     fn ledger_purpose_ist_post_stream_report() {
         // Vertrag mit dem Audit (P2.70): purpose='post-stream-report'.
-        assert_eq!(MINIMAX_LEDGER_PURPOSE, "post-stream-report");
+        assert_eq!(LEDGER_PURPOSE, "post-stream-report");
     }
 
     #[test]
@@ -2642,28 +2480,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn call_claude_header_und_content() {
+    async fn call_ai_opus_setzt_kopfzeilen_und_liefert_content() {
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        std::env::remove_var("TWITCH_ANALYTICS_DSN");
+        std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
         let body = serde_json::json!({"content": [{"type": "text", "text": "CLAUDE-ANTWORT"}]});
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
             .and(header("x-api-key", "secret"))
-            .and(header("anthropic-version", ANTHROPIC_VERSION))
+            .and(header("anthropic-version", "2023-06-01"))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let out = call_claude(&server.uri(), "secret", "prompt")
-            .await
-            .unwrap();
+        std::env::set_var("ANTHROPIC_API_KEY", "secret");
+        std::env::set_var("ANTHROPIC_BASE_URL", format!("{}/v1/messages", server.uri()));
+
+        let out = call_ai(AiModel::Opus, "prompt").await.unwrap();
         assert_eq!(out, "CLAUDE-ANTWORT");
+        clear_provider_env();
     }
 
     #[tokio::test]
-    async fn call_claude_fehlerbody_landet_in_der_meldung() {
+    async fn call_ai_fehlerbody_landet_in_der_meldung() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+        let _guard = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_provider_env();
+        std::env::remove_var("TWITCH_ANALYTICS_DSN");
+        std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
         let body = serde_json::json!({
             "type": "error",
@@ -2674,13 +2526,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(400).set_body_json(body))
             .mount(&server)
             .await;
-        let err = call_claude(&server.uri(), "secret", "prompt")
-            .await
-            .unwrap_err();
+        std::env::set_var("ANTHROPIC_API_KEY", "secret");
+        std::env::set_var("ANTHROPIC_BASE_URL", format!("{}/v1/messages", server.uri()));
+
+        let err = call_ai(AiModel::Opus, "prompt").await.unwrap_err();
         // Ohne Body ist ein 400 nicht diagnostizierbar (Modellname? Limit?).
         assert!(err.contains("400"), "Status fehlt: {err}");
         assert!(err.contains("invalid_request_error"), "Body fehlt: {err}");
         assert!(err.contains("model: unknown-model"), "Body fehlt: {err}");
+        clear_provider_env();
     }
 
     #[test]
