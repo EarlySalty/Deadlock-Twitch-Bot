@@ -98,7 +98,13 @@ pub async fn auth_status_handler(
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Admin { actor: Some(actor) } => {
             if admin_mode_header_active(&headers) {
-                admin_response("admin", true, true, csrf_token.as_deref())
+                admin_response(
+                    "admin",
+                    true,
+                    true,
+                    Some(&actor.twitch_login),
+                    csrf_token.as_deref(),
+                )
             } else {
                 partner_response(
                     &pool,
@@ -112,7 +118,7 @@ pub async fn auth_status_handler(
             }
         }
         DashboardAuthLevel::Admin { actor: None } => {
-            admin_response("admin", false, true, csrf_token.as_deref())
+            admin_response("admin", false, true, None, csrf_token.as_deref())
         }
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -204,6 +210,7 @@ fn admin_response(
     level: &'static str,
     admin_eligible: bool,
     admin_mode: bool,
+    twitch_login: Option<&str>,
     csrf_token: Option<&str>,
 ) -> Response {
     let plan = json!({
@@ -226,7 +233,7 @@ fn admin_response(
         "adminMode": admin_mode,
         "isLocalhost": is_localhost,
         "canViewAllStreamers": true,
-        "twitchLogin": null,
+        "twitchLogin": twitch_login,
         "adminDefaultStreamer": ADMIN_DEFAULT_STREAMER,
         "displayName": null,
         "partnerStatus": "active",
@@ -445,8 +452,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn twitch_admin_im_adminmodus_behaelt_twitch_identitaet() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_static("tb_admin_mode=2"),
+        );
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            headers,
+        )
+        .await;
+        let value = json_body(response).await;
+
+        assert_eq!(value["twitchLogin"], "earlysalty");
+    }
+
+    #[tokio::test]
     async fn admin_response_liefert_session_csrf() {
-        let value = json_body(admin_response("admin", false, true, Some("session-csrf"))).await;
+        let value = json_body(admin_response(
+            "admin",
+            false,
+            true,
+            None,
+            Some("session-csrf"),
+        ))
+        .await;
 
         assert_eq!(value["csrfToken"], "session-csrf");
         assert_eq!(value["csrf_token"], "session-csrf");
