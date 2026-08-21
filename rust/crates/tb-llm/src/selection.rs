@@ -4,11 +4,13 @@
 //! Anwendungsfall, alles über Umgebungsvariablen. So lässt sich ein einzelnes
 //! Feature auf einen anderen Anbieter ziehen, ohne den Rest anzufassen.
 //!
-//! - `TB_LLM_PROVIDER_DEFAULT` — Basis für alles.
+//! - `TB_LLM_PROVIDER_DEFAULT` — Basis für alles außer den Anthropic-Fällen
+//!   in [`ANTHROPIC_USE_CASES`]; die ignorieren den globalen Default.
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
-//!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`.
+//!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`. Nur so lässt sich ein
+//!   Anthropic-Fall auf einen anderen Anbieter legen.
 //! - `TB_LLM_MODEL_<USE_CASE>` — überschreibt das Modell eines Anwendungsfalls,
-//!   unabhängig vom Anbieter.
+//!   unabhängig vom Anbieter, auch auf dem Ausweichglied einer Kette.
 //!
 //! Ohne jede Konfiguration gilt: Fireworks/DeepSeek, wenn ein Key da ist,
 //! sonst MiniMax. Ein unbekannter Name fällt ebenfalls auf diesen Weg zurück
@@ -73,16 +75,31 @@ pub struct LlmEndpoint {
 /// Endpunkt für einen Anwendungsfall (z. B. `"invite_question"`).
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
     let env_name = format!("TB_LLM_PROVIDER_{}", use_case.to_uppercase());
-    let configured = nonempty_env(&env_name).or_else(|| nonempty_env(PROVIDER_DEFAULT_ENV));
+    // Die Anthropic-Anwendungsfaelle sind der Premium-Pfad. Ein globaler
+    // `TB_LLM_PROVIDER_DEFAULT` (z. B. "minimax" fuer den Rest des Bots) darf
+    // sie nicht stillschweigend auf ein anderes Produkt ziehen; umgelenkt
+    // werden sie nur ueber ihre eigene `TB_LLM_PROVIDER_<USE_CASE>`-Variable.
+    let configured = nonempty_env(&env_name).or_else(|| {
+        if anthropic_default_model(use_case).is_some() {
+            None
+        } else {
+            nonempty_env(PROVIDER_DEFAULT_ENV)
+        }
+    });
     let mut endpoint = resolve(configured.as_deref(), use_case);
-    // Das Modell eines Anwendungsfalls lässt sich unabhängig vom Anbieter
-    // umstellen. Diese eine Variable ersetzt die früheren Sonderformen
-    // `ENGAGEMENT_MINIMAX_MODEL`, `FIREWORKS_RICKY_REVIEW_MODEL` und
-    // `ANTHROPIC_HAIKU_MODEL`.
+    apply_model_override(&mut endpoint, use_case);
+    endpoint
+}
+
+/// Das Modell eines Anwendungsfalls lässt sich unabhängig vom Anbieter
+/// umstellen. Diese eine Variable ersetzt die früheren Sonderformen
+/// `ENGAGEMENT_MINIMAX_MODEL`, `FIREWORKS_RICKY_REVIEW_MODEL` und
+/// `ANTHROPIC_HAIKU_MODEL`. Gilt fuer jedes Glied einer Kette, nicht nur
+/// fuer den bevorzugten Anbieter.
+fn apply_model_override(endpoint: &mut LlmEndpoint, use_case: &str) {
     if let Some(model) = nonempty_env(&format!("TB_LLM_MODEL_{}", use_case.to_uppercase())) {
         endpoint.model = model;
     }
-    endpoint
 }
 
 /// Endpunkt-Kette für einen Anwendungsfall: bevorzugter Anbieter zuerst, der
@@ -98,11 +115,12 @@ pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
             .filter(|endpoint| endpoint.api_key.is_some())
             .collect();
     }
-    let fallback = if primary.provider == "fireworks" {
+    let mut fallback = if primary.provider == "fireworks" {
         minimax_endpoint()
     } else {
         fireworks_endpoint()
     };
+    apply_model_override(&mut fallback, use_case);
     [primary, fallback]
         .into_iter()
         .filter(|endpoint| endpoint.api_key.is_some())
@@ -248,6 +266,7 @@ mod tests {
             "ANTHROPIC_MODEL",
             "TB_LLM_PROVIDER_AI_ANALYSIS",
             "TB_LLM_MODEL_TITLE_AI",
+            "TB_LLM_MODEL_SPAM_JUDGE",
         ] {
             std::env::remove_var(v);
         }
@@ -383,6 +402,42 @@ mod tests {
         );
         // Andere Anwendungsfaelle bleiben unberuehrt.
         assert_eq!(endpoint_for("spam_judge").model, FIREWORKS_DEFAULT_MODEL);
+        clear();
+    }
+
+    #[test]
+    fn provider_default_zieht_anthropic_faelle_nicht_um() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("ANTHROPIC_API_KEY", "a");
+        std::env::set_var("MINIMAX_API_KEY", "m");
+        std::env::set_var(PROVIDER_DEFAULT_ENV, "minimax");
+
+        // Der globale Default greift fuer den Rest des Bots ...
+        assert_eq!(endpoint_for("title_ai").provider, "minimax");
+        // ... laesst die Premium-Faelle aber in Ruhe.
+        for (use_case, _) in ANTHROPIC_USE_CASES {
+            assert_eq!(endpoint_for(use_case).provider, "anthropic", "{use_case}");
+        }
+
+        // Nur die eigene Variable lenkt einen Anthropic-Fall um.
+        std::env::set_var("TB_LLM_PROVIDER_AI_ANALYSIS", "minimax");
+        assert_eq!(endpoint_for("ai_analysis").provider, "minimax");
+        assert_eq!(endpoint_for("ai_chat").provider, "anthropic");
+        clear();
+    }
+
+    #[test]
+    fn modell_je_anwendungsfall_gilt_auch_fuer_das_ausweichglied() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("FIREWORK_API_KEY", "f");
+        std::env::set_var("MINIMAX_API_KEY", "m");
+        std::env::set_var("TB_LLM_MODEL_SPAM_JUDGE", "eigenes-modell");
+
+        let kette = endpoint_chain("spam_judge");
+        assert_eq!(kette.len(), 2);
+        assert!(kette.iter().all(|e| e.model == "eigenes-modell"));
         clear();
     }
 
