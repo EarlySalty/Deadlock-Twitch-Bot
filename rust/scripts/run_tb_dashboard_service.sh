@@ -95,20 +95,17 @@ export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:
 # gesetzter URL an einen Legacy-Proxy weiter. Leer bedeutet 404 statt Proxy.
 export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 
-# self-explainer + SiteChatbot nutzen den EngagementMinimaxClient. Dessen
-# Code-Default MiniMax-M3 ist ein Reasoning-Modell: es liefert die Antwort nur
-# als <think>-Block, den process_response_text entfernt -> leerer Text ->
+# Der self-explainer hat seinen eigenen Use-Case `dashboard_self_explainer`.
+# Das MiniMax-Reasoning-Modell (MiniMax-M3) liefert die Antwort nur als
+# <think>-Block, den process_response_text entfernt -> leerer Text ->
 # grounded:false -> Dauer-Fallback ("Das kann ich dir hier nicht sicher sagen").
 # MiniMax-Text-01 antwortet direkt (kein <think>) und ist das passende Modell.
-# HART gesetzt (kein :- Default): der Infisical-Bulk-Load oben setzt das Modell
-# ggf. auf das Reasoning-Modell; hier bewusst uebersteuert, weil es den
-# self-explainer sonst dauerhaft verstummen laesst.
-# Die Variable heisst seit der LLM-Zentralisierung TB_LLM_MODEL_<USE_CASE>;
-# ENGAGEMENT_MINIMAX_MODEL wirkt nicht mehr. Der Anbieter wird mitgesetzt:
-# TB_LLM_MODEL_ENGAGEMENT gilt fuer jeden Anbieter, und ein MiniMax-Modellname
-# an einer Fireworks-Adresse waere ein Modellfehler. Frueher erledigte das ein
-# Sonderpfad im Code; jetzt steht es hier, wo man es sieht.
-export TB_LLM_PROVIDER_ENGAGEMENT="minimax"
-export TB_LLM_MODEL_ENGAGEMENT="MiniMax-Text-01"
+# Der Anbieter wird mitgesetzt: TB_LLM_MODEL_<USE_CASE> gilt fuer jeden
+# Anbieter, und ein MiniMax-Modellname an einer Fireworks-Adresse waere ein
+# Modellfehler. Nur dieser eine Use-Case wird umgestellt; der uebrige
+# `engagement`-Pfad (ai_chat/ai_analysis-MiniMax-Zweige, chat-deep-analysis)
+# bleibt auf Auto-Auswahl mit Fireworks vorn und MiniMax als Ausweichweg.
+export TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER="${TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER:-minimax}"
+export TB_LLM_MODEL_DASHBOARD_SELF_EXPLAINER="${TB_LLM_MODEL_DASHBOARD_SELF_EXPLAINER:-MiniMax-Text-01}"
 
 exec "$ROOT_DIR/rust/target/release/tb-dashboard"

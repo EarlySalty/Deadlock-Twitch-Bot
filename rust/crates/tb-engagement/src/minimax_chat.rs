@@ -633,28 +633,38 @@ sagen') und niemals dir was zusammenspinnen.{knowledge_override}"
     )
 }
 
-/// Fehler beim Modell-Aufruf — beide Varianten mappt die Pipeline auf
-/// `PROVIDER_ERROR` (Python: `LLMProviderUnavailable` vs. generische Exception).
+/// Fehler beim Modell-Aufruf. Die Pipeline mappt alles ausser `Unavailable`
+/// auf `PROVIDER_ERROR`; die Varianten bleiben getrennt, damit Logs und
+/// Aufrufer eine gerissene Zeitgrenze von einem 4xx unterscheiden koennen.
 #[derive(Debug)]
 pub enum GenerateError {
     /// Kein API-Key gesetzt.
     Unavailable(LlmProviderUnavailable),
-    /// Request/Parse fehlgeschlagen (Netzwerk, non-2xx, ungültiger Body).
+    /// Zeitgrenze gerissen.
+    Timeout(String),
+    /// Verbindung, TLS, Abbruch.
+    Transport(String),
+    /// Antwort kam, war aber kein Erfolg (non-2xx).
     Http(String),
+    /// Antwort kam an, war aber nicht verwertbar (leer, ungueltiger Body).
+    Unparsable(String),
 }
 
 impl std::fmt::Display for GenerateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GenerateError::Unavailable(e) => write!(f, "{e}"),
-            GenerateError::Http(e) => write!(f, "MiniMax-Call fehlgeschlagen: {e}"),
+            GenerateError::Timeout(e) => write!(f, "Modell-Aufruf: Zeitgrenze gerissen: {e}"),
+            GenerateError::Transport(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
+            GenerateError::Http(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
+            GenerateError::Unparsable(e) => write!(f, "Modell-Antwort unbrauchbar: {e}"),
         }
     }
 }
 
 impl std::error::Error for GenerateError {}
 
-/// Anwendungsfall dieses Clients in der gemeinsamen Anbieterauswahl.
+/// Standard-Anwendungsfall dieses Clients in der gemeinsamen Anbieterauswahl.
 const USE_CASE: &str = "engagement";
 
 impl From<tb_llm::LlmError> for GenerateError {
@@ -663,7 +673,10 @@ impl From<tb_llm::LlmError> for GenerateError {
             tb_llm::LlmError::Unavailable(detail) => {
                 Self::Unavailable(LlmProviderUnavailable(detail))
             }
-            other => Self::Http(other.to_string()),
+            tb_llm::LlmError::Timeout(detail) => Self::Timeout(detail),
+            tb_llm::LlmError::Transport(detail) => Self::Transport(detail),
+            tb_llm::LlmError::Unparsable(detail) => Self::Unparsable(detail),
+            http @ tb_llm::LlmError::Http { .. } => Self::Http(http.to_string()),
         }
     }
 }
@@ -682,7 +695,11 @@ impl From<tb_llm::LlmError> for GenerateError {
 /// Rangfolgen für dieselben Variablen sind eine Fehlerquelle, kein Netz. Das
 /// Modell dieses Anwendungsfalls stellt `TB_LLM_MODEL_ENGAGEMENT` um.
 pub struct EngagementMinimaxClient {
+    use_case: &'static str,
     endpoint: tb_llm::LlmEndpoint,
+    /// Explizite Parameter (Schluessel, Adresse, Modell) nageln den Endpunkt
+    /// fest; ohne sie arbeitet der Aufruf die Ausweichkette des Eingangs ab.
+    festgenagelt: bool,
     timeout: Duration,
 }
 
@@ -695,18 +712,42 @@ impl EngagementMinimaxClient {
         model: Option<String>,
         timeout: Option<Duration>,
     ) -> Self {
-        let mut endpoint = tb_llm::endpoint_for(USE_CASE);
+        Self::build(USE_CASE, api_key, base_url, model, timeout)
+    }
+
+    /// Wie [`Self::new`] ohne explizite Parameter, aber unter einem eigenen
+    /// Anwendungsfall. So bekommt etwa der Self-Explainer im Dashboard sein
+    /// eigenes `TB_LLM_PROVIDER_<USE_CASE>`/`TB_LLM_MODEL_<USE_CASE>`, ohne
+    /// den gesamten `engagement`-Pfad mitzuziehen.
+    pub fn for_use_case(use_case: &'static str, timeout: Option<Duration>) -> Self {
+        Self::build(use_case, None, None, None, timeout)
+    }
+
+    fn build(
+        use_case: &'static str,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        model: Option<String>,
+        timeout: Option<Duration>,
+    ) -> Self {
+        let mut endpoint = tb_llm::endpoint_for(use_case);
+        let mut festgenagelt = false;
         if let Some(api_key) = api_key.filter(|k| !k.is_empty()) {
             endpoint.api_key = Some(api_key);
+            festgenagelt = true;
         }
         if let Some(base_url) = base_url.filter(|u| !u.is_empty()) {
             endpoint.base_url = base_url;
+            festgenagelt = true;
         }
         if let Some(model) = model.filter(|m| !m.is_empty()) {
             endpoint.model = model;
+            festgenagelt = true;
         }
         Self {
+            use_case,
             endpoint,
+            festgenagelt,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
         }
     }
@@ -887,17 +928,23 @@ impl EngagementMinimaxClient {
         Ok(response.text)
     }
 
-    /// Einziger Weg nach draußen: Endpunkt und Zeitgrenze dieses Clients an den
-    /// gemeinsamen Eingang, Fehler in die Form bringen, die die Aufrufer kennen.
+    /// Einziger Weg nach draußen: Zeitgrenze dieses Clients an den gemeinsamen
+    /// Eingang, Fehler in die Form bringen, die die Aufrufer kennen.
+    ///
+    /// Ohne explizite Parameter laeuft der Aufruf ueber die Ausweichkette
+    /// (`endpoint_chain`): faellt der bevorzugte Anbieter aus, kommt der
+    /// andere dran. Nur ein festgenagelter Endpunkt (Tests, Sonderfaelle)
+    /// umgeht die Kette.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        tb_llm::complete(
-            USE_CASE,
-            request
-                .timeout(self.timeout)
-                .endpoint(self.endpoint.clone()),
-        )
-        .await
-        .map_err(GenerateError::from)
+        let request = request.timeout(self.timeout);
+        let request = if self.festgenagelt {
+            request.endpoint(self.endpoint.clone())
+        } else {
+            request.failover()
+        };
+        tb_llm::complete(self.use_case, request)
+            .await
+            .map_err(GenerateError::from)
     }
 }
 

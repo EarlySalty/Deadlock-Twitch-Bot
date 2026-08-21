@@ -119,9 +119,25 @@ Entfallen mit diesem Umbau:
 **Wichtig beim Umstellen eines Modells:** `TB_LLM_MODEL_<USE_CASE>` gilt fuer
 jeden Anbieter. Wer ein MiniMax-Modell setzt, waehrend die Auswahl Fireworks
 ergibt, bekommt einen Modellfehler vom Anbieter. Deshalb setzt der
-Dashboard-Wrapper `TB_LLM_PROVIDER_ENGAGEMENT=minimax` neben
-`TB_LLM_MODEL_ENGAGEMENT=MiniMax-Text-01`. Frueher hielt ein Sonderpfad im Code
-das auseinander; die Bedingung steht jetzt im Wrapper, wo sie sichtbar ist.
+Dashboard-Wrapper fuer den Self-Explainer
+`TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER=minimax` neben
+`TB_LLM_MODEL_DASHBOARD_SELF_EXPLAINER=MiniMax-Text-01` (beides mit `:-`,
+also ueberschreibbar). Frueher hielt ein Sonderpfad im Code das auseinander;
+die Bedingung steht jetzt im Wrapper, wo sie sichtbar ist.
+
+**Verhaltensaenderung Self-Explainer:** Der Self-Explainer im Dashboard hat
+seinen eigenen Use-Case `dashboard_self_explainer` (vorher lief er unter
+`engagement`). Ein hartes `TB_LLM_PROVIDER_ENGAGEMENT=minimax` im Wrapper haette
+sonst dem ganzen `engagement`-Pfad (MiniMax-Zweige von `ai_chat`/`ai_analysis`,
+`chat-deep-analysis`, Judges) den Fireworks-Vorrang und den Ausweichweg
+genommen. Jetzt bleibt `engagement` auf Auto-Auswahl (Fireworks vorn, MiniMax
+als Ausweichweg), und nur der Self-Explainer bekommt MiniMax-Text-01.
+
+Der `EngagementMinimaxClient` arbeitet ohne explizite Parameter die
+Ausweichkette (`endpoint_chain`) ab, statt sich auf einen Endpunkt
+festzunageln: faellt Fireworks aus, antwortet MiniMax. Nur ein Client mit
+explizit gesetztem Schluessel, Adresse oder Modell (Tests, Sonderfaelle) bleibt
+auf diesem einen Endpunkt.
 
 Der Schluessel eines Anbieters kommt jetzt ueberall aus `tb_llm::keys`. Fuer
 Fireworks heisst das: `FIREWORK_API_KEY` gewinnt vor `FIREWORKS_API_KEY`. Das
@@ -139,6 +155,7 @@ Fehlerquelle, kein Sicherheitsnetz.
 | Anwendungsfall | Aufrufer | Anbieter ohne Konfiguration |
 |---|---|---|
 | `engagement` | `minimax_chat.rs`, dazu alle Judges und Dashboard-Pfade darauf | Fireworks, sonst MiniMax |
+| `dashboard_self_explainer` | `handlers/self_explainer.rs` ueber `EngagementMinimaxClient::for_use_case` | MiniMax-Text-01 (Wrapper), sonst Auto |
 | `title_ai` | `title_ai.rs` (Titel und Insight) | Fireworks, sonst MiniMax |
 | `spam_judge` | `scam_pitch.rs`, mit eigener Kette | Fireworks, sonst MiniMax |
 | `crew_guard` | `crew_guard.rs`, mit eigenem Endpunkt | siehe unten |
