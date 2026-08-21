@@ -133,6 +133,20 @@ im Deadlock-Docs-Korpus.
   Block in Auswertung haelt seinen Lauf offen, der Sweep greift ihn also nicht
   vorzeitig ab.
 
+## Warum in der Concierge-Wissensbasis nichts dazu steht
+
+`docs/funktionsweise/` ist die Wissensbasis eines Frage-Antwort-Agenten, der
+Streamern und Zuschauern Auskunft gibt. Der durchgehende Ton-Mitschnitt und das
+Drive-Archiv stehen dort bewusst **nicht** drin: das ist kein Selbstbedienungs-
+Thema fuer einen Bot, sondern eines, das direkt zwischen Betreiber und Streamer
+gehoert. Wer betroffen ist, wird per DM angesprochen; ein Widerspruch kommt
+ueber `STREAM_AUDIT_DRIVE_EXCLUDE` in die Unit.
+
+Das ist eine Betreiberentscheidung, keine Luecke. Die eine Aussage in der
+Wissensbasis, die ohne den Mitschnitt falsch waere ("Der Ton verlaesst den
+Rechner nicht"), ist auf den Transkriptionsweg eingegrenzt, damit dort nichts
+Unwahres steht.
+
 ## Aufbewahrung im Drive
 
 Der Dienst loescht im Drive **nichts**. `STREAM_AUDIT_RETENTION_DAYS` und der

@@ -76,17 +76,6 @@ keine Sanktionen und postet nichts öffentlich.
 - Zum Aufschreiben des Gesagten verlässt der Ton den Rechner nicht. Zeigt die
   Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
   wurde ausdrücklich erlaubt.
-- Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt.
-  Nach dem Stream wandert sie in unser Google Drive, damit später jemand
-  nachhören kann. Das passiert nicht sofort, sondern beim nächsten
-  Aufräumdurchgang, meist innerhalb weniger Stunden.
-- Zusammen mit der Tonaufnahme gehen auch die Protokolle des Streams dorthin.
-  Ist das Mitschreiben des Gesagten eingeschaltet, ist der vollständige
-  Wortlaut dabei, ungekürzt und ohne Schwärzung. Wer das für seinen Kanal nicht
-  will, sagt Bescheid: dann wird weder aufgenommen noch etwas hochgeladen.
-- Kommt die Tonaufnahme nicht in unser Google Drive, wird sie auf dem Rechner
-  gelöscht: nach der eingestellten Frist plus zwei Wochen Aufschlag, mit dem
-  wir einen kaputten Upload noch reparieren können. Liegen bleibt sie nicht.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
@@ -99,15 +88,10 @@ keine Sanktionen und postet nichts öffentlich.
   persistente Akte enthält weiter nur das geschwärzte Zitat und die Prüfsumme.
 - Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich
   eingeschaltet ist. Standard ist: nicht speichern.
-- Auf dem Rechner werden Aufnahmen und Protokolle nach der eingestellten Frist
-  gelöscht (Standard 30 Tage). Dateien liegen nur für den eigenen Benutzer
-  lesbar.
-- **Im Google Drive gilt diese Frist nicht.** Was dort einmal liegt, bleibt
-  liegen, bis es jemand von Hand löscht. Wer will, dass seine Aufnahmen dort
-  verschwinden, sagt Bescheid, dann räumen wir sie weg.
-- Ein aufbewahrter Prüf-Ausschnitt enthält Bild und Ton, weil er die
-  Twitch-Spur so speichert, wie sie kommt. Geprüft wird ausschließlich der Ton.
-  Das ist nicht die durchgehende Tonaufnahme von oben: die ist reiner Ton.
+- Aufnahmen und Protokolle werden nach der eingestellten Frist gelöscht
+  (Standard 30 Tage). Dateien liegen nur für den eigenen Benutzer lesbar.
+- Ein aufbewahrter Mitschnitt enthält Bild und Ton, weil er die Twitch-Spur so
+  speichert, wie sie kommt. Geprüft wird ausschließlich der Ton.
 
 ## Häufige Fragen
 
