@@ -1421,21 +1421,22 @@ mod tests {
     // Begründung (geteilter OnceCell-PG-Pool über viele `#[tokio::test]`-Runtimes).
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn generate_ohne_key_unavailable() {
+        // Die Env-Sperre haelt parallele Tests davon ab, waehrenddessen einen
+        // Fireworks- oder MiniMax-Key zu setzen; sonst wird aus "kein Key"
+        // ein Transportfehler gegen 127.0.0.1:1.
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
         let client = EngagementMinimaxClient::new(
-            Some(String::new()), // leer → kein Key (Env hier ignoriert)
+            Some(String::new()), // leer → kein Key
             Some("http://127.0.0.1:1".to_string()),
             Some("MiniMax-M3".to_string()),
             None,
         );
-        // Nur valide, wenn keine Env-Keys gesetzt sind (Testprozess i.d.R. ohne).
-        if std::env::var("MINIMAX_TOKEN_PLAN_KEY").is_err()
-            && std::env::var("MINIMAX_API_KEY").is_err()
-        {
-            match client.generate("s", &[], 500, 480).await {
-                Err(GenerateError::Unavailable(_)) => {}
-                other => panic!("erwartete Unavailable, war {other:?}"),
-            }
+        match client.generate("s", &[], 500, 480).await {
+            Err(GenerateError::Unavailable(_)) => {}
+            other => panic!("erwartete Unavailable, war {other:?}"),
         }
     }
 }
