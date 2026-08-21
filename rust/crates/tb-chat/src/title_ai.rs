@@ -485,44 +485,8 @@ pub enum GenerateTitleError {
     Http(String),
 }
 
-#[derive(serde::Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-    usage: Option<serde_json::Value>,
-}
-
-#[derive(serde::Deserialize)]
-struct ChatChoice {
-    message: ChatMessage,
-}
-
-#[derive(serde::Deserialize)]
-struct ChatMessage {
-    content: Option<String>,
-}
-
-struct MiniMaxCompletion {
-    content: String,
-    tokens_in: i64,
-    tokens_out: i64,
-}
-
-fn usage_i64(usage: &serde_json::Value, keys: &[&str]) -> i64 {
-    keys.iter()
-        .find_map(|key| usage.get(*key).and_then(serde_json::Value::as_i64))
-        .unwrap_or(0)
-        .max(0)
-}
-
-fn usage_tokens(usage: Option<&serde_json::Value>) -> (i64, i64) {
-    let Some(usage) = usage else {
-        return (0, 0);
-    };
-    (
-        usage_i64(usage, &["prompt_tokens", "tokens_in", "input_tokens"]),
-        usage_i64(usage, &["completion_tokens", "tokens_out", "output_tokens"]),
-    )
-}
+/// Anwendungsfall in der gemeinsamen Anbieterauswahl.
+const USE_CASE: &str = "title_ai";
 
 /// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
 /// auf einen „wahren" Wert gesetzt ist.
@@ -537,64 +501,45 @@ fn pentest_disable_rate_limits() -> bool {
         .unwrap_or(false)
 }
 
-async fn minimax_chat_completion(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
+/// Ein Titel- oder Insight-Aufruf ueber den gemeinsamen Eingang.
+///
+/// Der Titel-Pfad haengt am Twitch-Dashboard und laeuft in Stosszeiten in
+/// 429er; deshalb zwei Wiederholungen mit `Retry-After`, wie bisher. Verbucht
+/// wird unter dem jeweiligen Zweck, damit Titel und Insight im Ledger
+/// unterscheidbar bleiben.
+async fn titel_completion(
+    endpoint: &tb_llm::LlmEndpoint,
+    purpose: &str,
     prompt: &str,
     temperature: f64,
-    max_tokens: u32,
-) -> Result<MiniMaxCompletion, String> {
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(240))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let mut resp = None;
-    for attempt in 0..3 {
-        let current = client
-            .post(&url)
-            .bearer_auth(api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if current.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || attempt == 2 {
-            resp = Some(current);
-            break;
-        }
-        let retry_after = current
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(1 << attempt)
-            .min(5);
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
-    }
-    let resp = resp.ok_or_else(|| "MiniMax request produced no response".to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let parsed: ChatResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let (tokens_in, tokens_out) = usage_tokens(parsed.usage.as_ref());
-    let content = parsed
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|c| c.message.content)
-        .unwrap_or_default();
-    Ok(MiniMaxCompletion {
-        content,
-        tokens_in,
-        tokens_out,
-    })
+    max_tokens: i64,
+) -> Result<String, String> {
+    let response = tb_llm::complete(
+        USE_CASE,
+        tb_llm::Request::prompt(prompt)
+            .temperature(temperature)
+            .max_tokens(max_tokens)
+            .retry_on_429(2)
+            .ledger_purpose(purpose)
+            .endpoint(endpoint.clone()),
+    )
+    .await
+    .map_err(|error| match error {
+        // Die Fehlerform der bisherigen Meldungen bleibt: die Aufrufer und die
+        // Tests lesen "HTTP <status>".
+        tb_llm::LlmError::Http { status, .. } => format!("HTTP {status}"),
+        other => other.to_string(),
+    })?;
+    Ok(response.text)
+}
+
+/// Endpunkt dieses Anwendungsfalls aus expliziten Testwerten.
+fn endpunkt(base_url: &str, api_key: &str, model: &str) -> tb_llm::LlmEndpoint {
+    let mut endpoint = tb_llm::endpoint_for(USE_CASE);
+    endpoint.base_url = base_url.to_string();
+    endpoint.model = model.to_string();
+    endpoint.api_key = Some(api_key.to_string());
+    endpoint
 }
 
 /// Kern von `generate_title` mit injizierbarem Endpoint (für Tests).
@@ -620,22 +565,16 @@ pub async fn generate_title_with(
         ratio,
         live_state,
     );
-    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.35, 2000)
-        .await
-        .map_err(GenerateTitleError::Http)?;
-    tb_llm::ledger::record(
+    let content = titel_completion(
+        &endpunkt(base_url, api_key, model),
         "title",
-        model,
-        completion.tokens_in,
-        completion.tokens_out,
-        true,
+        &prompt,
+        0.35,
+        2000,
     )
-    .await;
-    let result = sanitize_title_result(
-        parse_title_response(&completion.content),
-        keywords,
-        rank_display,
-    );
+    .await
+    .map_err(GenerateTitleError::Http)?;
+    let result = sanitize_title_result(parse_title_response(&content), keywords, rank_display);
     if result.primary.is_empty() {
         return Err(GenerateTitleError::Http(
             "MiniMax returned no usable title".to_string(),
@@ -662,7 +601,7 @@ pub async fn generate_title(
             .check_and_record(streamer_id, source)
             .map_err(GenerateTitleError::RateLimit)?;
     }
-    let endpoint = tb_llm::endpoint_for("title_ai");
+    let endpoint = tb_llm::endpoint_for(USE_CASE);
     let api_key = endpoint
         .api_key
         .as_deref()
@@ -794,18 +733,16 @@ pub async fn generate_insight_with(
         return None;
     }
     let prompt = build_insight_prompt(history, period_label);
-    let completion = minimax_chat_completion(base_url, api_key, model, &prompt, 0.5, 1500)
-        .await
-        .ok()?;
-    tb_llm::ledger::record(
+    let content = titel_completion(
+        &endpunkt(base_url, api_key, model),
         "title-insight",
-        model,
-        completion.tokens_in,
-        completion.tokens_out,
-        true,
+        &prompt,
+        0.5,
+        1500,
     )
-    .await;
-    parse_insight_response(&completion.content)
+    .await
+    .ok()?;
+    parse_insight_response(&content)
 }
 
 /// Wöchentliche Insight-Analyse via MiniMax (Python `generate_insight`).
@@ -817,7 +754,7 @@ pub async fn generate_insight(
     if history.is_empty() {
         return None;
     }
-    let endpoint = tb_llm::endpoint_for("title_ai");
+    let endpoint = tb_llm::endpoint_for(USE_CASE);
     let key = endpoint.api_key.as_deref()?;
     generate_insight_with(
         &endpoint.base_url,
@@ -951,14 +888,8 @@ mod tests {
         assert_eq!(format_metric(None, 2), "n/a");
     }
 
-    #[test]
-    fn usage_tokens_liest_minimax_usage() {
-        let usage = serde_json::json!({
-            "prompt_tokens": 123,
-            "completion_tokens": 45,
-        });
-        assert_eq!(usage_tokens(Some(&usage)), (123, 45));
-    }
+    // Das Auslesen der Token-Zahlen liegt jetzt im gemeinsamen Eingang und wird
+    // dort getestet (tb-llm, hub::tests).
 
     #[test]
     fn extract_json_payload_varianten() {

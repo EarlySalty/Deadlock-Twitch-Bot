@@ -681,6 +681,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn negative_und_fehlende_token_zahlen_werden_geklemmt() {
+        // Ein Anbieter, der Unsinn meldet, darf keine negativen Zeilen ins
+        // Ledger schreiben.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": -7}
+            })))
+            .mount(&server)
+            .await;
+
+        let response = complete(
+            "test",
+            Request::prompt("hi")
+                .no_ledger()
+                .endpoint(endpoint(&server, "fireworks")),
+        )
+        .await
+        .expect("Antwort");
+        assert_eq!(response.prompt_tokens, Some(0));
+        assert_eq!(response.completion_tokens, None);
+    }
+
+    #[tokio::test]
     async fn reasoning_content_greift_wenn_content_leer_ist() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
