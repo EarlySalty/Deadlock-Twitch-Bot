@@ -36,6 +36,7 @@ import {
   UPLINK_LAST_LABEL,
   UPLINK_PLATFORMS,
   UPLINK_REAUTH_HREF,
+  UPLINK_TWITCH_LOGIN_HINT,
   UPLINK_TWITCH_SCOPE_HINT,
   UPLINK_WAITLIST_FEHLER,
   UPLINK_WAITLIST_TEXT,
@@ -51,6 +52,9 @@ import {
   toEingabeZeit,
   toRelayZeit,
   twitchFehlertext,
+  uplinkAdminBloeckeSichtbar,
+  uplinkAnsicht,
+  uplinkStreamerBloeckeSichtbar,
   zielRumpf,
 } from './uplinkModel';
 import {
@@ -689,10 +693,20 @@ function VerwaltungsKarte() {
 export function UplinkPage() {
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
+  const planName = authStatus?.plan?.planName ?? 'Free';
+  const ansicht = uplinkAnsicht({
+    isAdmin: authStatus?.isAdmin,
+    twitchLogin: authStatus?.twitchLogin,
+  });
+  const streamerBloeckeSichtbar = uplinkStreamerBloeckeSichtbar(ansicht);
+  const adminBloeckeSichtbar = uplinkAdminBloeckeSichtbar(ansicht);
+  const streamerAbfrageAktiv =
+    authStatus?.authenticated === true && streamerBloeckeSichtbar;
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
     retry: false,
+    enabled: streamerAbfrageAktiv,
   });
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
@@ -702,7 +716,7 @@ export function UplinkPage() {
     queryKey: ['uplink-destinations'],
     queryFn: fetchUplinkDestinations,
     retry: false,
-    enabled: Boolean(data?.enabled),
+    enabled: streamerBloeckeSichtbar && Boolean(data?.enabled),
   });
 
   const zieleNachPlattform = useMemo(() => {
@@ -713,8 +727,6 @@ export function UplinkPage() {
     return karte;
   }, [ziele.data]);
 
-  const planName = authStatus?.plan?.planName ?? 'Free';
-  const istAdmin = Boolean(authStatus?.isAdmin);
   const zieleNeuLaden = () => {
     queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
@@ -758,20 +770,27 @@ export function UplinkPage() {
               </p>
             </Rise>
 
-            {isLoading && (
+            {authStatus && streamerBloeckeSichtbar && isLoading && (
               <div className="panel-card flex items-center gap-2 rounded-2xl p-6 text-text-secondary">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Status wird geladen
               </div>
             )}
 
-            {isError && (
+            {streamerBloeckeSichtbar && isError && (
               <div className="panel-card rounded-2xl p-6 text-sm text-warning">
                 {fehlertext(error, 'Uplink ist gerade nicht erreichbar.')}
               </div>
             )}
 
-            {data && !data.enabled && (
+            {ansicht === 'admin-ohne-twitch' && (
+              <Rise className="panel-card space-y-2 rounded-2xl p-6">
+                <h2 className="text-lg font-bold text-white">Persönliche Ansicht</h2>
+                <p className="text-sm text-text-secondary">{UPLINK_TWITCH_LOGIN_HINT}</p>
+              </Rise>
+            )}
+
+            {streamerBloeckeSichtbar && data && !data.enabled && (
               <div className="panel-card relative overflow-hidden rounded-2xl p-6">
                 <div className="absolute inset-0 bg-black/20" />
                 <div className="relative space-y-3">
@@ -797,7 +816,7 @@ export function UplinkPage() {
               </div>
             )}
 
-            {data?.enabled && (
+            {streamerBloeckeSichtbar && data?.enabled && (
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
@@ -828,7 +847,7 @@ export function UplinkPage() {
               </div>
             )}
 
-            {istAdmin && <VerwaltungsKarte />}
+            {adminBloeckeSichtbar && <VerwaltungsKarte />}
           </div>
         </div>
       </div>
