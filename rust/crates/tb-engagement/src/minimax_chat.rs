@@ -714,8 +714,16 @@ impl EngagementMinimaxClient {
     /// Anwendungsfall. So bekommt etwa der Self-Explainer im Dashboard sein
     /// eigenes `TB_LLM_PROVIDER_<USE_CASE>`/`TB_LLM_MODEL_<USE_CASE>`, ohne
     /// den gesamten `engagement`-Pfad mitzuziehen.
+    ///
+    /// Festgenagelt, kein Failover: Ein eigener Anwendungsfall existiert, weil
+    /// genau dieser Anbieter mit genau diesem Modell gewollt ist (der
+    /// Self-Explainer braucht MiniMax-Text-01 ohne `<think>`-Block). Die
+    /// Ausweichkette wuerde als zweites Glied Fireworks/DeepSeek erreichen,
+    /// also das Reasoning-Modell, das der Wrapper gerade vermeiden will.
     pub fn for_use_case(use_case: &'static str, timeout: Option<Duration>) -> Self {
-        Self::build(use_case, None, None, None, timeout)
+        let mut client = Self::build(use_case, None, None, None, timeout);
+        client.festgenagelt = true;
+        client
     }
 
     fn build(
@@ -930,8 +938,12 @@ impl EngagementMinimaxClient {
     /// (`endpoint_chain`): faellt der bevorzugte Anbieter aus, kommt der
     /// andere dran. Nur ein festgenagelter Endpunkt (Tests, Sonderfaelle)
     /// umgeht die Kette.
+    ///
+    /// Die Zeitgrenze des Clients gilt als Gesamtfrist ueber die ganze Kette
+    /// (Chat 30 s, Dashboard-Folgechat 240 s), nicht je Glied: eine
+    /// Twitch-Antwort, die erst nach zwei vollen Fristen kommt, ist keine.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        let request = request.timeout(self.timeout);
+        let request = request.timeout(self.timeout).total_deadline(self.timeout);
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {
@@ -1021,10 +1033,28 @@ mod tests {
             "MINIMAX_API_KEY",
             "MINIMAX_TOKEN_PLAN_KEY",
             "MINIMAX_BASE_URL",
+            "MINMAX",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
             "TB_LLM_MODEL_ENGAGEMENT",
         ] {
             std::env::remove_var(v);
         }
+    }
+
+    /// Env-Sperre plus Aufraeumen beim Verlassen, auch bei Panik.
+    struct ProviderEnvGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl Drop for ProviderEnvGuard {
+        fn drop(&mut self) {
+            clear_provider_env();
+        }
+    }
+
+    fn provider_env() -> ProviderEnvGuard {
+        let guard = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+        ProviderEnvGuard(guard)
     }
 
     #[test]
@@ -1426,8 +1456,7 @@ mod tests {
         // Die Env-Sperre haelt parallele Tests davon ab, waehrenddessen einen
         // Fireworks- oder MiniMax-Key zu setzen; sonst wird aus "kein Key"
         // ein Transportfehler gegen 127.0.0.1:1.
-        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        clear_provider_env();
+        let _g = provider_env();
         let client = EngagementMinimaxClient::new(
             Some(String::new()), // leer → kein Key
             Some("http://127.0.0.1:1".to_string()),
