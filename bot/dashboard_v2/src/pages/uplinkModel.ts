@@ -91,6 +91,65 @@ export function aktiveSessionId(
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+/** `/me` muss einen Wechsel der laufenden Session ohne Seitenreload sehen. */
+export const UPLINK_ME_REFETCH_INTERVAL_MS = 15_000;
+
+/** React-Query-Schlüssel, damit eine neue Session neue Messwerte anfragt. */
+export function uplinkMetricsQueryKey(
+  sessionId: number | null | undefined,
+): readonly ['uplink-metrics', number | null] {
+  return ['uplink-metrics', sessionId ?? null];
+}
+
+export interface UplinkScheduleDraftRow {
+  von: string;
+  bis: string;
+}
+
+export interface UplinkScheduleSavePlan {
+  entries: Array<{ starts_at: string; ends_at: string }> | null;
+  error: string | null;
+}
+
+/**
+ * Prüft den sichtbaren Zeitplan vor dem PUT.
+ *
+ * `null` bedeutet: Es darf kein PUT mit einer Ersatzliste abgeschickt werden.
+ * So wird ein nicht geladener oder unlesbarer Bestand niemals als Löschung
+ * interpretiert.
+ */
+export function scheduleSavePlan(
+  rows: UplinkScheduleDraftRow[],
+  status: { loaded: boolean; failed: boolean },
+): UplinkScheduleSavePlan {
+  if (status.failed) {
+    return { entries: null, error: 'Der Zeitplan konnte nicht geladen werden.' };
+  }
+  if (!status.loaded) {
+    return { entries: null, error: 'Der Zeitplan ist noch nicht geladen.' };
+  }
+
+  const entries: Array<{ starts_at: string; ends_at: string }> = [];
+  for (const [index, row] of rows.entries()) {
+    if (!row.von.trim() || !row.bis.trim()) {
+      return {
+        entries: null,
+        error: `Zeit ${index + 1}: Beginn und Ende müssen ausgefüllt sein.`,
+      };
+    }
+    const startsAt = toRelayZeit(row.von);
+    const endsAt = toRelayZeit(row.bis);
+    if (!startsAt || !endsAt) {
+      return {
+        entries: null,
+        error: `Zeit ${index + 1}: Beginn oder Ende ist ungültig.`,
+      };
+    }
+    entries.push({ starts_at: startsAt, ends_at: endsAt });
+  }
+  return { entries, error: null };
+}
+
 export interface UplinkProfile {
   width: number;
   height: number;
@@ -169,6 +228,32 @@ export const UPLINK_PLATFORMS: UplinkPlatform[] = [
     hint: 'TikTok Live Studio zeigt dir Adresse und Schlüssel beim Anlegen des Streams.',
   },
 ];
+
+export type UplinkZielAbfrage = 'loading' | 'error' | 'ready';
+
+/** Status für die Zielkarte, ohne eine fehlende Antwort als Trennung zu lügen. */
+export function zielVerbindungsLabel(
+  status: UplinkZielAbfrage,
+  enabled: boolean | null | undefined,
+): string {
+  if (status === 'loading') return 'Wird geladen';
+  if (status === 'error') return 'Status nicht verfügbar';
+  return enabled === true ? 'Verbunden' : 'Nicht verbunden';
+}
+
+export type UplinkWartelistenAnzeige = 'loading' | 'error' | 'empty' | 'entries';
+
+/** Eine leere Warteliste darf erst nach einer erfolgreichen Antwort erscheinen. */
+export function wartelistenAnzeige(opts: {
+  isLoading: boolean;
+  isError: boolean;
+  hasData: boolean;
+  entryCount: number;
+}): UplinkWartelistenAnzeige {
+  if (opts.isError) return 'error';
+  if (opts.isLoading || !opts.hasData) return 'loading';
+  return opts.entryCount === 0 ? 'empty' : 'entries';
+}
 
 /**
  * Ob sich der Knopf abschicken lässt.

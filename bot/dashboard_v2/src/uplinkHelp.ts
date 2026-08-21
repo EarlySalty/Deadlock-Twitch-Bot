@@ -11,7 +11,18 @@ export interface UplinkHelpPage {
 }
 
 export function uplinkHelpUrl(file: string): string {
-  return `${import.meta.env.BASE_URL}uplink/${file}`;
+  const baseUrl =
+    typeof import.meta.env?.BASE_URL === 'string' && import.meta.env.BASE_URL
+      ? import.meta.env.BASE_URL
+      : '/twitch/dashboard-v2/';
+  return `${baseUrl}uplink/${file}`;
+}
+
+function helpLink(href: string): string {
+  if (href.startsWith('/') || href.startsWith('#') || /^[a-z][a-z\d+.-]*:/i.test(href)) {
+    return href;
+  }
+  return uplinkHelpUrl(href.replace(/^\.\//, ''));
 }
 
 export function extractUplinkMain(html: string): string {
@@ -19,7 +30,11 @@ export function extractUplinkMain(html: string): string {
   if (!main) {
     throw new Error('Uplink-Hilfe enthält kein main.uplink-doc.');
   }
-  return main[0];
+  return main[0].replace(
+    /(<a\b[^>]*\bhref=["'])([^"']+)(["'])/gi,
+    (_whole, prefix: string, href: string, suffix: string) =>
+      `${prefix}${helpLink(href)}${suffix}`,
+  );
 }
 
 export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {

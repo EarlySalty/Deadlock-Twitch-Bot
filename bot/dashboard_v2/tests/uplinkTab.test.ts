@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { ApiHttpError } from '../src/api/httpError';
 
@@ -34,6 +36,18 @@ import {
   uplinkStreamerBloeckeSichtbar,
   zielRumpf,
 } from '../src/pages/uplinkModel';
+import * as uplinkModel from '../src/pages/uplinkModel';
+
+const DASHBOARD_SRC = join(import.meta.dirname, '..', 'src');
+const TAB_NAVIGATION_SRC = readFileSync(
+  join(DASHBOARD_SRC, 'components', 'layout', 'TabNavigation.tsx'),
+  'utf8',
+);
+const INTERNAL_HOME_SRC = readFileSync(
+  join(DASHBOARD_SRC, 'pages', 'InternalHomeLanding.tsx'),
+  'utf8',
+);
+const UPLINK_PAGE_SRC = readFileSync(join(DASHBOARD_SRC, 'pages', 'Uplink.tsx'), 'utf8');
 
 test('ohne Freigabe sieht nur der Admin-Modus den Uplink-Tab', () => {
   assert.equal(isUplinkTabVisible({ publicVisible: false, isAdmin: false }), false);
@@ -49,6 +63,13 @@ test('ein fehlendes Feld sperrt nichts auf', () => {
   assert.equal(isUplinkTabVisible({ isAdmin: false }), false);
   assert.equal(isUplinkTabVisible({ publicVisible: null, isAdmin: false }), false);
   assert.equal(isUplinkTabVisible({ publicVisible: undefined, isAdmin: null }), false);
+});
+
+test('die Freigabe filtert Uplink in beiden Hauptnavigationen', () => {
+  assert.equal(isUplinkTabVisible({ publicVisible: false, isAdmin: false }), false);
+  assert.match(TAB_NAVIGATION_SRC, /if \(tab\.id === UPLINK_TAB_ID\) return uplinkVisible/);
+  assert.match(INTERNAL_HOME_SRC, /const uplinkVisible = useUplinkVisibility\(isAdminView\)/);
+  assert.match(INTERNAL_HOME_SRC, /\.\.\.\(uplinkVisible\s*\?\s*\[/);
 });
 
 test('Admin ohne Twitch-Identität rendert Verwaltung statt Fehlerkarte', () => {
@@ -221,6 +242,64 @@ test('die Nummer des laufenden Streams kommt aus dem Feld session', () => {
   assert.equal(aktiveSessionId({}), null);
   assert.equal(aktiveSessionId(undefined), null);
   assert.equal(aktiveSessionId(null), null);
+});
+
+test('ein Sessionwechsel baut einen neuen Messwert-Schlüssel und wird abgefragt', () => {
+  assert.deepEqual(uplinkModel.uplinkMetricsQueryKey(7), ['uplink-metrics', 7]);
+  assert.notDeepEqual(
+    uplinkModel.uplinkMetricsQueryKey(7),
+    uplinkModel.uplinkMetricsQueryKey(8),
+  );
+  assert.equal(uplinkModel.UPLINK_ME_REFETCH_INTERVAL_MS, 15_000);
+  assert.match(UPLINK_PAGE_SRC, /refetchInterval: UPLINK_ME_REFETCH_INTERVAL_MS/);
+});
+
+test('Zeitplan-Speichern schützt ungeladene Abrufe und unvollständige Zeilen', () => {
+  assert.deepEqual(
+    uplinkModel.scheduleSavePlan([], { loaded: false, failed: false }),
+    {
+      entries: null,
+      error: 'Der Zeitplan ist noch nicht geladen.',
+    },
+  );
+  assert.deepEqual(
+    uplinkModel.scheduleSavePlan([], { loaded: false, failed: true }),
+    {
+      entries: null,
+      error: 'Der Zeitplan konnte nicht geladen werden.',
+    },
+  );
+  const unvollstaendig = uplinkModel.scheduleSavePlan(
+    [{ von: '2026-08-20T18:30', bis: '' }],
+    { loaded: true, failed: false },
+  );
+  assert.equal(unvollstaendig.entries, null);
+  assert.equal(unvollstaendig.error, 'Zeit 1: Beginn und Ende müssen ausgefüllt sein.');
+  assert.match(UPLINK_PAGE_SRC, /disabled={isLoading \|\| isError}/);
+});
+
+test('Zielkarten behaupten bei Lade- oder Fehlerzustand keine Verbindung', () => {
+  assert.equal(uplinkModel.zielVerbindungsLabel('loading', undefined), 'Wird geladen');
+  assert.equal(
+    uplinkModel.zielVerbindungsLabel('error', undefined),
+    'Status nicht verfügbar',
+  );
+  assert.equal(uplinkModel.zielVerbindungsLabel('ready', false), 'Nicht verbunden');
+});
+
+test('die Warteliste unterscheidet Laden, Fehler und leere Antwort', () => {
+  assert.equal(
+    uplinkModel.wartelistenAnzeige({ isLoading: true, isError: false, hasData: false, entryCount: 0 }),
+    'loading',
+  );
+  assert.equal(
+    uplinkModel.wartelistenAnzeige({ isLoading: false, isError: true, hasData: false, entryCount: 0 }),
+    'error',
+  );
+  assert.equal(
+    uplinkModel.wartelistenAnzeige({ isLoading: false, isError: false, hasData: true, entryCount: 0 }),
+    'empty',
+  );
 });
 
 test('die Statuskarte sagt in Worten, ob der Server mitkommt', () => {

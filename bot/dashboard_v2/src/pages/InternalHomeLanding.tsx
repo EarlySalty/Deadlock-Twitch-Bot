@@ -19,6 +19,7 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { formatNumber, formatDuration } from '@/utils/formatters';
+import { useUplinkVisibility } from '@/hooks/useUplinkVisibility';
 import {
   ArrowRight,
   BarChart3,
@@ -554,6 +555,7 @@ export function InternalHomeLanding() {
   );
 
   const isAdminView = Boolean(authStatus?.isAdmin || authStatus?.isLocalhost);
+  const uplinkVisible = useUplinkVisibility(isAdminView);
   const streamerOverride = isAdminView ? normalizedSelectedStreamer : null;
   const hasValidAdminSelection =
     streamerOverride !== null && partnerLoginSet.has(streamerOverride);
@@ -760,7 +762,7 @@ export function InternalHomeLanding() {
       ? [{ href: analyticsTabHref('overview'), label: 'Analyse', icon: BarChart3 }]
       : []),
     { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
-    { href: PREVIEW_UPLINK_ROUTE, label: 'Uplink', icon: Radio },
+    ...(uplinkVisible ? [{ href: PREVIEW_UPLINK_ROUTE, label: 'Uplink', icon: Radio }] : []),
   ];
   const toolNavItems: SidebarNavItem[] = [
     { href: PREVIEW_VERWALTUNG_ROUTE, label: 'Verwaltung', icon: Settings },

@@ -40,6 +40,15 @@ test('extrahiert nur main.uplink-doc aus einer Streamer-Seite', () => {
   );
 });
 
+test('eingebettete Hilfe verlinkt zurück in das Hilfe-Verzeichnis', () => {
+  assert.match(
+    extractUplinkMain(
+      '<main class="uplink-doc" data-doc="was-ist"><a href="index.html">Zurück</a></main>',
+    ),
+    /href="\/twitch\/dashboard-v2\/uplink\/index\.html"/,
+  );
+});
+
 test('weist eine HTML-Seite ohne main.uplink-doc zurück', () => {
   assert.throws(
     () => extractUplinkMain('<body><h1>Keine Uplink-Hilfe</h1></body>'),

@@ -42,6 +42,7 @@ import {
   UPLINK_TWITCH_SCOPE_HINT,
   UPLINK_WAITLIST_FEHLER,
   UPLINK_WAITLIST_TEXT,
+  UPLINK_ME_REFETCH_INTERVAL_MS,
   aktiveSessionId,
   canSaveDestination,
   clampedFields,
@@ -51,12 +52,15 @@ import {
   killErfolgreich,
   lastProzent,
   speedLage,
+  scheduleSavePlan,
   toEingabeZeit,
-  toRelayZeit,
   twitchFehlertext,
   uplinkAdminBloeckeSichtbar,
   uplinkAnsicht,
+  uplinkMetricsQueryKey,
   uplinkStreamerBloeckeSichtbar,
+  wartelistenAnzeige,
+  zielVerbindungsLabel,
   zielRumpf,
 } from './uplinkModel';
 import {
@@ -165,10 +169,12 @@ function zahlOderUndefined(wert: string): number | undefined {
 function PlattformKarte({
   platform,
   gespeichert,
+  status,
   onSaved,
 }: {
   platform: (typeof UPLINK_PLATFORMS)[number];
   gespeichert?: UplinkDestination;
+  status: 'loading' | 'error' | 'ready';
   onSaved: () => void;
 }) {
   const [eingabe, setEingabe] = useState<ZielEingabe>(() =>
@@ -212,19 +218,24 @@ function PlattformKarte({
     verbunden: Boolean(gespeichert),
   });
   const geklemmt = clampedFields(gespeichert?.requested, gespeichert?.effective);
+  const verbindungsText = zielVerbindungsLabel(status, gespeichert?.enabled);
+  const verbindungsKlasse =
+    status === 'error'
+      ? 'border-warning/30 bg-warning/10 text-warning'
+      : status === 'loading'
+        ? 'border-border text-text-secondary'
+        : gespeichert?.enabled
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-border text-text-secondary';
 
   return (
     <Rise className="panel-card space-y-3 rounded-2xl p-5">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-base font-bold text-white">{platform.label}</h3>
         <span
-          className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
-            gespeichert
-              ? 'border-success/30 bg-success/10 text-success'
-              : 'border-border text-text-secondary'
-          }`}
+          className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${verbindungsKlasse}`}
         >
-          {gespeichert ? 'Verbunden' : 'Nicht verbunden'}
+          {verbindungsText}
         </span>
       </div>
       <p className="text-xs text-text-secondary">{platform.hint}</p>
@@ -339,7 +350,7 @@ function PlattformKarte({
 
 function ZeitplanKarte() {
   const queryClient = useQueryClient();
-  const { data } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-schedule'],
     queryFn: fetchUplinkSchedule,
     retry: false,
@@ -352,15 +363,17 @@ function ZeitplanKarte() {
       von: toEingabeZeit(e.starts_at),
       bis: toEingabeZeit(e.ends_at),
     }));
+  const speicherplan = scheduleSavePlan(zeilen, {
+    loaded: data !== undefined,
+    failed: isError,
+  });
 
   const speichern = useMutation({
     mutationFn: () => {
-      const eintraege: UplinkScheduleEntry[] = [];
-      for (const zeile of zeilen) {
-        const von = toRelayZeit(zeile.von);
-        const bis = toRelayZeit(zeile.bis);
-        if (von && bis) eintraege.push({ starts_at: von, ends_at: bis });
+      if (!speicherplan.entries) {
+        throw new Error(speicherplan.error ?? 'Der Zeitplan kann nicht gespeichert werden.');
       }
+      const eintraege: UplinkScheduleEntry[] = speicherplan.entries;
       return saveUplinkSchedule(eintraege);
     },
     onSuccess: () => {
@@ -382,6 +395,15 @@ function ZeitplanKarte() {
         Trag deine geplanten Zeiten ein. Wir halten dir dann einen Platz frei.
       </p>
       <div className="space-y-2">
+        {isLoading && <p className="text-xs text-text-secondary">Zeitplan wird geladen.</p>}
+        {isError && (
+          <p className="text-xs text-warning">
+            {fehlertext(error, 'Der Zeitplan konnte nicht geladen werden.')}
+          </p>
+        )}
+        {!isLoading && !isError && speicherplan.error && (
+          <p className="text-xs text-warning">{speicherplan.error}</p>
+        )}
         {zeilen.map((zeile, index) => (
           <div key={index} className="flex flex-wrap items-center gap-2">
             <input
@@ -407,13 +429,14 @@ function ZeitplanKarte() {
             </button>
           </div>
         ))}
-        {zeilen.length === 0 && (
+        {!isLoading && !isError && zeilen.length === 0 && (
           <p className="text-xs text-text-secondary">Noch nichts geplant.</p>
         )}
       </div>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
+          disabled={isLoading || isError}
           onClick={() => setEntwurf([...zeilen, { von: '', bis: '' }])}
           className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white"
         >
@@ -421,7 +444,7 @@ function ZeitplanKarte() {
         </button>
         <button
           type="button"
-          disabled={speichern.isPending}
+          disabled={speichern.isPending || speicherplan.entries === null}
           onClick={() => speichern.mutate()}
           className={KNOPF_KLASSE}
         >
@@ -439,7 +462,7 @@ function ZeitplanKarte() {
 
 function StatusKarte({ sessionId }: { sessionId: number | null | undefined }) {
   const { data, isError } = useQuery({
-    queryKey: ['uplink-metrics', sessionId],
+    queryKey: uplinkMetricsQueryKey(sessionId),
     queryFn: () => fetchUplinkMetrics(sessionId as number),
     enabled: typeof sessionId === 'number' && sessionId > 0,
     refetchInterval: 15000,
@@ -562,6 +585,12 @@ function VerwaltungsKarte() {
   });
 
   const daten = uebersicht.data;
+  const wartelistenStatus = wartelistenAnzeige({
+    isLoading: warteliste.isLoading,
+    isError: warteliste.isError,
+    hasData: warteliste.data !== undefined,
+    entryCount: warteliste.data?.entries.length ?? 0,
+  });
 
   return (
     <Rise className="panel-card space-y-4 rounded-2xl p-6">
@@ -674,19 +703,27 @@ function VerwaltungsKarte() {
 
       <div className="space-y-2 border-t border-border pt-4">
         <h3 className="text-base font-bold text-white">Warteliste</h3>
-        {(warteliste.data?.entries ?? []).length === 0 && (
+        {wartelistenStatus === 'loading' && (
+          <p className="text-xs text-text-secondary">Warteliste wird geladen.</p>
+        )}
+        {wartelistenStatus === 'error' && (
+          <p className="text-xs text-warning">Die Warteliste ist gerade nicht erreichbar.</p>
+        )}
+        {wartelistenStatus === 'empty' && (
           <p className="text-xs text-text-secondary">Niemand wartet gerade.</p>
         )}
-        <ul className="space-y-1 text-sm text-white">
-          {(warteliste.data?.entries ?? []).map((eintrag) => (
-            <li key={eintrag.streamer_id} className="flex items-center justify-between gap-3">
-              <span>{eintrag.streamer_id}</span>
-              <span className="text-xs text-text-secondary">
-                {eintrag.enabled ? 'freigeschaltet' : eintrag.requested_at}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {wartelistenStatus === 'entries' && (
+          <ul className="space-y-1 text-sm text-white">
+            {warteliste.data?.entries.map((eintrag) => (
+              <li key={eintrag.streamer_id} className="flex items-center justify-between gap-3">
+                <span>{eintrag.streamer_id}</span>
+                <span className="text-xs text-text-secondary">
+                  {eintrag.enabled ? 'freigeschaltet' : eintrag.requested_at}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </Rise>
   );
@@ -708,6 +745,7 @@ export function UplinkPage() {
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
     retry: false,
+    refetchInterval: UPLINK_ME_REFETCH_INTERVAL_MS,
     enabled: streamerAbfrageAktiv,
   });
   const waitlist = useMutation({
@@ -725,6 +763,7 @@ export function UplinkPage() {
     retry: false,
     enabled: streamerBloeckeSichtbar && Boolean(data?.enabled),
   });
+  const zielStatus = ziele.isLoading ? 'loading' : ziele.isError ? 'error' : 'ready';
 
   const zieleNachPlattform = useMemo(() => {
     const karte = new Map<string, UplinkDestination>();
@@ -844,6 +883,7 @@ export function UplinkPage() {
                       key={platform.id}
                       platform={platform}
                       gespeichert={zieleNachPlattform.get(platform.id)}
+                      status={zielStatus}
                       onSaved={zieleNeuLaden}
                     />
                   ))}
