@@ -141,7 +141,14 @@ werden ausschliesslich hier und in `docs/architecture/` beschrieben.
 
 `docs/funktionsweise/` (die Wissensbasis des Frage-Antwort-Agenten) und jede
 andere nutzersichtbare Doku bleiben davon frei - kein Eintrag, kein Hinweis,
-keine Andeutung. Das ist eine getroffene Entscheidung, keine Luecke: wer davon
+keine Andeutung. Das Kapitel `stream-coaching-audit.md` ist dort deshalb
+geloescht, samt seiner beiden Index-Zeilen; der ganze Dienst kommt in der
+Wissensbasis nicht mehr vor.
+
+Bewusst auch **keine** Ausweich-Regel fuer den Agenten. Er kennt das Thema
+nicht und faellt damit auf die Grundregel des Kapitels zurueck: nur aus den
+vorhandenen Dateien antworten, nichts erfinden. Eine eigene Regel
+("dazu keine Auskunft") wuerde die Existenz des Themas erst verraten. Das ist eine getroffene Entscheidung, keine Luecke: wer davon
 erfahren soll, erfaehrt es direkt vom Betreiber per DM, nicht ueber einen Bot.
 Ein Widerspruch kommt ueber `STREAM_AUDIT_DRIVE_EXCLUDE` in die Unit.
 
