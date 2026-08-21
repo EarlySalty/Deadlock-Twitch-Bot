@@ -340,7 +340,18 @@ async fn drive_ziel_pruefen(konfiguration: &Konfiguration) {
     }
     let basis = archiv::remote_basis();
     let rclone = rclone_pfad();
-    match befehl_ausgabe(&rclone, &archiv::rclone_lsf_args(&basis)).await {
+    // `mkdir` statt `lsf`: bei der Erstinstallation existiert der Basisordner
+    // noch nicht, und ein `lsf` darauf waere ein Fehlalarm beim allerersten
+    // Start. `mkdir` legt ihn an und scheitert trotzdem, wenn rclone fehlt oder
+    // der Remote nicht eingerichtet ist - also genau bei dem, was hier
+    // auffallen soll.
+    match befehl_ausgabe_mit_grenze(
+        &rclone,
+        &archiv::rclone_mkdir_args(&basis),
+        DRIVE_STARTPRUEFUNG_ZEITGRENZE,
+    )
+    .await
+    {
         Ok(_) => tracing::info!(basis, "Drive-Ziel erreichbar"),
         Err(fehler) => {
             tracing::error!(
@@ -2263,13 +2274,15 @@ async fn auswertungs_schleife(
         // Grenze, die nichts loescht, ist keine - Berichte mit moeglichen
         // Vorfaellen lagen unbegrenzt.
         if tokio::time::Instant::now() >= naechstes_aufraeumen {
+            // Vor der Aufbewahrung: sie loescht gleich Material, dessen
+            // Upload aussteht, und der Betreiber soll davon vorher erfahren.
+            archivstau_pruefen(&konfiguration).await;
             alte_berichte_loeschen(&konfiguration).await;
             alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
             // Auch die 1:1-Ton-Mitschnitte: sonst wuerde ausgerechnet das
             // sensibelste Artefakt die Aufbewahrungsfrist ueberleben, sobald
             // der Drive-Upload dauerhaft scheitert.
             alte_mitschnitte_loeschen(&konfiguration).await;
-            archivstau_pruefen(&konfiguration).await;
             // Sammelordner eines abgestuerzten Uploads: die fallen unter keine
             // Aufbewahrung, und bis zum naechsten Dienststart zu warten waere
             // zu lange fuer Kopien mit vollem Transkript.
@@ -3745,6 +3758,9 @@ const AUFNAHME_FERTIG: &str = "aufnahme_fertig.json";
 /// gesetzt und soll nur verhindern, dass ein haengender Prozess das Archiv fuer
 /// immer blockiert.
 const RCLONE_ZEITGRENZE: Duration = Duration::from_secs(6 * 60 * 60);
+/// Zeitgrenze der Drive-Startpruefung. Kurz, weil sie auf dem Startpfad jedes
+/// Deploys liegt.
+const DRIVE_STARTPRUEFUNG_ZEITGRENZE: Duration = Duration::from_secs(45);
 /// Zeitgrenze fuer `df`. Kurz, weil der Aufruf in der Aufnahme-Schleife haengt.
 const DF_ZEITGRENZE: Duration = Duration::from_secs(10);
 
@@ -3922,19 +3938,43 @@ async fn drive_archiv_durchfuehren(
     // frueher abgebrochenen Anlauf als Beleg fuer einen komplett gescheiterten
     // Lauf durchgehen lassen - und danach wird lokal geloescht.
     let liste = befehl_ausgabe(rclone, &archiv::rclone_lsf_args(&ordner)).await?;
-    let oben: std::collections::HashSet<&str> = liste
-        .lines()
-        .map(|z| z.trim().trim_end_matches('/'))
-        .collect();
-    let erwartet: Vec<String> = mitschnitte
-        .iter()
-        .chain(berichte.iter())
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .chain(akte_da.then(|| AKTE.to_string()))
-        .collect();
-    if let Some(fehlend) = erwartet.iter().find(|name| !oben.contains(name.as_str())) {
-        let _ = tokio::fs::remove_dir_all(&staging).await;
-        return Err(format!("{fehlend} fehlt nach dem Upload in {ordner}"));
+    let oben: std::collections::HashMap<&str, u64> =
+        liste.lines().filter_map(archiv::lsf_zeile).collect();
+    // Beleg ist Name **und** Groesse. Eine gleichnamige, abgebrochene Datei aus
+    // einem frueheren Anlauf duerfte nicht als "liegt oben" durchgehen - direkt
+    // danach wird das lokale Original geloescht.
+    let mut erwartet: Vec<(String, u64)> = Vec::new();
+    for quelle in mitschnitte.iter().chain(berichte.iter()) {
+        let Some(name) = quelle.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let groesse = tokio::fs::metadata(quelle)
+            .await
+            .map(|m| m.len())
+            .map_err(|f| format!("{name} lokal nicht messbar: {f}"))?;
+        erwartet.push((name, groesse));
+    }
+    if akte_da {
+        let groesse = tokio::fs::metadata(&akte)
+            .await
+            .map(|m| m.len())
+            .map_err(|f| format!("Akte lokal nicht messbar: {f}"))?;
+        erwartet.push((AKTE.to_string(), groesse));
+    }
+    for (name, groesse) in &erwartet {
+        match oben.get(name.as_str()) {
+            Some(oben_groesse) if oben_groesse == groesse => {}
+            Some(oben_groesse) => {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return Err(format!(
+                    "{name} liegt in {ordner} mit {oben_groesse} statt {groesse} Bytes"
+                ));
+            }
+            None => {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return Err(format!("{name} fehlt nach dem Upload in {ordner}"));
+            }
+        }
     }
 
     // Erst jetzt raeumen. Jede Loeschung wird geprueft: bleibt etwas liegen,
@@ -4275,7 +4315,10 @@ const RUECKSTAU_MELDE_TAKT_SEKUNDEN: u64 = 24 * 60 * 60;
 async fn pending_archiv_laeufe(
     konfiguration: &Konfiguration,
 ) -> std::collections::HashSet<(String, String)> {
-    pending_archiv_laeufe_mit_stau(konfiguration).await.0
+    // `false`: diese Funktion zaehlt nur. Wuerde sie dabei die Melde-Marken
+    // frisch setzen, saehe der Melder sechs Zeilen spaeter im selben Takt nur
+    // noch frische Marken und schwiege fuer immer.
+    pending_archiv_laeufe_mit_stau(konfiguration, false).await.0
 }
 
 /// Prueft den Rueckstau und meldet ihn. Bewusst ein eigener Aufruf im
@@ -4287,7 +4330,7 @@ async fn archivstau_pruefen(konfiguration: &Konfiguration) {
     if !archiv::archiv_aktiv() {
         return;
     }
-    let (_, stau) = pending_archiv_laeufe_mit_stau(konfiguration).await;
+    let (_, stau) = pending_archiv_laeufe_mit_stau(konfiguration, true).await;
     if stau > 0 {
         archivstau_melden(konfiguration, stau).await;
     }
@@ -4297,6 +4340,7 @@ async fn archivstau_pruefen(konfiguration: &Konfiguration) {
 /// laenger als [`ARCHIV_RUECKSTAU_WARNUNG_TAGE`] auf ihren Upload warten.
 async fn pending_archiv_laeufe_mit_stau(
     konfiguration: &Konfiguration,
+    melden: bool,
 ) -> (std::collections::HashSet<(String, String)>, usize) {
     let mut raus = std::collections::HashSet::new();
     let mut stau = 0usize;
@@ -4356,21 +4400,20 @@ async fn pending_archiv_laeufe_mit_stau(
             // davon, ob die Aufbewahrung ueberhaupt schon greifen wuerde.
             // Einmal am Tag reicht; der Aufraeumtakt laeuft stuendlich.
             if alle_zu_alt(&dateien, ARCHIV_RUECKSTAU_WARNUNG_TAGE).await {
+                stau += 1;
                 let gemeldet = lauf_e.path().join(RUECKSTAU_GEMELDET);
-                if !marke_frisch(&gemeldet, RUECKSTAU_MELDE_TAKT_SEKUNDEN).await {
+                if melden && !marke_frisch(&gemeldet, RUECKSTAU_MELDE_TAKT_SEKUNDEN).await {
                     tracing::warn!(
                         kanal,
                         lauf,
                         tage = ARCHIV_RUECKSTAU_WARNUNG_TAGE,
                         "Drive-Upload haengt seit Wochen - rclone pruefen"
                     );
+                    // Die Marke entprellt nur diese Journal-Zeile. Die DM
+                    // geht gesammelt raus: eine je Lauf waere bei drei taeglich
+                    // sendenden Kanaelen und zwei Wochen Rueckstau eine
+                    // Mailbombe.
                     let _ = nur_fuer_mich(&gemeldet, b"{}").await;
-                    // Gemeldet wird nicht hier, sondern gesammelt: eine DM je
-                    // Lauf waere bei drei taeglich sendenden Kanaelen und zwei
-                    // Wochen Rueckstau eine Mailbombe, und ein ueber die ganze
-                    // Lebensdauer konstanter Schluessel liesse den Broker
-                    // stattdessen alles nach der ersten Nachricht schlucken.
-                    stau += 1;
                 }
             }
             // Deckel: irgendwann muss die Aufbewahrung wieder ziehen, sonst
@@ -4726,12 +4769,23 @@ async fn befehl_pruefen(programm: &str, args: &[String]) -> Result<(), String> {
 /// haengender Prozess wird nach [`RCLONE_ZEITGRENZE`] gekappt, damit das Archiv
 /// nicht fuer immer an einem toten rclone-Aufruf festhaengt.
 async fn befehl_ausgabe(programm: &str, args: &[String]) -> Result<String, String> {
+    befehl_ausgabe_mit_grenze(programm, args, RCLONE_ZEITGRENZE).await
+}
+
+/// Wie [`befehl_ausgabe`], mit eigener Zeitgrenze. Die sechs Stunden sind fuer
+/// einen Upload gedacht; auf dem Startpfad waere so ein Deckel ein stiller
+/// Dienst-Stillstand ohne Fehlerexit, also ohne `Restart=on-failure`.
+async fn befehl_ausgabe_mit_grenze(
+    programm: &str,
+    args: &[String],
+    grenze: Duration,
+) -> Result<String, String> {
     let lauf = tokio::process::Command::new(programm)
         .args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
-    let ausgabe = match tokio::time::timeout(RCLONE_ZEITGRENZE, lauf).await {
+    let ausgabe = match tokio::time::timeout(grenze, lauf).await {
         Ok(Ok(ausgabe)) => ausgabe,
         Ok(Err(fehler)) => return Err(format!("{programm} nicht startbar: {fehler}")),
         Err(_) => return Err(format!("{programm} ueberschritt die Zeitgrenze")),
@@ -5721,6 +5775,13 @@ mod tests {
     /// Legt ein Fake-rclone an, das jeden Aufruf protokolliert und auf `lsf`
     /// die uebergebenen Zeilen ausgibt. So ist der Loeschpfad ohne Netz und
     /// ohne Google-Konto pruefbar.
+    /// Eine `lsf --format ps`-Zeile fuer eine lokale Datei.
+    fn lsf_zeile_fuer(pfad: &Path) -> String {
+        let name = pfad.file_name().unwrap().to_string_lossy();
+        let groesse = std::fs::metadata(pfad).map(|m| m.len()).unwrap_or(0);
+        format!("{name};{groesse}\n")
+    }
+
     fn fake_rclone(wurzel: &Path, lsf_ausgabe: &str) -> PathBuf {
         let bin = wurzel.join("fake-rclone");
         std::fs::write(
@@ -5837,7 +5898,7 @@ mod tests {
         // rclone meldet Erfolg, aber der Zielordner fuehrt die Datei nicht -
         // etwa ein Rest aus einem frueher abgebrochenen Anlauf. Genau hier darf
         // lokal nichts geloescht werden.
-        let bin = fake_rclone(&wurzel, "irgendwas-anderes.aac\n");
+        let bin = fake_rclone(&wurzel, "irgendwas-anderes.aac;3\n");
         let ergebnis = drive_archiv_durchfuehren(
             &konfiguration,
             "kanal",
@@ -5849,8 +5910,23 @@ mod tests {
         assert!(ergebnis.is_err(), "unbelegter Upload muss scheitern");
         assert!(mitschnitt.exists(), "Original wurde trotzdem geloescht");
 
-        // Und der Gegenbeweis: fuehrt das Ziel die Datei, wird geraeumt.
-        let bin = fake_rclone(&wurzel, &format!("{}\n", archiv::mitschnitt_name(1)));
+        // Falscher Umfang zaehlt auch nicht als Beleg: eine gleichnamige,
+        // abgebrochene Datei aus einem frueheren Anlauf darf nicht dazu
+        // fuehren, dass das lokale Original geloescht wird.
+        let bin = fake_rclone(&wurzel, &format!("{};1\n", archiv::mitschnitt_name(1)));
+        let ergebnis = drive_archiv_durchfuehren(
+            &konfiguration,
+            "kanal",
+            "lauf1",
+            &bin.to_string_lossy(),
+            "gdrive:Test",
+        )
+        .await;
+        assert!(ergebnis.is_err(), "falscher Umfang muss scheitern");
+        assert!(mitschnitt.exists(), "Original wurde trotzdem geloescht");
+
+        // Und der Gegenbeweis: liegt sie vollstaendig oben, wird geraeumt.
+        let bin = fake_rclone(&wurzel, &lsf_zeile_fuer(&mitschnitt));
         let ergebnis = drive_archiv_durchfuehren(
             &konfiguration,
             "kanal",
@@ -5933,6 +6009,33 @@ mod tests {
         alte_mitschnitte_loeschen(&konfiguration).await;
 
         assert!(!datei.exists(), "unversiegelte Altlast blieb liegen");
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn das_zaehlen_des_rueckstaus_verbraucht_die_meldung_nicht() {
+        let wurzel = test_ordner("rueckstau-zaehlen");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "haengt", true).await;
+        let lange_her = std::time::SystemTime::now()
+            - Duration::from_secs((ARCHIV_RUECKSTAU_WARNUNG_TAGE + 1) * 24 * 60 * 60);
+        mtime_setzen(&dir.join(archiv::mitschnitt_name(1)), lange_her);
+
+        // Der Zaehl-Aufruf (so ruft `alte_berichte_loeschen` an) darf die
+        // Melde-Marke NICHT setzen. Sonst saehe der Melder wenige Zeilen
+        // spaeter im selben Takt nur frische Marken und schwiege fuer immer -
+        // genau die Eskalation, die die Doku zusagt, gaebe es dann nie.
+        let (_, stau) = pending_archiv_laeufe_mit_stau(&konfiguration, false).await;
+        assert_eq!(stau, 1, "Rueckstau wurde nicht gezaehlt");
+        assert!(
+            !dir.join(RUECKSTAU_GEMELDET).exists(),
+            "Zaehlen hat die Melde-Marke verbraucht"
+        );
+
+        // Der Melde-Aufruf setzt sie und entprellt sich danach selbst.
+        let (_, stau) = pending_archiv_laeufe_mit_stau(&konfiguration, true).await;
+        assert_eq!(stau, 1);
+        assert!(dir.join(RUECKSTAU_GEMELDET).exists());
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 

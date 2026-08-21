@@ -172,11 +172,38 @@ pub fn rclone_ordner_args(quelle: &Path, remote_ordner: &str) -> Vec<String> {
     ]
 }
 
+/// rclone-Argumente, um den Basisordner anzulegen. Fuer die Startpruefung: bei
+/// der Erstinstallation gibt es ihn noch nicht, ein Auflisten waere dann ein
+/// Fehlalarm. Auf einem eingerichteten Remote ist der Aufruf folgenlos.
+pub fn rclone_mkdir_args(remote_ordner: &str) -> Vec<String> {
+    vec!["mkdir".to_string(), remote_ordner.to_string()]
+}
+
 /// rclone-Argumente, um zu pruefen, was im Stream-Ordner liegt. Vor dem
 /// Loeschen: nur wenn das Ziel die Dateien wirklich fuehrt, ist der Upload
 /// belegt.
 pub fn rclone_lsf_args(remote_ordner: &str) -> Vec<String> {
-    vec!["lsf".to_string(), remote_ordner.to_string()]
+    vec![
+        "lsf".to_string(),
+        // Name **und** Groesse. Ein blosser Namensabgleich wuerde eine
+        // gleichnamige, abgebrochene Datei aus einem frueheren Anlauf als
+        // Beleg durchgehen lassen - und danach wird lokal geloescht.
+        "--format".to_string(),
+        "ps".to_string(),
+        "--separator".to_string(),
+        LSF_TRENNER.to_string(),
+        remote_ordner.to_string(),
+    ]
+}
+
+/// Trennzeichen der `lsf`-Ausgabe. Ein Semikolon kommt in keinem der erzeugten
+/// Dateinamen vor (Zeitstempel, Kanal, Lauf, Blocknummer).
+pub const LSF_TRENNER: &str = ";";
+
+/// Zerlegt eine `lsf --format ps`-Zeile in Name und Groesse.
+pub fn lsf_zeile(zeile: &str) -> Option<(&str, u64)> {
+    let (name, groesse) = zeile.trim().split_once(LSF_TRENNER)?;
+    Some((name.trim(), groesse.trim().parse().ok()?))
 }
 
 #[cfg(test)]
@@ -217,7 +244,12 @@ mod tests {
         let o = rclone_ordner_args(Path::new("/tmp/stage"), "gdrive:X/k/l");
         assert_eq!(o, vec!["copy", "/tmp/stage", "gdrive:X/k/l"]);
         let l = rclone_lsf_args("gdrive:X/k/l");
-        assert_eq!(l, vec!["lsf", "gdrive:X/k/l"]);
+        assert_eq!(
+            l,
+            vec!["lsf", "--format", "ps", "--separator", ";", "gdrive:X/k/l"]
+        );
+        let m = rclone_mkdir_args("gdrive:X");
+        assert_eq!(m, vec!["mkdir", "gdrive:X"]);
     }
 
     #[test]
@@ -244,6 +276,18 @@ mod tests {
         assert!(!kanal_ausgenommen("ski", Some("skifahrertv")));
         assert!(!kanal_ausgenommen("skifahrertv", Some("")));
         assert!(!kanal_ausgenommen("skifahrertv", None));
+    }
+
+    #[test]
+    fn lsf_zeilen_tragen_name_und_groesse() {
+        assert_eq!(
+            lsf_zeile("mitschnitt-1.aac;12345"),
+            Some(("mitschnitt-1.aac", 12345))
+        );
+        assert_eq!(lsf_zeile(" bericht.json ; 7 "), Some(("bericht.json", 7)));
+        // Ohne Groesse ist es kein Beleg.
+        assert_eq!(lsf_zeile("mitschnitt-1.aac"), None);
+        assert_eq!(lsf_zeile("mitschnitt-1.aac;keine-zahl"), None);
     }
 
     #[test]
