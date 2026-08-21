@@ -21,11 +21,16 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_crypto::FieldCipher;
-use tb_raid::RaidAuthStore;
+use tb_raid::{
+    RaidAuthStore, RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
+    TokenProvider, TokenResponse, TwitchTokenClient,
+};
+use tb_transport_twitch::{HelixClient, HelixConfig, UserTokenError};
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -37,6 +42,73 @@ const TWITCH_RTMP_URL: &str = "rtmp://live.twitch.tv/app";
 
 /// Scope, den Twitch fuer `GET /streams/key` verlangt.
 const STREAM_KEY_SCOPE: &str = "channel:read:stream_key";
+
+/// Twitch-OAuth-Adapter für den reaktiven Uplink-Pfad.
+struct UplinkHelixTokenClient {
+    helix: HelixClient,
+}
+
+fn map_user_token_error(error: UserTokenError) -> RefreshError {
+    match error {
+        UserTokenError::InvalidClient => RefreshError::InvalidClient,
+        UserTokenError::InvalidGrant => RefreshError::InvalidGrant,
+        UserTokenError::Other(message) => RefreshError::Other(message),
+    }
+}
+
+fn to_token_response(response: tb_transport_twitch::UserTokenResponse) -> TokenResponse {
+    TokenResponse {
+        access_token: response.access_token,
+        refresh_token: response.refresh_token,
+        expires_in: response.expires_in,
+        scopes: response.scope,
+    }
+}
+
+#[async_trait::async_trait]
+impl TwitchTokenClient for UplinkHelixTokenClient {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+        self.helix
+            .refresh_user_token(refresh_token)
+            .await
+            .map(to_token_response)
+            .map_err(map_user_token_error)
+    }
+
+    async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError> {
+        let _ = code;
+        Err(RefreshError::Other(
+            "Uplink verwendet keinen Authorization-Code-Tausch".into(),
+        ))
+    }
+
+    async fn token_owner(&self, access_token: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        let owner = self
+            .helix
+            .fetch_token_owner(access_token)
+            .await
+            .map_err(map_user_token_error)?;
+        Ok(TokenOwnerInfo {
+            twitch_user_id: owner.id,
+            twitch_login: owner.login,
+        })
+    }
+}
+
+fn uplink_token_provider(
+    pool: PgPool,
+    cipher: Arc<FieldCipher>,
+    helix: HelixClient,
+) -> TokenProvider {
+    let blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(UplinkHelixTokenClient { helix }),
+        blacklist.clone(),
+    );
+    TokenProvider::new(RaidAuthStore::new(pool, cipher), refresher, blacklist)
+}
 
 /// Zugang zum Relay. Ohne Secret gibt es keinen.
 pub(crate) struct RelayClient {
@@ -417,7 +489,8 @@ pub async fn twitch_auto_destination_handler(
         )
             .into_response());
     };
-    let store = RaidAuthStore::new(pool.clone(), Arc::new(cipher));
+    let cipher = Arc::new(cipher);
+    let store = RaidAuthStore::new(pool.clone(), cipher.clone());
     let scopes = store.get_scopes(&user_id).await.unwrap_or_default();
     if !scopes.iter().any(|scope| scope == STREAM_KEY_SCOPE) {
         return Err((
@@ -426,16 +499,6 @@ pub async fn twitch_auto_destination_handler(
         )
             .into_response());
     }
-    let token = match store.load_decrypted_unrestricted(&user_id).await {
-        Ok(Some(tokens)) if !tokens.needs_reauth => tokens.access_token,
-        _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "reauth_required" })),
-            )
-                .into_response())
-        }
-    };
     let client_id = std::env::var("TWITCH_CLIENT_ID")
         .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
         .unwrap_or_default();
@@ -446,8 +509,54 @@ pub async fn twitch_auto_destination_handler(
         )
             .into_response());
     }
+    let client_secret = std::env::var("TWITCH_CLIENT_SECRET").unwrap_or_default();
+    if client_secret.trim().is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "twitch_client_unavailable" })),
+        )
+            .into_response());
+    }
+    let mut helix_config = HelixConfig::new(client_id.trim(), client_secret.trim());
+    if let Ok(token_url) = std::env::var("TWITCH_OAUTH_TOKEN_URL") {
+        if !token_url.trim().is_empty() {
+            helix_config.token_url = token_url;
+        }
+    }
     let base = std::env::var("TWITCH_HELIX_BASE_URL")
         .unwrap_or_else(|_| "https://api.twitch.tv/helix".to_string());
+    if !base.trim().is_empty() {
+        helix_config.helix_base = base.clone();
+    }
+    let helix = HelixClient::new(helix_config).map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "twitch_client_unavailable" })),
+        )
+            .into_response()
+    })?;
+    let provider = uplink_token_provider(pool.clone(), cipher, helix);
+    let token = match provider
+        .get_valid_token_unrestricted(&user_id, Utc::now())
+        .await
+    {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "reauth_required" })),
+            )
+                .into_response())
+        }
+        Err(error) => {
+            tracing::error!(%error, "Twitch-Token für Uplink nicht lesbar");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "token_store_unavailable" })),
+            )
+                .into_response());
+        }
+    };
     let antwort = reqwest::Client::new()
         .get(format!("{}/streams/key", base.trim_end_matches('/')))
         .query(&[("broadcaster_id", user_id.as_str())])
@@ -645,12 +754,18 @@ pub async fn admin_kill_session_handler(
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
-    use wiremock::matchers::{header, method, path, query_param};
+    use std::str::FromStr;
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use tb_crypto::KID;
+    use tb_raid::{AuthWriter, NewAuth, DASHBOARD_REAUTH_SCOPE_PROFILE, FULL_STREAMER_SCOPES};
+    use wiremock::matchers::{body_string_contains, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Die Relay-Umgebungsvariablen sind global. Tests, die sie setzen, laufen
     /// nacheinander, sonst nimmt ein Test die Einstellung des anderen mit.
     static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
     fn partner() -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
@@ -662,6 +777,55 @@ mod tests {
 
     fn status_von(antwort: Response) -> StatusCode {
         antwort.status()
+    }
+
+    async fn token_test_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let options = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_raid_auth (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, access_token TEXT,
+                refresh_token TEXT, access_token_enc BYTEA, refresh_token_enc BYTEA,
+                enc_version INTEGER, enc_kid TEXT, token_expires_at TIMESTAMPTZ,
+                scopes TEXT, raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE,
+                authorized_at TIMESTAMPTZ, reauth_notified_at TIMESTAMPTZ, last_refreshed_at TIMESTAMPTZ
+            )",
+            "CREATE TABLE twitch_token_blacklist (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT,
+                error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT,
+                notified INTEGER DEFAULT 0, grace_expires_at TEXT
+            )",
+            "CREATE TABLE twitch_partners (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
+                manual_partner_opt_out INTEGER DEFAULT 0, technical_pause_reason TEXT,
+                raid_bot_enabled INTEGER DEFAULT 1
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
     }
 
     #[test]
@@ -737,6 +901,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abgelaufener_twitch_token_wird_vor_dem_streamkey_erneuert() {
+        let _guard = ENV.lock().await;
+        let Some(pool) = token_test_pool("t_uplink_expired_token").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let twitch = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 3600,
+                "scope": FULL_STREAMER_SCOPES,
+            })))
+            .mount(&twitch)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/streams/key"))
+            .and(query_param("broadcaster_id", "123"))
+            .and(header("Authorization", "Bearer fresh-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{ "stream_key": "twitch-key" }],
+            })))
+            .mount(&twitch)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/me/destinations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "destinations": [{ "platform": "twitch" }],
+            })))
+            .mount(&twitch)
+            .await;
+
+        std::env::set_var("DB_MASTER_KEY_V1", TEST_KEY_HEX);
+        std::env::set_var("TWITCH_CLIENT_ID", "client-id");
+        std::env::set_var("TWITCH_CLIENT_SECRET", "client-secret");
+        std::env::set_var("TWITCH_HELIX_BASE_URL", twitch.uri());
+        std::env::set_var(
+            "TWITCH_OAUTH_TOKEN_URL",
+            format!("{}/oauth2/token", twitch.uri()),
+        );
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", twitch.uri());
+
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        AuthWriter::new(pool.clone(), cipher)
+            .store_new_auth(
+                &NewAuth {
+                    twitch_user_id: "123".into(),
+                    twitch_login: "earlysalty".into(),
+                    access_token: "expired-access".into(),
+                    refresh_token: "old-refresh".into(),
+                    expires_in: -60,
+                    granted_scopes: FULL_STREAMER_SCOPES.iter().map(|s| s.to_string()).collect(),
+                    resolved_scope_profile: DASHBOARD_REAUTH_SCOPE_PROFILE.into(),
+                    activate_raid_features: true,
+                },
+                Utc::now(),
+            )
+            .await
+            .expect("abgelaufenen Token anlegen");
+
+        let Json(antwort) = twitch_auto_destination_handler(partner(), State(pool))
+            .await
+            .expect("ein gültiger Refresh darf nicht zur erneuten Anmeldung führen");
+        assert_eq!(antwort["destinations"][0]["platform"], json!("twitch"));
+        let token_requests = twitch.received_requests().await.expect("Twitch-Anfragen");
+        assert_eq!(
+            token_requests
+                .iter()
+                .filter(|request| request.url.path() == "/oauth2/token")
+                .count(),
+            1,
+            "der abgelaufene Zugang muss genau einmal erneuert werden"
+        );
+    }
+
+    #[tokio::test]
     async fn kill_ohne_bestaetigung_geht_nicht_ans_relay() {
         let server = MockServer::start().await;
         // Kein Mock: jeder Aufruf am Relay waere ein Treffer auf 404 und damit
@@ -795,6 +1039,11 @@ mod tests {
                 "loadavg": 0.42,
                 "max_points": 12,
                 "used_points": 3,
+                "active_sessions": [{
+                    "session_id": 7,
+                    "streamer_id": 123,
+                    "started_at": "2026-08-21T10:00:00Z"
+                }],
             })))
             .mount(&server)
             .await;
@@ -836,6 +1085,7 @@ mod tests {
             .await
             .expect("Admin-Übersicht muss durchkommen");
         assert_eq!(overview["max_points"], json!(12));
+        assert_eq!(overview["active_sessions"][0]["session_id"], json!(7));
 
         let Json(waitlist) = admin_waitlist_handler(auth.clone())
             .await
@@ -873,6 +1123,36 @@ mod tests {
             4,
             "Der Streamer-Endpunkt darf das Relay nicht erreichen"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_settings_reicht_max_points_null_an_das_relay() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/admin/settings"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .and(body_string_contains("\"max_points\":0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "max_points": 0,
+                "load_reject_threshold": 6.0,
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = ENV.lock().await;
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", server.uri());
+        let Json(antwort) = admin_settings_handler(
+            DashboardAuthLevel::admin(),
+            Json(AdminSettingsBody {
+                max_points: Some(0),
+                load_reject_threshold: None,
+            }),
+        )
+        .await
+        .expect("0 muss das Relay erreichen");
+        assert_eq!(antwort["max_points"], json!(0));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
