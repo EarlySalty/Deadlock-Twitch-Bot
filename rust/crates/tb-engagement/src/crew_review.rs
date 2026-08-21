@@ -162,12 +162,15 @@ pub struct FireworksReviewClient {
 }
 
 impl FireworksReviewClient {
+    /// Fail-closed-Gate: abgeschaltet wird nur durch fehlenden Schluessel
+    /// (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder durch eine eigene
+    /// `TB_LLM_PROVIDER_RICKY_CREW_REVIEW`, die auf einen anderen Anbieter
+    /// zeigt. Globale `FIREWORKS_MODEL`/`FIREWORK_BASE_URL` fuer den uebrigen
+    /// Bot schalten das Review nicht ab; Adresse und Modell sind hier ohnehin
+    /// festgenagelt, ein Modell ist nie "fehlend".
     pub fn from_env() -> Result<Self, ReviewError> {
         let endpoint = tb_llm::endpoint_for(USE_CASE);
-        if endpoint.provider != "fireworks"
-            || endpoint.base_url.trim_end_matches('/') != FIREWORKS_DEFAULT_BASE_URL
-            || endpoint.model != FIREWORKS_DEFAULT_MODEL
-        {
+        if endpoint.provider != "fireworks" || endpoint.api_key.is_none() {
             return Err(ReviewError::Unavailable);
         }
         Self::from_parts(
@@ -1177,30 +1180,59 @@ mod tests {
             "FIREWORK_API_KEY",
             "FIREWORKS_BASE_URL",
             "FIREWORK_BASE_URL",
+            "FIREWORKS_MODEL",
+            "FIREWORK_MODEL",
             "TB_LLM_MODEL_RICKY_CREW_REVIEW",
             "TB_LLM_PROVIDER_RICKY_CREW_REVIEW",
+            "TB_LLM_PROVIDER_OUTREACH_SHADOW",
+            "TB_LLM_MODEL_OUTREACH_SHADOW",
             "TB_LLM_PROVIDER_DEFAULT",
+            "MINIMAX_API_KEY",
         ];
         let _snapshot = EnvSnapshot::capture(&names);
         for name in names {
             std::env::remove_var(name);
         }
 
+        // Ohne Schluessel: aus.
         assert_eq!(
             FireworksReviewClient::from_env().err(),
             Some(ReviewError::Unavailable)
         );
 
-        std::env::set_var("FIREWORKS_API_KEY", "   ");
+        assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_err());
+
+        // Eigene Provider-Variable auf einen anderen Anbieter: aus.
         std::env::set_var("FIREWORK_API_KEY", "dummy-legacy");
-        std::env::set_var("FIREWORKS_BASE_URL", "https://example.invalid/inference/v1");
-        std::env::set_var("TB_LLM_MODEL_RICKY_CREW_REVIEW", "arbitrary-model");
+        std::env::set_var("MINIMAX_API_KEY", "m");
+        std::env::set_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW", "minimax");
+        std::env::set_var("TB_LLM_PROVIDER_OUTREACH_SHADOW", "minimax");
         assert_eq!(
             FireworksReviewClient::from_env().err(),
             Some(ReviewError::Unavailable)
         );
+        assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_err());
+        std::env::remove_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW");
+        std::env::remove_var("TB_LLM_PROVIDER_OUTREACH_SHADOW");
+        std::env::remove_var("MINIMAX_API_KEY");
+
+        // Globale Fireworks-Variablen fuer den Rest des Bots schalten das
+        // Review NICHT ab; Adresse und Modell bleiben festgenagelt.
+        std::env::set_var("FIREWORKS_API_KEY", "   ");
+        std::env::set_var("FIREWORKS_BASE_URL", "https://example.invalid/inference/v1");
+        std::env::set_var("FIREWORKS_MODEL", "accounts/fireworks/models/anderes");
+        std::env::set_var("TB_LLM_MODEL_RICKY_CREW_REVIEW", "arbitrary-model");
+        let trotz_global = FireworksReviewClient::from_env().expect("globales Modell schaltet nicht ab");
+        assert_eq!(trotz_global.endpoint.base_url, FIREWORKS_DEFAULT_BASE_URL);
+        assert_eq!(trotz_global.endpoint.model, FIREWORKS_DEFAULT_MODEL);
+        // Dasselbe Gate gilt fuer das Outreach-Schatten-Review (hier unter
+        // derselben Env-Sperre geprueft, weil beide dieselben Variablen lesen).
+        let outreach = crate::outreach_shadow::OutreachReviewClient::from_env()
+            .expect("Outreach: globales Modell schaltet nicht ab");
+        assert_eq!(outreach.endpoint_model(), FIREWORKS_DEFAULT_MODEL);
 
         std::env::set_var("FIREWORKS_BASE_URL", FIREWORKS_DEFAULT_BASE_URL);
+        std::env::remove_var("FIREWORKS_MODEL");
         std::env::remove_var("TB_LLM_MODEL_RICKY_CREW_REVIEW");
         let legacy = FireworksReviewClient::from_env().expect("Legacy-Fallback");
         assert_eq!(legacy.endpoint.api_key.as_deref(), Some("dummy-legacy"));

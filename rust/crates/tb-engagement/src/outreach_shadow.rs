@@ -206,15 +206,14 @@ impl OutreachReviewClient {
         if OUTREACH_SYSTEM_PROMPT.trim().is_empty() {
             return Err(OutreachError::Unavailable);
         }
-        // Gleiches Verhalten wie `crew_review::FireworksReviewClient::from_env`:
-        // Adresse und Modell kommen aus der zentralen Auswahl, und weichen
-        // sie vom Standard ab (etwa per `TB_LLM_MODEL_OUTREACH_SHADOW`),
-        // startet das Review nicht. Ein fehlendes oder fremdes Modell wird
-        // nicht still durch den Standard ersetzt, sondern ist `Unavailable`.
+        // Gleiches Gate wie `crew_review::FireworksReviewClient::from_env`:
+        // abgeschaltet nur durch fehlenden Schluessel
+        // (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder eine eigene
+        // `TB_LLM_PROVIDER_OUTREACH_SHADOW` auf einen anderen Anbieter.
+        // Globale `FIREWORKS_MODEL`/`FIREWORK_BASE_URL` schalten nicht ab;
+        // Adresse und Modell sind hier festgenagelt.
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks"
-            || endpoint.base_url.trim_end_matches('/') != FIREWORKS_DEFAULT_BASE_URL
-            || endpoint.model != FIREWORKS_DEFAULT_MODEL
             || endpoint.api_key.as_deref().is_none_or(|key| key.trim().is_empty())
         {
             return Err(OutreachError::Unavailable);
@@ -222,9 +221,15 @@ impl OutreachReviewClient {
         Ok(Self {
             endpoint: tb_llm::LlmEndpoint {
                 base_url: FIREWORKS_DEFAULT_BASE_URL.to_string(),
+                model: FIREWORKS_DEFAULT_MODEL.to_string(),
                 ..endpoint
             },
         })
+    }
+
+    /// Modell des festgenagelten Endpunkts (fuer Tests und Logs).
+    pub fn endpoint_model(&self) -> &str {
+        &self.endpoint.model
     }
 
     pub async fn decide(
