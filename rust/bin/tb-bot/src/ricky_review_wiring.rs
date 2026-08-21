@@ -1267,7 +1267,7 @@ mod tests {
             r#"export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECONDS:-20}""#,
             r#"export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}""#,
             r#"export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}""#,
-            r#"export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}""#,
+            r#"export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-accounts/fireworks/models/deepseek-v4-flash}""#,
         ] {
             assert!(SERVICE_WRAPPER.contains(expected), "fehlt: {expected}");
         }

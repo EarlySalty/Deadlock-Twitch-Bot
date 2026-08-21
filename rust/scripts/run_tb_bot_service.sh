@@ -87,7 +87,7 @@ export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/home/nat
 # Ohne diese Variable sucht der Bot selbst (venv, ~/.local/bin, PATH).
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}"
-export FIREWORKS_RICKY_REVIEW_MODEL="${FIREWORKS_RICKY_REVIEW_MODEL:-accounts/fireworks/models/deepseek-v4-flash}"
+export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-accounts/fireworks/models/deepseek-v4-flash}"
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): INFISICAL_WRITE_TOKEN wurde oben gesetzt.
 
