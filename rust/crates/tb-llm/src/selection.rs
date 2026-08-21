@@ -4,7 +4,7 @@
 //! Anwendungsfall, alles über Umgebungsvariablen. So lässt sich ein einzelnes
 //! Feature auf einen anderen Anbieter ziehen, ohne den Rest anzufassen.
 //!
-//! - `TB_LLM_PROVIDER_DEFAULT` — Basis für alles außer den Anthropic-Fällen
+//! - `TB_LLM_PROVIDER_DEFAULT`: Basis für alles außer den Anthropic-Fällen
 //!   in [`ANTHROPIC_USE_CASES`]; die ignorieren den globalen Default.
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
 //!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`. Nur so lässt sich ein
