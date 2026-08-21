@@ -15,16 +15,15 @@
 //!
 //! # Gelernte Muster
 //!
-//! [`LearnedPatterns::load`] liest aus `twitch_auto_learned_spam_patterns`
-//! (Prod-Schema: pattern=TEXT, pattern_type=TEXT). Der Filter-Cache wird
-//! einmalig beim Start befüllt und kann über [`LearnedPatterns::load`]
-//! jederzeit neu gebaut werden.
+//! [`LearnedPatterns::load`] liest aus `twitch_auto_learned_spam_patterns` und
+//! aus der manuellen Safe-Tabelle. Der Filter-Cache wird einmalig beim Start
+//! befüllt und kann über [`LearnedPatterns::load`] jederzeit neu gebaut werden.
 //!
-//! Safe-Muster (Negativ-Scoring) wurden am 11.07.2026 abgeschafft: Ein
-//! AI-gelerntes Einzelwort-Safe-Muster („viewer") hatte per Substring-Match
-//! echten Viewer-Bot-Spam unter die Ban-Schwelle gedrückt (Safe-List-
-//! Poisoning). Schutz vor False-Positives leistet jetzt ausschließlich der
-//! AI-Judge im Verdachtspfad — der gatet die Aktion, nie die Sichtbarkeit.
+//! Safe-Muster sind kein negatives Score-Signal. Sie stammen ausschließlich aus
+//! einem privilegierten menschlichen Gegen-Override und werden als exakter
+//! kanonisierter Volltext vor Score und LLM geprüft. So kann ein harmloser
+//! Einzelfall gelernt werden, ohne kurze Safe-Teilstrings in Spam-Nachrichten
+//! einzubauen.
 
 use std::sync::OnceLock;
 
@@ -132,44 +131,58 @@ fn build_homoglyph_table() -> Vec<(char, char)> {
 
     // Schicht 1 — Small Capitals (moderation.py Z. 29–37)
     let small_caps: &[(char, char)] = &[
-        ('ᴀ', 'a'), ('ʙ', 'b'), ('ᴄ', 'c'), ('ᴅ', 'd'),
-        ('ᴇ', 'e'), ('ꜰ', 'f'), ('ɢ', 'g'), ('ʜ', 'h'),
-        ('ɪ', 'i'), ('ᴊ', 'j'), ('ᴋ', 'k'), ('ʟ', 'l'),
-        ('ᴍ', 'm'), ('ɴ', 'n'), ('ᴏ', 'o'), ('ᴘ', 'p'),
-        ('ʀ', 'r'), ('ꜱ', 's'), ('ᴛ', 't'), ('ᴜ', 'u'),
-        ('ᴠ', 'v'), ('ᴡ', 'w'), ('ʏ', 'y'), ('ᴢ', 'z'),
+        ('ᴀ', 'a'),
+        ('ʙ', 'b'),
+        ('ᴄ', 'c'),
+        ('ᴅ', 'd'),
+        ('ᴇ', 'e'),
+        ('ꜰ', 'f'),
+        ('ɢ', 'g'),
+        ('ʜ', 'h'),
+        ('ɪ', 'i'),
+        ('ᴊ', 'j'),
+        ('ᴋ', 'k'),
+        ('ʟ', 'l'),
+        ('ᴍ', 'm'),
+        ('ɴ', 'n'),
+        ('ᴏ', 'o'),
+        ('ᴘ', 'p'),
+        ('ʀ', 'r'),
+        ('ꜱ', 's'),
+        ('ᴛ', 't'),
+        ('ᴜ', 'u'),
+        ('ᴠ', 'v'),
+        ('ᴡ', 'w'),
+        ('ʏ', 'y'),
+        ('ᴢ', 'z'),
     ];
     table.extend_from_slice(small_caps);
 
     // Schicht 2 — Mathematical Alphanumeric Symbols (moderation.py Z. 43–58)
     // 18 A–Z-Blöcke
     let az_upper_starts: &[u32] = &[
-        0x1D400, 0x1D434, 0x1D468, 0x1D49C, 0x1D4D0, 0x1D504, 0x1D538,
-        0x1D56C, 0x1D5A0, 0x1D5D4, 0x1D608, 0x1D63C, 0x1D670, 0x1D6A8,
-        0x1D6E2, 0x1D71C, 0x1D756, 0x1D790,
+        0x1D400, 0x1D434, 0x1D468, 0x1D49C, 0x1D4D0, 0x1D504, 0x1D538, 0x1D56C, 0x1D5A0, 0x1D5D4,
+        0x1D608, 0x1D63C, 0x1D670, 0x1D6A8, 0x1D6E2, 0x1D71C, 0x1D756, 0x1D790,
     ];
     // 18 a–z-Blöcke
     let az_lower_starts: &[u32] = &[
-        0x1D41A, 0x1D44E, 0x1D482, 0x1D4B6, 0x1D4EA, 0x1D51E, 0x1D552,
-        0x1D586, 0x1D5BA, 0x1D5EE, 0x1D622, 0x1D656, 0x1D68A, 0x1D6C2,
-        0x1D6FC, 0x1D736, 0x1D770, 0x1D7AA,
+        0x1D41A, 0x1D44E, 0x1D482, 0x1D4B6, 0x1D4EA, 0x1D51E, 0x1D552, 0x1D586, 0x1D5BA, 0x1D5EE,
+        0x1D622, 0x1D656, 0x1D68A, 0x1D6C2, 0x1D6FC, 0x1D736, 0x1D770, 0x1D7AA,
     ];
     for &base in az_upper_starts {
         for i in 0u32..26 {
-            if let (Some(src), Some(dst)) = (
-                char::from_u32(base + i),
-                char::from_u32('A' as u32 + i),
-            ) {
+            if let (Some(src), Some(dst)) =
+                (char::from_u32(base + i), char::from_u32('A' as u32 + i))
+            {
                 table.push((src, dst));
             }
         }
     }
     for &base in az_lower_starts {
         for i in 0u32..26 {
-            if let (Some(src), Some(dst)) = (
-                char::from_u32(base + i),
-                char::from_u32('a' as u32 + i),
-            ) {
+            if let (Some(src), Some(dst)) =
+                (char::from_u32(base + i), char::from_u32('a' as u32 + i))
+            {
                 table.push((src, dst));
             }
         }
@@ -179,17 +192,56 @@ fn build_homoglyph_table() -> Vec<(char, char)> {
     // Reihenfolge exakt wie im Python (letzter Eintrag überschreibt ggf. vorherige).
     let cyrillic_greek: &[(char, char)] = &[
         // Kyrillisch – Kleinbuchstaben
-        ('а', 'a'), ('е', 'e'), ('о', 'o'), ('с', 'c'), ('р', 'p'), ('х', 'x'),
-        ('у', 'y'), ('к', 'k'), ('м', 'm'), ('т', 't'), ('і', 'i'), ('ѕ', 's'),
-        ('ј', 'j'), ('ԁ', 'd'), ('о', 'o'),
+        ('а', 'a'),
+        ('е', 'e'),
+        ('о', 'o'),
+        ('с', 'c'),
+        ('р', 'p'),
+        ('х', 'x'),
+        ('у', 'y'),
+        ('к', 'k'),
+        ('м', 'm'),
+        ('т', 't'),
+        ('і', 'i'),
+        ('ѕ', 's'),
+        ('ј', 'j'),
+        ('ԁ', 'd'),
+        ('о', 'o'),
         // Kyrillisch – Großbuchstaben
-        ('А', 'A'), ('Е', 'E'), ('О', 'O'), ('С', 'C'), ('Р', 'P'), ('Х', 'X'),
-        ('У', 'Y'), ('К', 'K'), ('М', 'M'), ('Т', 'T'), ('В', 'B'), ('Н', 'H'),
-        ('І', 'I'), ('Ѕ', 'S'), ('Ј', 'J'),
+        ('А', 'A'),
+        ('Е', 'E'),
+        ('О', 'O'),
+        ('С', 'C'),
+        ('Р', 'P'),
+        ('Х', 'X'),
+        ('У', 'Y'),
+        ('К', 'K'),
+        ('М', 'M'),
+        ('Т', 'T'),
+        ('В', 'B'),
+        ('Н', 'H'),
+        ('І', 'I'),
+        ('Ѕ', 'S'),
+        ('Ј', 'J'),
         // Griechisch
-        ('ο', 'o'), ('α', 'a'), ('ρ', 'p'), ('ν', 'v'), ('κ', 'k'), ('μ', 'm'),
-        ('τ', 't'), ('χ', 'x'), ('Ο', 'O'), ('Α', 'A'), ('Ε', 'E'), ('Ρ', 'P'),
-        ('Τ', 'T'), ('Χ', 'X'), ('Κ', 'K'), ('Μ', 'M'), ('Ν', 'N'), ('Ι', 'I'),
+        ('ο', 'o'),
+        ('α', 'a'),
+        ('ρ', 'p'),
+        ('ν', 'v'),
+        ('κ', 'k'),
+        ('μ', 'm'),
+        ('τ', 't'),
+        ('χ', 'x'),
+        ('Ο', 'O'),
+        ('Α', 'A'),
+        ('Ε', 'E'),
+        ('Ρ', 'P'),
+        ('Τ', 'T'),
+        ('Χ', 'X'),
+        ('Κ', 'K'),
+        ('Μ', 'M'),
+        ('Ν', 'N'),
+        ('Ι', 'I'),
     ];
     table.extend_from_slice(cyrillic_greek);
 
@@ -228,14 +280,33 @@ fn normalize_spam_text(content: &str) -> String {
     replaced.trim().to_string()
 }
 
+/// Kanonischer Schlüssel für einen exakten manuellen Safe-Volltext.
+///
+/// Whitespace-Kompression macht Chat-Zeilenumbrüche und mehrfachen Whitespace
+/// äquivalent; der spätere Vergleich bleibt ein vollständiger Gleichheits-
+/// vergleich und ist kein Teilstring-Match.
+pub fn normalize_exact_spam_message(content: &str) -> String {
+    normalize_spam_text(content)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// Nur a-z0-9 — für gelernte Muster (compact form).
 fn compact(lowered: &str) -> String {
-    lowered.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+    lowered
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
 }
 
 /// a-z0-9 und Punkte — für Domain-Regex (domainized form).
 fn domainized(lowered: &str) -> String {
-    lowered.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect()
+    lowered
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.')
+        .collect()
 }
 
 /// Regex für Domain-Kompakt-Erkennung (constants.py Z. 106–108).
@@ -343,8 +414,8 @@ pub struct SpamVerdict {
 }
 
 // ---------------------------------------------------------------------------
-// Gelernte Muster — DB-Tabelle twitch_auto_learned_spam_patterns
-// (Prod-Schema geprüft 12.6.; Safe-Tabelle stillgelegt 11.7.)
+// Gelernte Muster — DB-Tabelle twitch_auto_learned_spam_patterns und
+// manuelle Safe-Tabelle twitch_auto_learned_safe_patterns.
 // ---------------------------------------------------------------------------
 
 /// Ein gelerntes Spam-Muster aus `twitch_auto_learned_spam_patterns`.
@@ -356,10 +427,17 @@ struct LearnedSpamPattern {
     pattern_type: String,
 }
 
+/// Ein manuell als harmlos gelernter exakter Volltext.
+#[derive(Debug, Clone)]
+struct LearnedSafePattern {
+    pattern: String,
+}
+
 /// Gecachte gelernte Muster — einmalig per `LearnedPatterns::load` aus der DB geladen.
 #[derive(Debug, Clone, Default)]
 pub struct LearnedPatterns {
     spam: Vec<LearnedSpamPattern>,
+    safe: Vec<LearnedSafePattern>,
 }
 
 impl LearnedPatterns {
@@ -368,10 +446,25 @@ impl LearnedPatterns {
         Self::default()
     }
 
-    /// Lädt gelernte Spam-Muster aus der Postgres-DB.
+    /// Erstellt eine Muster-Menge mit manuellen Safe-Volltexten.
+    ///
+    /// Der Produktivpfad verwendet [`Self::load`]; der Konstruktor hält den
+    /// exakten Pre-LLM-Pfad auch für isolierte Pipeline-Tests reproduzierbar.
+    pub fn with_safe_patterns(patterns: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            spam: vec![],
+            safe: patterns
+                .into_iter()
+                .map(|pattern| LearnedSafePattern { pattern })
+                .collect(),
+        }
+    }
+
+    /// Lädt gelernte Spam- und manuelle Safe-Muster aus der Postgres-DB.
     ///
     /// Tabelle (Prod-Schema 12.6.):
     /// - `twitch_auto_learned_spam_patterns`: pattern TEXT, pattern_type TEXT
+    /// - `twitch_auto_learned_safe_patterns`: pattern TEXT, source_channel TEXT
     ///
     /// Fehler beim Laden werden als Warn geloggt und mit leerer Muster-Menge
     /// beantwortet (fail-open wie Python: `except Exception: pass`).
@@ -408,7 +501,10 @@ impl LearnedPatterns {
                         );
                         return None;
                     }
-                    Some(LearnedSpamPattern { pattern, pattern_type })
+                    Some(LearnedSpamPattern {
+                        pattern,
+                        pattern_type,
+                    })
                 })
                 .collect(),
             Err(e) => {
@@ -417,7 +513,35 @@ impl LearnedPatterns {
             }
         };
 
-        Self { spam }
+        #[derive(sqlx::FromRow)]
+        struct SafeRow {
+            pattern: String,
+        }
+
+        let safe = match sqlx::query_as::<_, SafeRow>(
+            "SELECT pattern FROM twitch_auto_learned_safe_patterns \
+             WHERE pattern IS NOT NULL AND source_channel = $1",
+        )
+        .bind("discord-correction")
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| !row.pattern.trim().is_empty())
+                .map(|row| LearnedSafePattern {
+                    pattern: row.pattern,
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    "Konnte manuelle twitch_auto_learned_safe_patterns nicht laden: {e}"
+                );
+                vec![]
+            }
+        };
+
+        Self { spam, safe }
     }
 }
 
@@ -454,6 +578,19 @@ impl SpamFilter {
         self.learned.store(Arc::new(fresh));
     }
 
+    /// Gibt das gelernte Safe-Pattern zurück, wenn `text` exakt dem
+    /// kanonisierten Volltext entspricht. Teilstrings und längere Nachrichten
+    /// werden bewusst nicht akzeptiert.
+    pub fn known_safe_pattern(&self, text: &str) -> Option<String> {
+        let key = normalize_exact_spam_message(text);
+        if key.chars().count() < 4 {
+            return None;
+        }
+        self.learned.load().safe.iter().find_map(|pattern| {
+            (normalize_exact_spam_message(&pattern.pattern) == key).then(|| pattern.pattern.clone())
+        })
+    }
+
     /// Berechnet Spam-Score und trifft Aktionsentscheidung.
     ///
     /// Port von:
@@ -472,8 +609,8 @@ impl SpamFilter {
     /// 8. Mention-Score addieren (aus ctx)
     /// 9. Kontext-Eskalatoren: Account-Alter <90d +1 / Erstnachricht +1 (nur bei hartem Signal UND Score < SPAM_MIN_MATCHES)
     ///
-    /// Negativ-Scoring über Safe-Muster gibt es nicht mehr (Safe-List-Poisoning,
-    /// siehe Modul-Doku) — False-Positive-Schutz übernimmt der AI-Judge.
+    /// Safe-Muster sind kein Score-Signal. Ein manueller Safe-Volltext wird
+    /// bereits über [`Self::known_safe_pattern`] vor diesem Scoring geprüft.
     pub fn evaluate(&self, text: &str, ctx: &SpamContext) -> SpamVerdict {
         if text.is_empty() {
             return SpamVerdict {
@@ -520,7 +657,12 @@ impl SpamFilter {
             SpamAction::None
         };
 
-        SpamVerdict { score: hits, hard_signal: hard, action, matched: reasons }
+        SpamVerdict {
+            score: hits,
+            hard_signal: hard,
+            action,
+            matched: reasons,
+        }
     }
 
     /// Interner Score ohne Kontext-Eskalatoren und Mention-Score.
@@ -637,12 +779,53 @@ impl SpamFilter {
 /// Ein gelerntes Muster wie „best viewers" würde sonst als hartes Signal (+2)
 /// jedes Kompliment über Viewer in Ban-Nähe rücken.
 const GENERIC_PATTERN_TOKENS: &[&str] = &[
-    "viewer", "viewers", "view", "views", "follower", "followers", "follow",
-    "sub", "subs", "subscriber", "subscribers", "best", "top", "real", "live",
-    "cheap", "free", "buy", "get", "more", "big", "mad", "ai", "bot", "bots",
-    "stream", "streams", "streamer", "streaming", "twitch", "chat", "promo",
-    "promotion", "growth", "grow", "boost", "the", "and", "for", "with", "your",
-    "com", "org", "net", "online", "site", "link",
+    "viewer",
+    "viewers",
+    "view",
+    "views",
+    "follower",
+    "followers",
+    "follow",
+    "sub",
+    "subs",
+    "subscriber",
+    "subscribers",
+    "best",
+    "top",
+    "real",
+    "live",
+    "cheap",
+    "free",
+    "buy",
+    "get",
+    "more",
+    "big",
+    "mad",
+    "ai",
+    "bot",
+    "bots",
+    "stream",
+    "streams",
+    "streamer",
+    "streaming",
+    "twitch",
+    "chat",
+    "promo",
+    "promotion",
+    "growth",
+    "grow",
+    "boost",
+    "the",
+    "and",
+    "for",
+    "with",
+    "your",
+    "com",
+    "org",
+    "net",
+    "online",
+    "site",
+    "link",
 ];
 
 /// Ab dieser Wortzahl trägt ein Muster allein durch seine Satzlänge — beides
@@ -686,7 +869,11 @@ fn ist_dienstdomain(token: &str) -> bool {
     let Some((t, _)) = gate_token(token) else {
         return false;
     };
-    let labels: Vec<&str> = t.trim_matches('.').split('.').filter(|l| !l.is_empty()).collect();
+    let labels: Vec<&str> = t
+        .trim_matches('.')
+        .split('.')
+        .filter(|l| !l.is_empty())
+        .collect();
     labels.len() >= 2 && {
         let name = labels[labels.len() - 2];
         name.chars().count() >= 4 && !GENERIC_PATTERN_TOKENS.contains(&name)
@@ -858,7 +1045,10 @@ mod tests {
         // Reason: "Phrase(Exact): (remove the space)" — enthält kein Brand-Token.
         // Zusätzlich: Viewer-Muster greift ("viewers on" matcht \bviewers?\s+\w+).
         // Score: 2+1=3 → Ban; hard_signal=false (kein Brand-Token im Phrase-Reason).
-        let v = filter().evaluate("viewers on streamboo .com (remove the space)", &ctx_default());
+        let v = filter().evaluate(
+            "viewers on streamboo .com (remove the space)",
+            &ctx_default(),
+        );
         assert!(v.score >= 2, "score: {} reasons: {:?}", v.score, v.matched);
         assert_eq!(v.action, SpamAction::Ban);
         // "(remove the space)" enthält kein Brand-Token → hard_signal=false
@@ -948,7 +1138,10 @@ mod tests {
     fn ban_bei_score_genau_3() {
         // "Mind if I send you an share" → Phrase(Exact) +2, kein Viewer-Muster → score 2
         // + mention_score=1 → score 3 → Ban
-        let ctx = SpamContext { mention_score: 1, ..Default::default() };
+        let ctx = SpamContext {
+            mention_score: 1,
+            ..Default::default()
+        };
         let v = filter().evaluate("Mind if I send you an share", &ctx);
         assert_eq!(v.score, 3, "reasons: {:?}", v.matched);
         assert_eq!(v.action, SpamAction::Ban);
@@ -959,7 +1152,10 @@ mod tests {
     #[test]
     fn kontext_account_alter_eskaliert_nur_bei_hartem_signal() {
         // Weiches Signal (Fragment "rookie") + junges Konto → KEINE Eskalation
-        let ctx = SpamContext { account_age_days: Some(10), ..Default::default() };
+        let ctx = SpamContext {
+            account_age_days: Some(10),
+            ..Default::default()
+        };
         let v = filter().evaluate("hey rookie", &ctx);
         // hits=1 (Fragment), kein hartes Signal → Eskalator greift nicht
         assert_eq!(v.score, 1);
@@ -969,7 +1165,10 @@ mod tests {
     #[test]
     fn kontext_account_alter_eskaliert_bei_hartem_signal() {
         // Hartes Signal (Domain) + junges Konto → +1
-        let ctx = SpamContext { account_age_days: Some(10), ..Default::default() };
+        let ctx = SpamContext {
+            account_age_days: Some(10),
+            ..Default::default()
+        };
         // "streamboo" (Fragment mit hard signal) → score 1, hard → Eskalator +1 → score 2
         let v = filter().evaluate("check streamboo out", &ctx);
         assert!(v.score >= 2);
@@ -978,7 +1177,10 @@ mod tests {
 
     #[test]
     fn kontext_erstnachricht_nur_bei_hartem_signal() {
-        let ctx = SpamContext { is_first_message: true, ..Default::default() };
+        let ctx = SpamContext {
+            is_first_message: true,
+            ..Default::default()
+        };
         // Nur weiches Signal → kein Eskalator
         let v = filter().evaluate("hey rookie", &ctx);
         assert!(!v.matched.iter().any(|r| r == "Erstnachricht"));
@@ -986,9 +1188,16 @@ mod tests {
 
     #[test]
     fn kontext_erstnachricht_mit_hartem_signal() {
-        let ctx = SpamContext { is_first_message: true, ..Default::default() };
+        let ctx = SpamContext {
+            is_first_message: true,
+            ..Default::default()
+        };
         let v = filter().evaluate("check streamboo out", &ctx);
-        assert!(v.matched.iter().any(|r| r == "Erstnachricht"), "reasons: {:?}", v.matched);
+        assert!(
+            v.matched.iter().any(|r| r == "Erstnachricht"),
+            "reasons: {:?}",
+            v.matched
+        );
     }
 
     #[test]
@@ -1005,7 +1214,11 @@ mod tests {
         };
         let v = filter().evaluate("Mind if I send you an share", &ctx);
         // Score bleibt bei 3 (nicht 5), Eskalatoren greifen nicht.
-        assert_eq!(v.score, 3, "Eskalatoren dürfen nicht auf bereits-Ban-Score addieren: {:?}", v.matched);
+        assert_eq!(
+            v.score, 3,
+            "Eskalatoren dürfen nicht auf bereits-Ban-Score addieren: {:?}",
+            v.matched
+        );
         assert_eq!(v.action, SpamAction::Ban);
     }
 
@@ -1168,13 +1381,18 @@ mod tests {
                 pattern: "kaufe viewboost".to_string(),
                 pattern_type: "phrase".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("kaufe viewboost günstig", &ctx_default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
         // ALLE Learned-* Reasons sind hard signals (moderation.py Z. 606: startswith "Learned-")
-        assert!(v.hard_signal, "Learned-* muss immer hard signal sein: {:?}", v.matched);
+        assert!(
+            v.hard_signal,
+            "Learned-* muss immer hard signal sein: {:?}",
+            v.matched
+        );
         // Score 2 < SPAM_MIN_MATCHES(3) UND hartes Signal → DeleteOnly
         assert_eq!(v.action, SpamAction::DeleteOnly);
     }
@@ -1186,13 +1404,18 @@ mod tests {
                 pattern: "viewbot".to_string(),
                 pattern_type: "fragment".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("ich nutze viewbot", &ctx_default());
         assert_eq!(v.score, 1);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Fragment")));
         // ALLE Learned-* Reasons sind hard signals (moderation.py Z. 606)
-        assert!(v.hard_signal, "Learned-* muss immer hard signal sein: {:?}", v.matched);
+        assert!(
+            v.hard_signal,
+            "Learned-* muss immer hard signal sein: {:?}",
+            v.matched
+        );
         // Score 1 < 3 UND hartes Signal → DeleteOnly
         assert_eq!(v.action, SpamAction::DeleteOnly);
     }
@@ -1205,6 +1428,7 @@ mod tests {
                 pattern: "smmhype neu".to_string(),
                 pattern_type: "fragment".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("check smmhype neu aus", &ctx_default());
@@ -1221,12 +1445,34 @@ mod tests {
                 pattern: "kaufeviews".to_string(),
                 pattern_type: "phrase".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         // Text mit Spreizung: "k a u f e v i e w s" → compact = "kaufeviews"
         let v = f.evaluate("k a u f e v i e w s günstig", &ctx_default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
+    }
+
+    #[test]
+    fn manuelles_safe_pattern_matcht_nur_exakten_volltext() {
+        let learned = LearnedPatterns {
+            spam: vec![],
+            safe: vec![LearnedSafePattern {
+                pattern: "8 viewer brd wild".to_string(),
+            }],
+        };
+        let filter = SpamFilter::new(learned);
+
+        assert_eq!(
+            filter.known_safe_pattern(" 8  VIEWER brd wild\n"),
+            Some("8 viewer brd wild".to_string())
+        );
+        assert_eq!(
+            filter.known_safe_pattern("8 viewer brd wild eballo.com"),
+            None,
+            "ein längerer Text darf kein Safe-Teilstringtreffer sein"
+        );
     }
 
     // --- SPAM_MIN_MATCHES Konstante ---
@@ -1240,7 +1486,9 @@ mod tests {
 
     #[test]
     fn hard_signal_domain_immer() {
-        assert!(has_hard_spam_signal(&["Domain(Kompakt): streamboo.com".to_string()]));
+        assert!(has_hard_spam_signal(&[
+            "Domain(Kompakt): streamboo.com".to_string()
+        ]));
     }
 
     #[test]
@@ -1251,23 +1499,31 @@ mod tests {
 
     #[test]
     fn hard_signal_phrase_mit_brand() {
-        assert!(has_hard_spam_signal(&["Phrase(Exact): Best viewers streamboo.com".to_string()]));
+        assert!(has_hard_spam_signal(&[
+            "Phrase(Exact): Best viewers streamboo.com".to_string()
+        ]));
     }
 
     #[test]
     fn hard_signal_phrase_ohne_brand() {
         // "Mind if I send you an share" enthält keinen Brand-Token
-        assert!(!has_hard_spam_signal(&["Phrase(Exact): Mind if I send you an share".to_string()]));
+        assert!(!has_hard_spam_signal(&[
+            "Phrase(Exact): Mind if I send you an share".to_string()
+        ]));
     }
 
     #[test]
     fn hard_signal_fragment_rookie_kein_brand() {
-        assert!(!has_hard_spam_signal(&["Fragment(Fallback): rookie".to_string()]));
+        assert!(!has_hard_spam_signal(&[
+            "Fragment(Fallback): rookie".to_string()
+        ]));
     }
 
     #[test]
     fn hard_signal_fragment_mit_brand_token() {
-        assert!(has_hard_spam_signal(&["Fragment(Fallback): streamboo".to_string()]));
+        assert!(has_hard_spam_signal(&[
+            "Fragment(Fallback): streamboo".to_string()
+        ]));
     }
 }
 
@@ -1279,8 +1535,8 @@ mod tests {
 mod db_tests {
     use std::str::FromStr;
 
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use sqlx::PgPool;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     use super::*;
 
@@ -1339,6 +1595,19 @@ mod db_tests {
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_auto_learned_safe_patterns (
+                pattern TEXT PRIMARY KEY,
+                source_message TEXT,
+                source_channel TEXT,
+                minimax_reasoning TEXT,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1347,6 +1616,7 @@ mod db_tests {
         create_learned_tables(&pool).await;
         let lp = LearnedPatterns::load(&pool).await;
         assert!(lp.spam.is_empty());
+        assert!(lp.safe.is_empty());
     }
 
     #[tokio::test]
@@ -1374,8 +1644,42 @@ mod db_tests {
 
         let lp = LearnedPatterns::load(&pool).await;
         assert_eq!(lp.spam.len(), 2);
-        assert!(lp.spam.iter().any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase"));
-        assert!(lp.spam.iter().any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment"));
+        assert!(
+            lp.spam
+                .iter()
+                .any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase")
+        );
+        assert!(
+            lp.spam
+                .iter()
+                .any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_laedt_nur_manuelle_safe_quelle() {
+        let pool = pool_or_skip!("sf_load_safe");
+        create_learned_tables(&pool).await;
+
+        sqlx::query(
+            "INSERT INTO twitch_auto_learned_safe_patterns
+             (pattern, source_message, source_channel)
+             VALUES
+                ('8 viewer brd wild', '8 viewer brd wild', 'discord-correction'),
+                ('viewer', 'viewer', 'ai-review')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let lp = LearnedPatterns::load(&pool).await;
+        assert_eq!(lp.safe.len(), 1);
+        let filter = SpamFilter::new(lp);
+        assert_eq!(
+            filter.known_safe_pattern("8 VIEWER brd wild"),
+            Some("8 viewer brd wild".to_string())
+        );
+        assert_eq!(filter.known_safe_pattern("viewer"), None);
     }
 
     #[tokio::test]
@@ -1388,10 +1692,10 @@ mod db_tests {
         create_learned_tables(&pool).await;
 
         for (pattern, typ) in [
-            ("best viewers", "phrase"),                        // generisch, 2 Woerter
-            ("boost viewers on the stream", "phrase"),         // 5 Woerter, 27 Zeichen
+            ("best viewers", "phrase"),                // generisch, 2 Woerter
+            ("boost viewers on the stream", "phrase"), // 5 Woerter, 27 Zeichen
             ("cheap viewers and followers available", "phrase"), // 5 Woerter, 37 Zeichen
-            ("streamboo.com", "fragment"),                     // Domain
+            ("streamboo.com", "fragment"),             // Domain
         ] {
             sqlx::query(
                 "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) \
@@ -1444,7 +1748,10 @@ mod db_tests {
         let f = SpamFilter::new(LearnedPatterns::load(&pool).await);
         let before = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert!(
-            !before.matched.iter().any(|r| r.starts_with("Learned-Phrase")),
+            !before
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase")),
             "vor dem Lernen kein Learned-Phrase-Treffer"
         );
 
@@ -1462,7 +1769,12 @@ mod db_tests {
         f.reload(&pool).await;
         let after = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert_eq!(after.score, 2);
-        assert!(after.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
+        assert!(
+            after
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase"))
+        );
     }
 
     // Hinweis: Der frühere NULL-Pattern-Test entfiel mit der prod-treuen DDL —

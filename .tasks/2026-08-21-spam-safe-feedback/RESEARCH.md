@@ -1,6 +1,13 @@
-status: erledigt
+status: überholt
 datum: 2026-08-21
 klasse: mittel
+
+## Ablösung
+
+Der Nutzer hat den Auftrag nachträglich präzisiert: Der Button ist ein Gegen-Override
+zur AI-Entscheidung. Die aktive Safe-Liste soll bei einer manuellen Korrektur auf
+`harmlos` geschrieben und vor dem LLM exakt geprüft werden. Siehe den neuen Plan
+`.tasks/2026-08-21-spam-safe-list-override/`.
 
 ## Auftrag
 

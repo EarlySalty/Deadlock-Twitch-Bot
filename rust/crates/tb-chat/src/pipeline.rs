@@ -36,7 +36,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,21 +51,23 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
-use crate::crew_guard::{crew_guard_enabled, CrewGuard, CrewJudge};
+use crate::crew_guard::{CrewGuard, CrewJudge, crew_guard_enabled};
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
-use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
+use crate::mention_scoring::{MentionResolver, WHITELISTED_BOTS, score_mention_patterns};
 use crate::moderation::{
-    AutoBanRequest, ModerationEngine, ModerationEvidence, BAN_REASON_GLOBAL, BAN_REASON_SPAM,
+    AutoBanRequest, BAN_REASON_GLOBAL, BAN_REASON_SPAM, ModerationEngine, ModerationEvidence,
     NOTICE_GLOBAL_BAN,
 };
 use crate::promos::PromoEngine;
 use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
-use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
+use crate::spam_filter::{
+    SPAM_MIN_MATCHES, SpamAction, SpamContext, SpamFilter, normalize_exact_spam_message,
+};
 use crate::standard_replies::StandardReplies;
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
@@ -239,9 +241,19 @@ fn correction_learn_pattern(content: &str) -> Option<String> {
     }
 }
 
-fn safe_feedback_pattern(outcome: &AiReviewOutcome, content: &str) -> Option<String> {
-    matches!(outcome, AiReviewOutcome::Safe { .. })
-        .then(|| correction_learn_pattern(content))
+/// Exakter Safe-Fallback für AI-Spam ohne gespeicherte Spam-Row.
+///
+/// Die vollständige kanonische Nachricht muss in die Discord-custom_id passen.
+/// Wenn sie dafür zu lang ist, gibt es bewusst keinen Fallback-Button: Eine
+/// gekürzte Nachricht dürfte niemals als Safe-Volltext gelernt werden.
+fn correction_safe_pattern(content: &str) -> Option<String> {
+    let pattern = normalize_exact_spam_message(content);
+    (pattern.chars().count() >= 4 && pattern.chars().count() <= 78).then_some(pattern)
+}
+
+fn safe_correction_pattern(outcome: &AiReviewOutcome, content: &str) -> Option<String> {
+    matches!(outcome, AiReviewOutcome::Spam { .. })
+        .then(|| correction_safe_pattern(content))
         .flatten()
 }
 
@@ -380,6 +392,7 @@ impl ModAlerter {
                 ..
             } => {
                 ai_reason = reason.clone();
+                safe_feedback_pattern_value = safe_correction_pattern(outcome, content);
                 if let Some(l) = learned {
                     lines.push(format!("**Gelernt:** `{}`", l.pattern.replace('`', "'")));
                     learned_entries.push(serde_json::json!({
@@ -400,10 +413,7 @@ impl ModAlerter {
                     );
                 }
             }
-            AiReviewOutcome::Safe { reason } => {
-                ai_reason = reason.clone();
-                safe_feedback_pattern_value = safe_feedback_pattern(outcome, content);
-            }
+            AiReviewOutcome::Safe { reason } => ai_reason = reason.clone(),
             AiReviewOutcome::Error { detail: reason } => ai_reason = reason.clone(),
             AiReviewOutcome::Skipped => {}
         }
@@ -427,9 +437,10 @@ impl ModAlerter {
                 "verdict": verdict_key,
                 "ai_reason": ai_reason.chars().take(200).collect::<String>(),
                 "learned": learned_entries,
-                // Bei einem Safe-Urteil gibt es nur Safe-Feedback. Bei Fehlern
-                // und übersprungenen Reviews bleibt die Spam-Korrektur möglich.
-                "learn_pattern": (verdict_key != "safe").then(|| correction_learn_pattern(content)).flatten(),
+                // AI-Spam hat bereits automatisch gelernt; der Gegen-Button
+                // korrigiert auf Safe. Bei Harmlos-/Fehler-/Cooldown-Urteilen
+                // kann der Moderator den Fall als Spam nachlernen.
+                "learn_pattern": (verdict_key != "spam").then(|| correction_learn_pattern(content)).flatten(),
                 "safe_feedback_pattern": safe_feedback_pattern_value,
             },
         });
@@ -1056,12 +1067,9 @@ impl ChatPipeline {
         let sus_invite = Arc::clone(&p.sus_invite);
         let event_for_step = event.clone();
         let sus_channel = channel_login.to_string();
-        let Some(hit) = run_pipeline_step(
-            "sus_invite",
-            channel_login,
-            chatter_login,
-            async move { sus_invite.check(&event_for_step, &sus_channel).await },
-        )
+        let Some(hit) = run_pipeline_step("sus_invite", channel_login, chatter_login, async move {
+            sus_invite.check(&event_for_step, &sus_channel).await
+        })
         .await
         .flatten() else {
             return;
@@ -1187,6 +1195,26 @@ impl ChatPipeline {
     ) -> bool {
         let p = &self.parts;
         let text = event.message.text.as_str();
+
+        // Menschlicher Safe-Gegen-Override: vollständiger kanonisierter
+        // Volltexttreffer beendet den Spam-Pfad vor Score, Aktion und LLM.
+        if let Some(pattern) = p.spam_filter.known_safe_pattern(text) {
+            p.review_log.record(
+                channel_login,
+                chatter_login,
+                &event.chatter_user_id,
+                text,
+                "SAFE_PATTERN",
+                &format!("Manuell gelerntes Safe-Pattern: {pattern}; LLM übersprungen"),
+            );
+            info!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                pattern = %pattern,
+                "Manuelles Safe-Pattern vor LLM erkannt"
+            );
+            return false;
+        }
 
         // Pass A: Basis-Score ohne Mention/Eskalatoren — bestimmt
         // has_phrase_or_fragment_signal für den @host-Bonus (Z. 1603–1607).
@@ -1773,8 +1801,8 @@ async fn is_first_message_for_streamer(
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::api::BanOutcome;
     use crate::commands::{
@@ -1786,9 +1814,9 @@ mod tests {
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
+    use tb_engagement::crew_review::{RICKY_TWITCH_USER_ID, RickyChatInput};
     use tb_engagement::minimax_chat::EngagementMinimaxClient;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2169,10 +2197,32 @@ mod tests {
         pipeline_with_crew_review_trigger(api, pool, None)
     }
 
+    fn pipeline_for_non_partner_with_patterns(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+        learned: crate::spam_filter::LearnedPatterns,
+    ) -> ChatPipeline {
+        pipeline_with_crew_review_trigger_and_patterns(api, pool, None, learned)
+    }
+
     fn pipeline_with_crew_review_trigger(
         api: Arc<RecordingChatApi>,
         pool: PgPool,
         crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    ) -> ChatPipeline {
+        pipeline_with_crew_review_trigger_and_patterns(
+            api,
+            pool,
+            crew_review_trigger,
+            Default::default(),
+        )
+    }
+
+    fn pipeline_with_crew_review_trigger_and_patterns(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        learned: crate::spam_filter::LearnedPatterns,
     ) -> ChatPipeline {
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
@@ -2198,7 +2248,7 @@ mod tests {
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
             )),
-            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            spam_filter: Arc::new(SpamFilter::new(learned)),
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
@@ -2306,6 +2356,57 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn manuelles_safe_pattern_stoppt_spam_check_vor_llm() {
+        let Some(pool) = moderation_test_pool("pipeline_manual_safe_pre_llm").await else {
+            return;
+        };
+        sqlx::query(
+            "CREATE TABLE twitch_spam_review_decisions (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                chatter_id TEXT,
+                source_message TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                confidence REAL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner_with_patterns(
+            Arc::clone(&api),
+            pool.clone(),
+            crate::spam_filter::LearnedPatterns::with_safe_patterns([
+                "8 viewer brd wild".to_string()
+            ]),
+        );
+        let mut event = strong_timeout_event();
+        event.message.text = "8 viewer brd wild".to_string();
+        event.message_id = "manual-safe-pre-llm".to_string();
+
+        assert!(
+            !pipeline
+                .run_spam_check(&event, "channel", "seller", None)
+                .await
+        );
+        let review_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_spam_review_decisions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            review_count, 0,
+            "Safe-Treffer darf den Judge nicht aufrufen"
+        );
+        assert!(api.calls().is_empty(), "Safe-Treffer darf nicht moderieren");
     }
 
     async fn seed_active_pipeline_channel(pool: &PgPool) {
@@ -2995,19 +3096,10 @@ mod tests {
     }
 
     #[test]
-    fn safe_feedback_pattern_gibt_nur_safe_urteile_wieder() {
+    fn safe_correction_pattern_gibt_nur_spam_urteile_wieder() {
         let content = "aha, so sammelt man also viewer Kappa";
         assert_eq!(
-            safe_feedback_pattern(
-                &AiReviewOutcome::Safe {
-                    reason: "Gespräch".to_string()
-                },
-                content,
-            ),
-            Some(content.to_string())
-        );
-        assert_eq!(
-            safe_feedback_pattern(
+            safe_correction_pattern(
                 &AiReviewOutcome::Spam {
                     reason: "Angebot".to_string(),
                     confidence: Some(0.9),
@@ -3017,8 +3109,33 @@ mod tests {
                 },
                 content,
             ),
+            Some(content.to_lowercase())
+        );
+        assert_eq!(
+            safe_correction_pattern(
+                &AiReviewOutcome::Safe {
+                    reason: "Gespräch".to_string(),
+                },
+                content,
+            ),
             None
         );
+    }
+
+    #[test]
+    fn safe_correction_pattern_bewahrt_den_exakten_volltext() {
+        let outcome = AiReviewOutcome::Spam {
+            reason: "Angebot".to_string(),
+            confidence: Some(0.9),
+            learned: None,
+            rejected_pattern: None,
+            save_failed: false,
+        };
+        assert_eq!(
+            safe_correction_pattern(&outcome, " @User  Viewer\nKappa `x` "),
+            Some("@user viewer kappa `x`".to_string())
+        );
+        assert_eq!(safe_correction_pattern(&outcome, &"x".repeat(79)), None);
     }
 
     #[test]
