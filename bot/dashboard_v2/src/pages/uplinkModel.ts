@@ -9,6 +9,8 @@ import { ApiHttpError } from '../api/httpError';
 
 export const UPLINK_TAB_ID = 'restream' as const;
 export const UPLINK_TAB_LABEL = 'Uplink';
+export const UPLINK_TWITCH_LOGIN_HINT =
+  'Für die persönliche Ansicht ist ein Twitch-Login nötig.';
 
 /** Warteliste-Karte, Abschnitt 13 Text 6 der Spezifikation. */
 export const UPLINK_WAITLIST_TEXT =
@@ -55,6 +57,25 @@ export function isUplinkTabVisible(opts: {
 }): boolean {
   if (opts.publicVisible === true) return true;
   return opts.isAdmin === true;
+}
+
+export type UplinkAnsicht = 'streamer' | 'admin-mit-twitch' | 'admin-ohne-twitch';
+
+/** Trennt die Verwaltungsansicht von der persönlichen Streamer-Abfrage. */
+export function uplinkAnsicht(opts: {
+  isAdmin?: boolean | null;
+  twitchLogin?: string | null;
+}): UplinkAnsicht {
+  if (opts.isAdmin !== true) return 'streamer';
+  return opts.twitchLogin?.trim() ? 'admin-mit-twitch' : 'admin-ohne-twitch';
+}
+
+export function uplinkAdminBloeckeSichtbar(ansicht: UplinkAnsicht): boolean {
+  return ansicht !== 'streamer';
+}
+
+export function uplinkStreamerBloeckeSichtbar(ansicht: UplinkAnsicht): boolean {
+  return ansicht !== 'admin-ohne-twitch';
 }
 
 /**

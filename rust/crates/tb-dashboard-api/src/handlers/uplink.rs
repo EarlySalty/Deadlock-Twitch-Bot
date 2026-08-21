@@ -786,6 +786,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_ohne_twitch_kommt_nur_an_verwaltungsendpunkte() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/overview"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "loadavg": 0.42,
+                "max_points": 12,
+                "used_points": 3,
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/waitlist"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "entries": [],
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/admin/settings"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "max_points": 12,
+                "load_reject_threshold": 6.0,
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/sessions/7/kill"))
+            .and(query_param("confirm", "true"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "session_id": 7,
+                "ended": true,
+                "stopped": true,
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = ENV.lock().await;
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", server.uri());
+        let auth = DashboardAuthLevel::admin();
+
+        let Json(overview) = admin_overview_handler(auth.clone())
+            .await
+            .expect("Admin-Übersicht muss durchkommen");
+        assert_eq!(overview["max_points"], json!(12));
+
+        let Json(waitlist) = admin_waitlist_handler(auth.clone())
+            .await
+            .expect("Admin-Warteliste muss durchkommen");
+        assert_eq!(waitlist["entries"], json!([]));
+
+        let Json(settings) = admin_settings_handler(
+            auth.clone(),
+            Json(AdminSettingsBody {
+                max_points: Some(12),
+                load_reject_threshold: None,
+            }),
+        )
+        .await
+        .expect("Admin-Einstellungen müssen durchkommen");
+        assert_eq!(settings["load_reject_threshold"], json!(6.0));
+
+        let Json(kill) = admin_kill_session_handler(
+            auth.clone(),
+            Path(7),
+            Query(ConfirmQuery { confirm: true }),
+        )
+        .await
+        .expect("Admin-Kill muss durchkommen");
+        assert_eq!(kill["stopped"], json!(true));
+
+        let streamer_fehler = me_handler(auth)
+            .await
+            .expect_err("Streamer-Endpunkt darf keine Admin-Identität erfinden");
+        assert_eq!(status_von(streamer_fehler), StatusCode::BAD_REQUEST);
+
+        let requests = server.received_requests().await.expect("Relay-Anfragen");
+        assert_eq!(
+            requests.len(),
+            4,
+            "Der Streamer-Endpunkt darf das Relay nicht erreichen"
+        );
+    }
+
+    #[tokio::test]
     async fn verwaltung_ist_fuer_partner_gesperrt() {
         let fehler = admin_overview_handler(partner())
             .await

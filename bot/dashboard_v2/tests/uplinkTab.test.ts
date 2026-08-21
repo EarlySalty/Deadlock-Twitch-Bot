@@ -14,6 +14,7 @@ import {
   UPLINK_KILL_LAEUFT_NOCH,
   UPLINK_LAST_LABEL,
   UPLINK_TWITCH_ALLGEMEINER_FEHLER,
+  UPLINK_TWITCH_LOGIN_HINT,
   UPLINK_TWITCH_SCOPE_HINT,
   aktiveSessionId,
   canSaveDestination,
@@ -28,6 +29,9 @@ import {
   toEingabeZeit,
   toRelayZeit,
   twitchFehlertext,
+  uplinkAdminBloeckeSichtbar,
+  uplinkAnsicht,
+  uplinkStreamerBloeckeSichtbar,
   zielRumpf,
 } from '../src/pages/uplinkModel';
 
@@ -45,6 +49,16 @@ test('ein fehlendes Feld sperrt nichts auf', () => {
   assert.equal(isUplinkTabVisible({ isAdmin: false }), false);
   assert.equal(isUplinkTabVisible({ publicVisible: null, isAdmin: false }), false);
   assert.equal(isUplinkTabVisible({ publicVisible: undefined, isAdmin: null }), false);
+});
+
+test('Admin ohne Twitch-Identität rendert Verwaltung statt Fehlerkarte', () => {
+  const ansicht = uplinkAnsicht({ isAdmin: true, twitchLogin: null });
+
+  assert.equal(ansicht, 'admin-ohne-twitch');
+  assert.equal(uplinkAdminBloeckeSichtbar(ansicht), true);
+  assert.equal(uplinkStreamerBloeckeSichtbar(ansicht), false);
+  assert.equal(UPLINK_TWITCH_LOGIN_HINT, 'Für die persönliche Ansicht ist ein Twitch-Login nötig.');
+  assert.equal(UPLINK_TWITCH_LOGIN_HINT.includes('—'), false);
 });
 
 test('der Tab heißt in der Navigation Uplink und trägt die Kennung restream', () => {
