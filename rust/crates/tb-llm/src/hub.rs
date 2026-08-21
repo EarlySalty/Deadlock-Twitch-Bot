@@ -92,6 +92,11 @@ pub struct Request {
     pub ledger: Option<Ledger>,
     /// Entfernt `<think>`-Bloecke aus dem Antworttext.
     pub strip_think: bool,
+    /// Erlaubt den Rueckgriff auf `reasoning_content`, wenn `content` leer
+    /// ist. Standard aus: Denktext ist keine Antwort und darf nicht im
+    /// Twitch-Chat landen. Nur Aufrufer, die den Text ohnehin selbst parsen
+    /// (der Spam-Judge), schalten das ein.
+    pub allow_reasoning_content: bool,
     pub accept: Option<Accept>,
     /// Wiederholungen bei HTTP 429.
     pub retry_on_429: u8,
@@ -163,6 +168,10 @@ impl Request {
     }
     pub fn strip_think(mut self) -> Self {
         self.strip_think = true;
+        self
+    }
+    pub fn allow_reasoning_content(mut self) -> Self {
+        self.allow_reasoning_content = true;
         self
     }
     pub fn accept(mut self, accept: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
@@ -310,13 +319,26 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
         match call_endpoint(endpoint, &request, purpose.as_deref()).await {
             Ok(response) => return Ok(response),
             Err(error) => {
+                // Die Warnung traegt Klasse, Status und Body-Laenge; der
+                // Anbieter-Body selbst (bis 500 Zeichen) nur auf debug.
+                let (status, body_len) = match &error {
+                    LlmError::Http { status, body } => (Some(*status), body.chars().count()),
+                    _ => (None, 0),
+                };
                 tracing::warn!(
                     use_case,
                     provider = endpoint.provider,
                     model = %endpoint.model,
                     code = error.code(),
-                    fehler = %error,
+                    status,
+                    body_len,
                     "LLM-Aufruf fehlgeschlagen"
+                );
+                tracing::debug!(
+                    use_case,
+                    provider = endpoint.provider,
+                    fehler = %error,
+                    "LLM-Aufruf fehlgeschlagen (Detail)"
                 );
                 last = Some(LlmFailure {
                     provider: endpoint.provider.to_string(),
@@ -379,7 +401,7 @@ async fn call_endpoint(
     } else {
         let usage = payload.get("usage");
         (
-            extract_openai_text(&payload),
+            extract_openai_text(&payload, request.allow_reasoning_content),
             usage_field(usage, "prompt_tokens"),
             usage_field(usage, "completion_tokens"),
         )
@@ -569,12 +591,13 @@ fn usage_field(usage: Option<&Value>, name: &str) -> Option<i64> {
 /// Antworttext aus einer OpenAI-kompatiblen Antwort.
 ///
 /// Denkende Modelle legen das Ergebnis gelegentlich in `reasoning_content`
-/// statt in `content`. Ohne diesen Rueckgriff sieht so eine Antwort aus wie
-/// eine leere.
-fn extract_openai_text(payload: &Value) -> String {
+/// statt in `content`. Der Rueckgriff darauf ist Opt-in
+/// (`Request::allow_reasoning_content`): fuer Chat-Antworten ist Denktext
+/// keine Antwort, sondern Muell im Kanal.
+fn extract_openai_text(payload: &Value, allow_reasoning_content: bool) -> String {
     let message = &payload["choices"][0]["message"];
     let content = message["content"].as_str().unwrap_or("").trim();
-    if !content.is_empty() {
+    if !content.is_empty() || !allow_reasoning_content {
         return content.to_string();
     }
     message["reasoning_content"]
@@ -611,8 +634,10 @@ pub fn extract_anthropic_text(content: &Value) -> String {
     }
 }
 
-/// Entfernt `<think>`-Bloecke. Ein offener Block ohne Schluss faellt bis zum
-/// Ende weg: alles danach gehoert zum Denktext, nicht zur Antwort.
+/// Entfernt geschlossene `<think>...</think>`-Bloecke. Ein offener Block ohne
+/// Schluss bleibt stehen: bei einer abgeschnittenen Antwort steht das JSON
+/// oft nach dem offenen Tag, und der Aufrufer (Spam-Judge) schneidet sich das
+/// letzte flache JSON-Objekt selbst heraus.
 ///
 /// Bewusst per Regex statt per Kleinschreibungs-Suche: `to_lowercase`
 /// veraendert bei manchen Zeichen (z. B. `İ`) die Byte-Laenge, damit stimmen
@@ -622,7 +647,7 @@ pub fn extract_anthropic_text(content: &Value) -> String {
 pub fn strip_think(raw: &str) -> String {
     static THINK: OnceLock<regex::Regex> = OnceLock::new();
     let re = THINK.get_or_init(|| {
-        regex::Regex::new(r"(?si)<think>(?:.*?</think>|.*)").expect("think-Regex ist konstant")
+regex::Regex::new(r"(?si)<think>.*?</think>").expect("think-Regex ist konstant")
     });
     re.replace_all(raw, "").trim().to_string()
 }
@@ -678,11 +703,13 @@ mod tests {
     }
 
     #[test]
-    fn offener_think_block_verschluckt_den_rest() {
-        // Ein Denktext ohne Schluss ist kein halb brauchbarer Text: was danach
-        // kommt, gehoert noch zum Denken.
-        assert_eq!(strip_think("Vorher<think>ab hier Denktext"), "Vorher");
-        assert_eq!(strip_think("İ<think>ä"), "İ");
+    fn offener_think_block_bleibt_stehen() {
+        // Abgeschnittene Antwort: das JSON nach dem offenen Tag muss fuer den
+        // Aufrufer erreichbar bleiben, der es sich selbst herausschneidet.
+        let raw = "<think>Ueberlegung ohne Ende {\"is_spam\": true}";
+        assert_eq!(strip_think(raw), raw);
+        assert!(strip_think("Vorher<think>ab hier Denktext").contains("ab hier Denktext"));
+        assert_eq!(strip_think("İ<think>ä"), "İ<think>ä");
     }
 
     #[test]
@@ -692,7 +719,7 @@ mod tests {
         assert_eq!(strip_think("<think>İ blah</think>{json}"), "{json}");
         assert_eq!(strip_think("İİ<Think>İ</THINK>{\"a\":1}"), "İİ{\"a\":1}");
         assert_eq!(strip_think("<think>a</think>x<think>b</think>y"), "xy");
-        assert_eq!(strip_think("ä<think>İ"), "ä");
+        assert_eq!(strip_think("ä<think>İ"), "ä<think>İ");
     }
 
     #[test]
@@ -779,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reasoning_content_greift_wenn_content_leer_ist() {
+    async fn reasoning_content_greift_nur_mit_opt_in() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -788,10 +815,23 @@ mod tests {
             .mount(&server)
             .await;
 
+        // Ohne Opt-in bleibt Denktext Denktext: die Antwort ist leer.
         let response = complete(
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .endpoint(endpoint(&server, "minimax")),
+        )
+        .await
+        .expect("Antwort");
+        assert_eq!(response.text, "");
+
+        // Mit Opt-in (Spam-Judge) kommt der Text durch.
+        let response = complete(
+            "test",
+            Request::prompt("hi")
+                .no_ledger()
+                .allow_reasoning_content()
                 .endpoint(endpoint(&server, "minimax")),
         )
         .await

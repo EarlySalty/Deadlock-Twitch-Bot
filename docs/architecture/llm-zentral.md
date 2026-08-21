@@ -62,7 +62,8 @@ tb_llm::complete(use_case: &str, request: Request) -> Result<Response, LlmError>
 | `json_object` | setzt `response_format` |
 | `timeout` | pro Aufruf, sonst 240 s |
 | `ledger` | `Off` oder `Purpose(name)`; Default ist der Use-Case-Name |
-| `strip_think` | entfernt `<think>`-Bloecke aus dem Antworttext |
+| `strip_think` | entfernt geschlossene `<think>...</think>`-Bloecke aus dem Antworttext; ein offener Block bleibt stehen, damit JSON nach einer abgeschnittenen Ueberlegung erreichbar bleibt |
+| `allow_reasoning_content` | Opt-in: faellt auf `reasoning_content` zurueck, wenn `content` leer ist. Standard aus, damit kein Denktext im Chat landet; nur der Spam-Judge setzt es |
 | `accept` | Praedikat auf dem Antworttext; schlaegt es fehl, geht der Hub zum naechsten Anbieter der Kette |
 | `retry_on_429` | Anzahl Wiederholungen bei HTTP 429, `Retry-After` wird beachtet |
 | `failover` | Kette abarbeiten oder nur den ersten Anbieter |
