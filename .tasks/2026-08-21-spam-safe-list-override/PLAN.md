@@ -1,4 +1,4 @@
-status: aktiv
+status: erledigt
 datum: 2026-08-21
 klasse: mittel
 research: .tasks/2026-08-21-spam-safe-list-override/RESEARCH.md
@@ -42,3 +42,12 @@ Gezielte Rust-Tests, Paket-Tests, Clippy mit `-D warnings`, Formatter und
 - Kein Safe-Lernen aus einem AI-Harmlosurteil allein.
 - Kein negativer Safe-Score und kein Substring-Match.
 - Kein neues Modell und kein direkter Gemini-Aufruf im Buttonpfad.
+
+## Abschluss
+
+- Twitch-Main: Safe-Gate, transaktionale Korrektur-API und Review-Nachweis sind
+  gemergt und live im `tb-bot`.
+- Deadlock-Main: Gegenrichtungs-Buttons und exakter Fallback sind gemergt und
+  live im `dl-bot`.
+- Live-Beweis: beide Prozesse neu gestartet, neue PIDs aktiv, Executables ohne
+  `(deleted)`, neue Anker in den Binaries, `journal -p err` leer.
