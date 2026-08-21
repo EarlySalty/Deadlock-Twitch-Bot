@@ -13,6 +13,7 @@ chrono            = { workspace = true }
 chrono-tz         = { workspace = true }
 tb-transport-twitch = { workspace = true }
 tb-crypto         = { workspace = true }
+tb-llm            = { workspace = true }
 url               = { workspace = true }
 sha2              = { workspace = true }
 base64            = { workspace = true }

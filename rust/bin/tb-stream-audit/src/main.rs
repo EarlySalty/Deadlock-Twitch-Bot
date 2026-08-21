@@ -2872,60 +2872,42 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             )),
         );
     }
-    let Some(schluessel) = endpunkt.api_key.clone() else {
+    if endpunkt.api_key.is_none() {
         return (
             Vec::new(),
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
         );
-    };
-    let Some(client) = modell_client() else {
-        return (Vec::new(), Some("HTTP-Client nicht baubar".to_owned()));
-    };
+    }
 
     let mut raus = Vec::new();
     let mut fehler_gesehen: Option<String> = None;
     for stapel in llm::stapel(segmente) {
-        let anfrage = serde_json::json!({
-            "model": endpunkt.model,
-            "messages": [
-                {"role": "system", "content": llm::SYSTEM_PROMPT},
-                {"role": "user", "content": llm::anfrage_json(stapel)},
-            ],
-            "response_format": {"type": "json_object"},
-        });
-        let antwort = client
-            .post(format!(
-                "{}/chat/completions",
-                endpunkt.base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(&schluessel)
-            .json(&anfrage)
-            .send()
-            .await;
-        let roh = match antwort {
+        let antwort = tb_llm::complete(
+            llm::USE_CASE,
+            tb_llm::Request::simple(llm::SYSTEM_PROMPT, llm::anfrage_json(stapel))
+                .json_object()
+                .timeout(MODELL_ZEITGRENZE)
+                // Das Audit verbucht nichts: es laeuft ausserhalb des Bots und
+                // haengt an keinem Streamer-Budget.
+                .no_ledger()
+                .endpoint(endpunkt.clone()),
+        )
+        .await;
+        let inhalt = match antwort {
+            Ok(antwort) => antwort.text,
             // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
             // JSON - und der Bericht nennt den falschen Grund.
-            Ok(r) if !r.status().is_success() => {
-                let status = r.status().as_u16();
+            Err(tb_llm::LlmError::Http { status, .. }) => {
                 tracing::warn!(status, "Modellaufruf abgelehnt");
                 fehler_gesehen.get_or_insert_with(|| format!("Modellaufruf HTTP {status}"));
                 continue;
             }
-            Ok(r) => r.text().await.unwrap_or_default(),
             Err(fehler) => {
-                tracing::warn!(?fehler, "Modellaufruf fehlgeschlagen");
+                tracing::warn!(%fehler, "Modellaufruf fehlgeschlagen");
                 fehler_gesehen.get_or_insert_with(|| "Modellaufruf fehlgeschlagen".to_owned());
                 continue;
             }
         };
-        let inhalt = serde_json::from_str::<serde_json::Value>(&roh)
-            .ok()
-            .and_then(|v| {
-                v["choices"][0]["message"]["content"]
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
         let Some(json) = llm::json_objekt_ausschneiden(&inhalt) else {
             tracing::warn!("Modellantwort ohne JSON");
             fehler_gesehen.get_or_insert_with(|| "Modellantwort ohne JSON".to_owned());
@@ -2954,29 +2936,11 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
     (raus, fehler_gesehen)
 }
 
-/// HTTP-Client des Modellschritts.
-///
-/// Einmal gebaut und dann wiederverwendet: ein Client je Block hiesse ein
-/// neuer Verbindungspool und ein neuer TLS-Handschlag pro Auswertung.
-/// Ohne die Umleitungssperre koennte ein Endpunkt auf 127.0.0.1 per 307 nach
-/// draussen zeigen - die Pruefung auf "lokal" waere dann umsonst. Deshalb gibt
-/// es auch keinen Ersatzclient: `Client::new()` paniert im selben Fehlerfall,
-/// und ein Client ohne diese Einstellungen waere schlimmer als keiner.
-fn modell_client() -> Option<&'static reqwest::Client> {
-    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|fehler| {
-                    tracing::error!(?fehler, "HTTP-Client fuer den Modellschritt nicht baubar");
-                })
-                .ok()
-        })
-        .as_ref()
-}
+/// Zeitgrenze des Modellschritts. Der gemeinsame Eingang haelt je Zeitgrenze
+/// einen Client vor und sperrt Umleitungen: ein Endpunkt auf 127.0.0.1 kann
+/// nicht per 307 nach draussen zeigen, sonst waere die Pruefung auf "lokal"
+/// umsonst.
+const MODELL_ZEITGRENZE: Duration = Duration::from_secs(120);
 
 /// HTTP-Client fuer die Meldungen an den Broker.
 ///

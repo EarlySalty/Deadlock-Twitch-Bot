@@ -3131,6 +3131,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tb-crypto",
+ "tb-llm",
  "tb-transport-twitch",
  "thiserror 1.0.69",
  "tokio",
