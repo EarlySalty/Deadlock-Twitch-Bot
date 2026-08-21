@@ -15,9 +15,9 @@
 //!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Timelike, Utc};
@@ -472,7 +472,16 @@ pub struct OpenAiCrewJudge {
     endpoint: Option<tb_llm::LlmEndpoint>,
     timeout: Duration,
     failures: JudgeFailureTracker,
+    /// Drossel fuer die Warnung "nicht konfiguriert": Sekunden seit
+    /// `gestartet`, zu denen zuletzt gewarnt wurde (-1 = noch nie).
+    zuletzt_gewarnt_s: AtomicI64,
+    gestartet: Instant,
 }
+
+/// Hoechstens alle fuenf Minuten eine Warnung, dass der Judge ohne
+/// Konfiguration laeuft: laut genug, um aufzufallen, leise genug, um das Log
+/// bei jedem Chat-Event nicht zu fluten.
+const KONFIG_WARNUNG_ABSTAND: Duration = Duration::from_secs(300);
 
 impl OpenAiCrewJudge {
     pub fn from_env() -> Self {
@@ -499,6 +508,25 @@ impl OpenAiCrewJudge {
             endpoint,
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
+            zuletzt_gewarnt_s: AtomicI64::new(-1),
+            gestartet: Instant::now(),
+        }
+    }
+
+    /// Warnt gedrosselt, dass Schluessel oder Modell fehlen.
+    fn warne_nicht_konfiguriert(&self) {
+        let jetzt = self.gestartet.elapsed().as_secs() as i64;
+        let abstand = KONFIG_WARNUNG_ABSTAND.as_secs() as i64;
+        let faellig = self
+            .zuletzt_gewarnt_s
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |zuletzt| {
+                (zuletzt < 0 || jetzt - zuletzt >= abstand).then_some(jetzt)
+            })
+            .is_ok();
+        if faellig {
+            warn!(
+                "crew_guard: OPENAI_API_KEY oder CREW_GUARD_MODEL nicht gesetzt, Crew-Judge antwortet fail-safe unsure"
+            );
         }
     }
 
@@ -535,9 +563,7 @@ impl OpenAiCrewJudge {
         facts: Option<&CrewJudgeFacts>,
     ) -> CrewVerdict {
         let Some(endpoint) = self.endpoint.as_ref() else {
-            debug!(
-                "crew_guard: OPENAI_API_KEY oder CREW_GUARD_MODEL nicht gesetzt — Crew-Judge fail-safe unsure"
-            );
+            self.warne_nicht_konfiguriert();
             return CrewVerdict::unsure();
         };
 
@@ -558,11 +584,18 @@ impl OpenAiCrewJudge {
         let raw = match response {
             Ok(response) => response.text,
             Err(error) => {
-                let status = match error {
-                    tb_llm::LlmError::Timeout(_) => CrewVerdictStatus::Timeout,
-                    _ => CrewVerdictStatus::Error,
+                // Den Anbieter-Body hat der Hub schon geloggt; hier nur
+                // Fehlerklasse und HTTP-Status, kein zweites Mal der Body.
+                let (status, detail) = match &error {
+                    tb_llm::LlmError::Timeout(_) => {
+                        (CrewVerdictStatus::Timeout, "timeout".to_string())
+                    }
+                    tb_llm::LlmError::Http { status, .. } => {
+                        (CrewVerdictStatus::Error, format!("HTTP {status}"))
+                    }
+                    other => (CrewVerdictStatus::Error, other.code().to_string()),
                 };
-                return self.failure(content, error.code(), error, status);
+                return self.failure(content, error.code(), detail, status);
             }
         };
         let Some(verdict) = parse_crew_verdict(&raw) else {
@@ -1942,6 +1975,8 @@ Ich hab nichts getan."
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
+            zuletzt_gewarnt_s: AtomicI64::new(-1),
+            gestartet: Instant::now(),
         };
 
         for _ in 0..4 {
@@ -1975,6 +2010,8 @@ Ich hab nichts getan."
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
+            zuletzt_gewarnt_s: AtomicI64::new(-1),
+            gestartet: Instant::now(),
         };
 
         for _ in 0..4 {
@@ -2003,6 +2040,8 @@ Ich hab nichts getan."
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
+            zuletzt_gewarnt_s: AtomicI64::new(-1),
+            gestartet: Instant::now(),
         };
         assert_eq!(
             error_judge.judge("nani bannliste", &[]).await.status,
@@ -2023,6 +2062,8 @@ Ich hab nichts getan."
             }),
             timeout: Duration::from_millis(10),
             failures: JudgeFailureTracker::default(),
+            zuletzt_gewarnt_s: AtomicI64::new(-1),
+            gestartet: Instant::now(),
         };
         assert_eq!(
             timeout_judge.judge("nani bannliste", &[]).await.status,
