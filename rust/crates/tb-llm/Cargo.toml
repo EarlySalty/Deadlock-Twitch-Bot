@@ -7,7 +7,6 @@ edition.workspace = true
 # MiniMax (Primär) + Anthropic (Premium). Jeder erfolgreiche Call verbucht
 # Tokens best-effort ins gemeinsame MiniMax-Usage-Ledger (zentrale Postgres).
 [dependencies]
-async-trait = { workspace = true }
 chrono      = { workspace = true }
 reqwest     = { workspace = true }
 serde_json  = { workspace = true }

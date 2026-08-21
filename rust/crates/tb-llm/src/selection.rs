@@ -7,19 +7,24 @@
 //! - `TB_LLM_PROVIDER_DEFAULT` — Basis für alles.
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
 //!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`.
+//! - `TB_LLM_MODEL_<USE_CASE>` — überschreibt das Modell eines Anwendungsfalls,
+//!   unabhängig vom Anbieter.
 //!
 //! Ohne jede Konfiguration gilt: Fireworks/DeepSeek, wenn ein Key da ist,
 //! sonst MiniMax. Ein unbekannter Name fällt ebenfalls auf diesen Weg zurück
 //! und wird geloggt — eine Namensverwechslung darf den Bot nicht stumm
-//! schalten.
+//! schalten. Die Anwendungsfälle in [`ANTHROPIC_USE_CASES`] wählen ohne
+//! Konfiguration Anthropic; das sind genau die, die ihn heute schon nutzen.
 //!
 //! [`endpoint_for`] ist die gemeinsame Basis: Sie liefert Adresse, Modell und
-//! Key. Die fachlichen Aufrufer behalten ihren jeweiligen HTTP-, Retry- und
-//! Fehlerpfad und beziehen nur diese drei Werte zentral.
+//! Key. Der HTTP-Weg dahinter liegt in [`crate::hub`] — hier steht nur, WOHIN
+//! ein Aufruf geht.
+//!
+//! Alle Anbieter-Konstanten des Bots stehen in dieser Datei. Kopien in den
+//! fachlichen Crates sind der Grund, warum ein Anbieterwechsel früher an fünf
+//! Stellen passieren musste.
 
 use tracing::{info, warn};
-
-use crate::minimax;
 
 const PROVIDER_DEFAULT_ENV: &str = "TB_LLM_PROVIDER_DEFAULT";
 /// Fireworks-Endpunkt (OpenAI-kompatibel), identisch zum Discord-Bot.
@@ -30,6 +35,30 @@ pub const FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 /// (404); Nachfolger derselben Klasse ist die datierte 0731-Fassung,
 /// verifiziert per Testcall mit echtem Judge-Prompt (scam, confidence 0.95).
 pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash-0731";
+/// MiniMax-Endpunkt (OpenAI-kompatibel).
+pub const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
+/// MiniMax-Modell-Lock.
+pub const MINIMAX_DEFAULT_MODEL: &str = "MiniMax-M3";
+/// Anthropic-Messages-API.
+pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1/messages";
+/// Anthropic-Standardmodell (Premium-Pfad).
+pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-opus-4-6";
+/// Anthropic-Modell für die Clip-Anreicherung: klein, günstig, schnell.
+pub const ANTHROPIC_HAIKU_MODEL: &str = "claude-haiku-4-5-20251001";
+
+/// Anwendungsfälle, die ohne Konfiguration Anthropic wählen, mit optionalem
+/// eigenem Standardmodell. Der Rest des Bots läuft über Fireworks/MiniMax.
+///
+/// Diese Liste ersetzt die früher fest verdrahteten Anthropic-Aufrufe in
+/// `claude_chat.rs`, `post_stream.rs` und `llm_dispatch.rs`. Ein Wechsel eines
+/// dieser Fälle auf einen anderen Anbieter geht jetzt über
+/// `TB_LLM_PROVIDER_<USE_CASE>`, ohne Codeänderung.
+pub const ANTHROPIC_USE_CASES: &[(&str, Option<&str>)] = &[
+    ("ai_analysis", None),
+    ("ai_chat", None),
+    ("post_stream_opus", None),
+    ("social_media_claude", Some(ANTHROPIC_HAIKU_MODEL)),
+];
 
 /// Adresse, Modell und Key eines Anbieters — alles, was ein
 /// OpenAI-kompatibler Call braucht. Der Key wird nie geloggt.
@@ -45,7 +74,15 @@ pub struct LlmEndpoint {
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
     let env_name = format!("TB_LLM_PROVIDER_{}", use_case.to_uppercase());
     let configured = nonempty_env(&env_name).or_else(|| nonempty_env(PROVIDER_DEFAULT_ENV));
-    resolve(configured.as_deref(), use_case)
+    let mut endpoint = resolve(configured.as_deref(), use_case);
+    // Das Modell eines Anwendungsfalls lässt sich unabhängig vom Anbieter
+    // umstellen. Diese eine Variable ersetzt die früheren Sonderformen
+    // `ENGAGEMENT_MINIMAX_MODEL`, `FIREWORKS_RICKY_REVIEW_MODEL` und
+    // `ANTHROPIC_HAIKU_MODEL`.
+    if let Some(model) = nonempty_env(&format!("TB_LLM_MODEL_{}", use_case.to_uppercase())) {
+        endpoint.model = model;
+    }
+    endpoint
 }
 
 /// Endpunkt-Kette für einen Anwendungsfall: bevorzugter Anbieter zuerst, der
@@ -53,6 +90,14 @@ pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
 /// Kette ab, statt beim ersten Fehler aufzugeben. Einträge ohne Key entfallen.
 pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
     let primary = endpoint_for(use_case);
+    // Anthropic ist der Premium-Pfad: ein stiller Rückfall auf ein kleineres
+    // Modell wäre kein Ausweichweg, sondern ein anderes Produkt.
+    if primary.provider == "anthropic" {
+        return [primary]
+            .into_iter()
+            .filter(|endpoint| endpoint.api_key.is_some())
+            .collect();
+    }
     let fallback = if primary.provider == "fireworks" {
         minimax_endpoint()
     } else {
@@ -68,6 +113,7 @@ fn resolve(configured: Option<&str>, use_case: &str) -> LlmEndpoint {
     match configured.map(str::trim).map(str::to_lowercase).as_deref() {
         Some("minimax") => minimax_endpoint(),
         Some("fireworks") | Some("deepseek") => fireworks_endpoint(),
+        Some("anthropic") | Some("claude") => anthropic_endpoint(use_case),
         Some(other) => {
             warn!(
                 provider = other,
@@ -82,6 +128,11 @@ fn resolve(configured: Option<&str>, use_case: &str) -> LlmEndpoint {
 /// Fireworks, wenn ein Key vorliegt — sonst MiniMax. Ohne diesen Check würde
 /// eine fehlende Fireworks-Konfiguration erst beim ersten Call auffallen.
 fn auto(use_case: &str) -> LlmEndpoint {
+    if anthropic_default_model(use_case).is_some() {
+        let anthropic = anthropic_endpoint(use_case);
+        info!(use_case, model = %anthropic.model, "LLM-Provider: Anthropic");
+        return anthropic;
+    }
     let fireworks = fireworks_endpoint();
     if fireworks.api_key.is_some() {
         info!(
@@ -132,10 +183,36 @@ fn fireworks_endpoint() -> LlmEndpoint {
 fn minimax_endpoint() -> LlmEndpoint {
     LlmEndpoint {
         provider: "minimax",
-        base_url: nonempty_env("MINIMAX_BASE_URL")
-            .unwrap_or_else(|| minimax::DEFAULT_BASE_URL.to_string()),
-        model: nonempty_env("MINIMAX_MODEL").unwrap_or_else(|| minimax::DEFAULT_MODEL.to_string()),
+        base_url: nonempty_env("MINIMAX_BASE_URL").unwrap_or_else(|| MINIMAX_BASE_URL.to_string()),
+        model: nonempty_env("MINIMAX_MODEL").unwrap_or_else(|| MINIMAX_DEFAULT_MODEL.to_string()),
         api_key: crate::keys::minimax_api_key(),
+    }
+}
+
+/// Standardmodell eines Anthropic-Anwendungsfalls, falls er eines hat.
+/// `Some(None)` gibt es nicht: `None` heißt "kein Anthropic-Anwendungsfall".
+fn anthropic_default_model(use_case: &str) -> Option<Option<&'static str>> {
+    ANTHROPIC_USE_CASES
+        .iter()
+        .find(|(name, _)| *name == use_case)
+        .map(|(_, model)| *model)
+}
+
+/// Anthropic-Endpunkt. Ein Anwendungsfall mit eigenem Standardmodell (die
+/// Clip-Anreicherung mit Haiku) ignoriert `ANTHROPIC_MODEL`: sonst zöge ein
+/// globaler Opus-Schalter den günstigen Pfad mit hoch.
+fn anthropic_endpoint(use_case: &str) -> LlmEndpoint {
+    let model = match anthropic_default_model(use_case).flatten() {
+        Some(fest) => fest.to_string(),
+        None => nonempty_env("ANTHROPIC_MODEL")
+            .unwrap_or_else(|| ANTHROPIC_DEFAULT_MODEL.to_string()),
+    };
+    LlmEndpoint {
+        provider: "anthropic",
+        base_url: nonempty_env("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string()),
+        model,
+        api_key: crate::keys::anthropic_api_key(),
     }
 }
 
@@ -167,6 +244,10 @@ mod tests {
             "MINIMAX_TOKEN_PLAN_KEY",
             "MINIMAX_MODEL",
             "MINMAX",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_MODEL",
+            "TB_LLM_PROVIDER_AI_ANALYSIS",
+            "TB_LLM_MODEL_TITLE_AI",
         ] {
             std::env::remove_var(v);
         }
@@ -258,6 +339,50 @@ mod tests {
         let chain = endpoint_chain("default");
         assert_eq!(chain[0].provider, "minimax");
         assert_eq!(chain[1].provider, "fireworks");
+        clear();
+    }
+
+    #[test]
+    fn anthropic_anwendungsfaelle_waehlen_ohne_konfiguration_anthropic() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("ANTHROPIC_API_KEY", "a");
+
+        let opus = endpoint_for("ai_analysis");
+        assert_eq!(opus.provider, "anthropic");
+        assert_eq!(opus.model, ANTHROPIC_DEFAULT_MODEL);
+
+        // Die Clip-Anreicherung hat ihr eigenes, kleines Modell und darf nicht
+        // von einem globalen ANTHROPIC_MODEL nach oben gezogen werden.
+        std::env::set_var("ANTHROPIC_MODEL", "claude-riesig");
+        assert_eq!(endpoint_for("ai_analysis").model, "claude-riesig");
+        assert_eq!(
+            endpoint_for("social_media_claude").model,
+            ANTHROPIC_HAIKU_MODEL
+        );
+
+        // Ein Anthropic-Fall bekommt keinen stillen Rueckfall auf ein
+        // kleineres Modell.
+        std::env::set_var("FIREWORK_API_KEY", "f");
+        let kette = endpoint_chain("ai_analysis");
+        assert_eq!(kette.len(), 1);
+        assert_eq!(kette[0].provider, "anthropic");
+        clear();
+    }
+
+    #[test]
+    fn modell_je_anwendungsfall_schlaegt_den_anbieter_default() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        std::env::set_var("FIREWORK_API_KEY", "f");
+        std::env::set_var("TB_LLM_MODEL_TITLE_AI", "accounts/fireworks/models/klein");
+
+        assert_eq!(
+            endpoint_for("title_ai").model,
+            "accounts/fireworks/models/klein"
+        );
+        // Andere Anwendungsfaelle bleiben unberuehrt.
+        assert_eq!(endpoint_for("spam_judge").model, FIREWORKS_DEFAULT_MODEL);
         clear();
     }
 

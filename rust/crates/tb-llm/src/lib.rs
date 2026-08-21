@@ -1,39 +1,55 @@
-//! Gemeinsame LLM-Client-Schicht des Twitch-Bots (Phase-0-Foundation).
+//! Die LLM-Schicht des Twitch-Bots: ein Eingang, dahinter alles.
 //!
-//! Genau ZWEI Provider hinter einem gemeinsamen Port ([`provider::LlmProvider`]):
-//! - [`minimax::MiniMaxClient`] — **Primär** („alles über MiniMax betreiben").
-//! - [`anthropic::AnthropicClient`] — **Premium/`ai_full`** (Opus).
+//! [`complete`] ist die einzige Stelle im ganzen Repo, die HTTP gegen ein
+//! Sprachmodell spricht. Aufrufer nennen ihren Anwendungsfall und schicken
+//! einen [`Request`]; Anbieterwahl, Ausweichkette, Zeitgrenze, Wiederholung bei
+//! 429, Verbuchung im Ledger und die Einordnung des Fehlers passieren hier.
 //!
-//! **OpenAI ist raus** — diese Crate enthält keinen OpenAI-Client und keine
-//! OpenAI-Pfade (Querschnitts-Direktive 2 des Grillme-Audits).
+//! ```ignore
+//! let antwort = tb_llm::complete(
+//!     "title_ai",
+//!     tb_llm::Request::prompt(prompt).temperature(0.35).max_tokens(2000),
+//! )
+//! .await?;
+//! ```
 //!
-//! Jeder erfolgreiche Completion-Call verbucht die echten Token-Zahlen
-//! best-effort ins gemeinsame MiniMax-Usage-Ledger (geteiltes SQLite,
-//! `source='twitch-bot'`, `purpose=…`) — siehe [`ledger`]. DB-Fehler kippen den
-//! Call NIE.
+//! # Anbieter
 //!
-//! Secrets kommen ausschließlich aus der Umgebung (Infisical/systemd) über den
-//! konsolidierten Resolver [`keys`] und werden NIE geloggt.
+//! Drei, alle in [`selection`] konstant gehalten:
+//! - **Fireworks/DeepSeek** — Standard, solange ein Fireworks-Key gesetzt ist.
+//! - **MiniMax** — Rückfall ohne Fireworks-Key und Ausweichweg der Kette.
+//! - **Anthropic** — nur für die Anwendungsfälle in
+//!   [`selection::ANTHROPIC_USE_CASES`] (Dashboard-KI, Opus-Report,
+//!   Clip-Anreicherung).
 //!
-//! # Aufrufer
+//! **OpenAI ist raus** — diese Crate enthält keinen OpenAI-Client, keine
+//! OpenAI-Konstante und keinen OpenAI-Pfad (Querschnitts-Direktive 2 des
+//! Grillme-Audits). Neue Anbieter kommen nicht dazu, ohne dass diese Direktive
+//! ausdrücklich aufgehoben wird.
 //!
-//! Bestehende, verstreute MiniMax-/Anthropic-Aufrufe (z. B. `scam_pitch`,
-//! `title_ai`, `post_stream`, die Dashboard-AI-Handler) können gegen
-//! [`provider::LlmProvider`] programmieren, ohne ihre Fachlogik umzubauen — diese
-//! Crate stellt nur die Foundation (Clients + Ledger) bereit.
+//! # Ledger
+//!
+//! Jeder erfolgreiche Aufruf verbucht die echten Token-Zahlen best-effort ins
+//! gemeinsame Usage-Ledger (`source='twitch-bot'`, `purpose=` Name des
+//! Anwendungsfalls, falls der Aufrufer keinen eigenen Zweck nennt) — siehe
+//! [`ledger`]. Ein DB-Fehler kippt den Aufruf NIE.
+//!
+//! # Secrets
+//!
+//! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
+//! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
-pub mod anthropic;
+pub mod hub;
 pub mod keys;
 pub mod ledger;
-pub mod minimax;
 pub mod model_resolver;
-pub mod provider;
 pub mod selection;
 
-pub use anthropic::AnthropicClient;
-pub use minimax::MiniMaxClient;
 pub use model_resolver::{
     invalidate_and_refresh, model_cache_pool, refresh_fireworks, spawn_refresh_loop,
 };
-pub use provider::{CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message};
+pub use hub::{
+    complete, extract_anthropic_text, strip_think, Accept, Ledger, LlmError, Message, Request,
+    Response,
+};
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};
