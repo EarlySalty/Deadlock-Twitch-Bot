@@ -113,8 +113,13 @@ Entfallen mit diesem Umbau:
 | `ENGAGEMENT_MINIMAX_MODEL` | `TB_LLM_MODEL_ENGAGEMENT` |
 | `FIREWORKS_RICKY_REVIEW_MODEL` | `TB_LLM_MODEL_RICKY_CREW_REVIEW` |
 | `ANTHROPIC_HAIKU_MODEL` | `TB_LLM_MODEL_SOCIAL_MEDIA_CLAUDE` |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CREW_GUARD_MODEL` | bleiben, siehe "Bewusst nicht migriert" |
 | MiniMax-Sonderpfad in `minimax_chat.rs` (`MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` nur wenn die Auswahl MiniMax ergab) | faellt weg; die Variablen wirken weiterhin, aber ueber die zentrale Auswahl in `selection.rs` |
+
+Bleiben unveraendert:
+
+| Variable | Grund |
+|---|---|
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CREW_GUARD_MODEL` | eigener Schluessel fuer den Crew-Judge, siehe "Bewusst nicht migriert" |
 
 **Wichtig beim Umstellen eines Modells:** `TB_LLM_MODEL_<USE_CASE>` gilt fuer
 jeden Anbieter. Wer ein MiniMax-Modell setzt, waehrend die Auswahl Fireworks
