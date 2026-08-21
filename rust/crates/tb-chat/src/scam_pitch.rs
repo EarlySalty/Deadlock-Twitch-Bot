@@ -1656,7 +1656,14 @@ impl SpamAiReviewer {
                 // Der Eingang hat pro Kettenglied schon gewarnt (mit
                 // Anbieter-Body); hier nur noch der Spur halber.
                 debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
-                (format!("{modell}: {detail}"), verdict)
+                // Ohne Absender (kein Anbieter konfiguriert) kein fuehrender
+                // Doppelpunkt im Bericht.
+                let meldung = if modell.is_empty() {
+                    detail
+                } else {
+                    format!("{modell}: {detail}")
+                };
+                (meldung, verdict)
             }
         };
         self.record_and_return(
