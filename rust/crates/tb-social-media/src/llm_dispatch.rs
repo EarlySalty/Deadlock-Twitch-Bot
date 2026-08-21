@@ -124,176 +124,155 @@ fn env_rate(var: &str, default: f64) -> f64 {
     std::env::var(var).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|r| *r >= 0.0).unwrap_or(default)
 }
 
-const MINIMAX_DEFAULT_BASE: &str = "https://api.minimax.io/v1";
-const MINIMAX_DEFAULT_MODEL: &str = "MiniMax-M3";
-const CLAUDE_DEFAULT_BASE: &str = "https://api.anthropic.com/v1/messages";
-const CLAUDE_DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+/// Anwendungsfaelle der beiden externen Anbieter in der gemeinsamen Auswahl.
+/// Modell und Adresse stehen in `tb-llm`, nicht hier.
+const USE_CASE_MINIMAX: &str = "social_media";
+const USE_CASE_CLAUDE: &str = "social_media_claude";
 const EXTERNAL_TIMEOUT_SECONDS: u64 = 60;
 
-fn external_http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(EXTERNAL_TIMEOUT_SECONDS))
-        .build()
-        .unwrap_or_default()
+/// Uebersetzt den Fehler des gemeinsamen Eingangs in die Fehlerform des
+/// Dispatchers. `ProviderUnavailable` ist wichtig: nur darauf schaltet die
+/// Kette weiter, ohne den Fehler zu melden.
+fn dispatch_error(provider: &str, error: tb_llm::LlmError) -> LlmError {
+    match error {
+        tb_llm::LlmError::Unavailable(detail) => LlmError::ProviderUnavailable(detail),
+        other => LlmError::ProviderError(format!("{provider} error: {other}")),
+    }
 }
 
-/// MiniMax-Provider (extern, OpenAI-kompatibles chat/completions).
-pub struct MiniMaxProvider {
-    model: String,
-    base_url: String,
-    api_key: String,
+/// Ein externer Anbieter der Clip-Anreicherung.
+///
+/// Beide Anbieter unterscheiden sich nur noch in Name, Anwendungsfall und
+/// Preisschluesseln; der HTTP-Weg liegt in [`tb_llm::complete`].
+pub struct ExternalProvider {
+    name: &'static str,
+    use_case: &'static str,
+    endpoint: tb_llm::LlmEndpoint,
     temperature: f64,
-    http: reqwest::Client,
+    preis_eingang: (&'static str, f64),
+    preis_ausgang: (&'static str, f64),
 }
 
-impl MiniMaxProvider {
-    /// Aus Env; `MINIMAX_API_KEY` Pflicht → sonst Unavailable.
-    pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = nonempty_env("MINIMAX_API_KEY").ok_or_else(|| LlmError::ProviderUnavailable("MINIMAX_API_KEY not set".to_string()))?;
+impl ExternalProvider {
+    /// MiniMax; ohne Schluessel `Unavailable`, damit die Kette weiterschaltet.
+    pub fn minimax_from_env() -> Result<Self, LlmError> {
+        Self::from_env(
+            "minimax",
+            USE_CASE_MINIMAX,
+            ("MINIMAX_PRICE_INPUT_PER_1K", 0.0006),
+            ("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024),
+        )
+    }
+
+    /// Claude Haiku; ohne Schluessel `Unavailable`.
+    pub fn claude_haiku_from_env() -> Result<Self, LlmError> {
+        Self::from_env(
+            "claude_haiku",
+            USE_CASE_CLAUDE,
+            ("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001),
+            ("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005),
+        )
+    }
+
+    fn from_env(
+        name: &'static str,
+        use_case: &'static str,
+        preis_eingang: (&'static str, f64),
+        preis_ausgang: (&'static str, f64),
+    ) -> Result<Self, LlmError> {
+        let endpoint = tb_llm::endpoint_for(use_case);
+        if endpoint.api_key.is_none() {
+            return Err(LlmError::ProviderUnavailable(format!(
+                "kein Schluessel fuer {name}"
+            )));
+        }
         Ok(Self {
-            model: nonempty_env("MINIMAX_MODEL").unwrap_or_else(|| MINIMAX_DEFAULT_MODEL.to_string()),
-            base_url: nonempty_env("MINIMAX_BASE_URL").unwrap_or_else(|| MINIMAX_DEFAULT_BASE.to_string()),
-            api_key,
+            name,
+            use_case,
+            endpoint,
             temperature: 0.4,
-            http: external_http(),
+            preis_eingang,
+            preis_ausgang,
         })
     }
 
-    pub fn new(model: String, base_url: String, api_key: String, temperature: f64) -> Self {
-        Self { model, base_url, api_key, temperature, http: external_http() }
+    /// Expliziter Endpunkt, fuer Tests.
+    pub fn new(
+        name: &'static str,
+        use_case: &'static str,
+        endpoint: tb_llm::LlmEndpoint,
+        temperature: f64,
+    ) -> Self {
+        Self {
+            name,
+            use_case,
+            endpoint,
+            temperature,
+            preis_eingang: ("SOCIAL_MEDIA_PRICE_INPUT_PER_1K", 0.0),
+            preis_ausgang: ("SOCIAL_MEDIA_PRICE_OUTPUT_PER_1K", 0.0),
+        }
     }
 }
 
 #[async_trait]
-impl LlmProvider for MiniMaxProvider {
+impl LlmProvider for ExternalProvider {
     fn name(&self) -> &str {
-        "minimax"
+        self.name
     }
 
     async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
         let prompt = render_user_prompt(request);
-        let text = self.generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature).await?;
-        parse_llm_payload(&text.content, "minimax", &self.model, text.cost_usd_estimate)
+        let text = self
+            .generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature)
+            .await?;
+        parse_llm_payload(
+            &text.content,
+            self.name,
+            &self.endpoint.model,
+            text.cost_usd_estimate,
+        )
     }
 
-    async fn generate_text(&self, system_prompt: &str, user_prompt: &str, max_tokens: i64, temperature: f64) -> Result<LlmTextResponse, LlmError> {
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        });
+    async fn generate_text(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: i64,
+        temperature: f64,
+    ) -> Result<LlmTextResponse, LlmError> {
+        let mut request = tb_llm::Request::simple(system_prompt, user_prompt)
+            .max_tokens(max_tokens)
+            .temperature(temperature)
+            .timeout(std::time::Duration::from_secs(EXTERNAL_TIMEOUT_SECONDS))
+            .ledger_purpose(self.use_case)
+            .endpoint(self.endpoint.clone());
+        // format=json nur, wenn der System-Prompt strikten JSON verlangt.
         if system_prompt.to_lowercase().contains("strict json") {
-            body["response_format"] = serde_json::json!({"type": "json_object"});
+            request = request.json_object();
         }
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
+
+        let response = tb_llm::complete(self.use_case, request)
             .await
-            .map_err(|e| LlmError::ProviderError(format!("MiniMax error: {e}")))?
-            .error_for_status()
-            .map_err(|e| LlmError::ProviderError(format!("MiniMax error: {e}")))?;
-        let payload: Value = resp.json().await.map_err(|e| LlmError::ProviderError(format!("MiniMax JSON: {e}")))?;
-        let content = payload
-            .get("choices").and_then(Value::as_array).and_then(|a| a.first())
-            .and_then(|c| c.get("message")).and_then(|m| m.get("content")).and_then(Value::as_str)
-            .unwrap_or("").to_string();
-        if content.trim().is_empty() {
-            return Err(LlmError::ProviderError("MiniMax returned empty content".to_string()));
+            .map_err(|error| dispatch_error(self.name, error))?;
+        if response.text.trim().is_empty() {
+            return Err(LlmError::ProviderError(format!(
+                "{} returned empty content",
+                self.name
+            )));
         }
-        let usage = payload.get("usage");
-        let pt = usage.and_then(|u| u.get("prompt_tokens")).and_then(Value::as_i64).unwrap_or(0);
-        let ct = usage.and_then(|u| u.get("completion_tokens")).and_then(Value::as_i64).unwrap_or(0);
-        let cost = estimate_cost(pt, ct, env_rate("MINIMAX_PRICE_INPUT_PER_1K", 0.0006), env_rate("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024));
-        Ok(LlmTextResponse { content, provider: "minimax".to_string(), model: self.model.clone(), cost_usd_estimate: Some(cost) })
-    }
-}
-
-/// Claude-Haiku-Provider (extern, Anthropic Messages-API).
-pub struct ClaudeHaikuProvider {
-    model: String,
-    base_url: String,
-    api_key: String,
-    temperature: f64,
-    http: reqwest::Client,
-}
-
-impl ClaudeHaikuProvider {
-    /// Aus Env; `ANTHROPIC_API_KEY` Pflicht → sonst Unavailable.
-    pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = nonempty_env("ANTHROPIC_API_KEY").ok_or_else(|| LlmError::ProviderUnavailable("ANTHROPIC_API_KEY not set".to_string()))?;
-        Ok(Self {
-            model: nonempty_env("ANTHROPIC_HAIKU_MODEL").unwrap_or_else(|| CLAUDE_DEFAULT_MODEL.to_string()),
-            base_url: CLAUDE_DEFAULT_BASE.to_string(),
-            api_key,
-            temperature: 0.4,
-            http: external_http(),
+        let cost = estimate_cost(
+            response.prompt_tokens.unwrap_or(0),
+            response.completion_tokens.unwrap_or(0),
+            env_rate(self.preis_eingang.0, self.preis_eingang.1),
+            env_rate(self.preis_ausgang.0, self.preis_ausgang.1),
+        );
+        Ok(LlmTextResponse {
+            content: response.text,
+            provider: self.name.to_string(),
+            model: response.model,
+            cost_usd_estimate: Some(cost),
         })
     }
-
-    pub fn new(model: String, base_url: String, api_key: String, temperature: f64) -> Self {
-        Self { model, base_url, api_key, temperature, http: external_http() }
-    }
-}
-
-#[async_trait]
-impl LlmProvider for ClaudeHaikuProvider {
-    fn name(&self) -> &str {
-        "claude_haiku"
-    }
-
-    async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
-        let prompt = render_user_prompt(request);
-        let text = self.generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature).await?;
-        parse_llm_payload(&text.content, "claude_haiku", &self.model, text.cost_usd_estimate)
-    }
-
-    async fn generate_text(&self, system_prompt: &str, user_prompt: &str, max_tokens: i64, temperature: f64) -> Result<LlmTextResponse, LlmError> {
-        let body = serde_json::json!({
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
-        });
-        let resp = self
-            .http
-            .post(&self.base_url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::ProviderError(format!("Claude error: {e}")))?
-            .error_for_status()
-            .map_err(|e| LlmError::ProviderError(format!("Claude error: {e}")))?;
-        let payload: Value = resp.json().await.map_err(|e| LlmError::ProviderError(format!("Claude JSON: {e}")))?;
-        // content ist ein Array von Blocks; Text-Blocks konkatenieren.
-        let content: String = payload
-            .get("content").and_then(Value::as_array)
-            .map(|blocks| blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<String>())
-            .unwrap_or_default();
-        if content.trim().is_empty() {
-            return Err(LlmError::ProviderError("Claude returned empty content".to_string()));
-        }
-        let usage = payload.get("usage");
-        let pt = usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_i64).unwrap_or(0);
-        let ct = usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_i64).unwrap_or(0);
-        let cost = estimate_cost(pt, ct, env_rate("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001), env_rate("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005));
-        Ok(LlmTextResponse { content, provider: "claude_haiku".to_string(), model: self.model.clone(), cost_usd_estimate: Some(cost) })
-    }
-}
-
-/// Env-Var nur wenn gesetzt + nicht leer.
-fn nonempty_env(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|v| !v.is_empty())
 }
 
 /// Wählt + ruft den passenden Provider (Python `LLMDispatcher`).
@@ -340,8 +319,8 @@ impl LlmDispatcher {
     fn instantiate(&self, name: &str) -> Result<Box<dyn LlmProvider>, LlmError> {
         match name {
             "ollama" => Ok(Box::new(OllamaProvider::from_env())),
-            "minimax" => Ok(Box::new(MiniMaxProvider::from_env()?)),
-            "claude_haiku" => Ok(Box::new(ClaudeHaikuProvider::from_env()?)),
+            "minimax" => Ok(Box::new(ExternalProvider::minimax_from_env()?)),
+            "claude_haiku" => Ok(Box::new(ExternalProvider::claude_haiku_from_env()?)),
             other => Err(LlmError::ProviderUnavailable(format!("Unknown LLM provider: {other}"))),
         }
     }
@@ -477,14 +456,23 @@ mod tests {
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 1000}
             })))
             .mount(&server).await;
-        let p = MiniMaxProvider::new("MiniMax-M3".into(), server.uri(), "k".into(), 0.4);
+        let p = ExternalProvider::new(
+            "minimax",
+            USE_CASE_MINIMAX,
+            tb_llm::LlmEndpoint {
+                provider: "minimax",
+                base_url: server.uri(),
+                model: "MiniMax-M3".into(),
+                api_key: Some("k".into()),
+            },
+            0.4,
+        );
         let resp = p.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(resp.provider, "minimax");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
-        // Cost: 1000/1000*0.0006 + 1000/1000*0.0024 = 0.003 (Default-Raten, env-frei).
-        if std::env::var("MINIMAX_PRICE_INPUT_PER_1K").is_err() {
-            assert_eq!(resp.cost_usd_estimate, Some(0.003));
-        }
+        // Die Kostenschaetzung laeuft weiterhin ueber die Token-Zahlen der
+        // Antwort; der Testkonstruktor nutzt Rate 0.
+        assert_eq!(resp.cost_usd_estimate, Some(0.0));
     }
 
     #[tokio::test]
@@ -496,7 +484,17 @@ mod tests {
                 "usage": {"input_tokens": 100, "output_tokens": 50}
             })))
             .mount(&server).await;
-        let p = ClaudeHaikuProvider::new("claude-haiku".into(), format!("{}/messages", server.uri()), "k".into(), 0.4);
+        let p = ExternalProvider::new(
+            "claude_haiku",
+            USE_CASE_CLAUDE,
+            tb_llm::LlmEndpoint {
+                provider: "anthropic",
+                base_url: format!("{}/messages", server.uri()),
+                model: "claude-haiku".into(),
+                api_key: Some("k".into()),
+            },
+            0.4,
+        );
         let resp = p.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(resp.provider, "claude_haiku");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
