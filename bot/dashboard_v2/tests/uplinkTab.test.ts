@@ -17,7 +17,6 @@ import {
   UPLINK_LAST_LABEL,
   UPLINK_TWITCH_ALLGEMEINER_FEHLER,
   UPLINK_TWITCH_LOGIN_HINT,
-  UPLINK_SCHEDULE_TEXT,
   UPLINK_TWITCH_SCOPE_HINT,
   aktiveSessionId,
   canSaveDestination,
@@ -32,7 +31,6 @@ import {
   toEingabeZeit,
   toRelayZeit,
   twitchFehlertext,
-  zahlOderUndefined,
   uplinkAdminBloeckeSichtbar,
   uplinkAnsicht,
   uplinkStreamerBloeckeSichtbar,
@@ -478,7 +476,7 @@ test('max_points = 0 wird als 0 an das Relay geschickt', async () => {
     });
   };
   try {
-    await saveUplinkAdminSettings({ max_points: zahlOderUndefined('0', true) });
+    await saveUplinkAdminSettings({ max_points: uplinkModel.zahlOderUndefined('0', true) });
     assert.deepEqual(gesendeterRumpf, { max_points: 0 });
   } finally {
     globalThis.fetch = vorher;
@@ -488,7 +486,7 @@ test('max_points = 0 wird als 0 an das Relay geschickt', async () => {
 
 test('der Zeitplan verteilt Erwartungen und verspricht keinen reservierten Platz', () => {
   assert.equal(
-    UPLINK_SCHEDULE_TEXT,
+    uplinkModel.UPLINK_SCHEDULE_TEXT,
     'Trag deine geplanten Zeiten ein. Der Zeitplan hilft dir, Erwartungen zu verteilen und Konflikte sichtbar zu machen. Ob dein Stream starten kann, hängt von der aktuellen Auslastung ab.',
   );
   assert.match(UPLINK_PAGE_SRC, /UPLINK_SCHEDULE_TEXT/);
