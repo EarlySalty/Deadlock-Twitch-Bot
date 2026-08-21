@@ -85,16 +85,21 @@ Nur in `tb-llm`, nirgends sonst:
 
 Ohne Konfiguration entscheidet weiterhin der Key: Fireworks, wenn einer gesetzt
 ist, sonst MiniMax. Anthropic kommt nur, wenn ein Use-Case ihn ausdruecklich
-waehlt, also genau fuer die Faelle, die ihn heute schon nutzen. Kein OpenAI,
-keine neuen Anbieter (Direktive in `tb-llm/src/lib.rs`).
+waehlt, also genau fuer die Faelle, die ihn heute schon nutzen
+(`ANTHROPIC_USE_CASES`: `ai_analysis`, `ai_chat`, `post_stream_opus`,
+`social_media_claude`). Diese vier ignorieren `TB_LLM_PROVIDER_DEFAULT`: ein
+globaler Schalter fuer den Rest des Bots zieht den Premium-Pfad nicht still auf
+ein anderes Produkt. Umgelenkt werden sie nur ueber ihre eigene
+`TB_LLM_PROVIDER_<USE_CASE>`-Variable. Kein OpenAI, keine neuen Anbieter
+(Direktive in `tb-llm/src/lib.rs`).
 
 ## Umgebungsvariablen
 
 | Variable | Wirkung |
 |---|---|
-| `TB_LLM_PROVIDER_DEFAULT` | Anbieter fuer alles |
-| `TB_LLM_PROVIDER_<USE_CASE>` | Anbieter fuer einen Use-Case |
-| `TB_LLM_MODEL_<USE_CASE>` | Modell fuer einen Use-Case, unabhaengig vom Anbieter |
+| `TB_LLM_PROVIDER_DEFAULT` | Anbieter fuer alles ausser den Anthropic-Use-Cases |
+| `TB_LLM_PROVIDER_<USE_CASE>` | Anbieter fuer einen Use-Case; einziger Weg, einen Anthropic-Use-Case umzulenken |
+| `TB_LLM_MODEL_<USE_CASE>` | Modell fuer einen Use-Case, unabhaengig vom Anbieter, gilt auch fuer das Ausweichglied der Kette |
 | `FIREWORK_API_KEY`, `FIREWORKS_API_KEY` | Fireworks-Key |
 | `FIREWORK_BASE_URL`, `FIREWORKS_BASE_URL`, `FIREWORK_MODEL`, `FIREWORKS_MODEL` | Fireworks-Adresse und -Modell |
 | `MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINMAX` | MiniMax-Key |
