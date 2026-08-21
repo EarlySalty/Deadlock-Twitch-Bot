@@ -54,13 +54,6 @@ pub struct Bericht {
     pub modell_geprueft: bool,
     /// Grund, falls der Modellschritt ausfiel oder uebersprungen wurde.
     pub modell_hinweis: String,
-    /// Ob der zweite LLM-Schritt fuer die kopierfertigen Meldegruende
-    /// vollstaendig erfolgreich war.
-    #[serde(default)]
-    pub meldegrund_aufbereitet: bool,
-    /// Hinweis, wenn die Aufbereitung fehlte oder nur teilweise gelang.
-    #[serde(default)]
-    pub meldegrund_hinweis: String,
     pub funde: Vec<Fund>,
 }
 
@@ -187,9 +180,6 @@ pub fn markdown(bericht: &Bericht) -> String {
             zeilen.push(format!("- Begruendung: {}", fund.begruendung));
         }
         zeilen.push(format!("- Zitat (geschwaerzt): {}", fund.zitat_redigiert));
-        if !fund.twitch_meldegrund.trim().is_empty() {
-            zeilen.push(format!("- Twitch-Meldegrund: {}", fund.twitch_meldegrund));
-        }
         // Zeichenweise kuerzen: `Bericht` wird auch von der Platte gelesen,
         // und ein abgeschnittener Hash duerfte den Bericht nicht sprengen.
         let hash_kurz: String = fund.zitat_hash.chars().take(16).collect();
@@ -274,57 +264,33 @@ fn stream_zeitfenster(bericht: &Bericht, fund: &Fund) -> String {
     }
 }
 
-/// Sachlicher Rückfall, falls der zweite Modellschritt nicht antwortet. Der
-/// Text bleibt bewusst vorsichtig und behauptet keine Einzelheiten, die nur
-/// aus dem unredigierten Wortlaut stammen könnten.
-pub fn fallback_meldegrund(fund: &Fund) -> String {
-    match fund.kategorie.as_str() {
-        "hate_speech_slur" => {
-            "Der Streamer verwendete laut Transkript eine mögliche rassistische oder diskriminierende Beleidigung".to_owned()
-        }
-        "discriminatory_speech" => {
-            "Der Streamer äußerte laut Transkript eine diskriminierende Aussage über eine geschützte Gruppe".to_owned()
-        }
-        "threat_or_self_harm" => {
-            "Der Streamer äußerte laut Transkript eine mögliche Drohung oder Aufforderung zur Selbstverletzung".to_owned()
-        }
-        "harassment" => {
-            "Der Streamer beleidigte laut Transkript eine andere Person in deutlicher Weise".to_owned()
-        }
-        "sexual_content" => {
-            "Der Streamer verwendete laut Transkript eine deutlich sexuelle Äußerung gegen eine andere Person".to_owned()
-        }
-        _ => "Im Transkript wurde eine möglicherweise meldewürdige Äußerung erkannt".to_owned(),
-    }
-}
-
-fn meldegrund(fund: &Fund) -> String {
-    let text = if fund.twitch_meldegrund.trim().is_empty() {
-        fallback_meldegrund(fund)
-    } else {
-        fund.twitch_meldegrund.clone()
-    };
-    let text = crate::rules::redact_text(&text);
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    text.trim_end_matches(['.', '!', '?']).to_owned()
+fn copy_zeitfenster(bericht: &Bericht, fund: &Fund) -> String {
+    let fenster = stream_zeitfenster(bericht, fund);
+    fenster
+        .strip_prefix("ca. ")
+        .unwrap_or(&fenster)
+        .replacen(" bis ", " und ", 1)
 }
 
 fn kopierfertiger_meldegrund(bericht: &Bericht, fund: &Fund) -> String {
-    let grund = meldegrund(fund);
-    let fenster = stream_zeitfenster(bericht, fund);
+    let grund = format!(
+        "Ich finde es nicht okay, dass der Streamer {} auf Twitch gesagt hat, und bin der Meinung, dass das nicht zulässig ist.",
+        zitat_fuer_dm(fund)
+    );
+    let copy_fenster = copy_zeitfenster(bericht, fund);
     match fundzeitpunkt(bericht, fund) {
         Some((zeitpunkt, true)) => format!(
-            "{grund}; bitte prüft am {} um {} UTC das VOD im Zeitfenster {fenster}.",
+            "{grund} Die Aussage fiel am {} um {} UTC. Im VOD liegt die Stelle ungefähr zwischen {copy_fenster}.",
             zeitpunkt.format("%d.%m.%Y"),
             zeitpunkt.format("%H:%M:%S")
         ),
         Some((zeitpunkt, false)) => format!(
-            "{grund}; bitte prüft am {} um {} UTC ab Aufnahmebeginn das VOD im Zeitfenster {fenster}.",
+            "{grund} Die Aussage wurde am {} um {} UTC ab Aufnahmebeginn aufgezeichnet. Im VOD liegt die Stelle ungefähr zwischen {copy_fenster}.",
             zeitpunkt.format("%d.%m.%Y"),
             zeitpunkt.format("%H:%M:%S")
         ),
         None => format!(
-            "{grund}; bitte prüft das VOD im ungefähren Stream-Zeitfenster {fenster}."
+            "{grund} Im Transkript liegt die Aussage ungefähr zwischen {copy_fenster}. Der absolute Zeitpunkt ist nicht verfügbar."
         ),
     }
 }
@@ -362,21 +328,6 @@ pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
     };
 
     let mut text = kopf;
-    if !bericht.meldegrund_aufbereitet && !bericht.meldegrund_hinweis.trim().is_empty() {
-        let status = if bericht
-            .meldegrund_hinweis
-            .trim_start()
-            .starts_with("unvollständig")
-        {
-            "unvollständig"
-        } else {
-            "nicht verfügbar"
-        };
-        text.push_str(&format!(
-            "\n\nLLM-Aufbereitung {status}: {}",
-            bericht.meldegrund_hinweis
-        ));
-    }
     for fund in bericht.funde.iter().take(grenze) {
         text.push_str(&format!(
             "\n\n• Fundstelle {} bis {} ({}, {})\nGesagt (Transkript): {}\nGesagt am: {}\nStream-Zeitfenster: {}\nKopierfertiger Twitch-Meldegrund:\n{}",
@@ -421,9 +372,6 @@ mod tests {
             begruendung: "Begruendung".to_owned(),
             zitat_redigiert: "so ein [REDACTED] echt".to_owned(),
             zitat_roh: "so ein nigga echt".to_owned(),
-            twitch_meldegrund:
-                "Der Streamer verwendete eine rassistische Beleidigung gegen eine andere Person"
-                    .to_owned(),
             zitat_hash: "a".repeat(64),
         }
     }
@@ -445,8 +393,6 @@ mod tests {
             segmente: 12,
             modell_geprueft: true,
             modell_hinweis: String::new(),
-            meldegrund_aufbereitet: true,
-            meldegrund_hinweis: String::new(),
             funde,
         }
     }
@@ -600,8 +546,23 @@ mod tests {
             "Meldegrundlabel fehlt: {text}"
         );
         assert!(
-            text.contains("bitte prüft am 13.08.2026 um 20:00:12 UTC"),
-            "Datum und Uhrzeit fehlen im Kopiergrund: {text}"
+            text.contains(
+                "Ich finde es nicht okay, dass der Streamer „so ein nigga echt“ auf Twitch gesagt hat, und bin der Meinung, dass das nicht zulässig ist. Die Aussage fiel am 13.08.2026 um 20:00:12 UTC. Im VOD liegt die Stelle ungefähr zwischen 00:00:12 und 00:00:42."
+            ),
+            "direkter Copy-Paste-Text fehlt: {text}"
+        );
+    }
+
+    #[test]
+    fn dm_baukasten_braucht_keine_llm_aufbereitung() {
+        let text = dm_text(&bericht(vec![fund("high", 12.0, "hate_speech_slur")]), 5);
+        assert!(
+            !text.contains("LLM-Aufbereitung"),
+            "LLM-Hinweis gehört nicht mehr in die DM: {text}"
+        );
+        assert!(
+            text.contains("Ich finde es nicht okay, dass der Streamer"),
+            "Baukasten fehlt: {text}"
         );
     }
 
@@ -619,22 +580,6 @@ mod tests {
         assert!(anfrage
             .content
             .contains("Kopierfertiger Twitch-Meldegrund:"));
-    }
-
-    #[test]
-    fn dm_markiert_fallback_ohne_llm_aufbereitung() {
-        let mut b = bericht(vec![fund("high", 12.0, "hate_speech_slur")]);
-        b.meldegrund_aufbereitet = false;
-        b.meldegrund_hinweis = "Modellantwort fehlt".to_owned();
-        let text = dm_text(&b, 5);
-        assert!(
-            text.contains("LLM-Aufbereitung nicht verfügbar: Modellantwort fehlt"),
-            "Fallback-Hinweis fehlt: {text}"
-        );
-        assert!(
-            text.contains("Kopierfertiger Twitch-Meldegrund:"),
-            "Fallback-Grund fehlt: {text}"
-        );
     }
 
     #[test]

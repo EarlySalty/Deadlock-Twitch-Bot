@@ -1,9 +1,10 @@
 # Plan: Twitch-Meldegrund in der Audit-DM
 
-status: erledigt
+status: überholt
 datum: 2026-08-21
 klasse: kritisch
 research: .tasks/2026-08-21-twitch-report-copy/RESEARCH.md
+ersetzt durch: .tasks/2026-08-21-twitch-report-baukasten/PLAN.md
 
 ## Ziel
 

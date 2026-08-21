@@ -27,8 +27,9 @@ keine Sanktionen und postet nichts öffentlich.
 - Pro Block entsteht ein Protokoll auf der Platte und, wenn es etwas zu melden
   gibt, eine private Nachricht an den Admin. Sie enthält den erkannten
   Wortlaut, das Datum und die UTC-Uhrzeit, ein ungefähres Stream-Zeitfenster
-  sowie einen kopierfertigen Twitch-Meldegrund. Dieser Grund wird in einem
-  zweiten DeepSeek-V4-Flash-Schritt aus geschwärzten Funddaten formuliert.
+  sowie einen kopierfertigen Twitch-Meldegrund. Der Grund entsteht als fester
+  Baukasten aus Originalzitat, Zeitpunkt und VOD-Zeitfenster, ohne zweiten
+  LLM-Aufruf.
 - Aufnahmen mit Fund bleiben liegen, damit jemand nachhören kann. Saubere
   Blöcke werden gelöscht.
 
@@ -76,9 +77,8 @@ keine Sanktionen und postet nichts öffentlich.
   startet der Dienst gar nicht erst, außer das wurde ausdrücklich erlaubt.
 - An das Bewertungsmodell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
-  anderer Wortlaut geht mit. Der zweite Modellschritt für den Twitch-Meldegrund
-  erhält ebenfalls nur geschwärzte Belege. Deshalb ist der fremde Anbieter eine
-  bewusste, einzeln gesetzte Entscheidung.
+  anderer Wortlaut geht mit. Der kopierfertige Twitch-Meldegrund entsteht lokal
+  aus dem an den Admin gesendeten Zitat und den Zeitdaten.
 - Jeder Beleg im Protokoll läuft durch die Schwärzung und trägt eine Prüfsumme
   des Originals. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut aus demselben Abschnitt steht im Protokoll. Es ist deshalb

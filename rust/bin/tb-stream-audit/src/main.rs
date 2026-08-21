@@ -678,8 +678,6 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
         segmente: 0,
         modell_geprueft: false,
         modell_hinweis: "kein Text im Block".to_owned(),
-        meldegrund_aufbereitet: true,
-        meldegrund_hinweis: String::new(),
         funde: Vec::new(),
     }
 }
@@ -1999,8 +1997,7 @@ async fn block_auswerten(
         }
         (false, fehler) => fehler,
     };
-    let mut funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
-    let meldegrund_hinweis = meldegruende_aufbereiten(&mut funde).await;
+    let funde = report::sortiert(tb_stream_audit::funde_zusammenfassen(funde));
 
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
     let jetzt = chrono::Utc::now();
@@ -2027,8 +2024,6 @@ async fn block_auswerten(
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
         modell_hinweis: modell_hinweis.unwrap_or_default(),
-        meldegrund_aufbereitet: meldegrund_hinweis.is_none(),
-        meldegrund_hinweis: meldegrund_hinweis.unwrap_or_default(),
         funde,
     };
 
@@ -2297,92 +2292,6 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
         }
     }
     (raus, fehler_gesehen)
-}
-
-fn meldegrund_index(id: &str) -> Option<usize> {
-    id.strip_prefix('f')?.parse::<usize>().ok()?.checked_sub(1)
-}
-
-fn gleicher_fund(a: &tb_stream_audit::Fund, b: &tb_stream_audit::Fund) -> bool {
-    a.segment_id == b.segment_id
-        && a.kategorie == b.kategorie
-        && a.erkenner == b.erkenner
-        && a.zitat_hash == b.zitat_hash
-}
-
-/// Formuliert die kopierfertigen Twitch-Gruende. Der Rust-Code setzt vor dem
-/// Aufruf Rueckfalltexte und prueft jede Antwort-ID, damit ein LLM-Aussetzer
-/// nie einen Fund ohne verwendbaren Grund in die DM schickt.
-async fn meldegruende_aufbereiten(funde: &mut [tb_stream_audit::Fund]) -> Option<String> {
-    let meldefunde = tb_stream_audit::nur_tos_meldewuerdig(funde);
-    if meldefunde.is_empty() {
-        return None;
-    }
-    for fund in funde
-        .iter_mut()
-        .filter(|fund| tb_stream_audit::tos_meldewuerdig(fund))
-    {
-        fund.twitch_meldegrund = report::fallback_meldegrund(fund);
-    }
-
-    let client = match AuditLlmClient::from_env() {
-        Ok(client) => client,
-        Err(fehler) => return Some(fehler),
-    };
-    let inhalt = match client
-        .json_antwort(
-            llm::MELDEGRUND_SYSTEM_PROMPT,
-            llm::meldegrund_anfrage_json(&meldefunde),
-        )
-        .await
-    {
-        Ok(inhalt) => inhalt,
-        Err(fehler) => return Some(fehler),
-    };
-    let Some(json) = llm::json_objekt_ausschneiden(&inhalt) else {
-        return Some("Modellantwort ohne JSON".to_owned());
-    };
-    let antwort = match serde_json::from_str::<llm::MeldegrundAntwort>(json) {
-        Ok(antwort) => antwort,
-        Err(fehler) => {
-            tracing::warn!(?fehler, "Meldegrund-Antwort unlesbar");
-            return Some("Modellantwort unlesbar".to_owned());
-        }
-    };
-    let mut beantwortet = vec![false; meldefunde.len()];
-    for grund in antwort.reasons {
-        let Some(index) = meldegrund_index(&grund.id) else {
-            tracing::warn!(id = %grund.id, "Meldegrund mit unbekannter Fund-ID");
-            continue;
-        };
-        let Some(vorlage) = meldefunde.get(index) else {
-            tracing::warn!(id = %grund.id, "Meldegrund-ID ausserhalb der Anfrage");
-            continue;
-        };
-        let text = tb_stream_audit::rules::redact_text(&grund.text)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.trim().is_empty() {
-            continue;
-        }
-        if let Some(ziel) = funde.iter_mut().find(|fund| gleicher_fund(fund, vorlage)) {
-            ziel.twitch_meldegrund = text;
-            beantwortet[index] = true;
-        }
-    }
-    let fehlend = beantwortet
-        .iter()
-        .filter(|beantwortet| !**beantwortet)
-        .count();
-    if fehlend == 0 {
-        None
-    } else {
-        Some(format!(
-            "unvollständig: {fehlend} von {} Funden nutzen den Rückfallgrund",
-            meldefunde.len()
-        ))
-    }
 }
 
 /// Pfad des Berichts zu einem Block.
@@ -3007,8 +2916,6 @@ mod tests {
             segmente: 3,
             modell_geprueft: true,
             modell_hinweis: String::new(),
-            meldegrund_aufbereitet: true,
-            meldegrund_hinweis: String::new(),
             funde: Vec::new(),
         };
         fertig_markieren(&aufnahme, &bericht).await;
