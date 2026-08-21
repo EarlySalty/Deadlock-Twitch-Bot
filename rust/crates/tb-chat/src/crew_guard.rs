@@ -454,31 +454,42 @@ Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde d
 /// Timeout des Judge-HTTP-Calls.
 const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
 /// Default-Endpoint (OpenAI-kompatibel); via `OPENAI_BASE_URL` überschreibbar.
+///
+/// Diese Konstante bleibt bewusst hier und wandert NICHT nach `tb-llm`: der
+/// Crew-Judge ist der einzige Aufrufer hinter einem OpenAI-Schlüssel, und
+/// `tb-llm` nimmt laut Direktive im Crate-Kopf keinen OpenAI-Anbieter auf. Über
+/// den gemeinsamen Eingang läuft er trotzdem, mit explizitem Endpunkt: so
+/// teilen sich Transport, Zeitgrenze und Fehler-Einordnung eine Stelle mit dem
+/// Rest des Bots.
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// Anwendungsfall des Crew-Judges (nur für Logs und Ledger-Zweck).
+const CREW_JUDGE_USE_CASE: &str = "crew_guard";
 
 /// OpenAI-kompatibler Judge. Modellname NIE hardcoden — kommt aus
 /// `CREW_GUARD_MODEL`. Fehlt das Modell (oder der Key), antwortet der Judge
 /// fail-safe mit `unsure` (kein Crew), statt zu raten.
 pub struct OpenAiCrewJudge {
-    client: reqwest::Client,
-    api_key: Option<String>,
-    model: Option<String>,
-    base_url: String,
+    endpoint: Option<tb_llm::LlmEndpoint>,
+    timeout: Duration,
     failures: JudgeFailureTracker,
 }
 
 impl OpenAiCrewJudge {
     pub fn from_env() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS))
-            .build()
-            .unwrap_or_default();
+        // Ohne Schlüssel ODER ohne Modell gibt es keinen Endpunkt: der Judge
+        // antwortet dann fail-safe `unsure`, statt zu raten.
+        let endpoint = non_empty_env("OPENAI_API_KEY").zip(non_empty_env("CREW_GUARD_MODEL")).map(
+            |(api_key, model)| tb_llm::LlmEndpoint {
+                provider: "openai_kompatibel",
+                base_url: non_empty_env("OPENAI_BASE_URL")
+                    .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+                model,
+                api_key: Some(api_key),
+            },
+        );
         Self {
-            client,
-            api_key: non_empty_env("OPENAI_API_KEY"),
-            model: non_empty_env("CREW_GUARD_MODEL"),
-            base_url: non_empty_env("OPENAI_BASE_URL")
-                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+            endpoint,
+            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
         }
     }
@@ -515,64 +526,37 @@ impl OpenAiCrewJudge {
         recent_context: &[String],
         facts: Option<&CrewJudgeFacts>,
     ) -> CrewVerdict {
-        let Some(model) = self.model.as_deref() else {
-            warn!("crew_guard: CREW_GUARD_MODEL nicht gesetzt — Crew-Judge fail-safe unsure");
-            return CrewVerdict::unsure();
-        };
-        let Some(api_key) = self.api_key.as_deref() else {
-            debug!("crew_guard: OPENAI_API_KEY nicht gesetzt — Crew-Judge fail-safe unsure");
-            return CrewVerdict::unsure();
-        };
-
-        let body = serde_json::json!({
-            "model": model,
-            "messages": [
-                {"role": "system", "content": CREW_JUDGE_SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_content(content, recent_context, facts)},
-            ],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"},
-        });
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-
-        let resp = match self
-            .client
-            .post(&url)
-            .bearer_auth(api_key)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(resp) => resp,
-            Err(err) => {
-                let status = if err.is_timeout() {
-                    CrewVerdictStatus::Timeout
-                } else {
-                    CrewVerdictStatus::Error
-                };
-                return self.failure(content, "http_transport", err, status);
-            }
-        };
-        if !resp.status().is_success() {
-            return self.failure(
-                content,
-                "http_status",
-                resp.status(),
-                CrewVerdictStatus::Error,
+        let Some(endpoint) = self.endpoint.as_ref() else {
+            debug!(
+                "crew_guard: OPENAI_API_KEY oder CREW_GUARD_MODEL nicht gesetzt — Crew-Judge fail-safe unsure"
             );
-        }
-        let parsed = match resp.json::<ChatCompletion>().await {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                return self.failure(content, "response_json", err, CrewVerdictStatus::Error);
+            return CrewVerdict::unsure();
+        };
+
+        let response = tb_llm::complete(
+            CREW_JUDGE_USE_CASE,
+            tb_llm::Request::simple(
+                CREW_JUDGE_SYSTEM_PROMPT,
+                build_user_content(content, recent_context, facts),
+            )
+            .temperature(0.0)
+            .json_object()
+            .timeout(self.timeout)
+            .no_ledger()
+            .endpoint(endpoint.clone()),
+        )
+        .await;
+
+        let raw = match response {
+            Ok(response) => response.text,
+            Err(error) => {
+                let status = match error {
+                    tb_llm::LlmError::Timeout(_) => CrewVerdictStatus::Timeout,
+                    _ => CrewVerdictStatus::Error,
+                };
+                return self.failure(content, error.code(), error, status);
             }
         };
-        let raw = parsed
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|choice| choice.message.content)
-            .unwrap_or_default();
         let Some(verdict) = parse_crew_verdict(&raw) else {
             return self.failure(
                 content,
@@ -715,23 +699,6 @@ struct RawCrewVerdict {
     patterns: Vec<String>,
     #[serde(default)]
     reasoning: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletion {
-    #[serde(default)]
-    choices: Vec<CompletionChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CompletionChoice {
-    message: CompletionMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct CompletionMessage {
-    #[serde(default)]
-    content: Option<String>,
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -1959,10 +1926,13 @@ Ich hab nichts getan."
             .mount(&server)
             .await;
         let judge = OpenAiCrewJudge {
-            client: reqwest::Client::new(),
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            base_url: server.uri(),
+            endpoint: Some(tb_llm::LlmEndpoint {
+                provider: "openai_kompatibel",
+                base_url: server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
         };
 
@@ -1989,10 +1959,13 @@ Ich hab nichts getan."
             .mount(&server)
             .await;
         let judge = OpenAiCrewJudge {
-            client: reqwest::Client::new(),
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            base_url: server.uri(),
+            endpoint: Some(tb_llm::LlmEndpoint {
+                provider: "openai_kompatibel",
+                base_url: server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
         };
 
@@ -2014,10 +1987,13 @@ Ich hab nichts getan."
             .mount(&error_server)
             .await;
         let error_judge = OpenAiCrewJudge {
-            client: reqwest::Client::new(),
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            base_url: error_server.uri(),
+            endpoint: Some(tb_llm::LlmEndpoint {
+                provider: "openai_kompatibel",
+                base_url: error_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
             failures: JudgeFailureTracker::default(),
         };
         assert_eq!(
@@ -2031,13 +2007,13 @@ Ich hab nichts getan."
             .mount(&timeout_server)
             .await;
         let timeout_judge = OpenAiCrewJudge {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_millis(10))
-                .build()
-                .expect("Test-Client"),
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            base_url: timeout_server.uri(),
+            endpoint: Some(tb_llm::LlmEndpoint {
+                provider: "openai_kompatibel",
+                base_url: timeout_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            timeout: Duration::from_millis(10),
             failures: JudgeFailureTracker::default(),
         };
         assert_eq!(

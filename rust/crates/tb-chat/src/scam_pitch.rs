@@ -127,6 +127,8 @@ const STATE_PRUNE_INTERVAL_SEC: f64 = 60.0;
 
 /// Ledger-Zweck dieses Calls (spam_ai_review.py Z. 175: `purpose="spam-review"`).
 const JUDGE_PURPOSE: &str = "spam-review";
+/// Anwendungsfall in der gemeinsamen Anbieterauswahl.
+const JUDGE_USE_CASE: &str = "spam_judge";
 /// Token-Budget für den Judge. Reasoning-Modelle (DeepSeek, MiniMax-M3 mit
 /// <think>-Block) brauchen Platz für den Denktext VOR dem JSON — die alten
 /// 200 Tokens schnitten das Urteil oft ab (stille „kein JSON"-Reviews).
@@ -1558,18 +1560,17 @@ pub enum AiReviewOutcome {
 /// wartet auf das Urteil und baut daraus Aktion + Alert.
 pub struct SpamAiReviewer {
     pool: PgPool,
-    http: reqwest::Client,
     cooldowns: Arc<Mutex<HashMap<(String, String), f64>>>,
     /// Gemeinsame Uhr-Basis für monotone Timestamps.
     epoch: Instant,
 }
 
 impl SpamAiReviewer {
-    /// Erzeugt einen neuen Reviewer.
-    pub fn new(pool: PgPool, http: reqwest::Client) -> Self {
+    /// Erzeugt einen neuen Reviewer. Der HTTP-Weg liegt in [`tb_llm::complete`];
+    /// der Reviewer braucht keinen eigenen Client mehr.
+    pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
-            http,
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             epoch: Instant::now(),
         }
@@ -1607,7 +1608,7 @@ impl SpamAiReviewer {
             cds.insert(key, now_mono + REVIEW_COOLDOWN_SEC);
         }
 
-        let providers = tb_llm::endpoint_chain("spam_judge");
+        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         if providers.is_empty() {
             let detail = "kein Judge-API-Key gesetzt (FIREWORK_API_KEY / MINIMAX_*)".to_string();
             return self
@@ -1626,7 +1627,7 @@ impl SpamAiReviewer {
         let mut last_error = String::new();
         let mut last_verdict = SpamReviewVerdict::Unsure;
         for provider in &providers {
-            match call_judge(&self.http, provider, true, &content).await {
+            match call_judge(provider, true, &content).await {
                 Ok(Some(review)) => {
                     let (learned, rejected_pattern, save_failed) =
                         persist_spam_learning(&self.pool, &review, &content, &channel).await;
@@ -1782,100 +1783,45 @@ async fn persist_spam_learning(
     (learned, None, save_failed)
 }
 
-/// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
+/// Ruft einen Judge-Anbieter ueber den gemeinsamen Eingang auf.
 ///
-/// Fehlende oder negative Werte werden auf `0` geklemmt — Parität zu Pythons
-/// `int(getattr(_usage, "prompt_tokens", 0) or 0)` (spam_ai_review.py Z. 173–174)
-/// und zur Clamp-Logik in [`tb_llm::ledger::record`].
-fn usage_tokens(resp: &serde_json::Value) -> (i64, i64) {
-    let field = |name: &str| {
-        resp.get("usage")
-            .and_then(|u| u.get(name))
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0)
-            .max(0)
-    };
-    (field("prompt_tokens"), field("completion_tokens"))
-}
-
-/// Ruft einen Judge-Provider (OpenAI-kompatibel) auf.
+/// `Ok(None)` = Antwort kam, aber kein parsebares Urteil (kein Fehler des
+/// Transports). `Err` = Transport-/HTTP-Problem → Aufrufer probiert den
+/// naechsten Anbieter.
 ///
-/// `Ok(None)` = Antwort kam, aber kein parsebares Urteil (kein Fallback-Fehler
-/// des Transports). `Err` = Transport-/HTTP-Problem → Aufrufer probiert den
-/// nächsten Provider.
+/// Der Anbieter kommt fertig herein, weil der Aufrufer die Kette selbst
+/// abarbeitet: er muss zwischen "kaputt" und "nicht verwertbar" unterscheiden,
+/// beides zaehlen und beides anders melden.
 async fn call_judge(
-    http: &reqwest::Client,
     provider: &tb_llm::LlmEndpoint,
     record_usage: bool,
     content: &str,
 ) -> Result<Option<AiReview>, JudgeCallError> {
-    let Some(api_key) = provider.api_key.as_deref() else {
-        return Err(JudgeCallError::Provider(
-            "API-Key für Judge-Endpoint fehlt".to_string(),
-        ));
-    };
     let truncated: String = content.chars().take(500).collect();
-    let body = serde_json::json!({
-        "model": provider.model,
-        "max_tokens": JUDGE_MAX_TOKENS,
-        "temperature": 0.0,
-        "messages": [
-            {"role": "system", "content": SPAM_REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": format!("Nachricht: {truncated}")}
-        ]
-    });
+    let request = tb_llm::Request::simple(
+        SPAM_REVIEW_SYSTEM_PROMPT,
+        format!("Nachricht: {truncated}"),
+    )
+    .max_tokens(i64::from(JUDGE_MAX_TOKENS))
+    .temperature(0.0)
+    .timeout(Duration::from_secs(20))
+    // Der Denktext denkender Modelle ist nicht das Urteil.
+    .strip_think()
+    .endpoint(provider.clone());
+    let request = if record_usage {
+        request.ledger_purpose(JUDGE_PURPOSE)
+    } else {
+        request.no_ledger()
+    };
 
-    let resp = http
-        .post(format!(
-            "{}/chat/completions",
-            provider.base_url.trim_end_matches('/')
-        ))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(20))
-        .json(&body)
-        .send()
+    let response = tb_llm::complete(JUDGE_USE_CASE, request)
         .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                JudgeCallError::Timeout(error.to_string())
-            } else {
-                JudgeCallError::Provider(error.to_string())
-            }
+        .map_err(|error| match error {
+            tb_llm::LlmError::Timeout(detail) => JudgeCallError::Timeout(detail),
+            other => JudgeCallError::Provider(other.to_string()),
         })?;
 
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(JudgeCallError::Provider(format!("HTTP {status}")));
-    }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|error| JudgeCallError::Provider(error.to_string()))?;
-
-    // Verbrauch ins gemeinsame LLM-Ledger (best-effort, wirft nie).
-    // Verbucht direkt nach der Antwort, damit der Token-Verbrauch auch dann
-    // zählt, wenn die JSON-Extraktion unten scheitert.
-    let (tokens_in, tokens_out) = usage_tokens(&json);
-    if record_usage {
-        tb_llm::ledger::record(JUDGE_PURPOSE, &provider.model, tokens_in, tokens_out, true).await;
-    }
-
-    let message = &json["choices"][0]["message"];
-    let mut raw = message["content"].as_str().unwrap_or("").to_string();
-    if raw.trim().is_empty() {
-        // Reasoning-Modelle liefern das Urteil teils in reasoning_content.
-        raw = message["reasoning_content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-    }
-
-    // Think-Block stripping (spam_ai_review.py Z. 165)
-    let think_re = Regex::new(r"(?si)<think>.*?</think>").unwrap();
-    let stripped = think_re.replace_all(&raw, "").to_string();
-
-    Ok(extract_verdict(&stripped))
+    Ok(extract_verdict(&response.text))
 }
 
 /// Extrahiert das Urteil aus der Modellantwort: Reasoning-Modelle schreiben
@@ -2021,20 +1967,20 @@ mod tests {
         clear_provider_env();
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
-        let providers = tb_llm::endpoint_chain("spam_judge");
+        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
         assert_eq!(providers[0].model, "MiniMax-M3");
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
-        let providers = tb_llm::endpoint_chain("spam_judge");
+        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert!(providers[0].base_url.contains("fireworks.ai"));
         assert!(providers[0].model.contains("deepseek"));
         assert_eq!(providers[1].base_url, "https://api.minimax.io/v1");
         assert_eq!(providers[1].model, "MiniMax-M3");
 
         std::env::set_var("TB_LLM_PROVIDER_SPAM_JUDGE", "minimax");
-        let providers = tb_llm::endpoint_chain("spam_judge");
+        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
         assert_eq!(providers[0].model, "MiniMax-M3");
         clear_provider_env();
@@ -2314,32 +2260,8 @@ mod tests {
         assert!(!is_benign_social_checkin(content, &f, &p));
     }
 
-    // ── MiniMax-Usage-Ledger (B9-BUILD-minimax-usage-ledger) ──────────────────
-    #[test]
-    fn usage_tokens_liest_prompt_und_completion() {
-        // spam_ai_review.py Z. 172–175: prompt_tokens / completion_tokens aus usage.
-        let resp = serde_json::json!({
-            "choices": [{ "message": { "content": "{}" } }],
-            "usage": { "prompt_tokens": 123, "completion_tokens": 45 }
-        });
-        assert_eq!(usage_tokens(&resp), (123, 45));
-    }
-
-    #[test]
-    fn usage_tokens_fehlend_ist_null() {
-        // Kein usage-Objekt → (0, 0), wie Pythons `getattr(..., 0) or 0`.
-        let resp = serde_json::json!({ "choices": [] });
-        assert_eq!(usage_tokens(&resp), (0, 0));
-    }
-
-    #[test]
-    fn usage_tokens_clampt_negativ_auf_null() {
-        // Defensiv: negative Werte landen nicht im Ledger (Parität zu ledger::record).
-        let resp = serde_json::json!({
-            "usage": { "prompt_tokens": -7, "completion_tokens": -1 }
-        });
-        assert_eq!(usage_tokens(&resp), (0, 0));
-    }
+    // Das Auslesen und Klemmen der Token-Zahlen liegt jetzt im gemeinsamen
+    // Eingang und wird dort getestet (tb-llm, hub::tests).
 
     // ── extract_verdict (Reasoning-Modelle: Denktext vor dem JSON) ───────────
     #[test]
@@ -2785,14 +2707,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let http = reqwest::Client::new();
         let provider = tb_llm::LlmEndpoint {
             provider: "test",
             base_url: server.uri(),
             api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
         };
-        let review = call_judge(&http, &provider, false, content)
+        let review = call_judge(&provider, false, content)
             .await
             .expect("Transport ok")
             .expect("Urteil muss parsebar sein");
@@ -3108,9 +3029,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
     async fn live_judge_erkennt_anonyme_viewbot_angebote() {
-        let providers = tb_llm::endpoint_chain("spam_judge");
+        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         let provider = providers.first().expect("kein Judge-Key gesetzt");
-        let http = reqwest::Client::new();
 
         let mut fehlurteile = Vec::new();
         for (message, want_spam) in [
@@ -3125,7 +3045,7 @@ mod tests {
             ("endlich affiliate erreicht!", false),
             ("wie kriegt man eigentlich mehr viewer?", false),
         ] {
-            let review = call_judge(&http, provider, false, message)
+            let review = call_judge(provider, false, message)
                 .await
                 .expect("Judge-Call fehlgeschlagen")
                 .expect("Judge lieferte kein parsebares JSON");

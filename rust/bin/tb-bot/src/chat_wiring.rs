@@ -815,7 +815,7 @@ pub async fn build_runtime(
         )),
         conversation_scam,
         spam_filter: Arc::clone(&spam_filter),
-        ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+        ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
         moderation,
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
@@ -2810,7 +2810,7 @@ mod chat_notification_tests {
                 Arc::clone(&moderation),
             )),
             spam_filter: Arc::new(SpamFilter::new(Default::default())),
-            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
