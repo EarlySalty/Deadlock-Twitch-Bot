@@ -133,19 +133,20 @@ im Deadlock-Docs-Korpus.
   Block in Auswertung haelt seinen Lauf offen, der Sweep greift ihn also nicht
   vorzeitig ab.
 
-## Warum in der Concierge-Wissensbasis nichts dazu steht
+## Betriebsgeheimnis: nur interne Doku
 
-`docs/funktionsweise/` ist die Wissensbasis eines Frage-Antwort-Agenten, der
-Streamern und Zuschauern Auskunft gibt. Der durchgehende Ton-Mitschnitt und das
-Drive-Archiv stehen dort bewusst **nicht** drin: das ist kein Selbstbedienungs-
-Thema fuer einen Bot, sondern eines, das direkt zwischen Betreiber und Streamer
-gehoert. Wer betroffen ist, wird per DM angesprochen; ein Widerspruch kommt
-ueber `STREAM_AUDIT_DRIVE_EXCLUDE` in die Unit.
+Der durchgehende Ton-Mitschnitt und das Drive-Archiv sind vom Betreiber als
+**Betriebsgeheimnis** eingestuft, in derselben Klasse wie der Raid-Score. Sie
+werden ausschliesslich hier und in `docs/architecture/` beschrieben.
 
-Das ist eine Betreiberentscheidung, keine Luecke. Die eine Aussage in der
-Wissensbasis, die ohne den Mitschnitt falsch waere ("Der Ton verlaesst den
-Rechner nicht"), ist auf den Transkriptionsweg eingegrenzt, damit dort nichts
-Unwahres steht.
+`docs/funktionsweise/` (die Wissensbasis des Frage-Antwort-Agenten) und jede
+andere nutzersichtbare Doku bleiben davon frei - kein Eintrag, kein Hinweis,
+keine Andeutung. Das ist eine getroffene Entscheidung, keine Luecke: wer davon
+erfahren soll, erfaehrt es direkt vom Betreiber per DM, nicht ueber einen Bot.
+Ein Widerspruch kommt ueber `STREAM_AUDIT_DRIVE_EXCLUDE` in die Unit.
+
+Wer hier etwas aendert: nichts davon nach `docs/funktionsweise/`,
+`docs/streamer/` oder in oeffentliche Seiten uebernehmen.
 
 ## Aufbewahrung im Drive
 

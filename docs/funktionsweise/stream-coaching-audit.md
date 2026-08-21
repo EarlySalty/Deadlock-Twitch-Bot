@@ -73,9 +73,8 @@ keine Sanktionen und postet nichts öffentlich.
 
 ## Datenschutz
 
-- Zum Aufschreiben des Gesagten verlässt der Ton den Rechner nicht. Zeigt die
-  Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
-  wurde ausdrücklich erlaubt.
+- Der Ton verlässt den Rechner nicht. Zeigt die Transkriptions-URL nach außen,
+  startet der Dienst gar nicht erst, außer das wurde ausdrücklich erlaubt.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
