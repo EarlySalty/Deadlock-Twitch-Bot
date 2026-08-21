@@ -15,8 +15,9 @@
 //! `review_for_verdict(event)` fragt den Judge (DeepSeek via Fireworks,
 //! Fallback MiniMax M3), lernt bei Spam-Urteil ein distinktives Muster und
 //! gibt ein [`AiReviewOutcome`] zurück — der Orchestrator entscheidet über
-//! Aktion und Alert. Safe-Muster werden seit 11.07.2026 nicht mehr gelernt
-//! (Safe-List-Poisoning, siehe spam_filter.rs).
+//! Aktion und Alert. Das Modell lernt automatisch nur die bestätigten Spam-
+//! Muster; ein Safe-Pattern entsteht ausschließlich über den menschlichen
+//! Gegen-Override in der internen API (siehe spam_filter.rs).
 //!
 //! Accounts-Alter wird über [`AccountAgePort`] abgefragt — der Orchestrator
 //! verdrahtet die Helix-Implementierung.
@@ -1541,7 +1542,9 @@ pub enum AiReviewOutcome {
         /// muss im Alert sichtbar sein (kein stilles Nicht-Lernen).
         save_failed: bool,
     },
-    /// Judge hält die Nachricht für harmlos. Es wird bewusst NICHTS gelernt.
+    /// Judge hält die Nachricht für harmlos. Das Urteil selbst schreibt kein
+    /// Safe-Pattern; ein menschlicher Gegen-Override kann die Gegenrichtung
+    /// als Spam lernen.
     Safe { reason: String },
     /// Kein Urteil möglich (Key fehlt, beide Provider down, kein JSON).
     Error { detail: String },
@@ -1732,8 +1735,9 @@ enum JudgeCallError {
 
 /// Persistiert das Lern-Ergebnis eines Judge-Urteils.
 ///
-/// Nur Spam-Muster werden gelernt, und nur wenn sie das Distinktivitäts-Gate
-/// passieren. Safe-Muster werden NIE gespeichert (Safe-List-Poisoning).
+/// Nur Spam-Muster werden automatisch gelernt, und nur wenn sie das
+/// Distinktivitäts-Gate passieren. Safe-Muster werden nicht aus dem AI-Urteil
+/// selbst geschrieben; der menschliche Gegen-Override läuft über die interne API.
 /// Rückgabe: (gespeicherte Referenz, abgelehntes Muster, DB-Write gescheitert).
 async fn persist_spam_learning(
     pool: &PgPool,
@@ -2813,8 +2817,8 @@ mod tests {
 
     #[tokio::test]
     async fn spam_ai_review_contract_harmlos_lernt_nichts_mehr() {
-        // Safe-Lernen ist abgeschafft (Safe-List-Poisoning): Ein Harmlos-Urteil
-        // darf keinerlei DB-Zeile erzeugen, egal welches Muster der Judge nennt.
+        // Ein Harmlos-Urteil des Modells selbst darf kein Safe-Pattern erzeugen;
+        // Safe-Lernen ist ausschließlich der menschlichen Gegenkorrektur vorbehalten.
         let pool = pool_or_skip!("scam_ai_contract_safe_result");
         let review = AiReview {
             is_spam: false,

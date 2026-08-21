@@ -15,16 +15,15 @@
 //!
 //! # Gelernte Muster
 //!
-//! [`LearnedPatterns::load`] liest aus `twitch_auto_learned_spam_patterns`
-//! (Prod-Schema: pattern=TEXT, pattern_type=TEXT). Der Filter-Cache wird
-//! einmalig beim Start befüllt und kann über [`LearnedPatterns::load`]
-//! jederzeit neu gebaut werden.
+//! [`LearnedPatterns::load`] liest aus `twitch_auto_learned_spam_patterns` und
+//! aus der manuellen Safe-Tabelle. Der Filter-Cache wird einmalig beim Start
+//! befüllt und kann über [`LearnedPatterns::load`] jederzeit neu gebaut werden.
 //!
-//! Safe-Muster (Negativ-Scoring) wurden am 11.07.2026 abgeschafft: Ein
-//! AI-gelerntes Einzelwort-Safe-Muster („viewer") hatte per Substring-Match
-//! echten Viewer-Bot-Spam unter die Ban-Schwelle gedrückt (Safe-List-
-//! Poisoning). Schutz vor False-Positives leistet jetzt ausschließlich der
-//! AI-Judge im Verdachtspfad — der gatet die Aktion, nie die Sichtbarkeit.
+//! Safe-Muster sind kein negatives Score-Signal. Sie stammen ausschließlich aus
+//! einem privilegierten menschlichen Gegen-Override und werden als exakter
+//! kanonisierter Volltext vor Score und LLM geprüft. So kann ein harmloser
+//! Einzelfall gelernt werden, ohne kurze Safe-Teilstrings in Spam-Nachrichten
+//! einzubauen.
 
 use std::sync::OnceLock;
 
@@ -281,6 +280,19 @@ fn normalize_spam_text(content: &str) -> String {
     replaced.trim().to_string()
 }
 
+/// Kanonischer Schlüssel für einen exakten manuellen Safe-Volltext.
+///
+/// Whitespace-Kompression macht Chat-Zeilenumbrüche und mehrfachen Whitespace
+/// äquivalent; der spätere Vergleich bleibt ein vollständiger Gleichheits-
+/// vergleich und ist kein Teilstring-Match.
+pub fn normalize_exact_spam_message(content: &str) -> String {
+    normalize_spam_text(content)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// Nur a-z0-9 — für gelernte Muster (compact form).
 fn compact(lowered: &str) -> String {
     lowered
@@ -402,8 +414,8 @@ pub struct SpamVerdict {
 }
 
 // ---------------------------------------------------------------------------
-// Gelernte Muster — DB-Tabelle twitch_auto_learned_spam_patterns
-// (Prod-Schema geprüft 12.6.; Safe-Tabelle stillgelegt 11.7.)
+// Gelernte Muster — DB-Tabelle twitch_auto_learned_spam_patterns und
+// manuelle Safe-Tabelle twitch_auto_learned_safe_patterns.
 // ---------------------------------------------------------------------------
 
 /// Ein gelerntes Spam-Muster aus `twitch_auto_learned_spam_patterns`.
@@ -415,10 +427,17 @@ struct LearnedSpamPattern {
     pattern_type: String,
 }
 
+/// Ein manuell als harmlos gelernter exakter Volltext.
+#[derive(Debug, Clone)]
+struct LearnedSafePattern {
+    pattern: String,
+}
+
 /// Gecachte gelernte Muster — einmalig per `LearnedPatterns::load` aus der DB geladen.
 #[derive(Debug, Clone, Default)]
 pub struct LearnedPatterns {
     spam: Vec<LearnedSpamPattern>,
+    safe: Vec<LearnedSafePattern>,
 }
 
 impl LearnedPatterns {
@@ -427,10 +446,25 @@ impl LearnedPatterns {
         Self::default()
     }
 
-    /// Lädt gelernte Spam-Muster aus der Postgres-DB.
+    /// Erstellt eine Muster-Menge mit manuellen Safe-Volltexten.
+    ///
+    /// Der Produktivpfad verwendet [`Self::load`]; der Konstruktor hält den
+    /// exakten Pre-LLM-Pfad auch für isolierte Pipeline-Tests reproduzierbar.
+    pub fn with_safe_patterns(patterns: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            spam: vec![],
+            safe: patterns
+                .into_iter()
+                .map(|pattern| LearnedSafePattern { pattern })
+                .collect(),
+        }
+    }
+
+    /// Lädt gelernte Spam- und manuelle Safe-Muster aus der Postgres-DB.
     ///
     /// Tabelle (Prod-Schema 12.6.):
     /// - `twitch_auto_learned_spam_patterns`: pattern TEXT, pattern_type TEXT
+    /// - `twitch_auto_learned_safe_patterns`: pattern TEXT, source_channel TEXT
     ///
     /// Fehler beim Laden werden als Warn geloggt und mit leerer Muster-Menge
     /// beantwortet (fail-open wie Python: `except Exception: pass`).
@@ -479,7 +513,35 @@ impl LearnedPatterns {
             }
         };
 
-        Self { spam }
+        #[derive(sqlx::FromRow)]
+        struct SafeRow {
+            pattern: String,
+        }
+
+        let safe = match sqlx::query_as::<_, SafeRow>(
+            "SELECT pattern FROM twitch_auto_learned_safe_patterns \
+             WHERE pattern IS NOT NULL AND source_channel = $1",
+        )
+        .bind("discord-correction")
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| !row.pattern.trim().is_empty())
+                .map(|row| LearnedSafePattern {
+                    pattern: row.pattern,
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    "Konnte manuelle twitch_auto_learned_safe_patterns nicht laden: {e}"
+                );
+                vec![]
+            }
+        };
+
+        Self { spam, safe }
     }
 }
 
@@ -516,6 +578,19 @@ impl SpamFilter {
         self.learned.store(Arc::new(fresh));
     }
 
+    /// Gibt das gelernte Safe-Pattern zurück, wenn `text` exakt dem
+    /// kanonisierten Volltext entspricht. Teilstrings und längere Nachrichten
+    /// werden bewusst nicht akzeptiert.
+    pub fn known_safe_pattern(&self, text: &str) -> Option<String> {
+        let key = normalize_exact_spam_message(text);
+        if key.chars().count() < 4 {
+            return None;
+        }
+        self.learned.load().safe.iter().find_map(|pattern| {
+            (normalize_exact_spam_message(&pattern.pattern) == key).then(|| pattern.pattern.clone())
+        })
+    }
+
     /// Berechnet Spam-Score und trifft Aktionsentscheidung.
     ///
     /// Port von:
@@ -534,8 +609,8 @@ impl SpamFilter {
     /// 8. Mention-Score addieren (aus ctx)
     /// 9. Kontext-Eskalatoren: Account-Alter <90d +1 / Erstnachricht +1 (nur bei hartem Signal UND Score < SPAM_MIN_MATCHES)
     ///
-    /// Negativ-Scoring über Safe-Muster gibt es nicht mehr (Safe-List-Poisoning,
-    /// siehe Modul-Doku) — False-Positive-Schutz übernimmt der AI-Judge.
+    /// Safe-Muster sind kein Score-Signal. Ein manueller Safe-Volltext wird
+    /// bereits über [`Self::known_safe_pattern`] vor diesem Scoring geprüft.
     pub fn evaluate(&self, text: &str, ctx: &SpamContext) -> SpamVerdict {
         if text.is_empty() {
             return SpamVerdict {
@@ -1306,6 +1381,7 @@ mod tests {
                 pattern: "kaufe viewboost".to_string(),
                 pattern_type: "phrase".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("kaufe viewboost günstig", &ctx_default());
@@ -1328,6 +1404,7 @@ mod tests {
                 pattern: "viewbot".to_string(),
                 pattern_type: "fragment".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("ich nutze viewbot", &ctx_default());
@@ -1351,6 +1428,7 @@ mod tests {
                 pattern: "smmhype neu".to_string(),
                 pattern_type: "fragment".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         let v = f.evaluate("check smmhype neu aus", &ctx_default());
@@ -1367,12 +1445,34 @@ mod tests {
                 pattern: "kaufeviews".to_string(),
                 pattern_type: "phrase".to_string(),
             }],
+            safe: vec![],
         };
         let f = SpamFilter::new(learned);
         // Text mit Spreizung: "k a u f e v i e w s" → compact = "kaufeviews"
         let v = f.evaluate("k a u f e v i e w s günstig", &ctx_default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
+    }
+
+    #[test]
+    fn manuelles_safe_pattern_matcht_nur_exakten_volltext() {
+        let learned = LearnedPatterns {
+            spam: vec![],
+            safe: vec![LearnedSafePattern {
+                pattern: "8 viewer brd wild".to_string(),
+            }],
+        };
+        let filter = SpamFilter::new(learned);
+
+        assert_eq!(
+            filter.known_safe_pattern(" 8  VIEWER brd wild\n"),
+            Some("8 viewer brd wild".to_string())
+        );
+        assert_eq!(
+            filter.known_safe_pattern("8 viewer brd wild eballo.com"),
+            None,
+            "ein längerer Text darf kein Safe-Teilstringtreffer sein"
+        );
     }
 
     // --- SPAM_MIN_MATCHES Konstante ---
@@ -1435,8 +1535,8 @@ mod tests {
 mod db_tests {
     use std::str::FromStr;
 
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use sqlx::PgPool;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     use super::*;
 
@@ -1495,6 +1595,19 @@ mod db_tests {
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_auto_learned_safe_patterns (
+                pattern TEXT PRIMARY KEY,
+                source_message TEXT,
+                source_channel TEXT,
+                minimax_reasoning TEXT,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1503,6 +1616,7 @@ mod db_tests {
         create_learned_tables(&pool).await;
         let lp = LearnedPatterns::load(&pool).await;
         assert!(lp.spam.is_empty());
+        assert!(lp.safe.is_empty());
     }
 
     #[tokio::test]
@@ -1530,14 +1644,42 @@ mod db_tests {
 
         let lp = LearnedPatterns::load(&pool).await;
         assert_eq!(lp.spam.len(), 2);
-        assert!(lp
-            .spam
-            .iter()
-            .any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase"));
-        assert!(lp
-            .spam
-            .iter()
-            .any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment"));
+        assert!(
+            lp.spam
+                .iter()
+                .any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase")
+        );
+        assert!(
+            lp.spam
+                .iter()
+                .any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_laedt_nur_manuelle_safe_quelle() {
+        let pool = pool_or_skip!("sf_load_safe");
+        create_learned_tables(&pool).await;
+
+        sqlx::query(
+            "INSERT INTO twitch_auto_learned_safe_patterns
+             (pattern, source_message, source_channel)
+             VALUES
+                ('8 viewer brd wild', '8 viewer brd wild', 'discord-correction'),
+                ('viewer', 'viewer', 'ai-review')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let lp = LearnedPatterns::load(&pool).await;
+        assert_eq!(lp.safe.len(), 1);
+        let filter = SpamFilter::new(lp);
+        assert_eq!(
+            filter.known_safe_pattern("8 VIEWER brd wild"),
+            Some("8 viewer brd wild".to_string())
+        );
+        assert_eq!(filter.known_safe_pattern("viewer"), None);
     }
 
     #[tokio::test]
@@ -1627,10 +1769,12 @@ mod db_tests {
         f.reload(&pool).await;
         let after = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert_eq!(after.score, 2);
-        assert!(after
-            .matched
-            .iter()
-            .any(|r| r.starts_with("Learned-Phrase")));
+        assert!(
+            after
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase"))
+        );
     }
 
     // Hinweis: Der frühere NULL-Pattern-Test entfiel mit der prod-treuen DDL —

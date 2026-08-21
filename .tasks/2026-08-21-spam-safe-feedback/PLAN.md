@@ -1,7 +1,13 @@
-status: erledigt
+status: überholt
 datum: 2026-08-21
 klasse: mittel
 research: .tasks/2026-08-21-spam-safe-feedback/RESEARCH.md
+
+## Ablösung
+
+Dieser Plan behandelte nur eine bestätigende Review-Log-Aktion. Nach der
+Nutzerpräzisierung gilt der Gegen-Override mit aktivem Safe-Pattern; der neue
+Plan liegt unter `.tasks/2026-08-21-spam-safe-list-override/`.
 
 ## Ziel
 
