@@ -71,7 +71,10 @@ im Deadlock-Docs-Korpus.
    ist winzig, und ein df-Aussetzer soll die Aufnahme nicht abwuergen. Archiviert werden nur Streams **mit**
    Aufnahme; faellt der Recorder ganz aus, bleiben allein die lokalen Berichte
    der normalen Aufbewahrung. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet Recorder
-   und Upload ab. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
+   und Upload fuer alle ab; `STREAM_AUDIT_DRIVE_EXCLUDE=<kanal>` nur fuer
+   einzelne Kanaele, die widersprochen haben. Fuer einen ausgenommenen Kanal
+   startet kein Recorder und es geht nichts hoch; was von frueher noch liegt,
+   faellt der normalen Aufbewahrung zu. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
    wie bisher nach der Pruefung lokal geloescht.
 8. **Wenn der Recorder scheitert.** Ein Recorder, der kurz nach dem Start endet,
    mit Fehler abbricht oder haengt (die Aufnahmedatei waechst 15 Minuten lang
@@ -83,8 +86,9 @@ im Deadlock-Docs-Korpus.
    starten und jedes Mal Erfolg melden.
 9. **Wenn der Upload haengt.** Solange das Drive-Archiv eines Laufs aussteht,
    bleiben seine Berichte von der Aufbewahrung verschont - aber hoechstens
-   14 Tage. Danach greift `STREAM_AUDIT_RETENTION_DAYS` wieder, mit einer
-   Warnung im Protokoll (hoechstens eine je Lauf und Tag). Sonst waere die
+   14 Tage ueber die Frist hinaus. Danach greift `STREAM_AUDIT_RETENTION_DAYS`
+   wieder. Gewarnt wird schon ab 14 Tagen Rueckstau, hoechstens einmal je Lauf
+   und Tag. Sonst waere die
    Aufbewahrungsfrist bei kaputtem rclone still ausser Kraft, und Berichte mit
    vollem Wortlaut laegen unbegrenzt da. Dasselbe gilt fuer die
    1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie nach
@@ -144,6 +148,7 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_LOAD_WINDOW_SECS` | Sekunden Dauerlast, bevor das Gate greift | 240 |
 | `STREAM_AUDIT_LOAD_MAX_HOLD_SECS` | Deckel, wie lange das Gate am Stueck haelt, `0` = kein Deckel | 1800 |
 | `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
+| `STREAM_AUDIT_DRIVE_EXCLUDE` | Kanaele ohne Ton-Mitschnitt (Widerspruch), kommagetrennt | leer |
 | `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
 | `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz in ganzen GB; darunter startet kein neuer Recorder | 20 |
 | `STREAM_AUDIT_RCLONE_BIN` | rclone-Binaerprogramm | PATH-Aufloesung `rclone`, in der Unit auf `/usr/local/bin/rclone` gepinnt |

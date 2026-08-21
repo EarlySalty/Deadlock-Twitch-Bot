@@ -91,7 +91,10 @@ Audit, das darauf baut, faellt still aus.
   STT-Endpunkt bricht den Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
 - Der durchgehende 1:1-Ton-Mitschnitt geht dagegen nach dem Stream bewusst per
   rclone in den eigenen Google-Drive-Ordner (`STREAM_AUDIT_DRIVE_ARCHIVE`,
-  Standard an) und wird lokal erst nach belegtem Upload geloescht.
+  Standard an) und wird lokal erst nach belegtem Upload geloescht. Ein Kanal in
+  `STREAM_AUDIT_DRIVE_EXCLUDE` bekommt gar keinen Recorder.
+- Geht der Upload nie durch, faellt der Mitschnitt nach
+  `STREAM_AUDIT_RETENTION_DAYS` derselben Aufbewahrung zu wie die Berichte.
 - An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die
   Schwaerzung kennt die drei Muster aus `rules.rs`; anderer Wortlaut geht mit.
   Deshalb ist `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` eine bewusste Einstellung der

@@ -1219,7 +1219,14 @@ nicht erkannt."
         gemeldet.retain(|kanal| live.contains(kanal));
         // Offline gegangene Kanaele nicht mehr als live fuehren; ihr Recorder
         // wird von der Wartung als fertig markiert, nicht neu gestartet.
-        live_lauf.retain(|kanal, _| live.contains(kanal));
+        //
+        // Solange der Aufnahme-Task des Kanals noch laeuft, bleibt der Eintrag
+        // aber stehen: `live_lauf` wird nur beim Start eines neuen Tasks
+        // gesetzt, und ein einzelner Helix-Erfolg, der einen tatsaechlich
+        // sendenden Kanal nicht auffuehrt, wuerde ihn sonst endgueltig
+        // loeschen. Der Recorder liesse sich dann fuer den Rest der Sendung
+        // nicht mehr neu starten - stumm.
+        live_lauf.retain(|kanal, _| live.contains(kanal) || laufend.contains_key(kanal));
 
         // Nur eine Bremse fuer neue Aufnahmen, kein `continue`: sonst wuerde
         // eine volle Platte nie einen beendeten Lauf freigeben, den Abbruch
@@ -1477,6 +1484,9 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             let ziele: Vec<(String, String)> = live_lauf
                 .iter()
                 .filter(|(kanal, _)| live.contains(*kanal) && !mitschnitte.contains_key(*kanal))
+                // Widerspricht ein Streamer, wird fuer seinen Kanal gar nicht
+                // erst aufgenommen - ohne den Dienst fuer alle abzuschalten.
+                .filter(|(kanal, _)| archiv::archiv_aktiv_fuer(kanal))
                 .filter(|(kanal, lauf)| {
                     match mitschnitt_fehler.get(&format!("{kanal}/{lauf}")) {
                         Some(f) => {
@@ -1525,10 +1535,15 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                         live_lauf.get(kanal).map(String::as_str) == Some(lauf)
                     })
             });
-            // 3. Verwaiste Mitschnitt-Ordner (Dienst-Neustart, Absturz) nachziehen:
-            //    jeder Ordner ohne aktiven Recorder und ohne Fertig-Marke ist fertig.
-            mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte, &live).await;
         }
+        // Verwaiste Mitschnitt-Ordner (Dienst-Neustart, Absturz) nachziehen:
+        // jeder Ordner ohne aktiven Recorder und ohne Fertig-Marke ist fertig.
+        //
+        // Bewusst ausserhalb des Archiv-Schalters. Ein Deploy mitten im Stream
+        // laesst einen unversiegelten Ordner zurueck; wird das Archiv danach
+        // abgeschaltet, liefe weder Versiegelung noch Upload noch Loeschung,
+        // und die Aufnahme laege unbefristet da.
+        mitschnitt_ordner_versiegeln(&konfiguration, &mitschnitte, &live).await;
 
         // Erst jetzt, nachdem ein Sendungswechsel oben seinen abgebrochenen
         // Block bereits eingereiht hat: sonst ginge die Ende-DM eines Laufs
@@ -3542,8 +3557,11 @@ fn ffmpeg_pfad() -> String {
 /// abgeschlossen und darf hochgeladen werden. Erst dieses Signal - nicht eine
 /// Vermutung ueber die letzte Aenderung - gibt einen Lauf zum Archivieren frei.
 const AUFNAHME_FERTIG: &str = "aufnahme_fertig.json";
-/// Harte Obergrenze fuer einen rclone-Aufruf. Ein 17-GB-Upload dauert, aber ein
-/// haengender Prozess soll das Archiv nicht fuer immer blockieren.
+/// Harte Obergrenze fuer einen rclone-Aufruf. Der Mitschnitt ist reiner Ton,
+/// rund 1 MB je Minute, also selbst bei einem langen Stream unter einem
+/// Gigabyte - die Grenze ist bewusst grosszuegig fuer eine lahme Leitung
+/// gesetzt und soll nur verhindern, dass ein haengender Prozess das Archiv fuer
+/// immer blockiert.
 const RCLONE_ZEITGRENZE: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Schiebt einen fertigen Stream (Mitschnitt als ein File plus Berichte) in
@@ -3551,7 +3569,7 @@ const RCLONE_ZEITGRENZE: Duration = Duration::from_secs(6 * 60 * 60);
 /// ueber die Marke `drive_archiviert.json`; ein zweiter Lauf desselben Streams
 /// wird ueber `archiv_laeuft.json` abgefangen.
 async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lauf: String) {
-    if !archiv::archiv_aktiv() {
+    if !archiv::archiv_aktiv_fuer(&kanal) {
         return;
     }
     let lauf_dir = lauf_ordner(&konfiguration, &kanal, &lauf);
@@ -3562,8 +3580,9 @@ async fn nach_drive_archivieren(konfiguration: Konfiguration, kanal: String, lau
     if tokio::fs::create_dir_all(&lauf_dir).await.is_err() {
         return;
     }
-    // Laufmarke atomar belegen: zwei Ausloeser (Ende-DM und Sweep) duerfen nicht
-    // beide gleichzeitig hochladen und loeschen.
+    // Laufmarke atomar belegen. Der Sweep ist heute der einzige Ausloeser und
+    // arbeitet seine Liste nacheinander ab; die Marke haelt zusaetzlich einen
+    // Abarbeiter aus einem vorherigen Prozess ab, dessen Upload noch laeuft.
     let laeuft = lauf_dir.join(ARCHIV_LAEUFT);
     if !laufmarke_belegen(&laeuft, ARCHIV_LAEUFT_FRISCH_SEKUNDEN).await {
         return;
@@ -3727,8 +3746,13 @@ async fn drive_archiv_durchfuehren(
     }
     for datei in &mitschnitte {
         if let Err(fehler) = tokio::fs::remove_file(datei).await {
-            tracing::warn!(?fehler, ?datei, "Mitschnitt nicht loeschbar");
-            sauber = false;
+            // Schon weg ist kein Fehler: die Aufbewahrung kann eine abgelaufene
+            // Aufnahme waehrend des Uploads entfernt haben. Sonst meldete ein
+            // vollstaendig gelungenes Archiv `Err` und setzte seine Marke nicht.
+            if fehler.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(?fehler, ?datei, "Mitschnitt nicht loeschbar");
+                sauber = false;
+            }
         }
     }
     // Der Mitschnitt-Ordner (jetzt nur noch die Fertig-Marke) darf weg; schlaegt
@@ -3897,14 +3921,12 @@ async fn alte_mitschnitte_loeschen(konfiguration: &Konfiguration) {
                 continue;
             }
             let lauf = lauf_e.file_name().to_string_lossy().into_owned();
-            // Ein noch laufender Recorder schreibt weiter in seine Datei; die
-            // Fertig-Marke trennt ihn von einer abgeschlossenen Aufnahme.
-            if !tokio::fs::try_exists(lauf_e.path().join(AUFNAHME_FERTIG))
-                .await
-                .unwrap_or(false)
-            {
-                continue;
-            }
+            // Bewusst ohne Bedingung auf die Fertig-Marke: die wird nur
+            // gesetzt, solange der Dienst laeuft, und ein unversiegelter Ordner
+            // aus einem Deploy mitten im Stream wuerde sonst nie ablaufen. Der
+            // Schutz vor einem noch schreibenden Recorder ist die Datei selbst:
+            // ffmpeg fasst sie fortlaufend an, ihre Aenderungszeit kann die
+            // Aufbewahrungsfrist gar nicht erreichen.
             let Some(dateien) = mitschnitt_dateien_sammeln(&lauf_e.path()).await else {
                 continue;
             };
@@ -3942,13 +3964,36 @@ Drive-Upload hat nie funktioniert, bitte rclone pruefen"
     }
 }
 
-/// Wie lange die Aufbewahrung wegen eines ausstehenden Drive-Uploads hoechstens
-/// ausgesetzt wird. Ohne Deckel wuerde ein laengerer rclone-Ausfall (Binary weg,
-/// Token abgelaufen, Drive voll) die Aufbewahrung fuer die betroffenen Laeufe
-/// **still** abschalten - Berichte mit vollem Wortlaut und Pruefsummen laegen
-/// dann unbegrenzt da, obwohl `STREAM_AUDIT_KEEP_DAYS` laengst abgelaufen ist.
-/// Nach dieser Frist zieht die normale Aufbewahrung wieder, und zwar laut.
-const ARCHIV_RUECKSTAU_MAX_TAGE: u64 = 14;
+/// Ob alle Dateien aelter als die Frist sind. Eine leere Liste ist nicht "alt".
+async fn alle_zu_alt(dateien: &[PathBuf], tage: u64) -> bool {
+    if dateien.is_empty() {
+        return false;
+    }
+    for datei in dateien {
+        if !zu_alt(datei, tage).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// Wie viel laenger als `STREAM_AUDIT_RETENTION_DAYS` ein Bericht liegen bleiben
+/// darf, wenn sein Drive-Upload noch aussteht.
+///
+/// Der Aufschlag ist der springende Punkt: eine Frist, die **kuerzer** ist als
+/// die Aufbewahrung selbst, waere toter Code - ein Bericht erreicht die
+/// Loeschpruefung erst nach `aufbewahrung_tage`, und ein Rueckstau-Deckel
+/// darunter haette den Lauf da schon aussortiert. Die Ausnahme wirkt also im
+/// Fenster zwischen Ablauf der Frist und Ablauf der Frist plus diesem Aufschlag.
+///
+/// Ein Deckel muss trotzdem sein: sonst wuerde ein laengerer rclone-Ausfall
+/// (Binary weg, Token abgelaufen, Drive voll) die Aufbewahrung fuer die
+/// betroffenen Laeufe **still** abschalten, und Berichte mit vollem Wortlaut
+/// und Pruefsummen laegen unbegrenzt da.
+const ARCHIV_RUECKSTAU_GNADE_TAGE: u64 = 14;
+/// Ab diesem Rueckstau wird gewarnt, unabhaengig von der Aufbewahrungsfrist.
+/// Ein Upload, der zwei Wochen nicht durchgeht, ist kaputt.
+const ARCHIV_RUECKSTAU_WARNUNG_TAGE: u64 = 14;
 /// Marke im Mitschnitt-Ordner: der Rueckstau ist gemeldet. Verhindert eine
 /// Warnung je Aufraeumtakt.
 const RUECKSTAU_GEMELDET: &str = "rueckstau_gemeldet.json";
@@ -3959,9 +4004,9 @@ const RUECKSTAU_MELDE_TAKT_SEKUNDEN: u64 = 24 * 60 * 60;
 ///
 /// Bewusst eng gefasst. Ein Ordner unter `mitschnitte/` allein reicht nicht:
 /// darin muss eine Mitschnitt-Datei liegen (sonst gibt es nichts zu sichern),
-/// und der Rueckstau darf hoechstens [`ARCHIV_RUECKSTAU_MAX_TAGE`] alt sein.
-/// Ueberschreitet ein Lauf das, wird er hier ausgelassen und einmal je Durchgang
-/// gemeldet - die Aufbewahrung darf nicht wegen eines kaputten rclone
+/// und die Ausnahme laeuft hoechstens bis `aufbewahrung_tage +
+/// ARCHIV_RUECKSTAU_GNADE_TAGE`. Ueberschreitet ein Lauf das, wird er hier
+/// ausgelassen - die Aufbewahrung darf nicht wegen eines kaputten rclone
 /// unbemerkt ausser Kraft sein.
 async fn pending_archiv_laeufe(
     konfiguration: &Konfiguration,
@@ -4011,31 +4056,35 @@ async fn pending_archiv_laeufe(
                     continue;
                 }
             };
-            // Deckel: haengt der Upload zu lange, greift die Aufbewahrung
-            // wieder - aber nicht stillschweigend. Massgeblich ist die juengste
-            // Aufnahme, nicht der Ordner: dessen Zeitstempel wandert schon
-            // durch das Setzen der Fertig-Marke.
-            let mut zu_alt_fuer_rueckstau = !dateien.is_empty();
-            for datei in &dateien {
-                if !zu_alt(datei, ARCHIV_RUECKSTAU_MAX_TAGE).await {
-                    zu_alt_fuer_rueckstau = false;
-                    break;
-                }
-            }
-            if zu_alt_fuer_rueckstau {
-                // Einmal am Tag reicht. Der Aufraeumtakt laeuft stuendlich;
-                // ohne Entprellung waere das Protokoll nach einer Woche
-                // kaputtem rclone zu.
+            // Massgeblich ist die juengste Aufnahme, nicht der Ordner: dessen
+            // Zeitstempel wandert schon durch das Setzen der Fertig-Marke.
+            // Warnen, sobald der Upload sichtbar kaputt ist - unabhaengig
+            // davon, ob die Aufbewahrung ueberhaupt schon greifen wuerde.
+            // Einmal am Tag reicht; der Aufraeumtakt laeuft stuendlich.
+            if alle_zu_alt(&dateien, ARCHIV_RUECKSTAU_WARNUNG_TAGE).await {
                 let gemeldet = lauf_e.path().join(RUECKSTAU_GEMELDET);
                 if !marke_frisch(&gemeldet, RUECKSTAU_MELDE_TAKT_SEKUNDEN).await {
                     tracing::warn!(
                         kanal,
                         lauf,
-                        tage = ARCHIV_RUECKSTAU_MAX_TAGE,
-                        "Drive-Archiv haengt zu lange - Aufbewahrung greift wieder, Upload pruefen"
+                        tage = ARCHIV_RUECKSTAU_WARNUNG_TAGE,
+                        "Drive-Upload haengt seit Wochen - rclone pruefen"
                     );
                     let _ = nur_fuer_mich(&gemeldet, b"{}").await;
                 }
+            }
+            // Deckel: irgendwann muss die Aufbewahrung wieder ziehen, sonst
+            // waere sie bei kaputtem rclone still ausser Kraft.
+            let deckel = konfiguration
+                .aufbewahrung_tage
+                .saturating_add(ARCHIV_RUECKSTAU_GNADE_TAGE);
+            if alle_zu_alt(&dateien, deckel).await {
+                tracing::warn!(
+                    kanal,
+                    lauf,
+                    tage = deckel,
+                    "Drive-Archiv haengt zu lange - Aufbewahrung greift wieder"
+                );
                 continue;
             }
             raus.insert((kanal.clone(), lauf));
@@ -4072,6 +4121,11 @@ async fn offene_archive_nachholen(
             continue;
         }
         let kanal = kanal_e.file_name().to_string_lossy().into_owned();
+        // Ein Kanal, der widersprochen hat, wird nicht hochgeladen. Was von
+        // frueher noch liegt, faellt der Aufbewahrung zu.
+        if !archiv::archiv_aktiv_fuer(&kanal) {
+            continue;
+        }
         let Ok(mut laeufe) = tokio::fs::read_dir(kanal_e.path()).await else {
             continue;
         };
@@ -4156,12 +4210,21 @@ async fn offene_archive_nachholen(
         );
         return;
     }
+    // Guard statt `store` am Ende: panikt der Task, bliebe das Flag sonst fuer
+    // die Lebensdauer des Prozesses gesetzt und das stuendliche Nachholen waere
+    // tot - sichtbar nur als eine Info-Zeile.
+    struct SweepGuard;
+    impl Drop for SweepGuard {
+        fn drop(&mut self) {
+            SWEEP_LAEUFT.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
     let konfiguration = konfiguration.clone();
     tokio::spawn(async move {
+        let _guard = SweepGuard;
         for (kanal, lauf) in faellig {
             nach_drive_archivieren(konfiguration.clone(), kanal, lauf).await;
         }
-        SWEEP_LAEUFT.store(false, std::sync::atomic::Ordering::Release);
     });
 }
 
@@ -5008,18 +5071,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ein_zu_alter_rueckstau_gibt_die_aufbewahrung_wieder_frei() {
+    async fn die_rueckstau_ausnahme_wirkt_und_endet() {
         let wurzel = test_ordner("pending-rueckstau-deckel");
         let konfiguration = test_konfiguration(&wurzel);
-        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "alt", true).await;
-        // Der Upload haengt seit Wochen. Ohne Deckel waere die Aufbewahrung
-        // fuer diesen Lauf still abgeschaltet.
-        let lange_her = std::time::SystemTime::now()
-            - Duration::from_secs((ARCHIV_RUECKSTAU_MAX_TAGE + 1) * 24 * 60 * 60);
-        mtime_setzen(&dir.join(archiv::mitschnitt_name(1)), lange_her);
+        let vor_tagen = |tage: u64| {
+            std::time::SystemTime::now() - Duration::from_secs(tage * 24 * 60 * 60)
+        };
+        let frist = konfiguration.aufbewahrung_tage;
+
+        // Im Fenster: die Aufbewahrungsfrist ist abgelaufen, der Aufschlag noch
+        // nicht. Genau hier muss die Ausnahme greifen - waere der Deckel
+        // kuerzer als die Frist, waere sie toter Code.
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "im-fenster", true).await;
+        mtime_setzen(&dir.join(archiv::mitschnitt_name(1)), vor_tagen(frist + 1));
+
+        // Jenseits des Aufschlags: der Upload ist erkennbar kaputt, die
+        // Aufbewahrung zieht wieder.
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "zu-alt", true).await;
+        mtime_setzen(
+            &dir.join(archiv::mitschnitt_name(1)),
+            vor_tagen(frist + ARCHIV_RUECKSTAU_GNADE_TAGE + 1),
+        );
 
         let offen = pending_archiv_laeufe(&konfiguration).await;
-        assert!(!offen.contains(&("kanal".to_string(), "alt".to_string())));
+        assert!(offen.contains(&("kanal".to_string(), "im-fenster".to_string())));
+        assert!(!offen.contains(&("kanal".to_string(), "zu-alt".to_string())));
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 
@@ -5193,18 +5269,35 @@ mod tests {
     async fn eine_laufende_aufnahme_faellt_nicht_unter_die_aufbewahrung() {
         let wurzel = test_ordner("mitschnitt-aufbewahrung-laufend");
         let konfiguration = test_konfiguration(&wurzel);
+        // Keine Fertig-Marke, und ffmpeg schreibt fortlaufend: die
+        // Aenderungszeit ist frisch, also kann die Frist sie gar nicht
+        // erreichen. Das ist der Schutz, nicht die Marke.
         let dir = mitschnitt_anlegen(&konfiguration, "kanal", "laeuft", true).await;
-        // Keine Fertig-Marke: der Recorder schreibt noch. Selbst wenn die
-        // Datei alt aussieht, darf sie nicht unter dem Prozess weggeloescht
-        // werden.
         let datei = dir.join(archiv::mitschnitt_name(1));
+
+        alte_mitschnitte_loeschen(&konfiguration).await;
+
+        assert!(datei.exists(), "laufende Aufnahme wurde geloescht");
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn eine_unversiegelte_altlast_laeuft_trotzdem_ab() {
+        let wurzel = test_ordner("mitschnitt-aufbewahrung-unversiegelt");
+        let konfiguration = test_konfiguration(&wurzel);
+        // Deploy mitten im Stream laesst einen Ordner ohne Fertig-Marke
+        // zurueck; wird das Archiv danach abgeschaltet, versiegelt sie
+        // niemand mehr. Ohne diesen Pfad laege die Aufnahme unbefristet da.
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "altlast", true).await;
+        let datei = dir.join(archiv::mitschnitt_name(1));
+        assert!(!dir.join(AUFNAHME_FERTIG).exists());
         let lange_her = std::time::SystemTime::now()
             - Duration::from_secs((konfiguration.aufbewahrung_tage + 1) * 24 * 60 * 60);
         mtime_setzen(&datei, lange_her);
 
         alte_mitschnitte_loeschen(&konfiguration).await;
 
-        assert!(datei.exists(), "laufende Aufnahme wurde geloescht");
+        assert!(!datei.exists(), "unversiegelte Altlast blieb liegen");
         let _ = std::fs::remove_dir_all(&wurzel);
     }
 

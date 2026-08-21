@@ -74,9 +74,39 @@ fn gb_aus_wort(wert: Option<&str>) -> u64 {
     }
 }
 
+/// Kanaele, die vom durchgehenden Mitschnitt ausgenommen sind, kommagetrennt.
+///
+/// Der Mitschnitt ist eine 1:1-Tonaufnahme eines fremden Streams. Widerspricht
+/// ein Streamer, muss sich das genau fuer seinen Kanal umsetzen lassen - ohne
+/// den Dienst fuer alle anderen abzuschalten. Fuer einen Kanal auf dieser Liste
+/// startet kein Recorder und es wird nichts hochgeladen.
+pub const AUSNAHME_ENV: &str = "STREAM_AUDIT_DRIVE_EXCLUDE";
+
 /// Ob nach dem Stream ueberhaupt archiviert wird.
 pub fn archiv_aktiv() -> bool {
     aktiv_aus_wort(std::env::var(AKTIV_ENV).ok().as_deref())
+}
+
+/// Ob fuer diesen Kanal aufgenommen und archiviert wird. Prueft den globalen
+/// Schalter und die kanalweise Ausnahmeliste.
+pub fn archiv_aktiv_fuer(kanal: &str) -> bool {
+    archiv_aktiv()
+        && !kanal_ausgenommen(kanal, std::env::var(AUSNAHME_ENV).ok().as_deref())
+}
+
+/// Reine Wortlogik hinter [`archiv_aktiv_fuer`], ohne Umgebungszugriff.
+/// Gross- und Kleinschreibung spielt keine Rolle: Twitch-Logins sind klein,
+/// aber wer die Liste pflegt, tippt sie leicht anders.
+fn kanal_ausgenommen(kanal: &str, liste: Option<&str>) -> bool {
+    let Some(liste) = liste else {
+        return false;
+    };
+    let kanal = kanal.trim().to_ascii_lowercase();
+    liste
+        .split([',', ' ', ';'])
+        .map(|eintrag| eintrag.trim().to_ascii_lowercase())
+        .filter(|eintrag| !eintrag.is_empty())
+        .any(|eintrag| eintrag == kanal)
 }
 
 /// Reine Wortlogik hinter [`archiv_aktiv`], ohne Umgebungszugriff - so testbar,
@@ -193,6 +223,21 @@ mod tests {
         // sichtbar im Protokoll, nicht stillschweigend.
         assert_eq!(gb_aus_wort(Some("200G")), MIN_FREE_STANDARD_GB);
         assert_eq!(gb_aus_wort(Some("100.5")), MIN_FREE_STANDARD_GB);
+    }
+
+    #[test]
+    fn ein_widersprechender_kanal_wird_nicht_aufgenommen() {
+        assert!(kanal_ausgenommen("skifahrertv", Some("skifahrertv")));
+        assert!(kanal_ausgenommen(
+            "skifahrertv",
+            Some("helmbombenricky, SkifahrerTV")
+        ));
+        assert!(kanal_ausgenommen("skifahrertv", Some("a b skifahrertv")));
+        // Andere Kanaele bleiben unberuehrt, und ein Teiltreffer zaehlt nicht.
+        assert!(!kanal_ausgenommen("skifahrertv", Some("helmbombenricky")));
+        assert!(!kanal_ausgenommen("ski", Some("skifahrertv")));
+        assert!(!kanal_ausgenommen("skifahrertv", Some("")));
+        assert!(!kanal_ausgenommen("skifahrertv", None));
     }
 
     #[test]
