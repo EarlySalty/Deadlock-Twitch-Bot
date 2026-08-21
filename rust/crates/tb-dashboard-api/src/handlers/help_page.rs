@@ -38,6 +38,10 @@ fn render_help(kb: &KnowledgeBase) -> String {
         .docs()
         .iter()
         .filter(|d| d.namespace == Namespace::Bot)
+        // `audience: concierge` markiert Wissen, das nur der Self-Explainer als
+        // Grounding sehen darf (z. B. seine eigenen Antwort-Leitplanken). Auf der
+        // oeffentlichen Hilfeseite darf das nie erscheinen.
+        .filter(|d| d.audience != "concierge")
         .collect();
     docs.sort_by(|a, b| {
         category_rank(&a.category)
@@ -103,6 +107,7 @@ fn category_label(category: &str) -> &str {
         "feature" => "Feature",
         "setup" => "Setup",
         "trust" => "Vertrauen",
+        "support" => "Support",
         "" => "Sonstiges",
         other => other,
     }
@@ -234,6 +239,28 @@ mod tests {
         assert!(html.contains("<h2>Feature</h2>"));
         assert!(html.contains("<h2>Setup</h2>"));
         assert!(html.contains("<h1>Hilfe"));
+    }
+
+    /// `audience: concierge` grundiert nur den Self-Explainer, darf aber nie auf der
+    /// oeffentlichen `/streamer/help`-Seite landen (Leitplanken sind kein Publikum).
+    /// Ohne den Audience-Filter reisst dieser Test: Sabotage bestaetigt es (Fix
+    /// entfernt -> Absatz erscheint).
+    #[test]
+    fn render_help_versteckt_concierge_audience() {
+        let kb = KnowledgeBase::load_from_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tb-knowledge/tests/fixtures"),
+        )
+        .unwrap();
+        let html = render_help(&kb);
+        assert!(
+            !html.contains("Interngeheimnis"),
+            "audience: concierge darf nicht im oeffentlichen HTML landen"
+        );
+        assert!(
+            !html.contains("id=\"concierge-intern\""),
+            "auch kein Anker fuer das interne Dokument"
+        );
     }
 
     #[tokio::test]

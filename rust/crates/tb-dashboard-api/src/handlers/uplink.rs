@@ -491,7 +491,20 @@ pub async fn twitch_auto_destination_handler(
     };
     let cipher = Arc::new(cipher);
     let store = RaidAuthStore::new(pool.clone(), cipher.clone());
-    let scopes = store.get_scopes(&user_id).await.unwrap_or_default();
+    let scopes = match store.get_scopes(&user_id).await {
+        Ok(scopes) => scopes,
+        Err(e) => {
+            // Ein DB-Aussetzer ist kein "Scope fehlt". `scope_missing` schickt den
+            // Streamer per `twitchFehlertext` in einen unnoetigen Twitch-Re-Login;
+            // hier gibt es weder Scope-Info noch Re-Login-Grund.
+            tracing::warn!(error = %e, "twitch_auto_destination_handler: get_scopes fehlgeschlagen");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "token_store_unavailable" })),
+            )
+                .into_response());
+        }
+    };
     if !scopes.iter().any(|scope| scope == STREAM_KEY_SCOPE) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -977,6 +990,34 @@ mod tests {
                 .count(),
             1,
             "der abgelaufene Zugang muss genau einmal erneuert werden"
+        );
+    }
+
+    /// Ein DB-Aussetzer bei `get_scopes` darf nicht als `scope_missing` (403)
+    /// beantwortet werden: das schickt den Streamer per `twitchFehlertext` in einen
+    /// unnoetigen Twitch-Re-Login, obwohl der Scope da sein koennte. Sabotage: mit
+    /// `unwrap_or_default()` statt dem `match` faellt dieser Test von 503 auf 403.
+    #[tokio::test]
+    async fn db_fehler_bei_scopes_ist_503_nicht_scope_missing() {
+        let _guard = ENV.lock().await;
+        let Some(pool) = token_test_pool("t_uplink_scopes_db_error").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        std::env::set_var("DB_MASTER_KEY_V1", TEST_KEY_HEX);
+        // Tabelle weg -> get_scopes liefert Err(sqlx::Error), keine leere Liste.
+        sqlx::query("DROP TABLE twitch_raid_auth")
+            .execute(&pool)
+            .await
+            .expect("Tabelle zum Sabotieren entfernen");
+
+        let fehler = twitch_auto_destination_handler(partner(), State(pool))
+            .await
+            .expect_err("ein DB-Fehler darf keine Erfolgsantwort ergeben");
+        assert_eq!(
+            status_von(fehler),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB-Fehler ist kein scope_missing (403)"
         );
     }
 

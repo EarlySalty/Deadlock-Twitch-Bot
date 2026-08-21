@@ -176,6 +176,10 @@ function PlattformKarte({
     leereEingabe(platform.defaultRtmpUrl)
   );
   const [twitchHinweis, setTwitchHinweis] = useState<string | null>(null);
+  // Adresse wurde vom Nutzer angefasst, nicht nur automatisch vorbefuellt. Ohne
+  // diese Unterscheidung erlaubt canSaveDestination ein Speichern, das zielRumpf
+  // dann still verwirft, weil Adresse ohne Schluessel dort ausgelassen wird.
+  const [urlBeruehrt, setUrlBeruehrt] = useState(false);
 
   useEffect(() => {
     if (gespeichert?.rtmp_url) {
@@ -187,6 +191,7 @@ function PlattformKarte({
     mutationFn: () => saveUplinkDestination(zielRumpf({ platform: platform.id, ...eingabe })),
     onSuccess: () => {
       setEingabe((alt) => ({ ...alt, streamKey: '' }));
+      setUrlBeruehrt(false);
       onSaved();
     },
   });
@@ -209,6 +214,7 @@ function PlattformKarte({
   const speicherbar = canSaveDestination({
     rtmpUrl: eingabe.rtmpUrl,
     streamKey: eingabe.streamKey,
+    urlTouched: urlBeruehrt,
     profileTouched: profilBeruehrt,
     verbunden: Boolean(gespeichert),
   });
@@ -264,7 +270,10 @@ function PlattformKarte({
       <div className="space-y-2">
         <input
           value={eingabe.rtmpUrl}
-          onChange={(e) => setEingabe({ ...eingabe, rtmpUrl: e.target.value })}
+          onChange={(e) => {
+            setUrlBeruehrt(true);
+            setEingabe({ ...eingabe, rtmpUrl: e.target.value });
+          }}
           className={FELD_KLASSE}
           placeholder="Server-Adresse"
           aria-label={`Server-Adresse ${platform.label}`}
@@ -296,11 +305,11 @@ function PlattformKarte({
               inputMode="numeric"
               className={FELD_KLASSE}
               placeholder={
-                gespeichert
+                gespeichert?.effective
                   ? String(
-                      feld === 'bitrate'
+                      (feld === 'bitrate'
                         ? gespeichert.effective.bitrate_kbps
-                        : gespeichert.effective[feld as 'width' | 'height' | 'fps']
+                        : gespeichert.effective[feld as 'width' | 'height' | 'fps']) ?? ''
                     )
                   : ''
               }
@@ -309,7 +318,7 @@ function PlattformKarte({
         ))}
       </div>
 
-      {gespeichert && (
+      {gespeichert?.effective && (
         <p className="text-xs text-text-secondary">
           Wird gesendet mit {gespeichert.effective.width} mal {gespeichert.effective.height},{' '}
           {gespeichert.effective.fps} Bildern pro Sekunde und{' '}
@@ -612,7 +621,7 @@ function VerwaltungsKarte() {
           </div>
           <div>
             <div className={LABEL_KLASSE}>Serverlast</div>
-            <div className="text-lg font-bold text-white">{daten.loadavg.toFixed(2)}</div>
+            <div className="text-lg font-bold text-white">{(daten.loadavg ?? 0).toFixed(2)}</div>
           </div>
         </div>
       )}

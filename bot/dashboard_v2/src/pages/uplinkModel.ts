@@ -266,16 +266,24 @@ export function wartelistenAnzeige(opts: {
  * nur zusammen weg. Steht die Adresse nach dem automatischen Verbinden schon
  * im Feld und liegt der Schlüssel beim Server, bleibt trotzdem ein reines
  * Profil-Update möglich: dann fahren wir Adresse und Schlüssel gar nicht mit.
+ *
+ * Das gilt aber nur, solange die Adresse unangetastet die vorbefüllte ist.
+ * Hat der Nutzer die Adresse selbst geändert, aber keinen neuen Schlüssel
+ * eingetragen, lehnt der Knopf ab — sonst nimmt zielRumpf() die Adresse ohne
+ * Schlüssel gar nicht mit, der Knopf meldet trotzdem "Gespeichert", und die
+ * Änderung verschwindet stillschweigend.
  */
 export function canSaveDestination(opts: {
   rtmpUrl: string;
   streamKey: string;
+  urlTouched: boolean;
   profileTouched: boolean;
   verbunden: boolean;
 }): boolean {
   const url = opts.rtmpUrl.trim();
   const key = opts.streamKey.trim();
   if (url && key) return true;
+  if (opts.urlTouched) return false;
   if (!url && !key) return opts.verbunden && opts.profileTouched;
   if (url && !key) return opts.verbunden && opts.profileTouched;
   return false;

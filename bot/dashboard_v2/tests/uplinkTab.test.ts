@@ -121,6 +121,7 @@ test('Adresse und Schlüssel gehen nur zusammen weg', () => {
     canSaveDestination({
       rtmpUrl: 'rtmp://live.twitch.tv/app',
       streamKey: 'k',
+      urlTouched: true,
       profileTouched: false,
       verbunden: false,
     }),
@@ -130,38 +131,64 @@ test('Adresse und Schlüssel gehen nur zusammen weg', () => {
     canSaveDestination({
       rtmpUrl: 'rtmp://live.twitch.tv/app',
       streamKey: '',
+      urlTouched: true,
       profileTouched: true,
       verbunden: false,
     }),
     false
   );
   assert.equal(
-    canSaveDestination({ rtmpUrl: '', streamKey: 'k', profileTouched: true, verbunden: false }),
+    canSaveDestination({
+      rtmpUrl: '',
+      streamKey: 'k',
+      urlTouched: false,
+      profileTouched: true,
+      verbunden: false,
+    }),
     false
   );
   // Ein Schlüssel ohne Adresse geht auch bei verbundenem Ziel nicht weg.
   assert.equal(
-    canSaveDestination({ rtmpUrl: '', streamKey: 'k', profileTouched: true, verbunden: true }),
+    canSaveDestination({
+      rtmpUrl: '',
+      streamKey: 'k',
+      urlTouched: false,
+      profileTouched: true,
+      verbunden: true,
+    }),
     false
   );
   // Profilwerte ohne gespeichertes Ziel dürfen nicht an das Relay gehen.
   assert.equal(
-    canSaveDestination({ rtmpUrl: '', streamKey: '', profileTouched: true, verbunden: false }),
+    canSaveDestination({
+      rtmpUrl: '',
+      streamKey: '',
+      urlTouched: false,
+      profileTouched: true,
+      verbunden: false,
+    }),
     false
   );
   assert.equal(
-    canSaveDestination({ rtmpUrl: '', streamKey: '', profileTouched: false, verbunden: false }),
+    canSaveDestination({
+      rtmpUrl: '',
+      streamKey: '',
+      urlTouched: false,
+      profileTouched: false,
+      verbunden: false,
+    }),
     false
   );
 });
 
 test('nach dem automatischen Verbinden reicht die Adresse ohne Schlüssel', () => {
-  // Zustand nach dem Twitch-Knopf: Adresse steht im Feld, der Schlüssel liegt
-  // beim Server, nur die Profilwerte wurden angefasst.
+  // Zustand nach dem Twitch-Knopf: Adresse steht unangetastet im Feld, der
+  // Schlüssel liegt beim Server, nur die Profilwerte wurden angefasst.
   assert.equal(
     canSaveDestination({
       rtmpUrl: 'rtmp://live.twitch.tv/app',
       streamKey: '',
+      urlTouched: false,
       profileTouched: true,
       verbunden: true,
     }),
@@ -172,7 +199,25 @@ test('nach dem automatischen Verbinden reicht die Adresse ohne Schlüssel', () =
     canSaveDestination({
       rtmpUrl: 'rtmp://live.twitch.tv/app',
       streamKey: '',
+      urlTouched: false,
       profileTouched: false,
+      verbunden: true,
+    }),
+    false
+  );
+});
+
+test('eine geänderte Adresse ohne neuen Schlüssel wird abgelehnt statt still verworfen', () => {
+  // Bug: canSaveDestination erlaubte hier "Speichern", aber zielRumpf() liess
+  // die Adresse ohne Schlüssel komplett aus — der Knopf meldete "Gespeichert",
+  // die Änderung ging nie raus. Sabotage (urlTouched-Zweig entfernen) macht
+  // diesen Test rot.
+  assert.equal(
+    canSaveDestination({
+      rtmpUrl: 'rtmp://live.kick.tv/app-neu',
+      streamKey: '',
+      urlTouched: true,
+      profileTouched: true,
       verbunden: true,
     }),
     false

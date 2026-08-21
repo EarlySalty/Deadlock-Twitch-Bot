@@ -9,7 +9,7 @@ fn fixtures() -> std::path::PathBuf {
 #[test]
 fn laedt_beide_namespaces() {
     let kb = KnowledgeBase::load_from_dir(&fixtures()).expect("lädt");
-    assert_eq!(kb.len(), 3);
+    assert_eq!(kb.len(), 4);
     let bot = kb
         .docs()
         .iter()
@@ -20,7 +20,7 @@ fn laedt_beide_namespaces() {
         .iter()
         .filter(|d| d.namespace == Namespace::Deadlock)
         .count();
-    assert_eq!(bot, 2);
+    assert_eq!(bot, 3);
     assert_eq!(dl, 1);
 }
 
