@@ -138,14 +138,17 @@ pub async fn ai_analysis_handler(
     resp
 }
 
-/// LLM-Dispatch (Python `_call_ai_analysis`): Opus via ClaudeClient (max_tokens
-/// 60000), MiniMax via raw_completion (temp 0.5, max_tokens 60000). Fehler als
-/// String (Aufrufer prüft „credit balance is too low").
+/// LLM-Dispatch (Python `_call_ai_analysis`): Opus ueber den zentralen Eingang
+/// `tb_llm::complete` mit Use-Case `ai_analysis` (max_tokens 60000), MiniMax
+/// via raw_completion (temp 0.5, max_tokens 60000). Fehler als String
+/// (Aufrufer prüft „credit balance is too low").
 async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
     if ai_model == AI_MODEL_OPUS {
         let response = tb_llm::complete(
             "ai_analysis",
-            tb_llm::Request::prompt(prompt).max_tokens(60000),
+            tb_llm::Request::prompt(prompt)
+                .max_tokens(60000)
+                .ledger_purpose("ai-analysis"),
         )
         .await
         .map_err(|e| e.to_string())?;

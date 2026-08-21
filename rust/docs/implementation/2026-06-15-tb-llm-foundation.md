@@ -1,27 +1,37 @@
 # tb-llm — gemeinsame LLM-Client-Foundation (Phase 0)
 
-Crate: `rust/crates/tb-llm`. Liefert die geteilte LLM-Schicht für den Twitch-Bot-
-Cutover. **Foundation only** — sie stellt Clients + Ledger bereit, bestehende
-Aufrufer (scam_pitch, title_ai, post_stream, Dashboard-AI-Handler) wurden NICHT
-umgebaut. Das ist der spätere Schritt im F2-Ticket des Build-DAG.
+> **Stand nach dem Umbau "LLM zentral"** (siehe
+> `docs/architecture/llm-zentral.md`): Die Module `provider`, `minimax` und
+> `anthropic` samt `LlmProvider`-Trait, `MiniMaxClient`, `AnthropicClient` und
+> dem `ClaudeClient` in `tb-engagement` sind geloescht. An ihre Stelle treten
+> `hub` (ein HTTP-Weg fuer alle Anbieter, `tb_llm::complete`) und `selection`
+> (Anbieter- und Modellwahl je Use-Case). Die Abschnitte unten beschreiben
+> den urspruenglichen Phase-0-Stand und gelten nur noch dort, wo sie `keys`
+> und `ledger` betreffen.
 
-## Struktur
+Crate: `rust/crates/tb-llm`. Liefert die geteilte LLM-Schicht für den Twitch-Bot-
+Cutover. Urspruenglich **Foundation only**: Clients + Ledger, bestehende
+Aufrufer (scam_pitch, title_ai, post_stream, Dashboard-AI-Handler) wurden erst
+im Umbau "LLM zentral" umgestellt.
+
+## Struktur (heute)
 
 | Modul | Inhalt |
 |-------|--------|
-| `provider` | Port `LlmProvider` (Trait) + geteilte Typen `Message`, `CompletionRequest`, `CompletionResponse`, `LlmError`. |
-| `minimax` | `MiniMaxClient` — Primär-Provider, OpenAI-kompatibles `/chat/completions`. |
-| `anthropic` | `AnthropicClient` — Premium/`ai_full`, Messages API; `extract_text` für das `content`-Block-Array. |
+| `hub` | `complete`/`complete_detailed`, `Request`, `Response`, `LlmError`, `LlmFailure`; ein HTTP-Weg fuer OpenAI-kompatible Anbieter und Anthropic, Retry bei 429, `<think>`-Strip, Ledger-Verbuchung. |
+| `selection` | `endpoint_for`/`endpoint_chain`, `LlmEndpoint`, alle Anbieter-Konstanten, `ANTHROPIC_USE_CASES`. |
 | `keys` | Konsolidierter API-Key-Resolver (kein Dup). |
-| `ledger` | Best-effort-Writer ins geteilte MiniMax-Usage-Ledger (SQLite). |
+| `ledger` | Best-effort-Writer ins geteilte Usage-Ledger (Postgres, Tabelle `minimax_usage`). |
 
-Genau **zwei** Provider. **Kein OpenAI** (Client, Pfad oder Dep) — Querschnitts-
-Direktive 2 des Grillme-Audits. (Die `openai`-Erwähnungen in den Doc-Comments
-betreffen nur das *OpenAI-kompatible* MiniMax-Endpunkt-Schema.)
+Genau **drei** Anbieter (Fireworks, MiniMax, Anthropic). **Kein OpenAI** (Client,
+Pfad oder Dep) — Querschnitts-Direktive 2 des Grillme-Audits. (Die
+`openai`-Erwähnungen in den Doc-Comments betreffen nur das *OpenAI-kompatible*
+Endpunkt-Schema von Fireworks und MiniMax.)
 
-## Provider-Port
+## Provider-Port (historisch, geloescht)
 
 ```rust
+// Gab es in Phase 0; heute ersetzt durch tb_llm::complete(use_case, Request).
 trait LlmProvider {
     fn name(&self) -> &'static str;       // "minimax" | "anthropic"
     fn model(&self) -> &str;
@@ -30,11 +40,9 @@ trait LlmProvider {
 }
 ```
 
-Bei Erfolg verbucht `complete` die Tokens best-effort ins Ledger (siehe unten).
-Die **Provider-Auswahl** (welcher Provider je Feature/Entitlement) ist bewusst
-NICHT Teil der Schicht — sie bleibt im Aufrufer (Python-Orakel:
+Die **Provider-Auswahl** lag in Phase 0 bewusst beim Aufrufer (Python-Orakel:
 `api_ai.py:_plan_ai_model`, `analytics.ai_full` → Anthropic, `analytics.ai_mini`
-→ MiniMax).
+→ MiniMax). Heute liegt sie in `selection.rs`.
 
 ## Key-Resolver (`keys`)
 
