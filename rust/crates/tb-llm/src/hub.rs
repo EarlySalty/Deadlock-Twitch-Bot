@@ -557,35 +557,18 @@ pub fn extract_anthropic_text(content: &Value) -> String {
 
 /// Entfernt `<think>`-Bloecke. Ein offener Block ohne Schluss faellt bis zum
 /// Ende weg: alles danach gehoert zum Denktext, nicht zur Antwort.
+///
+/// Bewusst per Regex statt per Kleinschreibungs-Suche: `to_lowercase`
+/// veraendert bei manchen Zeichen (z. B. `İ`) die Byte-Laenge, damit stimmen
+/// die Indizes nicht mehr und ein Schnitt kann mitten in ein UTF-8-Zeichen
+/// fallen. Die Regex arbeitet auf Zeichengrenzen und ist dabei
+/// schreibungsunabhaengig.
 pub fn strip_think(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    loop {
-        let Some(start) = find_ignore_case(rest, "<think>") else {
-            out.push_str(rest);
-            break;
-        };
-        out.push_str(&rest[..start]);
-        let nach_start = &rest[start + "<think>".len()..];
-        match find_ignore_case(nach_start, "</think>") {
-            Some(ende) => rest = &nach_start[ende + "</think>".len()..],
-            None => break,
-        }
-    }
-    out.trim().to_string()
-}
-
-fn find_ignore_case(haystack: &str, needle: &str) -> Option<usize> {
-    let haystack_lower = haystack.to_lowercase();
-    // Kleinschreibung kann die Byte-Laenge aendern; deshalb ueber die
-    // Zeichen-Position zurueckrechnen statt den Index direkt zu uebernehmen.
-    let treffer = haystack_lower.find(needle)?;
-    let zeichen = haystack_lower[..treffer].chars().count();
-    haystack
-        .char_indices()
-        .nth(zeichen)
-        .map(|(i, _)| i)
-        .or(Some(haystack.len()))
+    static THINK: OnceLock<regex::Regex> = OnceLock::new();
+    let re = THINK.get_or_init(|| {
+        regex::Regex::new(r"(?si)<think>(?:.*?</think>|.*)").expect("think-Regex ist konstant")
+    });
+    re.replace_all(raw, "").trim().to_string()
 }
 
 /// HTTP-Clients nach Zeitgrenze zwischengespeichert.
@@ -643,6 +626,17 @@ mod tests {
         // Ein Denktext ohne Schluss ist kein halb brauchbarer Text: was danach
         // kommt, gehoert noch zum Denken.
         assert_eq!(strip_think("Vorher<think>ab hier Denktext"), "Vorher");
+        assert_eq!(strip_think("İ<think>ä"), "İ");
+    }
+
+    #[test]
+    fn think_block_mit_mehrbyte_zeichen_schneidet_an_zeichengrenzen() {
+        // `İ`.to_lowercase() ist laenger als `İ`; eine Index-Suche auf der
+        // Kleinschreibung wuerde hier daneben greifen oder panicken.
+        assert_eq!(strip_think("<think>İ blah</think>{json}"), "{json}");
+        assert_eq!(strip_think("İİ<Think>İ</THINK>{\"a\":1}"), "İİ{\"a\":1}");
+        assert_eq!(strip_think("<think>a</think>x<think>b</think>y"), "xy");
+        assert_eq!(strip_think("ä<think>İ"), "ä");
     }
 
     #[test]

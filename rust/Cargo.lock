@@ -3053,6 +3053,7 @@ name = "tb-llm"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "regex",
  "reqwest",
  "serde_json",
  "sqlx",
