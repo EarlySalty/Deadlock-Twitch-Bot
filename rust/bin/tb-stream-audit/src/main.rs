@@ -1883,9 +1883,16 @@ async fn alte_berichte_loeschen(konfiguration: &Konfiguration) {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
-                if ausstehend
-                    .iter()
-                    .any(|(k, l)| k == kanal && bericht_gehoert_zu(dateiname, k, l))
+                // Nur echte Berichte. Eine `.neu`-Halbschrift wird nie
+                // hochgeladen (siehe `bericht_dateien_sammeln`), darf also auch
+                // keine Schonfrist bekommen.
+                let echter_bericht = dateiname.ends_with(".json")
+                    || dateiname.ends_with(".md")
+                    || dateiname.ends_with(".txt");
+                if echter_bericht
+                    && ausstehend
+                        .iter()
+                        .any(|(k, l)| k == kanal && bericht_gehoert_zu(dateiname, k, l))
                 {
                     continue;
                 }
@@ -4214,6 +4221,28 @@ async fn pending_archiv_laeufe(
                         tage = ARCHIV_RUECKSTAU_WARNUNG_TAGE,
                         "Drive-Upload haengt seit Wochen - rclone pruefen"
                     );
+                    // Und eskalieren, nicht nur ins Journal schreiben. Jeder
+                    // andere Ausfall dieses Dienstes meldet sich per DM. Ohne
+                    // sie liefen hier Wochen ins Land, an deren Ende die
+                    // Aufnahmen ungesichert geloescht werden und niemand etwas
+                    // gemerkt hat.
+                    let text = format!(
+                        "Coaching-Audit: Der Upload nach Drive haengt seit ueber {} Tagen \
+(Kanal {kanal}). Bis dahin liegen die Aufnahmen lokal; nach Ablauf der \
+Aufbewahrung werden sie ungesichert geloescht. Bitte rclone pruefen.",
+                        ARCHIV_RUECKSTAU_WARNUNG_TAGE
+                    );
+                    let schluessel = format!("{kanal}-{lauf}-archivstau");
+                    if let Err(fehler) = dm_rohtext(&text, &schluessel).await {
+                        tracing::error!(fehler, kanal, "Archivstau nicht meldbar");
+                        hinweis_aufheben(
+                            konfiguration,
+                            &format!("archivstau-{kanal}-{lauf}"),
+                            &schluessel,
+                            &text,
+                        )
+                        .await;
+                    }
                     let _ = nur_fuer_mich(&gemeldet, b"{}").await;
                 }
             }
@@ -4244,8 +4273,8 @@ async fn pending_archiv_laeufe(
 /// abgefangen, sodass hier nichts Halbfertiges hochgeht.
 async fn offene_archive_nachholen(
     konfiguration: &Konfiguration,
-    sperre: &Mutex<plan::LaufSperre>,
-    warteschlange: &Mutex<plan::Warteschlange>,
+    sperre: &Arc<Mutex<plan::LaufSperre>>,
+    warteschlange: &Arc<Mutex<plan::Warteschlange>>,
 ) {
     if !archiv::archiv_aktiv() {
         return;
@@ -4364,9 +4393,22 @@ async fn offene_archive_nachholen(
         }
     }
     let konfiguration = konfiguration.clone();
+    let sperre = Arc::clone(sperre);
+    let warteschlange = Arc::clone(warteschlange);
     tokio::spawn(async move {
         let _guard = SweepGuard;
         for (kanal, lauf) in faellig {
+            // Erneut pruefen, direkt davor. Die Liste kann Dutzende Eintraege
+            // haben und jeder rclone-Aufruf bis zu sechs Stunden dauern - eine
+            // Pruefung vom Listenanfang waere beim letzten Eintrag viele
+            // Stunden alt, und dann loeschte das Archiv Berichte eines Laufs,
+            // der laengst wieder in Auswertung ist.
+            if sperre.lock().await.ist_gesperrt(&kanal, &lauf) {
+                continue;
+            }
+            if warteschlange.lock().await.offene_fuer_lauf(&kanal, &lauf) > 0 {
+                continue;
+            }
             nach_drive_archivieren(konfiguration.clone(), kanal, lauf).await;
         }
     });
@@ -4425,6 +4467,13 @@ async fn platz_fuer_mitschnitt(konfiguration: &Konfiguration) -> bool {
             return false;
         }
     }
+    // Bewusst nur eine Start-Bremse, kein Raeumer wie `grenze_durchsetzen` fuer
+    // `aufnahmen/`. Ein archivierter Lauf hat seine Aufnahme schon abgegeben;
+    // was den Deckel reissen kann, ist ausschliesslich **ungesichertes**
+    // Material, und das zu loeschen, um wieder aufnehmen zu koennen, waere
+    // genau die Zusage gebrochen, um die es hier geht. Der Ausweg ist deshalb
+    // keine Loeschung, sondern die Meldung: der Rueckstau eskaliert nach zwei
+    // Wochen per DM.
     match freier_platz_bytes(&aufnahme_wurzel(konfiguration)).await {
         Some(frei) => frei >= archiv::min_frei_bytes(),
         None => {
@@ -4518,7 +4567,15 @@ async fn laufmarke_belegen(pfad: &Path, frisch_sekunden: u64) -> bool {
 const MITSCHNITT_MAX_VERSUCHE: u32 = 5;
 /// Kuerzeste Laufzeit, ab der ein beendeter Recorder als echtes Stream-Ende und
 /// nicht als Fehlstart gilt.
-const MITSCHNITT_MIN_LAUFZEIT: Duration = Duration::from_secs(60);
+///
+/// Deutlich ueber [`plan::LIVE_PRUEFUNG_SEKUNDEN`], und das ist der Punkt: das
+/// Ende wird erst im naechsten Takt bemerkt, gemessen wird die Zeit seit dem
+/// Start des Recorders, nicht die echte Prozesslaufzeit. Bei gleichem Wert
+/// laese sich ein ffmpeg, das nach einer Sekunde mit Status 0 endet, als
+/// vollwertiger Lauf, der Fehlerzaehler fiele zurueck auf Null, und der
+/// Versuchs-Deckel griffe nie - genau der Neustart im Minutentakt, den er
+/// verhindern soll.
+const MITSCHNITT_MIN_LAUFZEIT: Duration = Duration::from_secs(5 * 60);
 /// Wartezeit vor dem ersten Wiederanlauf; sie verdoppelt sich je Fehlversuch.
 const MITSCHNITT_BACKOFF_START: Duration = Duration::from_secs(60);
 /// Waechst die Aufnahmedatei so lange nicht, gilt der Recorder als haengend und
@@ -4547,10 +4604,13 @@ fn ist_fehlstart(erfolgreich_beendet: bool, haengt: bool, laufzeit: Duration) ->
 }
 
 /// Wartezeit vor dem naechsten Anlauf nach `versuche` Fehlversuchen. Verdoppelt
-/// sich je Versuch und ist bei 32 Minuten gedeckelt, damit ein langer Stream
-/// nicht doch wieder im Minutentakt neu startet.
+/// sich je Versuch. Der Deckel liegt bei einem Versuch mehr, als der
+/// Versuchs-Deckel zulaesst - so bleibt die Verdopplung ueber den ganzen
+/// erreichbaren Bereich echt, statt am Ende auf einen Wert zu klemmen, den nie
+/// jemand sieht.
 fn backoff_wartezeit(versuche: u32) -> Duration {
-    MITSCHNITT_BACKOFF_START.saturating_mul(1u32 << versuche.saturating_sub(1).min(5))
+    let schritte = versuche.saturating_sub(1).min(MITSCHNITT_MAX_VERSUCHE);
+    MITSCHNITT_BACKOFF_START.saturating_mul(1u32 << schritte)
 }
 
 /// Gedaechtnis fuer gescheiterte Recorder-Starts eines Laufs.
@@ -4665,6 +4725,28 @@ async fn mitschnitt_starten(
     kanal: &str,
     lauf: &str,
 ) -> Option<Recorder> {
+    mitschnitt_starten_mit(konfiguration, kanal, lauf, &streamlink_pfad(), &ffmpeg_pfad()).await
+}
+
+/// Pfad zum streamlink-Binaerprogramm, wie im Rest des Dienstes.
+fn streamlink_pfad() -> String {
+    std::env::var("VOICE_REACTION_STREAMLINK_BIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "streamlink".to_string())
+}
+
+/// Wie [`mitschnitt_starten`], aber mit ausdruecklichen Binaerpfaden. So laesst
+/// sich der Start pruefen, ohne prozessweite Umgebungsvariablen zu setzen -
+/// `set_var` neben einem lesenden Test in einem anderen Thread ist ein
+/// Datenrennen, kein blosses Flackern.
+async fn mitschnitt_starten_mit(
+    konfiguration: &Konfiguration,
+    kanal: &str,
+    lauf: &str,
+    streamlink: &str,
+    ffmpeg: &str,
+) -> Option<Recorder> {
     let dir = mitschnitt_ordner(konfiguration, kanal, lauf);
     if tokio::fs::create_dir_all(&dir).await.is_err() {
         return None;
@@ -4698,13 +4780,9 @@ async fn mitschnitt_starten(
     .await;
     let ziel = dir.join(archiv::mitschnitt_name(chrono::Utc::now().timestamp()));
     let url = format!("https://twitch.tv/{kanal}");
-    let bin = std::env::var("VOICE_REACTION_STREAMLINK_BIN")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "streamlink".to_string());
     let fehlerzeilen: Arc<std::sync::Mutex<Vec<String>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut streamlink = match tokio::process::Command::new(&bin)
+    let mut prozess = match tokio::process::Command::new(streamlink)
         .arg("--twitch-disable-ads")
         // Nicht `--quiet`: dann schwiege streamlink auch bei einem Fehler
         // (kein `audio_only`, Token, 403), und die Diagnose unten haette nichts
@@ -4732,10 +4810,10 @@ async fn mitschnitt_starten(
             return None;
         }
     };
-    if let Some(fehler) = streamlink.stderr.take() {
+    if let Some(fehler) = prozess.stderr.take() {
         stderr_mitlesen(fehler, "streamlink", Arc::clone(&fehlerzeilen));
     }
-    let Some(pipe) = streamlink.stdout.take() else {
+    let Some(pipe) = prozess.stdout.take() else {
         tracing::error!(kanal, "streamlink liefert keine Standardausgabe");
         return None;
     };
@@ -4746,7 +4824,7 @@ async fn mitschnitt_starten(
             return None;
         }
     };
-    match tokio::process::Command::new(ffmpeg_pfad())
+    match tokio::process::Command::new(ffmpeg)
         .arg("-nostdin")
         .arg("-loglevel")
         .arg("error")
@@ -4776,7 +4854,7 @@ async fn mitschnitt_starten(
                 gestartet: jetzt,
                 letzter_fortschritt: jetzt,
                 letzte_groesse: 0,
-                _streamlink: streamlink,
+                _streamlink: prozess,
                 ffmpeg,
                 fehlerzeilen,
             })
@@ -5477,10 +5555,14 @@ mod tests {
         assert_eq!(backoff_wartezeit(1), MITSCHNITT_BACKOFF_START);
         assert_eq!(backoff_wartezeit(2), MITSCHNITT_BACKOFF_START * 2);
         assert_eq!(backoff_wartezeit(3), MITSCHNITT_BACKOFF_START * 4);
-        // Gedeckelt, sonst waere die Pause nach vielen Versuchen laenger als
-        // jeder Stream.
-        let deckel = MITSCHNITT_BACKOFF_START * 32;
-        assert_eq!(backoff_wartezeit(6), deckel);
+        // Der letzte erreichbare Versuch verdoppelt noch echt.
+        assert_eq!(
+            backoff_wartezeit(MITSCHNITT_MAX_VERSUCHE),
+            MITSCHNITT_BACKOFF_START * (1 << (MITSCHNITT_MAX_VERSUCHE - 1))
+        );
+        // Und darueber ist gedeckelt, sonst waere die Pause laenger als jeder
+        // Stream.
+        let deckel = MITSCHNITT_BACKOFF_START * (1 << MITSCHNITT_MAX_VERSUCHE);
         assert_eq!(backoff_wartezeit(99), deckel);
         // Ein Aufruf mit 0 darf nicht unterlaufen.
         assert_eq!(backoff_wartezeit(0), MITSCHNITT_BACKOFF_START);
@@ -5655,10 +5737,16 @@ mod tests {
             .unwrap();
 
         // Kein echter Recorder noetig: der Start scheitert an einem Binary,
-        // das es nicht gibt - die Marken raeumt er vorher weg.
-        std::env::set_var("VOICE_REACTION_STREAMLINK_BIN", "/nicht/vorhanden");
-        let _ = mitschnitt_starten(&konfiguration, "kanal", "lauf1").await;
-        std::env::remove_var("VOICE_REACTION_STREAMLINK_BIN");
+        // das es nicht gibt - die Marken raeumt er vorher weg. Die Pfade kommen
+        // als Parameter, damit der Test die Prozessumgebung nicht anfasst.
+        let _ = mitschnitt_starten_mit(
+            &konfiguration,
+            "kanal",
+            "lauf1",
+            "/nicht/vorhanden",
+            "/nicht/vorhanden",
+        )
+        .await;
 
         assert!(!dir.join(AUFNAHME_FERTIG).exists(), "Fertig-Marke blieb");
         assert!(!lauf_dir.join(ARCHIV_MARKE).exists(), "Archiv-Marke blieb");

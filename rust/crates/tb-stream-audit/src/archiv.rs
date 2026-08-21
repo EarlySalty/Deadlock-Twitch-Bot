@@ -20,7 +20,14 @@ use std::path::Path;
 pub const REMOTE_ENV: &str = "STREAM_AUDIT_DRIVE_REMOTE";
 pub const REMOTE_STANDARD: &str = "gdrive:Deadlock/Coaching-Audit";
 
-/// Schaltet die Archivierung ab, ohne den Rest anzufassen. Standard: an.
+/// Schaltet die Archivierung ab, ohne den Rest anzufassen.
+///
+/// **Vorgabe ist an**, und das ist eine bewusste Entscheidung des Betreibers,
+/// keine vergessene Absicherung: der Mitschnitt ist der Zweck dieses Bausteins,
+/// und ein Coaching-Audit ohne Aufnahme waere wertlos. Die Unit setzt den
+/// Schalter zusaetzlich ausdruecklich, damit er dort sichtbar ist. Wer
+/// widerspricht, kommt in [`AUSNAHME_ENV`]; das wirkt je Kanal und braucht
+/// keinen Eingriff am globalen Schalter.
 pub const AKTIV_ENV: &str = "STREAM_AUDIT_DRIVE_ARCHIVE";
 
 /// Praefix der durchgehenden Mitschnitt-Dateien im Lauf-Ordner. Ein Zeitstempel
@@ -110,7 +117,8 @@ fn kanal_ausgenommen(kanal: &str, liste: Option<&str>) -> bool {
 }
 
 /// Reine Wortlogik hinter [`archiv_aktiv`], ohne Umgebungszugriff - so testbar,
-/// ohne prozessweite Variablen zu setzen.
+/// ohne prozessweite Variablen zu setzen. Ohne Wert gilt "an", siehe
+/// [`AKTIV_ENV`].
 fn aktiv_aus_wort(wert: Option<&str>) -> bool {
     match wert {
         Some(v) => {

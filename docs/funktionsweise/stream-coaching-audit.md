@@ -76,10 +76,11 @@ keine Sanktionen und postet nichts öffentlich.
 - Zum Aufschreiben des Gesagten verlässt der Ton den Rechner nicht. Zeigt die
   Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
   wurde ausdrücklich erlaubt.
-- Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt. Die
-  liegt nach dem Stream nicht mehr auf dem Rechner, sondern in unserem eigenen
-  Speicher, damit später jemand nachhören kann. Wer das für seinen Kanal nicht
-  will, sagt Bescheid: dann wird diese Aufnahme gar nicht erst gemacht.
+- Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt.
+  Nach dem Stream wandert sie in unseren eigenen Speicher, damit später jemand
+  nachhören kann. Das passiert nicht sofort, sondern beim nächsten
+  Aufräumdurchgang, meist innerhalb weniger Stunden. Wer das für seinen Kanal
+  nicht will, sagt Bescheid: dann wird diese Aufnahme gar nicht erst gemacht.
 - Kommt die Aufnahme nicht in den Speicher, wird sie nach derselben Frist
   gelöscht wie alles andere. Liegen bleibt sie nicht.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
