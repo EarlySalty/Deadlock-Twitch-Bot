@@ -1613,26 +1613,9 @@ impl SpamAiReviewer {
             cds.insert(key, now_mono + REVIEW_COOLDOWN_SEC);
         }
 
-        let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
-        if providers.is_empty() {
-            let detail = "kein Judge-API-Key gesetzt (FIREWORK_API_KEY / MINIMAX_*)".to_string();
-            return self
-                .record_and_return(
-                    event,
-                    AiReviewOutcome::Error {
-                        detail: detail.clone(),
-                    },
-                    SpamReviewVerdict::ProviderError,
-                    None,
-                    detail,
-                )
-                .await;
-        }
-
-        // Die Kette arbeitet der gemeinsame Eingang ab; hier bleibt nur die
-        // Fachauswertung des Urteils. `providers` dient oben nur der
-        // Vorabpruefung, ob ueberhaupt ein Schluessel da ist.
-        drop(providers);
+        // Die Kette arbeitet der gemeinsame Eingang ab; ohne konfigurierten
+        // Anbieter liefert er `Unavailable`, das unten als ProviderError
+        // landet. Hier bleibt nur die Fachauswertung des Urteils.
         let (last_error, last_verdict) = match call_judge(None, true, &content).await {
             Ok(review) => {
                 let (learned, rejected_pattern, save_failed) =
@@ -1842,6 +1825,9 @@ async fn call_judge(
                 tb_llm::LlmError::Http { status, .. } => {
                     JudgeCallError::Provider(format!("HTTP {status}"))
                 }
+                tb_llm::LlmError::Unavailable(_) => JudgeCallError::Provider(
+                    "kein LLM-Anbieter fuer spam_judge konfiguriert".to_string(),
+                ),
                 other => JudgeCallError::Provider(other.to_string()),
             },
         })?;
