@@ -5042,6 +5042,20 @@ async fn mitschnitt_starten_mit(
                 teile = teile.len(),
                 "Ton-Mitschnitt hat zu viele Teile - kein weiterer Recorder fuer diesen Lauf"
             );
+            // Eigene Meldung: sonst kaeme dieser Fall beim Aufrufer als
+            // "Prozessstart gescheitert" an, und der Betreiber suchte nach
+            // einem kaputten streamlink, waehrend in Wahrheit der Teile-Deckel
+            // gerissen ist.
+            mitschnitt_ausfall_melden(
+                konfiguration,
+                kanal,
+                lauf,
+                &format!(
+                    "zu viele Teile ({}), Stream reisst staendig ab",
+                    teile.len()
+                ),
+            )
+            .await;
             return None;
         }
     }
