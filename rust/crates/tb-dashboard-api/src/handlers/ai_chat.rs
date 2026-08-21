@@ -94,7 +94,8 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, St
             "ai_chat",
             tb_llm::Request::history(messages)
                 .system(&system_prompt)
-                .max_tokens(4000),
+                .max_tokens(4000)
+                .ledger_purpose("ai-chat"),
         )
         .await
         .map_err(|e| e.to_string())?;

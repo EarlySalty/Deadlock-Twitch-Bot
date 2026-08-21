@@ -2897,13 +2897,14 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             Ok(antwort) => antwort.text,
             // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
             // JSON - und der Bericht nennt den falschen Grund.
+            // Der Eingang warnt pro Versuch selbst; hier nur noch die Spur.
             Err(tb_llm::LlmError::Http { status, .. }) => {
-                tracing::warn!(status, "Modellaufruf abgelehnt");
+                tracing::debug!(status, "Modellaufruf abgelehnt");
                 fehler_gesehen.get_or_insert_with(|| format!("Modellaufruf HTTP {status}"));
                 continue;
             }
             Err(fehler) => {
-                tracing::warn!(%fehler, "Modellaufruf fehlgeschlagen");
+                tracing::debug!(%fehler, "Modellaufruf fehlgeschlagen");
                 fehler_gesehen.get_or_insert_with(|| "Modellaufruf fehlgeschlagen".to_owned());
                 continue;
             }
