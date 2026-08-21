@@ -57,7 +57,7 @@ tb_llm::complete(use_case: &str, request: Request) -> Result<Response, LlmError>
 |---|---|
 | `system` | System-Prompt; landet bei OpenAI-kompatiblen Anbietern als erste Nachricht, bei Anthropic im `system`-Feld |
 | `messages` | Verlauf |
-| `max_tokens` | `None` laesst das Feld weg (der Folgechat braucht das) |
+| `max_tokens` | `None` laesst das Feld bei OpenAI-kompatiblen Anbietern weg (der Folgechat braucht das); Anthropic verlangt es, dort greift dann `ANTHROPIC_DEFAULT_MAX_TOKENS` = 4096 |
 | `temperature` | `None` laesst das Feld weg (Anthropic-Paritaet) |
 | `json_object` | setzt `response_format` |
 | `timeout` | pro Aufruf, sonst 240 s |

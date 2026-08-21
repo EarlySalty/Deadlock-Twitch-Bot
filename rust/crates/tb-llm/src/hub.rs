@@ -22,6 +22,10 @@ use crate::selection::{endpoint_chain, endpoint_for, LlmEndpoint};
 
 /// Zeitgrenze, wenn der Aufrufer keine nennt.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(240);
+/// Anthropic verlangt `max_tokens` im Request. Hat der Aufrufer keins gesetzt,
+/// geht dieser Wert in den Body; bei OpenAI-kompatiblen Anbietern bleibt das
+/// Feld dann weg.
+pub const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 4096;
 /// Versionskopf der Anthropic-Messages-API.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Obergrenze fuer eine vom Anbieter genannte Wartezeit.
@@ -75,7 +79,9 @@ pub type Accept = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 pub struct Request {
     pub system: Option<String>,
     pub messages: Vec<Message>,
-    /// `None` laesst `max_tokens` im Body weg.
+    /// `None` laesst `max_tokens` bei OpenAI-kompatiblen Anbietern im Body
+    /// weg. Anthropic verlangt das Feld; dort gilt dann
+    /// [`ANTHROPIC_DEFAULT_MAX_TOKENS`].
     pub max_tokens: Option<i64>,
     /// `None` laesst `temperature` im Body weg.
     pub temperature: Option<f64>,
@@ -489,7 +495,8 @@ async fn send_anthropic(
     });
     // Anthropic verlangt `max_tokens`. Fehlt es, faellt der Aufruf sonst mit
     // einem 400 auf, das nach einem Konfigurationsfehler aussieht.
-    body["max_tokens"] = serde_json::json!(request.max_tokens.unwrap_or(4096));
+    body["max_tokens"] =
+        serde_json::json!(request.max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS));
     if let Some(temperature) = request.temperature {
         body["temperature"] = serde_json::json!(temperature);
     }
