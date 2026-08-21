@@ -1813,7 +1813,9 @@ pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) ->
     let raw = match call_ai(model, &prompt).await {
         Ok(raw) => raw,
         Err(error) => {
-            tracing::warn!(
+            // Der Eingang hat den Fehler schon mit Anbieter und Body gewarnt;
+            // hier zaehlt nur, dass der Fallback greift.
+            tracing::debug!(
                 modell = model.as_str(),
                 %error,
                 "PostStream: KI-Aufruf fehlgeschlagen, Fallback-Report aktiv"

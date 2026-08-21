@@ -188,8 +188,8 @@ lassen, ohne das Schema anzufassen:
 | `spam-review` | `scam_pitch.rs` | unveraendert |
 | `post-stream-report` | `post_stream.rs`, MiniMax-/Fireworks-Zweig | unveraendert |
 | `post-stream-report-claude` | `post_stream.rs`, Opus-Zweig | **neu**, vorher gar nicht verbucht |
-| `ai_analysis` | Dashboard-KI-Analyse | **neu**, vorher gar nicht verbucht |
-| `ai_chat` | Dashboard-Folgechat | **neu**, vorher gar nicht verbucht |
+| `ai-analysis` | Dashboard-KI-Analyse | **neu**, vorher gar nicht verbucht |
+| `ai-chat` | Dashboard-Folgechat | **neu**, vorher gar nicht verbucht |
 | `social-media-minimax-<anbieter>` | Clip-Anreicherung, MiniMax-Bahn | **neu**, vorher gar nicht verbucht |
 | `social-media-claude_haiku-anthropic` | Clip-Anreicherung, Haiku-Bahn | **neu**, vorher gar nicht verbucht |
 
