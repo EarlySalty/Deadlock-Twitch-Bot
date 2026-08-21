@@ -1288,7 +1288,14 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                     // markieren (dann darf er hoch) und stoppen (kill_on_drop).
                     // Der neue Lauf bekommt weiter unten seinen eigenen Recorder.
                     if let Some(rec) = mitschnitte.remove(kanal) {
-                        aufnahme_fertig_markieren(&konfiguration, kanal, &rec.lauf).await;
+                        // Erst die Prozesse abraeumen (kill_on_drop), dann
+                        // markieren: die Fertig-Marke sagt "die Datei ist
+                        // abgeschlossen", und `aufnahme_fertig_markieren` raeumt
+                        // einen leeren Ordner weg - beides waere falsch,
+                        // solange ffmpeg noch schreibt.
+                        let alter_lauf = rec.lauf.clone();
+                        drop(rec);
+                        aufnahme_fertig_markieren(&konfiguration, kanal, &alter_lauf).await;
                     }
                     // Der abgebrochene Block liegt als angefangene Datei da.
                     // Ohne diesen Schritt wuerde er nie ausgewertet und
@@ -1507,10 +1514,14 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
             }
             // Fehlerzaehler von Laeufen wegraeumen, die nicht mehr live sind -
             // sonst waechst die Tabelle ueber die Laufzeit des Dienstes.
-            mitschnitt_fehler.retain(|schluessel, _| {
-                schluessel
-                    .split_once('/')
-                    .is_some_and(|(kanal, lauf)| {
+            //
+            // Ein Eintrag mit noch laufender Wartezeit bleibt aber stehen, auch
+            // wenn der Lauf gerade nicht in `live_lauf` steht: meldet Helix
+            // einen Kanal fuer einen Takt nicht, faellt der Eintrag sonst raus
+            // und der Versuchs-Deckel waere heimlich zurueckgesetzt.
+            mitschnitt_fehler.retain(|schluessel, fehler| {
+                fehler.naechster_versuch > jetzt
+                    || schluessel.split_once('/').is_some_and(|(kanal, lauf)| {
                         live_lauf.get(kanal).map(String::as_str) == Some(lauf)
                     })
             });
@@ -2072,6 +2083,10 @@ async fn auswertungs_schleife(
         if tokio::time::Instant::now() >= naechstes_aufraeumen {
             alte_berichte_loeschen(&konfiguration).await;
             alte_aufnahmen_loeschen(&konfiguration, &warteschlange).await;
+            // Auch die 1:1-Ton-Mitschnitte: sonst wuerde ausgerechnet das
+            // sensibelste Artefakt die Aufbewahrungsfrist ueberleben, sobald
+            // der Drive-Upload dauerhaft scheitert.
+            alte_mitschnitte_loeschen(&konfiguration).await;
             // Erst die Frist, dann die Gesamtgrenze: was ohnehin abgelaufen
             // ist, soll nicht als "wegen Platzmangel geloescht" gemeldet
             // werden.
@@ -3837,6 +3852,96 @@ fn bericht_gehoert_zu(dateiname: &str, kanal: &str, lauf: &str) -> bool {
         .is_some_and(|c| c.is_ascii_digit())
 }
 
+/// Loescht Ton-Mitschnitte, deren Aufbewahrungsfrist abgelaufen ist.
+///
+/// Der Regelweg ist der Upload nach Drive: gelingt er, ist die Aufnahme
+/// gesichert und wird sofort lokal geloescht. Bleibt er aus - rclone kaputt,
+/// Token abgelaufen, `STREAM_AUDIT_DRIVE_ARCHIVE=0` nach schon entstandenen
+/// Aufnahmen - dann darf die 1:1-Aufnahme fremder Streamer nicht als einziges
+/// Artefakt des Dienstes unbefristet liegen bleiben, waehrend die viel
+/// harmloseren Berichte planmaessig verschwinden. Deshalb gilt hier dieselbe
+/// Frist wie ueberall sonst: `STREAM_AUDIT_RETENTION_DAYS`.
+///
+/// Es wird laut geloescht. Eine Aufnahme, die die Frist erreicht, ist ein
+/// gescheiterter Upload, kein Normalfall.
+async fn alte_mitschnitte_loeschen(konfiguration: &Konfiguration) {
+    let tage = konfiguration.aufbewahrung_tage;
+    if tage == 0 {
+        return;
+    }
+    let wurzel = konfiguration.ausgabe.join("mitschnitte");
+    let Ok(mut kanaele) = tokio::fs::read_dir(&wurzel).await else {
+        return;
+    };
+    let mut geloescht = 0usize;
+    while let Ok(Some(kanal_e)) = kanaele.next_entry().await {
+        if !kanal_e
+            .file_type()
+            .await
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let kanal = kanal_e.file_name().to_string_lossy().into_owned();
+        let Ok(mut laeufe) = tokio::fs::read_dir(kanal_e.path()).await else {
+            continue;
+        };
+        while let Ok(Some(lauf_e)) = laeufe.next_entry().await {
+            if !lauf_e
+                .file_type()
+                .await
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let lauf = lauf_e.file_name().to_string_lossy().into_owned();
+            // Ein noch laufender Recorder schreibt weiter in seine Datei; die
+            // Fertig-Marke trennt ihn von einer abgeschlossenen Aufnahme.
+            if !tokio::fs::try_exists(lauf_e.path().join(AUFNAHME_FERTIG))
+                .await
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(dateien) = mitschnitt_dateien_sammeln(&lauf_e.path()).await else {
+                continue;
+            };
+            for datei in dateien {
+                if !zu_alt(&datei, tage).await {
+                    continue;
+                }
+                match tokio::fs::remove_file(&datei).await {
+                    Ok(()) => {
+                        geloescht += 1;
+                        tracing::warn!(
+                            kanal,
+                            lauf,
+                            tage,
+                            "Ton-Mitschnitt nach Ablauf der Aufbewahrung geloescht - der \
+Drive-Upload hat nie funktioniert, bitte rclone pruefen"
+                        );
+                    }
+                    Err(fehler) => {
+                        tracing::warn!(?fehler, ?datei, "Ton-Mitschnitt nicht loeschbar")
+                    }
+                }
+            }
+            // Bleibt nur noch die Fertig-Marke, kann der Ordner weg.
+            if mitschnitt_dateien_sammeln(&lauf_e.path())
+                .await
+                .is_some_and(|rest| rest.is_empty())
+            {
+                let _ = tokio::fs::remove_dir_all(lauf_e.path()).await;
+            }
+        }
+    }
+    if geloescht > 0 {
+        tracing::warn!(geloescht, tage, "ungesicherte Ton-Mitschnitte geloescht");
+    }
+}
+
 /// Wie lange die Aufbewahrung wegen eines ausstehenden Drive-Uploads hoechstens
 /// ausgesetzt wird. Ohne Deckel wuerde ein laengerer rclone-Ausfall (Binary weg,
 /// Token abgelaufen, Drive voll) die Aufbewahrung fuer die betroffenen Laeufe
@@ -3844,6 +3949,10 @@ fn bericht_gehoert_zu(dateiname: &str, kanal: &str, lauf: &str) -> bool {
 /// dann unbegrenzt da, obwohl `STREAM_AUDIT_KEEP_DAYS` laengst abgelaufen ist.
 /// Nach dieser Frist zieht die normale Aufbewahrung wieder, und zwar laut.
 const ARCHIV_RUECKSTAU_MAX_TAGE: u64 = 14;
+/// Marke im Mitschnitt-Ordner: der Rueckstau ist gemeldet. Verhindert eine
+/// Warnung je Aufraeumtakt.
+const RUECKSTAU_GEMELDET: &str = "rueckstau_gemeldet.json";
+const RUECKSTAU_MELDE_TAKT_SEKUNDEN: u64 = 24 * 60 * 60;
 
 /// Laeufe (Kanal, Lauf) mit einer echten, noch nicht hochgeladenen Aufnahme -
 /// also solche, deren Berichte die Aufbewahrung noch verschonen muss.
@@ -3914,12 +4023,19 @@ async fn pending_archiv_laeufe(
                 }
             }
             if zu_alt_fuer_rueckstau {
-                tracing::warn!(
-                    kanal,
-                    lauf,
-                    tage = ARCHIV_RUECKSTAU_MAX_TAGE,
-                    "Drive-Archiv haengt zu lange - Aufbewahrung greift wieder, Upload pruefen"
-                );
+                // Einmal am Tag reicht. Der Aufraeumtakt laeuft stuendlich;
+                // ohne Entprellung waere das Protokoll nach einer Woche
+                // kaputtem rclone zu.
+                let gemeldet = lauf_e.path().join(RUECKSTAU_GEMELDET);
+                if !marke_frisch(&gemeldet, RUECKSTAU_MELDE_TAKT_SEKUNDEN).await {
+                    tracing::warn!(
+                        kanal,
+                        lauf,
+                        tage = ARCHIV_RUECKSTAU_MAX_TAGE,
+                        "Drive-Archiv haengt zu lange - Aufbewahrung greift wieder, Upload pruefen"
+                    );
+                    let _ = nur_fuer_mich(&gemeldet, b"{}").await;
+                }
                 continue;
             }
             raus.insert((kanal.clone(), lauf));
@@ -3942,6 +4058,7 @@ async fn offene_archive_nachholen(
         return;
     }
     let wurzel = konfiguration.ausgabe.join("mitschnitte");
+    let mut faellig: Vec<(String, String)> = Vec::new();
     let Ok(mut kanaele) = tokio::fs::read_dir(&wurzel).await else {
         return;
     };
@@ -4008,13 +4125,44 @@ async fn offene_archive_nachholen(
             {
                 continue;
             }
-            tokio::spawn(nach_drive_archivieren(
-                konfiguration.clone(),
-                kanal.clone(),
-                lauf,
-            ));
+            faellig.push((kanal.clone(), lauf));
         }
     }
+    if faellig.is_empty() {
+        return;
+    }
+    // Nacheinander, nicht alle auf einmal. Nach einem mehrtaegigen
+    // rclone-Ausfall sind das schnell ein paar Dutzend Laeufe; parallel
+    // gespawnt waeren das ebenso viele gleichzeitige rclone-Prozesse mit je
+    // sechs Stunden Zeitgrenze - genau der Lastfall, gegen den der
+    // Lastwaechter dieses Dienstes gebaut ist, auf einer geteilten Maschine.
+    //
+    // Ein eigener Task statt `await` hier: die Auswertungsschleife soll
+    // waehrend eines langen Uploads weiterlaufen. Die Sperre verhindert, dass
+    // der naechste Aufraeumtakt einen zweiten Abarbeiter danebenstellt.
+    static SWEEP_LAEUFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SWEEP_LAEUFT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        tracing::info!(
+            offen = faellig.len(),
+            "Drive-Archiv arbeitet noch - Nachholen wartet auf den naechsten Takt"
+        );
+        return;
+    }
+    let konfiguration = konfiguration.clone();
+    tokio::spawn(async move {
+        for (kanal, lauf) in faellig {
+            nach_drive_archivieren(konfiguration.clone(), kanal, lauf).await;
+        }
+        SWEEP_LAEUFT.store(false, std::sync::atomic::Ordering::Release);
+    });
 }
 
 /// Freier Platz in Bytes auf dem Dateisystem des Pfades, ueber `df`. `None`,
@@ -4290,7 +4438,10 @@ async fn mitschnitt_starten(
     if let Some(fehler) = streamlink.stderr.take() {
         stderr_mitlesen(fehler, "streamlink", Arc::clone(&fehlerzeilen));
     }
-    let pipe = streamlink.stdout.take()?;
+    let Some(pipe) = streamlink.stdout.take() else {
+        tracing::error!(kanal, "streamlink liefert keine Standardausgabe");
+        return None;
+    };
     let pipe: std::process::Stdio = match pipe.try_into() {
         Ok(stdio) => stdio,
         Err(fehler) => {
@@ -4945,11 +5096,116 @@ mod tests {
     async fn freier_platz_kommt_als_bytes_zurueck() {
         // `df -kP` liefert Bloecke zu 1 KiB; ein Parsing-Fehler hier hiesse,
         // dass die Platzgrenze gar nicht oder immer greift.
-        let frei = freier_platz_bytes(&std::env::temp_dir())
-            .await
-            .expect("df auf /tmp muss messbar sein");
+        // Ohne `df` im Bild (schlanker Container) sagt der Test nichts aus -
+        // dann soll er auch nicht rot sein und wie ein Fehler im Dienst
+        // aussehen. Die fail-open-Entscheidung selbst prueft der Aufrufer.
+        let Some(frei) = freier_platz_bytes(&std::env::temp_dir()).await else {
+            return;
+        };
         assert!(frei > 1024, "unplausibel wenig frei: {frei}");
         assert_eq!(frei % 1024, 0, "kein Vielfaches von 1 KiB: {frei}");
+    }
+
+    /// Legt ein Fake-rclone an, das jeden Aufruf protokolliert und auf `lsf`
+    /// die uebergebenen Zeilen ausgibt. So ist der Loeschpfad ohne Netz und
+    /// ohne Google-Konto pruefbar.
+    fn fake_rclone(wurzel: &Path, lsf_ausgabe: &str) -> PathBuf {
+        let bin = wurzel.join("fake-rclone");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = lsf ]; then printf '%s' '{lsf_ausgabe}'; fi\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut rechte = std::fs::metadata(&bin).unwrap().permissions();
+        rechte.set_mode(0o700);
+        std::fs::set_permissions(&bin, rechte).unwrap();
+        bin
+    }
+
+    /// Tests, die prozessweite Umgebungsvariablen setzen, duerfen sich nicht
+    /// ueberlappen - `cargo test` laeuft parallel im selben Prozess.
+    static UMGEBUNG: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn ein_unvollstaendiger_upload_loescht_nichts() {
+        let _sperre = UMGEBUNG.lock().await;
+        let wurzel = test_ordner("archiv-lsf-unvollstaendig");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "lauf1", true).await;
+        tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+        let mitschnitt = dir.join(archiv::mitschnitt_name(1));
+
+        // rclone meldet Erfolg, aber der Zielordner fuehrt die Datei nicht -
+        // etwa ein Rest aus einem frueher abgebrochenen Anlauf. Genau hier darf
+        // lokal nichts geloescht werden.
+        let bin = fake_rclone(&wurzel, "irgendwas-anderes.aac\n");
+        std::env::set_var("STREAM_AUDIT_RCLONE_BIN", &bin);
+        std::env::set_var("STREAM_AUDIT_DRIVE_REMOTE", "gdrive:Test");
+
+        let ergebnis = drive_archiv_durchfuehren(&konfiguration, "kanal", "lauf1").await;
+        assert!(ergebnis.is_err(), "unbelegter Upload muss scheitern");
+        assert!(mitschnitt.exists(), "Original wurde trotzdem geloescht");
+
+        // Und der Gegenbeweis: fuehrt das Ziel die Datei, wird geraeumt.
+        let bin = fake_rclone(&wurzel, &format!("{}\n", archiv::mitschnitt_name(1)));
+        std::env::set_var("STREAM_AUDIT_RCLONE_BIN", &bin);
+        let ergebnis = drive_archiv_durchfuehren(&konfiguration, "kanal", "lauf1").await;
+        assert_eq!(ergebnis, Ok(true), "belegter Upload muss durchgehen");
+        assert!(!mitschnitt.exists(), "Original blieb nach dem Upload liegen");
+
+        std::env::remove_var("STREAM_AUDIT_RCLONE_BIN");
+        std::env::remove_var("STREAM_AUDIT_DRIVE_REMOTE");
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn ein_nie_hochgeladener_mitschnitt_faellt_unter_die_aufbewahrung() {
+        let wurzel = test_ordner("mitschnitt-aufbewahrung");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "alt", true).await;
+        tokio::fs::write(dir.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+        let datei = dir.join(archiv::mitschnitt_name(1));
+        let lange_her = std::time::SystemTime::now()
+            - Duration::from_secs((konfiguration.aufbewahrung_tage + 1) * 24 * 60 * 60);
+        mtime_setzen(&datei, lange_her);
+
+        // Frischer Lauf desselben Kanals: bleibt unangetastet.
+        let frisch = mitschnitt_anlegen(&konfiguration, "kanal", "neu", true).await;
+        tokio::fs::write(frisch.join(AUFNAHME_FERTIG), b"{}")
+            .await
+            .unwrap();
+
+        alte_mitschnitte_loeschen(&konfiguration).await;
+
+        assert!(!datei.exists(), "abgelaufene Aufnahme blieb liegen");
+        assert!(frisch.join(archiv::mitschnitt_name(1)).exists());
+        let _ = std::fs::remove_dir_all(&wurzel);
+    }
+
+    #[tokio::test]
+    async fn eine_laufende_aufnahme_faellt_nicht_unter_die_aufbewahrung() {
+        let wurzel = test_ordner("mitschnitt-aufbewahrung-laufend");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_anlegen(&konfiguration, "kanal", "laeuft", true).await;
+        // Keine Fertig-Marke: der Recorder schreibt noch. Selbst wenn die
+        // Datei alt aussieht, darf sie nicht unter dem Prozess weggeloescht
+        // werden.
+        let datei = dir.join(archiv::mitschnitt_name(1));
+        let lange_her = std::time::SystemTime::now()
+            - Duration::from_secs((konfiguration.aufbewahrung_tage + 1) * 24 * 60 * 60);
+        mtime_setzen(&datei, lange_her);
+
+        alte_mitschnitte_loeschen(&konfiguration).await;
+
+        assert!(datei.exists(), "laufende Aufnahme wurde geloescht");
+        let _ = std::fs::remove_dir_all(&wurzel);
     }
 
     #[tokio::test]

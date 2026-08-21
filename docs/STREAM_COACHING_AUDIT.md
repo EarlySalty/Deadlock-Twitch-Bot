@@ -66,7 +66,9 @@ im Deadlock-Docs-Korpus.
    Aufraeumtakt versucht es erneut; noch nicht hochgeladene Aufnahmen werden nie
    geloescht. Faellt der freie Platz unter `STREAM_AUDIT_DRIVE_MIN_FREE_GB`,
    startet **kein neuer** Recorder mehr (bestehende laufen weiter), damit die
-   geteilte Platte nicht volllaeuft. Archiviert werden nur Streams **mit**
+   geteilte Platte nicht volllaeuft. Laesst sich der freie Platz nicht messen
+   (kein `df`), wird trotzdem aufgenommen und das im Protokoll vermerkt: der Ton
+   ist winzig, und ein df-Aussetzer soll die Aufnahme nicht abwuergen. Archiviert werden nur Streams **mit**
    Aufnahme; faellt der Recorder ganz aus, bleiben allein die lokalen Berichte
    der normalen Aufbewahrung. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet Recorder
    und Upload ab. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
@@ -82,8 +84,16 @@ im Deadlock-Docs-Korpus.
 9. **Wenn der Upload haengt.** Solange das Drive-Archiv eines Laufs aussteht,
    bleiben seine Berichte von der Aufbewahrung verschont - aber hoechstens
    14 Tage. Danach greift `STREAM_AUDIT_RETENTION_DAYS` wieder, mit einer
-   Warnung im Protokoll. Sonst waere die Aufbewahrungsfrist bei kaputtem rclone
-   still ausser Kraft, und Berichte mit vollem Wortlaut laegen unbegrenzt da.
+   Warnung im Protokoll (hoechstens eine je Lauf und Tag). Sonst waere die
+   Aufbewahrungsfrist bei kaputtem rclone still ausser Kraft, und Berichte mit
+   vollem Wortlaut laegen unbegrenzt da. Dasselbe gilt fuer die
+   1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie nach
+   `STREAM_AUDIT_RETENTION_DAYS` lokal geloescht, mit deutlicher Warnung. Ohne
+   das ueberlebte ausgerechnet das sensibelste Artefakt jede Frist.
+10. **Nachholen laeuft nacheinander.** Der stuendliche Takt arbeitet
+   ausstehende Uploads in einem einzigen Hintergrund-Task nacheinander ab. Nach
+   einem mehrtaegigen rclone-Ausfall waeren es sonst Dutzende gleichzeitiger
+   rclone-Prozesse auf der geteilten Maschine.
 
 ## Datenschutz
 

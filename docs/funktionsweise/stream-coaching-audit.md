@@ -77,10 +77,11 @@ keine Sanktionen und postet nichts öffentlich.
   Transkriptions-URL nach außen, startet der Dienst gar nicht erst, außer das
   wurde ausdrücklich erlaubt.
 - Vom Stream selbst wird zusätzlich eine durchgehende Tonaufnahme angelegt. Die
-  liegt nach dem Stream nicht auf dem Rechner, sondern in unserem eigenen
-  Google Drive, damit später jemand nachhören kann. Wer das nicht will, sagt
-  Bescheid: mit `STREAM_AUDIT_DRIVE_ARCHIVE=0` entsteht diese Aufnahme gar
-  nicht erst.
+  liegt nach dem Stream nicht mehr auf dem Rechner, sondern in unserem eigenen
+  Speicher, damit später jemand nachhören kann. Wer das für seinen Kanal nicht
+  will, sagt Bescheid: dann wird diese Aufnahme gar nicht erst gemacht.
+- Kommt die Aufnahme nicht in den Speicher, wird sie nach derselben Frist
+  gelöscht wie alles andere. Liegen bleibt sie nicht.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwärzung
   geschickt. Die Schwärzung kennt die bekannten Muster und sonst nichts:
   anderer Wortlaut geht mit. Deshalb ist der fremde Anbieter eine bewusste,
