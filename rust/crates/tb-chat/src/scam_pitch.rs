@@ -1507,6 +1507,11 @@ pub struct LearnedPatternRef {
 enum SpamReviewVerdict {
     Spam,
     Clean,
+    /// Historischer Wert: der Judge kam frueher als Anfangszustand der
+    /// Anbieterschleife hierher, bevor ein Anbieter geantwortet hatte. Die
+    /// Schleife ist weg, gespeicherte Zeilen mit `unsure` gibt es weiter.
+    /// Bleibt Teil des persistierten Wortschatzes.
+    #[allow(dead_code)]
     Unsure,
     Skipped,
     Timeout,
@@ -1632,60 +1637,55 @@ impl SpamAiReviewer {
                 .await;
         }
 
-        let mut last_error = String::new();
-        let mut last_verdict = SpamReviewVerdict::Unsure;
-        for provider in &providers {
-            match call_judge(provider, true, &content).await {
-                Ok(Some(review)) => {
-                    let (learned, rejected_pattern, save_failed) =
-                        persist_spam_learning(&self.pool, &review, &content, &channel).await;
-                    let reason = review.reason.unwrap_or_default();
-                    let confidence = review.confidence;
-                    let (outcome, verdict) = if review.is_spam {
-                        (
-                            AiReviewOutcome::Spam {
-                                reason,
-                                confidence,
-                                learned,
-                                rejected_pattern,
-                                save_failed,
-                            },
-                            SpamReviewVerdict::Spam,
-                        )
-                    } else {
-                        (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
-                    };
-                    let persisted_reason = match &outcome {
-                        AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
-                            reason.clone()
-                        }
-                        _ => String::new(),
-                    };
-                    return self
-                        .record_and_return(event, outcome, verdict, confidence, persisted_reason)
-                        .await;
-                }
-                Ok(None) => {
-                    last_error = format!("{}: kein parsebares JSON", provider.model);
-                    last_verdict = SpamReviewVerdict::ParseError;
-                    warn!(
-                        model = provider.model,
-                        "Judge lieferte kein parsebares Urteil"
-                    );
-                }
-                Err(e) => {
-                    let (verdict, detail) = match e {
-                        JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
-                        JudgeCallError::Provider(detail) => {
-                            (SpamReviewVerdict::ProviderError, detail)
-                        }
-                    };
-                    last_verdict = verdict;
-                    last_error = format!("{}: {detail}", provider.model);
-                    warn!(model = provider.model, fehler = %detail, "Judge-Call fehlgeschlagen");
-                }
+        // Die Kette arbeitet der gemeinsame Eingang ab; hier bleibt nur die
+        // Fachauswertung des Urteils.
+        let (last_error, last_verdict) = match call_judge(None, true, &content).await {
+            Ok(review) => {
+                let (learned, rejected_pattern, save_failed) =
+                    persist_spam_learning(&self.pool, &review, &content, &channel).await;
+                let reason = review.reason.unwrap_or_default();
+                let confidence = review.confidence;
+                let (outcome, verdict) = if review.is_spam {
+                    (
+                        AiReviewOutcome::Spam {
+                            reason,
+                            confidence,
+                            learned,
+                            rejected_pattern,
+                            save_failed,
+                        },
+                        SpamReviewVerdict::Spam,
+                    )
+                } else {
+                    (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
+                };
+                let persisted_reason = match &outcome {
+                    AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
+                        reason.clone()
+                    }
+                    _ => String::new(),
+                };
+                return self
+                    .record_and_return(event, outcome, verdict, confidence, persisted_reason)
+                    .await;
             }
-        }
+            Err(error) => {
+                let (verdict, detail) = match error {
+                    JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
+                    JudgeCallError::Provider(detail) => (SpamReviewVerdict::ProviderError, detail),
+                    JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
+                };
+                // Der Eingang gibt den Fehler des letzten Kettenglieds zurueck;
+                // dessen Modell gehoert in die Meldung, sonst steht im Bericht
+                // ein Fehler ohne Absender.
+                let modell = providers
+                    .last()
+                    .map(|endpoint| endpoint.model.as_str())
+                    .unwrap_or("unbekannt");
+                warn!(model = modell, fehler = %detail, "Judge-Call fehlgeschlagen");
+                (format!("{modell}: {detail}"), verdict)
+            }
+        };
         self.record_and_return(
             event,
             AiReviewOutcome::Error {
@@ -1740,6 +1740,9 @@ struct AiReview {
 enum JudgeCallError {
     Timeout(String),
     Provider(String),
+    /// Antwort kam an, trug aber kein verwertbares Urteil. Eigene Klasse, weil
+    /// der Bericht "kaputt" und "nicht verwertbar" unterscheiden muss.
+    Parse(String),
 }
 
 /// Persistiert das Lern-Ergebnis eines Judge-Urteils.
@@ -1923,22 +1926,23 @@ pub(crate) async fn learn_pattern_from_judge(pool: &PgPool, req: JudgeLearning<'
     }
 }
 
-/// Ruft einen Judge-Anbieter ueber den gemeinsamen Eingang auf.
+/// Holt ein Judge-Urteil ueber den gemeinsamen Eingang.
 ///
-/// `Ok(None)` = Antwort kam, aber kein parsebares Urteil (kein Fehler des
-/// Transports). `Err` = Transport-/HTTP-Problem → Aufrufer probiert den
-/// naechsten Anbieter.
+/// `endpoint = None` laesst den Eingang die Kette aus der Anbieterauswahl
+/// abarbeiten: eine Antwort ohne verwertbares Urteil zaehlt dabei als
+/// Fehlschlag, damit der naechste Anbieter drankommt. Genau darum haengt das
+/// `accept`-Praedikat hier und nicht in einer eigenen Schleife: ein Judge, der
+/// beim ersten unlesbaren Satz aufgibt, laesst Spam durch.
 ///
-/// Der Anbieter kommt fertig herein, weil der Aufrufer die Kette selbst
-/// abarbeitet: er muss zwischen "kaputt" und "nicht verwertbar" unterscheiden,
-/// beides zaehlen und beides anders melden.
+/// Der Verbrauch wird pro antwortendem Anbieter verbucht, auch wenn dessen
+/// Antwort danach am Praedikat scheitert. Verbraucht sind die Tokens ohnehin.
 async fn call_judge(
-    provider: &tb_llm::LlmEndpoint,
+    endpoint: Option<&tb_llm::LlmEndpoint>,
     record_usage: bool,
     content: &str,
-) -> Result<Option<AiReview>, JudgeCallError> {
+) -> Result<AiReview, JudgeCallError> {
     let truncated: String = content.chars().take(500).collect();
-    let request = tb_llm::Request::simple(
+    let mut request = tb_llm::Request::simple(
         SPAM_REVIEW_SYSTEM_PROMPT,
         format!("Nachricht: {truncated}"),
     )
@@ -1947,7 +1951,11 @@ async fn call_judge(
     .timeout(Duration::from_secs(20))
     // Der Denktext denkender Modelle ist nicht das Urteil.
     .strip_think()
-    .endpoint(provider.clone());
+    .accept(|text| extract_verdict(text).is_some());
+    request = match endpoint {
+        Some(endpoint) => request.endpoint(endpoint.clone()),
+        None => request.failover(),
+    };
     let request = if record_usage {
         request.ledger_purpose(JUDGE_PURPOSE)
     } else {
@@ -1958,10 +1966,14 @@ async fn call_judge(
         .await
         .map_err(|error| match error {
             tb_llm::LlmError::Timeout(detail) => JudgeCallError::Timeout(detail),
+            tb_llm::LlmError::Unparsable(detail) => JudgeCallError::Parse(detail),
             other => JudgeCallError::Provider(other.to_string()),
         })?;
 
-    Ok(extract_verdict(&response.text))
+    // Das Praedikat oben hat schon geprueft; die zweite Pruefung haelt den
+    // Rueckgabetyp ehrlich, statt hier zu entpacken.
+    extract_verdict(&response.text)
+        .ok_or_else(|| JudgeCallError::Parse(format!("{}: kein parsebares JSON", response.model)))
 }
 
 /// Extrahiert das Urteil aus der Modellantwort: Reasoning-Modelle schreiben
@@ -3069,10 +3081,9 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
         };
-        let review = call_judge(&provider, false, content)
+        let review = call_judge(Some(&provider), false, content)
             .await
-            .expect("Transport ok")
-            .expect("Urteil muss parsebar sein");
+            .expect("Transport ok und Urteil parsebar");
         assert!(review.is_spam);
 
         let (learned, _, _) = persist_spam_learning(&pool, &review, content, "cheazycrust").await;
@@ -3503,10 +3514,9 @@ mod tests {
             ("gönne viewer du weißt", false),
             ("gönn dir viewer bro bin nur am lurken", false),
         ] {
-            let review = call_judge(provider, false, message)
+            let review = call_judge(Some(provider), false, message)
                 .await
-                .expect("Judge-Call fehlgeschlagen")
-                .expect("Judge lieferte kein parsebares JSON");
+                .expect("Judge-Call fehlgeschlagen");
             eprintln!(
                 "LIVE_SPAM_JUDGE want={want_spam} got={} reason={:?} msg={message:?}",
                 review.is_spam, review.reason
