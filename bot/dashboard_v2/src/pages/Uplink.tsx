@@ -38,6 +38,7 @@ import {
   UPLINK_LAST_LABEL,
   UPLINK_PLATFORMS,
   UPLINK_REAUTH_HREF,
+  UPLINK_SCHEDULE_TEXT,
   UPLINK_TWITCH_LOGIN_HINT,
   UPLINK_TWITCH_SCOPE_HINT,
   UPLINK_WAITLIST_FEHLER,
@@ -62,6 +63,7 @@ import {
   wartelistenAnzeige,
   zielVerbindungsLabel,
   zielRumpf,
+  zahlOderUndefined,
 } from './uplinkModel';
 import {
   PREVIEW_CHANGELOG_ROUTE,
@@ -157,13 +159,6 @@ function leereEingabe(defaultRtmpUrl: string): ZielEingabe {
     fps: '',
     bitrate: '',
   };
-}
-
-function zahlOderUndefined(wert: string): number | undefined {
-  const getrimmt = wert.trim();
-  if (!getrimmt) return undefined;
-  const zahl = Number(getrimmt);
-  return Number.isFinite(zahl) && zahl > 0 ? Math.round(zahl) : undefined;
 }
 
 function PlattformKarte({
@@ -391,9 +386,7 @@ function ZeitplanKarte() {
   return (
     <Rise className="panel-card space-y-3 rounded-2xl p-6">
       <h2 className="text-lg font-bold text-white">Wann du senden willst</h2>
-      <p className="text-sm text-text-secondary">
-        Trag deine geplanten Zeiten ein. Wir halten dir dann einen Platz frei.
-      </p>
+      <p className="text-sm text-text-secondary">{UPLINK_SCHEDULE_TEXT}</p>
       <div className="space-y-2">
         {isLoading && <p className="text-xs text-text-secondary">Zeitplan wird geladen.</p>}
         {isError && (
@@ -554,13 +547,12 @@ function VerwaltungsKarte() {
 
   const [plaetze, setPlaetze] = useState('');
   const [lastgrenze, setLastgrenze] = useState('');
-  const [sessionId, setSessionId] = useState('');
-  const [bestaetigt, setBestaetigt] = useState(false);
+  const [bestaetigteSession, setBestaetigteSession] = useState<number | null>(null);
 
   const einstellungen = useMutation({
     mutationFn: () =>
       saveUplinkAdminSettings({
-        max_points: zahlOderUndefined(plaetze),
+        max_points: zahlOderUndefined(plaetze, true),
         load_reject_threshold: lastgrenze.trim() ? Number(lastgrenze) : undefined,
       }),
     onSuccess: (antwort) => {
@@ -572,19 +564,17 @@ function VerwaltungsKarte() {
   });
 
   const beenden = useMutation({
-    mutationFn: () => killUplinkSession(Number(sessionId)),
+    mutationFn: (sessionId: number) => killUplinkSession(sessionId),
     onSuccess: (antwort) => {
-      // Steht der Stream noch, bleibt die Nummer im Feld: sonst müsste der
-      // Admin sie für den zweiten Versuch neu heraussuchen.
       if (killErfolgreich(antwort)) {
-        setSessionId('');
-        setBestaetigt(false);
+        setBestaetigteSession(null);
       }
       queryClient.invalidateQueries({ queryKey: ['uplink-admin-overview'] });
     },
   });
 
-  const daten = uebersicht.data;
+  // Bei einem fehlgeschlagenen neuen Abruf keine veraltete Session als aktuell anzeigen.
+  const daten = uebersicht.isError ? undefined : uebersicht.data;
   const wartelistenStatus = wartelistenAnzeige({
     isLoading: warteliste.isLoading,
     isError: warteliste.isError,
@@ -605,6 +595,9 @@ function VerwaltungsKarte() {
         <p className="text-sm text-warning">
           {fehlertext(uebersicht.error, 'Die Übersicht ist gerade nicht erreichbar.')}
         </p>
+      )}
+      {uebersicht.isLoading && (
+        <p className="text-sm text-text-secondary">Laufende Streams werden geladen.</p>
       )}
 
       {daten && (
@@ -662,43 +655,58 @@ function VerwaltungsKarte() {
 
       <div className="space-y-2 border-t border-border pt-4">
         <h3 className="text-base font-bold text-white">Laufenden Stream beenden</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={sessionId}
-            onChange={(e) => setSessionId(e.target.value)}
-            inputMode="numeric"
-            className={`${FELD_KLASSE} max-w-[12rem]`}
-            placeholder="Nummer des Streams"
-            aria-label="Nummer des Streams"
-          />
-          <label className="flex items-center gap-2 text-xs text-text-secondary">
-            <input
-              type="checkbox"
-              checked={bestaetigt}
-              onChange={(e) => setBestaetigt(e.target.checked)}
-            />
-            Ja, wirklich beenden
-          </label>
-          <button
-            type="button"
-            disabled={beenden.isPending || !bestaetigt || !zahlOderUndefined(sessionId)}
-            onClick={() => beenden.mutate()}
-            className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
-          >
-            Beenden
-          </button>
-        </div>
+        {daten && !Array.isArray(daten.active_sessions) && (
+          <p className="text-xs text-warning">
+            Laufende Streams sind gerade nicht verfügbar.
+          </p>
+        )}
+        {daten && Array.isArray(daten.active_sessions) && daten.active_sessions.length === 0 && (
+          <p className="text-xs text-text-secondary">Gerade läuft kein Stream.</p>
+        )}
+        <ul className="space-y-2">
+          {daten?.active_sessions?.map((eintrag) => (
+            <li
+              key={eintrag.session_id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border p-3"
+            >
+              <span className="text-sm text-white">Stream {eintrag.session_id}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2 text-xs text-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={bestaetigteSession === eintrag.session_id}
+                    onChange={(e) =>
+                      setBestaetigteSession(e.target.checked ? eintrag.session_id : null)
+                    }
+                  />
+                  Ja, wirklich beenden
+                </label>
+                <button
+                  type="button"
+                  disabled={
+                    beenden.isPending || bestaetigteSession !== eintrag.session_id
+                  }
+                  onClick={() => beenden.mutate(eintrag.session_id)}
+                  className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
+                >
+                  Beenden
+                </button>
+              </div>
+              {beenden.isSuccess && beenden.data?.session_id === eintrag.session_id && (
+                <p className="basis-full text-xs text-warning">
+                  {killErfolgreich(beenden.data)
+                    ? 'Der Stream wurde beendet.'
+                    : UPLINK_KILL_LAEUFT_NOCH}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
         {beenden.isError && (
           <p className="text-xs text-warning">
             {fehlertext(beenden.error, UPLINK_KILL_LAEUFT_NOCH)}
           </p>
         )}
-        {beenden.isSuccess &&
-          (killErfolgreich(beenden.data) ? (
-            <p className="text-xs text-success">Der Stream wurde beendet.</p>
-          ) : (
-            <p className="text-xs text-warning">{UPLINK_KILL_LAEUFT_NOCH}</p>
-          ))}
       </div>
 
       <div className="space-y-2 border-t border-border pt-4">

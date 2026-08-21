@@ -161,6 +161,15 @@ export interface UplinkAdminOverview {
   loadavg: number;
   max_points: number;
   used_points: number;
+  active_sessions: UplinkAdminSession[];
+}
+
+export interface UplinkAdminSession {
+  session_id: number;
+  streamer_id?: number;
+  started_at?: string;
+  ingest_protocol?: string;
+  ingest_codec?: string | null;
 }
 
 export function fetchUplinkAdminOverview(): Promise<UplinkAdminOverview> {

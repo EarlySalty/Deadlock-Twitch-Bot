@@ -17,6 +17,7 @@ import {
   UPLINK_LAST_LABEL,
   UPLINK_TWITCH_ALLGEMEINER_FEHLER,
   UPLINK_TWITCH_LOGIN_HINT,
+  UPLINK_SCHEDULE_TEXT,
   UPLINK_TWITCH_SCOPE_HINT,
   aktiveSessionId,
   canSaveDestination,
@@ -31,6 +32,7 @@ import {
   toEingabeZeit,
   toRelayZeit,
   twitchFehlertext,
+  zahlOderUndefined,
   uplinkAdminBloeckeSichtbar,
   uplinkAnsicht,
   uplinkStreamerBloeckeSichtbar,
@@ -144,10 +146,10 @@ test('Adresse und Schlüssel gehen nur zusammen weg', () => {
     canSaveDestination({ rtmpUrl: '', streamKey: 'k', profileTouched: true, verbunden: true }),
     false
   );
-  // Nur Profilwerte ändern ist erlaubt, ein leeres Formular nicht.
+  // Profilwerte ohne gespeichertes Ziel dürfen nicht an das Relay gehen.
   assert.equal(
     canSaveDestination({ rtmpUrl: '', streamKey: '', profileTouched: true, verbunden: false }),
-    true
+    false
   );
   assert.equal(
     canSaveDestination({ rtmpUrl: '', streamKey: '', profileTouched: false, verbunden: false }),
@@ -191,6 +193,7 @@ test('der Rumpf schickt Adresse und Schlüssel nur zusammen', () => {
   });
   assert.deepEqual(nurProfil, {
     platform: 'twitch',
+    enabled: true,
     width: 1920,
     height: 1080,
     fps: 60,
@@ -209,7 +212,7 @@ test('der Rumpf schickt Adresse und Schlüssel nur zusammen', () => {
       fps: '',
       bitrate: '',
     }),
-    { platform: 'kick', rtmp_url: 'rtmp://kick.example/app', stream_key: 'geheim' }
+    { platform: 'kick', enabled: true, rtmp_url: 'rtmp://kick.example/app', stream_key: 'geheim' }
   );
 
   assert.deepEqual(
@@ -222,8 +225,67 @@ test('der Rumpf schickt Adresse und Schlüssel nur zusammen', () => {
       fps: '',
       bitrate: '',
     }),
-    { platform: 'kick' }
+    { platform: 'kick', enabled: true }
   );
+});
+
+test('manuelles Speichern schaltet jedes zuvor abgeschaltete Ziel wieder ein', () => {
+  for (const platform of UPLINK_PLATFORMS) {
+    const body = zielRumpf({
+      platform: platform.id,
+      rtmpUrl: platform.defaultRtmpUrl || `rtmp://${platform.id}.example/app`,
+      streamKey: 'neuer-schluessel',
+      width: '',
+      height: '',
+      fps: '',
+      bitrate: '',
+    });
+    assert.equal(body.enabled, true, `${platform.id} muss manuell wieder einschaltbar sein`);
+  }
+});
+
+test('die Verwaltung listet aktive Sessions einzeln und trifft beim Beenden ihre ID', async () => {
+  const globalState = globalThis as typeof globalThis & {
+    window?: { __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown> };
+  };
+  const vorherigesFenster = globalState.window;
+  globalState.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
+  const { fetchUplinkAdminOverview, killUplinkSession } = await import('../src/api/uplink');
+  const vorher = globalThis.fetch;
+  const anfragen: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    anfragen.push(`${init?.method ?? 'GET'} ${url}`);
+    if (url.endsWith('/admin/overview')) {
+      return new Response(
+        JSON.stringify({
+          loadavg: 0.4,
+          max_points: 12,
+          used_points: 4,
+          active_sessions: [
+            { session_id: 7, streamer_id: 101, started_at: '2026-08-21T10:00:00Z' },
+            { session_id: 8, streamer_id: 202, started_at: '2026-08-21T10:01:00Z' },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(
+      JSON.stringify({ session_id: 8, ended: true, stopped: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+  try {
+    const overview = await fetchUplinkAdminOverview();
+    assert.deepEqual(overview.active_sessions.map((session) => session.session_id), [7, 8]);
+    await killUplinkSession(overview.active_sessions[1].session_id);
+    assert.match(anfragen[1], /\/admin\/sessions\/8\/kill\?confirm=true$/);
+    assert.match(UPLINK_PAGE_SRC, /active_sessions/);
+    assert.match(UPLINK_PAGE_SRC, /beenden\.mutate\(eintrag\.session_id\)/);
+  } finally {
+    globalThis.fetch = vorher;
+    globalState.window = vorherigesFenster;
+  }
 });
 
 test('die Nummer des laufenden Streams kommt aus dem Feld session', () => {
@@ -397,6 +459,41 @@ test('die gespeicherten Grenzen kommen aus der Antwort ins Formular zurück', ()
   });
   assert.deepEqual(formularAusEinstellungen(undefined), { plaetze: '', lastgrenze: '' });
   assert.deepEqual(formularAusEinstellungen({}), { plaetze: '', lastgrenze: '' });
+});
+
+test('max_points = 0 wird als 0 an das Relay geschickt', async () => {
+  const globalState = globalThis as typeof globalThis & {
+    window?: { __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown> };
+  };
+  const vorherigesFenster = globalState.window;
+  globalState.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
+  const { saveUplinkAdminSettings } = await import('../src/api/uplink');
+  const vorher = globalThis.fetch;
+  let gesendeterRumpf: unknown;
+  globalThis.fetch = async (_input, init) => {
+    gesendeterRumpf = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ max_points: 0, load_reject_threshold: 6 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    await saveUplinkAdminSettings({ max_points: zahlOderUndefined('0', true) });
+    assert.deepEqual(gesendeterRumpf, { max_points: 0 });
+  } finally {
+    globalThis.fetch = vorher;
+    globalState.window = vorherigesFenster;
+  }
+});
+
+test('der Zeitplan verteilt Erwartungen und verspricht keinen reservierten Platz', () => {
+  assert.equal(
+    UPLINK_SCHEDULE_TEXT,
+    'Trag deine geplanten Zeiten ein. Der Zeitplan hilft dir, Erwartungen zu verteilen und Konflikte sichtbar zu machen. Ob dein Stream starten kann, hängt von der aktuellen Auslastung ab.',
+  );
+  assert.match(UPLINK_PAGE_SRC, /UPLINK_SCHEDULE_TEXT/);
+  assert.doesNotMatch(UPLINK_PAGE_SRC, /Wir halten dir dann einen Platz frei\./);
+  assert.doesNotMatch(UPLINK_PAGE_SRC, /reservierten Platz|Kapazität reserviert/);
 });
 
 test('Zeitangaben gehen als UTC raus und kommen als Ortszeit zurück', () => {

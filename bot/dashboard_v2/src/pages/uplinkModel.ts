@@ -20,6 +20,10 @@ export const UPLINK_WAITLIST_TEXT =
 export const UPLINK_WAITLIST_FEHLER =
   'Der Eintrag auf die Warteliste hat gerade nicht geklappt. Versuch es bitte gleich noch einmal.';
 
+/** Der Zeitplan verteilt Erwartungen, entscheidet aber nicht über den Start. */
+export const UPLINK_SCHEDULE_TEXT =
+  'Trag deine geplanten Zeiten ein. Der Zeitplan hilft dir, Erwartungen zu verteilen und Konflikte sichtbar zu machen. Ob dein Stream starten kann, hängt von der aktuellen Auslastung ab.';
+
 /** Hinweis, wenn Twitch den Schlüssel nicht herausgibt. */
 export const UPLINK_TWITCH_SCOPE_HINT =
   'Twitch gibt den Schlüssel für dieses Konto noch nicht heraus. Verbinde deinen Twitch-Zugang neu, dann holen wir ihn automatisch. Bis dahin kannst du den Schlüssel unten selbst eintragen.';
@@ -272,7 +276,7 @@ export function canSaveDestination(opts: {
   const url = opts.rtmpUrl.trim();
   const key = opts.streamKey.trim();
   if (url && key) return true;
-  if (!url && !key) return opts.profileTouched;
+  if (!url && !key) return opts.verbunden && opts.profileTouched;
   if (url && !key) return opts.verbunden && opts.profileTouched;
   return false;
 }
@@ -295,6 +299,15 @@ function zahlAusFeld(wert: string): number | undefined {
   return Number.isFinite(zahl) && zahl > 0 ? Math.round(zahl) : undefined;
 }
 
+/** Liest eine positive ganze Zahl, optional mit dem Wert 0. */
+export function zahlOderUndefined(wert: string, zeroErlaubt = false): number | undefined {
+  const getrimmt = wert.trim();
+  if (!getrimmt) return undefined;
+  const zahl = Number(getrimmt);
+  const erlaubt = zeroErlaubt ? zahl >= 0 : zahl > 0;
+  return Number.isFinite(zahl) && erlaubt ? Math.round(zahl) : undefined;
+}
+
 /**
  * Baut den Rumpf für ein Ziel.
  *
@@ -304,6 +317,7 @@ function zahlAusFeld(wert: string): number | undefined {
  */
 export function zielRumpf(werte: ZielEingabeWerte): {
   platform: string;
+  enabled: true;
   rtmp_url?: string;
   stream_key?: string;
   width?: number;
@@ -315,13 +329,14 @@ export function zielRumpf(werte: ZielEingabeWerte): {
   const key = werte.streamKey.trim();
   const rumpf: {
     platform: string;
+    enabled: true;
     rtmp_url?: string;
     stream_key?: string;
     width?: number;
     height?: number;
     fps?: number;
     bitrate_kbps?: number;
-  } = { platform: werte.platform };
+  } = { platform: werte.platform, enabled: true };
   if (url && key) {
     rumpf.rtmp_url = url;
     rumpf.stream_key = key;
