@@ -153,32 +153,35 @@ pub struct ExternalProvider {
     preis_ausgang: (&'static str, f64),
 }
 
+/// Preisschluessel und Standardrate (USD je 1000 Tokens) einer Bahn:
+/// Umgebungsvariable fuer Eingang, Standard Eingang, Variable Ausgang,
+/// Standard Ausgang.
+type Preise = ((&'static str, f64), (&'static str, f64));
+
+const MINIMAX_PREISE: Preise = (
+    ("MINIMAX_PRICE_INPUT_PER_1K", 0.0006),
+    ("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024),
+);
+const CLAUDE_HAIKU_PREISE: Preise = (
+    ("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001),
+    ("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005),
+);
+
 impl ExternalProvider {
     /// MiniMax; ohne Schluessel `Unavailable`, damit die Kette weiterschaltet.
     pub fn minimax_from_env() -> Result<Self, LlmError> {
-        Self::from_env(
-            "minimax",
-            USE_CASE_MINIMAX,
-            ("MINIMAX_PRICE_INPUT_PER_1K", 0.0006),
-            ("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024),
-        )
+        Self::from_env("minimax", USE_CASE_MINIMAX, MINIMAX_PREISE)
     }
 
     /// Claude Haiku; ohne Schluessel `Unavailable`.
     pub fn claude_haiku_from_env() -> Result<Self, LlmError> {
-        Self::from_env(
-            "claude_haiku",
-            USE_CASE_CLAUDE,
-            ("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001),
-            ("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005),
-        )
+        Self::from_env("claude_haiku", USE_CASE_CLAUDE, CLAUDE_HAIKU_PREISE)
     }
 
     fn from_env(
         name: &'static str,
         use_case: &'static str,
-        preis_eingang: (&'static str, f64),
-        preis_ausgang: (&'static str, f64),
+        preise: Preise,
     ) -> Result<Self, LlmError> {
         let endpoint = tb_llm::endpoint_for(use_case);
         if endpoint.api_key.is_none() {
@@ -186,14 +189,24 @@ impl ExternalProvider {
                 "kein Schluessel fuer {name}"
             )));
         }
-        Ok(Self {
+        Ok(Self::with_endpoint(name, use_case, endpoint, 0.4, preise))
+    }
+
+    fn with_endpoint(
+        name: &'static str,
+        use_case: &'static str,
+        endpoint: tb_llm::LlmEndpoint,
+        temperature: f64,
+        (preis_eingang, preis_ausgang): Preise,
+    ) -> Self {
+        Self {
             name,
             use_case,
             endpoint,
-            temperature: 0.4,
+            temperature,
             preis_eingang,
             preis_ausgang,
-        })
+        }
     }
 
     /// Ledger-Zweck dieses Aufrufs: Bahn plus tatsaechlich antwortender
@@ -206,21 +219,21 @@ impl ExternalProvider {
         format!("social-media-{}-{}", self.name, self.endpoint.provider)
     }
 
-    /// Expliziter Endpunkt, fuer Tests.
-    pub fn new(
+    /// Expliziter Endpunkt fuer Tests, mit den produktiven Preisraten der
+    /// jeweiligen Bahn. Nicht `pub`: ein Produktionspfad soll die Raten nie
+    /// am `from_env` vorbei setzen koennen.
+    #[cfg(test)]
+    pub(crate) fn for_test(
         name: &'static str,
         use_case: &'static str,
         endpoint: tb_llm::LlmEndpoint,
         temperature: f64,
     ) -> Self {
-        Self {
-            name,
-            use_case,
-            endpoint,
-            temperature,
-            preis_eingang: ("SOCIAL_MEDIA_PRICE_INPUT_PER_1K", 0.0),
-            preis_ausgang: ("SOCIAL_MEDIA_PRICE_OUTPUT_PER_1K", 0.0),
-        }
+        let preise = match name {
+            "claude_haiku" => CLAUDE_HAIKU_PREISE,
+            _ => MINIMAX_PREISE,
+        };
+        Self::with_endpoint(name, use_case, endpoint, temperature, preise)
     }
 }
 
@@ -466,7 +479,7 @@ mod tests {
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 1000}
             })))
             .mount(&server).await;
-        let p = ExternalProvider::new(
+        let p = ExternalProvider::for_test(
             "minimax",
             USE_CASE_MINIMAX,
             tb_llm::LlmEndpoint {
@@ -480,9 +493,10 @@ mod tests {
         let resp = p.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(resp.provider, "minimax");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
-        // Die Kostenschaetzung laeuft weiterhin ueber die Token-Zahlen der
-        // Antwort; der Testkonstruktor nutzt Rate 0.
-        assert_eq!(resp.cost_usd_estimate, Some(0.0));
+        // 1000 Eingangs- und 1000 Ausgangstokens zu den produktiven
+        // MiniMax-Standardraten 0.0006 / 0.0024 je 1000 Tokens.
+        let kosten = resp.cost_usd_estimate.expect("Kostenschaetzung");
+        assert!((kosten - 0.003).abs() < 1e-9, "kosten={kosten}");
     }
 
     #[tokio::test]
@@ -494,7 +508,7 @@ mod tests {
                 "usage": {"input_tokens": 100, "output_tokens": 50}
             })))
             .mount(&server).await;
-        let p = ExternalProvider::new(
+        let p = ExternalProvider::for_test(
             "claude_haiku",
             USE_CASE_CLAUDE,
             tb_llm::LlmEndpoint {
@@ -508,14 +522,17 @@ mod tests {
         let resp = p.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(resp.provider, "claude_haiku");
         assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
-        assert!(resp.cost_usd_estimate.is_some());
+        // 100 Eingangs- und 50 Ausgangstokens zu den Haiku-Standardraten
+        // 0.001 / 0.005 je 1000 Tokens.
+        let kosten = resp.cost_usd_estimate.expect("Kostenschaetzung");
+        assert!((kosten - 0.00035).abs() < 1e-9, "kosten={kosten}");
     }
 
     #[test]
     fn ledger_zweck_nennt_bahn_und_antwortenden_anbieter() {
         // Hinter der Bahn `social_media` kann Fireworks oder MiniMax stehen; in
         // der Kostenauswertung muessen beide auseinanderzuhalten sein.
-        let p = ExternalProvider::new(
+        let p = ExternalProvider::for_test(
             "minimax",
             USE_CASE_MINIMAX,
             tb_llm::LlmEndpoint {
@@ -528,7 +545,7 @@ mod tests {
         );
         assert_eq!(p.ledger_purpose(), "social-media-minimax-fireworks");
 
-        let p = ExternalProvider::new(
+        let p = ExternalProvider::for_test(
             "claude_haiku",
             USE_CASE_CLAUDE,
             tb_llm::LlmEndpoint {
