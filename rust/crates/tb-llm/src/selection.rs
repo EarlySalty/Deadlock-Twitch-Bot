@@ -10,8 +10,9 @@
 //! - `TB_LLM_PROVIDER_<USE_CASE>` — überschreibt einzeln, z. B.
 //!   `TB_LLM_PROVIDER_INVITE_QUESTION=minimax`. Nur so lässt sich ein
 //!   Anthropic-Fall auf einen anderen Anbieter legen.
-//! - `TB_LLM_MODEL_<USE_CASE>` — überschreibt das Modell eines Anwendungsfalls,
-//!   unabhängig vom Anbieter, auch auf dem Ausweichglied einer Kette.
+//! - `TB_LLM_MODEL_<USE_CASE>` — überschreibt das Modell eines Anwendungsfalls
+//!   beim gewählten Anbieter; das Ausweichglied einer Kette behält sein
+//!   eigenes Standardmodell.
 //!
 //! Ohne jede Konfiguration gilt: Fireworks/DeepSeek, wenn ein Key da ist,
 //! sonst MiniMax. Ein unbekannter Name fällt ebenfalls auf diesen Weg zurück
@@ -27,7 +28,54 @@
 //! fachlichen Crates sind der Grund, warum ein Anbieterwechsel früher an fünf
 //! Stellen passieren musste.
 
+use std::sync::OnceLock;
+
 use tracing::{info, warn};
+
+/// Altvariablen, die seit der Zentralisierung nichts mehr bewirken, mit dem
+/// Namen, der sie ersetzt. Wer sie noch setzt, bekommt beim ersten
+/// `endpoint_for` eine Warnung statt stiller Wirkungslosigkeit.
+const ALTVARIABLEN: &[(&str, &str)] = &[
+    ("ENGAGEMENT_MINIMAX_MODEL", "TB_LLM_MODEL_ENGAGEMENT"),
+    ("ANTHROPIC_HAIKU_MODEL", "TB_LLM_MODEL_SOCIAL_MEDIA_CLAUDE"),
+    ("FIREWORKS_RICKY_REVIEW_MODEL", "TB_LLM_MODEL_RICKY_CREW_REVIEW"),
+];
+
+/// Gesetzte Altvariablen mit ihrem neuen Namen.
+fn gesetzte_altvariablen() -> Vec<(&'static str, &'static str)> {
+    ALTVARIABLEN
+        .iter()
+        .copied()
+        .filter(|(alt, _)| nonempty_env(alt).is_some())
+        .collect()
+}
+
+/// Warnt genau einmal je Prozess fuer jede gesetzte Altvariable. Liefert die
+/// gewarnten Altnamen zurueck (leer bei jedem weiteren Aufruf), damit ein Test
+/// die Einmaligkeit pruefen kann.
+fn warne_altvariablen() -> &'static [&'static str] {
+    static GEWARNT: OnceLock<Vec<&'static str>> = OnceLock::new();
+    let mut frisch = false;
+    let gewarnt = GEWARNT.get_or_init(|| {
+        frisch = true;
+        gesetzte_altvariablen()
+            .into_iter()
+            .map(|(alt, neu)| {
+                warn!(
+                    alt,
+                    neu,
+                    "Altvariable ohne Wirkung gesetzt; seit der LLM-Zentralisierung gilt der neue Name"
+                );
+                alt
+            })
+            .collect()
+    });
+    if frisch {
+        gewarnt
+    } else {
+        &[]
+    }
+}
 
 const PROVIDER_DEFAULT_ENV: &str = "TB_LLM_PROVIDER_DEFAULT";
 /// Fireworks-Endpunkt (OpenAI-kompatibel), identisch zum Discord-Bot.
@@ -83,6 +131,7 @@ pub struct LlmEndpoint {
 
 /// Endpunkt für einen Anwendungsfall (z. B. `"invite_question"`).
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
+    warne_altvariablen();
     let env_name = format!("TB_LLM_PROVIDER_{}", use_case.to_uppercase());
     // Die Anthropic-Anwendungsfaelle sind der Premium-Pfad. Ein globaler
     // `TB_LLM_PROVIDER_DEFAULT` (z. B. "minimax" fuer den Rest des Bots) darf
@@ -112,8 +161,9 @@ pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
 /// Das Modell eines Anwendungsfalls lässt sich unabhängig vom Anbieter
 /// umstellen. Diese eine Variable ersetzt die früheren Sonderformen
 /// `ENGAGEMENT_MINIMAX_MODEL`, `FIREWORKS_RICKY_REVIEW_MODEL` und
-/// `ANTHROPIC_HAIKU_MODEL`. Gilt fuer jedes Glied einer Kette, nicht nur
-/// fuer den bevorzugten Anbieter.
+/// `ANTHROPIC_HAIKU_MODEL`. Ein Modellname gehoert zu einem Anbieter; deshalb
+/// gilt der Override nur fuer Glieder mit demselben Anbieter wie das
+/// bevorzugte, das Ausweichglied behaelt sein Anbieter-Standardmodell.
 fn apply_model_override(endpoint: &mut LlmEndpoint, use_case: &str) {
     if let Some(model) = nonempty_env(&format!("TB_LLM_MODEL_{}", use_case.to_uppercase())) {
         endpoint.model = model;
@@ -138,7 +188,11 @@ pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
     } else {
         fireworks_endpoint()
     };
-    apply_model_override(&mut fallback, use_case);
+    // Kein Modell-Override auf das Ausweichglied: `fireworks` mit
+    // `MiniMax-Text-01` waere ein sicher scheiternder Aufruf.
+    if fallback.provider == primary.provider {
+        apply_model_override(&mut fallback, use_case);
+    }
     [primary, fallback]
         .into_iter()
         .filter(|endpoint| endpoint.api_key.is_some())
@@ -471,16 +525,52 @@ mod tests {
     }
 
     #[test]
-    fn modell_je_anwendungsfall_gilt_auch_fuer_das_ausweichglied() {
+    fn modell_je_anwendungsfall_laesst_das_ausweichglied_in_ruhe() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear();
         std::env::set_var("FIREWORK_API_KEY", "f");
         std::env::set_var("MINIMAX_API_KEY", "m");
-        std::env::set_var("TB_LLM_MODEL_SPAM_JUDGE", "eigenes-modell");
+        std::env::set_var("TB_LLM_MODEL_SPAM_JUDGE", "eigenes-fireworks-modell");
 
         let kette = endpoint_chain("spam_judge");
         assert_eq!(kette.len(), 2);
-        assert!(kette.iter().all(|e| e.model == "eigenes-modell"));
+        assert_eq!(kette[0].provider, "fireworks");
+        assert_eq!(kette[0].model, "eigenes-fireworks-modell");
+        // Das MiniMax-Glied behaelt sein eigenes Modell; ein Fireworks-Name
+        // an der MiniMax-Adresse waere ein sicherer Modellfehler.
+        assert_eq!(kette[1].provider, "minimax");
+        assert_eq!(kette[1].model, MINIMAX_DEFAULT_MODEL);
+        clear();
+    }
+
+    #[test]
+    fn altvariablen_werden_einmalig_gewarnt() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear();
+        // Die Warnung laeuft einmal je Prozess; deshalb muss dieser Test der
+        // erste Aufrufer sein, der sie ausloest. Andere Tests im selben
+        // Prozess koennen sie schon verbraucht haben, dann bleibt die Liste
+        // leer, und wir pruefen nur die Einmaligkeit.
+        std::env::set_var("ENGAGEMENT_MINIMAX_MODEL", "MiniMax-Text-01");
+        std::env::set_var("FIREWORKS_RICKY_REVIEW_MODEL", "x");
+        // Erkennung ist deterministisch pruefbar ...
+        let gesetzt = gesetzte_altvariablen();
+        assert_eq!(
+            gesetzt,
+            vec![
+                ("ENGAGEMENT_MINIMAX_MODEL", "TB_LLM_MODEL_ENGAGEMENT"),
+                ("FIREWORKS_RICKY_REVIEW_MODEL", "TB_LLM_MODEL_RICKY_CREW_REVIEW"),
+            ]
+        );
+        // ... die Warnung selbst laeuft einmal je Prozess.
+        let erste = warne_altvariablen();
+        if !erste.is_empty() {
+            assert!(erste.contains(&"ENGAGEMENT_MINIMAX_MODEL"));
+            assert!(erste.contains(&"FIREWORKS_RICKY_REVIEW_MODEL"));
+        }
+        assert!(warne_altvariablen().is_empty(), "zweiter Aufruf warnt nicht erneut");
+        std::env::remove_var("ENGAGEMENT_MINIMAX_MODEL");
+        std::env::remove_var("FIREWORKS_RICKY_REVIEW_MODEL");
         clear();
     }
 

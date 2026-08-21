@@ -100,7 +100,7 @@ ein anderes Produkt. Umgelenkt werden sie nur ueber ihre eigene
 |---|---|
 | `TB_LLM_PROVIDER_DEFAULT` | Anbieter fuer alles ausser den Anthropic-Use-Cases und den Nur-Fireworks-Use-Cases (`ricky_crew_review`, `outreach_shadow`) |
 | `TB_LLM_PROVIDER_<USE_CASE>` | Anbieter fuer einen Use-Case; einziger Weg, einen Anthropic- oder Nur-Fireworks-Use-Case umzulenken (Letzteres schaltet das Schatten-Review ab und wird gewarnt) |
-| `TB_LLM_MODEL_<USE_CASE>` | Modell fuer einen Use-Case, unabhaengig vom Anbieter, gilt auch fuer das Ausweichglied der Kette |
+| `TB_LLM_MODEL_<USE_CASE>` | Modell fuer einen Use-Case beim gewaehlten Anbieter; das Ausweichglied der Kette (anderer Anbieter) behaelt sein Standardmodell, weil ein Modellname nur zu seinem Anbieter passt |
 | `FIREWORK_API_KEY`, `FIREWORKS_API_KEY` | Fireworks-Key |
 | `FIREWORK_BASE_URL`, `FIREWORKS_BASE_URL`, `FIREWORK_MODEL`, `FIREWORKS_MODEL` | Fireworks-Adresse und -Modell |
 | `MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINMAX` | MiniMax-Key |
@@ -114,6 +114,10 @@ Entfallen mit diesem Umbau:
 | `ENGAGEMENT_MINIMAX_MODEL` | `TB_LLM_MODEL_ENGAGEMENT` |
 | `FIREWORKS_RICKY_REVIEW_MODEL` | `TB_LLM_MODEL_RICKY_CREW_REVIEW` |
 | `ANTHROPIC_HAIKU_MODEL` | `TB_LLM_MODEL_SOCIAL_MEDIA_CLAUDE` |
+
+Ist eine dieser drei Altvariablen noch gesetzt, warnt `endpoint_for` einmal je
+Prozess mit dem neuen Namen (`selection.rs`, `ALTVARIABLEN`); still ignoriert
+wird nichts mehr.
 | MiniMax-Sonderpfad in `minimax_chat.rs` (`MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` nur wenn die Auswahl MiniMax ergab) | faellt weg; die Variablen wirken weiterhin, aber ueber die zentrale Auswahl in `selection.rs` |
 
 Bleiben unveraendert:
