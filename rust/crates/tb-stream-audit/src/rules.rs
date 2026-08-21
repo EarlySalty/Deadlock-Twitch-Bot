@@ -89,6 +89,9 @@ pub struct Treffer {
     pub begruendung: &'static str,
     /// Bereits geschwaerzter Ausschnitt rund um die Fundstelle.
     pub zitat_redigiert: String,
+    /// Unredigierter Ausschnitt fuer die fluechtige Admin-DM. Er wird nicht
+    /// serialisiert und bleibt aus der persistenten Akte heraus.
+    pub zitat_roh: String,
     pub zitat_hash: String,
 }
 
@@ -118,6 +121,7 @@ pub fn treffer_im_text(text: &str) -> Vec<Treffer> {
                 schwere: regel.schwere,
                 begruendung: regel.begruendung,
                 zitat_redigiert: redact_text(&roh),
+                zitat_roh: leerraum_normalisieren(&roh),
                 zitat_hash: evidence_hash(&roh),
             });
         }

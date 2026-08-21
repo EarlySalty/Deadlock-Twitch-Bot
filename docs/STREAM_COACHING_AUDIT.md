@@ -33,8 +33,16 @@ im Deadlock-Docs-Korpus.
 3. Beim Start einer Aufnahme geht eine DM an den Admin. Fertige Bloecke
    warten, bis der Kanal offline ist. Dann wird seriell transkribiert und
    geprueft, und eine Abschluss-DM listet die ToS-Funde der ganzen Sendung.
-4. Transkription: lokaler STT-Dienst (`deadlock-stt-server`, faster-whisper),
-   nur wenn die Last unter 85 Prozent der Kerne liegt.
+4. Transkription: lokaler STT-Dienst (`deadlock-stt-server`, faster-whisper).
+   Ein Last-Gate stellt die Auswertung zurueck, wenn die **hoehere** von CPU-
+   und RAM-Auslastung des Servers ununterbrochen ueber der Grenze (Standard
+   90 Prozent, `STREAM_AUDIT_LOAD_LIMIT`) liegt, und zwar erst nach einem vollen
+   Fenster (Standard 240 s, `STREAM_AUDIT_LOAD_WINDOW_SECS`). Es faellt wieder unter
+   der Freigabe (Standard 80 Prozent, `STREAM_AUDIT_LOAD_RELEASE`). Aufgenommen
+   wird die ganze Zeit weiter; die Bloecke werden nachgeholt. Ein Deckel
+   (Standard 1800 s, `STREAM_AUDIT_LOAD_MAX_HOLD_SECS`) loest das Gate auch
+   unter Dauerlast einmal, damit die Aufbewahrung keine ungeprueften Aufnahmen
+   loescht.
 5. Pruefung: drei feste Regeln ueber dem Transkript, danach ein Modellschritt
    ueber den Anbieter des Twitch-Bots. Er sieht alle Segmente des Blocks, nicht
    nur die ohne Regeltreffer, in Stapeln zu 20.
@@ -82,6 +90,10 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_ALLOW_REMOTE_STT` | Transkription auf fremdem Host | aus |
 | `STREAM_AUDIT_ALLOW_REMOTE_LLM` | Modellschritt bei fremdem Anbieter | aus im Code, `1` in der Unit |
 | `STREAM_AUDIT_DISCORD_USER_ID` | Empfaenger der DM | Admin-ID aus `melden.rs` |
+| `STREAM_AUDIT_LOAD_LIMIT` | Auslastung in Prozent, ab der das Gate greift | 90 |
+| `STREAM_AUDIT_LOAD_RELEASE` | Auslastung in Prozent, unter der das Gate faellt | 80 |
+| `STREAM_AUDIT_LOAD_WINDOW_SECS` | Sekunden Dauerlast, bevor das Gate greift | 240 |
+| `STREAM_AUDIT_LOAD_MAX_HOLD_SECS` | Deckel, wie lange das Gate am Stueck haelt, `0` = kein Deckel | 1800 |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 

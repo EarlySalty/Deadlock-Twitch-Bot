@@ -33,9 +33,6 @@ pub const MAX_SEKUNDEN_JE_SENDUNG: u64 = 24 * 60 * 60;
 /// mitgeschnitten. Darueber pausiert nur die Aufnahme, nie die Auswertung.
 pub const MAX_AUFNAHME_BYTES: u64 = 12 * 1024 * 1024 * 1024;
 
-/// Anteil der Kerne, bis zu dem die Auswertung STT belasten darf.
-pub const LAST_KERNE_ANTEIL: f64 = 0.85;
-
 /// So oft wird geprueft, ob ein Kanal sendet.
 pub const LIVE_PRUEFUNG_SEKUNDEN: u64 = 60;
 
@@ -73,6 +70,10 @@ pub struct Block {
     /// Passiert, wenn Twitch kein brauchbares `started_at` liefert. Der Bericht
     /// sagt es dann, statt eine Stelle im VOD zu behaupten, die nicht stimmt.
     pub zeit_unsicher: bool,
+    /// Absoluter Start der Twitch-Sendung, sofern Helix ihn geliefert hat.
+    pub stream_start_utc: Option<String>,
+    /// Absoluter Beginn dieses Aufnahmeprozesses als Ersatzbasis.
+    pub aufnahme_beginn_utc: Option<String>,
 }
 
 /// Ab diesem Zaehlerstand ist der halbstuendige Takt vorbei: gemeldet wird ein
@@ -320,14 +321,6 @@ pub fn platte_reicht(belegt: u64, grenze: u64) -> bool {
     belegt < grenze
 }
 
-/// Ob die Auswertung STT starten darf, ohne den Rechner zu traegen.
-pub fn last_erlaubt(load1: f64, kerne: u32) -> bool {
-    if kerne == 0 {
-        return true;
-    }
-    load1 < f64::from(kerne) * LAST_KERNE_ANTEIL
-}
-
 /// Laufender Aufnahmezustand eines Kanals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Aufnahme {
@@ -344,6 +337,8 @@ pub struct Aufnahme {
     pub versatz_basis: u64,
     /// Ob die Zeitbasis geraten ist, weil `started_at` fehlte.
     pub zeit_unsicher: bool,
+    /// Absoluter Start der Twitch-Sendung, sofern bekannt.
+    pub stream_start_utc: Option<String>,
     /// Unix-Zeit, zu der diese Aufnahme angelegt wurde.
     ///
     /// Die Sendungszeit laeuft an der Uhr, nicht an der Summe der
@@ -371,6 +366,7 @@ impl Aufnahme {
             aufgenommen_sekunden: 0,
             versatz_basis,
             zeit_unsicher: false,
+            stream_start_utc: None,
             gestartet_um: chrono::Utc::now().timestamp(),
         }
     }
@@ -442,6 +438,12 @@ impl Aufnahme {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: self.zeit_unsicher,
+            stream_start_utc: self.stream_start_utc.clone(),
+            aufnahme_beginn_utc: chrono::DateTime::<chrono::Utc>::from_timestamp(
+                self.gestartet_um,
+                0,
+            )
+            .map(|zeitpunkt| zeitpunkt.to_rfc3339()),
         }
     }
 }
@@ -466,6 +468,8 @@ mod tests {
                     nur_melden: false,
                     meldeversuche: 0,
                     zeit_unsicher: false,
+                    stream_start_utc: None,
+                    aufnahme_beginn_utc: None,
                 }
                 .bezeichnung()
             })
@@ -496,6 +500,8 @@ mod tests {
                 nur_melden: false,
                 meldeversuche: 0,
                 zeit_unsicher: false,
+                stream_start_utc: None,
+                aufnahme_beginn_utc: None,
             });
         }
         assert_eq!(w.laenge(), 3);
@@ -523,6 +529,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         });
         let block = w.naechster().expect("Block");
         assert!(w.ist_leer(), "der Block ist aus der Schlange raus");
@@ -551,6 +559,8 @@ mod tests {
                 nur_melden: false,
                 meldeversuche: 0,
                 zeit_unsicher: false,
+                stream_start_utc: None,
+                aufnahme_beginn_utc: None,
             });
         }
         let reihenfolge: Vec<_> = std::iter::from_fn(|| w.naechster())
@@ -661,6 +671,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         };
         assert_eq!(
             block.segment_id(7),
@@ -734,6 +746,8 @@ mod tests_lauf_sperre {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         }
     }
 
@@ -790,7 +804,7 @@ mod tests_lauf_sperre {
 }
 
 #[cfg(test)]
-mod tests_last_und_platte {
+mod tests_platte {
     use super::*;
 
     #[test]
@@ -799,12 +813,5 @@ mod tests_last_und_platte {
         assert!(platte_reicht(MAX_AUFNAHME_BYTES - 1, MAX_AUFNAHME_BYTES));
         assert!(!platte_reicht(MAX_AUFNAHME_BYTES, MAX_AUFNAHME_BYTES));
         assert!(!platte_reicht(MAX_AUFNAHME_BYTES + 1, MAX_AUFNAHME_BYTES));
-    }
-
-    #[test]
-    fn last_erlaubt_unter_85_prozent() {
-        assert!(last_erlaubt(13.5, 16));
-        assert!(!last_erlaubt(13.7, 16));
-        assert!(last_erlaubt(100.0, 0));
     }
 }

@@ -31,6 +31,7 @@ use tb_engagement::audio_capture::AudioCapturer;
 use tb_engagement::transcribe::OpenAiTranscriber;
 use tb_stream_audit::{
     config::Konfiguration,
+    last::Lastwaechter,
     llm, melden, plan,
     report::{self, Bericht},
     Segment,
@@ -134,6 +135,14 @@ Stream-Audio dorthin zu senden.",
         }
     }
     liegengebliebenes_einreihen(&konfiguration, &warteschlange).await;
+    // Das Last-Gate: solange true, stellt die Auswertung STT zurueck. Ein
+    // eigener Task misst CPU und RAM und schaltet es.
+    let last_gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    tokio::spawn(last_ueberwachen(
+        Arc::clone(&last_gate),
+        Arc::clone(&abbruch),
+        Lastwaechter::aus_umgebung(),
+    ));
     let aufnahme = tokio::spawn(aufnahme_schleife(
         helix,
         konfiguration.clone(),
@@ -148,6 +157,7 @@ Stream-Audio dorthin zu senden.",
         Arc::clone(&warteschlange),
         Arc::clone(&abbruch),
         Arc::clone(&sperre),
+        Arc::clone(&last_gate),
     ));
 
     // Beide Schleifen laufen endlos. Endet eine, ist der Dienst kaputt - er
@@ -511,22 +521,27 @@ const LAEUFT: &str = "aufnahme_laeuft.json";
 /// stammt und an welcher Stelle der Sendung sie sass. Ein Stopp durch systemd
 /// trifft mitten in den Block - wer den Zettel erst danach schreibt,
 /// laesst genau die angebrochene Aufnahme ohne Zuordnung zurueck.
-async fn zettel_schreiben(
-    blockordner: &Path,
-    kanal: &str,
-    lauf: &str,
+struct ZettelDaten<'a> {
+    kanal: &'a str,
+    lauf: &'a str,
     nummer: u32,
     versatz_sekunden: u64,
     zeit_unsicher: bool,
-) -> bool {
+    stream_start_utc: Option<&'a str>,
+    aufnahme_beginn_utc: Option<&'a str>,
+}
+
+async fn zettel_schreiben(blockordner: &Path, daten: ZettelDaten<'_>) -> bool {
     let inhalt = serde_json::json!({
-        "kanal": kanal,
-        "lauf": lauf,
-        "nummer": nummer,
-        "versatz_sekunden": versatz_sekunden,
+        "kanal": daten.kanal,
+        "lauf": daten.lauf,
+        "nummer": daten.nummer,
+        "versatz_sekunden": daten.versatz_sekunden,
         // Ohne diese Angabe behauptete ein wiederaufgenommener Block, seine
         // Zeiten seien Sendungszeiten - auch wenn sie es nie waren.
-        "zeit_unsicher": zeit_unsicher,
+        "zeit_unsicher": daten.zeit_unsicher,
+        "stream_start_utc": daten.stream_start_utc,
+        "aufnahme_beginn_utc": daten.aufnahme_beginn_utc,
     });
     match nur_fuer_mich(&blockordner.join(ZETTEL), inhalt.to_string().as_bytes()).await {
         Ok(()) => true,
@@ -724,6 +739,8 @@ fn leerer_bericht(block: &plan::Block) -> Bericht {
     Bericht {
         lauf_id: block.bezeichnung(),
         erstellt_am: chrono::Utc::now().to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: "kein Text".to_owned(),
         kanal: block.kanal.clone(),
         transkription: String::new(),
@@ -816,6 +833,8 @@ async fn zettel_lesen(aufnahme: &Path) -> Option<plan::Block> {
         // Fehlt die Angabe (Zettel aus einer aelteren Fassung), gilt die
         // vorsichtige Annahme: die Zeiten koennten geraten sein.
         zeit_unsicher: json["zeit_unsicher"].as_bool().unwrap_or(true),
+        stream_start_utc: json["stream_start_utc"].as_str().map(str::to_owned),
+        aufnahme_beginn_utc: json["aufnahme_beginn_utc"].as_str().map(str::to_owned),
         datei: aufnahme.to_string_lossy().to_string(),
         versuche: 0,
         frueherstens: 0,
@@ -1295,6 +1314,10 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                     (id, _) => id.to_owned(),
                 };
                 let mut zustand = plan::Aufnahme::starten_bei(kanal.clone(), lauf, basis);
+                zustand.stream_start_utc =
+                    chrono::DateTime::parse_from_rfc3339(sendung.started_at.trim())
+                        .ok()
+                        .map(|zeitpunkt| zeitpunkt.with_timezone(&chrono::Utc).to_rfc3339());
                 // Ohne brauchbares started_at zaehlen die Zeiten ab
                 // Aufnahmebeginn. Das gehoert in den Bericht, sonst schickt er
                 // jemanden im VOD an die falsche Stelle.
@@ -1415,13 +1438,20 @@ async fn kanal_aufnehmen(
         if let Err(fehler) = nur_fuer_mich(&laeuft, b"{}").await {
             tracing::warn!(fehler, "Laufmarke nicht schreibbar");
         }
+        let aufnahme_beginn_utc =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(zustand.gestartet_um, 0)
+                .map(|zeitpunkt| zeitpunkt.to_rfc3339());
         if !zettel_schreiben(
             &blockordner,
-            &kanal,
-            &zustand.lauf,
-            zustand.bloecke + 1,
-            versatz,
-            zustand.zeit_unsicher,
+            ZettelDaten {
+                kanal: &kanal,
+                lauf: &zustand.lauf,
+                nummer: zustand.bloecke + 1,
+                versatz_sekunden: versatz,
+                zeit_unsicher: zustand.zeit_unsicher,
+                stream_start_utc: zustand.stream_start_utc.as_deref(),
+                aufnahme_beginn_utc: aufnahme_beginn_utc.as_deref(),
+            },
         )
         .await
         {
@@ -1836,6 +1866,7 @@ async fn auswertungs_schleife(
     warteschlange: Arc<Mutex<plan::Warteschlange>>,
     abbruch: Arc<std::sync::atomic::AtomicBool>,
     sperre: Arc<Mutex<plan::LaufSperre>>,
+    last_gate: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut naechstes_aufraeumen = tokio::time::Instant::now();
     // Wie viele Bloecke am Stueck je Kanal der Modellschritt ausfiel.
@@ -1889,9 +1920,16 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 tokio::time::Instant::now() + Duration::from_secs(AUFRAEUM_TAKT_SEKUNDEN);
         }
 
-        if !plan::last_erlaubt(last_eins(), kernzahl()) {
-            tracing::info!("Auswertung wartet - Last zu hoch");
-            tokio::time::sleep(Duration::from_secs(15)).await;
+        // Last-Gate: unter Dauerlast wird nur aufgenommen, die Auswertung
+        // wartet. Die Bloecke bleiben auf der Platte und werden nachgeholt,
+        // sobald die Last faellt. Bewusst ohne DM: das Gate misst die
+        // maschinenweite Last, die zu einem grossen Teil die Auswertung selbst
+        // erzeugt - eine "Server ueberlastet"-DM je Wechsel wuerde eine
+        // Fremdstoerung behaupten, die keine ist, und im Takt flattern. Den
+        // Zustandswechsel loggt der Messtask. Echter Deckungsverlust (Rueckstand
+        // oder Platzgrenze) meldet sich weiter ueber die eigenen Pfade.
+        if last_gate.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_secs(plan::LIVE_PRUEFUNG_SEKUNDEN)).await;
             continue;
         }
         let snapshot = sperre.lock().await.clone();
@@ -1956,7 +1994,7 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 meldung_erledigt(Path::new(&block.datei)).await;
                 fertig_markieren(Path::new(&block.datei), &bericht).await;
                 if !block.nur_melden {
-                    akte_verbuchen(&konfiguration, &block, &bericht.funde).await;
+                    akte_verbuchen(&konfiguration, &block, &bericht).await;
                 }
                 lauf_ende_melden(
                     &konfiguration,
@@ -1983,7 +2021,8 @@ geloescht. Sie sind als Beleg nicht mehr da."
                 // lassen wie die Meldung, die davon spricht.
                 let aufnahme_behalten = segmente == 0 && stumm_am_stueck >= MAX_LEER_AM_STUECK;
                 if !block.nur_melden {
-                    akte_verbuchen(&konfiguration, &block, &[]).await;
+                    let bericht = leerer_bericht(&block);
+                    akte_verbuchen(&konfiguration, &block, &bericht).await;
                 }
                 lauf_ende_melden(
                     &konfiguration,
@@ -2256,6 +2295,8 @@ async fn block_auswerten(
     let bericht = Bericht {
         lauf_id: report::lauf_id(jetzt, &block.kanal),
         erstellt_am: jetzt.to_rfc3339(),
+        stream_start_utc: block.stream_start_utc.clone(),
+        aufnahme_beginn_utc: block.aufnahme_beginn_utc.clone(),
         quelle: if block.zeit_unsicher {
             format!(
                 "live, Block {} - Zeiten ab Aufnahmebeginn, nicht ab Sendungsbeginn",
@@ -2901,17 +2942,142 @@ async fn aufnahmen_bytes(wurzel: &Path) -> u64 {
     summe
 }
 
-fn last_eins() -> f64 {
-    std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|s| s.split_whitespace().next()?.parse().ok())
-        .unwrap_or(0.0)
+/// Wie oft die Auslastung gemessen wird. Der CPU-Anteil ergibt sich aus der
+/// Differenz zweier `/proc/stat`-Messungen; dieser Takt ist also zugleich das
+/// Messfenster fuer die CPU.
+const LAST_TAKT_SEKUNDEN: u64 = 20;
+
+/// Summe der Ticks aus `/proc/stat` und der davon untaetige Anteil.
+///
+/// Die CPU-Auslastung ist keine Momentaufnahme, sondern der Anteil belegter
+/// Ticks zwischen zwei Messungen - deshalb der Zwischenstand.
+#[derive(Clone, Copy)]
+struct CpuStand {
+    gesamt: u64,
+    untaetig: u64,
 }
 
-fn kernzahl() -> u32 {
-    std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(1)
+/// Liest die Sammelzeile `cpu` aus `/proc/stat`. `None`, wenn die Datei fehlt
+/// oder unerwartet aussieht - dann faellt die CPU als Signal aus, RAM traegt
+/// weiter.
+fn cpu_stand() -> Option<CpuStand> {
+    let inhalt = std::fs::read_to_string("/proc/stat").ok()?;
+    let zeile = inhalt.lines().next()?;
+    let mut felder = zeile.split_whitespace();
+    if felder.next()? != "cpu" {
+        return None;
+    }
+    // Genau die acht Standardfelder, der Reihe nach:
+    // user nice system idle iowait irq softirq steal. Positionsgenau lesen -
+    // ein `filter_map` wuerde ein unparsbares Feld ueberspringen und idle/iowait
+    // von der falschen Stelle holen. `guest`/`guest_nice` bleiben aussen vor:
+    // der Kernel fuehrt sie bereits in user/nice, mitzusummieren zaehlte sie
+    // doppelt.
+    let mut werte = [0u64; 8];
+    for feld in werte.iter_mut() {
+        *feld = felder.next()?.parse().ok()?;
+    }
+    let gesamt: u64 = werte.iter().sum();
+    // idle + iowait gelten als untaetig.
+    let untaetig = werte[3] + werte[4];
+    Some(CpuStand { gesamt, untaetig })
+}
+
+/// CPU-Auslastung in Prozent zwischen zwei Messungen. `None`, wenn die Uhr
+/// nicht weitergelaufen ist (gleiche Messung).
+fn cpu_prozent(vorher: CpuStand, jetzt: CpuStand) -> Option<f32> {
+    let gesamt = jetzt.gesamt.checked_sub(vorher.gesamt)?;
+    let untaetig = jetzt.untaetig.saturating_sub(vorher.untaetig);
+    if gesamt == 0 {
+        return None;
+    }
+    let belegt = gesamt.saturating_sub(untaetig);
+    Some(belegt as f32 / gesamt as f32 * 100.0)
+}
+
+/// RAM-Auslastung in Prozent aus `/proc/meminfo`. `MemAvailable` ist der frei
+/// nutzbare Speicher inklusive rueckholbarem Cache - naeher an "voll" als das
+/// blosse `MemFree`.
+fn ram_prozent() -> Option<f32> {
+    let inhalt = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let mut gesamt = None;
+    let mut verfuegbar = None;
+    for zeile in inhalt.lines() {
+        if let Some(rest) = zeile.strip_prefix("MemTotal:") {
+            gesamt = rest.split_whitespace().next()?.parse::<u64>().ok();
+        } else if let Some(rest) = zeile.strip_prefix("MemAvailable:") {
+            verfuegbar = rest.split_whitespace().next()?.parse::<u64>().ok();
+        }
+    }
+    let gesamt = gesamt?;
+    let verfuegbar = verfuegbar?;
+    if gesamt == 0 {
+        return None;
+    }
+    let belegt = gesamt.saturating_sub(verfuegbar);
+    Some(belegt as f32 / gesamt as f32 * 100.0)
+}
+
+/// Misst CPU und RAM im Takt und setzt das Last-Gate: liegt die groessere der
+/// beiden Auslastungen lange genug ueber der Grenze, wird die Auswertung
+/// zurueckgestellt. Aufgenommen wird die ganze Zeit weiter.
+async fn last_ueberwachen(
+    gate: Arc<std::sync::atomic::AtomicBool>,
+    abbruch: Arc<std::sync::atomic::AtomicBool>,
+    mut waechter: Lastwaechter,
+) {
+    let start = tokio::time::Instant::now();
+    let mut voriger = cpu_stand();
+    loop {
+        tokio::time::sleep(Duration::from_secs(LAST_TAKT_SEKUNDEN)).await;
+        if abbruch.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let jetziger = cpu_stand();
+        let cpu = match (voriger, jetziger) {
+            (Some(a), Some(b)) => cpu_prozent(a, b),
+            _ => None,
+        };
+        voriger = jetziger;
+        let ram = ram_prozent();
+        // Die groessere von CPU und RAM entscheidet: liegt eine der beiden ueber
+        // der Grenze, gilt der Server als ausgelastet.
+        let auslastung = match (cpu, ram) {
+            (Some(c), Some(r)) => c.max(r),
+            (Some(c), None) => c,
+            (None, Some(r)) => r,
+            // Kein Signal mehr messbar (etwa /proc unlesbar): ohne Beleg fuer
+            // Ueberlast die Auswertung anzuhalten waere falsch. Gate freigeben
+            // und den Zwischenstand vergessen, sonst bliebe es haengen, solange
+            // keine Messung mehr kommt.
+            (None, None) => {
+                let vorher = waechter.aktiv();
+                waechter.zuruecksetzen();
+                gate.store(false, std::sync::atomic::Ordering::Relaxed);
+                if vorher {
+                    tracing::warn!(
+                        "Last-Gate aus - Auslastung nicht mehr messbar, Auswertung freigegeben"
+                    );
+                }
+                continue;
+            }
+        };
+        let vorher = waechter.aktiv();
+        let aktiv = waechter.beobachten(auslastung, start.elapsed().as_secs());
+        gate.store(aktiv, std::sync::atomic::Ordering::Relaxed);
+        if aktiv != vorher {
+            if aktiv {
+                tracing::warn!(
+                    auslastung,
+                    cpu = ?cpu,
+                    ram = ?ram,
+                    "Last-Gate an - Auswertung wird zurueckgestellt, Aufnahme laeuft weiter"
+                );
+            } else {
+                tracing::info!(auslastung, "Last-Gate aus - Auswertung laeuft wieder");
+            }
+        }
+    }
 }
 
 fn lauf_ordner(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> PathBuf {
@@ -2960,15 +3126,11 @@ async fn akte_lesen(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> r
     }
 }
 
-async fn akte_verbuchen(
-    konfiguration: &Konfiguration,
-    block: &plan::Block,
-    funde: &[tb_stream_audit::Fund],
-) {
+async fn akte_verbuchen(konfiguration: &Konfiguration, block: &plan::Block, bericht: &Bericht) {
     let ordner = lauf_ordner(konfiguration, &block.kanal, &block.lauf);
     let _ = tokio::fs::create_dir_all(&ordner).await;
     let mut akte = akte_lesen(konfiguration, &block.kanal, &block.lauf).await;
-    akte.block_verbuchen(funde);
+    akte.block_verbuchen(bericht);
     let pfad = ordner.join(AKTE);
     if let Ok(json) = serde_json::to_string(&akte) {
         if let Err(fehler) = atomar_schreiben(&pfad, json.as_bytes()).await {
@@ -2994,7 +3156,7 @@ async fn lauf_ende_melden(
         return;
     }
     let akte = akte_lesen(konfiguration, kanal, lauf).await;
-    let text = report::ende_dm_text(kanal, akte.bloecke, &akte.funde, 8);
+    let text = report::ende_dm_text(kanal, &akte, 2);
     let schluessel = format!("{kanal}-{lauf}-ende");
     match dm_rohtext(&text, &schluessel).await {
         Ok(()) => {
@@ -3032,6 +3194,8 @@ mod tests {
             nur_melden: false,
             meldeversuche: 0,
             zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
         }
     }
 
@@ -3178,7 +3342,19 @@ mod tests {
             .await
             .expect("schreiben");
 
-        zettel_schreiben(&blockordner, "helmbombenricky", "4711", 7, 3600, false).await;
+        zettel_schreiben(
+            &blockordner,
+            ZettelDaten {
+                kanal: "helmbombenricky",
+                lauf: "4711",
+                nummer: 7,
+                versatz_sekunden: 3600,
+                zeit_unsicher: false,
+                stream_start_utc: Some("2026-08-13T20:00:00Z"),
+                aufnahme_beginn_utc: Some("2026-08-13T20:00:05Z"),
+            },
+        )
+        .await;
 
         let gelesen = zettel_lesen(&aufnahme).await.expect("Zettel lesbar");
         assert_eq!(gelesen.kanal, "helmbombenricky");
@@ -3234,6 +3410,8 @@ mod tests {
         let bericht = Bericht {
             lauf_id: "20260813T120000Z-ricky".to_owned(),
             erstellt_am: "2026-08-13T12:00:00Z".to_owned(),
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
             quelle: "live, Block 1".to_owned(),
             kanal: "ricky".to_owned(),
             transkription: "openai_api".to_owned(),

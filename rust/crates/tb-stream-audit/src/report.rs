@@ -9,7 +9,7 @@
 //! bleibt nur liegen, wenn `STREAM_AUDIT_KEEP_TRANSCRIPT` vorher gesetzt war.
 //! Der Hash kann ein vorgelegtes Zitat bestaetigen, aber keines herstellen.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::Fund;
@@ -22,6 +22,12 @@ use crate::Fund;
 pub struct Bericht {
     pub lauf_id: String,
     pub erstellt_am: String,
+    /// Twitch-Startzeit der Sendung, sofern Helix sie geliefert hat.
+    #[serde(default)]
+    pub stream_start_utc: Option<String>,
+    /// Beginn dieses Aufnahmeprozesses als ehrliche Ersatzbasis.
+    #[serde(default)]
+    pub aufnahme_beginn_utc: Option<String>,
     pub quelle: String,
     pub kanal: String,
     pub transkription: String,
@@ -100,6 +106,17 @@ pub fn markdown(bericht: &Bericht) -> String {
         String::new(),
         format!("- Lauf: `{}`", bericht.lauf_id),
         format!("- Erstellt: {}", bericht.erstellt_am),
+        format!(
+            "- Stream-Beginn UTC: {}",
+            bericht.stream_start_utc.as_deref().unwrap_or("unbekannt")
+        ),
+        format!(
+            "- Aufnahmebeginn UTC: {}",
+            bericht
+                .aufnahme_beginn_utc
+                .as_deref()
+                .unwrap_or("unbekannt")
+        ),
         format!("- Quelle: {}", bericht.quelle),
         // Der Dienst nennt in seiner Antwort das Modell, das er wirklich
         // geladen hat; erst wenn er schweigt, steht hier der angefragte Name.
@@ -194,6 +211,92 @@ pub fn markdown(bericht: &Bericht) -> String {
     zeilen.join("\n")
 }
 
+const DM_ZITAT_MAX: usize = 140;
+
+/// Bevorzugt den Klartext fuer die fluechtige Admin-DM. Alte Berichte ohne
+/// Rohzitat fallen auf die geschwaerzte Fassung zurueck.
+fn zitat_fuer_dm(fund: &Fund) -> String {
+    let quelle = if fund.zitat_roh.trim().is_empty() {
+        &fund.zitat_redigiert
+    } else {
+        &fund.zitat_roh
+    };
+    let quelle = quelle.split_whitespace().collect::<Vec<_>>().join(" ");
+    if quelle.chars().count() <= DM_ZITAT_MAX {
+        return format!("„{quelle}“");
+    }
+    let gekuerzt: String = quelle.chars().take(DM_ZITAT_MAX).collect();
+    format!("„{gekuerzt}…“")
+}
+
+fn basiszeit(bericht: &Bericht) -> Option<(DateTime<Utc>, bool)> {
+    bericht
+        .stream_start_utc
+        .as_deref()
+        .and_then(|wert| DateTime::parse_from_rfc3339(wert).ok())
+        .map(|wert| (wert.with_timezone(&Utc), true))
+        .or_else(|| {
+            bericht
+                .aufnahme_beginn_utc
+                .as_deref()
+                .and_then(|wert| DateTime::parse_from_rfc3339(wert).ok())
+                .map(|wert| (wert.with_timezone(&Utc), false))
+        })
+}
+
+fn fundzeitpunkt(bericht: &Bericht, fund: &Fund) -> Option<(DateTime<Utc>, bool)> {
+    let (basis, ist_streambeginn) = basiszeit(bericht)?;
+    let millisekunden = (fund.start_sekunden.max(0.0) * 1000.0).round() as i64;
+    Some((
+        basis + Duration::milliseconds(millisekunden),
+        ist_streambeginn,
+    ))
+}
+
+fn stream_zeitfenster(bericht: &Bericht, fund: &Fund) -> String {
+    let fenster = format!(
+        "ca. {} bis {}",
+        zeit(fund.start_sekunden),
+        zeit(fund.ende_sekunden)
+    );
+    match basiszeit(bericht) {
+        Some((_, true)) => fenster,
+        Some((_, false)) => format!("{fenster} (ab Aufnahmebeginn, Stream-Start unbekannt)"),
+        None => format!("{fenster} (Stream-Start unbekannt)"),
+    }
+}
+
+fn copy_zeitfenster(bericht: &Bericht, fund: &Fund) -> String {
+    let fenster = stream_zeitfenster(bericht, fund);
+    fenster
+        .strip_prefix("ca. ")
+        .unwrap_or(&fenster)
+        .replacen(" bis ", " und ", 1)
+}
+
+fn kopierfertiger_meldegrund(bericht: &Bericht, fund: &Fund) -> String {
+    let grund = format!(
+        "Ich finde es nicht okay, dass der Streamer {} auf Twitch gesagt hat, und bin der Meinung, dass das nicht zulässig ist.",
+        zitat_fuer_dm(fund)
+    );
+    let copy_fenster = copy_zeitfenster(bericht, fund);
+    match fundzeitpunkt(bericht, fund) {
+        Some((zeitpunkt, true)) => format!(
+            "{grund} Die Aussage fiel am {} um {} UTC. Im VOD liegt die Stelle ungefähr zwischen {copy_fenster}.",
+            zeitpunkt.format("%d.%m.%Y"),
+            zeitpunkt.format("%H:%M:%S")
+        ),
+        Some((zeitpunkt, false)) => format!(
+            "{grund} Die Aussage wurde am {} um {} UTC ab Aufnahmebeginn aufgezeichnet. Im VOD liegt die Stelle ungefähr zwischen {copy_fenster}.",
+            zeitpunkt.format("%d.%m.%Y"),
+            zeitpunkt.format("%H:%M:%S")
+        ),
+        None => format!(
+            "{grund} Im Transkript liegt die Aussage ungefähr zwischen {copy_fenster}. Der absolute Zeitpunkt ist nicht verfügbar."
+        ),
+    }
+}
+
 /// Kurzfassung fuer die Discord-DM. Discord kappt lange Nachrichten, und eine
 /// abgeschnittene Liste liest sich wie eine vollstaendige.
 pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
@@ -230,10 +333,17 @@ pub fn dm_text(bericht: &Bericht, grenze: usize) -> String {
     let mut text = kopf;
     for fund in bericht.funde.iter().take(grenze) {
         text.push_str(&format!(
-            "\n• {} {} ({})",
+            "\n\n• Fundstelle {} bis {} ({}, {})\nGesagt (Transkript): {}\nGesagt am: {}\nStream-Zeitfenster: {}\nKopierfertiger Twitch-Meldegrund:\n{}",
             zeit(fund.start_sekunden),
+            zeit(fund.ende_sekunden),
             fund.kategorie,
-            fund.schwere
+            fund.schwere,
+            zitat_fuer_dm(fund),
+            fundzeitpunkt(bericht, fund)
+                .map(|(zeitpunkt, _)| zeitpunkt.format("%d.%m.%Y %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "unbekannt (Stream-Start nicht verfügbar)".to_owned()),
+            stream_zeitfenster(bericht, fund),
+            kopierfertiger_meldegrund(bericht, fund)
         ));
     }
     if bericht.funde.len() > grenze {
@@ -253,24 +363,53 @@ pub fn start_dm_text(kanal: &str) -> String {
     )
 }
 
-/// Abschlussmeldung einer Sendung. Nur ToS-relevante Funde, Zeitstempel zuerst.
-pub fn ende_dm_text(kanal: &str, bloecke: usize, funde: &[crate::Fund], grenze: usize) -> String {
-    let funde = crate::nur_tos_meldewuerdig(funde);
+/// Abschlussmeldung einer Sendung. Nur ToS-relevante Funde mit fertigem
+/// Copy-Paste-Text.
+pub fn ende_dm_text(kanal: &str, akte: &LaufAkte, grenze: usize) -> String {
+    let funde = crate::nur_tos_meldewuerdig(&akte.funde);
     if funde.is_empty() {
         return format!(
-            "Coaching-Audit {kanal}: Stream zu Ende, {bloecke} Blöcke geprüft, keine ToS-Verstöße."
+            "Coaching-Audit {kanal}: Stream zu Ende, {} Blöcke geprüft, keine ToS-Verstöße.",
+            akte.bloecke
         );
     }
     let mut text = format!(
-        "Coaching-Audit {kanal}: Stream zu Ende, {bloecke} Blöcke geprüft, {} ToS-Verstöße.",
+        "Coaching-Audit {kanal}: Stream zu Ende, {} Blöcke geprüft, {} ToS-Verstöße.",
+        akte.bloecke,
         funde.len()
     );
+    let bericht = Bericht {
+        lauf_id: format!("ende-{kanal}"),
+        erstellt_am: String::new(),
+        stream_start_utc: akte.stream_start_utc.clone(),
+        aufnahme_beginn_utc: akte.aufnahme_beginn_utc.clone(),
+        quelle: "live".to_owned(),
+        kanal: kanal.to_owned(),
+        transkription: String::new(),
+        modell: String::new(),
+        transkription_lokal: true,
+        anbieter: String::new(),
+        llm_modell: String::new(),
+        transkript_behalten: false,
+        segmente: 0,
+        modell_geprueft: true,
+        modell_hinweis: String::new(),
+        aufnahme_abgebrochen: false,
+        funde: Vec::new(),
+    };
     for fund in funde.iter().take(grenze) {
         text.push_str(&format!(
-            "\n• {} {} ({})",
+            "\n\n• Fundstelle {} bis {} ({}, {})\nGesagt (Transkript): {}\nGesagt am: {}\nStream-Zeitfenster: {}\nKopierfertiger Twitch-Meldegrund:\n{}",
             zeit(fund.start_sekunden),
+            zeit(fund.ende_sekunden),
             fund.kategorie,
-            fund.schwere
+            fund.schwere,
+            zitat_fuer_dm(fund),
+            fundzeitpunkt(&bericht, fund)
+                .map(|(zeitpunkt, _)| zeitpunkt.format("%d.%m.%Y %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "unbekannt (Stream-Start nicht verfügbar)".to_owned()),
+            stream_zeitfenster(&bericht, fund),
+            kopierfertiger_meldegrund(&bericht, fund)
         ));
     }
     if funde.len() > grenze {
@@ -285,12 +424,22 @@ pub fn ende_dm_text(kanal: &str, bloecke: usize, funde: &[crate::Fund], grenze: 
 pub struct LaufAkte {
     pub bloecke: usize,
     pub funde: Vec<crate::Fund>,
+    #[serde(default)]
+    pub stream_start_utc: Option<String>,
+    #[serde(default)]
+    pub aufnahme_beginn_utc: Option<String>,
 }
 
 impl LaufAkte {
-    pub fn block_verbuchen(&mut self, funde: &[crate::Fund]) {
+    pub fn block_verbuchen(&mut self, bericht: &Bericht) {
         self.bloecke += 1;
-        self.funde.extend(funde.iter().cloned());
+        if self.stream_start_utc.is_none() {
+            self.stream_start_utc = bericht.stream_start_utc.clone();
+        }
+        if self.aufnahme_beginn_utc.is_none() {
+            self.aufnahme_beginn_utc = bericht.aufnahme_beginn_utc.clone();
+        }
+        self.funde.extend(bericht.funde.iter().cloned());
     }
 }
 
@@ -313,6 +462,7 @@ mod tests {
             sicherheit: "high".to_owned(),
             begruendung: "Begruendung".to_owned(),
             zitat_redigiert: "so ein [REDACTED] echt".to_owned(),
+            zitat_roh: "so ein nigga echt".to_owned(),
             zitat_hash: "a".repeat(64),
         }
     }
@@ -321,6 +471,8 @@ mod tests {
         Bericht {
             lauf_id: "20260813T200000Z-testkanal".to_owned(),
             erstellt_am: "2026-08-13T20:00:00Z".to_owned(),
+            stream_start_utc: Some("2026-08-13T20:00:00Z".to_owned()),
+            aufnahme_beginn_utc: Some("2026-08-13T20:00:00Z".to_owned()),
             quelle: "live".to_owned(),
             kanal: "testkanal".to_owned(),
             transkription: "faster-whisper".to_owned(),
@@ -485,7 +637,12 @@ mod tests {
     #[test]
     fn ende_dm_ohne_tos_sagt_keine_verstoesse() {
         let safe = fund("low", 12.0, "harassment");
-        let text = ende_dm_text("helmbombenricky", 7, &[safe], 5);
+        let akte = LaufAkte {
+            bloecke: 7,
+            funde: vec![safe],
+            ..LaufAkte::default()
+        };
+        let text = ende_dm_text("helmbombenricky", &akte, 5);
         assert!(text.contains("7 Blöcke geprüft"), "{text}");
         assert!(text.contains("keine ToS-Verstöße"), "{text}");
         assert!(!text.contains('•'), "{text}");
@@ -498,7 +655,13 @@ mod tests {
             fund("high", 125.0, "hate_speech_slur"),
             fund("high", 400.0, "harassment"),
         ];
-        let text = ende_dm_text("helmbombenricky", 12, &funde, 5);
+        let akte = LaufAkte {
+            bloecke: 12,
+            funde,
+            stream_start_utc: Some("2026-08-13T20:00:00Z".to_owned()),
+            aufnahme_beginn_utc: Some("2026-08-13T20:00:00Z".to_owned()),
+        };
+        let text = ende_dm_text("helmbombenricky", &akte, 5);
         assert!(text.contains("2 ToS-Verstöße"), "{text}");
         assert!(text.contains("00:02:05"), "{text}");
         assert!(text.contains("hate_speech_slur"), "{text}");
@@ -506,13 +669,17 @@ mod tests {
             !text.contains("00:00:12"),
             "safe harassment darf nicht in die DM"
         );
+        assert!(text.contains("Ich finde es nicht okay"), "{text}");
+        assert!(text.contains("so ein nigga echt"), "{text}");
+        assert!(text.contains("13.08.2026 20:02:05 UTC"), "{text}");
+        assert!(text.contains("00:02:05 und 00:02:35"), "{text}");
     }
 
     #[test]
     fn laufakte_zaehlt_bloecke_und_sammelt_funde() {
         let mut akte = LaufAkte::default();
-        akte.block_verbuchen(&[fund("high", 1.0, "hate_speech_slur")]);
-        akte.block_verbuchen(&[]);
+        akte.block_verbuchen(&bericht(vec![fund("high", 1.0, "hate_speech_slur")]));
+        akte.block_verbuchen(&bericht(vec![]));
         assert_eq!(akte.bloecke, 2);
         assert_eq!(akte.funde.len(), 1);
     }

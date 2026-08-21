@@ -24,6 +24,7 @@
 //! zwar mit denselben Mustern, die sie gefunden haben.
 
 pub mod config;
+pub mod last;
 pub mod llm;
 pub mod melden;
 pub mod plan;
@@ -76,8 +77,9 @@ pub struct Segment {
     pub text: String,
 }
 
-/// Ein Fund. `zitat_roh` bleibt bewusst aussen vor: der Bericht traegt nur die
-/// geschwaerzte Fassung und den Hash des Originals.
+/// Ein Fund. Die persistente Akte traegt nur die geschwaerzte Fassung und den
+/// Hash des Originals. `zitat_roh` bleibt ueber `skip_serializing` auf die
+/// fluechtige Admin-DM begrenzt.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fund {
     pub segment_id: String,
@@ -89,6 +91,8 @@ pub struct Fund {
     pub sicherheit: String,
     pub begruendung: String,
     pub zitat_redigiert: String,
+    #[serde(default, skip_serializing)]
+    pub zitat_roh: String,
     pub zitat_hash: String,
 }
 
@@ -107,6 +111,7 @@ pub fn regelfunde(segmente: &[Segment]) -> Vec<Fund> {
                 sicherheit: "high".to_owned(),
                 begruendung: treffer.begruendung.to_owned(),
                 zitat_redigiert: treffer.zitat_redigiert,
+                zitat_roh: treffer.zitat_roh,
                 zitat_hash: treffer.zitat_hash,
             });
         }
@@ -189,6 +194,7 @@ mod tests {
             sicherheit: "high".to_owned(),
             begruendung: String::new(),
             zitat_redigiert: String::new(),
+            zitat_roh: String::new(),
             zitat_hash: String::new(),
         }
     }
@@ -262,12 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn fund_enthaelt_kein_rohzitat() {
+    fn fund_traegt_rohzitat_nur_fuer_die_dm() {
         let funde = regelfunde(&[segment("s1", "so ein schwuchtel")]);
         assert!(!funde[0]
             .zitat_redigiert
             .to_lowercase()
             .contains("schwuchtel"));
+        assert!(funde[0].zitat_roh.contains("schwuchtel"));
+        let json = serde_json::to_string(&funde[0]).expect("Fund serialisierbar");
+        assert!(!json.contains("schwuchtel"));
     }
 
     #[test]
@@ -287,6 +296,7 @@ mod tests {
             sicherheit: "medium".to_owned(),
             begruendung: "Modellbegruendung".to_owned(),
             zitat_redigiert: rules::redact_text(ganzes_segment),
+            zitat_roh: ganzes_segment.to_owned(),
             zitat_hash: rules::evidence_hash(ganzes_segment),
         });
         assert_ne!(
@@ -318,6 +328,7 @@ immer das ganze Segment und darf keinen Regelfund verdraengen"
             sicherheit: "medium".to_owned(),
             begruendung: "andere Stelle".to_owned(),
             zitat_redigiert: "ganz andere Worte ohne Ueberschneidung".to_owned(),
+            zitat_roh: "ganz andere Worte ohne Ueberschneidung".to_owned(),
             zitat_hash: rules::evidence_hash("ganz andere Worte ohne Ueberschneidung"),
         });
         assert_eq!(
