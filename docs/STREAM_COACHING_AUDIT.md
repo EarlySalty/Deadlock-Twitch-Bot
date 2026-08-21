@@ -50,12 +50,37 @@ im Deadlock-Docs-Korpus.
    Abschluss-DM nennt nur Funde, die Twitch ahnden wuerde. Ein Block, dessen
    Transkription dreimal scheiterte, kommt nie so weit: von ihm bleiben die
    Aufnahme und die DM "aufgegeben".
+7. Parallel zu den kurzen Auswertungs-Bloecken laeuft je Stream ein
+   **durchgehender Ton-Recorder** (streamlink liefert den Stream, ffmpeg zieht
+   ohne Neucodierung nur die Tonspur heraus), der eine saubere 1:1-Aufnahme
+   (`mitschnitt-<zeit>.aac`) schreibt - nicht aus den Auswertungs-Haeppchen
+   zusammengestueckelt. Im Normalfall ist es eine Datei; ein Dienst-Neustart oder
+   ein streamlink-Aussetzer waehrend der Sendung erzeugt wenige Teile (jeweils
+   mit eigenem Zeitstempel), die alle in denselben Stream-Ordner hochgeladen
+   werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig. Ist der Stream vorbei und jeder Block ausgewertet, wird
+   diese Aufnahme zusammen mit den Berichten in einen eigenen Ordner je Stream
+   unter `STREAM_AUDIT_DRIVE_REMOTE` geladen (rclone-Remote `gdrive:`). Erst wenn
+   der Upload belegt ist (`rclone lsf`), wird lokal geloescht - so bleibt die
+   Platte frei. Scheitert der Upload, bleibt alles liegen und der stuendliche
+   Aufraeumtakt versucht es erneut; noch nicht hochgeladene Aufnahmen werden nie
+   geloescht. Faellt der freie Platz unter `STREAM_AUDIT_DRIVE_MIN_FREE_GB`,
+   startet **kein neuer** Recorder mehr (bestehende laufen weiter), damit die
+   geteilte Platte nicht volllaeuft. Archiviert werden nur Streams **mit**
+   Aufnahme; faellt der Recorder ganz aus, bleiben allein die lokalen Berichte
+   der normalen Aufbewahrung. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet Recorder
+   und Upload ab. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
+   wie bisher nach der Pruefung lokal geloescht.
 
 ## Datenschutz
 
-- **Audio verlaesst den Rechner nie.** Zeigt `ENGAGEMENT_STT_BASE_URL` auf einen
-  fremden Host, bricht der Start ab; nur `STREAM_AUDIT_ALLOW_REMOTE_STT=1` hebt
-  das auf.
+- **Zur Transkription verlaesst das Audio den Rechner nie.** Zeigt
+  `ENGAGEMENT_STT_BASE_URL` auf einen fremden Host, bricht der Start ab; nur
+  `STREAM_AUDIT_ALLOW_REMOTE_STT=1` hebt das auf. Das betrifft den STT-Weg. Der
+  durchgehende Ton-Mitschnitt wird dagegen bewusst ins eigene Google
+  Drive archiviert (Schritt 7) - eine gewollte Ablage im eigenen Speicher, kein
+  Versand an einen Transkriptionsdienst. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet
+  den durchgehenden Recorder samt Upload ganz ab: dann entsteht diese
+  1:1-Aufnahme gar nicht erst, und nur die kurzen Auswertungs-Bloecke laufen.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwaerzung
   geschickt, mit anonymer Segmentnummer statt Segment-ID. Die Schwaerzung kennt
   die drei Muster aus `rules.rs` und sonst nichts: anderer Wortlaut geht mit.
@@ -94,6 +119,9 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_LOAD_RELEASE` | Auslastung in Prozent, unter der das Gate faellt | 80 |
 | `STREAM_AUDIT_LOAD_WINDOW_SECS` | Sekunden Dauerlast, bevor das Gate greift | 240 |
 | `STREAM_AUDIT_LOAD_MAX_HOLD_SECS` | Deckel, wie lange das Gate am Stueck haelt, `0` = kein Deckel | 1800 |
+| `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
+| `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
+| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz; darunter startet kein neuer Recorder | 20 |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 

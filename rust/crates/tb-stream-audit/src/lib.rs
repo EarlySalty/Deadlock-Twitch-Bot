@@ -23,6 +23,7 @@
 //! werden vor jeder Weitergabe durch [`rules::redact_text`] geschwaerzt, und
 //! zwar mit denselben Mustern, die sie gefunden haben.
 
+pub mod archiv;
 pub mod config;
 pub mod last;
 pub mod llm;
