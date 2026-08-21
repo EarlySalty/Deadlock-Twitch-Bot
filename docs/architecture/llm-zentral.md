@@ -107,14 +107,55 @@ Entfallen mit diesem Umbau:
 |---|---|
 | `ENGAGEMENT_MINIMAX_MODEL` | `TB_LLM_MODEL_ENGAGEMENT` |
 | `FIREWORKS_RICKY_REVIEW_MODEL` | `TB_LLM_MODEL_RICKY_CREW_REVIEW` |
-| `ANTHROPIC_HAIKU_MODEL` | `TB_LLM_MODEL_SOCIAL_MEDIA` |
+| `ANTHROPIC_HAIKU_MODEL` | `TB_LLM_MODEL_SOCIAL_MEDIA_CLAUDE` |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CREW_GUARD_MODEL` | bleiben, siehe "Bewusst nicht migriert" |
 | MiniMax-Sonderpfad in `minimax_chat.rs` (`MINIMAX_TOKEN_PLAN_KEY`, `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` nur wenn die Auswahl MiniMax ergab) | faellt weg; die Variablen wirken weiterhin, aber ueber die zentrale Auswahl in `selection.rs` |
+
+**Wichtig beim Umstellen eines Modells:** `TB_LLM_MODEL_<USE_CASE>` gilt fuer
+jeden Anbieter. Wer ein MiniMax-Modell setzt, waehrend die Auswahl Fireworks
+ergibt, bekommt einen Modellfehler vom Anbieter. Deshalb setzt der
+Dashboard-Wrapper `TB_LLM_PROVIDER_ENGAGEMENT=minimax` neben
+`TB_LLM_MODEL_ENGAGEMENT=MiniMax-Text-01`. Frueher hielt ein Sonderpfad im Code
+das auseinander; die Bedingung steht jetzt im Wrapper, wo sie sichtbar ist.
+
+Der Schluessel eines Anbieters kommt jetzt ueberall aus `tb_llm::keys`. Fuer
+Fireworks heisst das: `FIREWORK_API_KEY` gewinnt vor `FIREWORKS_API_KEY`. Das
+Crew-Review bevorzugte vorher den Plural. Beide Namen zeigen auf dasselbe
+Fireworks-Konto; die Rangfolge ist jetzt an einer Stelle statt an dreien.
 
 Der Sonderpfad in `minimax_chat.rs` war eine Ruecksprungmoeglichkeit aus der
 Zeit, als der Engagement-Client als einziger auf MiniMax festgenagelt war. Er
 liest dieselben Variablen, die `selection.rs` ohnehin liest, nur mit einer
 zweiten Rangfolge. Zwei Rangfolgen fuer dieselben Variablen sind eine
 Fehlerquelle, kein Sicherheitsnetz.
+
+## Anwendungsfaelle nach dem Umbau
+
+| Anwendungsfall | Aufrufer | Anbieter ohne Konfiguration |
+|---|---|---|
+| `engagement` | `minimax_chat.rs`, dazu alle Judges und Dashboard-Pfade darauf | Fireworks, sonst MiniMax |
+| `title_ai` | `title_ai.rs` (Titel und Insight) | Fireworks, sonst MiniMax |
+| `spam_judge` | `scam_pitch.rs`, mit eigener Kette | Fireworks, sonst MiniMax |
+| `crew_guard` | `crew_guard.rs`, mit eigenem Endpunkt | siehe unten |
+| `ricky_crew_review` | `crew_review.rs`, fail-closed | Fireworks |
+| `outreach_shadow` | `outreach_shadow.rs`, fail-closed | Fireworks |
+| `post_stream` | `post_stream.rs`, MiniMax-Zweig | Fireworks, sonst MiniMax |
+| `post_stream_opus` | `post_stream.rs`, Opus-Zweig | Anthropic |
+| `ai_analysis` | `handlers/ai_analysis.rs` | Anthropic |
+| `ai_chat` | `handlers/ai_chat.rs` | Anthropic |
+| `social_media` | `llm_dispatch.rs`, MiniMax-Zweig | Fireworks, sonst MiniMax |
+| `social_media_claude` | `llm_dispatch.rs`, Haiku-Zweig | Anthropic Haiku |
+| `stream_audit` | `bin/tb-stream-audit` | Fireworks, sonst MiniMax |
+
+## Was der Umbau geloescht hat
+
+- `tb-llm/src/minimax.rs`, `tb-llm/src/anthropic.rs`, `tb-llm/src/provider.rs`:
+  zwei Einzelclients und ein Trait-Port ohne einen einzigen Aufrufer ausserhalb
+  der Crate.
+- `tb-engagement/src/claude_chat.rs`: der zweite Anthropic-Client.
+- Sieben eigene `reqwest::Client`-Aufbauten, fuenf Kopien der
+  Antwort-Structs, vier Kopien des Token-Auslesens und drei Kopien der
+  Env-Fallback-Kette.
 
 ## Bewusst nicht migriert
 
