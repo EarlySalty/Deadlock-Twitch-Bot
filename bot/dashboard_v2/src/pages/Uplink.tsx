@@ -58,31 +58,66 @@ function SidebarLink({
   );
 }
 
+/**
+ * Kopierfeld: der Knopf kopiert, und das Feld selbst ist ebenfalls ein
+ * Klickziel. Beides laeuft ueber denselben Weg, damit die Rueckmeldung nicht
+ * an einer der beiden Stellen fehlt.
+ *
+ * `navigator.clipboard` scheitert still, wenn die Seite ohne HTTPS laeuft oder
+ * der Browser die Erlaubnis verweigert. Ohne den Fehlerzweig sagt das Feld
+ * dann "Kopiert", waehrend die Zwischenablage leer bleibt, und der Streamer
+ * sucht den Fehler spaeter in OBS.
+ */
 function CopyField({ label, value }: { label: string; value: string }) {
-  const [ok, setOk] = useState(false);
+  const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   if (!value) return null;
+
+  const kopieren = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setStand('ok');
+    } catch {
+      setStand('fehler');
+    }
+    window.setTimeout(() => setStand('ruhe'), 2000);
+  };
+
+  const knopfText = stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Ging nicht' : 'Kopieren';
+
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
         {label}
       </div>
       <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-xl border border-border bg-background/70 px-3 py-2 text-xs text-white">
-          {value}
-        </code>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white"
-          onClick={async () => {
-            await navigator.clipboard.writeText(value);
-            setOk(true);
-            window.setTimeout(() => setOk(false), 1500);
-          }}
+          onClick={kopieren}
+          title="Klicken zum Kopieren"
+          className="min-w-0 flex-1 cursor-pointer truncate rounded-xl border border-border bg-background/70 px-3 py-2 text-left font-mono text-xs text-white transition-colors hover:border-primary/40 hover:bg-background"
+        >
+          {value}
+        </button>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white"
+          onClick={kopieren}
         >
           <Copy className="h-3.5 w-3.5" />
-          {ok ? 'Kopiert' : 'Kopieren'}
+          {knopfText}
         </button>
       </div>
+      {/* Ein aria-live-Bereich, weil die Rueckmeldung sonst nur im Knopftext
+          steht und von einem Screenreader nicht angesagt wird. */}
+      <p aria-live="polite" className="sr-only">
+        {stand === 'ok' ? 'In die Zwischenablage kopiert' : ''}
+        {stand === 'fehler' ? 'Kopieren hat nicht geklappt' : ''}
+      </p>
+      {stand === 'fehler' && (
+        <p className="text-xs text-warning">
+          Dein Browser hat das Kopieren nicht erlaubt. Markier die Adresse und kopier sie von Hand.
+        </p>
+      )}
     </div>
   );
 }
@@ -216,6 +251,15 @@ export function UplinkPage() {
                       Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei, meld dich beim Support.
                     </p>
                   )}
+                  {/* Die Adresse traegt den Ingest-Key als streamid. Wer sie
+                      abliest, sendet auf denselben Kanal wie der Streamer. Auf
+                      einem geteilten Bildschirm passiert genau das, deshalb
+                      steht die Warnung direkt am Feld und nicht in der Hilfe. */}
+                  <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    <strong className="font-semibold">Zeig diese Adresse nicht im Stream.</strong>{' '}
+                    Sie enthält deinen persönlichen Schlüssel. Wer sie sieht, kann auf deinem Kanal senden.
+                    Blende das Dashboard aus, bevor du es teilst.
+                  </p>
                   <p className="text-xs text-text-secondary">
                     In OBS: Dienst Benutzerdefiniert, SRT-Adresse aus dem Dashboard. Hardware-HEVC, VBR, Keyframe 2 s. Danach Stream starten.
                   </p>
