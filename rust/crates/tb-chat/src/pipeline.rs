@@ -66,7 +66,8 @@ use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
 use crate::spam_filter::{
-    SPAM_MIN_MATCHES, SpamAction, SpamContext, SpamFilter, normalize_exact_spam_message,
+    SPAM_MIN_MATCHES, SpamAction, SpamContext, SpamFilter, matches_safe_wording,
+    normalize_exact_spam_message, spam_signal_ist_nur_viewer_muster,
 };
 use crate::standard_replies::StandardReplies;
 use crate::sus_invite::SusInviteCheck;
@@ -1302,6 +1303,44 @@ impl ChatPipeline {
             }
 
             SpamAction::DeleteOnly | SpamAction::None if verdict.score > 0 => {
+                // Safe-Wording-Gate: Wenn der EINZIGE Grund der weiche
+                // Viewer-Regex ist und der Text ein harmloses
+                // Umgangssprache-Muster trägt (Lurk-/Gönn-Sprech), gar nicht
+                // erst den Judge fragen. Genau solche Sätze hat er fälschlich
+                // getimeoutet. Kein Negativ-Scoring, nur ein Gate im reinen
+                // Viewer-Regex-Pfad, damit echter Spam (stärkeres Signal) nie
+                // durchrutscht.
+                //
+                // mention_score == 0 ist Teil der Bedingung: ein Host-Mention
+                // erhöht den Score, ohne je einen Reason-String in
+                // verdict.matched zu erzeugen. Ohne diese Prüfung würde
+                // „@host gönn dir viewers billig" (Viewer-Regex + Mention)
+                // trotz zweier Signale durchgewinkt.
+                if !verdict.hard_signal
+                    && mention_score == 0
+                    && spam_signal_ist_nur_viewer_muster(&verdict.matched)
+                {
+                    if let Some(marker) = matches_safe_wording(text) {
+                        p.review_log.record(
+                            channel_login,
+                            chatter_login,
+                            &event.chatter_user_id,
+                            text,
+                            "SAFE_WORDING",
+                            &format!(
+                                "Harmlose Umgangssprache (Marker: {marker}), Judge übersprungen"
+                            ),
+                        );
+                        info!(
+                            channel = %channel_login,
+                            chatter = %chatter_login,
+                            marker,
+                            "Safe-Wording: reiner Viewer-Regex-Treffer, Judge übersprungen"
+                        );
+                        return false;
+                    }
+                }
+
                 // Verdachts-Pfad: loggen, bei hartem Signal Delete-only, dann
                 // Judge-Urteil + genau EIN Alert (asynchron) — KEIN Stopp.
                 let reasons_str = reasons.join(", ");

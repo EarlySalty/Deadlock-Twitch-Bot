@@ -179,6 +179,10 @@ normale URLs\n\
 - Fragen oder Gespräche ÜBER Spam, Viewer-Bots oder Bans (z.B. 'bannt der Bot mich, wenn \
 ich X eingebe?') — wer über einen Dienst redet, wirbt nicht für ihn. Nur die aktive \
 Bewerbung ist Spam.\n\
+- deutscher Alltags- und Lurk-Sprech, in dem 'viewer' nur beiläufig vorkommt (z.B. \
+'gönn(t) dir viewer', 'gönne viewer du weißt', 'bin nur am lurken', Kommentare über die \
+eigenen oder fremde Viewer-Zahlen). 'gönnen' ist deutsche Unterstützer-Umgangssprache, \
+kein Angebot.\n\
 \n\
 pattern ist reines Lern-Nebenprodukt und beeinflusst is_spam nie. Bei is_spam=true: pattern = \
 kürzestes eindeutiges Spam-Kernmuster, sofern die Nachricht einen unterscheidungskräftigen Token \
@@ -3124,6 +3128,8 @@ mod tests {
             ("best viewers in chat today", false),
             ("endlich affiliate erreicht!", false),
             ("wie kriegt man eigentlich mehr viewer?", false),
+            ("gönne viewer du weißt", false),
+            ("gönn dir viewer bro bin nur am lurken", false),
         ] {
             let review = call_judge(&http, provider, false, message)
                 .await
