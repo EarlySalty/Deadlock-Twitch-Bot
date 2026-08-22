@@ -10,6 +10,12 @@
 //! - Partner    → landing_access_allowed? → analytics_access_allowed?
 //!   (bei false → Redirect → /twitch/dashboard)
 //!
+//! Main-Domain-Shells (`/twitch/dashboard`, `/twitch/verwaltung`,
+//! `/twitch/uplink`) laufen ueber [`main_domain_spa_shell_gated_handler`] und
+//! sind serverseitig gegated: ohne Session 303 auf den Login mit dem eigenen
+//! Pfad als `next`, gesperrte Partner bekommen 403. Nur `/twitch/pricing`
+//! bleibt als Marketing-Seite oeffentlich ([`main_domain_spa_shell_handler`]).
+//!
 //! Dist-Pfad: Env `DASHBOARD_V2_DIST_PATH`, Default `bot/analytics/dashboard_v2/dist`
 //! (relativ zum WorkingDirectory des Service = Repo-Root).
 
@@ -26,6 +32,9 @@ use crate::auth::level::DashboardAuthLevel;
 // ── Konstanten ──────────────────────────────────────────────────────────────
 
 const LOGIN_URL: &str = "/twitch/auth/login?next=%2Fanalyse";
+/// Vite baut das dashboard_v2-Bundle mit genau diesem Prefix; die
+/// Main-Domain-Shells duerfen ihn deshalb nicht umschreiben.
+const MAIN_DOMAIN_ASSET_PREFIX: &str = "/twitch/dashboard-v2/";
 const LEGACY_DASHBOARD_URL: &str = "/twitch/dashboard";
 const DEFAULT_DIST_PATH: &str = "bot/analytics/dashboard_v2/dist";
 
@@ -73,14 +82,133 @@ pub(crate) async fn serve_dashboard_v2_index() -> Response {
     serve_dashboard_v2_index_with_asset_prefix("/analyse/").await
 }
 
-/// Liefert die dashboard_v2-SPA-Shell fuer Main-Domain-Seiten ohne Host-,
-/// Login- oder Analytics-Gate. Auth passiert dort clientseitig in der SPA.
+/// Liefert die dashboard_v2-SPA-Shell fuer die oeffentliche Main-Domain-Seite
+/// `/twitch/pricing`. Bewusst ohne Login-Gate: die Preisseite ist Marketing und
+/// muss auch ausgeloggt laden.
+///
+/// Alle eingeloggten Shells laufen ueber
+/// [`main_domain_spa_shell_gated_handler`].
 pub async fn main_domain_spa_shell_handler() -> Response {
-    serve_dashboard_v2_index_with_asset_prefix("/twitch/dashboard-v2/").await
+    serve_dashboard_v2_index_with_asset_prefix(MAIN_DOMAIN_ASSET_PREFIX).await
+}
+
+/// `GET /twitch/dashboard`, `/twitch/verwaltung`, `/twitch/uplink` — dieselbe
+/// SPA-Shell, aber serverseitig gegated.
+///
+/// Bis zum Cutover-Commit c8ada2a7 lagen diese Seiten ungegated auf
+/// [`main_domain_spa_shell_handler`]: jeder Besucher sah die komplette
+/// Dashboard-Shell samt Navigation, nur die JSON-API antwortete "unauthorized".
+///
+/// Kaskade wie bei [`analyse_handler`], aber ohne das Analytics-Gate: das gilt
+/// nur fuer `/analyse`. Wuerde es hier greifen, schickte `check_spa_auth` einen
+/// Partner ohne Analytics-Zugang auf `/twitch/dashboard` — also im Kreis.
+///
+/// 1. Admin-Host-Gate (Admin-Host → 404),
+/// 2. keine Session → 303 auf den Login, `next` ist der eigene Pfad,
+/// 3. Partner ohne Landing-Freigabe → 403 mit derselben Ansage wie der
+///    OAuth-Callback,
+/// 4. Admin, Localhost und freigeschaltete Partner → Shell.
+pub async fn main_domain_spa_shell_gated_handler(
+    headers: HeaderMap,
+    uri: Uri,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
+        return r;
+    }
+    if let Some(r) = check_shell_auth(&auth, &pool, uri.path()).await {
+        return r;
+    }
+    serve_dashboard_v2_index_with_asset_prefix(MAIN_DOMAIN_ASSET_PREFIX).await
+}
+
+/// Login-Ziel einer gegateten Shell: der eigene Pfad als `next`, damit der
+/// Streamer nach dem Twitch-Login dort landet, wo er hinwollte.
+///
+/// Alle drei Pfade stehen in `ALLOWED_NEXT_PREFIXES` (`auth/oauth_login.rs`),
+/// sonst wuerde `sanitize_next_path` sie auf `/twitch/dashboard` zurueckfallen
+/// lassen.
+fn shell_login_url(path: &str) -> String {
+    let encoded: String = url::form_urlencoded::byte_serialize(path.as_bytes()).collect();
+    format!("/twitch/auth/login?next={encoded}")
+}
+
+/// Wortgleiche Absage wie der OAuth-Callback (`handlers/auth_login.rs`), damit
+/// ein gesperrter Account ueberall dieselbe Erklaerung bekommt.
+fn kein_zugriff_response(display_name: &str, twitch_login: &str) -> Response {
+    let who = if display_name.trim().is_empty() {
+        twitch_login
+    } else {
+        display_name
+    };
+    (
+        StatusCode::FORBIDDEN,
+        [(header::CACHE_CONTROL, "no-store")],
+        format!("Kein Zugriff: Twitch-Account '{who}' ist nicht als Streamer-Partner freigegeben."),
+    )
+        .into_response()
+}
+
+/// Reine Gate-Entscheidung fuer die Main-Domain-Shells. `landing_allowed` ist
+/// nur fuer Partner relevant und wird von [`check_shell_auth`] vorher geladen.
+fn shell_gate_decision(
+    auth: &DashboardAuthLevel,
+    landing_allowed: bool,
+    path: &str,
+) -> Option<Response> {
+    match auth {
+        DashboardAuthLevel::None => Some(Redirect::to(&shell_login_url(path)).into_response()),
+        DashboardAuthLevel::Admin { .. } => None,
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            display_name,
+            ..
+        } => {
+            if landing_allowed {
+                None
+            } else {
+                Some(kein_zugriff_response(display_name, twitch_login))
+            }
+        }
+    }
+}
+
+/// Laedt fuer Partner den Access-State und faellt damit in
+/// [`shell_gate_decision`]. Bei DB-Fehlern bleibt der bereits eingeloggte
+/// Partner drin (gleiche Kulanz wie [`check_spa_auth`]).
+async fn check_shell_auth(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    path: &str,
+) -> Option<Response> {
+    let landing_allowed = match auth {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => tb_analytics::partner_access::load_partner_access_state(
+            pool,
+            twitch_login,
+            twitch_user_id,
+        )
+        .await
+        .map(|access| access.landing_access_allowed)
+        .unwrap_or_else(|e| {
+            tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
+            true
+        }),
+        _ => true,
+    };
+    shell_gate_decision(auth, landing_allowed, path)
 }
 
 async fn serve_dashboard_v2_index_with_asset_prefix(asset_prefix: &str) -> Response {
-    let index = dist_root().join("index.html");
+    serve_dashboard_v2_index_from_root(dist_root(), asset_prefix).await
+}
+
+async fn serve_dashboard_v2_index_from_root(dist: PathBuf, asset_prefix: &str) -> Response {
+    let index = dist.join("index.html");
     let mut html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,
         Err(_) => {
@@ -93,8 +221,8 @@ async fn serve_dashboard_v2_index_with_asset_prefix(asset_prefix: &str) -> Respo
     };
 
     // Vite baut die Assets mit Prefix /twitch/dashboard-v2/.
-    if asset_prefix != "/twitch/dashboard-v2/" {
-        html = html.replace("/twitch/dashboard-v2/", asset_prefix);
+    if asset_prefix != MAIN_DOMAIN_ASSET_PREFIX {
+        html = html.replace(MAIN_DOMAIN_ASSET_PREFIX, asset_prefix);
     }
     // Runtime-Script vor </head> injizieren (erstes Vorkommen).
     let html = html.replacen("</head>", &format!("{RUNTIME_SCRIPT}\n  </head>"), 1);
@@ -147,9 +275,13 @@ pub async fn analyse_assets_handler(
     serve_asset(asset_path.trim_start_matches('/')).await
 }
 
-/// `GET /twitch/dashboard-v2/{path:.*}` — dashboard_v2-Assets fuer die
-/// ungegateten Main-Domain-Shells. Ohne Login-Gate, damit `/twitch/pricing`
-/// auch ausgeloggt vollstaendig laedt.
+/// `GET /twitch/dashboard-v2/{path:.*}` — dashboard_v2-Assets der
+/// Main-Domain-Shells. Bewusst ohne Login-Gate, damit die oeffentliche
+/// Preisseite `/twitch/pricing` auch ausgeloggt vollstaendig laedt.
+///
+/// Unbedenklich, weil hier ausschliesslich statische Dateien aus dem
+/// Vite-Build-Verzeichnis rausgehen (`serve_asset`, segmentweise
+/// Traversal-Pruefung): kein DB-Zugriff, keine Session, keine Nutzerdaten.
 pub async fn dashboard_v2_public_assets_handler(Path(asset_path): Path<String>) -> Response {
     serve_asset(asset_path.trim_start_matches('/')).await
 }
@@ -663,6 +795,116 @@ mod tests {
         );
         let body = body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"console.log('ok');");
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    fn test_partner() -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: "ismile_e".to_string(),
+            twitch_user_id: "4242".to_string(),
+            display_name: "iSmile_E".to_string(),
+        }
+    }
+
+    /// Ohne Session darf keine Shell rausgehen. Der Login bekommt den eigenen
+    /// Pfad als `next`, sonst landet der Streamer nach dem Twitch-Login auf
+    /// einer anderen Seite als der, die er aufgerufen hat.
+    #[test]
+    fn ohne_session_fuehrt_die_shell_auf_den_login() {
+        let erwartet = [
+            (
+                "/twitch/dashboard",
+                "/twitch/auth/login?next=%2Ftwitch%2Fdashboard",
+            ),
+            (
+                "/twitch/verwaltung",
+                "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung",
+            ),
+            (
+                "/twitch/uplink",
+                "/twitch/auth/login?next=%2Ftwitch%2Fuplink",
+            ),
+        ];
+        for (pfad, ziel) in erwartet {
+            let resp = shell_gate_decision(&DashboardAuthLevel::None, true, pfad)
+                .expect("ohne Session muss der Gate greifen");
+            assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{pfad}");
+            assert_eq!(
+                resp.headers()
+                    .get(header::LOCATION)
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                ziel,
+                "{pfad}"
+            );
+            // Der Login wirft ein nicht gelistetes `next` weg — dann liefe der
+            // Redirect ins Leere statt zurueck auf die aufgerufene Seite.
+            assert_eq!(
+                crate::auth::oauth_login::sanitize_next_path(Some(pfad)),
+                pfad,
+                "{pfad} fehlt in ALLOWED_NEXT_PREFIXES"
+            );
+        }
+    }
+
+    /// Ein Partner ohne Landing-Freigabe bekommt dieselbe Absage wie im
+    /// OAuth-Callback, keine Shell und keinen Redirect.
+    #[tokio::test]
+    async fn partner_ohne_freigabe_bekommt_kein_zugriff() {
+        let resp = shell_gate_decision(&test_partner(), false, "/twitch/uplink")
+            .expect("gesperrter Partner muss geblockt werden");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let body = body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(
+            text,
+            "Kein Zugriff: Twitch-Account 'iSmile_E' ist nicht als Streamer-Partner freigegeben."
+        );
+    }
+
+    /// Freigegebener Partner und Admin kommen durch, und die Shell behaelt den
+    /// Asset-Prefix /twitch/dashboard-v2/ (Vite baut das Bundle nur dafuer).
+    #[tokio::test]
+    async fn freigegebener_partner_bekommt_die_shell() {
+        for pfad in ["/twitch/dashboard", "/twitch/verwaltung", "/twitch/uplink"] {
+            assert!(
+                shell_gate_decision(&test_partner(), true, pfad).is_none(),
+                "{pfad}"
+            );
+            assert!(
+                shell_gate_decision(&DashboardAuthLevel::admin(), true, pfad).is_none(),
+                "{pfad}"
+            );
+        }
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tb_spa_shell_test_{unique}"));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::write(
+            root.join("index.html"),
+            b"<html><head></head><body><script src=\"/twitch/dashboard-v2/assets/app.js\"></script></body></html>",
+        )
+        .await
+        .unwrap();
+
+        let resp = serve_dashboard_v2_index_from_root(root.clone(), MAIN_DOMAIN_ASSET_PREFIX).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("/twitch/dashboard-v2/assets/app.js"),
+            "{html}"
+        );
+        assert!(html.contains("__TWITCH_DASHBOARD_RUNTIME__"), "{html}");
 
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
