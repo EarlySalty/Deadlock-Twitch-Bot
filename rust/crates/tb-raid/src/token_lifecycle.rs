@@ -505,6 +505,36 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             return false;
         }
 
+        // Getrennte/archivierte Kanäle nie restaurieren — und vor allem nicht
+        // proben: der Ban-Probe läuft über `ensure_bot_is_mod` und würde den Bot
+        // im getrennten Kanal als Nebenwirkung wieder als Moderator setzen.
+        // Fail-closed: ist der Zustand nicht lesbar, wird nicht restauriert.
+        match self
+            .partner_disconnect_state(twitch_user_id, twitch_login)
+            .await
+        {
+            Ok(Some(state)) => {
+                tracing::info!(
+                    login = twitch_login,
+                    urteil = "nein",
+                    grund = state,
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login = twitch_login,
+                    urteil = "fehler",
+                    grund = "Partner-Status nicht lesbar",
+                    "Bot-Ban-Restore-Entscheidung"
+                );
+                return false;
+            }
+        }
+
         let Some(probe) = &self.bot_ban_status_probe else {
             tracing::info!(
                 login = twitch_login,
@@ -649,6 +679,22 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                         AND COALESCE(TRIM(p.technical_pause_reason), '') = ''
                         AND COALESCE(ra.raid_enabled, FALSE) = FALSE
                     )
+               )
+               -- Bewusst getrennte oder archivierte Kanäle bleiben draußen.
+               -- `disconnect-bot` hinterlässt exakt die Signatur des
+               -- Legacy-Opt-out-Zweigs (opt_out=1, keine Pause, raid_enabled=0);
+               -- ohne diesen Filter hat der Sweep die Trennung Stunden später
+               -- teilweise zurückgedreht und den Bot dabei wieder gemoddet.
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM twitch_partners dp
+                    WHERE (dp.twitch_user_id = ra.twitch_user_id
+                        OR LOWER(dp.twitch_login) = LOWER(ra.twitch_login))
+                      AND (
+                           LOWER(TRIM(COALESCE(dp.status, ''))) IN ('departnered', 'archived')
+                        OR dp.departnered_at IS NOT NULL
+                        OR dp.admin_archived_at IS NOT NULL
+                      )
                )
             "#,
         )
@@ -994,6 +1040,42 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     /// existiert UND `needs_reauth = FALSE` (Kanal wieder gesund). Hebt nur echte
     /// Bot-Ban-Zustände auf und re-aktiviert Raid, sofern kein manueller Opt-out
     /// vorliegt.
+    /// Ist der Kanal bewusst getrennt (`disconnect-bot`) oder archiviert?
+    /// Liefert `Some(grund)` für den Log, `None` wenn nichts dagegen spricht.
+    /// Getrennt heißt: kein Partner mehr, weder als Raid-Quelle noch als Ziel.
+    /// Ein Bot-Ban-Restore hätte hier nichts zu heilen, es gibt keinen Ban.
+    async fn partner_disconnect_state(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+    ) -> Result<Option<&'static str>, sqlx::Error> {
+        let login_hint = twitch_login.trim().to_lowercase();
+        let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+            r#"
+            SELECT status, departnered_at::TEXT, admin_archived_at::TEXT
+              FROM twitch_partners
+             WHERE twitch_user_id = $1
+                OR ($2 <> '' AND LOWER(twitch_login) = $2)
+             LIMIT 1
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(&login_hint)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((status, departnered_at, archived_at)) = row else {
+            return Ok(None);
+        };
+        let status = status.unwrap_or_default().trim().to_lowercase();
+        if status == "archived" || archived_at.is_some() {
+            return Ok(Some("Kanal ist archiviert"));
+        }
+        if status == "departnered" || departnered_at.is_some() {
+            return Ok(Some("Kanal ist bewusst getrennt"));
+        }
+        Ok(None)
+    }
+
     async fn restore_bot_banned_inner(
         &self,
         twitch_user_id: &str,
@@ -1066,6 +1148,33 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             ),
             None => (false, String::new()),
         };
+        // Zweiter Halt innerhalb der Transaktion: zwischen Kandidaten-Query und
+        // hier kann die Trennung passiert sein. Ohne diesen Check würde ein
+        // bewusst getrennter Kanal über den Legacy-Opt-out-Zweig unten wieder
+        // auf `manual_partner_opt_out = 0` und `raid_enabled = true` gesetzt.
+        let disconnected = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                  FROM twitch_partners
+                 WHERE (twitch_user_id = $1 OR ($2 <> '' AND LOWER(twitch_login) = $2))
+                   AND (
+                        LOWER(TRIM(COALESCE(status, ''))) IN ('departnered', 'archived')
+                     OR departnered_at IS NOT NULL
+                     OR admin_archived_at IS NOT NULL
+                   )
+            )
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(&login_hint)
+        .fetch_one(&mut *tx)
+        .await?;
+        if disconnected {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
         let legacy_manual_opt_out_state =
             pause_reason.is_empty() && manual_opt_out && !auth.raid_enabled.unwrap_or(false);
         let restores_bot_banned =
@@ -1202,6 +1311,19 @@ mod tests {
     impl BotBanStatusProbe for FixedBotBanStatus {
         async fn bot_ban_status(&self, _twitch_user_id: &str, _twitch_login: &str) -> BotBanStatus {
             self.0
+        }
+    }
+
+    /// Zählt die Probe-Aufrufe. In Prod hängt am Probe ein `ensure_bot_is_mod`,
+    /// jeder Aufruf ist also ein potenzieller Remod im fremden Kanal.
+    #[derive(Default)]
+    struct CountingBotBanStatus(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl BotBanStatusProbe for CountingBotBanStatus {
+        async fn bot_ban_status(&self, _twitch_user_id: &str, _twitch_login: &str) -> BotBanStatus {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            BotBanStatus::NotBanned
         }
     }
 
@@ -1355,7 +1477,8 @@ mod tests {
                 id bigserial PRIMARY KEY, twitch_user_id text, twitch_login text,
                 status text DEFAULT 'active',
                 manual_partner_opt_out integer DEFAULT 0,
-                technical_pause_reason text, raid_bot_enabled integer DEFAULT 1)",
+                technical_pause_reason text, raid_bot_enabled integer DEFAULT 1,
+                departnered_at timestamptz, admin_archived_at timestamptz)",
             "CREATE TABLE twitch_raid_auth (
                 twitch_user_id text PRIMARY KEY, twitch_login text,
                 raid_enabled boolean DEFAULT true, needs_reauth boolean DEFAULT false,
@@ -1628,6 +1751,86 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(raid, Some(true));
+    }
+
+    /// Regression: `disconnect-bot` hinterlässt genau die Signatur, die der
+    /// Legacy-Opt-out-Zweig als Bot-Ban gelesen hat (opt_out=1, keine
+    /// technische Pause, raid_enabled=false). Der Sweep hat den getrennten
+    /// Kanal deshalb Stunden später halb reaktiviert: `manual_partner_opt_out`
+    /// zurück auf 0, `raid_enabled` auf true, und über den Ban-Probe den Bot
+    /// wieder als Moderator gesetzt — während `status` auf `departnered` stand.
+    #[tokio::test]
+    async fn restore_bot_banned_fasst_getrennte_kanaele_nicht_an() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_restore_departnered").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_user_id, twitch_login, status, manual_partner_opt_out,
+                 raid_bot_enabled, departnered_at)
+             VALUES ('310', 'getrennt', 'departnered', 1, 0, now()),
+                    ('311', 'archiviert', 'archived', 1, 0, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_partners SET admin_archived_at = now() WHERE twitch_user_id = '311'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES ('310', 'getrennt', false, false), ('311', 'archiviert', false, false)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let probe = Arc::new(CountingBotBanStatus::default());
+        let reactor =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()))
+                .with_bot_ban_status_probe(probe.clone());
+
+        // Kandidaten-Query lässt beide draußen.
+        assert_eq!(
+            reactor.restore_ready_bot_banned_channels().await,
+            0,
+            "getrennte und archivierte Kanäle sind keine Bot-Ban-Kandidaten"
+        );
+        // Direkter Aufruf ebenfalls, und ohne den Bot zu proben (= zu remodden).
+        assert!(!reactor.restore_bot_banned_channel("310", "getrennt").await);
+        assert!(
+            !reactor
+                .restore_bot_banned_channel("311", "archiviert")
+                .await
+        );
+        assert_eq!(
+            probe.0.load(Ordering::SeqCst),
+            0,
+            "kein Ban-Probe im getrennten Kanal — der würde den Bot wieder modden"
+        );
+
+        // DB-Zustand unverändert: Opt-out bleibt, Raid bleibt aus.
+        let rows: Vec<(String, Option<i32>, Option<bool>)> = sqlx::query_as(
+            "SELECT p.twitch_user_id, p.manual_partner_opt_out, a.raid_enabled
+               FROM twitch_partners p
+               JOIN twitch_raid_auth a ON a.twitch_user_id = p.twitch_user_id
+              ORDER BY p.twitch_user_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("310".to_string(), Some(1), Some(false)),
+                ("311".to_string(), Some(1), Some(false)),
+            ]
+        );
     }
 
     #[tokio::test]
