@@ -165,9 +165,11 @@ impl FireworksReviewClient {
     /// Fail-closed-Gate: abgeschaltet wird nur durch fehlenden Schluessel
     /// (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder durch eine eigene
     /// `TB_LLM_PROVIDER_RICKY_CREW_REVIEW`, die auf einen anderen Anbieter
-    /// zeigt. Globale `FIREWORKS_MODEL`/`FIREWORK_BASE_URL` fuer den uebrigen
-    /// Bot schalten das Review nicht ab; Adresse und Modell sind hier ohnehin
-    /// festgenagelt, ein Modell ist nie "fehlend".
+    /// zeigt. Adresse und Modell kommen aus der zentralen Auswahl und werden
+    /// durchgereicht: `TB_LLM_MODEL_RICKY_CREW_REVIEW` (bzw. das globale
+    /// `FIREWORKS_MODEL`) und `FIREWORKS_BASE_URL` wirken, wie der
+    /// Service-Wrapper es verspricht. Ein Modell ist nie "fehlend", die
+    /// Auswahl liefert immer eines.
     pub fn from_env() -> Result<Self, ReviewError> {
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks" || endpoint.api_key.is_none() {
@@ -175,8 +177,8 @@ impl FireworksReviewClient {
         }
         Self::from_parts(
             endpoint.api_key.unwrap_or_default(),
-            FIREWORKS_DEFAULT_BASE_URL.to_string(),
-            FIREWORKS_DEFAULT_MODEL.to_string(),
+            endpoint.base_url,
+            endpoint.model,
             FIREWORKS_TIMEOUT,
         )
     }
@@ -1216,20 +1218,26 @@ mod tests {
         std::env::remove_var("TB_LLM_PROVIDER_OUTREACH_SHADOW");
         std::env::remove_var("MINIMAX_API_KEY");
 
-        // Globale Fireworks-Variablen fuer den Rest des Bots schalten das
-        // Review NICHT ab; Adresse und Modell bleiben festgenagelt.
+        // Globale Fireworks-Variablen und der eigene Modell-Override schalten
+        // das Review NICHT ab, sondern werden durchgereicht.
         std::env::set_var("FIREWORKS_API_KEY", "   ");
         std::env::set_var("FIREWORKS_BASE_URL", "https://example.invalid/inference/v1");
         std::env::set_var("FIREWORKS_MODEL", "accounts/fireworks/models/anderes");
         std::env::set_var("TB_LLM_MODEL_RICKY_CREW_REVIEW", "arbitrary-model");
-        let trotz_global = FireworksReviewClient::from_env().expect("globales Modell schaltet nicht ab");
-        assert_eq!(trotz_global.endpoint.base_url, FIREWORKS_DEFAULT_BASE_URL);
-        assert_eq!(trotz_global.endpoint.model, FIREWORKS_DEFAULT_MODEL);
+        let mit_override = FireworksReviewClient::from_env().expect("Override schaltet nicht ab");
+        assert_eq!(mit_override.endpoint.base_url, "https://example.invalid/inference/v1");
+        assert_eq!(mit_override.endpoint.model, "arbitrary-model");
+        // Ohne eigenen Override gilt das globale Fireworks-Modell.
+        std::env::remove_var("TB_LLM_MODEL_RICKY_CREW_REVIEW");
+        let global = FireworksReviewClient::from_env().expect("globales Modell schaltet nicht ab");
+        assert_eq!(global.endpoint.model, "accounts/fireworks/models/anderes");
         // Dasselbe Gate gilt fuer das Outreach-Schatten-Review (hier unter
         // derselben Env-Sperre geprueft, weil beide dieselben Variablen lesen).
+        std::env::set_var("TB_LLM_MODEL_OUTREACH_SHADOW", "outreach-model");
         let outreach = crate::outreach_shadow::OutreachReviewClient::from_env()
             .expect("Outreach: globales Modell schaltet nicht ab");
-        assert_eq!(outreach.endpoint_model(), FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(outreach.endpoint_model(), "outreach-model");
+        std::env::remove_var("TB_LLM_MODEL_OUTREACH_SHADOW");
 
         std::env::set_var("FIREWORKS_BASE_URL", FIREWORKS_DEFAULT_BASE_URL);
         std::env::remove_var("FIREWORKS_MODEL");
