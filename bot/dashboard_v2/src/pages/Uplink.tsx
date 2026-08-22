@@ -81,26 +81,34 @@ function SidebarLink({
  * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
  */
 /**
- * Die vier Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
+ * Die Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
  *
- * OBS zeigt Chat, Aktivitaet und Stream-Info nur bei verbundenem Twitch-Konto.
- * Als Browser-Dock kommen sie zurueck. Ohne den fertigen Link muesste jeder
- * seinen Kanalnamen in vier Adressen von Hand einsetzen, und genau da bricht
- * die Einrichtung ab.
+ * Es sind dieselben Adressen, die OBS in seine eigenen Docks laedt: siehe
+ * `frontend/oauth/TwitchAuth.cpp` im OBS-Quellcode. Die eingebauten Docks sind
+ * selbst nur Browser-Fenster, sie werden nur automatisch angelegt, sobald ein
+ * Twitch-Konto verbunden ist. Inhaltlich ist ein eigenes Dock dasselbe Fenster.
+ *
+ * Drei der vier Adressen kommen ohne Kanalnamen aus: Twitch leitet einen
+ * angemeldeten Nutzer auf seinen eigenen Kanal weiter. Das ist robuster als
+ * der Namensweg, weil es auch nach einer Namensaenderung noch stimmt. Nur der
+ * Chat braucht den Kanal in der Adresse.
  */
 const OBS_DOCKS = [
-  { titel: 'Chat', pfad: (k: string) => `https://www.twitch.tv/popout/${k}/chat?darkpopout` },
+  {
+    titel: 'Chat',
+    pfad: (k: string) => (k ? `https://www.twitch.tv/popout/${k}/chat?darkpopout` : ''),
+  },
   {
     titel: 'Aktivitätsfeed',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/activity-feed`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/activity-feed',
   },
   {
     titel: 'Stream-Informationen',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/edit-stream-info`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info',
   },
   {
     titel: 'Kanalpunkte',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/community-points`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/community-points',
   },
 ] as const;
 
@@ -503,28 +511,28 @@ export function UplinkPage() {
                   <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
                   <p className="text-sm text-text-secondary">
                     Bei Dienst „Benutzerdefiniert“ blendet OBS die Twitch-Fenster aus. Dein Chat läuft
-                    normal weiter, nur die Fenster fehlen. In OBS unter <strong>Docks</strong>,{' '}
-                    <strong>Benutzerdefinierte Browser-Docks</strong> holst du sie zurück: Name eintragen,
-                    Adresse hier kopieren, einfügen.
+                    normal weiter, nur die Fenster fehlen. Es sind dieselben Seiten, die OBS auch in
+                    seine eigenen Fenster lädt, du legst sie einmal selbst an. In OBS unter{' '}
+                    <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>: Name
+                    eintragen, Adresse hier kopieren, einfügen.
                   </p>
-                  {data.twitch_login ? (
-                    <div className="space-y-1.5">
-                      {OBS_DOCKS.map((dock) => (
-                        <DockZeile
-                          key={dock.titel}
-                          titel={dock.titel}
-                          url={dock.pfad(data.twitch_login as string)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
+                  <div className="space-y-1.5">
+                    {OBS_DOCKS.map((dock) => {
+                      const url = dock.pfad(data.twitch_login ?? '');
+                      if (!url) return null;
+                      return <DockZeile key={dock.titel} titel={dock.titel} url={url} />;
+                    })}
+                  </div>
+                  {data.twitch_login ? null : (
                     <p className="text-xs text-text-secondary">
-                      Wir kennen deinen Kanalnamen gerade nicht. Melde dich neu an, dann stehen die
-                      Adressen hier fertig.
+                      Für den Chat brauchen wir deinen Kanalnamen, den kennen wir gerade nicht. Melde
+                      dich neu an, dann steht auch diese Adresse hier.
                     </p>
                   )}
                   <p className="text-xs text-text-secondary">
-                    Im Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach.
+                    Im Dock musst du bei Twitch angemeldet sein, danach bleibt die Anmeldung stehen.
+                    Einmal einrichten, Fenster anordnen, unter <strong>Docks</strong> das Layout
+                    speichern. Das übersteht jeden OBS-Neustart.
                   </p>
                 </Rise>
               </div>
