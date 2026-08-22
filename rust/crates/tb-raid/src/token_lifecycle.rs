@@ -685,16 +685,30 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                -- Legacy-Opt-out-Zweigs (opt_out=1, keine Pause, raid_enabled=0);
                -- ohne diesen Filter hat der Sweep die Trennung Stunden später
                -- teilweise zurückgedreht und den Bot dabei wieder gemoddet.
-               AND NOT EXISTS (
-                   SELECT 1
-                     FROM twitch_partners dp
-                    WHERE (dp.twitch_user_id = ra.twitch_user_id
-                        OR LOWER(dp.twitch_login) = LOWER(ra.twitch_login))
-                      AND (
-                           LOWER(TRIM(COALESCE(dp.status, ''))) IN ('departnered', 'archived')
-                        OR dp.departnered_at IS NOT NULL
-                        OR dp.admin_archived_at IS NOT NULL
-                      )
+               -- Eine aktive Zeile schlägt eine alte getrennte: der partielle
+               -- Unique-Index greift nur für status = 'active', Karteileichen
+               -- daneben sind möglich und dürfen keinen Partner aussperren.
+               AND NOT (
+                   EXISTS (
+                       SELECT 1
+                         FROM twitch_partners dp
+                        WHERE (dp.twitch_user_id = ra.twitch_user_id
+                            OR LOWER(dp.twitch_login) = LOWER(ra.twitch_login))
+                          AND (
+                               LOWER(TRIM(COALESCE(dp.status, ''))) IN ('departnered', 'archived')
+                            OR dp.departnered_at IS NOT NULL
+                            OR dp.admin_archived_at IS NOT NULL
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM twitch_partners ap
+                        WHERE (ap.twitch_user_id = ra.twitch_user_id
+                            OR LOWER(ap.twitch_login) = LOWER(ra.twitch_login))
+                          AND LOWER(TRIM(COALESCE(ap.status, ''))) = 'active'
+                          AND ap.departnered_at IS NULL
+                          AND ap.admin_archived_at IS NULL
+                   )
                )
             "#,
         )
@@ -1036,46 +1050,61 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         Ok(false)
     }
 
-    /// Kern von `restore_bot_banned_channel`: nur restaurieren, wenn die Auth-Zeile
-    /// existiert UND `needs_reauth = FALSE` (Kanal wieder gesund). Hebt nur echte
-    /// Bot-Ban-Zustände auf und re-aktiviert Raid, sofern kein manueller Opt-out
-    /// vorliegt.
     /// Ist der Kanal bewusst getrennt (`disconnect-bot`) oder archiviert?
     /// Liefert `Some(grund)` für den Log, `None` wenn nichts dagegen spricht.
     /// Getrennt heißt: kein Partner mehr, weder als Raid-Quelle noch als Ziel.
     /// Ein Bot-Ban-Restore hätte hier nichts zu heilen, es gibt keinen Ban.
+    ///
+    /// Aggregiert über ALLE Zeilen des Kanals statt `LIMIT 1`: der partielle
+    /// Unique-Index greift nur `WHERE status = 'active'`
+    /// (`storage_pg_v2_partner_archive_split.sql`), eine alte `departnered`-Zeile
+    /// neben der aktiven ist also möglich. Eine aktive Zeile schlägt darum die
+    /// getrennte, sonst wäre ein reaktivierter Partner dauerhaft vom Restore
+    /// ausgeschlossen. Gleiche Semantik wie die beiden SQL-Guards.
     async fn partner_disconnect_state(
         &self,
         twitch_user_id: &str,
         twitch_login: &str,
     ) -> Result<Option<&'static str>, sqlx::Error> {
         let login_hint = twitch_login.trim().to_lowercase();
-        let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+        let row = sqlx::query_as::<_, (bool, bool, bool)>(
             r#"
-            SELECT status, departnered_at::TEXT, admin_archived_at::TEXT
+            SELECT
+                BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'archived'
+                        OR admin_archived_at IS NOT NULL)   AS archiviert,
+                BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'departnered'
+                        OR departnered_at IS NOT NULL)      AS getrennt,
+                BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'active'
+                        AND departnered_at IS NULL
+                        AND admin_archived_at IS NULL)      AS aktiv
               FROM twitch_partners
              WHERE twitch_user_id = $1
                 OR ($2 <> '' AND LOWER(twitch_login) = $2)
-             LIMIT 1
             "#,
         )
         .bind(twitch_user_id)
         .bind(&login_hint)
         .fetch_optional(&self.pool)
         .await?;
-        let Some((status, departnered_at, archived_at)) = row else {
+        let Some((archiviert, getrennt, aktiv)) = row else {
             return Ok(None);
         };
-        let status = status.unwrap_or_default().trim().to_lowercase();
-        if status == "archived" || archived_at.is_some() {
+        if aktiv {
+            return Ok(None);
+        }
+        if archiviert {
             return Ok(Some("Kanal ist archiviert"));
         }
-        if status == "departnered" || departnered_at.is_some() {
+        if getrennt {
             return Ok(Some("Kanal ist bewusst getrennt"));
         }
         Ok(None)
     }
 
+    /// Kern von `restore_bot_banned_channel`: nur restaurieren, wenn die Auth-Zeile
+    /// existiert UND `needs_reauth = FALSE` (Kanal wieder gesund). Hebt nur echte
+    /// Bot-Ban-Zustände auf und re-aktiviert Raid, sofern kein manueller Opt-out
+    /// vorliegt.
     async fn restore_bot_banned_inner(
         &self,
         twitch_user_id: &str,
@@ -1163,6 +1192,16 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                      OR departnered_at IS NOT NULL
                      OR admin_archived_at IS NOT NULL
                    )
+            )
+            -- Eine aktive Zeile schlägt eine alte getrennte (Karteileichen sind
+            -- möglich, der Unique-Index greift nur für status = 'active').
+            AND NOT EXISTS (
+                SELECT 1
+                  FROM twitch_partners
+                 WHERE (twitch_user_id = $1 OR ($2 <> '' AND LOWER(twitch_login) = $2))
+                   AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
+                   AND departnered_at IS NULL
+                   AND admin_archived_at IS NULL
             )
             "#,
         )
@@ -1766,6 +1805,9 @@ mod tests {
             return;
         };
         let pool = setup_db("tl_restore_departnered").await;
+        // Signatur der echten Trennung, gesetzt in
+        // `tb-analytics/src/streamers_crud.rs` (Schritt 3: status + departnered_at,
+        // Schritt 4: raid_enabled = false).
         sqlx::query(
             "INSERT INTO twitch_partners
                 (twitch_user_id, twitch_login, status, manual_partner_opt_out,
@@ -1814,11 +1856,37 @@ mod tests {
             "kein Ban-Probe im getrennten Kanal — der würde den Bot wieder modden"
         );
 
-        // DB-Zustand unverändert: Opt-out bleibt, Raid bleibt aus.
+        // Karteileiche: alte departnered-Zeile NEBEN einer aktiven. Der partielle
+        // Unique-Index greift nur für status='active', dieser Fall ist also
+        // möglich — und darf den heute aktiven Partner nicht aussperren.
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_user_id, twitch_login, status, manual_partner_opt_out,
+                 raid_bot_enabled, departnered_at, technical_pause_reason)
+             VALUES ('312', 'wiederda', 'departnered', 1, 0, now(), NULL),
+                    ('312', 'wiederda', 'active', 1, 0, NULL, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES ('312', 'wiederda', false, false)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            reactor.restore_bot_banned_channel("312", "wiederda").await,
+            "aktive Zeile schlägt die alte getrennte — sonst bleibt der Partner für immer gesperrt"
+        );
+
+        // DB-Zustand der getrennten Kanäle unverändert: Opt-out bleibt, Raid bleibt aus.
         let rows: Vec<(String, Option<i32>, Option<bool>)> = sqlx::query_as(
             "SELECT p.twitch_user_id, p.manual_partner_opt_out, a.raid_enabled
                FROM twitch_partners p
                JOIN twitch_raid_auth a ON a.twitch_user_id = p.twitch_user_id
+              WHERE p.twitch_user_id IN ('310', '311')
               ORDER BY p.twitch_user_id",
         )
         .fetch_all(&pool)
