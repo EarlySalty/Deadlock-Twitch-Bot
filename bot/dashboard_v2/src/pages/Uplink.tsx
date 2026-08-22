@@ -21,6 +21,7 @@ import '../uplinkHelp.css';
 import {
   UPLINK_PROFILE,
   fetchUplinkDestinations,
+  profilNameFuer,
   fetchUplinkMe,
   joinUplinkWaitlist,
   saveUplinkTwitchDestination,
@@ -251,11 +252,16 @@ export function UplinkPage() {
   });
   // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
   // leeres Formular, weil der Stream-Key nie zurueckkommt.
-  const { data: ziele } = useQuery({
+  const { data: ziele, isError: zieleFehler } = useQuery({
     queryKey: ['uplink-destinations'],
     queryFn: fetchUplinkDestinations,
     retry: false,
   });
+  // Das Relay antwortet auf einen leeren Erfolg auch mal mit `{}`. Ohne die
+  // Absicherung wirft `.length` beim Rendern, und die ErrorBoundary ersetzt
+  // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
+  // gerade braucht.
+  const gespeicherteZiele = ziele?.destinations ?? [];
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
@@ -263,6 +269,19 @@ export function UplinkPage() {
   const [rtmpUrl, setRtmpUrl] = useState('rtmp://live.twitch.tv/app');
   const [streamKey, setStreamKey] = useState('');
   const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
+  // Vorbelegen aus dem gespeicherten Ziel, aber nur einmal: sonst zoege ein
+  // Refetch die Auswahl unter der Hand zurueck, waehrend jemand sie gerade
+  // aendert. `bestellt` ist der Wunsch des Streamers, nicht das geklemmte
+  // Ergebnis, sonst spraenge die Auswahl auf das, was die Plattform erlaubt.
+  const [profilGesetzt, setProfilGesetzt] = useState(false);
+  const bestellt = gespeicherteZiele.find((z) => z.platform === 'twitch')?.requested;
+  useEffect(() => {
+    if (profilGesetzt) return;
+    const name = profilNameFuer(bestellt);
+    if (!name) return;
+    setProfil(name);
+    setProfilGesetzt(true);
+  }, [bestellt, profilGesetzt]);
   const saveDest = useMutation({
     mutationFn: () =>
       saveUplinkTwitchDestination({ rtmp_url: rtmpUrl, stream_key: streamKey, profil }),
@@ -479,11 +498,16 @@ export function UplinkPage() {
                       leer, auch wenn ein Ziel gespeichert ist. Ohne diese Zeile
                       sieht ein fertig eingerichtetes Konto aus wie ein leeres
                       Formular, und der Streamer speichert ein zweites Mal. */}
-                  {ziele && ziele.destinations.length > 0 ? (
+                  {zieleFehler ? (
+                    <p className="text-xs text-warning">
+                      Wir können deine gespeicherten Ziele gerade nicht abrufen. Das heißt nicht, dass sie
+                      weg sind. Speichere nichts doppelt, lade die Seite in einer Minute neu.
+                    </p>
+                  ) : gespeicherteZiele.length > 0 ? (
                     <div className="space-y-1">
-                      {ziele.destinations.map((ziel) => (
+                      {gespeicherteZiele.map((ziel) => (
                         <div
-                          key={ziel.platform}
+                          key={`${ziel.platform}-${ziel.rtmp_url}`}
                           className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
                         >
                           <Check className="h-3.5 w-3.5 shrink-0" />
@@ -505,6 +529,15 @@ export function UplinkPage() {
                       Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber nirgends hin.
                     </p>
                   )}
+
+                  {/* NIT 4: ohne diese Zeile sieht ein 400 (etwa Katalog-Drift
+                      zwischen Client und Server) aus wie ein Klick, der nichts
+                      tut, und das Ziel ist trotzdem nicht gespeichert. */}
+                  {saveDest.isError ? (
+                    <p className="text-xs text-warning">
+                      Speichern hat nicht geklappt. Prüfe die Adresse und den Schlüssel, dann noch einmal.
+                    </p>
+                  ) : null}
                 </Rise>
 
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">

@@ -159,3 +159,18 @@ test('die Hilfe startet zugeklappt', () => {
     'Ein Kapitel startet aufgeklappt',
   );
 });
+
+test('Bildpfade in den Fragmenten werden auf die echte Adresse gezogen', () => {
+  const html = extractUplinkMain(
+    '<main class="uplink-doc" data-doc="obs"><figure><img src="bilder/1-stream.svg" alt="x"></figure></main>',
+  );
+  assert.match(html, /src="\/uplink\/bilder\/1-stream\.svg"/);
+});
+
+test('absolute und Daten-Bildquellen bleiben unberuehrt', () => {
+  const html = extractUplinkMain(
+    '<main class="uplink-doc" data-doc="obs"><img src="https://x.test/a.png"><img src="/schon/absolut.svg"></main>',
+  );
+  assert.match(html, /src="https:\/\/x\.test\/a\.png"/);
+  assert.match(html, /src="\/schon\/absolut\.svg"/);
+});
