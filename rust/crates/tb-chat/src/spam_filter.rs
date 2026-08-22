@@ -416,7 +416,12 @@ pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
     // plus Homoglyph-Tabelle. Ohne sie liefe die Gegenpruefung auf dem Rohtext,
     // und ein kyrillisches Zeichen in "schreib mir" haette das Gate wieder
     // geoeffnet, obwohl das ganze Modul dagegen gehaertet ist.
-    let lowered = normalize_spam_text(text).to_lowercase();
+    //
+    // normalize_exact_spam_message statt normalize_spam_text: es fasst
+    // zusaetzlich Whitespace zusammen. Die Marker sind mehrwortig, und ein
+    // zweites Leerzeichen in "schreib  mir" waere sonst die billigste
+    // Umgehung der ganzen Liste gewesen.
+    let lowered = normalize_exact_spam_message(text);
     // Fuer die Gegenpruefung zusaetzlich die Akzente weg: die Homoglyph-Tabelle
     // kennt das kyrillische s, aber nicht jedes Zeichen mit Diakritikum, und
     // "billig" mit Akzent-i ist derselbe Trick. Schaerfer zu normalisieren ist
@@ -1280,6 +1285,25 @@ mod tests {
         }
         // Die harmlose Umgangssprache bleibt harmlos.
         assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
+    }
+
+    /// Die Marker sind mehrwortig. Ein zweites Leerzeichen, ein Tab oder ein
+    /// Zeilenumbruch waere sonst die billigste Umgehung der ganzen Liste.
+    #[test]
+    fn safe_wording_stolpert_nicht_ueber_zusaetzlichen_whitespace() {
+        for text in [
+            "gönn dir viewers, schreib  mir",
+            "gönn dir viewers, schreib\tmir",
+            "gönn dir viewers,\nschreib\nmir",
+            "gönn dir viewer,  link   in  bio",
+            "gönn dir viewer, melde   dich",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "zusaetzlicher Whitespace darf die Gegenpruefung nicht aushebeln: {text:?}"
+            );
+        }
     }
 
     /// Das Gate ueberstimmt einen Detektor, der ueber die Homoglyph-Tabelle

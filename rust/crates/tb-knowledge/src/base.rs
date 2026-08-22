@@ -24,10 +24,18 @@ impl KnowledgeBase {
     }
 
     /// Alle als Tipp ausspielbaren Dokumente (tip_eligible + nicht-leerer tip_text).
+    ///
+    /// Der dritte Ausgang neben `select` und der Hilfeseite, und Tipps landen im
+    /// Streamer-Chat. Die Zielgruppen-Sperre gilt deshalb auch hier: ein
+    /// internes Doc mit `tip_eligible: true` waere sonst ein Tipp an alle. Die
+    /// Erlaubnisliste soll nicht darauf angewiesen sein, dass jemand an das
+    /// Flag denkt.
     pub fn eligible_tips(&self) -> Vec<&KnowledgeDoc> {
         self.docs
             .iter()
-            .filter(|d| d.tip_eligible && !d.tip_text.trim().is_empty())
+            .filter(|d| {
+                d.tip_eligible && !d.tip_text.trim().is_empty() && ist_oeffentlich(&d.audience)
+            })
             .collect()
     }
 
