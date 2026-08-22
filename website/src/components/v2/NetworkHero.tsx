@@ -1,9 +1,13 @@
 import { motion } from "framer-motion";
 import { ArrowRight, Radio, ShieldCheck, Users } from "lucide-react";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
+import { NetworkRaidDemo } from "@/components/v2/NetworkRaidDemo";
 import type { NetworkMetrics } from "@/hooks/useNetworkMetrics";
 
-/** Eine Kennzahl der Beweiszeile. Ohne Wert bleibt der Platz sichtbar leer. */
+/**
+ * Eine Kennzahl der Beweiszeile. Ohne Wert bleibt der Platz sichtbar leer,
+ * es wird nie eine Zahl erfunden.
+ */
 function ProofItem({
   icon,
   value,
@@ -16,104 +20,71 @@ function ProofItem({
   settled: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-3">
       <span className="text-[var(--color-primary)]">{icon}</span>
-      <span className="text-sm text-[var(--color-text-secondary)]">
-        <strong className="font-semibold text-[var(--color-text-primary)]">
-          {value !== null ? value.toLocaleString("de-DE") : settled ? "keine Daten" : "…"}
-        </strong>{" "}
-        {label}
+      <span className="flex flex-col leading-tight">
+        <strong className="text-xl font-extrabold tabular-nums text-[var(--color-text-primary)]">
+          {value !== null
+            ? value.toLocaleString("de-DE")
+            : settled
+              ? "keine Daten"
+              : "…"}
+        </strong>
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          {label}
+        </span>
       </span>
     </div>
   );
 }
 
 /**
- * Der Beispielablauf rechts im Hero. Zeigt in vier Zeilen, was am Stream-Ende
- * passiert. Die Uhrzeiten sind als Beispiel gekennzeichnet, damit sie niemand
- * fuer gemessene Werte haelt.
+ * Hero der Landing V2.
+ *
+ * Die rechte Seite beherrscht den Raum: eine einzige Buehne, in der beide
+ * Stream-Karten, die Zeitachse und die Statuszeile zusammen sitzen. Der Text
+ * links ist bewusst auf Zeile, Satz und zwei Knoepfe eingedampft, damit die
+ * Bewegung rechts der Blickfang bleibt.
+ *
+ * Die Lichtinseln (`v2-ambient`) sind Teil der Komposition, nicht Deko: die
+ * goldene liegt hinter der Buehne, die tuerkise hinter der Beweiszeile, sodass
+ * beide Farben des Netzwerks im ersten Bild vorkommen.
  */
-function HandoverCard() {
-  const rows = [
-    { time: "23:47:00", text: "Dein Stream endet", tone: "muted" as const },
-    { time: "23:47:01", text: "Netzwerk sucht einen passenden Partner", tone: "muted" as const },
-    { time: "23:47:03", text: "Deine Zuschauer landen im nächsten Deadlock-Stream", tone: "gold" as const },
-    { time: "morgen", text: "Ein anderer Stream endet, du bekommst Zuschauer zurück", tone: "teal" as const },
-  ];
-
-  return (
-    <div className="panel-card rounded-2xl p-6 sm:p-7">
-      <div className="flex items-center justify-between">
-        <span className="v2-stamp">Beispielablauf</span>
-        <span className="flex items-center gap-2">
-          <span className="v2-pulse h-2 w-2 rounded-full bg-[var(--color-success)]" />
-          <span className="text-xs text-[var(--color-text-secondary)]">Netzwerk aktiv</span>
-        </span>
-      </div>
-
-      <div className="mt-6 space-y-4">
-        {rows.map((row, i) => (
-          <motion.div
-            key={row.time}
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5, delay: 0.5 + i * 0.18 }}
-            className="flex gap-4"
-          >
-            <span className="v2-stamp v2-stamp-dim w-16 shrink-0 pt-0.5">{row.time}</span>
-            <span
-              className={`text-sm leading-relaxed ${
-                row.tone === "gold"
-                  ? "text-[var(--color-primary-hover)]"
-                  : row.tone === "teal"
-                    ? "text-[var(--color-accent-hover)]"
-                    : "text-[var(--color-text-secondary)]"
-              }`}
-            >
-              {row.text}
-            </span>
-          </motion.div>
-        ))}
-      </div>
-
-      {/* Die Uebergabe als Bild: Punkte wandern vom linken zum rechten Kanal. */}
-      <div className="mt-7 rounded-xl border border-[var(--color-border)] bg-black/25 p-4">
-        <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
-          <span>dein Kanal</span>
-          <span>Partnerkanal</span>
-        </div>
-        <div className="relative mt-3 h-6">
-          <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-[rgba(201,168,106,0.5)] via-[rgba(201,168,106,0.22)] to-[rgba(85,151,143,0.5)]" />
-          <div className="relative flex h-full items-center gap-2">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <span
-                key={i}
-                className="v2-relay-dot"
-                style={{
-                  animationDelay: `${i * 0.22}s`,
-                  ["--v2-relay-distance" as string]: "min(58vw, 320px)",
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
   return (
-    <section className="relative overflow-hidden pt-36 pb-20 sm:pt-44 sm:pb-28">
-      <div className="mx-auto grid max-w-[84rem] items-center gap-14 px-6 lg:grid-cols-[1.05fr_0.95fr]">
+    <section className="relative overflow-hidden pt-32 pb-10 sm:pt-40 sm:pb-16">
+      {/* Lichtinseln hinter der Komposition */}
+      <div
+        className="v2-ambient v2-ambient-gold"
+        style={{
+          top: "-14%",
+          right: "-10%",
+          width: "min(52rem, 82vw)",
+          height: "min(52rem, 82vw)",
+        }}
+        aria-hidden="true"
+      />
+      <div
+        className="v2-ambient v2-ambient-teal"
+        style={{
+          bottom: "-24%",
+          left: "-14%",
+          width: "min(40rem, 70vw)",
+          height: "min(40rem, 70vw)",
+          animationDelay: "-7s",
+        }}
+        aria-hidden="true"
+      />
+
+      <div className="relative mx-auto grid max-w-[84rem] items-center gap-12 px-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)] lg:gap-12">
         <div>
           <motion.span
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-accent)]"
+            className="v2-chip inline-flex items-center gap-2"
           >
-            <Radio size={14} />
+            <Radio size={13} />
             Für deutschsprachige Deadlock-Streamer
           </motion.span>
 
@@ -121,7 +92,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.08 }}
-            className="mt-7 text-5xl font-extrabold leading-[0.98] tracking-tight text-[var(--color-text-primary)] sm:text-6xl lg:text-7xl"
+            className="mt-7 text-[clamp(2.7rem,5.5vw,4.2rem)] font-extrabold leading-[0.95] tracking-[-0.02em] text-[var(--color-text-primary)]"
           >
             Kein Stream
             <br />
@@ -138,70 +109,74 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.16 }}
-            className="mt-7 max-w-xl text-lg leading-relaxed text-[var(--color-text-secondary)] sm:text-xl"
+            className="mt-6 max-w-lg text-lg leading-relaxed text-[var(--color-text-secondary)]"
           >
-            Das kostenlose Wachstums-Netzwerk für deutschsprachige
-            Deadlock-Streamer: Auto-Raids beim Stream-Ende, Schutz im Chat,
-            Auswertung nach dem Stream und Clips, die von allein entstehen.
+            Gehst du offline, übergibt das Netzwerk deine Zuschauer an einen
+            anderen deutschen Deadlock-Stream. Und schickt sie dir zurück, wenn
+            dort Schluss ist.
           </motion.p>
 
           <motion.div
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.24 }}
-            className="mt-9 flex flex-wrap items-center gap-4"
+            className="mt-8 flex flex-wrap items-center gap-4"
           >
             <a
               href={buildTwitchBotAuthUrl()}
-              className="gradient-accent inline-flex w-full items-center justify-center gap-2 rounded-xl px-7 py-3.5 font-semibold no-underline transition-all hover:brightness-110 hover:shadow-[0_0_28px_4px_rgba(201,168,106,0.28)] sm:w-auto"
+              className="gradient-accent inline-flex w-full items-center justify-center gap-2 rounded-xl px-6 py-3.5 font-semibold no-underline transition-all hover:brightness-110 hover:shadow-[0_0_28px_4px_rgba(201,168,106,0.28)] sm:w-auto"
             >
               Jetzt kostenlos verbinden
               <ArrowRight size={18} />
             </a>
             <a
               href="#report"
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[rgba(255,255,255,0.14)] px-7 py-3.5 font-semibold text-[var(--color-text-primary)] no-underline transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:w-auto"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[rgba(255,255,255,0.14)] px-6 py-3.5 font-semibold text-[var(--color-text-primary)] no-underline transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:w-auto"
             >
               Kanal-Report holen
             </a>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.4 }}
-            className="mt-10 flex flex-wrap items-center gap-x-7 gap-y-3"
-          >
-            <ProofItem
-              icon={<Users size={16} />}
-              value={metrics.partners}
-              label="Streamer im Netzwerk"
-              settled={metrics.settled}
-            />
-            <ProofItem
-              icon={<Radio size={16} />}
-              value={metrics.liveNow}
-              label="gerade live"
-              settled={metrics.settled}
-            />
-            <ProofItem
-              icon={<ShieldCheck size={16} />}
-              value={metrics.banStats?.total_30d ?? null}
-              label="Spam-Accounts entfernt, 30 Tage"
-              settled={metrics.settled}
-            />
-          </motion.div>
-          <p className="mt-3 text-xs text-[var(--color-subtle,rgba(183,170,145,0.55))]">
-            Alle Zahlen auf dieser Seite kommen live aus dem laufenden Betrieb.
-          </p>
         </div>
 
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.3 }}
+          className="relative lg:-mr-6 xl:-mr-14"
         >
-          <HandoverCard />
+          <NetworkRaidDemo partners={metrics.partnerList} />
+        </motion.div>
+
+        {/* Sockel: eine durchgehende Ablesezeile unter der ganzen Komposition,
+            statt drei Kennzahlen, die in der Textspalte umbrechen. */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.6, delay: 0.45 }}
+          className="flex flex-wrap items-center gap-x-10 gap-y-5 border-t border-[rgba(239,212,157,0.14)] pt-6 lg:col-span-2 lg:mt-4"
+        >
+          <ProofItem
+            icon={<Users size={17} />}
+            value={metrics.partners}
+            label="Streamer im Netzwerk"
+            settled={metrics.settled}
+          />
+          <ProofItem
+            icon={<Radio size={17} />}
+            value={metrics.liveNow}
+            label="gerade live"
+            settled={metrics.settled}
+          />
+          <ProofItem
+            icon={<ShieldCheck size={17} />}
+            value={metrics.banStats?.total_30d ?? null}
+            label="Spam-Accounts entfernt, 30 Tage"
+            settled={metrics.settled}
+          />
+          <p className="text-xs text-[rgba(183,170,145,0.5)] sm:ml-auto">
+            Alle Zahlen auf dieser Seite kommen live aus dem laufenden Betrieb.
+          </p>
         </motion.div>
       </div>
     </section>

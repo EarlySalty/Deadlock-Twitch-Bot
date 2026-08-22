@@ -60,7 +60,9 @@ export function OpenMetricsSection({ metrics }: { metrics: NetworkMetrics }) {
   return (
     <ProtocolSection
       id="zahlen"
-      stamp="04 · Offene Zahlen"
+      ambient="teal"
+      ambientSide="left"
+      stamp="06 · Offene Zahlen"
       headline="Wir behaupten nichts, was wir nicht zeigen können."
       intro="Diese Werte kommen direkt aus dem laufenden Betrieb und ändern sich, während du hier liest. Wenn eine Zahl schlecht aussieht, steht sie trotzdem da."
     >
@@ -160,7 +162,8 @@ export function ChannelReportSection() {
   return (
     <ProtocolSection
       id="report"
-      stamp="05 · Vor der Entscheidung"
+      ambientSide="right"
+      stamp="07 · Vor der Entscheidung"
       headline="Erst der Blick auf deinen Kanal, dann der Rest."
       intro="Du musst nichts verbinden, um etwas zu bekommen. Sag uns deinen Kanal und du bekommst eine Einschätzung: wann deine Zuschauer abspringen, wie deine Streamzeiten zu den Deadlock-Spitzen liegen und welche Stellen sich als Clip lohnen."
     >

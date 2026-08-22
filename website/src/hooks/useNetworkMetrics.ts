@@ -13,8 +13,16 @@ export interface NetworkMetrics {
   liveNow: number | null;
   /** Namen der Partnerkanaele fuer das Laufband. */
   partnerNames: string[];
+  /** Vollstaendige Partnerkanaele fuer Hero-Buehne und Live-Block. */
+  partnerList: PartnerChannel[];
   bans: BanEntry[];
   banStats: BanStats | null;
+  /**
+   * true, wenn die API zu den Kanaelen eine Spielkategorie liefert. Ist sie
+   * false, kann "gerade live" NICHT auf Deadlock eingegrenzt werden und die
+   * Oberflaeche darf das auch nicht behaupten.
+   */
+  categoryKnown: boolean;
   /** true, sobald mindestens ein Abruf durch ist (egal ob erfolgreich). */
   settled: boolean;
 }
@@ -23,6 +31,25 @@ interface NetworkStreamer {
   display_name?: string;
   login?: string;
   is_live?: boolean;
+  game?: string;
+  viewer_count?: number;
+  avatar_url?: string;
+  deadlock_streams_30d?: number;
+  avg_viewers_30d?: number;
+}
+
+/** Ein Partnerkanal, so wie ihn Hero-Buehne und Live-Block brauchen. */
+export interface PartnerChannel {
+  login: string;
+  displayName: string;
+  isLive: boolean;
+  viewers: number;
+  game?: string;
+  avatarUrl?: string;
+  /** Live UND in Deadlock. Nur diese zaehlen als "gerade live". */
+  liveDeadlock: boolean;
+  dlStreams30d: number;
+  avgViewers30d: number;
 }
 
 /**
@@ -38,6 +65,8 @@ export function useNetworkMetrics(): NetworkMetrics {
     partners: null,
     liveNow: null,
     partnerNames: [],
+    partnerList: [],
+    categoryKnown: false,
     bans: [],
     banStats: null,
     settled: false,
@@ -55,13 +84,56 @@ export function useNetworkMetrics(): NetworkMetrics {
           ? data.streamers
           : [];
         if (cancelled || list.length === 0) return;
+
+        // Liefert die API ueberhaupt Kategorien, gilt "live" nur mit Deadlock.
+        // Fehlt das Feld komplett, waere die Zahl sonst dauerhaft 0.
+        const hasGame = list.some(
+          (s) => typeof s.game === "string" && s.game.trim() !== "",
+        );
+
+        const channels: PartnerChannel[] = list
+          .map((s) => {
+            const isLive = !!s.is_live;
+            const game =
+              typeof s.game === "string" && s.game.trim() !== ""
+                ? s.game.trim()
+                : undefined;
+            return {
+              login: s.login || "",
+              displayName: s.display_name || s.login || "",
+              isLive,
+              viewers: typeof s.viewer_count === "number" ? s.viewer_count : 0,
+              game,
+              avatarUrl:
+                typeof s.avatar_url === "string" && s.avatar_url.trim() !== ""
+                  ? s.avatar_url
+                  : undefined,
+              liveDeadlock:
+                isLive && (!hasGame || (game ?? "").toLowerCase() === "deadlock"),
+              dlStreams30d:
+                typeof s.deadlock_streams_30d === "number"
+                  ? s.deadlock_streams_30d
+                  : 0,
+              avgViewers30d:
+                typeof s.avg_viewers_30d === "number" ? s.avg_viewers_30d : 0,
+            };
+          })
+          .filter((c) => c.login)
+          .sort((a, b) =>
+            a.liveDeadlock === b.liveDeadlock
+              ? b.viewers - a.viewers
+              : a.liveDeadlock
+                ? -1
+                : 1,
+          );
+
         setMetrics((prev) => ({
           ...prev,
-          partners: list.length,
-          liveNow: list.filter((s) => s.is_live).length,
-          partnerNames: list
-            .map((s) => s.display_name || s.login || "")
-            .filter(Boolean),
+          partners: channels.length,
+          liveNow: channels.filter((c) => c.liveDeadlock).length,
+          partnerNames: channels.map((c) => c.displayName),
+          partnerList: channels,
+          categoryKnown: hasGame,
         }));
       } catch {
         // Kein Fallback: partners bleibt null, die Kachel meldet das offen.
@@ -88,7 +160,10 @@ export function useNetworkMetrics(): NetworkMetrics {
       if (!cancelled) setMetrics((prev) => ({ ...prev, settled: true }));
     });
 
-    const id = setInterval(loadBans, 45_000);
+    const id = setInterval(() => {
+      loadNetwork();
+      loadBans();
+    }, 45_000);
     return () => {
       cancelled = true;
       clearInterval(id);

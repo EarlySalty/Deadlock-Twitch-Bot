@@ -1,4 +1,6 @@
 import { motion } from "framer-motion";
+import { initials } from "@/components/v2/NetworkLive";
+import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
 import { ArrowRight, Check, Minus, Plus } from "lucide-react";
 import { ProtocolSection } from "@/components/v2/NetworkChrome";
 import { objections, plans } from "@/data/networkPage";
@@ -30,7 +32,8 @@ export function PricingSection() {
   return (
     <ProtocolSection
       id="preise"
-      stamp="06 · Preise"
+      ambientSide="left"
+      stamp="08 · Preise"
       headline="Kostenlos bleibt kostenlos."
       intro="Das Netzwerk und der Schutz kosten nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht. Bezahlt wird nur, was Rechenzeit oder Bevorzugung verbraucht."
     >
@@ -152,7 +155,8 @@ export function ObjectionsSection() {
   return (
     <ProtocolSection
       id="einwaende"
-      stamp="07 · Was du dich wahrscheinlich fragst"
+      ambient="none"
+      stamp="09 · Was du dich wahrscheinlich fragst"
       headline="Die unangenehmen Fragen zuerst."
       intro="Wenn dir eine Antwort nicht reicht, frag im Discord nach. Dort antworten Menschen, keine Vorlage."
     >
@@ -201,11 +205,65 @@ export function ObjectionsSection() {
 }
 
 /** Letzter Abschnitt: eine Entscheidung, zwei Wege. */
-export function NetworkCta() {
+/**
+ * Die Gesichter zum Schluss: echte Partnerkanaele als Avatarreihe ueber den
+ * Knoepfen. Kein Beispielbild, kein Platzhalter — ohne geladene Partner
+ * bleibt die Reihe schlicht weg.
+ */
+function PartnerFaces({ partners }: { partners: PartnerChannel[] }) {
+  // Die Netzwerk-API liefert derzeit keine Profilbilder. Statt die Reihe
+  // wegzulassen, tragen Kanaele ohne Bild ihr Monogramm — echte Logins,
+  // nur ohne Foto.
+  const shown = partners.slice(0, 9);
+  if (shown.length < 3) return null;
+
+  return (
+    <div className="mb-9 flex flex-wrap items-center gap-4">
+      <div className="flex -space-x-2">
+        {shown.map((p) => (
+          <a
+            key={p.login}
+            href={`https://twitch.tv/${p.login}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={p.displayName}
+            className="relative block h-11 w-11 rounded-full ring-2 ring-[var(--color-bg,#0b0b0b)] transition-transform hover:z-10 hover:-translate-y-1"
+          >
+            {p.avatarUrl ? (
+              <img
+                src={p.avatarUrl}
+                alt={p.displayName}
+                width={44}
+                height={44}
+                loading="lazy"
+                className="h-11 w-11 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex h-11 w-11 items-center justify-center rounded-full border border-[rgba(239,212,157,0.3)] bg-[rgba(201,168,106,0.12)] text-xs font-bold text-[var(--color-primary-hover)]">
+                {initials(p.login)}
+              </span>
+            )}
+            {p.liveDeadlock ? (
+              <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-bg,#0b0b0b)]" />
+            ) : null}
+          </a>
+        ))}
+      </div>
+      <span className="text-sm text-[var(--color-text-secondary)]">
+        {partners.length} Kanäle sind schon dabei. Grüner Punkt heißt: läuft
+        gerade.
+      </span>
+    </div>
+  );
+}
+
+export function NetworkCta({ partners }: { partners: PartnerChannel[] }) {
   return (
     <ProtocolSection
       id="start"
-      stamp="08 · Der nächste Stream"
+      ambient="teal"
+      ambientSide="right"
+      stamp="10 · Der nächste Stream"
       headline={
         <>
           Dein nächster Stream endet sowieso.
@@ -219,6 +277,8 @@ export function NetworkCta() {
         </>
       }
     >
+      <PartnerFaces partners={partners} />
+
       <div className="flex flex-wrap items-center gap-4">
         <a
           href={buildTwitchBotAuthUrl()}
