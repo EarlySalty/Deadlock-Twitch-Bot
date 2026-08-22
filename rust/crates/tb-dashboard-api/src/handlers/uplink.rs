@@ -1,12 +1,14 @@
 //! Proxy vom Streamer-Dashboard zu rs-relay. Das Relay-Secret bleibt serverseitig.
 
 use axum::{
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -20,34 +22,68 @@ fn relay_secret() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
-fn partner_id(auth: &DashboardAuthLevel) -> Result<i64, Response> {
-    let raw = match auth {
-        DashboardAuthLevel::Partner { twitch_user_id, .. } => twitch_user_id.as_str(),
+/// Twitch-Identität der Session: Login und, falls die Session sie mitbringt,
+/// die numerische User-ID.
+///
+/// Die Master-Session des Admin-Dashboards ist Discord-basiert und trägt gar
+/// keine Twitch-User-ID (`master_session_auth` setzt sie leer). Ohne Fallback
+/// scheiterte Uplink für genau diese Session an einem leeren Parse.
+fn twitch_identitaet(auth: &DashboardAuthLevel) -> Result<(&str, &str), Response> {
+    match auth {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => Ok((twitch_login.as_str(), twitch_user_id.as_str())),
         DashboardAuthLevel::Admin {
             actor: Some(actor),
-        } => actor.twitch_user_id.as_str(),
-        DashboardAuthLevel::Admin { actor: None } => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "admin ohne twitch-identitaet" })),
-            )
-                .into_response());
-        }
-        DashboardAuthLevel::None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "unauthorized" })),
-            )
-                .into_response());
-        }
-    };
-    raw.trim().parse::<i64>().map_err(|_| {
-        (
+        } => Ok((actor.twitch_login.as_str(), actor.twitch_user_id.as_str())),
+        DashboardAuthLevel::Admin { actor: None } => Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "twitch user id fehlt" })),
+            Json(json!({ "error": "admin ohne twitch-identitaet" })),
         )
-            .into_response()
-    })
+            .into_response()),
+        DashboardAuthLevel::None => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response()),
+    }
+}
+
+/// Streamer-ID für das Relay. Bringt die Session keine numerische User-ID mit,
+/// wird sie über den Login aus der Datenbank aufgelöst (`tb_twitch_user_id`,
+/// dieselbe Quelle wie im übrigen Dashboard).
+async fn partner_id(pool: &PgPool, auth: &DashboardAuthLevel) -> Result<i64, Response> {
+    let (login, roh) = twitch_identitaet(auth)?;
+    if let Ok(id) = roh.trim().parse::<i64>() {
+        return Ok(id);
+    }
+
+    let login = login.trim().to_lowercase();
+    let aufgeloest: Option<String> = sqlx::query_scalar("SELECT tb_twitch_user_id($1)")
+        .bind(&login)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| {
+            tracing::warn!("uplink: Lookup der Twitch-User-ID für {login} fehlgeschlagen: {e}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "twitch-identitaet nicht abrufbar" })),
+            )
+                .into_response()
+        })?;
+
+    aufgeloest
+        .as_deref()
+        .and_then(|wert| wert.trim().parse::<i64>().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "twitch user id fehlt" })),
+            )
+                .into_response()
+        })
 }
 
 async fn relay_json(
@@ -90,8 +126,11 @@ async fn relay_json(
     Ok(wert)
 }
 
-pub async fn me_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
-    let id = partner_id(&auth)?;
+pub async fn me_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
     let wert = relay_json(
         reqwest::Method::GET,
         &format!("/v1/me?streamer_id={id}"),
@@ -101,8 +140,11 @@ pub async fn me_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Respons
     Ok(Json(wert))
 }
 
-pub async fn waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
-    let id = partner_id(&auth)?;
+pub async fn waitlist_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
     let wert = relay_json(
         reqwest::Method::POST,
         &format!("/v1/me/waitlist?streamer_id={id}"),
@@ -120,10 +162,11 @@ pub struct DestinationBody {
 }
 
 pub async fn put_destination_handler(
+    State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
     Json(body): Json<DestinationBody>,
 ) -> Result<Json<Value>, Response> {
-    let id = partner_id(&auth)?;
+    let id = partner_id(&pool, &auth).await?;
     if body.stream_key.trim().is_empty() || body.rtmp_url.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -148,11 +191,11 @@ pub async fn put_destination_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::level::AdminActor;
 
     #[test]
-    fn partner_ohne_id_ist_fehler() {
-        let auth = DashboardAuthLevel::None;
-        assert!(partner_id(&auth).is_err());
+    fn ohne_session_gibt_es_keine_identitaet() {
+        assert!(twitch_identitaet(&DashboardAuthLevel::None).is_err());
     }
 
     #[test]
@@ -162,6 +205,34 @@ mod tests {
             twitch_user_id: "123".into(),
             display_name: "Early".into(),
         };
-        assert_eq!(partner_id(&auth).unwrap(), 123);
+        let (login, id) = twitch_identitaet(&auth).unwrap();
+        assert_eq!(login, "earlysalty");
+        assert_eq!(id.parse::<i64>().unwrap(), 123);
+    }
+
+    /// Die Master-Session des Admin-Dashboards kommt genau so an: Login da,
+    /// User-ID leer. Frueher endete das direkt im Fehler "twitch user id
+    /// fehlt"; jetzt bleibt der Login fuer den DB-Lookup uebrig.
+    #[test]
+    fn master_session_behaelt_den_login_ohne_id() {
+        let auth = DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: String::new(),
+            display_name: "earlysalty".into(),
+        };
+        let (login, id) = twitch_identitaet(&auth).unwrap();
+        assert_eq!(login, "earlysalty");
+        assert!(id.trim().parse::<i64>().is_err());
+    }
+
+    #[test]
+    fn admin_mit_actor_nutzt_dessen_identitaet() {
+        let auth = DashboardAuthLevel::Admin {
+            actor: Some(AdminActor {
+                twitch_user_id: "42".into(),
+                twitch_login: "earlysalty".into(),
+            }),
+        };
+        assert_eq!(twitch_identitaet(&auth).unwrap(), ("earlysalty", "42"));
     }
 }
