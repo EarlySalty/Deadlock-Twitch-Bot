@@ -251,6 +251,9 @@ mod tests {
         assert!(ist_oeffentlich(""));
         assert!(ist_oeffentlich("streamer"));
         assert!(ist_oeffentlich("public"));
+        // Groesste Reichweite: der Deadlock-Namespace nutzt es fuer Wissen,
+        // das im Chat an jeden geht.
+        assert!(ist_oeffentlich("viewer"));
         assert!(!ist_oeffentlich("concierge"));
         assert!(!ist_oeffentlich("intern"));
         // Unbekannte Zielgruppen bleiben drin, nicht draussen.

@@ -11,7 +11,7 @@ Am Anfang zählt die sichtbare Lage, danach der nächste Schritt. Bei einem kurz
 
 ### Der Start wird abgelehnt, weil Plätze belegt sind
 
-Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Slot streamst du direkt zur Plattform. Stelle OBS dafür wieder auf Twitch oder Kick.
+Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Abend streamst du direkt zur Plattform. Stelle OBS dafür wieder auf Twitch oder Kick.
 
 ### OBS sendet, aber auf der Plattform kommt nichts an
 

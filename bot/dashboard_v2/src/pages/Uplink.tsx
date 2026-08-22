@@ -23,6 +23,7 @@ import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
+  PREVIEW_PRICING_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
@@ -172,9 +173,9 @@ export function UplinkPage() {
                   <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5">
                     <Lock className="h-5 w-5 text-white/40" />
                   </div>
-                  <h2 className="text-lg font-bold text-white">Uplink ist noch nicht freigeschaltet</h2>
+                  <h2 className="text-lg font-bold text-white">Uplink ist ein bezahltes Add-on</h2>
                   <p className="max-w-xl text-sm text-text-secondary">
-                    Du kannst dich auf die Warteliste setzen. Danach wird dein Zugang eingerichtet.
+                    Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -185,6 +186,14 @@ export function UplinkPage() {
                     >
                       {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
                     </button>
+                    {/* Der Hinweis, dass Uplink kostet, gehoert VOR den
+                        Wartelisten-Klick, nicht erst in die Rechnung. */}
+                    <a
+                      href={PREVIEW_PRICING_ROUTE}
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
+                    >
+                      Zum Plan
+                    </a>
                   </div>
                 </div>
               </div>
@@ -194,10 +203,10 @@ export function UplinkPage() {
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  {/* srt_hint liefert das Relay immer (rs-relay
-                      src/api/user.rs:157, Typ String). Leer ist es genau dann,
-                      wenn kein ingest_key existiert, also fuer einen nicht
-                      freigeschalteten Zugang. Dieser Block haengt an
+                  {/* srt_hint liefert das Relay immer als String (rs-relay,
+                      srt_hint_fuer in src/api/user.rs). Leer ist es genau
+                      dann, wenn kein ingest_key existiert, also fuer einen
+                      nicht freigeschalteten Zugang. Dieser Block haengt an
                       data.enabled, trotzdem faengt der Guard den Leerfall ab:
                       ein leeres Kopierfeld waere die schlechteste Antwort. */}
                   {data.srt_hint ? (

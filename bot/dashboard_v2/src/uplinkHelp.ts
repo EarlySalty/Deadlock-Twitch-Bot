@@ -21,9 +21,10 @@ export function uplinkHelpUrl(file: string): string {
 }
 
 /**
- * Die Fragmente liegen unter /uplink/, eingebettet werden sie auf /twitch/uplink.
- * Relative Links wie `obs.html` zeigen dort auf /twitch/obs.html, also ins Leere.
- * Beim Einbetten werden sie deshalb auf ihre echte Adresse gezogen.
+ * Die Fragmente liegen unter <BASE_URL>uplink/, eingebettet werden sie auf der
+ * Uplink-Seite des Dashboards. Relative Links wie `obs.html` zeigen von dort aus
+ * auf einen Nachbarpfad der Seite, den es nicht gibt. Beim Einbetten werden sie
+ * deshalb ueber uplinkHelpUrl auf ihre echte Adresse gezogen.
  */
 function absoluteLinks(fragment: string): string {
   return fragment.replace(

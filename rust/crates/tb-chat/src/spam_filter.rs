@@ -381,6 +381,30 @@ const KONTAKT_MARKERS: &[&str] = &[
     "instagram",
 ];
 
+/// Jede Adresse und jeder Preis, nicht nur die sechs bekannten Spam-Marken.
+///
+/// Der Detektor kennt nur Domains aus einer Namensliste; ein neuer Shop taucht
+/// dort erst nach dem ersten Schaden auf. Fuer die Gegenpruefung reicht die
+/// Form: wer im selben Satz "gönn dir viewer" und eine Adresse oder einen
+/// Betrag schreibt, verkauft etwas. Absichtlich weit gefasst, denn ein Treffer
+/// bedeutet nur, dass wieder der Judge entscheidet.
+fn kontakt_form_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?x)
+              https?:// |
+              \bwww\. |
+              \b[a-z0-9][a-z0-9-]*\.(?:com|net|org|io|ru|online|xyz|site|shop|store|gg|de|tv|me|link|bio)\b |
+              [$€£] |
+              \b(?:usd|eur|dollar|euros?|paypal|paysafe|crypto|btc)\b |
+              \b\d+\s*(?:eur|usd|dollar|euro)\b
+            ",
+        )
+        .expect("Kontakt-Form-Regex ist konstant")
+    })
+}
+
 /// Trifft ein harmloses Umgangssprache-Muster, das den Viewer-Regex fälschlich
 /// triggert, gibt den Marker zurück. Lowercase-Contains reicht: die Marker sind
 /// distinktiv, und das Gate greift nur im reinen Viewer-Regex-Pfad.
@@ -407,6 +431,8 @@ pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
     if KONTAKT_MARKERS
         .iter()
         .any(|k| lowered.contains(k) || ohne_akzente.contains(k))
+        || kontakt_form_re().is_match(&lowered)
+        || kontakt_form_re().is_match(&ohne_akzente)
     {
         return None;
     }
@@ -1272,6 +1298,33 @@ mod tests {
             matches_safe_wording("gönn dir viewer bill\u{00ed}g"),
             None,
             "Homoglyph im Verkaufswort umgeht die Gegenpruefung"
+        );
+    }
+
+    /// Bewusst mit Formulierungen, die NICHT woertlich in KONTAKT_MARKERS
+    /// stehen: eine unbekannte Domain, eine Fremdwaehrung, ein anderer Dienst.
+    /// Ein Test, der nur die eigene Liste abfragt, beweist nichts.
+    #[test]
+    fn safe_wording_faengt_adressen_und_betraege_ausserhalb_der_liste() {
+        for text in [
+            "gönn dir viewer auf viewbot-neu.io",
+            "gönn dir viewer, https://irgendwo-neues.example",
+            "gönn dir viewer für 5 dollar",
+            "gönn dir viewer, 20$",
+            "bin am lurken, zahl per paypal",
+            "gönn dir viewer, www.nochnieda.ru",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Adresse oder Betrag muss das Gate aufheben: {text}"
+            );
+        }
+        // Ohne Adresse und ohne Betrag bleibt es Umgangssprache.
+        assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
+        assert_eq!(
+            matches_safe_wording("bin nur am lurken, schaue nebenbei"),
+            Some("am lurken")
         );
     }
 
