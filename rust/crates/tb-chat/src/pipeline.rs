@@ -211,6 +211,27 @@ pub struct CrewRadarAlert {
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
 
+/// Ab welcher Judge-Confidence ein Text mit harmlosem Umgangssprache-Muster
+/// trotzdem geahndet wird.
+///
+/// Der Judge hat deutsche Goenn- und Lurk-Sprache wiederholt knapp als Spam
+/// gewertet und getimeoutet. Ein getarntes Angebot dagegen ist fuer ihn
+/// eindeutig. Die Schwelle trennt beides, ohne dass eine Wortliste jeden
+/// Kontaktweg kennen muss. Fehlt die Confidence ganz, zaehlt das Urteil als
+/// nicht klar.
+const SAFE_WORDING_MIN_CONFIDENCE: f32 = 0.85;
+
+/// Darf ein Spam-Urteil geahndet werden, wenn der Text ein harmloses
+/// Umgangssprache-Muster trug?
+///
+/// Eigene Funktion, damit die Entscheidung testbar ist, ohne die halbe Pipeline
+/// aufzubauen. Ohne Safe-Wording gilt jedes Spam-Urteil; mit Safe-Wording nur
+/// ein klares. Eine fehlende Confidence zaehlt als nicht klar: der Judge hat
+/// deutsche Goenn- und Lurk-Sprache genau dort knapp falsch bewertet.
+fn ahndung_erlaubt(safe_wording: bool, confidence: Option<f32>) -> bool {
+    !safe_wording || confidence.is_some_and(|c| c >= SAFE_WORDING_MIN_CONFIDENCE)
+}
+
 /// Felder eines sus_spam-Alerts (Verdachtsfall mit Judge-Urteil).
 pub struct SusSpamAlert<'a> {
     pub channel_login: &'a str,
@@ -1303,69 +1324,49 @@ impl ChatPipeline {
             }
 
             SpamAction::DeleteOnly | SpamAction::None if verdict.score > 0 => {
-                // Safe-Wording-Gate: Wenn der EINZIGE Grund der weiche
-                // Viewer-Regex ist und der Text ein harmloses
-                // Umgangssprache-Muster trägt (Lurk-/Gönn-Sprech), gar nicht
-                // erst den Judge fragen. Genau solche Sätze hat er fälschlich
-                // getimeoutet. Kein Negativ-Scoring, nur ein Gate im reinen
-                // Viewer-Regex-Pfad, damit echter Spam (stärkeres Signal) nie
-                // durchrutscht.
+                // Safe-Wording: Wenn der EINZIGE Grund der weiche Viewer-Regex
+                // ist und der Text ein harmloses Umgangssprache-Muster traegt
+                // (Lurk-/Goenn-Sprech), hebt das nicht mehr den Judge auf,
+                // sondern die automatische Ahndung an eine Confidence-Schwelle.
                 //
-                // Praktisch greift nur der None-Zweig: DeleteOnly entsteht
-                // ausschliesslich mit hartem Signal, und `!verdict.hard_signal`
-                // schliesst das aus. Der Arm deckt beide ab, damit eine
-                // spaetere Aenderung an der Aktionswahl das Gate nicht
-                // versehentlich umgeht.
+                // Warum nicht mehr "Judge ueberspringen": die Gegenpruefung war
+                // eine Wortliste, und eine Wortliste ist nie vollstaendig. Jede
+                // Runde fand einen weiteren Kontaktweg ("add me on discord",
+                // "hmu", "insta"), der das Gate geoeffnet und damit die
+                // Durchsetzung ganz abgeschaltet haette. Jetzt urteilt in jedem
+                // Fall der Judge; das Safe-Wording verlangt fuer die Aktion nur
+                // ein klares Urteil statt eines knappen. Falsche Timeouts bei
+                // deutscher Umgangssprache bleiben damit aus, ein getarntes
+                // Angebot faellt trotzdem.
                 //
                 // mention_score == 0 ist Teil der Bedingung: ein Host-Mention
-                // erhöht den Score, ohne je einen Reason-String in
-                // verdict.matched zu erzeugen. Ohne diese Prüfung würde
-                // „@host gönn dir viewers billig" (Viewer-Regex + Mention)
-                // trotz zweier Signale durchgewinkt.
-                if !verdict.hard_signal
+                // erhoeht den Score, ohne je einen Reason-String in
+                // verdict.matched zu erzeugen.
+                let safe_wording_marker = if !verdict.hard_signal
                     && mention_score == 0
                     && spam_signal_ist_nur_viewer_muster(&verdict.matched)
                 {
-                    if let Some(marker) = matches_safe_wording(text) {
-                        p.review_log.record(
-                            channel_login,
-                            chatter_login,
-                            &event.chatter_user_id,
-                            text,
-                            "SAFE_WORDING",
-                            &format!(
-                                "Harmlose Umgangssprache (Marker: {marker}), Judge übersprungen"
-                            ),
-                        );
-                        info!(
-                            channel = %channel_login,
-                            chatter = %chatter_login,
-                            marker,
-                            "Safe-Wording: reiner Viewer-Regex-Treffer, Judge übersprungen"
-                        );
-                        // Der Alert geht trotzdem raus. Uebersprungen wird der
-                        // Judge, nicht die Sichtbarkeit: sonst verschwaende das
-                        // Gate seine eigenen Treffer lautlos, und niemand
-                        // merkte, wenn es zu weit greift. Aktion gibt es keine.
-                        p.alerter.send_sus_spam(SusSpamAlert {
-                            channel_login,
-                            chatter_login,
-                            chatter_id: &event.chatter_user_id,
-                            content: text,
-                            rule_reason: &format!(
-                                "Score {}: {} (Safe-Wording-Gate, Marker: {marker})",
-                                verdict.score,
-                                reasons.join(", ")
-                            ),
-                            outcome: &AiReviewOutcome::Safe {
-                                reason: format!(
-                                    "Harmlose Umgangssprache (Marker: {marker}), Judge nicht gefragt"
-                                ),
-                            },
-                            action_taken: "keine",
-                        });
-                        return false;
-                    }
+                    matches_safe_wording(text)
+                } else {
+                    None
+                };
+                if let Some(marker) = safe_wording_marker {
+                    p.review_log.record(
+                        channel_login,
+                        chatter_login,
+                        &event.chatter_user_id,
+                        text,
+                        "SAFE_WORDING",
+                        &format!(
+                            "Harmlose Umgangssprache (Marker: {marker}), Ahndung nur bei klarem Urteil"
+                        ),
+                    );
+                    info!(
+                        channel = %channel_login,
+                        chatter = %chatter_login,
+                        marker,
+                        "Safe-Wording: reiner Viewer-Regex-Treffer, Ahndung an Confidence gebunden"
+                    );
                 }
 
                 // Verdachts-Pfad: loggen, bei hartem Signal Delete-only, dann
@@ -1422,7 +1423,14 @@ impl ChatPipeline {
                 let event_owned = event.clone();
                 let channel_owned = channel_login.to_string();
                 let chatter_owned = chatter_login.to_string();
-                let rule_reason = format!("Score {}: {}", verdict.score, reasons_str);
+                let rule_reason = match safe_wording_marker {
+                    Some(marker) => format!(
+                        "Score {}: {} (Safe-Wording, Marker: {marker})",
+                        verdict.score, reasons_str
+                    ),
+                    None => format!("Score {}: {}", verdict.score, reasons_str),
+                };
+                let safe_wording = safe_wording_marker.is_some();
                 let handle = tokio::spawn(async move {
                     this.judge_and_alert(
                         &event_owned,
@@ -1430,6 +1438,7 @@ impl ChatPipeline {
                         &chatter_owned,
                         &rule_reason,
                         already_deleted,
+                        safe_wording,
                     )
                     .await;
                 });
@@ -1475,6 +1484,10 @@ impl ChatPipeline {
     /// Verdachtsfall (Score 1–2): Judge fragen, bei Spam-Urteil handeln
     /// (Nachricht löschen + 24h-Timeout, reversibel), und in JEDEM Fall genau
     /// einen Alert mit Urteil, Begründung und Aktion schicken.
+    /// `safe_wording`: der Text trug ein harmloses Umgangssprache-Muster und als
+    /// einziges Spam-Signal den weichen Viewer-Regex. Der Judge urteilt trotzdem,
+    /// aber die automatische Ahndung verlangt dann ein klares Urteil statt eines
+    /// knappen. Siehe die Begruendung am Gate in `handle`.
     async fn judge_and_alert(
         &self,
         event: &ChatMessageEvent,
@@ -1482,6 +1495,7 @@ impl ChatPipeline {
         chatter_login: &str,
         rule_reason: &str,
         already_deleted: bool,
+        safe_wording: bool,
     ) {
         let p = &self.parts;
         let text = event.message.text.as_str();
@@ -1530,7 +1544,18 @@ impl ChatPipeline {
             "keine".to_string()
         };
         if let AiReviewOutcome::Spam { confidence, .. } = &outcome {
-            if event.chatter_user_id.is_empty()
+            // Bei Safe-Wording zaehlt nur ein klares Urteil. Ein knappes oder
+            // eines ohne Confidence-Angabe reicht nicht: genau dort lagen die
+            // falschen Timeouts auf deutsche Goenn- und Lurk-Sprache. Der Alert
+            // geht unten trotzdem raus, die Entscheidung bleibt sichtbar.
+            if !ahndung_erlaubt(safe_wording, *confidence) {
+                action_taken = format!(
+                    "keine (Safe-Wording, Judge-Confidence {})",
+                    confidence
+                        .map(|c| format!("{c:.2}"))
+                        .unwrap_or_else(|| "unbekannt".to_string())
+                );
+            } else if event.chatter_user_id.is_empty()
                 || event.chatter_user_id == event.broadcaster_user_id
                 || event.is_mod_or_broadcaster()
             {
@@ -1869,6 +1894,28 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Der Kern des Safe-Wording-Verhaltens: der Judge urteilt immer, aber ein
+    /// Text mit harmlosem Umgangssprache-Muster wird nur bei klarem Urteil
+    /// geahndet. Genau dort lagen die falschen Timeouts auf Goenn- und
+    /// Lurk-Sprache.
+    #[test]
+    fn safe_wording_verlangt_ein_klares_urteil_fuer_die_ahndung() {
+        // Ohne Safe-Wording zaehlt jedes Spam-Urteil, auch ohne Confidence.
+        assert!(ahndung_erlaubt(false, None));
+        assert!(ahndung_erlaubt(false, Some(0.10)));
+
+        // Mit Safe-Wording reicht ein knappes Urteil nicht.
+        assert!(!ahndung_erlaubt(true, Some(0.50)));
+        assert!(!ahndung_erlaubt(true, Some(0.84)));
+        // Und eine fehlende Confidence zaehlt als nicht klar.
+        assert!(!ahndung_erlaubt(true, None));
+
+        // Ein eindeutiges Urteil setzt sich durch: getarnte Angebote fallen,
+        // egal welchen Kontaktweg sie benutzen.
+        assert!(ahndung_erlaubt(true, Some(SAFE_WORDING_MIN_CONFIDENCE)));
+        assert!(ahndung_erlaubt(true, Some(0.99)));
+    }
 
     use crate::api::BanOutcome;
     use crate::commands::{

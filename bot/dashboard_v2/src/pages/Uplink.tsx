@@ -178,6 +178,14 @@ export function UplinkPage() {
                     Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.
                   </p>
                   <div className="flex flex-wrap gap-2">
+                    {/* Was es kostet, steht vor dem Klick auf die Warteliste,
+                        nicht erst in der Rechnung. */}
+                    <a
+                      href={PREVIEW_PRICING_ROUTE}
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
+                    >
+                      Preise ansehen
+                    </a>
                     <button
                       type="button"
                       disabled={waitlist.isPending || data.waitlisted}
@@ -186,14 +194,6 @@ export function UplinkPage() {
                     >
                       {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
                     </button>
-                    {/* Der Hinweis, dass Uplink kostet, gehoert VOR den
-                        Wartelisten-Klick, nicht erst in die Rechnung. */}
-                    <a
-                      href={PREVIEW_PRICING_ROUTE}
-                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
-                    >
-                      Zum Plan
-                    </a>
                   </div>
                 </div>
               </div>
@@ -260,6 +260,13 @@ export function UplinkPage() {
               </div>
               {isHelpError && (
                 <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
+              )}
+              {/* Teilausfall sichtbar machen: sonst haelt der Streamer zwei
+                  Kacheln fuer die vollstaendige Hilfe. */}
+              {helpPages && helpPages.length < UPLINK_HELP_PAGES.length && (
+                <p className="text-sm text-warning">
+                  {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
+                </p>
               )}
               <div className="space-y-4">
                 {/* Bei einem Fehler keine Platzhalter mehr: drei Kacheln

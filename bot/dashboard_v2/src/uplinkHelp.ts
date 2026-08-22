@@ -46,12 +46,16 @@ function ueberschriftenTieferlegen(fragment: string): string {
 }
 
 /**
- * Der Zurueck-Link gehoert zur Standalone-Seite. Eingebettet in die
- * Dashboard-Karte stuenden sonst drei davon mitten im Text und fuehrten aus der
- * Oberflaeche heraus auf die Rohseite.
+ * Zurueck-Link und Querverweise gehoeren zur Standalone-Seite. Eingebettet in
+ * die Dashboard-Karte stuenden sonst drei davon mitten im Text und fuehrten aus
+ * der Oberflaeche heraus auf die Rohseite, obwohl das Ziel zwei Kacheln tiefer
+ * schon dasteht. Ganze Abschnitte, die dann leer waeren ("Weiterlesen"),
+ * verschwinden mit.
  */
 function nurStandaloneEntfernen(fragment: string): string {
-  return fragment.replace(/<p class="nur-standalone">[\s\S]*?<\/p>\s*/g, '');
+  return fragment
+    .replace(/<section class="nur-standalone"[\s\S]*?<\/section>\s*/g, '')
+    .replace(/<p class="nur-standalone">[\s\S]*?<\/p>\s*/g, '');
 }
 
 export function extractUplinkMain(html: string): string {
@@ -61,7 +65,13 @@ export function extractUplinkMain(html: string): string {
   if (!main) {
     throw new Error('Uplink-Hilfe enthält kein main.uplink-doc.');
   }
-  return ueberschriftenTieferlegen(absoluteLinks(nurStandaloneEntfernen(main[0])));
+  // main wird zu div: mehrere main-Landmarks in einem Dokument sind ungueltig
+  // und fuer Screenreader genau das Problem, gegen das die Ueberschriften eine
+  // Ebene tiefer rutschen.
+  const alsAbschnitt = main[0]
+    .replace(/^<main /, '<div ')
+    .replace(/<\/main>$/, '</div>');
+  return ueberschriftenTieferlegen(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt)));
 }
 
 export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {

@@ -38,7 +38,7 @@ test('extrahiert nur main.uplink-doc und legt die Ueberschrift eine Ebene tiefer
   const html = '<body><main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main></body>';
   assert.equal(
     extractUplinkMain(html),
-    '<main class="uplink-doc" data-doc="obs"><h2>OBS</h2></main>',
+    '<div class="uplink-doc" data-doc="obs"><h2>OBS</h2></div>',
   );
 });
 
@@ -46,7 +46,7 @@ test('nimmt nur bis zum ersten schliessenden main', () => {
   // Gieriges Matching zoege fremdes Markup in das dangerouslySetInnerHTML.
   const html =
     '<main class="uplink-doc" data-doc="obs"><p>A</p></main><main><p>fremd</p></main>';
-  assert.equal(extractUplinkMain(html), '<main class="uplink-doc" data-doc="obs"><p>A</p></main>');
+  assert.equal(extractUplinkMain(html), '<div class="uplink-doc" data-doc="obs"><p>A</p></div>');
 });
 
 test('macht relative Links im Fragment absolut', () => {
@@ -59,6 +59,36 @@ test('macht relative Links im Fragment absolut', () => {
   assert.match(fragment, new RegExp(`href="${uplinkHelpUrl('obs.html')}"`));
   assert.match(fragment, /href="https:\/\/twitch\.tv"/);
   assert.match(fragment, /href="#anker"/);
+});
+
+/**
+ * Derselbe Inhalt liegt zweimal: als HTML unter public/uplink/ und als Markdown
+ * unter rust/knowledge/bot/. Formuliert sind beide bewusst verschieden, die
+ * harten Zahlen muessen aber uebereinstimmen: laufen sie auseinander, gibt der
+ * Chatbot eine andere Empfehlung als die Hilfeseite.
+ */
+test('Zahlen in HTML- und Markdown-Fassung stimmen ueberein', () => {
+  const KNOWLEDGE_ROOT = join(DASHBOARD_ROOT, '../../rust/knowledge/bot');
+  const PAARE = [
+    ['obs.html', 'uplink-obs.md'],
+    ['was-ist.html', 'uplink-was-ist.md'],
+    ['stoerungen.html', 'uplink-stoerungen.md'],
+  ] as const;
+  // Zahlen mit Einheit: Bitraten, Keyframe-Sekunden, Aufloesungen.
+  const ZAHLEN = /\b\d+(?:[.,]\d+)?\s*(?:kbps|Kbps|Mbit\/s|s\b|p\b|fps)/g;
+
+  for (const [htmlDatei, mdDatei] of PAARE) {
+    const html = readFileSync(join(HELP_ROOT, htmlDatei), 'utf8').replace(/<[^>]+>/g, ' ');
+    const md = readFileSync(join(KNOWLEDGE_ROOT, mdDatei), 'utf8');
+    const ausHtml = new Set((html.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
+    const ausMd = new Set((md.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
+    const nurInMd = [...ausMd].filter((z) => !ausHtml.has(z));
+    assert.deepEqual(
+      nurInMd,
+      [],
+      `${mdDatei} nennt Werte, die in ${htmlDatei} nicht vorkommen: ${nurInMd.join(', ')}`,
+    );
+  }
 });
 
 test('jede eingebettete Seite existiert als Datei', () => {
