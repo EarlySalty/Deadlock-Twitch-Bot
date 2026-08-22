@@ -924,35 +924,6 @@ export function UplinkPage() {
 
                 <ZeitplanKarte />
                 <StatusKarte sessionId={aktiveSessionId(data)} />
-
-                <Rise className="panel-card space-y-4 rounded-2xl p-6">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">Uplink-Hilfe</h2>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      Die Streamer-Hilfe erklärt Uplink, die OBS-Einrichtung und häufige Störungen.
-                    </p>
-                  </div>
-                  {isHelpError && (
-                    <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
-                  )}
-                  <div className="space-y-4">
-                    {(helpPages ?? UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' }))).map((page) => (
-                      <div
-                        key={page.file}
-                        className="uplink-help-shell overflow-hidden rounded-xl border border-border bg-background/70"
-                      >
-                        {page.html ? (
-                          <div dangerouslySetInnerHTML={{ __html: page.html }} />
-                        ) : (
-                          <div className="p-4 text-sm text-text-secondary">Hilfe wird geladen: {page.label}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <a className="text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
-                    Uplink-Hilfe als eigene Seite öffnen
-                  </a>
-                </Rise>
               </div>
             )}
 
