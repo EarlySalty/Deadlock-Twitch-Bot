@@ -276,6 +276,12 @@ mod tests {
             .to_lowercase()
             .contains("schwuchtel"));
         assert!(funde[0].zitat_roh.contains("schwuchtel"));
+        // Auch das redigierte Zitat darf das Wort nicht mehr tragen: es ist die
+        // Fassung, die in den Bericht auf der Platte geht.
+        assert!(!funde[0]
+            .zitat_redigiert
+            .to_lowercase()
+            .contains("schwuchtel"));
         let json = serde_json::to_string(&funde[0]).expect("Fund serialisierbar");
         assert!(!json.contains("schwuchtel"));
     }
