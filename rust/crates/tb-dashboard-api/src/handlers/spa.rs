@@ -117,13 +117,26 @@ pub async fn main_domain_spa_shell_gated_handler(
     if let Some(r) = admin_dashboard_host_page_gate(&headers) {
         return r;
     }
-    if let Some(r) = check_shell_auth(&auth, &pool, uri.path()).await {
+    if let Some(r) = check_shell_auth(&auth, &pool, &shell_next_target(&uri)).await {
         return r;
     }
     serve_dashboard_v2_index_with_asset_prefix(MAIN_DOMAIN_ASSET_PREFIX).await
 }
 
-/// Login-Ziel einer gegateten Shell: der eigene Pfad als `next`, damit der
+/// Rueckkehrziel fuer den Login: Pfad samt Query, damit `/twitch/dashboard?tab=x`
+/// nach dem Login nicht auf dem nackten Dashboard landet.
+///
+/// Eine ueberlange Query (praeparierter Link) faellt auf den reinen Pfad
+/// zurueck, damit der `Location`-Header nicht aufgeblaeht wird.
+fn shell_next_target(uri: &Uri) -> String {
+    const MAX_NEXT_LEN: usize = 512;
+    match uri.path_and_query() {
+        Some(pq) if pq.as_str().len() <= MAX_NEXT_LEN => pq.as_str().to_string(),
+        _ => uri.path().to_string(),
+    }
+}
+
+/// Login-Ziel einer gegateten Shell: das Rueckkehrziel als `next`, damit der
 /// Streamer nach dem Twitch-Login dort landet, wo er hinwollte.
 ///
 /// Alle drei Pfade stehen in `ALLOWED_NEXT_PREFIXES` (`auth/oauth_login.rs`),
@@ -847,6 +860,64 @@ mod tests {
                 "{pfad} fehlt in ALLOWED_NEXT_PREFIXES"
             );
         }
+    }
+
+    /// Der Login soll den Streamer dorthin zurueckbringen, wo er hinwollte,
+    /// also samt Query. Nur ein praeparierter Riesen-Link faellt auf den
+    /// nackten Pfad zurueck.
+    #[test]
+    fn next_ziel_behaelt_die_query_und_deckelt_ausreisser() {
+        let mit_query: Uri = "/twitch/dashboard?tab=growth".parse().unwrap();
+        assert_eq!(
+            shell_next_target(&mit_query),
+            "/twitch/dashboard?tab=growth"
+        );
+
+        let resp = shell_gate_decision(
+            &DashboardAuthLevel::None,
+            true,
+            &shell_next_target(&mit_query),
+        )
+        .expect("ohne Session muss der Gate greifen");
+        assert_eq!(
+            resp.headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/twitch/auth/login?next=%2Ftwitch%2Fdashboard%3Ftab%3Dgrowth"
+        );
+        // Die Whitelist prueft nur den Pfadteil, die Query ueberlebt.
+        assert_eq!(
+            crate::auth::oauth_login::sanitize_next_path(Some("/twitch/dashboard?tab=growth")),
+            "/twitch/dashboard?tab=growth"
+        );
+
+        let riesig: Uri = format!("/twitch/uplink?x={}", "a".repeat(600))
+            .parse()
+            .unwrap();
+        assert_eq!(shell_next_target(&riesig), "/twitch/uplink");
+    }
+
+    /// Kulanz bei DB-Wackler: ein bereits eingeloggter Partner fliegt nicht
+    /// raus, nur weil der Access-State gerade nicht lesbar ist. Der lazy Pool
+    /// zeigt auf einen toten Port, `load_partner_access_state` scheitert also.
+    #[tokio::test]
+    async fn db_fehler_sperrt_eingeloggte_partner_nicht_aus() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            // Ohne kurzes Timeout haengt der Pool 30 s im Default-Retry.
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        assert!(check_shell_auth(&test_partner(), &pool, "/twitch/uplink")
+            .await
+            .is_none());
+        // Ohne Session bleibt es trotz DB-Fehler beim Login-Redirect.
+        let resp = check_shell_auth(&DashboardAuthLevel::None, &pool, "/twitch/uplink")
+            .await
+            .expect("ohne Session muss der Gate greifen");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     }
 
     /// Ein Partner ohne Landing-Freigabe bekommt dieselbe Absage wie im
