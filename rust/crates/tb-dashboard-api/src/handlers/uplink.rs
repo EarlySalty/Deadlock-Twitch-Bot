@@ -110,6 +110,16 @@ fn uplink_token_provider(
     TokenProvider::new(RaidAuthStore::new(pool, cipher), refresher, blacklist)
 }
 
+/// Ein Client fuer alle ausgehenden Aufrufe.
+///
+/// `reqwest::Client::new()` pro Anfrage wirft den Verbindungspool jedes Mal weg
+/// und baut TLS neu auf. Bei einem Proxy, der pro Dashboard-Aufruf einmal
+/// rausgeht, sammeln sich daraus offene Dateideskriptoren.
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 /// Zugang zum Relay. Ohne Secret gibt es keinen.
 pub(crate) struct RelayClient {
     base: String,
@@ -147,8 +157,7 @@ impl RelayClient {
         body: Option<Value>,
     ) -> Result<Value, Response> {
         let url = format!("{}{path}", self.base);
-        let client = reqwest::Client::new();
-        let mut req = client
+        let mut req = http_client()
             .request(method, url)
             .header("X-Relay-Auth", self.secret.clone())
             .header("Accept", "application/json");
@@ -163,11 +172,33 @@ impl RelayClient {
                 .into_response()
         })?;
         let status = antwort.status();
-        let wert = antwort.json::<Value>().await.unwrap_or_else(|_| json!({}));
+        let rohtext = antwort.text().await.unwrap_or_default();
+        // Ein leerer Rumpf ist die uebliche Absage des Relays und bleibt ein
+        // leeres Objekt. Steht dagegen etwas Unlesbares drin, ist das kein
+        // Ergebnis: bei Erfolgsstatus wuerde daraus sonst eine leere Karte im
+        // Dashboard, die wie "nichts eingerichtet" aussieht.
+        let geparst = if rohtext.trim().is_empty() {
+            Some(json!({}))
+        } else {
+            serde_json::from_str::<Value>(&rohtext).ok()
+        };
         if !status.is_success() {
             let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            return Err((code, Json(fehlertext(code, wert))).into_response());
+            let rumpf = geparst.unwrap_or_else(|| json!({}));
+            return Err((code, Json(fehlertext(code, rumpf))).into_response());
         }
+        let Some(wert) = geparst else {
+            tracing::error!(
+                status = status.as_u16(),
+                laenge = rohtext.len(),
+                "Uplink-Antwort ist kein JSON"
+            );
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "Uplink liefert keine lesbare Antwort." })),
+            )
+                .into_response());
+        };
         Ok(wert)
     }
 }
@@ -570,7 +601,7 @@ pub async fn twitch_auto_destination_handler(
                 .into_response());
         }
     };
-    let antwort = reqwest::Client::new()
+    let antwort = http_client()
         .get(format!("{}/streams/key", base.trim_end_matches('/')))
         .query(&[("broadcaster_id", user_id.as_str())])
         .header("Client-Id", client_id)
@@ -911,6 +942,47 @@ mod tests {
             .as_str()
             .expect("srt")
             .contains("relay.example.org"));
+    }
+
+    #[tokio::test]
+    async fn unlesbare_relay_antwort_ist_kein_erfolg() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("<html>Gateway</html>")
+                    .insert_header("Content-Type", "text/html"),
+            )
+            .mount(&server)
+            .await;
+
+        let _guard = ENV.lock().await;
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", server.uri());
+        let fehler = me_handler(partner())
+            .await
+            .expect_err("ein unlesbarer Rumpf darf nicht als leerer Erfolg durchgehen");
+        assert_eq!(status_von(fehler), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn leerer_rumpf_bleibt_ein_leeres_objekt() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(""))
+            .mount(&server)
+            .await;
+
+        let _guard = ENV.lock().await;
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", server.uri());
+        let Json(wert) = me_handler(partner())
+            .await
+            .map_err(|_| "relay-aufruf")
+            .expect("leerer Rumpf bleibt erlaubt");
+        assert_eq!(wert, json!({}));
     }
 
     #[tokio::test]
