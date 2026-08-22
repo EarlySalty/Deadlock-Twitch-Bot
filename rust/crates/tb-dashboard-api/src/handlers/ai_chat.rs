@@ -80,16 +80,16 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, St
     let history = history_messages(session);
 
     if session.model == AI_MODEL_OPUS {
-        // Opus: system separat, messages = History + neue User-Message.
-        let mut messages = history;
-        messages.push(json!({ "role": "user", "content": message }));
-        let messages = messages
+        // Opus: system separat, messages = History + neue User-Message,
+        // direkt als `Message` gebaut statt ueber ein JSON-Zwischenarray.
+        let mut messages: Vec<tb_llm::Message> = history
             .iter()
             .map(|m| tb_llm::Message {
                 role: m["role"].as_str().unwrap_or("user").to_string(),
                 content: m["content"].as_str().unwrap_or_default().to_string(),
             })
             .collect();
+        messages.push(tb_llm::Message::user(message));
         let response = tb_llm::complete(
             "ai_chat",
             tb_llm::Request::history(messages)

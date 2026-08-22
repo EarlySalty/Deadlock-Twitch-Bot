@@ -2937,10 +2937,10 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
     (raus, fehler_gesehen)
 }
 
-/// Zeitgrenze des Modellschritts. Der gemeinsame Eingang haelt je Zeitgrenze
-/// einen Client vor und sperrt Umleitungen: ein Endpunkt auf 127.0.0.1 kann
-/// nicht per 307 nach draussen zeigen, sonst waere die Pruefung auf "lokal"
-/// umsonst.
+/// Zeitgrenze des Modellschritts. Der gemeinsame Eingang nutzt einen einzigen
+/// Client und legt die Frist per `tokio::time::timeout` um jeden Request; er
+/// sperrt Umleitungen: ein Endpunkt auf 127.0.0.1 kann nicht per 307 nach
+/// draussen zeigen, sonst waere die Pruefung auf "lokal" umsonst.
 const MODELL_ZEITGRENZE: Duration = Duration::from_secs(120);
 
 /// HTTP-Client fuer die Meldungen an den Broker.
