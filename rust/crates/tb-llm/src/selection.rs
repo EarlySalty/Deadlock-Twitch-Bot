@@ -147,12 +147,22 @@ pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
     });
     let mut endpoint = resolve(configured.as_deref(), use_case);
     if ist_nur_fireworks(use_case) && endpoint.provider != "fireworks" {
-        warn!(
-            use_case,
-            provider = endpoint.provider,
-            variable = %env_name,
-            "Nur-Fireworks-Anwendungsfall auf anderen Anbieter gelenkt; der Aufrufer schaltet sich damit ab"
-        );
+        // Zwei Ursachen, zwei Meldungen: bewusst umgelenkt oder schlicht
+        // kein Fireworks-Schluessel (dann faellt die Auto-Auswahl auf MiniMax).
+        if eigene_variable.is_some() {
+            warn!(
+                use_case,
+                provider = endpoint.provider,
+                variable = %env_name,
+                "Nur-Fireworks-Anwendungsfall per eigener Variable auf anderen Anbieter gelenkt; der Aufrufer schaltet sich damit ab"
+            );
+        } else {
+            warn!(
+                use_case,
+                provider = endpoint.provider,
+                "Nur-Fireworks-Anwendungsfall ohne Fireworks-Schluessel (FIREWORK_API_KEY); der Aufrufer schaltet sich damit ab"
+            );
+        }
     }
     apply_model_override(&mut endpoint, use_case);
     endpoint
@@ -183,16 +193,14 @@ pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
             .filter(|endpoint| endpoint.api_key.is_some())
             .collect();
     }
-    let mut fallback = if primary.provider == "fireworks" {
+    // Das Ausweichglied ist immer der jeweils andere Anbieter und bekommt
+    // bewusst keinen Modell-Override: `fireworks` mit `MiniMax-Text-01` waere
+    // ein sicher scheiternder Aufruf.
+    let fallback = if primary.provider == "fireworks" {
         minimax_endpoint()
     } else {
         fireworks_endpoint()
     };
-    // Kein Modell-Override auf das Ausweichglied: `fireworks` mit
-    // `MiniMax-Text-01` waere ein sicher scheiternder Aufruf.
-    if fallback.provider == primary.provider {
-        apply_model_override(&mut fallback, use_case);
-    }
     [primary, fallback]
         .into_iter()
         .filter(|endpoint| endpoint.api_key.is_some())
@@ -340,6 +348,9 @@ mod tests {
     fn clear() {
         for v in [
             PROVIDER_DEFAULT_ENV,
+            "ENGAGEMENT_MINIMAX_MODEL",
+            "ANTHROPIC_HAIKU_MODEL",
+            "FIREWORKS_RICKY_REVIEW_MODEL",
             "TB_LLM_PROVIDER_INVITE_QUESTION",
             "FIREWORK_API_KEY",
             "FIREWORKS_API_KEY",
