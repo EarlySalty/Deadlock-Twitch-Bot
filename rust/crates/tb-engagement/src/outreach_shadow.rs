@@ -7,9 +7,7 @@ use serde_json::Value;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::crew_review::{
-    FIREWORKS_DEFAULT_BASE_URL, FIREWORKS_DEFAULT_MODEL,
-};
+use crate::crew_review::FIREWORKS_DEFAULT_MODEL;
 
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HOOKS: usize = 5;
@@ -210,25 +208,21 @@ impl OutreachReviewClient {
         // abgeschaltet nur durch fehlenden Schluessel
         // (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder eine eigene
         // `TB_LLM_PROVIDER_OUTREACH_SHADOW` auf einen anderen Anbieter.
-        // Globale `FIREWORKS_MODEL`/`FIREWORK_BASE_URL` schalten nicht ab;
-        // Adresse und Modell sind hier festgenagelt.
+        // Adresse und Modell kommen aus der zentralen Auswahl und werden
+        // durchgereicht (`TB_LLM_MODEL_OUTREACH_SHADOW`, `FIREWORKS_MODEL`,
+        // `FIREWORKS_BASE_URL`).
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks"
             || endpoint.api_key.as_deref().is_none_or(|key| key.trim().is_empty())
         {
             return Err(OutreachError::Unavailable);
         }
-        Ok(Self {
-            endpoint: tb_llm::LlmEndpoint {
-                base_url: FIREWORKS_DEFAULT_BASE_URL.to_string(),
-                model: FIREWORKS_DEFAULT_MODEL.to_string(),
-                ..endpoint
-            },
-        })
+        Ok(Self { endpoint })
     }
 
-    /// Modell des festgenagelten Endpunkts (fuer Tests und Logs).
-    pub fn endpoint_model(&self) -> &str {
+    /// Modell des aufgeloesten Endpunkts (fuer Tests).
+    #[cfg(test)]
+    pub(crate) fn endpoint_model(&self) -> &str {
         &self.endpoint.model
     }
 
