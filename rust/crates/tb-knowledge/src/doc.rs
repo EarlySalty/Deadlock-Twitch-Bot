@@ -73,6 +73,12 @@ pub struct KnowledgeDoc {
 /// (`concierge`, `intern`, was noch kommt) bleibt drin, ohne dass jemand daran
 /// denken muss. Andersherum waere der Fehlerfall ein Leak: `uplink-concierge.md`
 /// listet zum Beispiel auf, welche Admin-Funktionen und Lastgrenzen es gibt.
+///
+/// Randfall `viewer`: `knowledge/deadlock/_infra-platzhalter.md` traegt
+/// `audience: viewer` und bleibt nach dieser Liste draussen. Kein Produktivpfad
+/// ruft heute den Deadlock-Namespace auf; soll er einmal oeffentlich werden,
+/// ist `viewer` hier zu ergaenzen, nicht eine zweite Sperrliste an einem der
+/// Ausgaenge zu bauen.
 pub fn ist_oeffentlich(audience: &str) -> bool {
     matches!(audience.trim(), "" | "streamer" | "public")
 }

@@ -240,10 +240,11 @@ mod tests {
         assert!(html.contains("<h1>Hilfe"));
     }
 
-    /// `audience: concierge` grundiert nur den Self-Explainer, darf aber nie auf der
-    /// oeffentlichen `/streamer/help`-Seite landen (Leitplanken sind kein Publikum).
-    /// Ohne den Audience-Filter reisst dieser Test: Sabotage bestaetigt es (Fix
-    /// entfernt -> Absatz erscheint).
+    /// `audience: concierge` grundiert nichts: weder diese oeffentliche
+    /// `/streamer/help`-Seite noch den Self-Explainer oder `!help`. Ueberall
+    /// greift dieselbe Erlaubnisliste aus tb-knowledge (Leitplanken sind kein
+    /// Publikum). Ohne den Filter reisst dieser Test: Sabotage bestaetigt es
+    /// (Fix entfernt -> Absatz erscheint).
     #[test]
     fn render_help_versteckt_concierge_audience() {
         let kb = KnowledgeBase::load_from_dir(

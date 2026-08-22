@@ -24,7 +24,7 @@ Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Wel
 
 Für Twitch und Kick werden 1080p und CBR verwendet. Die Ziele werden in dieser Reihenfolge berücksichtigt: Twitch, YouTube, Kick, TikTok.
 
-Uplink nimmt deinen Stream über SRT an. Im Dashboard steht dafür genau eine SRT-Adresse.
+Uplink nimmt deinen Stream über SRT an. Von deinem PC aus ist SRT der einzige Weg zu uns: Einen RTMP-Eingang gibt es zwar, doch der liegt auf dem Server selbst und ist nur von dort erreichbar. Im Dashboard steht für den Weg von deinem PC deshalb genau eine Adresse, die SRT-Adresse.
 
 ### Was passiert, wenn kein Platz frei ist?
 

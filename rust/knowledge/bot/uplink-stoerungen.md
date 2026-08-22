@@ -33,7 +33,7 @@ Nutze Hardware-H.264. Der Stream läuft dann weiter, braucht aber mehr Upload. L
 
 ### Streamlabs kann die SRT-Adresse nicht eintragen
 
-Viele Streamlabs-Versionen können kein SRT. Nur über SRT kommt dein Stream bei uns an. Wenn du die SRT-Adresse aus dem Dashboard dort nicht eintragen kannst, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar. Dann ist der Bandbreitenvorteil weg.
+Viele Streamlabs-Versionen können kein SRT. Von deinem PC aus kommt dein Stream nur über SRT bei uns an. Einen RTMP-Eingang gibt es zusätzlich, doch der liegt auf dem Server selbst und ist nur von dort erreichbar. Wenn du die SRT-Adresse aus dem Dashboard dort nicht eintragen kannst, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar. Dann ist der Bandbreitenvorteil weg.
 
 ### Das Internet bricht weg
 

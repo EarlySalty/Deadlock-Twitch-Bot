@@ -319,9 +319,12 @@ async fn answer_question(kb: &KnowledgeBase, question: &str) -> SelfExplainerAns
     }
     let q_clean: String = q.chars().take(MAX_QUESTION_LEN).collect();
 
-    // Nur Streamer-Wissen grundiert die Antwort; Concierge-Docs sind internes
-    // Leitplanken-Material und duerfen nicht als Quelle auftauchen.
-    let hits = kb.select(&q_clean, Namespace::Bot, Some("streamer"), 4);
+    // Die zentrale Erlaubnisliste (`ist_oeffentlich`) grundiert hier wie in
+    // `!help` und auf der Hilfeseite. Ein Audience-Argument waere eine zweite,
+    // engere Sperrliste und wuerde `audience: public` fälschlich ausschliessen.
+    // Concierge-Docs sind internes Leitplanken-Material und duerfen nicht als
+    // Quelle auftauchen.
+    let hits = kb.select(&q_clean, Namespace::Bot, None, 4);
     if hits.is_empty() {
         return SelfExplainerAnswer {
             answer: FALLBACK_NOT_DOCUMENTED.to_string(),

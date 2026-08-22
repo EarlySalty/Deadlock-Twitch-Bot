@@ -885,6 +885,18 @@ export function UplinkPage() {
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                   <CopyField label="Server-Adresse für OBS" value={data.srt_hint} />
                   <CopyField label="Dein Stream-Schlüssel" value={data.ingest_key} />
+                  {/*
+                    Die beiden alten RTMP-Anzeigefelder sind hier bewusst verschwunden,
+                    und eine Umstellungs-Ansage fehlt mit Absicht: Der RTMP-Eingang war
+                    nie von aussen erreichbar (er lauscht nur auf dem Server selbst), und
+                    der Dienst ist mit null Sessions und null Destinations gestartet. Es
+                    gibt niemanden, der je darueber gesendet haette und umgestellt werden
+                    muesste. Der Guard-Test in tests/uplinkHelp.test.ts wacht darueber,
+                    dass die alte Feldbeschriftung nicht zurueckkehrt; sie steht deshalb
+                    nicht einmal im Kommentar im Wortlaut. Die API liefert rtmp_url und
+                    ingest_key weiterhin aus; das Feld unten zeigt sie nur, solange das
+                    Relay sie fuellt.
+                  */}
                   {data.rtmp_url && (
                     <CopyField label="Alternative Adresse auf diesem Rechner" value={data.rtmp_url} />
                   )}
