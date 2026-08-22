@@ -1499,12 +1499,9 @@ pub struct LearnedPatternRef {
 enum SpamReviewVerdict {
     Spam,
     Clean,
-    /// Historischer Wert: der Judge kam frueher als Anfangszustand der
-    /// Anbieterschleife hierher, bevor ein Anbieter geantwortet hatte. Die
-    /// Schleife ist weg, gespeicherte Zeilen mit `unsure` gibt es weiter.
-    /// Bleibt Teil des persistierten Wortschatzes.
-    #[allow(dead_code)]
-    Unsure,
+    // `unsure` war der Anfangszustand der frueheren Anbieterschleife. Alte
+    // Zeilen mit diesem Wert bleiben in der DB lesbar (TEXT-Spalte, keine
+    // Lesestelle deserialisiert in dieses Enum); geschrieben wird er nicht mehr.
     Skipped,
     Timeout,
     ProviderError,
@@ -1516,7 +1513,6 @@ impl SpamReviewVerdict {
         match self {
             Self::Spam => "spam",
             Self::Clean => "clean",
-            Self::Unsure => "unsure",
             Self::Skipped => "skipped",
             Self::Timeout => "timeout",
             Self::ProviderError => "provider_error",
@@ -2562,12 +2558,6 @@ mod tests {
         "spam_review_decision_clean",
         Clean,
         Some(0.88)
-    );
-    spam_review_decision_persistence_test!(
-        spam_review_unsure_wird_persistiert,
-        "spam_review_decision_unsure",
-        Unsure,
-        Some(0.40)
     );
     spam_review_decision_persistence_test!(
         spam_review_skipped_wird_persistiert,
