@@ -115,9 +115,42 @@ fn uplink_token_provider(
 /// `reqwest::Client::new()` pro Anfrage wirft den Verbindungspool jedes Mal weg
 /// und baut TLS neu auf. Bei einem Proxy, der pro Dashboard-Aufruf einmal
 /// rausgeht, sammeln sich daraus offene Dateideskriptoren.
+///
+/// Die Zeitgrenze ist kein Feinschliff. `/uplink/me` haengt seit
+/// `useUplinkVisibility` an jedem Dashboard-Aufruf, nicht mehr nur an der
+/// Uplink-Seite, und das Relay laeuft auf derselben Maschine, die
+/// transkodiert und per Design lastvoll gefahren wird. Ein Relay, das haengt
+/// statt abzustuerzen, wuerde ohne Grenze jede Dashboard-Anfrage offen halten.
+/// Faellt der Aufbau des Clients aus, bleibt der Weg ohne Grenze besser als
+/// gar kein Dashboard.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// Ein 401 oder 403 vom Relay ist kein Twitch-Problem.
+///
+/// `twitchFehlertext` im Dashboard deutet jeden 401 und 403 dieses Handlers
+/// als fehlende Twitch-Freigabe und schickt den Streamer in einen neuen
+/// Twitch-Login. Lehnt aber das Relay ab, etwa weil `X-Relay-Auth` nicht
+/// stimmt, hilft dieser Weg nicht: der Streamer meldet sich neu an und sieht
+/// denselben Fehler wieder. Derselbe Handler schliesst diese Verwechslung fuer
+/// den Datenbank-Aussetzer bereits, siehe `get_scopes` weiter unten.
+fn relay_fehler_ohne_twitch_deutung(antwort: Response) -> Response {
+    match antwort.status() {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": "uplink_unavailable" })),
+        )
+            .into_response(),
+        _ => antwort,
+    }
 }
 
 /// Zugang zum Relay. Ohne Secret gibt es keinen.
@@ -673,7 +706,8 @@ pub async fn twitch_auto_destination_handler(
                 }],
             })),
         )
-        .await?;
+        .await
+        .map_err(relay_fehler_ohne_twitch_deutung)?;
     Ok(Json(wert))
 }
 
@@ -983,6 +1017,34 @@ mod tests {
             .map_err(|_| "relay-aufruf")
             .expect("leerer Rumpf bleibt erlaubt");
         assert_eq!(wert, json!({}));
+    }
+
+    #[test]
+    fn relay_401_wird_kein_twitch_scope_hinweis() {
+        // Ohne diese Abbildung liest das Dashboard den 401 des Relays als
+        // fehlende Twitch-Freigabe und schickt den Streamer in einen neuen
+        // Twitch-Login, der nichts aendert. 403 traegt dieselbe Falle.
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let vom_relay = (status, Json(json!({ "error": "unauthorized" }))).into_response();
+            let umgeschrieben = relay_fehler_ohne_twitch_deutung(vom_relay);
+            assert_eq!(
+                umgeschrieben.status(),
+                StatusCode::BAD_GATEWAY,
+                "Relay-{status} muss als Uplink-Stoerung ankommen"
+            );
+        }
+    }
+
+    #[test]
+    fn andere_relay_fehler_bleiben_unveraendert() {
+        // Die Abbildung greift eng: ein 503 des Relays traegt keine
+        // Twitch-Deutung und darf seinen Status behalten.
+        let vom_relay =
+            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "busy" }))).into_response();
+        assert_eq!(
+            relay_fehler_ohne_twitch_deutung(vom_relay).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test]
