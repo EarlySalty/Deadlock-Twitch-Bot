@@ -693,21 +693,23 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                        SELECT 1
                          FROM twitch_partners dp
                         WHERE (dp.twitch_user_id = ra.twitch_user_id
-                            OR LOWER(dp.twitch_login) = LOWER(ra.twitch_login))
+                            OR (COALESCE(TRIM(ra.twitch_login), '') <> ''
+                                AND LOWER(dp.twitch_login) = LOWER(ra.twitch_login)))
                           AND (
                                LOWER(TRIM(COALESCE(dp.status, ''))) IN ('departnered', 'archived')
-                            OR dp.departnered_at IS NOT NULL
-                            OR dp.admin_archived_at IS NOT NULL
+                            OR COALESCE(TRIM(dp.departnered_at::TEXT), '') <> ''
+                            OR COALESCE(TRIM(dp.admin_archived_at::TEXT), '') <> ''
                           )
                    )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM twitch_partners ap
                         WHERE (ap.twitch_user_id = ra.twitch_user_id
-                            OR LOWER(ap.twitch_login) = LOWER(ra.twitch_login))
+                            OR (COALESCE(TRIM(ra.twitch_login), '') <> ''
+                                AND LOWER(ap.twitch_login) = LOWER(ra.twitch_login)))
                           AND LOWER(TRIM(COALESCE(ap.status, ''))) = 'active'
-                          AND ap.departnered_at IS NULL
-                          AND ap.admin_archived_at IS NULL
+                          AND COALESCE(TRIM(ap.departnered_at::TEXT), '') = ''
+                          AND COALESCE(TRIM(ap.admin_archived_at::TEXT), '') = ''
                    )
                )
             "#,
@@ -1067,16 +1069,25 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         twitch_login: &str,
     ) -> Result<Option<&'static str>, sqlx::Error> {
         let login_hint = twitch_login.trim().to_lowercase();
-        let row = sqlx::query_as::<_, (bool, bool, bool)>(
+        // Aggregat ohne GROUP BY: ohne Treffer kommt EINE Zeile mit lauter NULL
+        // zurück, nicht null Zeilen. Deshalb Option<bool> dekodieren — ein
+        // bool-Decode würde bei jedem Kanal ohne Partner-Zeile mit
+        // UnexpectedNull scheitern und ihn über den Err-Zweig dauerhaft
+        // aussperren. `twitch_raid_auth` hat keinen FK auf `twitch_partners`,
+        // der Fall ist über den Blacklist-Zweig der Kandidaten-Query erreichbar.
+        //
+        // `departnered_at`/`admin_archived_at` sind in Prod TEXT: auf leer statt
+        // auf NULL prüfen, sonst gilt ein Leerstring als Trennung.
+        let row = sqlx::query_as::<_, (Option<bool>, Option<bool>, Option<bool>)>(
             r#"
             SELECT
                 BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'archived'
-                        OR admin_archived_at IS NOT NULL)   AS archiviert,
+                        OR COALESCE(TRIM(admin_archived_at::TEXT), '') <> '')  AS archiviert,
                 BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'departnered'
-                        OR departnered_at IS NOT NULL)      AS getrennt,
+                        OR COALESCE(TRIM(departnered_at::TEXT), '') <> '')     AS getrennt,
                 BOOL_OR(LOWER(TRIM(COALESCE(status, ''))) = 'active'
-                        AND departnered_at IS NULL
-                        AND admin_archived_at IS NULL)      AS aktiv
+                        AND COALESCE(TRIM(departnered_at::TEXT), '') = ''
+                        AND COALESCE(TRIM(admin_archived_at::TEXT), '') = '')  AS aktiv
               FROM twitch_partners
              WHERE twitch_user_id = $1
                 OR ($2 <> '' AND LOWER(twitch_login) = $2)
@@ -1089,6 +1100,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let Some((archiviert, getrennt, aktiv)) = row else {
             return Ok(None);
         };
+        let (archiviert, getrennt, aktiv) = (
+            archiviert.unwrap_or(false),
+            getrennt.unwrap_or(false),
+            aktiv.unwrap_or(false),
+        );
         if aktiv {
             return Ok(None);
         }
@@ -1153,27 +1169,28 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         // `manual_partner_opt_out` ist in `twitch_partners` ein INTEGER-Flag
         // (DEFAULT 0, Python liest es als `bool(...)`) — daher als i32 dekodieren
         // und gegen 0 prüfen. Ein bool-Decode würde am int4-Spaltentyp scheitern.
-        let partner = sqlx::query!(
+        // ORDER BY statt blankem LIMIT 1: pro Kanal kann es mehrere Zeilen geben
+        // (der Unique-Index greift nur für status = 'active'). Ohne Sortierung
+        // käme Opt-out und Pause aus einer beliebigen, womöglich der toten Zeile.
+        let partner = sqlx::query_as::<_, (Option<i32>, Option<String>)>(
             r#"
-            SELECT manual_partner_opt_out AS "manual_partner_opt_out?",
-                   technical_pause_reason AS "technical_pause_reason?"
-            FROM twitch_partners
-            WHERE twitch_user_id = $1
-               OR LOWER(twitch_login) = LOWER($2)
-            LIMIT 1
+            SELECT manual_partner_opt_out, technical_pause_reason
+              FROM twitch_partners
+             WHERE twitch_user_id = $1
+                OR ($2 <> '' AND LOWER(twitch_login) = $2)
+             ORDER BY (LOWER(TRIM(COALESCE(status, ''))) = 'active') DESC,
+                      id DESC
+             LIMIT 1
             "#,
-            twitch_user_id,
-            &login_hint
         )
+        .bind(twitch_user_id)
+        .bind(&login_hint)
         .fetch_optional(&mut *tx)
         .await?;
         let (manual_opt_out, pause_reason) = match partner {
-            Some(row) => (
-                row.manual_partner_opt_out.unwrap_or(0) != 0,
-                row.technical_pause_reason
-                    .unwrap_or_default()
-                    .trim()
-                    .to_lowercase(),
+            Some((opt_out, pause)) => (
+                opt_out.unwrap_or(0) != 0,
+                pause.unwrap_or_default().trim().to_lowercase(),
             ),
             None => (false, String::new()),
         };
@@ -1189,8 +1206,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                  WHERE (twitch_user_id = $1 OR ($2 <> '' AND LOWER(twitch_login) = $2))
                    AND (
                         LOWER(TRIM(COALESCE(status, ''))) IN ('departnered', 'archived')
-                     OR departnered_at IS NOT NULL
-                     OR admin_archived_at IS NOT NULL
+                     OR COALESCE(TRIM(departnered_at::TEXT), '') <> ''
+                     OR COALESCE(TRIM(admin_archived_at::TEXT), '') <> ''
                    )
             )
             -- Eine aktive Zeile schlägt eine alte getrennte (Karteileichen sind
@@ -1200,8 +1217,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                   FROM twitch_partners
                  WHERE (twitch_user_id = $1 OR ($2 <> '' AND LOWER(twitch_login) = $2))
                    AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
-                   AND departnered_at IS NULL
-                   AND admin_archived_at IS NULL
+                   AND COALESCE(TRIM(departnered_at::TEXT), '') = ''
+                   AND COALESCE(TRIM(admin_archived_at::TEXT), '') = ''
             )
             "#,
         )
@@ -1256,8 +1273,15 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                SET technical_pause_reason = NULL,
                    manual_partner_opt_out = CASE WHEN $1 THEN 0 ELSE manual_partner_opt_out END,
                    raid_bot_enabled = CASE WHEN $2 THEN 1 ELSE raid_bot_enabled END
-             WHERE twitch_user_id = $3
-                OR LOWER(twitch_login) = LOWER($4)
+             WHERE (twitch_user_id = $3
+                 OR ($4 <> '' AND LOWER(twitch_login) = $4))
+               -- Nie eine getrennte oder archivierte Zeile mitschreiben. Im
+               -- Mischfall (alte departnered-Karteileiche neben der aktiven)
+               -- hätte das dort genau die Werte gesetzt, die der Guard oben
+               -- verhindern soll.
+               AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('departnered', 'archived')
+               AND COALESCE(TRIM(departnered_at::TEXT), '') = ''
+               AND COALESCE(TRIM(admin_archived_at::TEXT), '') = ''
             "#,
         )
         .bind(legacy_manual_opt_out_state)
@@ -1517,7 +1541,9 @@ mod tests {
                 status text DEFAULT 'active',
                 manual_partner_opt_out integer DEFAULT 0,
                 technical_pause_reason text, raid_bot_enabled integer DEFAULT 1,
-                departnered_at timestamptz, admin_archived_at timestamptz)",
+                -- Prod-Typen: beide TEXT, nicht timestamptz
+                -- (rust/migrations/20260601000000_baseline_schema.sql).
+                departnered_at text, admin_archived_at text)",
             "CREATE TABLE twitch_raid_auth (
                 twitch_user_id text PRIMARY KEY, twitch_login text,
                 raid_enabled boolean DEFAULT true, needs_reauth boolean DEFAULT false,
@@ -1812,14 +1838,14 @@ mod tests {
             "INSERT INTO twitch_partners
                 (twitch_user_id, twitch_login, status, manual_partner_opt_out,
                  raid_bot_enabled, departnered_at)
-             VALUES ('310', 'getrennt', 'departnered', 1, 0, now()),
+             VALUES ('310', 'getrennt', 'departnered', 1, 0, now()::text),
                     ('311', 'archiviert', 'archived', 1, 0, NULL)",
         )
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            "UPDATE twitch_partners SET admin_archived_at = now() WHERE twitch_user_id = '311'",
+            "UPDATE twitch_partners SET admin_archived_at = now()::text WHERE twitch_user_id = '311'",
         )
         .execute(&pool)
         .await
@@ -1863,7 +1889,7 @@ mod tests {
             "INSERT INTO twitch_partners
                 (twitch_user_id, twitch_login, status, manual_partner_opt_out,
                  raid_bot_enabled, departnered_at, technical_pause_reason)
-             VALUES ('312', 'wiederda', 'departnered', 1, 0, now(), NULL),
+             VALUES ('312', 'wiederda', 'departnered', 1, 0, now()::text, NULL),
                     ('312', 'wiederda', 'active', 1, 0, NULL, NULL)",
         )
         .execute(&pool)
@@ -1880,6 +1906,39 @@ mod tests {
             reactor.restore_bot_banned_channel("312", "wiederda").await,
             "aktive Zeile schlägt die alte getrennte — sonst bleibt der Partner für immer gesperrt"
         );
+
+        // Kanal ganz ohne twitch_partners-Zeile: über den Blacklist-Zweig der
+        // Kandidaten-Query erreichbar (twitch_raid_auth hat keinen FK auf
+        // twitch_partners). Das BOOL_OR-Aggregat liefert hier eine Zeile voller
+        // NULL — ein bool-Decode hätte den Kanal per Fehler dauerhaft
+        // ausgesperrt, statt ihn durchzulassen.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES ('313', 'ohnepartner', false, false)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
+             VALUES ('313', 'ohnepartner', 'bot_banned', now()::text)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            reactor
+                .restore_bot_banned_channel("313", "ohnepartner")
+                .await,
+            "ohne Partner-Zeile gibt es keine Trennung, die den Restore blockieren könnte"
+        );
+        let blacklist_rest: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_raid_blacklist WHERE target_id = '313'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(blacklist_rest, 0, "Bot-Ban-Marker ist aufgehoben");
 
         // DB-Zustand der getrennten Kanäle unverändert: Opt-out bleibt, Raid bleibt aus.
         let rows: Vec<(String, Option<i32>, Option<bool>)> = sqlx::query_as(
