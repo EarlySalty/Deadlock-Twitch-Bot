@@ -1012,6 +1012,7 @@ twitch_partners_all_state|twitch_login|text|YES|
 twitch_partners_all_state|twitch_user_id|text|YES|
 twitch_partners|added_by|text|YES|
 twitch_partners|admin_archived_at|text|YES|
+twitch_partners|auto_raid_paused_until|timestamp with time zone|YES|
 twitch_partners|departnered_at|text|YES|
 twitch_partners|global_ban_enforcement_enabled|boolean|NO|true
 twitch_partners|id|bigint|NO|nextval('twitch_partners_id_seq'::regclass)

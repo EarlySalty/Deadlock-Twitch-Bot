@@ -1095,11 +1095,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         )
         .bind(twitch_user_id)
         .bind(&login_hint)
-        .fetch_optional(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-        let Some((archiviert, getrennt, aktiv)) = row else {
-            return Ok(None);
-        };
+        let (archiviert, getrennt, aktiv) = row;
         let (archiviert, getrennt, aktiv) = (
             archiviert.unwrap_or(false),
             getrennt.unwrap_or(false),
