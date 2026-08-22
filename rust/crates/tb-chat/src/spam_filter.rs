@@ -259,7 +259,7 @@ fn homoglyph_table() -> &'static Vec<(char, char)> {
 /// NFKC-Normalisierung + Homoglyph-Ersetzung + strip().
 /// Port von `_normalize_spam_text` (moderation.py Z. 614–617).
 /// Reihenfolge: NFKC zuerst, dann Homoglyphen, dann trim.
-fn normalize_spam_text(content: &str) -> String {
+pub(crate) fn normalize_spam_text(content: &str) -> String {
     // NFKC via unicode-normalization
     let nfkc: String = content.nfkc().collect();
     // Homoglyph-Ersetzung (char-für-char)
@@ -294,7 +294,7 @@ pub fn normalize_exact_spam_message(content: &str) -> String {
 }
 
 /// Nur a-z0-9 — für gelernte Muster (compact form).
-fn compact(lowered: &str) -> String {
+pub(crate) fn compact(lowered: &str) -> String {
     lowered
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -327,9 +327,137 @@ fn viewer_pattern_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\bviewers?\s+\w+").expect("viewer-Regex ist konstant"))
 }
 
+/// Grund-Label des reinen Viewer-Regex-Treffers (Schritt 5). Als Konstante,
+/// weil das Safe-Wording-Gate exakt gegen dieses Label prüft.
+pub const VIEWER_PATTERN_REASON: &str = "Muster: viewer + name";
+
+/// Deutsche Umgangssprache, die harmlos mit „viewer" zusammenfällt und den
+/// weichen Viewer-Regex (Schritt 5) allein auslöst: Lurk- und Gönn-Sprech.
+///
+/// KEIN Negativ-Scoring (das war das Safe-List-Poisoning vom 11.07.), sondern
+/// nur ein Gate für den reinen Viewer-Regex-Treffer, siehe
+/// [`spam_signal_ist_nur_viewer_muster`]. Distinktiv gehalten: englischer
+/// Viewbot-Spam nutzt keinen dieser Marker.
+const SAFE_WORDING_MARKERS: &[&str] = &[
+    "gönn",  // gönn, gönne, gönnt, gönn dir, gönnen
+    "goenn", // ohne Umlaut getippt
+    "am lurken",
+    "nur am lurk",
+    "bin am lurk",
+];
+
+/// Kontaktaufnahme und Verkauf. Wer sie mitschickt, will etwas verkaufen, auch
+/// wenn er es in Gönn-Sprech verpackt: „gönn dir viewers, schreib mir" trägt
+/// sonst nur den weichen Viewer-Regex und käme ohne diese Gegenprüfung am Judge
+/// vorbei. Das Gate ist gegen falsche Timeouts bei Umgangssprache gebaut, nicht
+/// als Freifahrtschein für getarnte Angebote.
+const KONTAKT_MARKERS: &[&str] = &[
+    "schreib mir",
+    "schreibt mir",
+    "schreib mich",
+    "melde dich",
+    "meldet euch",
+    "dm mir",
+    "dm mich",
+    "schick mir",
+    "kontaktier",
+    "t.me/",
+    "telegram",
+    "whatsapp",
+    "discord.gg",
+    "billig",
+    "guenstig",
+    "günstig",
+    "gunstig", // nach dem Entfernen der Diakritika
+    "kaufen",
+    "preis",
+    "euro",
+    "€",
+    "angebot",
+    "rabatt",
+    "bestell",
+    "shop",
+    "link in bio",
+    "instagram",
+];
+
+/// Jede Adresse und jeder Preis, nicht nur die sechs bekannten Spam-Marken.
+///
+/// Der Detektor kennt nur Domains aus einer Namensliste; ein neuer Shop taucht
+/// dort erst nach dem ersten Schaden auf. Fuer die Gegenpruefung reicht die
+/// Form: wer im selben Satz "gönn dir viewer" und eine Adresse oder einen
+/// Betrag schreibt, verkauft etwas. Absichtlich weit gefasst, denn ein Treffer
+/// bedeutet nur, dass wieder der Judge entscheidet.
+fn kontakt_form_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?x)
+              https?:// |
+              \bwww\. |
+              \b[a-z0-9][a-z0-9-]*\.(?:com|net|org|io|ru|online|xyz|site|shop|store|gg|de|tv|me|link|bio)\b |
+              [$€£] |
+              \b(?:usd|eur|dollar|euros?|paypal|paysafe|crypto|btc)\b |
+              \b\d+\s*(?:eur|usd|dollar|euro)\b
+            ",
+        )
+        .expect("Kontakt-Form-Regex ist konstant")
+    })
+}
+
+/// Trifft ein harmloses Umgangssprache-Muster, das den Viewer-Regex fälschlich
+/// triggert, gibt den Marker zurück. Lowercase-Contains reicht: die Marker sind
+/// distinktiv, und das Gate greift nur im reinen Viewer-Regex-Pfad.
+///
+/// Trägt der Text zusätzlich eine Kontaktaufnahme oder ein Verkaufswort, gibt es
+/// keinen Marker zurück: dann entscheidet wieder der Judge.
+pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
+    // Dieselbe Normalisierung wie der Detektor, den das Gate ueberstimmt: NFKC
+    // plus Homoglyph-Tabelle. Ohne sie liefe die Gegenpruefung auf dem Rohtext,
+    // und ein kyrillisches Zeichen in "schreib mir" haette das Gate wieder
+    // geoeffnet, obwohl das ganze Modul dagegen gehaertet ist.
+    //
+    // normalize_exact_spam_message statt normalize_spam_text: es fasst
+    // zusaetzlich Whitespace zusammen. Die Marker sind mehrwortig, und ein
+    // zweites Leerzeichen in "schreib  mir" waere sonst die billigste
+    // Umgehung der ganzen Liste gewesen.
+    let lowered = normalize_exact_spam_message(text);
+    // Fuer die Gegenpruefung zusaetzlich die Akzente weg: die Homoglyph-Tabelle
+    // kennt das kyrillische s, aber nicht jedes Zeichen mit Diakritikum, und
+    // "billig" mit Akzent-i ist derselbe Trick. Schaerfer zu normalisieren ist
+    // hier die sichere Richtung: das Gate greift dann seltener, also entscheidet
+    // haeufiger der Judge. Die Safe-Marker selbst bleiben auf `lowered`, sonst
+    // wuerde "goenn" den Umlaut in "gönn" verlieren und beide Schreibweisen
+    // faenden sich gegenseitig nicht mehr.
+    let ohne_akzente: String = lowered
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect();
+    if KONTAKT_MARKERS
+        .iter()
+        .any(|k| lowered.contains(k) || ohne_akzente.contains(k))
+        || kontakt_form_re().is_match(&lowered)
+        || kontakt_form_re().is_match(&ohne_akzente)
+    {
+        return None;
+    }
+    SAFE_WORDING_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| lowered.contains(marker))
+}
+
+/// True, wenn der EINZIGE Spam-Grund der weiche Viewer-Regex ist (kein
+/// Fragment, keine Phrase, keine Domain, kein gelerntes Muster). Nur dann darf
+/// ein Safe-Wording-Treffer den Judge überstimmen, damit echter Spam, der
+/// immer ein stärkeres Signal trägt, nie durchrutscht.
+pub fn spam_signal_ist_nur_viewer_muster(matched: &[String]) -> bool {
+    !matched.is_empty() && matched.iter().all(|reason| reason == VIEWER_PATTERN_REASON)
+}
+
 /// Baut einen Word-Boundary-Regex für ein Literal-Muster (\b...\b).
 /// Entspricht `re.search(r"\b" + re.escape(...) + r"\b", lowered)`.
-fn word_boundary_re(pattern: &str) -> Option<Regex> {
+pub(crate) fn word_boundary_re(pattern: &str) -> Option<Regex> {
     let escaped = regex::escape(pattern);
     Regex::new(&format!(r"\b{escaped}\b")).ok()
 }
@@ -726,7 +854,7 @@ impl SpamFilter {
         // Schritt 5: Viewer-Muster (moderation.py Z. 537–539)
         if viewer_pattern_re().is_match(&lowered) {
             hits += 1;
-            reasons.push("Muster: viewer + name".to_string());
+            reasons.push(VIEWER_PATTERN_REASON.to_string());
         }
 
         // Schritt 6+7: Gelernte Muster (moderation.py Z. 542–562)
@@ -1120,6 +1248,147 @@ mod tests {
         assert_eq!(v.score, 1);
         assert!(!v.hard_signal);
         assert_eq!(v.action, SpamAction::None);
+    }
+
+    // --- Safe-Wording-Gate ---
+
+    #[test]
+    fn safe_wording_trifft_goenn_und_lurk_sprech() {
+        assert_eq!(matches_safe_wording("gönne viewer du weißt"), Some("gönn"));
+        assert_eq!(
+            matches_safe_wording("GÖNN dir viewer bro"),
+            Some("gönn"),
+            "case-insensitiv"
+        );
+        assert_eq!(matches_safe_wording("goenn dir viewer"), Some("goenn"));
+        assert_eq!(matches_safe_wording("bin nur am lurken hehe"), Some("am lurken"));
+        assert_eq!(matches_safe_wording("best viewers streamboo com"), None);
+    }
+
+    /// Getarnte Angebote tragen den harmlosen Marker mit, wollen aber verkaufen.
+    /// Der reine Viewer-Regex ist dabei das einzige Spam-Signal, das Gate wuerde
+    /// sie also ohne diese Gegenpruefung am Judge vorbei durchwinken.
+    #[test]
+    fn safe_wording_greift_nicht_bei_kontakt_oder_verkauf() {
+        for text in [
+            "gönn dir viewers, schreib mir",
+            "gönn dir viewer, dm mir",
+            "goenn dir viewer, billig",
+            "gönn dir viewer, melde dich per telegram",
+            "bin am lurken, kaufen kannst du viewer bei mir",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Kontakt- oder Verkaufsangebot darf nicht als harmlos gelten: {text}"
+            );
+        }
+        // Die harmlose Umgangssprache bleibt harmlos.
+        assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
+    }
+
+    /// Die Marker sind mehrwortig. Ein zweites Leerzeichen, ein Tab oder ein
+    /// Zeilenumbruch waere sonst die billigste Umgehung der ganzen Liste.
+    #[test]
+    fn safe_wording_stolpert_nicht_ueber_zusaetzlichen_whitespace() {
+        for text in [
+            "gönn dir viewers, schreib  mir",
+            "gönn dir viewers, schreib\tmir",
+            "gönn dir viewers,\nschreib\nmir",
+            "gönn dir viewer,  link   in  bio",
+            "gönn dir viewer, melde   dich",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "zusaetzlicher Whitespace darf die Gegenpruefung nicht aushebeln: {text:?}"
+            );
+        }
+    }
+
+    /// Das Gate ueberstimmt einen Detektor, der ueber die Homoglyph-Tabelle
+    /// laeuft. Ohne dieselbe Normalisierung waere ein kyrillisches Zeichen der
+    /// Freifahrtschein am Judge vorbei.
+    #[test]
+    fn safe_wording_sieht_durch_homoglyphen_hindurch() {
+        // Kyrillisches s (U+0455) in "schreib mir".
+        assert_eq!(
+            matches_safe_wording("gönn dir viewers, \u{0455}chreib mir"),
+            None,
+            "Homoglyph im Kontaktwort umgeht die Gegenpruefung"
+        );
+        // Akzent-i in "billig".
+        assert_eq!(
+            matches_safe_wording("gönn dir viewer bill\u{00ed}g"),
+            None,
+            "Homoglyph im Verkaufswort umgeht die Gegenpruefung"
+        );
+    }
+
+    /// Bewusst mit Formulierungen, die NICHT woertlich in KONTAKT_MARKERS
+    /// stehen: eine unbekannte Domain, eine Fremdwaehrung, ein anderer Dienst.
+    /// Ein Test, der nur die eigene Liste abfragt, beweist nichts.
+    #[test]
+    fn safe_wording_faengt_adressen_und_betraege_ausserhalb_der_liste() {
+        for text in [
+            "gönn dir viewer auf viewbot-neu.io",
+            "gönn dir viewer, https://irgendwo-neues.example",
+            "gönn dir viewer für 5 dollar",
+            "gönn dir viewer, 20$",
+            "bin am lurken, zahl per paypal",
+            "gönn dir viewer, www.nochnieda.ru",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Adresse oder Betrag muss das Gate aufheben: {text}"
+            );
+        }
+        // Ohne Adresse und ohne Betrag bleibt es Umgangssprache.
+        assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
+        assert_eq!(
+            matches_safe_wording("bin nur am lurken, schaue nebenbei"),
+            Some("am lurken")
+        );
+    }
+
+    /// Die Blockliste ist handgepflegt, deckt aber auch Preis- und
+    /// Shop-Vokabular ab: ein Angebot braucht kein Kontaktwort, eine Zahl mit
+    /// Waehrung reicht.
+    #[test]
+    fn safe_wording_faengt_auch_reine_preisangaben() {
+        for text in [
+            "gönn dir 10k viewer, 5 euro",
+            "gönn dir viewer, 5€",
+            "gönn dir viewer, link in bio",
+            "bin am lurken, mein shop hat viewer",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Preis- oder Shop-Angebot darf nicht als harmlos gelten: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_greift_nur_bei_reinem_viewer_muster() {
+        // Reiner Viewer-Regex-Treffer → Gate darf greifen.
+        let nur_viewer = filter().evaluate("gönne viewer du weißt", &ctx_default());
+        assert_eq!(nur_viewer.matched, vec![VIEWER_PATTERN_REASON.to_string()]);
+        assert!(spam_signal_ist_nur_viewer_muster(&nur_viewer.matched));
+
+        // Zusätzliches Fragment/Phrase → Gate darf NICHT greifen (echter Spam
+        // trägt immer ein stärkeres Signal).
+        let mit_phrase = filter().evaluate("gönn dir viewers smmhype", &ctx_default());
+        assert!(
+            !spam_signal_ist_nur_viewer_muster(&mit_phrase.matched),
+            "matched: {:?}",
+            mit_phrase.matched
+        );
+
+        // Leere Trefferliste ist kein Viewer-Muster.
+        assert!(!spam_signal_ist_nur_viewer_muster(&[]));
     }
 
     // --- SPAM_MIN_MATCHES Schwelle ---

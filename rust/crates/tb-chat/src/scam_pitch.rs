@@ -159,8 +159,12 @@ Teilübereinstimmungen mit bekannten Spam-Mustern). Deine Aufgabe: bestätige od
 sich um WERBUNG für Viewer-Bot-Services, SMM-Dienste oder ähnliche Twitch-Manipulation handelt.\n\
 \n\
 Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne <think>-Block:\n\
-{\"is_spam\": true/false, \"pattern\": \"Kernmuster oder null\", \"pattern_type\": \"phrase\" \
-oder \"fragment\", \"reason\": \"Begründung max 80 Zeichen\"}\n\
+{\"is_spam\": true/false, \"confidence\": 0.0 bis 1.0, \"pattern\": \"Kernmuster oder null\", \
+\"pattern_type\": \"phrase\" oder \"fragment\", \"reason\": \"Begründung max 80 Zeichen\"}\n\
+\n\
+confidence ist deine Sicherheit im Urteil, nicht die Schwere: 0.9 und hoeher bei einem \
+eindeutigen Angebot, 0.5 bis 0.7 wenn es auch normale Chat-Sprache sein koennte. Das Feld \
+entscheidet mit, ob automatisch geahndet wird, also schaetze ehrlich.\n\
 \n\
 Entscheidend ist allein, ob die Nachricht ein Angebot macht — NICHT, ob ein Dienstname, eine \
 Domain, ein Preis oder eine Kontaktaufforderung darin steht. Anonyme Angebote ohne Markennamen \
@@ -179,6 +183,10 @@ normale URLs\n\
 - Fragen oder Gespräche ÜBER Spam, Viewer-Bots oder Bans (z.B. 'bannt der Bot mich, wenn \
 ich X eingebe?') — wer über einen Dienst redet, wirbt nicht für ihn. Nur die aktive \
 Bewerbung ist Spam.\n\
+- deutscher Alltags- und Lurk-Sprech, in dem 'viewer' nur beiläufig vorkommt (z.B. \
+'gönn(t) dir viewer', 'gönne viewer du weißt', 'bin nur am lurken', Kommentare über die \
+eigenen oder fremde Viewer-Zahlen). 'gönnen' ist deutsche Unterstützer-Umgangssprache, \
+kein Angebot.\n\
 \n\
 pattern ist reines Lern-Nebenprodukt und beeinflusst is_spam nie. Bei is_spam=true: pattern = \
 kürzestes eindeutiges Spam-Kernmuster, sofern die Nachricht einen unterscheidungskräftigen Token \
@@ -1751,35 +1759,167 @@ async fn persist_spam_learning(
     let Some(pat) = review.pattern.as_deref() else {
         return (None, None, false);
     };
-    if pat.chars().count() < PATTERN_MIN_LEN {
-        return (None, None, false);
-    }
-    if !crate::spam_filter::is_distinctive_spam_pattern(pat) {
-        warn!(
-            pattern = %pat,
-            "Judge-Muster abgelehnt: nur generisches Vokabular (Distinktivitäts-Gate)"
-        );
-        return (None, Some(pat.to_string()), false);
-    }
     let pattern_type = match review.pattern_type.as_deref() {
         Some("phrase") => "phrase",
         _ => "fragment",
     };
-    let learned = save_spam_pattern(
+    match learn_pattern_from_judge(
         pool,
-        pat,
-        pattern_type,
-        content,
-        channel,
-        review.reason.as_deref().unwrap_or(""),
+        JudgeLearning {
+            pattern: pat,
+            pattern_type,
+            evidence: content,
+            source_message: content,
+            channel,
+            reasoning: review.reason.as_deref().unwrap_or(""),
+            confidence: review.confidence,
+        },
     )
     .await
-    .map(|id| LearnedPatternRef {
-        id,
-        pattern: pat.to_lowercase(),
-    });
-    let save_failed = learned.is_none();
-    (learned, None, save_failed)
+    {
+        LearnOutcome::Saved { id, pattern } => {
+            (Some(LearnedPatternRef { id, pattern }), None, false)
+        }
+        LearnOutcome::Rejected => (None, Some(pat.to_string()), false),
+        LearnOutcome::SaveFailed => (None, None, true),
+        LearnOutcome::Skipped => (None, None, false),
+    }
+}
+
+/// Ab dieser Konfidenz darf ein Judge-Urteil ein Muster in den Vorfilter
+/// schreiben. Ein gelerntes Muster ist ein hartes Signal und wirkt rueckwirkend
+/// in allen Kanaelen, deshalb liegt die Schwelle ueber jeder Ahndungsschwelle.
+/// Liefert ein Judge gar keine Konfidenz, wird nicht gelernt.
+pub(crate) const LEARN_MIN_CONFIDENCE: f32 = 0.9;
+
+/// Ergebnis eines Lernversuchs aus einem Judge-Urteil.
+pub(crate) enum LearnOutcome {
+    Saved { id: i64, pattern: String },
+    /// Muster hat eine der Hürden gerissen: nicht in der Nachricht belegt oder
+    /// zu generisch.
+    Rejected,
+    /// Kein oder zu kurzes Muster — nichts zu lernen, kein Fehler.
+    Skipped,
+    /// Schreibfehler in der DB.
+    SaveFailed,
+}
+
+/// Prüft ein vom Judge vorgeschlagenes Spam-Muster und schreibt es in die
+/// gelernten Muster. Gemeinsamer Pfad für den Service-Pitch-Judge und den
+/// Konversations-Wächter (`conversation_scam`).
+///
+/// Drei Hürden, alle nötig, weil ein gelerntes Muster laut
+/// [`crate::spam_filter::has_hard_spam_signal`] ein hartes Signal ist und
+/// rückwirkend in jedem Kanal greift:
+///
+/// 1. Entfremdung entfernen (NFKC + Homoglyphen). Ein Muster mit Small Caps
+///    oder kyrillischem „а" würde sonst nie wieder matchen: beim Scoring ist
+///    der Vergleichstext normalisiert, das gespeicherte Muster war es bislang
+///    nicht.
+/// 2. Beleg in der Quelle: das Muster muss als eigenstaendige Wortfolge im
+///    Belegtext stehen ([`beleg_form`]). Ein halluziniertes Muster, das so kein
+///    Chatter geschrieben hat, wird nicht gelernt.
+/// 3. Distinktivitäts-Gate ([`crate::spam_filter::is_distinctive_spam_pattern`]).
+pub(crate) struct JudgeLearning<'a> {
+    pub pattern: &'a str,
+    pub pattern_type: &'a str,
+    /// Text, in dem das Muster belegt sein muss. Urteilt der Judge ueber einen
+    /// ganzen Dialog, gehoert der ganze Dialog hier hinein und nicht nur die
+    /// letzte Nachricht.
+    pub evidence: &'a str,
+    /// Was als Quelle in der Lerntabelle landet.
+    pub source_message: &'a str,
+    pub channel: &'a str,
+    pub reasoning: &'a str,
+    /// Konfidenz des Urteils, wenn der Judge eine liefert.
+    pub confidence: Option<f32>,
+}
+
+/// Wortform fuer die Beleg-Pruefung: normalisiert, klein, Satz- und
+/// Sonderzeichen werden zu Leerraum, Leerraum wird zusammengefasst.
+///
+/// So gilt „eballo .com" als Beleg fuer „eballo.com", ohne dass Wortgrenzen
+/// verschwinden: ein reiner Alphanumerik-Vergleich haette „viewers.su" in
+/// „viewers super" gefunden.
+fn beleg_form(text: &str) -> String {
+    let normalized = crate::spam_filter::normalize_spam_text(text).to_lowercase();
+    let entschaerft: String = normalized
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    entschaerft.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) async fn learn_pattern_from_judge(pool: &PgPool, req: JudgeLearning<'_>) -> LearnOutcome {
+    let JudgeLearning {
+        pattern,
+        pattern_type,
+        evidence,
+        source_message,
+        channel,
+        reasoning,
+        confidence,
+    } = req;
+    let canonical = crate::spam_filter::normalize_spam_text(pattern)
+        .to_lowercase()
+        .trim()
+        .to_string();
+    if canonical.chars().count() < PATTERN_MIN_LEN {
+        return LearnOutcome::Skipped;
+    }
+    // Ein knappes Urteil darf ahnden, aber nichts dauerhaft lernen. Fehlt die
+    // Konfidenz ganz, gilt dasselbe wie im Ahndungspfad (`ahndung_erlaubt` in
+    // pipeline.rs): unbekannt ist nicht klar genug.
+    if !confidence.is_some_and(|c| c >= LEARN_MIN_CONFIDENCE) {
+        return LearnOutcome::Skipped;
+    }
+    // Was das Safe-Wording-Gate von der Ahndung ausnimmt, darf erst recht kein
+    // hartes Signal werden: sonst haette deutsche Umgangssprache ein einziges
+    // Fehlurteil gebraucht, um in jedem Kanal dauerhaft zu greifen.
+    if let Some(marker) = crate::spam_filter::matches_safe_wording(evidence) {
+        warn!(
+            pattern = %canonical,
+            marker,
+            "Judge-Muster abgelehnt: Safe-Wording in der Quelle"
+        );
+        return LearnOutcome::Rejected;
+    }
+    let haystack = beleg_form(evidence);
+    let needle = beleg_form(&canonical);
+    let belegt = !needle.is_empty()
+        && crate::spam_filter::word_boundary_re(&needle)
+            .map(|re| re.is_match(&haystack))
+            .unwrap_or(false);
+    if !belegt {
+        warn!(
+            pattern = %canonical,
+            "Judge-Muster abgelehnt: steht so nicht in der Quelle"
+        );
+        return LearnOutcome::Rejected;
+    }
+    if !crate::spam_filter::is_distinctive_spam_pattern(&canonical) {
+        warn!(
+            pattern = %canonical,
+            "Judge-Muster abgelehnt: nur generisches Vokabular (Distinktivitäts-Gate)"
+        );
+        return LearnOutcome::Rejected;
+    }
+    match save_spam_pattern(
+        pool,
+        &canonical,
+        pattern_type,
+        source_message,
+        channel,
+        reasoning,
+    )
+    .await
+    {
+        Some(id) => LearnOutcome::Saved {
+            id,
+            pattern: canonical,
+        },
+        None => LearnOutcome::SaveFailed,
+    }
 }
 
 /// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
@@ -2354,6 +2494,46 @@ mod tests {
         assert_eq!(v.pattern_type.as_deref(), Some("phrase"));
     }
 
+    /// Die Confidence entscheidet mit, ob im Safe-Wording-Fall geahndet wird
+    /// (`pipeline::ahndung_erlaubt`). Sie muss also wirklich aus der Antwort
+    /// kommen, und ihr Fehlen muss als Fehlen ankommen, nicht als Null.
+    #[test]
+    fn extract_verdict_liest_die_confidence_und_meldet_ihr_fehlen() {
+        let mit = extract_verdict(
+            "{\"is_spam\": true, \"confidence\": 0.92, \"pattern\": \"viewer boost\", \
+             \"pattern_type\": \"phrase\", \"reason\": \"Angebot\"}",
+        )
+        .expect("Urteil");
+        assert_eq!(mit.confidence, Some(0.92));
+
+        // Genau der Fall, den das alte Prompt erzeugte: kein Feld, also None.
+        let ohne = extract_verdict(
+            "{\"is_spam\": true, \"pattern\": \"viewer boost\", \
+             \"pattern_type\": \"phrase\", \"reason\": \"Angebot\"}",
+        )
+        .expect("Urteil");
+        assert_eq!(ohne.confidence, None);
+
+        // Unbrauchbare Werte zaehlen ebenfalls als fehlend, nicht als 0.
+        for roh in ["\"hoch\"", "1.5", "-0.2"] {
+            let v = extract_verdict(&format!(
+                "{{\"is_spam\": true, \"confidence\": {roh}, \"reason\": \"x\"}}"
+            ))
+            .expect("Urteil");
+            assert_eq!(v.confidence, None, "unbrauchbare Confidence: {roh}");
+        }
+    }
+
+    /// Der Prompt muss das Feld anfordern, sonst liefert kein Modell es, und die
+    /// Schwelle in der Pipeline waere ein Schalter, der die Ahndung abstellt.
+    #[test]
+    fn judge_prompt_fordert_die_confidence_an() {
+        assert!(
+            SPAM_REVIEW_SYSTEM_PROMPT.contains("\"confidence\""),
+            "Prompt fordert keine Confidence an"
+        );
+    }
+
     #[test]
     fn extract_verdict_ohne_json_gibt_none() {
         assert!(extract_verdict("nur Denktext, kein Urteil").is_none());
@@ -2627,6 +2807,182 @@ mod tests {
         Skipped,
         None
     );
+
+    // ── Lernpfad aus Judge-Urteilen ──────────────────────────────────────────
+
+    /// Ein verfremdetes Muster muss entfremdungsfrei in der DB landen, sonst
+    /// matcht es beim naechsten Mal nie: das Scoring vergleicht normalisierten
+    /// Text gegen das rohe gespeicherte Muster.
+    #[tokio::test]
+    async fn entfremdetes_judge_muster_wird_normalisiert_gelernt() {
+        let pool = pool_or_skip!("judge_learning_obfuscation");
+        let nachricht = "𝗏𝗂𝖾𝗐𝖾𝗋𝗌 on the stream 𝗌𝗍𝗋𝖾𝖺𝗆_𝗉𝗋𝗈𝗆𝗈𝗍𝗂𝗈𝗇_𝖻𝗈𝗍 tg";
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "𝗌𝗍𝗋𝖾𝖺𝗆_𝗉𝗋𝗈𝗆𝗈𝗍𝗂𝗈𝗇_𝖻𝗈𝗍",
+                pattern_type: "fragment",
+                evidence: nachricht,
+                source_message: nachricht,
+                channel: "testchannel",
+                reasoning: "Growth-Pitch",
+                confidence: Some(0.95),
+            },
+        )
+        .await;
+        let LearnOutcome::Saved { pattern, .. } = outcome else {
+            panic!("Muster muss gelernt werden");
+        };
+        assert_eq!(pattern, "stream_promotion_bot");
+
+        // Und der Vorfilter erkennt dieselbe Nachricht danach ohne Judge.
+        let filter =
+            crate::spam_filter::SpamFilter::new(crate::spam_filter::LearnedPatterns::load(&pool).await);
+        let verdict = filter.evaluate(nachricht, &crate::spam_filter::SpamContext::default());
+        assert!(
+            verdict.hard_signal,
+            "gelerntes Muster muss ein hartes Signal sein: {:?}",
+            verdict.matched
+        );
+    }
+
+    /// Ein Muster, das so nicht in der Nachricht steht, ist halluziniert und
+    /// darf nie gelernt werden.
+    #[tokio::test]
+    async fn halluziniertes_judge_muster_wird_abgelehnt() {
+        let pool = pool_or_skip!("judge_learning_halluzination");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "clicknex.online",
+                pattern_type: "fragment",
+                evidence: "hey, schoener stream, spielst du haze?",
+                source_message: "hey, schoener stream, spielst du haze?",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: Some(0.99),
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_auto_learned_spam_patterns")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "halluziniertes Muster darf nicht in der DB stehen");
+    }
+
+    /// Fehlt die Konfidenz, gilt dasselbe wie im Ahndungspfad: unbekannt ist
+    /// nicht klar genug, um ein dauerhaftes hartes Signal zu setzen.
+    #[tokio::test]
+    async fn judge_ohne_konfidenz_lernt_nichts() {
+        let pool = pool_or_skip!("judge_learning_ohne_konfidenz");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "clicknex.online",
+                pattern_type: "fragment",
+                evidence: "schau mal clicknex.online an",
+                source_message: "schau mal clicknex.online an",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: None,
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Skipped));
+    }
+
+    /// Ein knappes Urteil darf ahnden, aber nichts dauerhaft lernen.
+    #[tokio::test]
+    async fn knappes_judge_urteil_lernt_nichts() {
+        let pool = pool_or_skip!("judge_learning_konfidenz");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "clicknex.online",
+                pattern_type: "fragment",
+                evidence: "schau mal clicknex.online an",
+                source_message: "schau mal clicknex.online an",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: Some(0.6),
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Skipped));
+    }
+
+    /// Was das Safe-Wording-Gate von der Ahndung ausnimmt, darf auch kein
+    /// hartes Signal werden.
+    #[tokio::test]
+    async fn safe_wording_quelle_lernt_nichts() {
+        let pool = pool_or_skip!("judge_learning_safe_wording");
+        // Genau der Fall, fuer den das Gate existiert: deutsche Umgangssprache
+        // ohne Kontaktweg und ohne Verkaufswort.
+        let quelle = "goenn dir mal zuschauer bro";
+        assert!(
+            crate::spam_filter::matches_safe_wording(quelle).is_some(),
+            "Testquelle muss das Safe-Wording-Gate treffen"
+        );
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "zuschauer bro",
+                pattern_type: "fragment",
+                evidence: quelle,
+                source_message: quelle,
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: Some(0.99),
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+    }
+
+    /// Der Beleg laeuft ueber Wortgrenzen: „viewers.su" darf nicht durch
+    /// „viewers super" belegt werden.
+    #[tokio::test]
+    async fn beleg_ueber_wortgrenzen_statt_zeichenbrei() {
+        let pool = pool_or_skip!("judge_learning_wortgrenze");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "viewers.su",
+                pattern_type: "fragment",
+                evidence: "deine viewers super heute",
+                source_message: "deine viewers super heute",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: Some(0.99),
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+    }
+
+    /// Generisches Chat-Vokabular bleibt draussen, auch wenn es in der
+    /// Nachricht steht.
+    #[tokio::test]
+    async fn generisches_judge_muster_wird_abgelehnt() {
+        let pool = pool_or_skip!("judge_learning_generisch");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "best viewers",
+                pattern_type: "fragment",
+                evidence: "best viewers on the stream",
+                source_message: "best viewers on the stream",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: Some(0.99),
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+    }
     spam_review_decision_persistence_test!(
         spam_review_timeout_wird_persistiert,
         "spam_review_decision_timeout",
@@ -2704,7 +3060,7 @@ mod tests {
         let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
         let review = AiReview {
             is_spam: true,
-            confidence: None,
+            confidence: Some(0.95),
             pattern: Some("PeakPy c0m".to_string()),
             pattern_type: Some("fragment".to_string()),
             reason: Some("obfuskierter viewer-service".to_string()),
@@ -2741,7 +3097,7 @@ mod tests {
         let pool = pool_or_skip!("scam_ai_contract_gate_reject");
         let review = AiReview {
             is_spam: true,
-            confidence: None,
+            confidence: Some(0.95),
             pattern: Some("best viewers".to_string()),
             pattern_type: Some("phrase".to_string()),
             reason: Some("viewer-bot werbung".to_string()),
@@ -2777,7 +3133,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{
                     "message": {
-                        "content": "<think>kurze analyse</think>\n{\"is_spam\": true, \"pattern\": \"PeakPy c0m\", \"pattern_type\": \"fragment\", \"reason\": \"obfuskierter viewer-service\"}"
+                        "content": "<think>kurze analyse</think>\n{\"is_spam\": true, \"confidence\": 0.95, \"pattern\": \"PeakPy c0m\", \"pattern_type\": \"fragment\", \"reason\": \"obfuskierter viewer-service\"}"
                     }
                 }],
                 "usage": { "prompt_tokens": 5, "completion_tokens": 6 }
@@ -3124,6 +3480,8 @@ mod tests {
             ("best viewers in chat today", false),
             ("endlich affiliate erreicht!", false),
             ("wie kriegt man eigentlich mehr viewer?", false),
+            ("gönne viewer du weißt", false),
+            ("gönn dir viewer bro bin nur am lurken", false),
         ] {
             let review = call_judge(&http, provider, false, message)
                 .await

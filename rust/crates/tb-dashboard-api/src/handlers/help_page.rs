@@ -37,10 +37,7 @@ fn render_help(kb: &KnowledgeBase) -> String {
     let mut docs: Vec<_> = kb
         .docs()
         .iter()
-        .filter(|d| d.namespace == Namespace::Bot)
-        // Die Erlaubnisliste steckt zentral in tb-knowledge (`ist_oeffentlich`),
-        // damit `!help` und die Frage-Box dieselbe Regel anwenden wie diese Seite.
-        .filter(|d| ist_oeffentlich(&d.audience))
+        .filter(|d| d.namespace == Namespace::Bot && ist_oeffentlich(&d.audience))
         .collect();
     docs.sort_by(|a, b| {
         category_rank(&a.category)
@@ -106,7 +103,6 @@ fn category_label(category: &str) -> &str {
         "feature" => "Feature",
         "setup" => "Setup",
         "trust" => "Vertrauen",
-        "support" => "Support",
         "" => "Sonstiges",
         other => other,
     }
@@ -168,7 +164,11 @@ nav ul{margin:0;padding:0;list-style:none;display:grid;gap:.4rem;\
 grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}\
 ul{padding-left:1.25rem}\
 article{margin-bottom:1.5rem}\
-section{margin-bottom:1rem}";
+section{margin-bottom:1rem}\
+table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.94em}\
+th,td{border:1px solid var(--line,rgba(201,168,106,.24));padding:.5rem .7rem;text-align:left}\
+th{color:var(--gold,#c8a86b);font-weight:700;background:rgba(201,168,106,.08)}\
+td{color:var(--bone-dim,#b7aa91)}";
 
 fn page(title: &str, body: &str) -> String {
     format!(
@@ -224,6 +224,42 @@ mod tests {
         assert!(h.contains("<li>a</li>"));
     }
 
+    /// Die Seite haengt ohne Auth im oeffentlichen Router. Ein Doc, das sich an
+    /// den Concierge richtet, listet interne Faehigkeiten auf (Admin-Funktionen,
+    /// Freischalt-Wege, Lastgrenzen) und darf dort nie erscheinen.
+    #[test]
+    fn render_help_laesst_nicht_oeffentliche_docs_weg() {
+        let kb = KnowledgeBase::load_from_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tb-knowledge/tests/fixtures"),
+        )
+        .unwrap();
+        let html = render_help(&kb);
+        assert!(
+            !html.contains("GEHEIMES_INTERNES_WISSEN"),
+            "Concierge-Doc auf der oeffentlichen Seite: {html}"
+        );
+        assert!(
+            !html.contains("nur-concierge"),
+            "Concierge-Doc steht im Inhaltsverzeichnis: {html}"
+        );
+        assert!(html.contains("auto-raid"), "Streamer-Docs fehlen dafuer");
+    }
+
+    #[test]
+    fn nur_streamer_und_leere_zielgruppe_sind_oeffentlich() {
+        assert!(ist_oeffentlich(""));
+        assert!(ist_oeffentlich("streamer"));
+        assert!(ist_oeffentlich("public"));
+        // Groesste Reichweite: der Deadlock-Namespace nutzt es fuer Wissen,
+        // das im Chat an jeden geht.
+        assert!(ist_oeffentlich("viewer"));
+        assert!(!ist_oeffentlich("concierge"));
+        assert!(!ist_oeffentlich("intern"));
+        // Unbekannte Zielgruppen bleiben drin, nicht draussen.
+        assert!(!ist_oeffentlich("was-auch-immer-morgen-dazukommt"));
+    }
+
     #[test]
     fn render_help_setzt_anker() {
         let kb = KnowledgeBase::load_from_dir(
@@ -238,29 +274,6 @@ mod tests {
         assert!(html.contains("<h2>Feature</h2>"));
         assert!(html.contains("<h2>Setup</h2>"));
         assert!(html.contains("<h1>Hilfe"));
-    }
-
-    /// `audience: concierge` grundiert nichts: weder diese oeffentliche
-    /// `/streamer/help`-Seite noch den Self-Explainer oder `!help`. Ueberall
-    /// greift dieselbe Erlaubnisliste aus tb-knowledge (Leitplanken sind kein
-    /// Publikum). Ohne den Filter reisst dieser Test: Sabotage bestaetigt es
-    /// (Fix entfernt -> Absatz erscheint).
-    #[test]
-    fn render_help_versteckt_concierge_audience() {
-        let kb = KnowledgeBase::load_from_dir(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tb-knowledge/tests/fixtures"),
-        )
-        .unwrap();
-        let html = render_help(&kb);
-        assert!(
-            !html.contains("Interngeheimnis"),
-            "audience: concierge darf nicht im oeffentlichen HTML landen"
-        );
-        assert!(
-            !html.contains("id=\"concierge-intern\""),
-            "auch kein Anker fuer das interne Dokument"
-        );
     }
 
     #[tokio::test]

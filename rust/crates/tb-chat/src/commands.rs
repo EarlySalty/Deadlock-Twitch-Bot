@@ -44,6 +44,11 @@ const INVITE_COOLDOWN_SECS: u64 = 3600;
 
 /// Max. Länge für Clip-Titel.
 /// `commands.py:181` — `[:57].rstrip() + "..."` wenn > 60 Z.
+/// Cooldown pro Kanal für `!clip`. Twitch Shared Chat (Stream Together)
+/// stellt dieselbe Nachricht in jedem Kanal der Session zu, der Bot sieht sie
+/// also mehrfach und würde ohne Sperre mehrere Clips erzeugen.
+const CLIP_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
+
 const CLIP_TITLE_MAX_LEN: usize = 60;
 const CLIP_TITLE_TRIM_LEN: usize = 57;
 
@@ -314,6 +319,10 @@ pub struct CommandEngine {
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
     /// Rate-Limiter für `!title` (B11): 5/600s pro streamer:source.
     title_rate_limiter: Arc<crate::title_ai::TitleRateLimiter>,
+    /// In-memory Cooldown für `!clip`: 10s pro Kanal. Schützt gegen doppelte
+    /// Auslösung bei Twitch Shared Chat (Stream Together liefert dieselbe
+    /// Nachricht über beide Kanal-Abos) und gegen Clip-Spam.
+    clip_cooldowns: Mutex<HashMap<String, Instant>>,
 }
 
 impl CommandEngine {
@@ -339,6 +348,7 @@ impl CommandEngine {
             invite_reply_notifier: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
+            clip_cooldowns: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1322,6 +1332,25 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_clip(&self, event: &ChatMessageEvent, args: &str) {
+        // Cooldown pro Kanal (10s): der zweite Aufruf innerhalb des Fensters
+        // wird still verworfen — kein Helix-Call, keine Chat-Antwort, sonst
+        // stünde die Cooldown-Meldung selbst doppelt im Chat.
+        let cooldown_key = event.broadcaster_user_login.to_lowercase();
+        {
+            let mut cooldowns = self.clip_cooldowns.lock().await;
+            let now = Instant::now();
+            cooldowns.retain(|_, last| now.duration_since(*last) < CLIP_COOLDOWN);
+            if let Some(last) = cooldowns.get(&cooldown_key) {
+                tracing::debug!(
+                    channel = %event.broadcaster_user_login,
+                    seit_ms = now.duration_since(*last).as_millis(),
+                    "!clip im Cooldown verworfen"
+                );
+                return;
+            }
+            cooldowns.insert(cooldown_key, now);
+        }
+
         // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
         // kein Helix-Call und keine Antwort im Chat. DB-Fehler lassen den
         // Command an, damit ein Ausfall der Abfrage kein Feature abschaltet.
@@ -3417,6 +3446,36 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1, "Clip muss erstellt werden");
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Clip erstellt"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn clip_command_cooldown_verhindert_doppelten_clip() {
+        // Shared Chat (Stream Together) liefert dieselbe Nachricht mehrfach an
+        // den Bot. Der zweite Aufruf innerhalb von 10s darf keinen zweiten Clip
+        // erzeugen und auch keine zweite Chat-Nachricht schreiben.
+        let pool = pool_or_skip!("cmd_clip_cooldown");
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        let api = MockApi::new();
+        let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
+
+        engine.handle(&make_event("!clip", false, false), true).await;
+        let nachrichten_nach_erstem = api.message_count().await;
+        let handled = engine
+            .handle(&make_event("!clip", false, false), true)
+            .await;
+
+        assert!(handled, "!clip bleibt ein bekannter Command");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "zweiter Aufruf im Cooldown darf keinen Clip erstellen"
+        );
+        assert_eq!(
+            api.message_count().await,
+            nachrichten_nach_erstem,
+            "im Cooldown darf keine weitere Chat-Nachricht rausgehen"
+        );
     }
 
     #[tokio::test]

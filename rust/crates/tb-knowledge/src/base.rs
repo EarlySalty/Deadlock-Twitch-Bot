@@ -24,10 +24,18 @@ impl KnowledgeBase {
     }
 
     /// Alle als Tipp ausspielbaren Dokumente (tip_eligible + nicht-leerer tip_text).
+    ///
+    /// Der dritte Ausgang neben `select` und der Hilfeseite, und Tipps landen im
+    /// Streamer-Chat. Die Zielgruppen-Sperre gilt deshalb auch hier: ein
+    /// internes Doc mit `tip_eligible: true` waere sonst ein Tipp an alle. Die
+    /// Erlaubnisliste soll nicht darauf angewiesen sein, dass jemand an das
+    /// Flag denkt.
     pub fn eligible_tips(&self) -> Vec<&KnowledgeDoc> {
         self.docs
             .iter()
-            .filter(|d| d.tip_eligible && !d.tip_text.trim().is_empty())
+            .filter(|d| {
+                d.tip_eligible && !d.tip_text.trim().is_empty() && ist_oeffentlich(&d.audience)
+            })
             .collect()
     }
 
@@ -66,6 +74,12 @@ impl KnowledgeBase {
 
     /// Deterministische lexikalische Selektion (kein RAG). Score je Doc =
     /// gewichtete Treffer der Frage-Tokens in Titel/Kategorie/tip_flags/Body.
+    ///
+    /// `audience: None` heisst **oeffentlich**, nicht "alles". Die Aufrufer
+    /// sitzen ueberwiegend an ungeschuetzten Oberflaechen (Hilfeseite,
+    /// Self-Explainer, `!help` im Twitch-Chat), und ein Doc mit eigener
+    /// Zielgruppe traegt Anweisungen oder Interna. Wer wirklich alles braucht,
+    /// nennt seine Zielgruppe ausdruecklich.
     pub fn select(
         &self,
         query: &str,
@@ -81,11 +95,9 @@ impl KnowledgeBase {
             .docs
             .iter()
             .filter(|d| d.namespace == namespace)
-            .filter(|d| ist_oeffentlich(&d.audience))
-            .filter(|d| {
-                audience
-                    .map(|a| d.audience.is_empty() || d.audience == a)
-                    .unwrap_or(true)
+            .filter(|d| match audience {
+                Some(a) => d.audience.is_empty() || d.audience == a,
+                None => ist_oeffentlich(&d.audience),
             })
             .map(|d| (score_doc(d, &tokens), d))
             .filter(|(s, _)| *s > 0)
@@ -191,52 +203,37 @@ mod select_tests {
         );
     }
 
+    /// `None` ist der Default aller ungeschuetzten Aufrufer (Hilfeseite,
+    /// Self-Explainer, `!help` im Twitch-Chat). Ein Doc mit eigener Zielgruppe
+    /// darf dort nie auftauchen, auch nicht als Titel in einer Quellenliste.
+    #[test]
+    fn ohne_zielgruppe_kommen_nur_oeffentliche_docs() {
+        let mut kb = kb();
+        kb.docs.push(
+            parse_doc(
+                "---\ntitle: Interne Agenten-Anweisung\nnamespace: bot\naudience: concierge\n---\nWie der Bot raidet, steht hier intern.",
+                "interne-anweisung",
+            )
+            .unwrap(),
+        );
+        let hits = kb.select("raidet", Namespace::Bot, None, 8);
+        assert!(
+            hits.iter().all(|d| d.slug != "interne-anweisung"),
+            "Concierge-Doc an einer ungeschuetzten Oberflaeche: {:?}",
+            hits.iter().map(|d| &d.slug).collect::<Vec<_>>()
+        );
+        assert!(!hits.is_empty(), "die oeffentlichen Docs fehlen dafuer");
+
+        // Wer die Zielgruppe ausdruecklich nennt, bekommt sie weiterhin.
+        let intern = kb.select("raidet", Namespace::Bot, Some("concierge"), 8);
+        assert!(intern.iter().any(|d| d.slug == "interne-anweisung"));
+    }
+
     #[test]
     fn respektiert_top_k() {
         let kb = kb();
         let hits = kb.select("bot verbinden dashboard raidet", Namespace::Bot, None, 1);
         assert_eq!(hits.len(), 1);
-    }
-
-    /// `audience: concierge` ist nur Grounding-Material und darf in keiner
-    /// Selektion landen — weder im `!help`-Chat noch in der Frage-Box. Ohne den
-    /// Filter reisst dieser Test: das Concierge-Doc schlaegt bei „uplink“
-    /// mit dem Streamer-Dokument gleich auf und gewinnt den Slug-Tiebreak.
-    #[test]
-    fn select_laesst_nicht_oeffentliche_zielgruppen_weg() {
-        let intern = parse_doc(
-            "---\ntitle: Uplink Concierge\nnamespace: bot\ncategory: support\n\
-             audience: concierge\ntime_to_value: 2\n---\nUplink nimmt den Stream an.",
-            "uplink-concierge",
-        )
-        .unwrap();
-        let streamer = parse_doc(
-            "---\ntitle: Was ist Uplink\nnamespace: bot\ncategory: feature\n\
-             audience: streamer\ntime_to_value: 2\n---\nUplink verteilt den Stream weiter.",
-            "uplink-was-ist",
-        )
-        .unwrap();
-        let kb = KnowledgeBase {
-            docs: vec![intern, streamer],
-        };
-        let hits = kb.select("uplink", Namespace::Bot, None, 4);
-        assert_eq!(hits.len(), 1, "nur das Streamer-Doc bleibt: {hits:?}");
-        assert_eq!(hits[0].slug, "uplink-was-ist");
-    }
-
-    /// Die Fixture-Sammlung enthaelt ein Concierge-Doc; die Selektion darf es
-    /// nie ausspielen, auch wenn der Suchende es beim Namen nennt.
-    #[test]
-    fn select_aus_fixtures_zeigt_kein_concierge_doc() {
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let kb = KnowledgeBase::load_from_dir(&root).expect("fixtures laden");
-        let hits = kb.select("concierge interngeheimnis", Namespace::Bot, None, 4);
-        assert!(
-            !hits.iter().any(|d| d.slug == "concierge-intern"),
-            "Concierge-Doc in der Auswahl: {:?}",
-            hits.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>()
-        );
     }
 
     #[test]

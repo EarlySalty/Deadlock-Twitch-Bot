@@ -22,7 +22,7 @@ Deutsche Deadlock Community ist eine kostenlose Plattform für Deadlock-Streamer
 
 ### Wie richte ich OBS für Uplink ein?
 
-Öffne im Dashboard die Uplink-Hilfe und kopiere die SRT-Adresse in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/uplink) führt dich durch die Einrichtung und nennt die nächsten Schritte bei Störungen.
+Öffne im Dashboard die Uplink-Hilfe und kopiere die SRT-Adresse in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html) führt dich durch die Einrichtung und nennt die nächsten Schritte bei Störungen.
 
 ### Wie starte ich?
 

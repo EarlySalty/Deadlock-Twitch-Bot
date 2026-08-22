@@ -20,11 +20,11 @@ fn select_liefert_kein_concierge_doc_mehr() {
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
     )
     .expect("fixtures laden");
-    // Das Concierge-Doc matcht „interngeheimnis“ lexikalisch am besten;
+    // Das Concierge-Doc matcht „GEHEIMES_INTERNES_WISSEN“ lexikalisch am besten;
     // ohne den Audience-Filter stuende es in der Auswahl.
-    let hits = kb.select("interngeheimnis", Namespace::Bot, None, 4);
+    let hits = kb.select("GEHEIMES_INTERNES_WISSEN", Namespace::Bot, None, 4);
     assert!(
-        !hits.iter().any(|d| d.slug == "concierge-intern"),
+        !hits.iter().any(|d| d.slug == "nur-concierge"),
         "Concierge-Doc in der Auswahl: {:?}",
         hits.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>()
     );

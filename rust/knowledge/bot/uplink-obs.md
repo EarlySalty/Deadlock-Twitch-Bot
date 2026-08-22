@@ -87,9 +87,9 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 
 1. Dienst: **Benutzerdefiniert**
 2. Server: die **SRT-Adresse** aus dem Dashboard. Kopiere sie, statt sie abzutippen.
-3. Stream-Schlüssel: der Schlüssel aus dem Dashboard. Bei SRT steckt er oft schon in der Adresse.
+3. Stream-Schlüssel: bleibt leer. Dein Schlüssel steckt bei SRT bereits als `streamid` in der Adresse.
 
-Von deinem PC aus erreichen wir deinen Stream nur über SRT. Einen RTMP-Eingang gibt es zwar auch, doch der liegt auf dem Server selbst und ist nur von dort erreichbar. SRT verträgt ein Wackelnetz besser. Im Dashboard steht genau eine Adresse, und das ist die SRT-Adresse. Kann dein Programm kein SRT, nimm OBS.
+Ins Dashboard kommt nur die SRT-Adresse, und über die läuft dein Stream. SRT verträgt ein Wackelnetz besser. Im Dashboard steht genau eine Adresse, und das ist die SRT-Adresse. Kann dein Programm kein SRT, nimm OBS.
 
 Mit **Stream starten** sendest du danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen ein, solange die Synchronisation dafür noch nicht verfügbar ist.
 

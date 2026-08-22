@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { extractUplinkMain } from '../src/uplinkHelp';
+import { extractUplinkMain, UPLINK_HELP_PAGES, uplinkHelpUrl } from '../src/uplinkHelp';
 
 const DASHBOARD_ROOT = join(import.meta.dirname, '..');
 const HELP_ROOT = join(DASHBOARD_ROOT, 'public', 'uplink');
@@ -32,21 +32,80 @@ test('Dashboard bindet die Uplink-Hilfe mit main.uplink-doc ein', () => {
   }
 });
 
-test('extrahiert nur main.uplink-doc aus einer Streamer-Seite', () => {
+test('extrahiert nur main.uplink-doc und legt die Ueberschrift eine Ebene tiefer', () => {
+  // Die Seite hat schon eine h1; drei Fragmente mit eigener h1 zerlegen die
+  // Ueberschriftenstruktur fuer Screenreader.
   const html = '<body><main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main></body>';
   assert.equal(
     extractUplinkMain(html),
-    '<main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main>',
+    '<div class="uplink-doc" data-doc="obs"><h2>OBS</h2></div>',
   );
 });
 
-test('eingebettete Hilfe verlinkt zurück in das Hilfe-Verzeichnis', () => {
-  assert.match(
-    extractUplinkMain(
-      '<main class="uplink-doc" data-doc="was-ist"><a href="index.html">Zurück</a></main>',
-    ),
-    /href="\/twitch\/dashboard-v2\/uplink\/index\.html"/,
-  );
+test('nimmt nur bis zum ersten schliessenden main', () => {
+  // Gieriges Matching zoege fremdes Markup in das dangerouslySetInnerHTML.
+  const html =
+    '<main class="uplink-doc" data-doc="obs"><p>A</p></main><main><p>fremd</p></main>';
+  assert.equal(extractUplinkMain(html), '<div class="uplink-doc" data-doc="obs"><p>A</p></div>');
+});
+
+test('macht relative Links im Fragment absolut', () => {
+  // Gerendert wird das Fragment auf /twitch/uplink: `obs.html` zeigte dort auf
+  // /twitch/obs.html, eine Route, die es nicht gibt.
+  const html =
+    '<main class="uplink-doc" data-doc="was-ist"><a href="obs.html">OBS</a>' +
+    '<a href="https://twitch.tv">extern</a><a href="#anker">Anker</a></main>';
+  const fragment = extractUplinkMain(html);
+  assert.match(fragment, new RegExp(`href="${uplinkHelpUrl('obs.html')}"`));
+  assert.match(fragment, /href="https:\/\/twitch\.tv"/);
+  assert.match(fragment, /href="#anker"/);
+});
+
+/**
+ * Derselbe Inhalt liegt zweimal: als HTML unter public/uplink/ und als Markdown
+ * unter rust/knowledge/bot/. Formuliert sind beide bewusst verschieden, die
+ * harten Zahlen muessen aber uebereinstimmen: laufen sie auseinander, gibt der
+ * Chatbot eine andere Empfehlung als die Hilfeseite.
+ */
+test('Zahlen in HTML- und Markdown-Fassung stimmen ueberein', () => {
+  const KNOWLEDGE_ROOT = join(DASHBOARD_ROOT, '../../rust/knowledge/bot');
+  const PAARE = [
+    ['obs.html', 'uplink-obs.md'],
+    ['was-ist.html', 'uplink-was-ist.md'],
+    ['stoerungen.html', 'uplink-stoerungen.md'],
+  ] as const;
+  // Zahlen mit Einheit: Bitraten (auch nackte vierstellige), Keyframe-Sekunden,
+  // Aufloesungen, CQP-Werte.
+  const ZAHLEN =
+    /\b\d+(?:[.,]\d+)?\s*(?:kbps|Kbps|kbit\/s|Mbit\/s|Mbit|mbit|s\b|p\b|fps)|\b\d{4}\b/g;
+
+  for (const [htmlDatei, mdDatei] of PAARE) {
+    const html = readFileSync(join(HELP_ROOT, htmlDatei), 'utf8').replace(/<[^>]+>/g, ' ');
+    // Frontmatter raus: last_updated traegt eine Jahreszahl, die in der
+    // HTML-Fassung nichts zu suchen hat.
+    const md = readFileSync(join(KNOWLEDGE_ROOT, mdDatei), 'utf8').replace(/^---[\s\S]*?---/, '');
+    const ausHtml = new Set((html.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
+    const ausMd = new Set((md.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
+    const nurInMd = [...ausMd].filter((z) => !ausHtml.has(z));
+    const nurInHtml = [...ausHtml].filter((z) => !ausMd.has(z));
+    assert.deepEqual(
+      nurInMd,
+      [],
+      `${mdDatei} nennt Werte, die in ${htmlDatei} nicht vorkommen: ${nurInMd.join(', ')}`,
+    );
+    assert.deepEqual(
+      nurInHtml,
+      [],
+      `${htmlDatei} nennt Werte, die in ${mdDatei} nicht vorkommen: ${nurInHtml.join(', ')}`,
+    );
+  }
+});
+
+test('jede eingebettete Seite existiert als Datei', () => {
+  // Ohne diese Pruefung faellt eine neue Hilfeseite lautlos aus der Einbettung.
+  for (const page of UPLINK_HELP_PAGES) {
+    assert.ok(existsSync(join(HELP_ROOT, page.file)), `Hilfequelle fehlt: ${page.file}`);
+  }
 });
 
 test('weist eine HTML-Seite ohne main.uplink-doc zurück', () => {

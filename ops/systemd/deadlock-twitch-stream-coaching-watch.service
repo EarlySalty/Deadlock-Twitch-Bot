@@ -24,13 +24,27 @@ Environment=STREAM_AUDIT_CHANNELS=helmbombenricky,skifahrertv,deadlockgermany
 Environment=STREAM_AUDIT_OUTPUT_DIR=%h/repos/Deadlock-Twitch-Bot/data/stream_coaching_audits
 
 # Transkription bleibt lokal. Zeigt diese URL woandershin, bricht der Start ab;
-# nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio den Rechner verlassen.
+# nur STREAM_AUDIT_ALLOW_REMOTE_STT=1 laesst Stream-Audio zur Transkription den
+# Rechner verlassen. Der durchgehende 1:1-Ton-Mitschnitt geht davon unabhaengig
+# nach dem Stream in unser eigenes Google Drive (STREAM_AUDIT_DRIVE_ARCHIVE).
 Environment=ENGAGEMENT_STT_BASE_URL=http://127.0.0.1:8791/v1/audio/transcriptions
 Environment=VOICE_REACTION_STREAMLINK_BIN=%h/stt-tools/bin/streamlink
 # ffmpeg fest auf das System-Binaerprogramm: der systemd-Benutzer-PATH stellt
 # ~/.local/bin nach vorn, und der dortige statische Build segfaultet mit leerem
 # stderr. Ohne diese Zeile scheitert jeder Block an der Tonspur.
 Environment=FFMPEG_BIN=/usr/bin/ffmpeg
+# rclone fuer das Drive-Archiv des durchgehenden Ton-Mitschnitts. Fest gepinnt,
+# damit ein PATH-Unterschied zwischen Shell und systemd-Benutzer nicht dazu
+# fuehrt, dass jeder Upload stuendlich scheitert und lokal alles liegen bleibt.
+Environment=STREAM_AUDIT_RCLONE_BIN=/usr/local/bin/rclone
+# Der durchgehende 1:1-Ton-Mitschnitt ist im Code per Vorgabe an. Hier steht er
+# trotzdem: mit dem Deploy nimmt der Dienst den Ton fremder Streams durchgehend
+# auf und laedt ihn hoch. Das soll in der Unit sichtbar sein und nicht
+# implizit gelten. `0` schaltet ihn fuer alle ab.
+Environment=STREAM_AUDIT_DRIVE_ARCHIVE=1
+# Kanaele, die widersprochen haben, kommen hier rein (kommagetrennt). Fuer sie
+# startet kein Recorder und es geht nichts hoch.
+Environment=STREAM_AUDIT_DRIVE_EXCLUDE=
 
 Environment=RUST_LOG=info
 
@@ -42,8 +56,9 @@ UMask=0077
 # Der Modellschritt laeuft ueber denselben Anbieter wie der Twitch-Bot, und
 # der liegt nicht auf diesem Rechner. Der Schalter ist bewusst gesetzt: ohne
 # ihn faellt der Modellschritt bei jedem Block aus, es bleibt die reine
-# Regelpruefung, und jeder Bericht traegt "NICHT GELAUFEN". Raus gehen
-# geschwaerzte Transkriptausschnitte - nie Audio.
+# Regelpruefung, und jeder Bericht traegt "NICHT GELAUFEN". An das Modell gehen
+# nur geschwaerzte Transkriptausschnitte, nie Audio. Der Ton-Mitschnitt geht
+# einen anderen Weg: per rclone ins eigene Drive, siehe STREAM_AUDIT_DRIVE_*.
 Environment=STREAM_AUDIT_ALLOW_REMOTE_LLM=1
 LoadCredential=infisical-token:%h/.config/infisical-tokens/infisical-token-twitch
 

@@ -863,6 +863,14 @@ export function UplinkPage() {
                   <h2 className="text-lg font-bold text-white">Auf mehreren Plattformen gleichzeitig senden</h2>
                   <p className="max-w-xl text-sm text-text-secondary">{UPLINK_WAITLIST_TEXT}</p>
                   <div className="flex flex-wrap gap-2">
+                    {/* Was es kostet, steht vor dem Klick auf die Warteliste,
+                        nicht erst in der Rechnung. */}
+                    <a
+                      href={PREVIEW_PRICING_ROUTE}
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
+                    >
+                      Preise ansehen
+                    </a>
                     <button
                       type="button"
                       disabled={waitlist.isPending || data.waitlisted}
@@ -883,22 +891,18 @@ export function UplinkPage() {
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  <CopyField label="Server-Adresse für OBS" value={data.srt_hint} />
-                  <CopyField label="Dein Stream-Schlüssel" value={data.ingest_key} />
-                  {/*
-                    Die beiden alten RTMP-Anzeigefelder sind hier bewusst verschwunden,
-                    und eine Umstellungs-Ansage fehlt mit Absicht: Der RTMP-Eingang war
-                    nie von aussen erreichbar (er lauscht nur auf dem Server selbst), und
-                    der Dienst ist mit null Sessions und null Destinations gestartet. Es
-                    gibt niemanden, der je darueber gesendet haette und umgestellt werden
-                    muesste. Der Guard-Test in tests/uplinkHelp.test.ts wacht darueber,
-                    dass die alte Feldbeschriftung nicht zurueckkehrt; sie steht deshalb
-                    nicht einmal im Kommentar im Wortlaut. Die API liefert rtmp_url und
-                    ingest_key weiterhin aus; das Feld unten zeigt sie nur, solange das
-                    Relay sie fuellt.
-                  */}
-                  {data.rtmp_url && (
-                    <CopyField label="Alternative Adresse auf diesem Rechner" value={data.rtmp_url} />
+                  {/* srt_hint liefert das Relay immer als String (rs-relay,
+                      srt_hint_fuer in src/api/user.rs). Leer ist es genau
+                      dann, wenn kein ingest_key existiert, also fuer einen
+                      nicht freigeschalteten Zugang. Dieser Block haengt an
+                      data.enabled, trotzdem faengt der Guard den Leerfall ab:
+                      ein leeres Kopierfeld waere die schlechteste Antwort. */}
+                  {data.srt_hint ? (
+                    <CopyField label="SRT-Adresse" value={data.srt_hint} />
+                  ) : (
+                    <p className="text-sm text-warning">
+                      Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei, meld dich beim Support.
+                    </p>
                   )}
                   <p className="text-xs text-text-secondary">
                     In OBS: Dienst Benutzerdefiniert, Adresse einsetzen, Hardware-HEVC, VBR,
@@ -953,6 +957,41 @@ export function UplinkPage() {
             )}
 
             {adminBloeckeSichtbar && <VerwaltungsKarte />}
+            <Rise className="panel-card space-y-4 rounded-2xl p-6">
+              <div>
+                <h2 className="text-lg font-bold text-white">Uplink-Hilfe</h2>
+                <p className="mt-1 text-sm text-text-secondary">
+                  Die Streamer-Hilfe erklärt Uplink, die OBS-Einrichtung und häufige Störungen.
+                </p>
+              </div>
+              {isHelpError && (
+                <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
+              )}
+              {/* Teilausfall sichtbar machen: sonst haelt der Streamer zwei
+                  Kacheln fuer die vollstaendige Hilfe. */}
+              {helpPages && helpPages.length < UPLINK_HELP_PAGES.length && (
+                <p className="text-sm text-warning">
+                  {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
+                </p>
+              )}
+              <div className="space-y-4">
+                {/* Bei einem Fehler keine Platzhalter mehr: drei Kacheln
+                    "Hilfe wird geladen" neben der Fehlerzeile behaupten einen
+                    Fortschritt, der nicht mehr kommt. */}
+                {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) => (
+                  <div key={page.file} className="uplink-help-shell overflow-hidden rounded-xl border border-border bg-background/70">
+                    {page.html ? (
+                      <div dangerouslySetInnerHTML={{ __html: page.html }} />
+                    ) : (
+                      <div className="p-4 text-sm text-text-secondary">Hilfe wird geladen: {page.label}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <a className="text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
+                Uplink-Hilfe als eigene Seite öffnen
+              </a>
+            </Rise>
           </div>
         </div>
       </div>

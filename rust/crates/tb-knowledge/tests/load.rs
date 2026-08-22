@@ -9,6 +9,8 @@ fn fixtures() -> std::path::PathBuf {
 #[test]
 fn laedt_beide_namespaces() {
     let kb = KnowledgeBase::load_from_dir(&fixtures()).expect("lädt");
+    // Drei Streamer-Docs plus nur-concierge.md, das die Zielgruppen-Filterung
+    // der oeffentlichen Hilfeseite abdeckt.
     assert_eq!(kb.len(), 4);
     let bot = kb
         .docs()

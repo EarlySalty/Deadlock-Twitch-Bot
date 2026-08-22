@@ -123,6 +123,7 @@ impl ScamJudge for FixedJudge {
             confidence: 0.95,
             category: "growth-pitch".to_string(),
             reasoning: "clear Discord growth pitch".to_string(),
+            pattern: None,
         }
     }
 }
@@ -137,6 +138,7 @@ impl ScamJudge for ZeroDayRiskJudge {
             confidence: 0.80,
             category: "befriending_pivot".to_string(),
             reasoning: "generic English befriending followed by a Discord pivot".to_string(),
+            pattern: None,
         }
     }
 }

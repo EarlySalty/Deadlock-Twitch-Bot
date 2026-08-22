@@ -11,13 +11,13 @@ Am Anfang zählt die sichtbare Lage, danach der nächste Schritt. Bei einem kurz
 
 ### Der Start wird abgelehnt, weil Plätze belegt sind
 
-Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Slot streamst du direkt zur Plattform. Stelle OBS dafür wieder auf Twitch oder Kick.
+Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Abend streamst du direkt zur Plattform. Stelle OBS dafür wieder auf Twitch oder Kick.
 
 ### OBS sendet, aber auf der Plattform kommt nichts an
 
-1. Prüfe im Dashboard, ob Uplink freigeschaltet ist, das Ziel verbunden ist und der Schlüssel stimmt.
+1. Prüfe im Dashboard, ob Uplink für dich freigeschaltet ist. Steht dort die SRT-Adresse, ist der Zugang da.
 2. Der OBS-Dienst muss **Benutzerdefiniert** sein. Als Server muss die SRT-Adresse aus dem Dashboard eingetragen sein.
-3. Bei einem falschen oder alten Schlüssel holst du im Dashboard einen frischen und setzt ihn in OBS ein.
+3. Steht in OBS noch eine alte Adresse, kopiere die SRT-Adresse im Dashboard neu und ersetze sie. Der Schlüssel steckt als `streamid` in der Adresse, es gibt keinen zweiten Wert zum Abtippen.
 
 ### Das Bild reißt in Fights
 

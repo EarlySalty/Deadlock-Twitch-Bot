@@ -461,8 +461,11 @@ mod tests {
             erkenner: "regel".to_owned(),
             sicherheit: "high".to_owned(),
             begruendung: "Begruendung".to_owned(),
+            // Roh und redigiert gehoeren zusammen: der Schwaerzer ersetzt genau
+            // das Wort, das die Kategorie ausgeloest hat. Ein harmloses Wort
+            // stuende im redigierten Zitat unveraendert.
             zitat_redigiert: "so ein [REDACTED] echt".to_owned(),
-            zitat_roh: "so ein nigga echt".to_owned(),
+            zitat_roh: "so ein Beleidigungswort echt".to_owned(),
             zitat_hash: "a".repeat(64),
         }
     }
@@ -670,9 +673,24 @@ mod tests {
             "safe harassment darf nicht in die DM"
         );
         assert!(text.contains("Ich finde es nicht okay"), "{text}");
-        assert!(text.contains("so ein nigga echt"), "{text}");
+        assert!(text.contains("so ein Beleidigungswort echt"), "{text}");
         assert!(text.contains("13.08.2026 20:02:05 UTC"), "{text}");
         assert!(text.contains("00:02:05 und 00:02:35"), "{text}");
+    }
+
+    /// Ein aus der Platte nachgeladener Bericht traegt kein Rohzitat mehr, die
+    /// Akte speichert es bewusst nicht. Dann ist das geschwaerzte Zitat besser
+    /// als gar keins: ohne diesen Rueckfall stuende in der DM eine leere Zeile,
+    /// wo der Wortlaut stehen soll.
+    #[test]
+    fn dm_faellt_ohne_rohzitat_auf_die_schwaerzung_zurueck() {
+        let mut ohne_roh = fund("high", 10.0, "harassment");
+        ohne_roh.zitat_roh = String::new();
+        let text = dm_text(&bericht(vec![ohne_roh]), 5);
+        assert!(
+            text.contains("[REDACTED]"),
+            "Rueckfall aufs geschwaerzte Zitat fehlt: {text}"
+        );
     }
 
     #[test]

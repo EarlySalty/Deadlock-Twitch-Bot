@@ -495,7 +495,13 @@ async fn serve_asset_from_root(dist: PathBuf, raw_path: &str) -> Response {
 
 fn cache_control_for_asset(raw_path: &str) -> &'static str {
     if raw_path.starts_with("assets/") {
+        // Vite haengt einen Hash an den Dateinamen, die Datei aendert sich nie.
         "public, max-age=31536000, immutable"
+    } else if raw_path.starts_with("uplink/") {
+        // Die Hilfe-Fragmente tragen keinen Hash im Namen. Mit einer Stunde
+        // Cache saehe der Streamer nach einem Deploy die alte Anleitung neben
+        // dem neuen Dashboard.
+        "no-cache"
     } else {
         "public, max-age=3600"
     }
@@ -526,6 +532,18 @@ mod tests {
     use super::*;
     use axum::{body, http::HeaderValue};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Die Hilfe-Fragmente tragen keinen Hash im Dateinamen, ein Deploy tauscht
+    /// sie unter demselben Pfad aus.
+    #[test]
+    fn hilfe_fragmente_werden_nicht_gecacht() {
+        assert_eq!(cache_control_for_asset("uplink/obs.html"), "no-cache");
+        assert_eq!(
+            cache_control_for_asset("assets/index-a1b2c3.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control_for_asset("favicon.ico"), "public, max-age=3600");
+    }
 
     #[test]
     fn host_header_normalisierung() {

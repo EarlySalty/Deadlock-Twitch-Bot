@@ -7,7 +7,7 @@ last_updated: 2026-08-21
 source: rs-relay/docs/was-ist.html
 tip_eligible: false
 ---
-Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS.
+Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS; einen eigenen Knopf dafür gibt es nicht.
 
 Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Plattformen senden möchten.
 
@@ -20,9 +20,9 @@ Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Pla
 
 ### Was stellst du ein, was passiert bei uns?
 
-Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Welche Plattformen verbunden sind, siehst du im Dashboard. Titel und Kategorie änderst du in den Dashboards der Plattformen.
+Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Dein Twitch-Ziel trägst du im Dashboard ein. Titel und Kategorie änderst du in den Dashboards der Plattformen.
 
-Für Twitch und Kick werden 1080p und CBR verwendet. Die Ziele werden in dieser Reihenfolge berücksichtigt: Twitch, YouTube, Kick, TikTok.
+Für Twitch und Kick werden 1080p und CBR verwendet.
 
 Uplink nimmt deinen Stream über SRT an. Von deinem PC aus ist SRT der einzige Weg zu uns: Einen RTMP-Eingang gibt es zwar, doch der liegt auf dem Server selbst und ist nur von dort erreichbar. Im Dashboard steht für den Weg von deinem PC deshalb genau eine Adresse, die SRT-Adresse.
 

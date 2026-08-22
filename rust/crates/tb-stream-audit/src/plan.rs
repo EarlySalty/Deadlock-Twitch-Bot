@@ -136,7 +136,10 @@ pub struct Warteschlange {
     /// fuer liegengeblieben und reihte ihn ein zweites Mal ein: die zweite
     /// Auswertung ueberschrieb dann den Bericht des ersten Durchlaufs und
     /// loeschte im Zweifel die Aufnahme, die den Fund belegt.
-    in_arbeit: std::collections::HashSet<String>,
+    /// Datei -> (Kanal, Lauf) der gerade laufenden Auswertungen. Der Lauf
+    /// gehoert dazu, weil sonst niemand sagen kann, ob ein Lauf wirklich fertig
+    /// ist: ein Block in Arbeit steht in keiner Schlange mehr.
+    in_arbeit: std::collections::HashMap<String, (String, String)>,
 }
 
 /// Mindestlaenge eines Blocks.
@@ -170,7 +173,10 @@ impl Warteschlange {
             .iter()
             .position(|b| b.frueherstens <= jetzt)?;
         let block = self.eintraege.remove(stelle)?;
-        self.in_arbeit.insert(block.datei.clone());
+        self.in_arbeit.insert(
+            block.datei.clone(),
+            (block.kanal.clone(), block.lauf.clone()),
+        );
         Some(block)
     }
 
@@ -216,7 +222,7 @@ impl Warteschlange {
         self.eintraege
             .iter()
             .map(|b| b.datei.clone())
-            .chain(self.in_arbeit.iter().cloned())
+            .chain(self.in_arbeit.keys().cloned())
             .collect()
     }
 
@@ -256,19 +262,52 @@ impl Warteschlange {
             .eintraege
             .iter()
             .position(|b| b.frueherstens <= jetzt && !sperre.ist_gesperrt(&b.kanal, &b.lauf))?;
-        self.eintraege.remove(stelle)
+        let block = self.eintraege.remove(stelle)?;
+        // Auch hier vermerken, nicht nur in `naechster_um`: sonst ist ein Block
+        // waehrend seiner Auswertung fuer niemanden sichtbar, und das
+        // Drive-Archiv haelt den Lauf faelschlich fuer fertig.
+        self.in_arbeit.insert(
+            block.datei.clone(),
+            (block.kanal.clone(), block.lauf.clone()),
+        );
+        Some(block)
     }
 
     pub fn naechster_ohne_sperre(&mut self, sperre: &LaufSperre) -> Option<Block> {
         self.naechster_ohne_sperre_um(chrono::Utc::now().timestamp(), sperre)
     }
 
-    /// Offene Bloecke eines Laufs, Auswertung und Meldung zusammen.
+    /// Offene Bloecke eines Laufs: wartende **und** gerade in Auswertung.
+    ///
+    /// Die in Arbeit muessen mitzaehlen. Ein Block, der gerade transkribiert
+    /// wird, steht in keiner Schlange mehr; wer nur die Schlange zaehlt, haelt
+    /// den Lauf fuer fertig, archiviert ihn und loescht seine Berichte -
+    /// waehrend der letzte Bericht noch geschrieben wird. Der ginge dann nie
+    /// hoch und verloere zusaetzlich seinen Aufbewahrungsschutz.
     pub fn offene_fuer_lauf(&self, kanal: &str, lauf: &str) -> usize {
-        self.eintraege
+        self.offene_fuer_lauf_ohne(kanal, lauf, None)
+    }
+
+    /// Wie [`Warteschlange::offene_fuer_lauf`], laesst aber eine Datei aussen
+    /// vor.
+    ///
+    /// Fuer den Aufrufer, der selbst gerade diesen Block auswertet. Ohne die
+    /// Ausnahme zaehlte er sich selbst als "noch offen", und die Abschluss-DM
+    /// eines Laufs koennte nie faellig werden: der letzte Block ist immer der,
+    /// der sie ausloest.
+    pub fn offene_fuer_lauf_ohne(&self, kanal: &str, lauf: &str, ausser: Option<&str>) -> usize {
+        let wartend = self
+            .eintraege
             .iter()
             .filter(|b| b.kanal == kanal && b.lauf == lauf)
-            .count()
+            .filter(|b| ausser != Some(b.datei.as_str()))
+            .count();
+        let laufend = self
+            .in_arbeit
+            .iter()
+            .filter(|(datei, (k, l))| k == kanal && l == lauf && ausser != Some(datei.as_str()))
+            .count();
+        wartend + laufend
     }
 }
 
@@ -509,6 +548,60 @@ mod tests {
         assert_eq!(w.naechster().unwrap().nummer, 2);
         assert_eq!(w.naechster().unwrap().nummer, 3);
         assert!(w.ist_leer());
+    }
+
+    #[test]
+    fn ein_block_in_auswertung_haelt_seinen_lauf_offen() {
+        // Der Fall, der das Drive-Archiv kaputt machte: der letzte Block eines
+        // Laufs wird gerade transkribiert, steht also in keiner Schlange mehr.
+        // Wer nur die Schlange zaehlt, haelt den Lauf fuer fertig, archiviert
+        // ihn und loescht die Berichte - waehrend der letzte noch entsteht.
+        let bauen = |datei: &str| Block {
+            kanal: "kanal".to_owned(),
+            lauf: "lauf1".to_owned(),
+            nummer: 1,
+            versatz_sekunden: 0,
+            datei: datei.to_owned(),
+            versuche: 0,
+            frueherstens: 0,
+            nur_melden: false,
+            meldeversuche: 0,
+            zeit_unsicher: false,
+            stream_start_utc: None,
+            aufnahme_beginn_utc: None,
+        };
+        let mut w = Warteschlange::new();
+        w.einreihen(bauen("/a/audio.ts"));
+        assert_eq!(w.offene_fuer_lauf("kanal", "lauf1"), 1);
+
+        let genommen = w.naechster_um(i64::MAX).expect("Block");
+        assert_eq!(
+            w.offene_fuer_lauf("kanal", "lauf1"),
+            1,
+            "Block in Auswertung muss den Lauf offen halten"
+        );
+
+        // Aber der Auswerter dieses Blocks darf sich nicht selbst als offen
+        // zaehlen - sonst waere die Abschluss-DM nie faellig, denn der letzte
+        // Block ist immer der, der sie ausloest.
+        assert_eq!(
+            w.offene_fuer_lauf_ohne("kanal", "lauf1", Some(&genommen.datei)),
+            0,
+            "der eigene Block darf sich nicht selbst blockieren"
+        );
+
+        w.freigeben(&genommen.datei);
+        assert_eq!(w.offene_fuer_lauf("kanal", "lauf1"), 0);
+
+        // Derselbe Schutz auf dem Weg ueber die Laufsperre.
+        w.einreihen(bauen("/b/audio.ts"));
+        let sperre = LaufSperre::new();
+        let genommen = w
+            .naechster_ohne_sperre_um(i64::MAX, &sperre)
+            .expect("Block");
+        assert_eq!(w.offene_fuer_lauf("kanal", "lauf1"), 1);
+        w.freigeben(&genommen.datei);
+        assert_eq!(w.offene_fuer_lauf("kanal", "lauf1"), 0);
     }
 
     #[test]

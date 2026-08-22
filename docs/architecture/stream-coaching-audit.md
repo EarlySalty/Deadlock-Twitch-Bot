@@ -87,8 +87,23 @@ Audit, das darauf baut, faellt still aus.
 
 ## 6. Datenschutz
 
-- Audio verlaesst den Rechner nicht; ein entfernter STT-Endpunkt bricht den
-  Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
+- Auf dem STT-Weg verlaesst Audio den Rechner nicht; ein entfernter
+  STT-Endpunkt bricht den Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
+- Der durchgehende 1:1-Ton-Mitschnitt geht dagegen nach dem Stream bewusst per
+  rclone in den eigenen Google-Drive-Ordner (`STREAM_AUDIT_DRIVE_ARCHIVE`,
+  Standard an) und wird lokal erst nach belegtem Upload geloescht. Ein Kanal in
+  `STREAM_AUDIT_DRIVE_EXCLUDE` bekommt gar keinen Recorder.
+- Mit hoch gehen die Berichte des Laufs (`.json`, `.md`) und, wenn
+  `STREAM_AUDIT_KEEP_TRANSCRIPT=1` gesetzt ist, das `.txt` mit dem
+  ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der Vorgang zum
+  Zeitpunkt des Uploads, nicht nur der Ton. Ein Nachzuegler nach gesetzter
+  `drive_archiviert.json` geht nicht mehr hoch; der haeufige Fall (letzter Block
+  noch in Auswertung) ist ueber `offene_fuer_lauf` abgedeckt.
+- Geht der Upload nie durch, faellt der Mitschnitt derselben Aufbewahrung zu
+  wie die Berichte: `STREAM_AUDIT_RETENTION_DAYS` plus 14 Tage Gnadenfrist
+  (`ARCHIV_RUECKSTAU_GNADE_TAGE`). Die Aufnahme ist der Anker, an dem ein
+  offener Upload erkannt wird, und darf deshalb nicht frueher verschwinden.
+- Im Drive selbst laeuft nichts ab. Der Dienst loescht dort nie etwas.
 - An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die
   Schwaerzung kennt die drei Muster aus `rules.rs`; anderer Wortlaut geht mit.
   Deshalb ist `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` eine bewusste Einstellung der

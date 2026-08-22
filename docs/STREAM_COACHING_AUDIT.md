@@ -50,12 +50,129 @@ im Deadlock-Docs-Korpus.
    Abschluss-DM nennt nur Funde, die Twitch ahnden wuerde. Ein Block, dessen
    Transkription dreimal scheiterte, kommt nie so weit: von ihm bleiben die
    Aufnahme und die DM "aufgegeben".
+7. Parallel zu den kurzen Auswertungs-Bloecken laeuft je Stream ein
+   **durchgehender Ton-Recorder** (streamlink liefert den Stream, ffmpeg zieht
+   ohne Neucodierung nur die Tonspur heraus), der eine saubere 1:1-Aufnahme
+   (`mitschnitt-<zeit>.aac`) schreibt - nicht aus den Auswertungs-Haeppchen
+   zusammengestueckelt. Im Normalfall ist es eine Datei; ein Dienst-Neustart oder
+   ein streamlink-Aussetzer waehrend der Sendung erzeugt wenige Teile (jeweils
+   mit eigenem Zeitstempel), die alle in denselben Stream-Ordner hochgeladen
+   werden. Video braucht das Coaching nicht; ohne Video ist die Datei winzig.
+   Faellt Twitchs `audio_only` aus, greift der Rueckfall `worst` und zieht doch
+   die Videospur, die `-vn` sofort wegwirft: die Datei bleibt klein, Bandbreite
+   und Demux-Last nicht. Dieser Pfad laeuft am Lastwaechter vorbei.
+   Ist der Stream vorbei und jeder Block ausgewertet, wird
+   diese Aufnahme im naechsten stuendlichen Aufraeumtakt zusammen mit den
+   Berichten in einen eigenen Ordner je Stream
+   unter `STREAM_AUDIT_DRIVE_REMOTE` geladen (rclone-Remote `gdrive:`). Erst wenn
+   der Upload belegt ist (`rclone lsf` fuehrt jede einzelne hochgeladene Datei
+   namentlich auf), wird lokal geloescht - so bleibt die
+   Platte frei. Scheitert der Upload, bleibt alles liegen und der stuendliche
+   Aufraeumtakt versucht es erneut; noch nicht hochgeladene Aufnahmen werden nie
+   geloescht. Faellt der freie Platz unter `STREAM_AUDIT_DRIVE_MIN_FREE_GB`,
+   startet **kein neuer** Recorder mehr (bestehende laufen weiter), damit die
+   geteilte Platte nicht volllaeuft. Dieselbe Wirkung hat die Plattengrenze des
+   Auswertungs-Baums: ist sie erreicht, startet fuer diese Sendung auch kein
+   Ton-Recorder. Laesst sich der freie Platz nicht messen
+   (kein `df`), wird trotzdem aufgenommen und das im Protokoll vermerkt: der Ton
+   ist winzig, und ein df-Aussetzer soll die Aufnahme nicht abwuergen. Archiviert werden nur Streams **mit**
+   Aufnahme; faellt der Recorder ganz aus, bleiben allein die lokalen Berichte
+   der normalen Aufbewahrung. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet Recorder
+   und Upload fuer alle ab; `STREAM_AUDIT_DRIVE_EXCLUDE=<kanal>` nur fuer
+   einzelne Kanaele, die widersprochen haben. Fuer einen ausgenommenen Kanal
+   startet kein Recorder und es geht nichts hoch; was von frueher noch liegt,
+   faellt der normalen Aufbewahrung zu. Die Auswertungs-Haeppchen bleiben davon unberuehrt: sie werden
+   wie bisher nach der Pruefung lokal geloescht.
+8. **Wenn der Recorder scheitert.** Ein Recorder, der kurz nach dem Start endet,
+   mit Fehler abbricht oder haengt (die Aufnahmedatei waechst 15 Minuten lang
+   nicht), gilt als Fehlversuch: seine Prozesse werden beendet, die letzten
+   stderr-Zeilen von streamlink und ffmpeg stehen in der Meldung, und der
+   Wiederanlauf wartet mit sich verdoppelnder Pause. Nach fuenf Fehlversuchen
+   startet fuer diesen Lauf kein Recorder mehr, und es gibt eine Fehlermeldung.
+   Ohne diesen Deckel wuerde ein dauerhaft kaputtes ffmpeg im Minutentakt neu
+   starten und jedes Mal Erfolg melden. Ein bereits geschriebener Stummel
+   bleibt liegen und geht mit ins Archiv; verworfen wird nur eine leere Datei.
+   Zerhackt sich ein Stream immer wieder, ist bei 24 Teilen je Lauf Schluss.
+9. **Wenn der Upload haengt.** Solange das Drive-Archiv eines Laufs aussteht,
+   bleiben seine Berichte von der Aufbewahrung verschont - aber hoechstens
+   14 Tage ueber die Frist hinaus. Danach greift `STREAM_AUDIT_RETENTION_DAYS`
+   wieder. Gewarnt wird schon ab 14 Tagen Rueckstau, hoechstens einmal je Lauf
+   und Tag. Sonst waere die
+   Aufbewahrungsfrist bei kaputtem rclone still ausser Kraft, und Berichte mit
+   vollem Wortlaut laegen unbegrenzt da. Dasselbe gilt fuer die
+   1:1-Ton-Mitschnitte: gelingt der Upload nie, werden sie zum selben Zeitpunkt
+   geloescht wie die Berichte, also nach `STREAM_AUDIT_RETENTION_DAYS` plus den
+   14 Tagen Aufschlag. Frueher geht nicht: die Aufnahme ist der Anker, an dem
+   der Dienst einen offenen Upload ueberhaupt erkennt. Ab 14 Tagen Rueckstau
+   gibt es zusaetzlich eine DM, hoechstens eine am Tag fuer alle betroffenen
+   Streams zusammen. Ohne das ueberlebte ausgerechnet das sensibelste Artefakt
+   jede Frist.
+10. **Wann der Upload laeuft.** Ausschliesslich im stuendlichen Aufraeumtakt,
+   und nur wenn die Abschluss-DM des Laufs raus ist. Bleibt sie aus (etwa nach
+   einem Dienst-Neustart mitten im Stream), wartet der Takt sechs Stunden und
+   archiviert dann trotzdem; die Akte des Laufs bleibt in dem Fall lokal
+   liegen, damit eine spaetere Abschluss-DM noch die richtigen Zahlen nennt.
+   Nachgeholt wird in einem einzigen Hintergrund-Task nacheinander: nach einem
+   mehrtaegigen rclone-Ausfall waeren es sonst Dutzende gleichzeitiger
+   rclone-Prozesse auf der geteilten Maschine.
+11. **Eigener Plattendeckel.** `STREAM_AUDIT_MAX_KEEP_GB` misst nur
+   `aufnahmen/`. Derselbe Zahlenwert gilt zusaetzlich fuer den Mitschnitt-Baum
+   getrennt: reisst er ihn, startet kein neuer Recorder, unabhaengig davon, ob
+   `df` messbar ist. `0` heisst dort wie ueberall "keine Grenze"; dann bremst
+   nur noch `STREAM_AUDIT_DRIVE_MIN_FREE_GB`.
+
+## Grenzen, die man kennen sollte
+
+- `STREAM_AUDIT_RETENTION_DAYS=0` heisst "unbegrenzt aufbewahren" und schaltet
+  damit auch den Ablauf der Ton-Mitschnitte ab. Der Dienst warnt beim
+  Aufraeumen darueber, aber die Zusage an die Streamer ("liegen bleibt sie
+  nicht") gilt dann nicht mehr. Standard ist 30, die Unit setzt nichts.
+- `drive_archiviert.json` ist endgueltig. Ein Bericht, der **nach** dem
+  Archivieren entsteht (eine spaeter nachgeholte Meldung), geht nicht mehr hoch
+  und faellt der normalen Aufbewahrung zu. Der haeufige Fall ist abgedeckt: ein
+  Block in Auswertung haelt seinen Lauf offen, der Sweep greift ihn also nicht
+  vorzeitig ab.
+
+## Betriebsgeheimnis: nur interne Doku
+
+Der durchgehende Ton-Mitschnitt und das Drive-Archiv sind vom Betreiber als
+**Betriebsgeheimnis** eingestuft, in derselben Klasse wie der Raid-Score. Sie
+werden ausschliesslich hier und in `docs/architecture/` beschrieben.
+
+`docs/funktionsweise/` (die Wissensbasis des Frage-Antwort-Agenten) und jede
+andere nutzersichtbare Doku bleiben davon frei - kein Eintrag, kein Hinweis,
+keine Andeutung. Das Kapitel `stream-coaching-audit.md` ist dort deshalb
+geloescht, samt seiner beiden Index-Zeilen; der ganze Dienst kommt in der
+Wissensbasis nicht mehr vor.
+
+Bewusst auch **keine** Ausweich-Regel fuer den Agenten. Er kennt das Thema
+nicht und faellt damit auf die Grundregel des Kapitels zurueck: nur aus den
+vorhandenen Dateien antworten, nichts erfinden. Eine eigene Regel
+("dazu keine Auskunft") wuerde die Existenz des Themas erst verraten. Das ist eine getroffene Entscheidung, keine Luecke: wer davon
+erfahren soll, erfaehrt es direkt vom Betreiber per DM, nicht ueber einen Bot.
+Ein Widerspruch kommt ueber `STREAM_AUDIT_DRIVE_EXCLUDE` in die Unit.
+
+Wer hier etwas aendert: nichts davon nach `docs/funktionsweise/`,
+`docs/streamer/` oder in oeffentliche Seiten uebernehmen.
+
+## Aufbewahrung im Drive
+
+Der Dienst loescht im Drive **nichts**. `STREAM_AUDIT_RETENTION_DAYS` und der
+14-Tage-Aufschlag gelten ausschliesslich fuer die lokale Platte. Was einmal
+oben liegt, bleibt dort, bis es jemand von Hand entfernt. Das ist Absicht (das
+Archiv ist der Zweck), muss aber jedem klar sein, der einem Streamer eine Frist
+zusagt.
 
 ## Datenschutz
 
-- **Audio verlaesst den Rechner nie.** Zeigt `ENGAGEMENT_STT_BASE_URL` auf einen
-  fremden Host, bricht der Start ab; nur `STREAM_AUDIT_ALLOW_REMOTE_STT=1` hebt
-  das auf.
+- **Zur Transkription verlaesst das Audio den Rechner nie.** Zeigt
+  `ENGAGEMENT_STT_BASE_URL` auf einen fremden Host, bricht der Start ab; nur
+  `STREAM_AUDIT_ALLOW_REMOTE_STT=1` hebt das auf. Das betrifft den STT-Weg. Der
+  durchgehende Ton-Mitschnitt wird dagegen bewusst ins eigene Google
+  Drive archiviert (Schritt 7) - eine gewollte Ablage im eigenen Speicher, kein
+  Versand an einen Transkriptionsdienst. `STREAM_AUDIT_DRIVE_ARCHIVE=0` schaltet
+  den durchgehenden Recorder samt Upload ganz ab: dann entsteht diese
+  1:1-Aufnahme gar nicht erst, und nur die kurzen Auswertungs-Bloecke laufen.
 - An das Modell gehen Transkriptausschnitte, vorher durch die Schwaerzung
   geschickt, mit anonymer Segmentnummer statt Segment-ID. Die Schwaerzung kennt
   die drei Muster aus `rules.rs` und sonst nichts: anderer Wortlaut geht mit.
@@ -94,6 +211,12 @@ im Deadlock-Docs-Korpus.
 | `STREAM_AUDIT_LOAD_RELEASE` | Auslastung in Prozent, unter der das Gate faellt | 80 |
 | `STREAM_AUDIT_LOAD_WINDOW_SECS` | Sekunden Dauerlast, bevor das Gate greift | 240 |
 | `STREAM_AUDIT_LOAD_MAX_HOLD_SECS` | Deckel, wie lange das Gate am Stueck haelt, `0` = kein Deckel | 1800 |
+| `STREAM_AUDIT_DRIVE_ARCHIVE` | Fertigen Stream nach Drive archivieren, `0`/`aus` schaltet ab | an |
+| `STREAM_AUDIT_DRIVE_EXCLUDE` | Kanaele ohne Ton-Mitschnitt (Widerspruch), kommagetrennt | leer |
+| `STREAM_AUDIT_DRIVE_REMOTE` | Ziel-Basisordner im Drive (rclone-Remote) | `gdrive:Deadlock/Coaching-Audit` |
+| `STREAM_AUDIT_DRIVE_MIN_FREE_GB` | Untergrenze freier Platz in ganzen GiB (1024^3); darunter startet kein neuer Recorder | 20 |
+| `STREAM_AUDIT_RCLONE_BIN` | rclone-Binaerprogramm | PATH-Aufloesung `rclone`, in der Unit auf `/usr/local/bin/rclone` gepinnt |
+| `STREAM_AUDIT_FFMPEG_BIN` | ffmpeg fuer den Recorder | `FFMPEG_BIN`, sonst `/usr/bin/ffmpeg` |
 | `ENGAGEMENT_STT_BASE_URL` | lokaler Whisper-Endpunkt | `http://127.0.0.1:8791/v1/audio/transcriptions` |
 | `VOICE_REACTION_STREAMLINK_BIN` | streamlink fuer die Aufnahme | `streamlink` aus dem `PATH` |
 
