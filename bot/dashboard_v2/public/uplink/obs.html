@@ -9,15 +9,15 @@
 </head>
 <body>
 <main class="uplink-doc" data-doc="obs">
-  <p><a href="index.html">Zurück zur Hilfe</a></p>
+  <p class="nur-standalone"><a href="index.html">Zurück zur Hilfe</a></p>
   <h1>OBS einrichten</h1>
   <p class="lede">Du stellst den Weg zu uns ein. CBR, 1080p-Limit und Keyframe für Twitch musst du nicht nachbauen. Ziel: viel Bild bei wenig Upload, wenig Last neben dem Spiel.</p>
 
-  <section id="ausgabe">
+  <section id="obs-ausgabe">
     <h2>1. Ausgabe</h2>
     <p>Einstellungen → Ausgabe → Ausgabemodus <strong>Erweitert</strong> → Reiter <strong>Stream</strong>.</p>
 
-    <h3 id="encoder">Videokodierer</h3>
+    <h3 id="obs-encoder">Videokodierer</h3>
     <p>Nimm den ersten Eintrag, den OBS bei dir anbietet:</p>
     <ol>
       <li><code>NVIDIA NVENC HEVC</code> oder <code>AMD HW H.265 (HEVC)</code> oder <code>QuickSync HEVC</code></li>
@@ -27,7 +27,7 @@
     <p>Weglassen: <code>x265</code>, <code>SVT-AV1</code>, <code>AOM AV1</code> (zu schwer neben dem Spiel) und Hardware-AV1 (unser Eingang erwartet HEVC oder H.264).</p>
   </section>
 
-  <section id="ratenregelung">
+  <section id="obs-ratenregelung">
     <h2>Qualitätsregulierung</h2>
     <p>CBR, VBR, ABR und CQP/CRF steuern, wie viele Bits eine Szene bekommt. Nicht den Codec.</p>
     <table>
@@ -68,7 +68,7 @@
       <li><strong>CBR</strong>: Deckel und Boden sind gleich. Für den direkten Twitch-Weg Pflicht, für uns Verschwendung.</li>
     </ul>
 
-    <h3 id="zahlen">Welche Zahl</h3>
+    <h3 id="obs-zahlen">Welche Zahl</h3>
     <p><strong>Standard bei knapper Leitung: VBR</strong></p>
     <ul>
       <li>Zielbitrate: 6000 Kbps</li>
@@ -87,7 +87,7 @@
     <p>x264-Notnagel: Preset <code>veryfast</code>, Profil <code>high</code>, Tune <code>zerolatency</code>. Tune <code>film</code> ist für Aufnahme, nicht für Live.</p>
   </section>
 
-  <section id="audio">
+  <section id="obs-audio">
     <h2>Audio</h2>
     <ul>
       <li>Kodierer: FFmpeg AAC</li>
@@ -97,7 +97,7 @@
     </ul>
   </section>
 
-  <section id="video">
+  <section id="obs-video">
     <h2>2. Video (Auflösung und FPS)</h2>
     <p>Einstellungen → Video.</p>
     <table>
@@ -114,7 +114,7 @@
     <p>1440p an uns zu schicken lohnt, weil wir nach 1080p runterrechnen und dabei Schärfe behalten. Es lohnt nicht, wenn der Encoder Frames schluckt. In OBS unten: <strong>Skipped frames</strong> bleibt bei 0.</p>
   </section>
 
-  <section id="ziel">
+  <section id="obs-ziel">
     <h2>3. Ziel: unser Server</h2>
     <p>Einstellungen → Stream.</p>
     <ol>
@@ -126,7 +126,7 @@
     <p>„Stream starten“ geht danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen, solange die Sync dafür noch nicht liegt.</p>
   </section>
 
-  <section id="check">
+  <section id="obs-check">
     <h2>4. Check vor dem Abend</h2>
     <ol>
       <li>Hardware-HEVC, nicht x264.</li>

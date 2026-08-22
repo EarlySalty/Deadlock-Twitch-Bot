@@ -379,8 +379,26 @@ const KONTAKT_MARKERS: &[&str] = &[
 /// Trägt der Text zusätzlich eine Kontaktaufnahme oder ein Verkaufswort, gibt es
 /// keinen Marker zurück: dann entscheidet wieder der Judge.
 pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
-    let lowered = text.to_lowercase();
-    if KONTAKT_MARKERS.iter().any(|k| lowered.contains(k)) {
+    // Dieselbe Normalisierung wie der Detektor, den das Gate ueberstimmt: NFKC
+    // plus Homoglyph-Tabelle. Ohne sie liefe die Gegenpruefung auf dem Rohtext,
+    // und ein kyrillisches Zeichen in "schreib mir" haette das Gate wieder
+    // geoeffnet, obwohl das ganze Modul dagegen gehaertet ist.
+    let lowered = normalize_spam_text(text).to_lowercase();
+    // Fuer die Gegenpruefung zusaetzlich die Akzente weg: die Homoglyph-Tabelle
+    // kennt das kyrillische s, aber nicht jedes Zeichen mit Diakritikum, und
+    // "billig" mit Akzent-i ist derselbe Trick. Schaerfer zu normalisieren ist
+    // hier die sichere Richtung: das Gate greift dann seltener, also entscheidet
+    // haeufiger der Judge. Die Safe-Marker selbst bleiben auf `lowered`, sonst
+    // wuerde "goenn" den Umlaut in "gönn" verlieren und beide Schreibweisen
+    // faenden sich gegenseitig nicht mehr.
+    let ohne_akzente: String = lowered
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect();
+    if KONTAKT_MARKERS
+        .iter()
+        .any(|k| lowered.contains(k) || ohne_akzente.contains(k))
+    {
         return None;
     }
     SAFE_WORDING_MARKERS
@@ -1227,6 +1245,37 @@ mod tests {
         }
         // Die harmlose Umgangssprache bleibt harmlos.
         assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
+    }
+
+    /// Das Gate ueberstimmt einen Detektor, der ueber die Homoglyph-Tabelle
+    /// laeuft. Ohne dieselbe Normalisierung waere ein kyrillisches Zeichen der
+    /// Freifahrtschein am Judge vorbei.
+    #[test]
+    fn safe_wording_sieht_durch_homoglyphen_hindurch() {
+        // Kyrillisches s (U+0455) in "schreib mir".
+        assert_eq!(
+            matches_safe_wording("gönn dir viewers, \u{0455}chreib mir"),
+            None,
+            "Homoglyph im Kontaktwort umgeht die Gegenpruefung"
+        );
+        // Akzent-i in "billig".
+        assert_eq!(
+            matches_safe_wording("gönn dir viewer bill\u{00ed}g"),
+            None,
+            "Homoglyph im Verkaufswort umgeht die Gegenpruefung"
+        );
+    }
+
+    /// Die Blockliste ist handgepflegt. Ein Angebot mit blosser Preisangabe
+    /// traegt keinen Marker: dieser Test haelt fest, was das Gate heute NICHT
+    /// faengt, damit die Luecke sichtbar bleibt statt still zu wirken.
+    #[test]
+    fn safe_wording_faengt_reine_preisangaben_nicht() {
+        assert_eq!(
+            matches_safe_wording("gönn dir 10k viewer, 5 euro"),
+            Some("gönn"),
+            "bekannte Luecke: ohne Kontakt- oder Verkaufswort greift das Gate"
+        );
     }
 
     #[test]

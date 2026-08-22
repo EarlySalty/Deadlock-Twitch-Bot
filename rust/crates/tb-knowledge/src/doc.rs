@@ -1,5 +1,17 @@
 //! Ein Wissens-Dokument: kontrolliertes Frontmatter + Markdown-Body.
 
+/// Darf ein Doc an eine ungeschuetzte Oberflaeche?
+///
+/// Bewusst eine Erlaubnisliste. Ein Doc ohne `audience` ist Streamer-Wissen und
+/// darf raus; alles mit eigener Zielgruppe (`concierge`, `intern`, was noch
+/// kommt) bleibt drin, ohne dass jemand daran denken muss. Der Fehlerfall waere
+/// sonst ein Leak: `uplink-concierge.md` zaehlt zum Beispiel auf, welche
+/// Admin-Funktionen, Freischalt-Wege und Lastgrenzen es gibt, und seine
+/// Body-Zeilen sind Anweisungen an einen Agenten, keine Nutzer-Antworten.
+pub fn ist_oeffentlich(audience: &str) -> bool {
+    matches!(audience.trim(), "" | "streamer" | "public")
+}
+
 use std::str::FromStr;
 
 use thiserror::Error;

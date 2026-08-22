@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::doc::{parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
+use crate::doc::{ist_oeffentlich, parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
 
 #[derive(Debug, Clone, Default)]
 pub struct KnowledgeBase {
@@ -66,6 +66,13 @@ impl KnowledgeBase {
 
     /// Deterministische lexikalische Selektion (kein RAG). Score je Doc =
     /// gewichtete Treffer der Frage-Tokens in Titel/Kategorie/tip_flags/Body.
+    ///
+    /// `audience: None` heisst **oeffentlich**, nicht "alles". Die Aufrufer
+    /// sitzen ueberwiegend an ungeschuetzten Oberflaechen (Hilfeseite,
+    /// Self-Explainer, `!help` im Twitch-Chat), und ein Doc mit eigener
+    /// Zielgruppe traegt Anweisungen oder Interna: `uplink-concierge.md`
+    /// zaehlt zum Beispiel auf, welche Admin-Funktionen es gibt. Wer wirklich
+    /// alles braucht, nennt seine Zielgruppe ausdruecklich.
     pub fn select(
         &self,
         query: &str,
@@ -81,10 +88,9 @@ impl KnowledgeBase {
             .docs
             .iter()
             .filter(|d| d.namespace == namespace)
-            .filter(|d| {
-                audience
-                    .map(|a| d.audience.is_empty() || d.audience == a)
-                    .unwrap_or(true)
+            .filter(|d| match audience {
+                Some(a) => d.audience.is_empty() || d.audience == a,
+                None => ist_oeffentlich(&d.audience),
             })
             .map(|d| (score_doc(d, &tokens), d))
             .filter(|(s, _)| *s > 0)
@@ -188,6 +194,32 @@ mod select_tests {
             hits.is_empty(),
             "ohne lexikalischen Treffer keine Doku → Refusal"
         );
+    }
+
+    /// `None` ist der Default aller ungeschuetzten Aufrufer (Hilfeseite,
+    /// Self-Explainer, `!help` im Twitch-Chat). Ein Doc mit eigener Zielgruppe
+    /// darf dort nie auftauchen, auch nicht als Titel in einer Quellenliste.
+    #[test]
+    fn ohne_zielgruppe_kommen_nur_oeffentliche_docs() {
+        let mut kb = kb();
+        kb.docs.push(
+            parse_doc(
+                "---\ntitle: Uplink Concierge\nnamespace: bot\naudience: concierge\n---\nWie der Bot raidet, steht hier intern.",
+                "uplink-concierge",
+            )
+            .unwrap(),
+        );
+        let hits = kb.select("raidet", Namespace::Bot, None, 8);
+        assert!(
+            hits.iter().all(|d| d.slug != "uplink-concierge"),
+            "Concierge-Doc an einer ungeschuetzten Oberflaeche: {:?}",
+            hits.iter().map(|d| &d.slug).collect::<Vec<_>>()
+        );
+        assert!(!hits.is_empty(), "die oeffentlichen Docs fehlen dafuer");
+
+        // Wer die Zielgruppe ausdruecklich nennt, bekommt sie weiterhin.
+        let intern = kb.select("raidet", Namespace::Bot, Some("concierge"), 8);
+        assert!(intern.iter().any(|d| d.slug == "uplink-concierge"));
     }
 
     #[test]

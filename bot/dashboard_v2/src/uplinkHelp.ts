@@ -44,6 +44,15 @@ function ueberschriftenTieferlegen(fragment: string): string {
   });
 }
 
+/**
+ * Der Zurueck-Link gehoert zur Standalone-Seite. Eingebettet in die
+ * Dashboard-Karte stuenden sonst drei davon mitten im Text und fuehrten aus der
+ * Oberflaeche heraus auf die Rohseite.
+ */
+function nurStandaloneEntfernen(fragment: string): string {
+  return fragment.replace(/<p class="nur-standalone">[\s\S]*?<\/p>\s*/g, '');
+}
+
 export function extractUplinkMain(html: string): string {
   // Nicht gierig: sonst reicht der Treffer bis zum letzten </main> im Dokument
   // und zieht fremdes Markup in das dangerouslySetInnerHTML.
@@ -51,12 +60,13 @@ export function extractUplinkMain(html: string): string {
   if (!main) {
     throw new Error('Uplink-Hilfe enthält kein main.uplink-doc.');
   }
-  return ueberschriftenTieferlegen(absoluteLinks(main[0]));
+  return ueberschriftenTieferlegen(absoluteLinks(nurStandaloneEntfernen(main[0])));
 }
 
 export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {
   // Bewusst kein Promise.all: eine einzelne 404 würde sonst alle drei Kacheln
-  // kippen und der Nutzer bliebe dauerhaft bei "Hilfe wird geladen".
+  // kippen. Scheitern alle drei (Deploy ohne neues dist/), wirft die Funktion
+  // weiterhin, und die Seite zeigt ihre Fehlerzeile.
   const ergebnisse: PromiseSettledResult<UplinkHelpPage>[] = await Promise.allSettled(
     UPLINK_HELP_PAGES.map(async (page): Promise<UplinkHelpPage> => {
       const response = await fetch(uplinkHelpUrl(page.file), { credentials: 'same-origin' });

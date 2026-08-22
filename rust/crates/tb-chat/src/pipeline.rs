@@ -1311,6 +1311,12 @@ impl ChatPipeline {
                 // Viewer-Regex-Pfad, damit echter Spam (stärkeres Signal) nie
                 // durchrutscht.
                 //
+                // Praktisch greift nur der None-Zweig: DeleteOnly entsteht
+                // ausschliesslich mit hartem Signal, und `!verdict.hard_signal`
+                // schliesst das aus. Der Arm deckt beide ab, damit eine
+                // spaetere Aenderung an der Aktionswahl das Gate nicht
+                // versehentlich umgeht.
+                //
                 // mention_score == 0 ist Teil der Bedingung: ein Host-Mention
                 // erhöht den Score, ohne je einen Reason-String in
                 // verdict.matched zu erzeugen. Ohne diese Prüfung würde
