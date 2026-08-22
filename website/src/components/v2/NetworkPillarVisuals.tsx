@@ -144,8 +144,9 @@ function ClipVisual() {
   ];
 
   return (
-    <div className="v2-visual flex h-[15rem] flex-col justify-center gap-4 p-6">
-      <div className="relative grid grid-cols-3 gap-3">
+    <div className="v2-visual relative flex h-[15rem] flex-col justify-center gap-4 p-6">
+      <span className="v2-stamp v2-stamp-dim absolute right-4 top-3">Beispiel</span>
+      <div className="grid grid-cols-3 gap-3">
         {clips.map((clip) => (
           <div
             key={clip.time}

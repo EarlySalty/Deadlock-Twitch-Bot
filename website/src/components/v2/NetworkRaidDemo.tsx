@@ -119,13 +119,19 @@ function animateCounter(
 }
 
 /**
- * Wandelt die Partnerliste in Demo-Kanäle um: live in Deadlock zuerst, danach
- * die mit dem stärksten 30-Tage-Schnitt. Kanäle ohne brauchbare Zuschauerzahl
- * bekommen den 30-Tage-Schnitt, damit die Karte nie „0 Zuschauer" zeigt.
+ * Wandelt die Partnerliste in Buehnen-Kanäle um. Es kommen nur Kanäle infrage,
+ * die gerade live in Deadlock sind und ein Profilbild haben; sonst laeuft die
+ * Buehne mit den ausgedachten Beispielkanälen. Kanäle ohne brauchbare
+ * Zuschauerzahl bekommen den 30-Tage-Schnitt, damit die Karte nie „0
+ * Zuschauer" zeigt.
  */
 function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
+  // Nur Kanaele, die tatsaechlich gerade live in Deadlock sind: die Karte
+  // traegt ein rotes LIVE-Abzeichen und eine laufende Uhr. Ein offliner
+  // Kanal an dieser Stelle waere dieselbe falsche Behauptung wie zuvor die
+  // erfundenen Zuschauerzahlen.
   const usable = partners
-    .filter((p) => p.avatarUrl)
+    .filter((p) => p.avatarUrl && p.liveDeadlock)
     .sort((a, b) => {
       if (a.liveDeadlock !== b.liveDeadlock) return a.liveDeadlock ? -1 : 1;
       return b.avgViewers30d - a.avgViewers30d;
