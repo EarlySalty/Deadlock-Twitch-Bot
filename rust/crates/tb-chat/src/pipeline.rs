@@ -1549,11 +1549,22 @@ impl ChatPipeline {
             // falschen Timeouts auf deutsche Goenn- und Lurk-Sprache. Der Alert
             // geht unten trotzdem raus, die Entscheidung bleibt sichtbar.
             if !ahndung_erlaubt(safe_wording, *confidence) {
+                if confidence.is_none() {
+                    // Der Prompt fordert das Feld an. Fehlt es trotzdem, faellt
+                    // jede Ahndung im Safe-Wording-Pfad aus, und das darf nicht
+                    // still passieren: dann liefert das Modell nicht, was der
+                    // Prompt verlangt.
+                    warn!(
+                        channel = %channel_login,
+                        chatter = %chatter_login,
+                        "Judge lieferte keine Confidence, Safe-Wording-Fall bleibt ungeahndet"
+                    );
+                }
                 action_taken = format!(
                     "keine (Safe-Wording, Judge-Confidence {})",
                     confidence
                         .map(|c| format!("{c:.2}"))
-                        .unwrap_or_else(|| "unbekannt".to_string())
+                        .unwrap_or_else(|| "fehlt".to_string())
                 );
             } else if event.chatter_user_id.is_empty()
                 || event.chatter_user_id == event.broadcaster_user_id

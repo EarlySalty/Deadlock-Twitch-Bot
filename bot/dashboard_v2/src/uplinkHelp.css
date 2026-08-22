@@ -16,19 +16,15 @@
   font-family: var(--font-body, "Manrope", "Segoe UI", sans-serif);
 }
 
-.uplink-help-shell .uplink-doc h1,
+/* Eingebettet rutscht jede Fragment-Ueberschrift eine Ebene tiefer
+   (ueberschriftenTieferlegen in uplinkHelp.ts): aus h1 wird h2, aus h3 wird h4.
+   Ein h1 kommt hier deshalb nie an, dafuer aber h4. */
 .uplink-help-shell .uplink-doc h2,
-.uplink-help-shell .uplink-doc h3 {
+.uplink-help-shell .uplink-doc h3,
+.uplink-help-shell .uplink-doc h4 {
   font-family: var(--font-display, "Sora", "Manrope", sans-serif);
   line-height: 1.2;
   letter-spacing: -0.01em;
-}
-
-.uplink-help-shell .uplink-doc h1 {
-  margin: 0 0 1rem;
-  color: #ede0c4;
-  font-size: clamp(2rem, 5vw, 2.75rem);
-  font-weight: 800;
 }
 
 .uplink-help-shell .uplink-doc h2 {
@@ -40,6 +36,7 @@
   font-weight: 700;
 }
 
+.uplink-help-shell .uplink-doc h4,
 .uplink-help-shell .uplink-doc h3 {
   margin: 1.5rem 0 0.5rem;
   color: #c5a059;

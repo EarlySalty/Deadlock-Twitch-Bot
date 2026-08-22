@@ -74,19 +74,29 @@ test('Zahlen in HTML- und Markdown-Fassung stimmen ueberein', () => {
     ['was-ist.html', 'uplink-was-ist.md'],
     ['stoerungen.html', 'uplink-stoerungen.md'],
   ] as const;
-  // Zahlen mit Einheit: Bitraten, Keyframe-Sekunden, Aufloesungen.
-  const ZAHLEN = /\b\d+(?:[.,]\d+)?\s*(?:kbps|Kbps|Mbit\/s|s\b|p\b|fps)/g;
+  // Zahlen mit Einheit: Bitraten (auch nackte vierstellige), Keyframe-Sekunden,
+  // Aufloesungen, CQP-Werte.
+  const ZAHLEN =
+    /\b\d+(?:[.,]\d+)?\s*(?:kbps|Kbps|kbit\/s|Mbit\/s|Mbit|mbit|s\b|p\b|fps)|\b\d{4}\b/g;
 
   for (const [htmlDatei, mdDatei] of PAARE) {
     const html = readFileSync(join(HELP_ROOT, htmlDatei), 'utf8').replace(/<[^>]+>/g, ' ');
-    const md = readFileSync(join(KNOWLEDGE_ROOT, mdDatei), 'utf8');
+    // Frontmatter raus: last_updated traegt eine Jahreszahl, die in der
+    // HTML-Fassung nichts zu suchen hat.
+    const md = readFileSync(join(KNOWLEDGE_ROOT, mdDatei), 'utf8').replace(/^---[\s\S]*?---/, '');
     const ausHtml = new Set((html.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
     const ausMd = new Set((md.match(ZAHLEN) ?? []).map((t) => t.replace(/\s+/g, '')));
     const nurInMd = [...ausMd].filter((z) => !ausHtml.has(z));
+    const nurInHtml = [...ausHtml].filter((z) => !ausMd.has(z));
     assert.deepEqual(
       nurInMd,
       [],
       `${mdDatei} nennt Werte, die in ${htmlDatei} nicht vorkommen: ${nurInMd.join(', ')}`,
+    );
+    assert.deepEqual(
+      nurInHtml,
+      [],
+      `${htmlDatei} nennt Werte, die in ${mdDatei} nicht vorkommen: ${nurInHtml.join(', ')}`,
     );
   }
 });

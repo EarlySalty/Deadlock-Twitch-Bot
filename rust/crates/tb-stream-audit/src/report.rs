@@ -461,8 +461,11 @@ mod tests {
             erkenner: "regel".to_owned(),
             sicherheit: "high".to_owned(),
             begruendung: "Begruendung".to_owned(),
+            // Roh und redigiert gehoeren zusammen: der Schwaerzer ersetzt genau
+            // das Wort, das die Kategorie ausgeloest hat. Ein harmloses Wort
+            // stuende im redigierten Zitat unveraendert.
             zitat_redigiert: "so ein [REDACTED] echt".to_owned(),
-            zitat_roh: "so ein Vollidiot echt".to_owned(),
+            zitat_roh: "so ein Beleidigungswort echt".to_owned(),
             zitat_hash: "a".repeat(64),
         }
     }
@@ -670,7 +673,7 @@ mod tests {
             "safe harassment darf nicht in die DM"
         );
         assert!(text.contains("Ich finde es nicht okay"), "{text}");
-        assert!(text.contains("so ein Vollidiot echt"), "{text}");
+        assert!(text.contains("so ein Beleidigungswort echt"), "{text}");
         assert!(text.contains("13.08.2026 20:02:05 UTC"), "{text}");
         assert!(text.contains("00:02:05 und 00:02:35"), "{text}");
     }

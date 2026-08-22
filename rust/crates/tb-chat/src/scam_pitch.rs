@@ -159,8 +159,12 @@ Teilübereinstimmungen mit bekannten Spam-Mustern). Deine Aufgabe: bestätige od
 sich um WERBUNG für Viewer-Bot-Services, SMM-Dienste oder ähnliche Twitch-Manipulation handelt.\n\
 \n\
 Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne <think>-Block:\n\
-{\"is_spam\": true/false, \"pattern\": \"Kernmuster oder null\", \"pattern_type\": \"phrase\" \
-oder \"fragment\", \"reason\": \"Begründung max 80 Zeichen\"}\n\
+{\"is_spam\": true/false, \"confidence\": 0.0 bis 1.0, \"pattern\": \"Kernmuster oder null\", \
+\"pattern_type\": \"phrase\" oder \"fragment\", \"reason\": \"Begründung max 80 Zeichen\"}\n\
+\n\
+confidence ist deine Sicherheit im Urteil, nicht die Schwere: 0.9 und hoeher bei einem \
+eindeutigen Angebot, 0.5 bis 0.7 wenn es auch normale Chat-Sprache sein koennte. Das Feld \
+entscheidet mit, ob automatisch geahndet wird, also schaetze ehrlich.\n\
 \n\
 Entscheidend ist allein, ob die Nachricht ein Angebot macht — NICHT, ob ein Dienstname, eine \
 Domain, ein Preis oder eine Kontaktaufforderung darin steht. Anonyme Angebote ohne Markennamen \
@@ -2356,6 +2360,46 @@ mod tests {
         assert!(v.is_spam);
         assert_eq!(v.pattern.as_deref(), Some("eballo.com"));
         assert_eq!(v.pattern_type.as_deref(), Some("phrase"));
+    }
+
+    /// Die Confidence entscheidet mit, ob im Safe-Wording-Fall geahndet wird
+    /// (`pipeline::ahndung_erlaubt`). Sie muss also wirklich aus der Antwort
+    /// kommen, und ihr Fehlen muss als Fehlen ankommen, nicht als Null.
+    #[test]
+    fn extract_verdict_liest_die_confidence_und_meldet_ihr_fehlen() {
+        let mit = extract_verdict(
+            "{\"is_spam\": true, \"confidence\": 0.92, \"pattern\": \"viewer boost\", \
+             \"pattern_type\": \"phrase\", \"reason\": \"Angebot\"}",
+        )
+        .expect("Urteil");
+        assert_eq!(mit.confidence, Some(0.92));
+
+        // Genau der Fall, den das alte Prompt erzeugte: kein Feld, also None.
+        let ohne = extract_verdict(
+            "{\"is_spam\": true, \"pattern\": \"viewer boost\", \
+             \"pattern_type\": \"phrase\", \"reason\": \"Angebot\"}",
+        )
+        .expect("Urteil");
+        assert_eq!(ohne.confidence, None);
+
+        // Unbrauchbare Werte zaehlen ebenfalls als fehlend, nicht als 0.
+        for roh in ["\"hoch\"", "1.5", "-0.2"] {
+            let v = extract_verdict(&format!(
+                "{{\"is_spam\": true, \"confidence\": {roh}, \"reason\": \"x\"}}"
+            ))
+            .expect("Urteil");
+            assert_eq!(v.confidence, None, "unbrauchbare Confidence: {roh}");
+        }
+    }
+
+    /// Der Prompt muss das Feld anfordern, sonst liefert kein Modell es, und die
+    /// Schwelle in der Pipeline waere ein Schalter, der die Ahndung abstellt.
+    #[test]
+    fn judge_prompt_fordert_die_confidence_an() {
+        assert!(
+            SPAM_REVIEW_SYSTEM_PROMPT.contains("\"confidence\""),
+            "Prompt fordert keine Confidence an"
+        );
     }
 
     #[test]
