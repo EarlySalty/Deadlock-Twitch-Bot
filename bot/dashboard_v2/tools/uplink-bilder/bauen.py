@@ -135,3 +135,38 @@ s.append(f'<text x="24" y="316" class="mark">1 Hardware-HEVC, nicht x264 &#183; 
 s.append('</svg>')
 open("4-ausgabe.svg", "w").write("\n".join(s))
 print("gebaut")
+
+# --------------------------------------------------- 5. Anmeldung im Dock
+# Beantwortet die Frage, die jeder stellt: "ich bin doch gar nicht
+# angemeldet". Zwei Zustaende nebeneinander sagen das schneller als ein
+# Absatz Text.
+B, H = 900, 300
+s = [kopf(B, H, "Chat-Dock in OBS: links der abgemeldete Zustand mit Anmelden-Knopf, rechts der angemeldete Chat")]
+s.append(f'<text x="24" y="34" class="titel">Chat</text>')
+s.append(f'<text x="480" y="34" class="titel">Chat</text>')
+
+# links: abgemeldet
+s.append(f'<rect x="24" y="74" width="404" height="180" rx="6" fill="{OBS_FELD}" stroke="{OBS_RAND}"/>')
+s.append(f'<text x="226" y="134" text-anchor="middle" class="dim">Melde dich an, um zu chatten</text>')
+s.append(f'<rect x="156" y="156" width="140" height="36" rx="4" fill="#9147ff"/>')
+s.append(f'<text x="226" y="180" text-anchor="middle" class="lbl" font-weight="600">Anmelden</text>')
+s.append(ring(156, 156, 140, 36))
+s.append(nummer(324, 174, 1))
+
+s.append(f'<text x="24" y="66" class="dim" font-size="12">beim ersten Öffnen</text>')
+s.append(f'<text x="480" y="66" class="dim" font-size="12">danach, dauerhaft</text>')
+
+# rechts: angemeldet
+s.append(f'<rect x="480" y="74" width="396" height="180" rx="6" fill={chr(34)}{OBS_FELD}{chr(34)} stroke="{OBS_RAND}"/>')
+namen = [("Lea", "#4a9eff", "gg wp"), ("Mika", "#3ecf8e", "der Fight war nice"), ("Tobi", "#ff6b9d", "PogChamp"), ("Sam", "#ffb454", "wie heisst der Build?")]
+for i, (n, farbe, text) in enumerate(namen):
+    y = 104 + i * 32
+    s.append(f'<text x="498" y="{y}" font-size="13" font-weight="700" fill="{farbe}" font-family="system-ui, sans-serif">{n}:</text>')
+    s.append(f'<text x="{498 + len(n)*9 + 14}" y="{y}" class="dim" font-size="13">{text}</text>')
+s.append(f'<rect x="498" y="220" width="300" height="26" rx="4" fill="#18181b" stroke="#3a3a3d"/>')
+s.append(f'<text x="510" y="238" class="dim" font-size="12">Nachricht senden</text>')
+
+s.append(f'<text x="24" y="278" class="mark">Einmal auf „Anmelden“, danach merkt sich OBS die Anmeldung dauerhaft.</text>')
+s.append('</svg>')
+open("5-anmelden.svg", "w").write("\n".join(s))
+print("bild 5 gebaut")

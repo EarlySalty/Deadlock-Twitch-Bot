@@ -114,7 +114,20 @@ Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt 
 
 Es sind übrigens dieselben Seiten, die OBS auch in seine eingebauten Twitch-Fenster lädt. Der Unterschied ist nur, dass OBS sie bei verbundenem Konto selbst anlegt. Du legst sie einmal von Hand an, ordnest die Fenster und speicherst unter **Docks** das Layout. Das übersteht jeden OBS-Neustart.
 
-Im Browser-Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen. Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eigenen Fenster ein.
+#### „Aber ich bin doch gar nicht angemeldet“
+
+Das ist die häufigste Frage an dieser Stelle, und dahinter stecken zwei verschiedene Anmeldungen:
+
+- **Konto verbinden** in den Stream-Einstellungen. Damit holt sich OBS deinen Twitch-Streamschlüssel. Die brauchst du bei uns nicht, deshalb ist sie weg.
+- **Anmeldung im Fenster.** In OBS steckt ein vollständiger Browser mit eigenen Cookies, genau wie Chrome oder Firefox. Damit meldest du dich bei Twitch an, und darüber laufen Chat, Aktivität und Stream-Info.
+
+Beim ersten Öffnen zeigt das Fenster einen Anmelden-Knopf. Ein Klick, einmal einloggen, fertig. OBS legt das Cookie ab und findet es beim nächsten Start wieder.
+
+Die eingebauten Twitch-Fenster machen es genauso: dieselben Seiten, derselbe Browser, dasselbe Cookie. Du sparst dir mit ihnen nur das Anlegen, nicht die Anmeldung.
+
+Über unseren Server läuft davon nichts. Dafür müssten wir deine Twitch-Sitzung durch unsere Hand laufen lassen, und wer bei uns einbräche, hätte damit Zugriff auf deinen Kanal. Deine Anmeldung bleibt zwischen dir und Twitch.
+
+Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eigenen Fenster ein.
 
 Zwei Dinge bleiben anders als vorher:
 

@@ -159,7 +159,20 @@
     </table>
     <p>Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt dich Twitch automatisch auf deinen eigenen Kanal, sobald du angemeldet bist. Im Dashboard stehen alle vier fertig zum Kopieren, dann musst du gar nichts ersetzen.</p>
     <p>Schritt 3: Fenster dahin ziehen, wo du sie haben willst, dann unter <strong>Docks</strong> das Layout speichern. Das übersteht jeden OBS-Neustart, du machst das genau einmal.</p>
-    <p>Im Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen. Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eingebauten Fenster ein.</p>
+    <h3 id="obs-docks-anmeldung">„Aber ich bin doch gar nicht angemeldet“</h3>
+    <p>Das ist die häufigste Frage an dieser Stelle, und dahinter stecken zwei verschiedene Anmeldungen, die leicht durcheinandergehen:</p>
+    <ul>
+      <li><strong>Konto verbinden</strong> in den Stream-Einstellungen. Damit holt sich OBS deinen Twitch-Streamschlüssel. Die brauchst du bei uns nicht, deshalb ist sie weg.</li>
+      <li><strong>Anmeldung im Fenster.</strong> In OBS steckt ein vollständiger Browser. Der hat eigene Cookies, genau wie Chrome oder Firefox. Damit meldest du dich bei Twitch an, und darüber laufen Chat, Aktivität und Stream-Info.</li>
+    </ul>
+    <p>Beim ersten Öffnen zeigt das Fenster also einen Anmelden-Knopf. Ein Klick, einmal einloggen, fertig. OBS legt das Cookie ab und findet es beim nächsten Start wieder.</p>
+    <figure>
+      <img src="bilder/5-anmelden.svg" alt="Das Chat-Fenster in OBS in zwei Zuständen: links beim ersten Öffnen mit dem hervorgehobenen Anmelden-Knopf, rechts der angemeldete Chat mit Nachrichten und Eingabefeld.">
+      <figcaption>Einmal <strong>Anmelden</strong>, danach bleibt es so.</figcaption>
+    </figure>
+    <p>Wichtig: die eingebauten Twitch-Fenster machen es genauso. Auch die laden dieselben Seiten in denselben Browser und brauchen dasselbe Cookie. Du sparst dir mit ihnen nur das Anlegen, nicht die Anmeldung.</p>
+    <p>Und nein, wir leiten das nicht über unseren Server um. Dafür müssten wir deine Twitch-Sitzung durch unsere Hand laufen lassen, und wer bei uns einbräche, hätte damit Zugriff auf deinen Kanal. Deine Anmeldung bleibt zwischen dir und Twitch. Wir sehen davon nichts.</p>
+    <p>Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eingebauten Fenster ein.</p>
     <p><strong>Stream starten</strong> schickt danach an uns, nicht an Twitch. Twitch geht live, sobald wir dorthin senden. <strong>Enhanced Broadcasting</strong> und Mehrspur-Video bietet OBS nur mit verbundenem Twitch-Konto an, über uns läuft das nicht. Dafür kommst du mit einem Upload gleichzeitig auf mehrere Plattformen.</p>
   </section>
 
