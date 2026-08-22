@@ -58,6 +58,22 @@ function nurStandaloneEntfernen(fragment: string): string {
     .replace(/<p class="nur-standalone">[\s\S]*?<\/p>\s*/g, '');
 }
 
+/**
+ * Nimmt die Titelueberschrift aus dem Fragment.
+ *
+ * Eingebettet steht der Kapitelname schon im Klapptitel. Bliebe die h1 im
+ * Inhalt, stuende derselbe Satz zweimal untereinander, sobald jemand aufklappt.
+ *
+ * Bewusst vor `ueberschriftenTieferlegen`: dort wird aus h1 ein h2, und danach
+ * waere der Titel von einer echten Zwischenueberschrift nicht mehr zu
+ * unterscheiden. Nur der erste Treffer faellt weg, alles Weitere ist Inhalt.
+ * Die eigenstaendige Hilfeseite laeuft nicht durch diese Funktion und behaelt
+ * ihren Titel.
+ */
+export function titelUeberschriftEntfernen(fragment: string): string {
+  return fragment.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>\s*/, '');
+}
+
 export function extractUplinkMain(html: string): string {
   // Nicht gierig: sonst reicht der Treffer bis zum letzten </main> im Dokument
   // und zieht fremdes Markup in das dangerouslySetInnerHTML.
@@ -71,7 +87,9 @@ export function extractUplinkMain(html: string): string {
   const alsAbschnitt = main[0]
     .replace(/^<main /, '<div ')
     .replace(/<\/main>$/, '</div>');
-  return ueberschriftenTieferlegen(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt)));
+  return ueberschriftenTieferlegen(
+    titelUeberschriftEntfernen(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt))),
+  );
 }
 
 export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {

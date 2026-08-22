@@ -3,7 +3,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { extractUplinkMain, UPLINK_HELP_PAGES, uplinkHelpUrl } from '../src/uplinkHelp';
+import {
+  extractUplinkMain,
+  titelUeberschriftEntfernen,
+  UPLINK_HELP_PAGES,
+  uplinkHelpUrl,
+} from '../src/uplinkHelp';
 
 const DASHBOARD_ROOT = join(import.meta.dirname, '..');
 const HELP_ROOT = join(DASHBOARD_ROOT, 'public', 'uplink');
@@ -32,13 +37,16 @@ test('Dashboard bindet die Uplink-Hilfe mit main.uplink-doc ein', () => {
   }
 });
 
-test('extrahiert nur main.uplink-doc und legt die Ueberschrift eine Ebene tiefer', () => {
-  // Die Seite hat schon eine h1; drei Fragmente mit eigener h1 zerlegen die
+test('extrahiert nur main.uplink-doc und legt die Ueberschriften eine Ebene tiefer', () => {
+  // Zwei Dinge in einem Durchlauf: die Titel-h1 faellt weg, weil ihr Text schon
+  // im Klapptitel steht, und alles Uebrige rutscht eine Ebene tiefer. Die Seite
+  // hat bereits eine h1, und drei Fragmente mit eigener h1 zerlegten die
   // Ueberschriftenstruktur fuer Screenreader.
-  const html = '<body><main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main></body>';
+  const html =
+    '<body><main class="uplink-doc" data-doc="obs"><h1>OBS</h1><h2>Ablauf</h2><p>Text</p></main></body>';
   assert.equal(
     extractUplinkMain(html),
-    '<div class="uplink-doc" data-doc="obs"><h2>OBS</h2></div>',
+    '<div class="uplink-doc" data-doc="obs"><h3>Ablauf</h3><p>Text</p></div>',
   );
 });
 
@@ -112,5 +120,42 @@ test('weist eine HTML-Seite ohne main.uplink-doc zurück', () => {
   assert.throws(
     () => extractUplinkMain('<body><h1>Keine Uplink-Hilfe</h1></body>'),
     /main\.uplink-doc/,
+  );
+});
+
+test('nimmt nur die Titelueberschrift, nicht die Zwischenueberschriften', () => {
+  // Der Kapitelname steht eingebettet schon im Klapptitel. Bliebe die h1 im
+  // Inhalt, stuende derselbe Satz zweimal untereinander.
+  const fragment = '<h1>Was ist Uplink</h1>\n<p>Text</p><h1>Zweite</h1>';
+  const ohne = titelUeberschriftEntfernen(fragment);
+  assert.equal(ohne, '<p>Text</p><h1>Zweite</h1>');
+});
+
+test('laesst ein Fragment ohne Titelueberschrift unveraendert', () => {
+  const fragment = '<p>Nur Text</p><h2>Ablauf</h2>';
+  assert.equal(titelUeberschriftEntfernen(fragment), fragment);
+});
+
+test('jedes eingebettete Kapitel verliert seinen Titel und behaelt den Inhalt', () => {
+  // Gegen den echten Dateien, nicht gegen ein gebasteltes Fragment: hier faellt
+  // auf, wenn eine Hilfeseite ihre Struktur aendert.
+  for (const page of UPLINK_HELP_PAGES) {
+    const roh = readFileSync(join(HELP_ROOT, page.file), 'utf8');
+    const eingebettet = extractUplinkMain(roh);
+    assert.ok(
+      !eingebettet.includes(`>${page.label}</h2>`),
+      `${page.file}: Titel steht doppelt, im Klapptitel und im Inhalt`,
+    );
+    assert.ok(eingebettet.length > 200, `${page.file}: Inhalt ist verschwunden`);
+  }
+});
+
+test('die Hilfe startet zugeklappt', () => {
+  // Ein `open` am details-Element machte den Umbau wirkungslos: die Hilfe
+  // fuellte wieder mehrere Bildschirmhoehen.
+  assert.ok(UPLINK_PAGE.includes('<details'), 'Die Hilfe ist nicht mehr klappbar');
+  assert.ok(
+    !/<details[^>]*\sopen[\s>]/.test(UPLINK_PAGE),
+    'Ein Kapitel startet aufgeklappt',
   );
 });

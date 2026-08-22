@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
+  ChevronDown,
   Copy,
   Eye,
   EyeOff,
@@ -383,19 +384,40 @@ export function UplinkPage() {
                   {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
                 </p>
               )}
-              <div className="space-y-4">
+              {/* Jedes Kapitel klappt einzeln auf und startet zu. Aufgeklappt
+                  fuellte die Hilfe mehrere Bildschirmhoehen und schob alles
+                  darueber aus dem Blick; wer sie braucht, sucht ohnehin ein
+                  bestimmtes Kapitel.
+
+                  `details` statt eigenem Zustand: das Auf und Zu, die
+                  Tastaturbedienung und die Ansage fuer Screenreader bringt der
+                  Browser mit, und die Seitensuche des Browsers findet auch
+                  zugeklappten Text. */}
+              <div className="space-y-2">
                 {/* Bei einem Fehler keine Platzhalter mehr: drei Kacheln
                     "Hilfe wird geladen" neben der Fehlerzeile behaupten einen
                     Fortschritt, der nicht mehr kommt. */}
-                {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) => (
-                  <div key={page.file} className="uplink-help-shell overflow-hidden rounded-xl border border-border bg-background/70">
-                    {page.html ? (
+                {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) =>
+                  page.html ? (
+                    <details
+                      key={page.file}
+                      className="uplink-help-shell group overflow-hidden rounded-xl border border-border bg-background/70"
+                    >
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
+                        <span>{page.label}</span>
+                        <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+                      </summary>
                       <div dangerouslySetInnerHTML={{ __html: page.html }} />
-                    ) : (
-                      <div className="p-4 text-sm text-text-secondary">Hilfe wird geladen: {page.label}</div>
-                    )}
-                  </div>
-                ))}
+                    </details>
+                  ) : (
+                    <div
+                      key={page.file}
+                      className="rounded-xl border border-border bg-background/70 p-4 text-sm text-text-secondary"
+                    >
+                      Hilfe wird geladen: {page.label}
+                    </div>
+                  ),
+                )}
               </div>
               <a className="text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
                 Uplink-Hilfe als eigene Seite öffnen
