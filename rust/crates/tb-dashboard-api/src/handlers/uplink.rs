@@ -272,14 +272,15 @@ pub async fn destinations_handler(
 /// Deadlock-Teamfight weniger wert als bei 1080p. Wer es trotzdem will, soll
 /// es waehlen koennen; die Oberflaeche schreibt den Haken dazu.
 ///
-/// Die Reihenfolge hier ist die der Auswahlliste. `profil_aufloesen` sucht
-/// nach Namen, fuer die Aufloesung spielt sie keine Rolle.
+/// Die Reihenfolge hier ist die der Auswahlliste, absteigend von der besten
+/// zur sparsamsten Stufe. `profil_aufloesen` sucht nach Namen, fuer die
+/// Aufloesung spielt sie keine Rolle.
 const PROFILE: [(&str, i32, i32, i32, i32); 5] = [
-    ("1080p60", 1920, 1080, 60, 6000),
+    ("1440p60", 2560, 1440, 60, 12000),
     ("1080p60-hoch", 1920, 1080, 60, 8000),
+    ("1080p60", 1920, 1080, 60, 6000),
     ("720p60", 1280, 720, 60, 4500),
     ("480p30", 854, 480, 30, 1500),
-    ("1440p60", 2560, 1440, 60, 8000),
 ];
 
 /// Obergrenze, die fuer Twitch-Ziele wirklich gilt.
@@ -293,7 +294,7 @@ const TWITCH_MAX_BREITE: i32 = 2560;
 #[cfg(test)]
 const TWITCH_MAX_HOEHE: i32 = 1440;
 #[cfg(test)]
-const TWITCH_MAX_BITRATE: i32 = 8000;
+const TWITCH_MAX_BITRATE: i32 = 12000;
 
 /// Loest einen Profilnamen auf. `None` heisst: nicht im Katalog.
 fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
@@ -371,7 +372,7 @@ mod tests {
 
     #[test]
     fn das_hoechste_profil_ist_1440p() {
-        assert_eq!(profil_aufloesen("1440p60"), Some((2560, 1440, 60, 8000)));
+        assert_eq!(profil_aufloesen("1440p60"), Some((2560, 1440, 60, 12000)));
     }
 
     #[test]

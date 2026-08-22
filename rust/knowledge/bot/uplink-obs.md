@@ -77,6 +77,7 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 | 3 bis 5 Mbit | 1920×1080 | 30 | HEVC, VBR 4000, maximal 5000 |
 | 5 bis 8 Mbit | 1920×1080 | 60 | HEVC, VBR 6000, maximal 8000 |
 | Ab 8 Mbit, wenn die GPU 1440 ohne Drops hält | 2560×1440 | 60 | HEVC, VBR 6000, maximal 8000 |
+| Ab 14 Mbit, wenn du 2K auch rausschicken willst | 2560×1440 | 60 | HEVC, VBR 9000, maximal 12000 |
 | Wenn die GPU Drops hat oder das Spiel ruckelt | Eine Stufe kleiner oder 30 fps |  | Derselbe Encoder, nicht auf Software wechseln |
 
 1440p an uns zu schicken lohnt sich zweifach: entweder rechnen wir daraus 1080p und behalten dabei Schärfe, oder wir senden die vollen 2K weiter, wenn du diese Stufe im Dashboard wählst. Es lohnt sich nicht, wenn der Encoder Frames schluckt. **Skipped frames** bleibt in OBS bei 0.

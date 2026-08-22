@@ -56,23 +56,23 @@ export interface UplinkProfilAnsicht {
  */
 export const UPLINK_PROFILE = [
   {
-    name: '1080p60',
-    label: '1080p60, 6000 kbps',
-    hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.',
-    warnung: '',
+    name: '1440p60',
+    label: '1440p60 (2K), 12000 kbps',
+    hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
+    warnung:
+      'Twitch unterstützt 2K über diesen Weg offiziell nicht. Ob deine 12000 kbps ankommen oder Twitch drosselt, siehst du erst im Stream. Probier es einen Abend lang aus, bevor du dabei bleibst. Wer aus OBS nur 1080p sendet, gewinnt hier gar nichts: wir müssten hochrechnen, und das kostet Bitrate ohne Gegenwert.',
   },
   {
     name: '1080p60-hoch',
     label: '1080p60, 8000 kbps',
-    hinweis: 'Twitch-Maximum. Nur mit Partner- oder Affiliate-Status sinnvoll.',
+    hinweis: 'Twitch-Maximum für 1080p. Nur mit Partner- oder Affiliate-Status sinnvoll.',
     warnung: '',
   },
   {
-    name: '1440p60',
-    label: '1440p60 (2K), 8000 kbps',
-    hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
-    warnung:
-      'Twitch unterstützt 2K über diesen Weg offiziell nicht und deckelt die Bitrate bei 8000. Dieselben Bits verteilen sich auf 1,78-mal so viele Pixel, im Teamfight sieht das oft schlechter aus als 1080p. Probier es einen Abend lang aus, bevor du dabei bleibst. Wer aus OBS nur 1080p sendet, gewinnt hier gar nichts: wir müssten hochrechnen, und das kostet Bitrate ohne Gegenwert.',
+    name: '1080p60',
+    label: '1080p60, 6000 kbps',
+    hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.',
+    warnung: '',
   },
   {
     name: '720p60',
@@ -94,7 +94,7 @@ export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
 const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
   '1080p60': [1920, 1080, 60, 6000],
   '1080p60-hoch': [1920, 1080, 60, 8000],
-  '1440p60': [2560, 1440, 60, 8000],
+  '1440p60': [2560, 1440, 60, 12000],
   '720p60': [1280, 720, 60, 4500],
   '480p30': [854, 480, 30, 1500],
 };
