@@ -495,9 +495,9 @@ Der Prompt gibt die fünf Fakten jeweils mit Quellenart an, verlangt natürliche
 Konfiguration:
 
 ```text
-FIREWORKS_API_KEY (Fallback nur auf vorhandenen Legacy-Namen FIREWORK_API_KEY)
-FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
-TB_LLM_MODEL_RICKY_CREW_REVIEW=accounts/fireworks/models/deepseek-v4-flash
+FIREWORK_API_KEY (gewinnt vor FIREWORKS_API_KEY, gemeinsamer Resolver in tb_llm::keys)
+FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1   (wird durchgereicht)
+TB_LLM_MODEL_RICKY_CREW_REVIEW=accounts/fireworks/models/deepseek-v4-flash   (wird durchgereicht; ohne Override gilt FIREWORKS_MODEL, sonst der Code-Default)
 ```
 
 POST ausschließlich an `/chat/completions`, ohne Provider-Fallback. Fehler werden auf `unavailable`, `timeout`, `http_status`, `decode` oder `validation` reduziert. Weder Antwortbody noch Requestprompt werden im Fehlerstring gespeichert.

@@ -62,7 +62,7 @@ tb_llm::complete(use_case: &str, request: Request) -> Result<Response, LlmError>
 | `json_object` | setzt `response_format` |
 | `timeout` | pro Aufruf, sonst 240 s |
 | `ledger` | `Off` oder `Purpose(name)`; Default ist der Use-Case-Name |
-| `total_deadline` | Gesamtfrist ueber die ganze Kette; ohne Angabe die Summe der Einzelfristen. Der Engagement-Client setzt seine Client-Frist (Chat 30 s, Dashboard-Folgechat 240 s) als Gesamtfrist, damit eine Antwort nicht erst nach zwei vollen Fristen kommt |
+| `total_deadline` | Gesamtfrist ueber die ganze Kette inklusive 429-Wiederholungen und Wartezeiten; ohne Angabe die Summe der Einzelfristen. Der Engagement-Client setzt das Doppelte seiner Client-Frist (Chat 2x30 s, Dashboard-Folgechat 2x240 s): das Ausweichglied kommt auch bei haengendem erstem Glied dran |
 | `strip_think` | entfernt geschlossene `<think>...</think>`-Bloecke aus dem Antworttext; ein offener Block bleibt stehen, damit JSON nach einer abgeschnittenen Ueberlegung erreichbar bleibt |
 | `allow_reasoning_content` | Opt-in: faellt auf `reasoning_content` zurueck, wenn `content` leer ist. Standard aus, damit kein Denktext im Chat landet; nur der Spam-Judge setzt es |
 | `accept` | Praedikat auf dem Antworttext; schlaegt es fehl, geht der Hub zum naechsten Anbieter der Kette |
@@ -113,7 +113,7 @@ Entfallen mit diesem Umbau:
 | Alt | Neu |
 |---|---|
 | `ENGAGEMENT_MINIMAX_MODEL` | `TB_LLM_MODEL_ENGAGEMENT` |
-| `FIREWORKS_RICKY_REVIEW_MODEL` | `TB_LLM_MODEL_RICKY_CREW_REVIEW` |
+| `FIREWORKS_RICKY_REVIEW_MODEL` | `TB_LLM_MODEL_RICKY_CREW_REVIEW` (wird vom Schatten-Review durchgereicht, ebenso `FIREWORKS_BASE_URL`) |
 | `ANTHROPIC_HAIKU_MODEL` | `TB_LLM_MODEL_SOCIAL_MEDIA_CLAUDE` |
 
 Ist eine dieser drei Altvariablen noch gesetzt, warnt `endpoint_for` einmal je
@@ -145,11 +145,15 @@ als Ausweichweg), und nur der Self-Explainer bekommt MiniMax-Text-01.
 
 Der `EngagementMinimaxClient` arbeitet ohne explizite Parameter die
 Ausweichkette (`endpoint_chain`) ab, statt sich auf einen Endpunkt
-festzunageln: faellt Fireworks aus, antwortet MiniMax. Nur ein Client mit
-explizit gesetztem Schluessel, Adresse oder Modell (Tests, Sonderfaelle) oder
-ein Client aus `for_use_case` (Self-Explainer) bleibt auf diesem einen
-Endpunkt; beim Self-Explainer bewusst, weil das Ausweichglied Fireworks/DeepSeek
-genau das Reasoning-Modell waere, das der Wrapper vermeiden will.
+festzunageln: faellt Fireworks aus (Fehler, leere Antwort oder die volle
+Einzelfrist gerissen), antwortet MiniMax, insgesamt innerhalb von zwei
+Einzelfristen. Nur ein Client mit
+explizit gesetztem Schluessel, Adresse oder Modell (Tests, Sonderfaelle)
+bleibt auf diesem einen Endpunkt. Der Self-Explainer (`for_use_case`) laeuft
+ebenfalls mit Kette: MiniMax-Text-01 vorn, Fireworks/DeepSeek als Ausweichweg.
+Der Ausweichweg ist schlechter (Reasoning-Modell, nach dem `<think>`-Strip
+kann die Antwort leer ausfallen), aber ohne MiniMax-Schluessel waere der
+Self-Explainer sonst dauerhaft stumm.
 
 Fehlt fuer einen Use-Case jeder Anbieter (kein Schluessel), warnt der Hub
 selbst (`kein LLM-Anbieter konfiguriert`), gedrosselt auf einmal je fuenf
@@ -197,7 +201,7 @@ Fehlerquelle, kein Sicherheitsnetz.
 
 ## Bewusste Verhaltensaenderungen
 
-Vier Dinge verhalten sich nach dem Umbau anders als vorher. Alle vier sind
+Fuenf Dinge verhalten sich nach dem Umbau anders als vorher. Alle fuenf sind
 gewollt; wer Logs, Kostenauswertungen oder Dashboards darauf gebaut hat, muss
 sie kennen.
 
@@ -215,6 +219,7 @@ lassen, ohne das Schema anzufassen:
 | Zweck (`purpose`) | Aufrufer | Vorher |
 |---|---|---|
 | `engagement` | `minimax_chat.rs`, Standardweg | unveraendert |
+| `dashboard_self_explainer` | Self-Explainer im Dashboard (`handlers/self_explainer.rs`) | **neu**, vorher unter `engagement` verbucht; Auswertungen, die den Self-Explainer im `engagement`-Topf erwarteten, muessen beide Zwecke addieren |
 | `chat-deep-analysis` und andere Zwecke des Aufrufers | `raw_completion_tracked` | unveraendert |
 | `title` | `title_ai.rs`, Titelgenerierung | unveraendert |
 | `title-insight` | `title_ai.rs`, Wochenauswertung | unveraendert |
@@ -238,17 +243,17 @@ nicht dem Bahn-Namen aus den Einstellungen. Die Preistabelle in
 Nicht verbucht bleiben drei Pfade, jeweils mit Grund:
 
 - `ricky_crew_review` und `outreach_shadow`: Schatten-Reviews, die nie an einem
-  Streamer-Budget hingen. Beide sind gleich fail-closed und laufen immer an
-  der Fireworks-Standardadresse mit dem Standardmodell (im Code
-  festgenagelt). Abgeschaltet (`Unavailable`) werden sie durch genau zwei
-  Dinge: keinen Fireworks-Schluessel (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`
-  leer) oder eine eigene `TB_LLM_PROVIDER_RICKY_CREW_REVIEW` bzw.
+  Streamer-Budget hingen. Beide sind gleich fail-closed: sie laufen nur auf
+  Fireworks. Abgeschaltet (`Unavailable`) werden sie durch genau zwei Dinge:
+  keinen Fireworks-Schluessel (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY` leer)
+  oder eine eigene `TB_LLM_PROVIDER_RICKY_CREW_REVIEW` bzw.
   `TB_LLM_PROVIDER_OUTREACH_SHADOW`, die auf einen anderen Anbieter zeigt
-  (mit `warn!` beim Aufloesen). Nicht abschaltend: `TB_LLM_PROVIDER_DEFAULT`
-  (beide stehen in `FIREWORKS_ONLY_USE_CASES` und ignorieren ihn), globale
-  `FIREWORKS_MODEL`/`FIREWORK_MODEL`, `FIREWORK_BASE_URL`/`FIREWORKS_BASE_URL`
-  und `TB_LLM_MODEL_<USE_CASE>`; diese Werte werden fuer die Schatten-Reviews
-  schlicht nicht uebernommen.
+  (mit `warn!` beim Aufloesen). Nicht abschaltend, sondern durchgereicht:
+  Adresse und Modell kommen aus der zentralen Auswahl, also wirken
+  `TB_LLM_MODEL_RICKY_CREW_REVIEW`/`TB_LLM_MODEL_OUTREACH_SHADOW`, das globale
+  `FIREWORKS_MODEL`/`FIREWORK_MODEL` und `FIREWORKS_BASE_URL`/`FIREWORK_BASE_URL`
+  genauso wie im Service-Wrapper versprochen. `TB_LLM_PROVIDER_DEFAULT`
+  ignorieren beide (`FIREWORKS_ONLY_USE_CASES`).
 - `crew_guard`: laeuft ueber einen fremden Schluessel, dessen Kosten nicht in
   diesem Ledger stehen.
 - `stream_audit`: laeuft ausserhalb des Bots und gehoert zu keinem Streamer.
@@ -290,6 +295,14 @@ zeigen, auch fuer die Kostenschaetzung. Kein Backfill: Altzeilen behalten
 `minimax`/`claude_haiku`. Auswertungen ueber diese Spalte muessen beide
 Vokabulare kennen (`claude_haiku` entspricht `anthropic`). Kommentar am
 Schreibpfad in `llm_dispatch.rs`.
+
+### (e) Das 5h-Budget zaehlt nur noch MiniMax-Zeilen
+
+`warn_if_over_budget` (`MINIMAX_5H_TOKEN_BUDGET`) summierte frueher alle
+Zeilen des Ledgers, und das waren nur MiniMax-Zeilen. Seit das Ledger auch
+Fireworks/DeepSeek und Anthropic fuehrt (siehe (a)), filtert die Budgetpruefung
+auf `model ILIKE 'minimax%'`; sonst wuerde ein Opus-Report das MiniMax-Budget
+sprengen. `window_tokens` ohne Filter bleibt als Gesamtsicht erhalten.
 
 ## Bewusst nicht migriert
 
