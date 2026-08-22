@@ -78,9 +78,8 @@ impl KnowledgeBase {
     /// `audience: None` heisst **oeffentlich**, nicht "alles". Die Aufrufer
     /// sitzen ueberwiegend an ungeschuetzten Oberflaechen (Hilfeseite,
     /// Self-Explainer, `!help` im Twitch-Chat), und ein Doc mit eigener
-    /// Zielgruppe traegt Anweisungen oder Interna: `uplink-concierge.md`
-    /// zaehlt zum Beispiel auf, welche Admin-Funktionen es gibt. Wer wirklich
-    /// alles braucht, nennt seine Zielgruppe ausdruecklich.
+    /// Zielgruppe traegt Anweisungen oder Interna. Wer wirklich alles braucht,
+    /// nennt seine Zielgruppe ausdruecklich.
     pub fn select(
         &self,
         query: &str,
@@ -212,14 +211,14 @@ mod select_tests {
         let mut kb = kb();
         kb.docs.push(
             parse_doc(
-                "---\ntitle: Uplink Concierge\nnamespace: bot\naudience: concierge\n---\nWie der Bot raidet, steht hier intern.",
-                "uplink-concierge",
+                "---\ntitle: Interne Agenten-Anweisung\nnamespace: bot\naudience: concierge\n---\nWie der Bot raidet, steht hier intern.",
+                "interne-anweisung",
             )
             .unwrap(),
         );
         let hits = kb.select("raidet", Namespace::Bot, None, 8);
         assert!(
-            hits.iter().all(|d| d.slug != "uplink-concierge"),
+            hits.iter().all(|d| d.slug != "interne-anweisung"),
             "Concierge-Doc an einer ungeschuetzten Oberflaeche: {:?}",
             hits.iter().map(|d| &d.slug).collect::<Vec<_>>()
         );
@@ -227,7 +226,7 @@ mod select_tests {
 
         // Wer die Zielgruppe ausdruecklich nennt, bekommt sie weiterhin.
         let intern = kb.select("raidet", Namespace::Bot, Some("concierge"), 8);
-        assert!(intern.iter().any(|d| d.slug == "uplink-concierge"));
+        assert!(intern.iter().any(|d| d.slug == "interne-anweisung"));
     }
 
     #[test]

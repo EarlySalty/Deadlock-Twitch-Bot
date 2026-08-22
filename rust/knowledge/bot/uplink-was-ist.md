@@ -7,7 +7,7 @@ last_updated: 2026-08-21
 source: rs-relay/docs/was-ist.html
 tip_eligible: false
 ---
-Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS.
+Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS; einen eigenen Knopf dafür gibt es nicht.
 
 Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Plattformen senden möchten.
 
