@@ -34,6 +34,21 @@ function absoluteLinks(fragment: string): string {
 }
 
 /**
+ * Dasselbe fuer die Bilder in den Fragmenten.
+ *
+ * `src="bilder/1-stream.svg"` zeigt von der Dashboard-Route aus auf einen
+ * Nachbarpfad, den es nicht gibt, und der Streamer sieht statt der Anleitung
+ * ein kaputtes Bild. Anders als bei den Links faellt das nicht auf, solange
+ * niemand klickt, deshalb steht es hier und nicht nur in der Doku.
+ */
+function absoluteBilder(fragment: string): string {
+  return fragment.replace(
+    /src="(?!https?:|data:|\/)([^"]+)"/g,
+    (_treffer, pfad: string) => `src="${uplinkHelpUrl(pfad)}"`,
+  );
+}
+
+/**
  * Die Seite hat schon eine h1 (der Uplink-Titel). Drei eingebettete Fragmente mit
  * je eigener h1 zerlegen die Überschriftenstruktur für Screenreader, deshalb
  * rutscht jede Fragment-Überschrift eine Ebene tiefer.
@@ -88,7 +103,7 @@ export function extractUplinkMain(html: string): string {
     .replace(/^<main /, '<div ')
     .replace(/<\/main>$/, '</div>');
   return ueberschriftenTieferlegen(
-    titelUeberschriftEntfernen(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt))),
+    titelUeberschriftEntfernen(absoluteBilder(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt)))),
   );
 }
 

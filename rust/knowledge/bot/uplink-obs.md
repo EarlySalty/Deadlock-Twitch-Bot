@@ -106,11 +106,15 @@ Du holst sie in einer Minute zurück:
 | Fenster | Adresse |
 | --- | --- |
 | Chat | `https://www.twitch.tv/popout/DEINKANAL/chat?darkpopout` |
-| Aktivitätsfeed | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/activity-feed` |
-| Stream-Informationen | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/edit-stream-info` |
-| Kanalpunkte | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/community-points` |
+| Aktivitätsfeed | `https://dashboard.twitch.tv/popout/stream-manager/activity-feed` |
+| Stream-Informationen | `https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info` |
+| Kanalpunkte | `https://dashboard.twitch.tv/popout/stream-manager/community-points` |
 
-Im Browser-Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen.
+Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt dich Twitch automatisch auf deinen eigenen Kanal, sobald du angemeldet bist. Im Dashboard stehen alle Adressen fertig zum Kopieren.
+
+Es sind übrigens dieselben Seiten, die OBS auch in seine eingebauten Twitch-Fenster lädt. Der Unterschied ist nur, dass OBS sie bei verbundenem Konto selbst anlegt. Du legst sie einmal von Hand an, ordnest die Fenster und speicherst unter **Docks** das Layout. Das übersteht jeden OBS-Neustart.
+
+Im Browser-Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen. Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eigenen Fenster ein.
 
 Zwei Dinge bleiben anders als vorher:
 

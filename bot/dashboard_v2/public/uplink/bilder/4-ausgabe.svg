@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" width="900" height="330" role="img" aria-labelledby="t">
+<title id="t">OBS-Einstellungen, Reiter Ausgabe: Hardware-HEVC, VBR, Keyframe 2 Sekunden</title>
+<style>
+  text { font-family: system-ui, sans-serif; }
+  .lbl { fill: #e6e6e6; font-size: 15px; }
+  .dim { fill: #9a9a9a; font-size: 14px; }
+  .feld { fill: #e6e6e6; font-size: 14px; font-family: monospace; }
+  .mark { fill: #efd49d; font-size: 14px; font-weight: 700; }
+  .titel { fill: #e6e6e6; font-size: 16px; font-weight: 600; }
+</style>
+<rect width="900" height="330" rx="10" fill="#2b2b2b" stroke="#1e1e1e"/>
+<rect x="0" y="0" width="900" height="46" rx="10" fill="#3c3c3c"/>
+<rect x="0" y="36" width="900" height="10" fill="#3c3c3c"/>
+<text x="24" y="30" class="titel">Einstellungen</text>
+<text x="180" y="30" class="dim">Ausgabe</text>
+<rect x="168" y="42" width="80" height="3" fill="#4a7fb5"/>
+<text x="24" y="98" class="lbl">Ausgabemodus</text>
+<rect x="260" y="76" width="520" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="272" y="98" class="feld">Erweitert</text>
+<text x="758" y="99" class="dim">&#9662;</text>
+<text x="24" y="144" class="lbl">Videokodierer</text>
+<rect x="260" y="122" width="520" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="272" y="144" class="feld">NVIDIA NVENC HEVC</text>
+<text x="758" y="145" class="dim">&#9662;</text>
+<text x="24" y="190" class="lbl">Ratensteuerung</text>
+<rect x="260" y="168" width="520" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="272" y="190" class="feld">VBR</text>
+<text x="758" y="191" class="dim">&#9662;</text>
+<text x="24" y="236" class="lbl">Bitrate / Maximum</text>
+<rect x="260" y="214" width="520" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="272" y="236" class="feld">6000 Kbps / 8000 Kbps</text>
+<text x="758" y="237" class="dim">&#9662;</text>
+<text x="24" y="282" class="lbl">Keyframe-Intervall</text>
+<rect x="260" y="260" width="520" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="272" y="282" class="feld">2 s</text>
+<text x="758" y="283" class="dim">&#9662;</text>
+<rect x="255" y="117" width="530" height="44" rx="8" fill="none" stroke="#c8a86b" stroke-width="2.5"/>
+<circle cx="818" cy="139" r="14" fill="#c8a86b"/><text x="818" y="144" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">1</text>
+<rect x="255" y="163" width="530" height="44" rx="8" fill="none" stroke="#c8a86b" stroke-width="2.5"/>
+<circle cx="818" cy="185" r="14" fill="#c8a86b"/><text x="818" y="190" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">2</text>
+<text x="24" y="316" class="mark">1 Hardware-HEVC, nicht x264 &#183; 2 VBR, nicht CBR und nicht ABR</text>
+</svg>

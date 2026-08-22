@@ -44,6 +44,13 @@ export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
  * hoehere Aufloesungen gehen dort ausschliesslich ueber Enhanced Broadcasting,
  * und das setzt OBS mit verbundenem Twitch-Konto voraus, also ohne uns.
  */
+export interface UplinkProfilAnsicht {
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_kbps: number;
+}
+
 export const UPLINK_PROFILE = [
   { name: '1080p60', label: '1080p60, 6000 kbps', hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.' },
   { name: '1080p60-hoch', label: '1080p60, 8000 kbps', hinweis: 'Twitch-Maximum. Nur mit Partner- oder Affiliate-Status sinnvoll.' },
@@ -52,6 +59,31 @@ export const UPLINK_PROFILE = [
 ] as const;
 
 export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
+
+/** Die Zahlen hinter jedem Profilnamen, gespiegelt aus `handlers/uplink.rs`. */
+const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
+  '1080p60': [1920, 1080, 60, 6000],
+  '1080p60-hoch': [1920, 1080, 60, 8000],
+  '720p60': [1280, 720, 60, 4500],
+  '480p30': [854, 480, 30, 1500],
+};
+
+/**
+ * Findet den Profilnamen zu einem gespeicherten Ziel.
+ *
+ * Ohne das startet die Auswahl immer auf dem Standard, und wer nur seinen
+ * Stream-Key erneuert, schickt still 1080p60 mit und aendert damit eine
+ * Qualitaetsstufe, die er nie angefasst hat. `null` heisst: das gespeicherte
+ * Profil steht nicht im Katalog, dann bleibt die Auswahl, wo sie ist.
+ */
+export function profilNameFuer(werte: UplinkProfilAnsicht | undefined): UplinkProfilName | null {
+  if (!werte) return null;
+  const treffer = (Object.keys(PROFIL_WERTE) as UplinkProfilName[]).find((name) => {
+    const [w, h, f, b] = PROFIL_WERTE[name];
+    return werte.width === w && werte.height === h && werte.fps === f && werte.bitrate_kbps === b;
+  });
+  return treffer ?? null;
+}
 
 export function saveUplinkTwitchDestination(body: {
   rtmp_url: string;
@@ -79,13 +111,6 @@ export function saveUplinkTwitchDestination(body: {
  * Ohne Stream-Key: der liegt verschluesselt in der Datenbank und wird nie
  * wieder ausgeliefert. Fuer die Oberflaeche zaehlt nur, dass es ihn gibt.
  */
-export interface UplinkProfilAnsicht {
-  width: number;
-  height: number;
-  fps: number;
-  bitrate_kbps: number;
-}
-
 export interface UplinkDestination {
   platform: string;
   rtmp_url: string;

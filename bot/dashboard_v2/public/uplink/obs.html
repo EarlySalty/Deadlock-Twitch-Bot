@@ -24,6 +24,10 @@
       <li>Wenn HEVC fehlt oder das Spiel danach ruckelt: <code>NVIDIA NVENC H.264</code> / <code>AMD HW H.264</code> / <code>QuickSync H.264</code></li>
       <li><code>x264</code> ohne Hardware-Encoder. Das kostet Kerne und mehr Upload.</li>
     </ol>
+    <figure>
+      <img src="bilder/4-ausgabe.svg" alt="OBS-Einstellungen, Reiter Ausgabe: Ausgabemodus Erweitert, Videokodierer NVIDIA NVENC HEVC, Ratensteuerung VBR, Bitrate 6000 mit Maximum 8000, Keyframe-Intervall 2 Sekunden. Encoder und Ratensteuerung sind hervorgehoben.">
+      <figcaption>So sieht der Reiter aus, wenn er stimmt. Die Zahlen passt du unten an deinen Upload an.</figcaption>
+    </figure>
     <p>Weglassen: <code>x265</code>, <code>SVT-AV1</code>, <code>AOM AV1</code> (zu schwer neben dem Spiel) und Hardware-AV1 (unser Eingang erwartet HEVC oder H.264).</p>
   </section>
 
@@ -122,12 +126,45 @@
       <li>Server: die <strong>SRT-Adresse</strong> aus dem Dashboard (kopieren, nicht abtippen)</li>
       <li>Stream-Schlüssel: bleibt leer. Dein Schlüssel steckt bei SRT bereits als <code>streamid</code> in der Adresse.</li>
     </ol>
+    <figure>
+      <img src="bilder/1-stream.svg" alt="OBS-Einstellungen, Reiter Stream: Dienst auf Benutzerdefiniert, im Feld Server die SRT-Adresse, das Feld Streamschlüssel bleibt leer.">
+      <figcaption>Drei Felder, mehr nicht. Der Streamschlüssel bleibt leer, deiner steckt schon in der Adresse.</figcaption>
+    </figure>
     <p>Ins Dashboard kommt nur die SRT-Adresse, und über die läuft dein Stream. SRT verträgt Wackelnetz besser, und im Dashboard steht genau eine Adresse: die SRT-Adresse. Kann dein Programm kein SRT, nimm OBS.</p>
     <p>„Stream starten“ geht danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen, solange die Sync dafür noch nicht liegt.</p>
   </section>
 
+  <section id="obs-docks">
+    <h2>4. Chat und die OBS-Fenster zurückholen</h2>
+    <p>Sobald der Dienst auf <strong>Benutzerdefiniert</strong> steht, verschwinden in OBS die Twitch-Fenster: Chat, Aktivitätsfeed und Stream-Informationen. Dein Chat läuft trotzdem normal weiter. Chat und Video sind bei Twitch getrennte Wege, wir fassen nur das Video an. Weg sind nur die Fenster in OBS, weil OBS die ausschließlich bei verbundenem Twitch-Konto selbst anlegt.</p>
+    <p>Es sind dieselben Seiten wie in den eingebauten Fenstern. Du legst sie einmal von Hand an, dann bleiben sie.</p>
+    <figure>
+      <img src="bilder/2-docks-menue.svg" alt="OBS-Menüleiste, das Menü Docks ist geöffnet, ganz unten der hervorgehobene Eintrag Benutzerdefinierte Browser-Docks.">
+      <figcaption>Schritt 1: Menü <strong>Docks</strong>, ganz unten <strong>Benutzerdefinierte Browser-Docks</strong>.</figcaption>
+    </figure>
+    <figure>
+      <img src="bilder/3-docks-dialog.svg" alt="Dialog Benutzerdefinierte Browser-Docks mit vier Zeilen: Chat, Aktivität, Stream-Info und Kanalpunkte, jeweils mit der zugehörigen Twitch-Adresse. Der Plus-Knopf und der Knopf Übernehmen sind hervorgehoben.">
+      <figcaption>Schritt 2: Pro Fenster einmal auf <strong>+</strong>, Name und Adresse eintragen, dann <strong>Übernehmen</strong>.</figcaption>
+    </figure>
+    <table>
+      <thead>
+        <tr><th>Fenster</th><th>Adresse</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Chat</td><td><code>https://www.twitch.tv/popout/DEINKANAL/chat?darkpopout</code></td></tr>
+        <tr><td>Aktivitätsfeed</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/activity-feed</code></td></tr>
+        <tr><td>Stream-Informationen</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info</code></td></tr>
+        <tr><td>Kanalpunkte</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/community-points</code></td></tr>
+      </tbody>
+    </table>
+    <p>Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt dich Twitch automatisch auf deinen eigenen Kanal, sobald du angemeldet bist. Im Dashboard stehen alle vier fertig zum Kopieren, dann musst du gar nichts ersetzen.</p>
+    <p>Schritt 3: Fenster dahin ziehen, wo du sie haben willst, dann unter <strong>Docks</strong> das Layout speichern. Das übersteht jeden OBS-Neustart, du machst das genau einmal.</p>
+    <p>Im Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen. Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eingebauten Fenster ein.</p>
+    <p><strong>Stream starten</strong> schickt danach an uns, nicht an Twitch. Twitch geht live, sobald wir dorthin senden. <strong>Enhanced Broadcasting</strong> und Mehrspur-Video bietet OBS nur mit verbundenem Twitch-Konto an, über uns läuft das nicht. Dafür kommst du mit einem Upload gleichzeitig auf mehrere Plattformen.</p>
+  </section>
+
   <section id="obs-check">
-    <h2>4. Check vor dem Abend</h2>
+    <h2>5. Check vor dem Abend</h2>
     <ol>
       <li>Hardware-HEVC, nicht x264.</li>
       <li>VBR mit Ziel und Maximum, nicht CBR, nicht ABR.</li>

@@ -21,6 +21,7 @@ import '../uplinkHelp.css';
 import {
   UPLINK_PROFILE,
   fetchUplinkDestinations,
+  profilNameFuer,
   fetchUplinkMe,
   joinUplinkWaitlist,
   saveUplinkTwitchDestination,
@@ -81,26 +82,34 @@ function SidebarLink({
  * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
  */
 /**
- * Die vier Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
+ * Die Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
  *
- * OBS zeigt Chat, Aktivitaet und Stream-Info nur bei verbundenem Twitch-Konto.
- * Als Browser-Dock kommen sie zurueck. Ohne den fertigen Link muesste jeder
- * seinen Kanalnamen in vier Adressen von Hand einsetzen, und genau da bricht
- * die Einrichtung ab.
+ * Es sind dieselben Adressen, die OBS in seine eigenen Docks laedt: siehe
+ * `frontend/oauth/TwitchAuth.cpp` im OBS-Quellcode. Die eingebauten Docks sind
+ * selbst nur Browser-Fenster, sie werden nur automatisch angelegt, sobald ein
+ * Twitch-Konto verbunden ist. Inhaltlich ist ein eigenes Dock dasselbe Fenster.
+ *
+ * Drei der vier Adressen kommen ohne Kanalnamen aus: Twitch leitet einen
+ * angemeldeten Nutzer auf seinen eigenen Kanal weiter. Das ist robuster als
+ * der Namensweg, weil es auch nach einer Namensaenderung noch stimmt. Nur der
+ * Chat braucht den Kanal in der Adresse.
  */
 const OBS_DOCKS = [
-  { titel: 'Chat', pfad: (k: string) => `https://www.twitch.tv/popout/${k}/chat?darkpopout` },
+  {
+    titel: 'Chat',
+    pfad: (k: string) => (k ? `https://www.twitch.tv/popout/${k}/chat?darkpopout` : ''),
+  },
   {
     titel: 'Aktivitätsfeed',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/activity-feed`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/activity-feed',
   },
   {
     titel: 'Stream-Informationen',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/edit-stream-info`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info',
   },
   {
     titel: 'Kanalpunkte',
-    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/community-points`,
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/community-points',
   },
 ] as const;
 
@@ -243,11 +252,16 @@ export function UplinkPage() {
   });
   // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
   // leeres Formular, weil der Stream-Key nie zurueckkommt.
-  const { data: ziele } = useQuery({
+  const { data: ziele, isError: zieleFehler } = useQuery({
     queryKey: ['uplink-destinations'],
     queryFn: fetchUplinkDestinations,
     retry: false,
   });
+  // Das Relay antwortet auf einen leeren Erfolg auch mal mit `{}`. Ohne die
+  // Absicherung wirft `.length` beim Rendern, und die ErrorBoundary ersetzt
+  // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
+  // gerade braucht.
+  const gespeicherteZiele = ziele?.destinations ?? [];
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
@@ -255,6 +269,19 @@ export function UplinkPage() {
   const [rtmpUrl, setRtmpUrl] = useState('rtmp://live.twitch.tv/app');
   const [streamKey, setStreamKey] = useState('');
   const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
+  // Vorbelegen aus dem gespeicherten Ziel, aber nur einmal: sonst zoege ein
+  // Refetch die Auswahl unter der Hand zurueck, waehrend jemand sie gerade
+  // aendert. `bestellt` ist der Wunsch des Streamers, nicht das geklemmte
+  // Ergebnis, sonst spraenge die Auswahl auf das, was die Plattform erlaubt.
+  const [profilGesetzt, setProfilGesetzt] = useState(false);
+  const bestellt = gespeicherteZiele.find((z) => z.platform === 'twitch')?.requested;
+  useEffect(() => {
+    if (profilGesetzt) return;
+    const name = profilNameFuer(bestellt);
+    if (!name) return;
+    setProfil(name);
+    setProfilGesetzt(true);
+  }, [bestellt, profilGesetzt]);
   const saveDest = useMutation({
     mutationFn: () =>
       saveUplinkTwitchDestination({ rtmp_url: rtmpUrl, stream_key: streamKey, profil }),
@@ -471,11 +498,16 @@ export function UplinkPage() {
                       leer, auch wenn ein Ziel gespeichert ist. Ohne diese Zeile
                       sieht ein fertig eingerichtetes Konto aus wie ein leeres
                       Formular, und der Streamer speichert ein zweites Mal. */}
-                  {ziele && ziele.destinations.length > 0 ? (
+                  {zieleFehler ? (
+                    <p className="text-xs text-warning">
+                      Wir können deine gespeicherten Ziele gerade nicht abrufen. Das heißt nicht, dass sie
+                      weg sind. Speichere nichts doppelt, lade die Seite in einer Minute neu.
+                    </p>
+                  ) : gespeicherteZiele.length > 0 ? (
                     <div className="space-y-1">
-                      {ziele.destinations.map((ziel) => (
+                      {gespeicherteZiele.map((ziel) => (
                         <div
-                          key={ziel.platform}
+                          key={`${ziel.platform}-${ziel.rtmp_url}`}
                           className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
                         >
                           <Check className="h-3.5 w-3.5 shrink-0" />
@@ -497,34 +529,43 @@ export function UplinkPage() {
                       Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber nirgends hin.
                     </p>
                   )}
+
+                  {/* NIT 4: ohne diese Zeile sieht ein 400 (etwa Katalog-Drift
+                      zwischen Client und Server) aus wie ein Klick, der nichts
+                      tut, und das Ziel ist trotzdem nicht gespeichert. */}
+                  {saveDest.isError ? (
+                    <p className="text-xs text-warning">
+                      Speichern hat nicht geklappt. Prüfe die Adresse und den Schlüssel, dann noch einmal.
+                    </p>
+                  ) : null}
                 </Rise>
 
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
                   <p className="text-sm text-text-secondary">
                     Bei Dienst „Benutzerdefiniert“ blendet OBS die Twitch-Fenster aus. Dein Chat läuft
-                    normal weiter, nur die Fenster fehlen. In OBS unter <strong>Docks</strong>,{' '}
-                    <strong>Benutzerdefinierte Browser-Docks</strong> holst du sie zurück: Name eintragen,
-                    Adresse hier kopieren, einfügen.
+                    normal weiter, nur die Fenster fehlen. Es sind dieselben Seiten, die OBS auch in
+                    seine eigenen Fenster lädt, du legst sie einmal selbst an. In OBS unter{' '}
+                    <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>: Name
+                    eintragen, Adresse hier kopieren, einfügen.
                   </p>
-                  {data.twitch_login ? (
-                    <div className="space-y-1.5">
-                      {OBS_DOCKS.map((dock) => (
-                        <DockZeile
-                          key={dock.titel}
-                          titel={dock.titel}
-                          url={dock.pfad(data.twitch_login as string)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
+                  <div className="space-y-1.5">
+                    {OBS_DOCKS.map((dock) => {
+                      const url = dock.pfad(data.twitch_login ?? '');
+                      if (!url) return null;
+                      return <DockZeile key={dock.titel} titel={dock.titel} url={url} />;
+                    })}
+                  </div>
+                  {data.twitch_login ? null : (
                     <p className="text-xs text-text-secondary">
-                      Wir kennen deinen Kanalnamen gerade nicht. Melde dich neu an, dann stehen die
-                      Adressen hier fertig.
+                      Für den Chat brauchen wir deinen Kanalnamen, den kennen wir gerade nicht. Melde
+                      dich neu an, dann steht auch diese Adresse hier.
                     </p>
                   )}
                   <p className="text-xs text-text-secondary">
-                    Im Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach.
+                    Im Dock musst du bei Twitch angemeldet sein, danach bleibt die Anmeldung stehen.
+                    Einmal einrichten, Fenster anordnen, unter <strong>Docks</strong> das Layout
+                    speichern. Das übersteht jeden OBS-Neustart.
                   </p>
                 </Rise>
               </div>
