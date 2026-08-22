@@ -194,9 +194,12 @@ export function UplinkPage() {
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  {/* Die Relay-Antwort wird als rohes JSON durchgereicht. Fehlt
-                      das Feld, stuende hier ein leeres Kopierfeld und der
-                      Streamer haette gar keine Adresse mehr. */}
+                  {/* srt_hint liefert das Relay immer (rs-relay
+                      src/api/user.rs:157, Typ String). Leer ist es genau dann,
+                      wenn kein ingest_key existiert, also fuer einen nicht
+                      freigeschalteten Zugang. Dieser Block haengt an
+                      data.enabled, trotzdem faengt der Guard den Leerfall ab:
+                      ein leeres Kopierfeld waere die schlechteste Antwort. */}
                   {data.srt_hint ? (
                     <CopyField label="SRT-Adresse" value={data.srt_hint} />
                   ) : (
@@ -250,7 +253,10 @@ export function UplinkPage() {
                 <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
               )}
               <div className="space-y-4">
-                {(helpPages ?? UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' }))).map((page) => (
+                {/* Bei einem Fehler keine Platzhalter mehr: drei Kacheln
+                    "Hilfe wird geladen" neben der Fehlerzeile behaupten einen
+                    Fortschritt, der nicht mehr kommt. */}
+                {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) => (
                   <div key={page.file} className="uplink-help-shell overflow-hidden rounded-xl border border-border bg-background/70">
                     {page.html ? (
                       <div dangerouslySetInnerHTML={{ __html: page.html }} />

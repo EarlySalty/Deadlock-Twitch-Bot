@@ -368,8 +368,17 @@ const KONTAKT_MARKERS: &[&str] = &[
     "billig",
     "guenstig",
     "günstig",
+    "gunstig", // nach dem Entfernen der Diakritika
     "kaufen",
     "preis",
+    "euro",
+    "€",
+    "angebot",
+    "rabatt",
+    "bestell",
+    "shop",
+    "link in bio",
+    "instagram",
 ];
 
 /// Trifft ein harmloses Umgangssprache-Muster, das den Viewer-Regex fälschlich
@@ -1266,16 +1275,23 @@ mod tests {
         );
     }
 
-    /// Die Blockliste ist handgepflegt. Ein Angebot mit blosser Preisangabe
-    /// traegt keinen Marker: dieser Test haelt fest, was das Gate heute NICHT
-    /// faengt, damit die Luecke sichtbar bleibt statt still zu wirken.
+    /// Die Blockliste ist handgepflegt, deckt aber auch Preis- und
+    /// Shop-Vokabular ab: ein Angebot braucht kein Kontaktwort, eine Zahl mit
+    /// Waehrung reicht.
     #[test]
-    fn safe_wording_faengt_reine_preisangaben_nicht() {
-        assert_eq!(
-            matches_safe_wording("gönn dir 10k viewer, 5 euro"),
-            Some("gönn"),
-            "bekannte Luecke: ohne Kontakt- oder Verkaufswort greift das Gate"
-        );
+    fn safe_wording_faengt_auch_reine_preisangaben() {
+        for text in [
+            "gönn dir 10k viewer, 5 euro",
+            "gönn dir viewer, 5€",
+            "gönn dir viewer, link in bio",
+            "bin am lurken, mein shop hat viewer",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Preis- oder Shop-Angebot darf nicht als harmlos gelten: {text}"
+            );
+        }
     }
 
     #[test]

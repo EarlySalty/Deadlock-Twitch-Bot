@@ -1,3 +1,12 @@
+/* Uplink-Hilfe, eingebettet ins Dashboard.
+ *
+ * Die Hex-Werte hier weichen bewusst von public/uplink/doc.css und
+ * help_page.rs ab: das Dashboard faehrt seine eigene, hellere Gold-Palette
+ * ("Deadlock Industrial Gold", seit 2026-07-14 eine Stufe heller), und
+ * tests/brandPalette.test.ts laesst nur diese zu. Die Standalone-Seite und
+ * /streamer/help teilen dagegen den dunkleren Satz. Gleichziehen wuerde eine
+ * der beiden Oberflaechen aus ihrer Palette werfen.
+ */
 .uplink-help-shell .uplink-doc {
   max-width: 820px;
   margin: 0 auto;

@@ -5,7 +5,7 @@ export interface UplinkMe {
   waitlisted: boolean;
   ingest_key: string;
   rtmp_url: string;
-  srt_hint?: string;
+  srt_hint: string;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {

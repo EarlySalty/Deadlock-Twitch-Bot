@@ -8,8 +8,11 @@
 /// sonst ein Leak: `uplink-concierge.md` zaehlt zum Beispiel auf, welche
 /// Admin-Funktionen, Freischalt-Wege und Lastgrenzen es gibt, und seine
 /// Body-Zeilen sind Anweisungen an einen Agenten, keine Nutzer-Antworten.
+///
+/// `viewer` gehoert dazu: der Deadlock-Namespace nutzt es fuer Wissen, das im
+/// Chat an jeden geht.
 pub fn ist_oeffentlich(audience: &str) -> bool {
-    matches!(audience.trim(), "" | "streamer" | "public")
+    matches!(audience.trim(), "" | "streamer" | "public" | "viewer")
 }
 
 use std::str::FromStr;

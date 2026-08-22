@@ -15,7 +15,7 @@ Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Slot streamst
 
 ### OBS sendet, aber auf der Plattform kommt nichts an
 
-1. Prüfe im Dashboard, ob Uplink freigeschaltet und das Ziel verbunden ist.
+1. Prüfe im Dashboard, ob Uplink für dich freigeschaltet ist. Steht dort die SRT-Adresse, ist der Zugang da.
 2. Der OBS-Dienst muss **Benutzerdefiniert** sein. Als Server muss die SRT-Adresse aus dem Dashboard eingetragen sein.
 3. Steht in OBS noch eine alte Adresse, kopiere die SRT-Adresse im Dashboard neu und ersetze sie. Der Schlüssel steckt als `streamid` in der Adresse, es gibt keinen zweiten Wert zum Abtippen.
 
