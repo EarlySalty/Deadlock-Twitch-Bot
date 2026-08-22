@@ -471,7 +471,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route(
             "/twitch/api/v2/uplink/destinations",
-            put(uplink::put_destination_handler),
+            get(uplink::destinations_handler).put(uplink::put_destination_handler),
         )
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.

@@ -17,6 +17,8 @@ export interface UplinkMe {
   rtmp_url: string;
   srt_hint: string;
   live_status?: UplinkLiveStatus;
+  /** Fuer die fertigen OBS-Dock-Adressen. Fehlt bei aelteren Servern. */
+  twitch_login?: string;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
@@ -34,9 +36,27 @@ export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
   );
 }
 
+/**
+ * Die Profilnamen muessen zum Katalog in `handlers/uplink.rs` passen. Ein Name,
+ * den der Server nicht kennt, gibt 400 statt still auf den Standard zu fallen.
+ *
+ * 1440p fehlt mit Absicht: der normale Twitch-Ingest nimmt nur 1080p60 an,
+ * hoehere Aufloesungen gehen dort ausschliesslich ueber Enhanced Broadcasting,
+ * und das setzt OBS mit verbundenem Twitch-Konto voraus, also ohne uns.
+ */
+export const UPLINK_PROFILE = [
+  { name: '1080p60', label: '1080p60, 6000 kbps', hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.' },
+  { name: '1080p60-hoch', label: '1080p60, 8000 kbps', hinweis: 'Twitch-Maximum. Nur mit Partner- oder Affiliate-Status sinnvoll.' },
+  { name: '720p60', label: '720p60, 4500 kbps', hinweis: 'Weniger Serverlast und weniger Upload, immer noch 60 Bilder.' },
+  { name: '480p30', label: '480p30, 1500 kbps', hinweis: 'Notfallstufe bei schlechter Leitung.' },
+] as const;
+
+export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
+
 export function saveUplinkTwitchDestination(body: {
   rtmp_url: string;
   stream_key: string;
+  profil: UplinkProfilName;
 }): Promise<{ platform: string; width: number; height: number }> {
   return fetchJson(
     '/twitch/api/v2/uplink/destinations',
@@ -47,7 +67,38 @@ export function saveUplinkTwitchDestination(body: {
         platform: 'twitch',
         rtmp_url: body.rtmp_url,
         stream_key: body.stream_key,
+        profil: body.profil,
       }),
     })
+  );
+}
+
+/**
+ * Ein gespeichertes Ziel, wie das Relay es zurueckgibt.
+ *
+ * Ohne Stream-Key: der liegt verschluesselt in der Datenbank und wird nie
+ * wieder ausgeliefert. Fuer die Oberflaeche zaehlt nur, dass es ihn gibt.
+ */
+export interface UplinkProfilAnsicht {
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_kbps: number;
+}
+
+export interface UplinkDestination {
+  platform: string;
+  rtmp_url: string;
+  enabled: boolean;
+  /** Was der Streamer bestellt hat. */
+  requested?: UplinkProfilAnsicht;
+  /** Was nach der Klemmung gegen die Plattform-Caps wirklich rausgeht. */
+  effective?: UplinkProfilAnsicht;
+}
+
+export function fetchUplinkDestinations(): Promise<{ destinations: UplinkDestination[] }> {
+  return fetchJson<{ destinations: UplinkDestination[] }>(
+    '/twitch/api/v2/uplink/destinations',
+    withCookieCredentials()
   );
 }

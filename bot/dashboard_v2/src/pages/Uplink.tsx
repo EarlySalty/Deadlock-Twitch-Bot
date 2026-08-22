@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
+  Check,
   ChevronDown,
   Copy,
   Eye,
@@ -18,10 +19,13 @@ import {
 import { Rise } from '../motion/Rise';
 import '../uplinkHelp.css';
 import {
+  UPLINK_PROFILE,
+  fetchUplinkDestinations,
   fetchUplinkMe,
   joinUplinkWaitlist,
   saveUplinkTwitchDestination,
 } from '@/api/uplink';
+import type { UplinkProfilName } from '@/api/uplink';
 import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
@@ -76,6 +80,66 @@ function SidebarLink({
  * den Fehlerzweig meldete das Feld "Kopiert", waehrend die Zwischenablage leer
  * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
  */
+/**
+ * Die vier Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
+ *
+ * OBS zeigt Chat, Aktivitaet und Stream-Info nur bei verbundenem Twitch-Konto.
+ * Als Browser-Dock kommen sie zurueck. Ohne den fertigen Link muesste jeder
+ * seinen Kanalnamen in vier Adressen von Hand einsetzen, und genau da bricht
+ * die Einrichtung ab.
+ */
+const OBS_DOCKS = [
+  { titel: 'Chat', pfad: (k: string) => `https://www.twitch.tv/popout/${k}/chat?darkpopout` },
+  {
+    titel: 'Aktivitätsfeed',
+    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/activity-feed`,
+  },
+  {
+    titel: 'Stream-Informationen',
+    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/edit-stream-info`,
+  },
+  {
+    titel: 'Kanalpunkte',
+    pfad: (k: string) => `https://dashboard.twitch.tv/popout/u/${k}/stream-manager/community-points`,
+  },
+] as const;
+
+function DockZeile({ titel, url }: { titel: string; url: string }) {
+  const [kopiert, setKopiert] = useState(false);
+
+  async function kopieren() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setKopiert(true);
+      window.setTimeout(() => setKopiert(false), 1600);
+    } catch {
+      // Ohne Zwischenablage bleibt die Adresse lesbar im Feld stehen, dann
+      // markiert man sie von Hand. Eine Fehlermeldung hilft hier nicht.
+      setKopiert(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={kopieren}
+        title={url}
+        className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-left text-xs text-white hover:border-primary/50"
+      >
+        <span className="shrink-0 font-semibold">{titel}</span>
+        <span className="truncate font-mono text-[11px] text-text-secondary">{url}</span>
+      </button>
+      <span
+        aria-live="polite"
+        className="w-16 shrink-0 text-[11px] text-success"
+      >
+        {kopiert ? 'Kopiert' : ''}
+      </span>
+    </div>
+  );
+}
+
 function CopyField({
   label,
   value,
@@ -177,18 +241,29 @@ export function UplinkPage() {
     queryFn: fetchUplinkHelp,
     staleTime: Infinity,
   });
+  // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
+  // leeres Formular, weil der Stream-Key nie zurueckkommt.
+  const { data: ziele } = useQuery({
+    queryKey: ['uplink-destinations'],
+    queryFn: fetchUplinkDestinations,
+    retry: false,
+  });
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
   });
   const [rtmpUrl, setRtmpUrl] = useState('rtmp://live.twitch.tv/app');
   const [streamKey, setStreamKey] = useState('');
+  const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
   const saveDest = useMutation({
     mutationFn: () =>
-      saveUplinkTwitchDestination({ rtmp_url: rtmpUrl, stream_key: streamKey }),
+      saveUplinkTwitchDestination({ rtmp_url: rtmpUrl, stream_key: streamKey, profil }),
     onSuccess: () => {
       setStreamKey('');
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      // Ohne das bliebe die Zielliste auf dem Stand von vor dem Speichern, und
+      // die Rueckmeldung fehlte genau in dem Moment, in dem sie zaehlt.
+      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     },
   });
 
@@ -355,6 +430,34 @@ export function UplinkPage() {
                     className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
                     placeholder="Twitch Stream-Key"
                   />
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="uplink-profil"
+                      className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary"
+                    >
+                      Qualität, die wir an Twitch senden
+                    </label>
+                    <select
+                      id="uplink-profil"
+                      value={profil}
+                      onChange={(e) => setProfil(e.target.value as UplinkProfilName)}
+                      className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+                    >
+                      {UPLINK_PROFILE.map((eintrag) => (
+                        <option key={eintrag.name} value={eintrag.name}>
+                          {eintrag.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-text-secondary">
+                      {UPLINK_PROFILE.find((e) => e.name === profil)?.hinweis}
+                    </p>
+                    <p className="text-xs text-text-secondary">
+                      Du darfst uns 1440p schicken, wir rechnen daraus diese Stufe. Twitch selbst nimmt über
+                      diesen Weg kein 1440p an.
+                    </p>
+                  </div>
+
                   <button
                     type="button"
                     disabled={saveDest.isPending || !streamKey}
@@ -363,6 +466,66 @@ export function UplinkPage() {
                   >
                     {saveDest.isSuccess ? 'Gespeichert' : 'Twitch-Ziel speichern'}
                   </button>
+
+                  {/* Der Stream-Key kommt nie zurueck, das Feld bleibt also
+                      leer, auch wenn ein Ziel gespeichert ist. Ohne diese Zeile
+                      sieht ein fertig eingerichtetes Konto aus wie ein leeres
+                      Formular, und der Streamer speichert ein zweites Mal. */}
+                  {ziele && ziele.destinations.length > 0 ? (
+                    <div className="space-y-1">
+                      {ziele.destinations.map((ziel) => (
+                        <div
+                          key={ziel.platform}
+                          className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+                        >
+                          <Check className="h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            <strong className="font-semibold capitalize">{ziel.platform}</strong> ist
+                            gespeichert{ziel.enabled ? '' : ' (aus)'}. Schlüssel liegt verschlüsselt bei uns.
+                            {ziel.effective ? (
+                              <>
+                                {' '}Wir senden {ziel.effective.height}p{ziel.effective.fps} mit{' '}
+                                {ziel.effective.bitrate_kbps} kbps.
+                              </>
+                            ) : null}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-text-secondary">
+                      Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber nirgends hin.
+                    </p>
+                  )}
+                </Rise>
+
+                <Rise className="panel-card space-y-3 rounded-2xl p-6">
+                  <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
+                  <p className="text-sm text-text-secondary">
+                    Bei Dienst „Benutzerdefiniert“ blendet OBS die Twitch-Fenster aus. Dein Chat läuft
+                    normal weiter, nur die Fenster fehlen. In OBS unter <strong>Docks</strong>,{' '}
+                    <strong>Benutzerdefinierte Browser-Docks</strong> holst du sie zurück: Name eintragen,
+                    Adresse hier kopieren, einfügen.
+                  </p>
+                  {data.twitch_login ? (
+                    <div className="space-y-1.5">
+                      {OBS_DOCKS.map((dock) => (
+                        <DockZeile
+                          key={dock.titel}
+                          titel={dock.titel}
+                          url={dock.pfad(data.twitch_login as string)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-text-secondary">
+                      Wir kennen deinen Kanalnamen gerade nicht. Melde dich neu an, dann stehen die
+                      Adressen hier fertig.
+                    </p>
+                  )}
+                  <p className="text-xs text-text-secondary">
+                    Im Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach.
+                  </p>
                 </Rise>
               </div>
             )}

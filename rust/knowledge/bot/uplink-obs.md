@@ -3,7 +3,7 @@ title: Uplink in OBS einrichten
 namespace: bot
 category: setup
 audience: streamer
-last_updated: 2026-08-21
+last_updated: 2026-08-22
 source: rs-relay/docs/obs.html
 tip_eligible: false
 ---
@@ -93,7 +93,31 @@ Ins Dashboard kommt nur die SRT-Adresse, und über die läuft dein Stream. SRT v
 
 Mit **Stream starten** sendest du danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen ein, solange die Synchronisation dafür noch nicht verfügbar ist.
 
-### 4. Check vor dem Abend
+### 4. Chat und die OBS-Fenster zurückholen
+
+Sobald der Dienst auf **Benutzerdefiniert** steht, verschwinden in OBS die Twitch-Fenster: Chat, Aktivitätsfeed und Stream-Informationen. Dein Chat läuft trotzdem normal weiter. Chat und Video sind bei Twitch getrennte Wege, wir fassen nur das Video an. Weg sind nur die Fenster in OBS, weil OBS die ausschließlich bei verbundenem Twitch-Konto einblendet.
+
+Du holst sie in einer Minute zurück:
+
+1. In OBS: **Docks**, dann **Benutzerdefinierte Browser-Docks**.
+2. Pro Zeile einen Namen und die Adresse aus der Tabelle eintragen. `DEINKANAL` durch deinen Kanalnamen ersetzen.
+3. Fenster anordnen, dann unter **Docks** das Layout speichern.
+
+| Fenster | Adresse |
+| --- | --- |
+| Chat | `https://www.twitch.tv/popout/DEINKANAL/chat?darkpopout` |
+| Aktivitätsfeed | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/activity-feed` |
+| Stream-Informationen | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/edit-stream-info` |
+| Kanalpunkte | `https://dashboard.twitch.tv/popout/u/DEINKANAL/stream-manager/community-points` |
+
+Im Browser-Dock musst du bei Twitch angemeldet sein. OBS fragt einmal danach, danach bleibt die Anmeldung stehen.
+
+Zwei Dinge bleiben anders als vorher:
+
+- **Stream starten** schickt an uns, nicht an Twitch. Twitch geht live, sobald wir dorthin senden.
+- **Enhanced Broadcasting** und Mehrspur-Video bietet OBS nur mit verbundenem Twitch-Konto an. Über uns läuft das nicht. Dafür kommst du mit einem Upload gleichzeitig auf mehrere Plattformen.
+
+### 5. Check vor dem Abend
 
 1. Hardware-HEVC, nicht x264.
 2. VBR mit Ziel und Maximum, nicht CBR und nicht ABR.

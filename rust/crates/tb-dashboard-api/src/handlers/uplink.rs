@@ -213,6 +213,16 @@ pub async fn me_handler(
             "live_status".to_string(),
             Value::String(live_status(&pool, id).await.to_string()),
         );
+        // Der Login geht mit, damit die Oberflaeche die OBS-Dock-Adressen
+        // fertig hinschreiben kann. Wer auf "Benutzerdefiniert" umstellt,
+        // verliert in OBS Chat und Aktivitaet, und ein Platzhalter zum
+        // Selbstersetzen ist genau die Stelle, an der Leute steckenbleiben.
+        if let Ok((login, _)) = twitch_identitaet(&auth) {
+            objekt.insert(
+                "twitch_login".to_string(),
+                Value::String(login.trim().to_lowercase()),
+            );
+        }
     }
     Ok(Json(wert))
 }
@@ -231,11 +241,56 @@ pub async fn waitlist_handler(
     Ok(Json(wert))
 }
 
+/// Die gespeicherten Ziele, ohne Stream-Key.
+///
+/// Das Relay liefert den Key nicht mit, und das ist richtig so: er ist
+/// verschluesselt abgelegt und wird nie wieder ausgegeben. Gerade deshalb
+/// braucht die Oberflaeche diese Liste. Ohne sie sieht ein gespeichertes Ziel
+/// aus wie ein leeres Formular, und der Streamer speichert ein zweites Mal.
+pub async fn destinations_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::GET,
+        &format!("/v1/me/destinations?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+/// Erlaubte Profile fuer die Zielwahl im Dashboard.
+///
+/// Feste Stufen statt freier Zahlen: Twitch nimmt ueber den normalen Ingest
+/// hoechstens 1080p60, und wer 1440 eintraegt, bekaeme einen Stream, den die
+/// Plattform still verwirft oder schlecht ausliefert. Das Relay klemmt zwar
+/// zusaetzlich gegen `relay.platform_caps`, aber eine geklemmte Eingabe ist
+/// eine Eingabe, die der Streamer nie so gemeint hat.
+const PROFILE: [(&str, i32, i32, i32, i32); 4] = [
+    ("1080p60", 1920, 1080, 60, 6000),
+    ("1080p60-hoch", 1920, 1080, 60, 8000),
+    ("720p60", 1280, 720, 60, 4500),
+    ("480p30", 854, 480, 30, 1500),
+];
+
+/// Loest einen Profilnamen auf. `None` heisst: nicht im Katalog.
+fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
+    let gesucht = name.trim();
+    PROFILE
+        .iter()
+        .find(|(n, ..)| *n == gesucht)
+        .map(|(_, w, h, f, b)| (*w, *h, *f, *b))
+}
+
 #[derive(Deserialize)]
 pub struct DestinationBody {
     pub platform: String,
     pub rtmp_url: String,
     pub stream_key: String,
+    /// Weggelassen heisst: das Relay behaelt, was gespeichert ist.
+    pub profil: Option<String>,
 }
 
 pub async fn put_destination_handler(
@@ -251,17 +306,29 @@ pub async fn put_destination_handler(
         )
             .into_response());
     }
-    let wert = relay_json(
-        reqwest::Method::PUT,
-        "/v1/admin/destinations",
-        Some(json!({
-            "streamer_id": id,
-            "platform": body.platform,
-            "rtmp_url": body.rtmp_url,
-            "stream_key": body.stream_key,
-        })),
-    )
-    .await?;
+    let mut nutzlast = json!({
+        "streamer_id": id,
+        "platform": body.platform,
+        "rtmp_url": body.rtmp_url,
+        "stream_key": body.stream_key,
+    });
+    if let Some(name) = body.profil.as_deref() {
+        let Some((w, h, f, b)) = profil_aufloesen(name) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unbekanntes Profil" })),
+            )
+                .into_response());
+        };
+        let felder = nutzlast
+            .as_object_mut()
+            .expect("json! baut hier ein Objekt");
+        felder.insert("width".into(), json!(w));
+        felder.insert("height".into(), json!(h));
+        felder.insert("fps".into(), json!(f));
+        felder.insert("bitrate_kbps".into(), json!(b));
+    }
+    let wert = relay_json(reqwest::Method::PUT, "/v1/admin/destinations", Some(nutzlast)).await?;
     Ok(Json(wert))
 }
 
@@ -269,6 +336,35 @@ pub async fn put_destination_handler(
 mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
+
+    #[test]
+    fn bekannte_profile_loesen_auf() {
+        assert_eq!(profil_aufloesen("1080p60"), Some((1920, 1080, 60, 6000)));
+        assert_eq!(profil_aufloesen("480p30"), Some((854, 480, 30, 1500)));
+    }
+
+    #[test]
+    fn unbekannte_profile_werden_abgelehnt() {
+        // 1440p steht bewusst nicht im Katalog: der normale Twitch-Ingest
+        // nimmt es nicht an. Faellt es je durch, kaeme es hier durch.
+        assert_eq!(profil_aufloesen("1440p60"), None);
+        assert_eq!(profil_aufloesen(""), None);
+    }
+
+    #[test]
+    fn leerraum_um_den_namen_stoert_nicht() {
+        assert_eq!(profil_aufloesen("  720p60 "), Some((1280, 720, 60, 4500)));
+    }
+
+    #[test]
+    fn kein_profil_ueberschreitet_die_twitch_grenze() {
+        // Die Klemmung im Relay ist die zweite Verteidigungslinie. Reisst der
+        // Katalog hier aus, merkt es sonst niemand, weil geklemmt still passiert.
+        for (name, w, h, _f, b) in PROFILE {
+            assert!(w <= 1920 && h <= 1080, "{name} ist groesser als 1080p");
+            assert!(b <= 8000, "{name} liegt ueber dem Twitch-Deckel");
+        }
+    }
 
     #[test]
     fn ohne_session_gibt_es_keine_identitaet() {
