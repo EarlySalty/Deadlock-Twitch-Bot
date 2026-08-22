@@ -86,6 +86,11 @@ use crate::types::ChatMessageEvent;
 pub const SCAM_PITCH_TIMEOUT_REASON: &str =
     "Account-Takeover-Verdacht / wiederholter Service-Pitch";
 
+/// Zeitfenster, in dem eine schon verarbeitete Nachrichten-ID als Duplikat gilt.
+const SEEN_MESSAGE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+/// Ab dieser Groesse wird die Duplikat-Tabelle beim naechsten Eintrag geputzt.
+const SEEN_MESSAGE_MAX: usize = 4096;
+
 const SUS_INVITE_TIMEOUT_SECS: u32 = 600;
 const SUS_INVITE_TIMEOUT_REASON: &str = "Fremde Discord-Werbung ist hier nicht erlaubt";
 
@@ -700,6 +705,43 @@ pub struct ChatPipelineParts {
     pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
+/// Kurzzeit-Gedaechtnis fuer schon verarbeitete Nachrichten-IDs.
+///
+/// Twitch stellt bei Shared Chat (Stream Together) dieselbe Nachricht in jedem
+/// Kanal der Session zu. Ist der Bot in mehreren davon, laeuft sie ohne diese
+/// Sperre mehrfach durch die Pipeline (doppelte Clips, doppelte Antworten,
+/// doppeltes Tracking).
+#[derive(Default)]
+struct SeenMessages {
+    inner: DashMap<String, std::time::Instant>,
+}
+
+impl SeenMessages {
+    /// `true` = ID war neu (verarbeiten), `false` = innerhalb von
+    /// `SEEN_MESSAGE_TTL` schon gesehen. Alte Eintraege werden aufgeraeumt,
+    /// sobald die Tabelle `SEEN_MESSAGE_MAX` ueberschreitet.
+    fn mark(&self, message_id: &str, now: std::time::Instant) -> bool {
+        if self.inner.len() > SEEN_MESSAGE_MAX {
+            self.inner
+                .retain(|_, seen| now.duration_since(*seen) < SEEN_MESSAGE_TTL);
+        }
+        match self.inner.entry(message_id.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                if now.duration_since(*slot.get()) >= SEEN_MESSAGE_TTL {
+                    slot.insert(now);
+                    true
+                } else {
+                    false
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(now);
+                true
+            }
+        }
+    }
+}
+
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
 #[derive(Clone)]
 pub struct ChatPipeline {
@@ -709,6 +751,8 @@ pub struct ChatPipeline {
     crew_guard: Arc<CrewGuard>,
     spam_meta_cooldowns: Arc<DashMap<String, std::time::Instant>>,
     spam_meta_reply_index: Arc<std::sync::atomic::AtomicUsize>,
+    /// Zuletzt verarbeitete Nachrichten-IDs (nach Shared-Chat-Normalisierung).
+    seen_messages: Arc<SeenMessages>,
 }
 
 impl ChatPipeline {
@@ -731,7 +775,15 @@ impl ChatPipeline {
             crew_guard,
             spam_meta_cooldowns: Arc::new(DashMap::new()),
             spam_meta_reply_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            seen_messages: Arc::new(SeenMessages::default()),
         }
+    }
+
+    /// Merkt sich eine Nachrichten-ID und meldet, ob sie neu war
+    /// (`true` = verarbeiten, `false` = Shared-Chat-Duplikat).
+    fn mark_message_seen(&self, message_id: &str) -> bool {
+        self.seen_messages
+            .mark(message_id, std::time::Instant::now())
     }
 
     /// Verarbeitet ein eingehendes Chat-Event — Einstiegspunkt für den
@@ -750,6 +802,18 @@ impl ChatPipeline {
         // Ohne Shared Chat ist das ein geliehener No-op (kein Klon).
         let normalized = event.with_effective_channel();
         let event = &*normalized;
+
+        // Schritt 0a: Shared-Chat-Dedup. Nach der Normalisierung tragen beide
+        // Kopien derselben Nachricht (Host-Abo und Quell-Kanal-Abo) dieselbe
+        // `message_id` — die zweite wird hier verworfen.
+        if !event.message_id.is_empty() && !self.mark_message_seen(&event.message_id) {
+            tracing::debug!(
+                channel = %event.broadcaster_user_login,
+                message_id = %event.message_id,
+                "Shared-Chat-Duplikat verworfen"
+            );
+            return false;
+        }
 
         // Schritt 0: Echo-/Self-Filter (bot.py Z. 1528–1532)
         if event.chatter_user_id == p.bot_user_id {
@@ -1933,6 +1997,34 @@ mod tests {
         AutobanEntry, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
         RaidStartResult, RaidStatusInfo, SuperModPort,
     };
+    // -----------------------------------------------------------------------
+    // Shared-Chat-Dedup (SeenMessages)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shared_chat_duplikat_wird_nur_einmal_verarbeitet() {
+        // Stream Together: dieselbe Nachricht kommt ueber zwei Kanal-Abos an und
+        // traegt nach der Normalisierung dieselbe message_id.
+        let seen = SeenMessages::default();
+        let now = std::time::Instant::now();
+
+        assert!(seen.mark("msg-1", now), "erste Kopie wird verarbeitet");
+        assert!(!seen.mark("msg-1", now), "zweite Kopie wird verworfen");
+        assert!(seen.mark("msg-2", now), "andere Nachricht bleibt unberuehrt");
+    }
+
+    #[test]
+    fn seen_message_verfaellt_nach_ttl() {
+        let seen = SeenMessages::default();
+        let now = std::time::Instant::now();
+        assert!(seen.mark("msg-1", now));
+        let spaeter = now + SEEN_MESSAGE_TTL + std::time::Duration::from_secs(1);
+        assert!(
+            seen.mark("msg-1", spaeter),
+            "nach Ablauf des Fensters ist die ID wieder frei"
+        );
+    }
+
     use crate::promos::OutboundSuppressionCheck;
     use crate::scam_pitch::AccountAgePort;
     use crate::types::{ChatMessageBody, SendOutcome};
