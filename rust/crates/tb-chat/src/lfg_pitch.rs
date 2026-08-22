@@ -25,14 +25,14 @@ pub const LFG_PITCH_REPLY: &str =
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
-Beurteile, ob die Nachricht gerade Mitspieler für Deadlock sucht: LFG, Gruppe, Duo, Stack, Lobby oder Leute zum Zocken.
+Beurteile, ob die Nachricht gerade Anschluss zum gemeinsamen Deadlock-Spielen sucht: LFG, Gruppe, Duo, Stack, Lobby, Leute zum Zocken oder die Absicht, sich einer laufenden Runde anzuschließen.
 
 Antworte EXAKT mit einem JSON-Objekt ohne Markdown und ohne weiteren Text:
 {"verdict":"yes"|"no"|"unsure","confidence":0.0-1.0,"reasoning":"..."}
 
 Regeln:
-- "yes" nur, wenn die Person wirklich gerade Mitspieler für Deadlock sucht.
-- "no" bei Builds, Gameplay-Fragen, Smalltalk oder Zugang/Invite-Fragen ohne Mitspieler-Suche.
+- "yes", wenn die Person Mitspieler sucht oder sich selbst einer Runde anschließen will ("ich hau mich dazu", "kann ich mit?", "noch Platz frei?", "wer zockt noch").
+- "no" bei Builds, reinen Gameplay-Fragen ("spielt ihr ranked oder normal?"), Smalltalk oder Zugang/Invite-Fragen ohne Bezug zum Mitspielen.
 - "unsure" wenn die Absicht unklar ist."#;
 
 fn direct_lfg_re() -> &'static Result<Regex, regex::Error> {
@@ -44,6 +44,23 @@ fn search_lfg_re() -> &'static Result<Regex, regex::Error> {
     static RE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(r"(?i)\b(such\w*|brauche?\w*|wer\s+hat\s+bock|noch\s+jemand|jemand)\b")
+    })
+}
+
+/// Anschluss-Signal: die Person will selbst mitspielen, statt explizit zu suchen.
+fn join_lfg_re() -> &'static Result<Regex, regex::Error> {
+    static RE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+              \b hau \s+ mich \b [^?!.]{0,20} \b dazu \b
+            | \b mit (spielen|zocken|machen|kommen) \b
+            | \b (kann|darf|könnte|dürfte) \s+ (ich|man|wer) \b [^?!.]{0,25} \b (mit|dazu|dabei) \b
+            | \b noch \s+ (platz|slot|einer|wer) \b
+            | \b wer \s+ (will|zockt|spielt|hat \s+ bock) \b
+            | \b (add|adde|invite|inv) \s+ mich \b
+            ",
+        )
     })
 }
 
@@ -67,6 +84,7 @@ pub fn classify_lfg(content: &str) -> bool {
     }
 
     is_match(direct_lfg_re(), raw)
+        || is_match(join_lfg_re(), raw)
         || (is_match(search_lfg_re(), raw) && is_match(object_lfg_re(), raw))
 }
 
