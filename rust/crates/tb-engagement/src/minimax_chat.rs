@@ -720,15 +720,15 @@ impl EngagementMinimaxClient {
     /// eigenes `TB_LLM_PROVIDER_<USE_CASE>`/`TB_LLM_MODEL_<USE_CASE>`, ohne
     /// den gesamten `engagement`-Pfad mitzuziehen.
     ///
-    /// Festgenagelt, kein Failover: Ein eigener Anwendungsfall existiert, weil
-    /// genau dieser Anbieter mit genau diesem Modell gewollt ist (der
-    /// Self-Explainer braucht MiniMax-Text-01 ohne `<think>`-Block). Die
-    /// Ausweichkette wuerde als zweites Glied Fireworks/DeepSeek erreichen,
-    /// also das Reasoning-Modell, das der Wrapper gerade vermeiden will.
+    /// Mit Ausweichkette wie `new` ohne Parameter: Der Wrapper legt den
+    /// Self-Explainer per `TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER=minimax`
+    /// auf MiniMax-Text-01 (kein `<think>`-Block). Faellt MiniMax aus oder
+    /// fehlt der Schluessel, antwortet Fireworks/DeepSeek als zweites Glied:
+    /// schlechter (Reasoning-Modell, Antwort kann nach dem `<think>`-Strip
+    /// leer ausfallen), aber nicht dauerhaft `Unavailable`. Festnageln hiesse,
+    /// ohne MiniMax-Schluessel fuer immer zu schweigen.
     pub fn for_use_case(use_case: &'static str, timeout: Option<Duration>) -> Self {
-        let mut client = Self::build(use_case, None, None, None, timeout);
-        client.festgenagelt = true;
-        client
+        Self::build(use_case, None, None, None, timeout)
     }
 
     fn build(
@@ -944,11 +944,15 @@ impl EngagementMinimaxClient {
     /// andere dran. Nur ein festgenagelter Endpunkt (Tests, Sonderfaelle)
     /// umgeht die Kette.
     ///
-    /// Die Zeitgrenze des Clients gilt als Gesamtfrist ueber die ganze Kette
-    /// (Chat 30 s, Dashboard-Folgechat 240 s), nicht je Glied: eine
-    /// Twitch-Antwort, die erst nach zwei vollen Fristen kommt, ist keine.
+    /// Die Zeitgrenze des Clients gilt je Glied (Chat 30 s, Dashboard-
+    /// Folgechat 240 s); die Gesamtfrist ueber die Kette ist das Doppelte.
+    /// So kommt das Ausweichglied auch dann dran, wenn das erste Glied die
+    /// volle Frist haengt, und die Antwort dauert trotzdem nie laenger als
+    /// zwei Fristen.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        let request = request.timeout(self.timeout).total_deadline(self.timeout);
+        let request = request
+            .timeout(self.timeout)
+            .total_deadline(self.timeout.saturating_mul(2));
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {

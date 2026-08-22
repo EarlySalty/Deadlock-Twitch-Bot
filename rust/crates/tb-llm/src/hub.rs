@@ -88,10 +88,11 @@ pub struct Request {
     /// Setzt `response_format: {"type": "json_object"}`.
     pub json_object: bool,
     pub timeout: Option<Duration>,
-    /// Gesamtfrist ueber die ganze Kette (alle Glieder, alle Wiederholungen).
-    /// `None` heisst: Summe der Einzelfristen der Glieder. Der Chat-Pfad setzt
-    /// 30 s, damit eine Twitch-Antwort nicht erst nach zwei vollen Fristen
-    /// ankommt.
+    /// Gesamtfrist ueber die ganze Kette: alle Glieder, alle
+    /// 429-Wiederholungen samt Wartezeiten. `None` heisst: Summe der
+    /// Einzelfristen der Glieder. Der Engagement-Client setzt das Doppelte
+    /// seiner Einzelfrist, damit ein haengendes erstes Glied das zweite nicht
+    /// verdraengt und die Antwort trotzdem nicht ewig dauert.
     pub total_deadline: Option<Duration>,
     /// `None` bedeutet: unter dem Namen des Anwendungsfalls verbuchen.
     pub ledger: Option<Ledger>,
@@ -441,9 +442,14 @@ async fn call_endpoint(
     };
     let client = http_client()?;
 
+    // `frist` ist das Budget dieses Glieds inklusive aller 429-Wiederholungen
+    // und der Wartezeiten dazwischen; so bleibt die Gesamtfrist der Kette
+    // wirklich eine Gesamtfrist.
+    let ende = Instant::now() + frist;
     let mut versuch = 0u8;
     let raw = loop {
         let started = Instant::now();
+        let rest = ende.saturating_duration_since(started);
         // Die Frist liegt um den ganzen Request (Senden, Warten, Body lesen),
         // nicht im Client: so reicht ein einziger Client fuer alle Fristen.
         let senden = async {
@@ -453,7 +459,7 @@ async fn call_endpoint(
                 send_openai_compatible(&client, endpoint, api_key, request).await
             }
         };
-        let outcome = match tokio::time::timeout(frist, senden).await {
+        let outcome = match tokio::time::timeout(rest, senden).await {
             Ok(outcome) => outcome,
             Err(_) => {
                 return Err(LlmError::Timeout(format!(
@@ -465,12 +471,21 @@ async fn call_endpoint(
         };
         match outcome {
             Ok(payload) => break (payload, started.elapsed().as_millis() as i64),
-            Err(RawError::TooManyRequests { retry_after, .. }) if versuch < request.retry_on_429 => {
+            Err(RawError::TooManyRequests { retry_after, body })
+                if versuch < request.retry_on_429 =>
+            {
                 versuch += 1;
-                let wartezeit = retry_after
-                    .unwrap_or(1u64 << (versuch - 1))
-                    .min(MAX_RETRY_AFTER_SECS);
-                tokio::time::sleep(Duration::from_secs(wartezeit)).await;
+                let wartezeit = Duration::from_secs(
+                    retry_after
+                        .unwrap_or(1u64 << (versuch - 1))
+                        .min(MAX_RETRY_AFTER_SECS),
+                );
+                // Reicht die Frist nicht mehr fuer Warten plus Versuch, ist
+                // die Wiederholung sinnlos: 429 zurueckgeben statt ueberziehen.
+                if Instant::now() + wartezeit >= ende {
+                    return Err(LlmError::Http { status: 429, body });
+                }
+                tokio::time::sleep(wartezeit).await;
             }
             Err(RawError::TooManyRequests { body, .. }) => {
                 return Err(LlmError::Http { status: 429, body })
@@ -1126,7 +1141,7 @@ mod tests {
         Mock::given(method("POST"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(600))
+                    .set_delay(Duration::from_secs(3))
                     .set_body_json(json!({"choices": [{"message": {"content": "spaet"}}]})),
             )
             .mount(&langsam)
@@ -1146,7 +1161,7 @@ mod tests {
             Request::prompt("hi")
                 .no_ledger()
                 .timeout(Duration::from_secs(5))
-                .total_deadline(Duration::from_millis(300)),
+                .total_deadline(Duration::from_millis(150)),
             kette.clone(),
         )
         .await
@@ -1167,7 +1182,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
-                .timeout(Duration::from_millis(200))
+                .timeout(Duration::from_millis(150))
                 .accept(|text| text == "schnell"),
             vec![endpoint(&langsam, "fireworks"), endpoint(&schnell2, "minimax")],
         )
