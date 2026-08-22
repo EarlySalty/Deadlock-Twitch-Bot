@@ -146,9 +146,12 @@ fn nonempty_env(var: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Prozessweiter Lock fuer alle Tests dieser Crate: Sowohl die
+    // Resolver-Zelle in model_resolver als auch die Umgebungsvariablen sind
+    // global, parallel laufende Tests duerfen sie nicht gleichzeitig
+    // setzen oder lesen.
+    use crate::model_resolver::TEST_LOCK as ENV_LOCK;
 
     fn clear() {
         for v in [

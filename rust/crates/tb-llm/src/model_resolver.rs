@@ -65,6 +65,15 @@ fn cell() -> &'static RwLock<Option<String>> {
     CELL.get_or_init(|| RwLock::new(None))
 }
 
+/// Gemeinsamer Lock für alle Tests dieser Crate, die die prozessweite
+/// Resolver-Zelle oder die Umgebungsvariablen dahinter setzen. Rust startet
+/// jeden Test in seinem eigenen Thread; ohne diesen Lock würde ein in der
+/// Zelle hinterlegter Wert in parallel laufende Tests durchschlagen und
+/// deren Erwartung an den einkompilierten Default kippen. Nur unter
+/// `cfg(test)` vorhanden, der Produktivcode braucht ihn nicht.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Der aufgelöste Name, falls vorhanden. Synchron und billig — genau das,
 /// was [`crate::selection`] beim Bauen eines Endpunkts braucht.
 pub fn resolved_fireworks_model() -> Option<String> {
@@ -463,8 +472,6 @@ mod tests {
         assert!(parse_models(&serde_json::json!([])).is_empty());
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn clear_resolver_env() {
         for name in [
             "FIREWORK_API_KEY",
@@ -481,7 +488,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn transienter_listenfehler_leert_die_zelle_nicht() {
-        let _guard = ENV_LOCK
+        let _guard = crate::model_resolver::TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear_resolver_env();
@@ -514,7 +521,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn listen_ok_legt_neue_fassung_in_die_zelle() {
-        let _guard = ENV_LOCK
+        let _guard = crate::model_resolver::TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear_resolver_env();
