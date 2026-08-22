@@ -476,6 +476,8 @@ pub struct OpenAiCrewJudge {
     /// `gestartet`, zu denen zuletzt gewarnt wurde (-1 = noch nie).
     zuletzt_gewarnt_s: AtomicI64,
     gestartet: Instant,
+    /// Welche Variablen beim Start fehlten (fuer die gedrosselte Warnung).
+    konfig_luecke: &'static str,
 }
 
 /// Hoechstens alle fuenf Minuten eine Warnung, dass der Judge ohne
@@ -486,17 +488,17 @@ const KONFIG_WARNUNG_ABSTAND: Duration = Duration::from_secs(300);
 impl OpenAiCrewJudge {
     pub fn from_env() -> Self {
         // Ohne Schlüssel ODER ohne Modell gibt es keinen Endpunkt: der Judge
-        // antwortet dann fail-safe `unsure`, statt zu raten.
-        // Jede Luecke bekommt ihre eigene Warnung, damit im Log sofort
-        // sichtbar ist, welche der beiden Variablen fehlt.
+        // antwortet dann fail-safe `unsure`, statt zu raten. Gewarnt wird
+        // gedrosselt beim Aufruf (`warne_nicht_konfiguriert`), nicht hier,
+        // sonst stuende dieselbe Zeile zweimal im Log.
         let api_key = non_empty_env("OPENAI_API_KEY");
-        if api_key.is_none() {
-            warn!("crew_guard: OPENAI_API_KEY nicht gesetzt, Crew-Judge antwortet fail-safe unsure");
-        }
         let model = non_empty_env("CREW_GUARD_MODEL");
-        if model.is_none() {
-            warn!("crew_guard: CREW_GUARD_MODEL nicht gesetzt, Crew-Judge antwortet fail-safe unsure");
-        }
+        let konfig_luecke = match (api_key.is_some(), model.is_some()) {
+            (true, true) => "",
+            (false, true) => "OPENAI_API_KEY",
+            (true, false) => "CREW_GUARD_MODEL",
+            (false, false) => "OPENAI_API_KEY und CREW_GUARD_MODEL",
+        };
         let endpoint = api_key.zip(model).map(|(api_key, model)| tb_llm::LlmEndpoint {
             provider: "openai_kompatibel",
             base_url: non_empty_env("OPENAI_BASE_URL")
@@ -510,6 +512,7 @@ impl OpenAiCrewJudge {
             failures: JudgeFailureTracker::default(),
             zuletzt_gewarnt_s: AtomicI64::new(-1),
             gestartet: Instant::now(),
+            konfig_luecke,
         }
     }
 
@@ -525,7 +528,8 @@ impl OpenAiCrewJudge {
             .is_ok();
         if faellig {
             warn!(
-                "crew_guard: OPENAI_API_KEY oder CREW_GUARD_MODEL nicht gesetzt, Crew-Judge antwortet fail-safe unsure"
+                fehlt = self.konfig_luecke,
+                "crew_guard: Variable nicht gesetzt, Crew-Judge antwortet fail-safe unsure"
             );
         }
     }
@@ -1977,6 +1981,7 @@ Ich hab nichts getan."
             failures: JudgeFailureTracker::default(),
             zuletzt_gewarnt_s: AtomicI64::new(-1),
             gestartet: Instant::now(),
+            konfig_luecke: "",
         };
 
         for _ in 0..4 {
@@ -2012,6 +2017,7 @@ Ich hab nichts getan."
             failures: JudgeFailureTracker::default(),
             zuletzt_gewarnt_s: AtomicI64::new(-1),
             gestartet: Instant::now(),
+            konfig_luecke: "",
         };
 
         for _ in 0..4 {
@@ -2042,6 +2048,7 @@ Ich hab nichts getan."
             failures: JudgeFailureTracker::default(),
             zuletzt_gewarnt_s: AtomicI64::new(-1),
             gestartet: Instant::now(),
+            konfig_luecke: "",
         };
         assert_eq!(
             error_judge.judge("nani bannliste", &[]).await.status,
@@ -2064,6 +2071,7 @@ Ich hab nichts getan."
             failures: JudgeFailureTracker::default(),
             zuletzt_gewarnt_s: AtomicI64::new(-1),
             gestartet: Instant::now(),
+            konfig_luecke: "",
         };
         assert_eq!(
             timeout_judge.judge("nani bannliste", &[]).await.status,
