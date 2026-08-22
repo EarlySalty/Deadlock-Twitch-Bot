@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::doc::{parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
+use crate::doc::{ist_oeffentlich, parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
 
 #[derive(Debug, Clone, Default)]
 pub struct KnowledgeBase {
@@ -81,6 +81,7 @@ impl KnowledgeBase {
             .docs
             .iter()
             .filter(|d| d.namespace == namespace)
+            .filter(|d| ist_oeffentlich(&d.audience))
             .filter(|d| {
                 audience
                     .map(|a| d.audience.is_empty() || d.audience == a)
@@ -195,6 +196,47 @@ mod select_tests {
         let kb = kb();
         let hits = kb.select("bot verbinden dashboard raidet", Namespace::Bot, None, 1);
         assert_eq!(hits.len(), 1);
+    }
+
+    /// `audience: concierge` ist nur Grounding-Material und darf in keiner
+    /// Selektion landen — weder im `!help`-Chat noch in der Frage-Box. Ohne den
+    /// Filter reisst dieser Test: das Concierge-Doc schlaegt bei „uplink“
+    /// mit dem Streamer-Dokument gleich auf und gewinnt den Slug-Tiebreak.
+    #[test]
+    fn select_laesst_nicht_oeffentliche_zielgruppen_weg() {
+        let intern = parse_doc(
+            "---\ntitle: Uplink Concierge\nnamespace: bot\ncategory: support\n\
+             audience: concierge\ntime_to_value: 2\n---\nUplink nimmt den Stream an.",
+            "uplink-concierge",
+        )
+        .unwrap();
+        let streamer = parse_doc(
+            "---\ntitle: Was ist Uplink\nnamespace: bot\ncategory: feature\n\
+             audience: streamer\ntime_to_value: 2\n---\nUplink verteilt den Stream weiter.",
+            "uplink-was-ist",
+        )
+        .unwrap();
+        let kb = KnowledgeBase {
+            docs: vec![intern, streamer],
+        };
+        let hits = kb.select("uplink", Namespace::Bot, None, 4);
+        assert_eq!(hits.len(), 1, "nur das Streamer-Doc bleibt: {hits:?}");
+        assert_eq!(hits[0].slug, "uplink-was-ist");
+    }
+
+    /// Die Fixture-Sammlung enthaelt ein Concierge-Doc; die Selektion darf es
+    /// nie ausspielen, auch wenn der Suchende es beim Namen nennt.
+    #[test]
+    fn select_aus_fixtures_zeigt_kein_concierge_doc() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let kb = KnowledgeBase::load_from_dir(&root).expect("fixtures laden");
+        let hits = kb.select("concierge interngeheimnis", Namespace::Bot, None, 4);
+        assert!(
+            !hits.iter().any(|d| d.slug == "concierge-intern"),
+            "Concierge-Doc in der Auswahl: {:?}",
+            hits.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

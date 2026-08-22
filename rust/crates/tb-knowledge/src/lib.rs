@@ -8,6 +8,6 @@ mod grounding;
 pub mod tips;
 
 pub use base::KnowledgeBase;
-pub use doc::{parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
+pub use doc::{ist_oeffentlich, parse_doc, KnowledgeDoc, KnowledgeError, Namespace};
 pub use grounding::{assemble_grounding, Grounding};
 pub use tips::{rank_tip, TipState};

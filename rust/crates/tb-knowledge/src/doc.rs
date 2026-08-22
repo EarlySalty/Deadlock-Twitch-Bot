@@ -65,6 +65,18 @@ pub struct KnowledgeDoc {
     pub body: String,
 }
 
+/// Erlaubnisliste oeffentlicher Zielgruppen, keine Sperrliste.
+///
+/// Die Wissensbasis haengt an mehreren Ausgaengen: der oeffentlichen Hilfeseite,
+/// dem `!help`-Befehl im Chat und der Frage-Box. Ein Doc ohne `audience` ist
+/// Streamer-Wissen und darf überall raus; alles mit einer anderen Zielgruppe
+/// (`concierge`, `intern`, was noch kommt) bleibt drin, ohne dass jemand daran
+/// denken muss. Andersherum waere der Fehlerfall ein Leak: `uplink-concierge.md`
+/// listet zum Beispiel auf, welche Admin-Funktionen und Lastgrenzen es gibt.
+pub fn ist_oeffentlich(audience: &str) -> bool {
+    matches!(audience.trim(), "" | "streamer" | "public")
+}
+
 /// Frontmatter-Format (kontrolliertes Eigenformat, KEIN allgemeines YAML):
 /// Datei beginnt mit einer Zeile `---`, dann `key: value`-Zeilen, dann eine
 /// Zeile `---`, danach der Markdown-Body. `tip_flags` als `[a, b]` oder leer `[]`.

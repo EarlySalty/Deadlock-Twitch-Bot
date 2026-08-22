@@ -6,7 +6,7 @@ use axum::response::{Html, IntoResponse, Response};
 use pulldown_cmark::{html, Options, Parser};
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use tb_knowledge::{KnowledgeBase, Namespace};
+use tb_knowledge::{ist_oeffentlich, KnowledgeBase, Namespace};
 
 fn knowledge_dir() -> PathBuf {
     match std::env::var("KNOWLEDGE_DIR")
@@ -38,10 +38,9 @@ fn render_help(kb: &KnowledgeBase) -> String {
         .docs()
         .iter()
         .filter(|d| d.namespace == Namespace::Bot)
-        // `audience: concierge` markiert Wissen, das nur der Self-Explainer als
-        // Grounding sehen darf (z. B. seine eigenen Antwort-Leitplanken). Auf der
-        // oeffentlichen Hilfeseite darf das nie erscheinen.
-        .filter(|d| d.audience != "concierge")
+        // Die Erlaubnisliste steckt zentral in tb-knowledge (`ist_oeffentlich`),
+        // damit `!help` und die Frage-Box dieselbe Regel anwenden wie diese Seite.
+        .filter(|d| ist_oeffentlich(&d.audience))
         .collect();
     docs.sort_by(|a, b| {
         category_rank(&a.category)

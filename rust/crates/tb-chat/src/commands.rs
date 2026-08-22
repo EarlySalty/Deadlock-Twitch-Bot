@@ -106,7 +106,9 @@ fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
     if topic.is_empty() {
         return format!("Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}");
     }
-    match kb.select(topic, Namespace::Bot, None, 1).first() {
+    // `Some("streamer")`: das Concierge-Wissen ist nur Grounding-Material und
+    // darf nie als Chat-Antwort mit totem Anker auf der Hilfeseite landen.
+    match kb.select(topic, Namespace::Bot, Some("streamer"), 1).first() {
         Some(doc) => format!("{}: {HELP_BASE_URL}#{}", doc.title, doc.slug),
         None => format!("Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}"),
     }
