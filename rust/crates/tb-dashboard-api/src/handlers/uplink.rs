@@ -392,7 +392,7 @@ pub async fn get_destinations_handler(auth: DashboardAuthLevel) -> Result<Json<V
 
 /// Ein Ziel aus dem Dashboard. Adresse und Schluessel kommen zusammen oder gar
 /// nicht; ohne beides aendert der Aufruf nur die Profilwerte.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct DestinationBody {
     pub platform: String,
     #[serde(default)]
@@ -411,11 +411,26 @@ pub struct DestinationBody {
     pub bitrate_kbps: Option<i32>,
 }
 
+/// Ein Feld zaehlt nur als gesetzt, wenn wirklich etwas darin steht.
+///
+/// Die Pruefung im Handler und der Rumpfbau brauchen denselben Massstab.
+/// Solange nur der Handler getrimmt hat, kam ein Aufruf mit leerer Adresse und
+/// leerem Schluessel durch die Pruefung (beide Felder gelten als nicht gesetzt,
+/// also gleich) und wurde danach als leere Zeichenkette an das Relay gereicht.
+/// Ein Streamer konnte damit sein eigenes, funktionierendes Ziel leerschreiben;
+/// es blieb aktiv, und der Push zu Twitch scheiterte erst mitten im Stream.
+fn gefuellt(feld: Option<&str>) -> Option<&str> {
+    feld.map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Baut den Rumpf, den `PUT /v1/me/destinations` erwartet.
 fn destination_payload(id: i64, body: &DestinationBody) -> Value {
     let mut eintrag = json!({ "platform": body.platform });
     let obj = eintrag.as_object_mut().expect("objekt");
-    if let (Some(url), Some(key)) = (body.rtmp_url.as_deref(), body.stream_key.as_deref()) {
+    if let (Some(url), Some(key)) = (
+        gefuellt(body.rtmp_url.as_deref()),
+        gefuellt(body.stream_key.as_deref()),
+    ) {
         obj.insert("rtmp_url".into(), json!(url));
         obj.insert("stream_key".into(), json!(key));
     }
@@ -440,14 +455,8 @@ pub async fn put_destination_handler(
     Json(body): Json<DestinationBody>,
 ) -> Result<Json<Value>, Response> {
     let id = partner_id(&auth)?;
-    let hat_url = body
-        .rtmp_url
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty());
-    let hat_key = body
-        .stream_key
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty());
+    let hat_url = gefuellt(body.rtmp_url.as_deref()).is_some();
+    let hat_key = gefuellt(body.stream_key.as_deref()).is_some();
     if hat_url != hat_key {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1017,6 +1026,38 @@ mod tests {
             .map_err(|_| "relay-aufruf")
             .expect("leerer Rumpf bleibt erlaubt");
         assert_eq!(wert, json!({}));
+    }
+
+    #[test]
+    fn leere_adresse_und_leerer_schluessel_werden_nicht_gesendet() {
+        // Beide Felder leer heisst "nichts aendern", nicht "leerschreiben".
+        // Ohne denselben Massstab in Pruefung und Rumpfbau ueberschriebe dieser
+        // Aufruf ein funktionierendes Ziel mit Leerwerten.
+        let body = DestinationBody {
+            platform: "twitch".into(),
+            rtmp_url: Some("   ".into()),
+            stream_key: Some(String::new()),
+            enabled: Some(true),
+            ..Default::default()
+        };
+        let rumpf = destination_payload(7, &body);
+        let ziel = &rumpf["destinations"][0];
+        assert!(ziel.get("rtmp_url").is_none(), "{ziel}");
+        assert!(ziel.get("stream_key").is_none(), "{ziel}");
+        assert_eq!(ziel["enabled"], json!(true));
+    }
+
+    #[test]
+    fn umschlossene_werte_kommen_getrimmt_an() {
+        let body = DestinationBody {
+            platform: "kick".into(),
+            rtmp_url: Some("  rtmp://a/live  ".into()),
+            stream_key: Some(" sk_123 ".into()),
+            ..Default::default()
+        };
+        let ziel = destination_payload(7, &body)["destinations"][0].clone();
+        assert_eq!(ziel["rtmp_url"], json!("rtmp://a/live"));
+        assert_eq!(ziel["stream_key"], json!("sk_123"));
     }
 
     #[test]
