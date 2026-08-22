@@ -10,11 +10,10 @@ import {
   Radio,
   Settings,
   MonitorPlay,
-  Sparkles,
   FileText,
 } from 'lucide-react';
 import { Rise } from '../motion/Rise';
-import { useAuthStatus } from '@/hooks/useAnalytics';
+import '../uplinkHelp.css';
 import {
   fetchUplinkMe,
   joinUplinkWaitlist,
@@ -24,11 +23,11 @@ import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
-  PREVIEW_PRICING_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
+import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 
 function SidebarLink({
   href,
@@ -89,11 +88,15 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
 export function UplinkPage() {
   const queryClient = useQueryClient();
-  const { data: authStatus } = useAuthStatus();
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
     retry: false,
+  });
+  const { data: helpPages, isError: isHelpError } = useQuery({
+    queryKey: ['uplink-help'],
+    queryFn: fetchUplinkHelp,
+    staleTime: Infinity,
   });
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
@@ -109,8 +112,6 @@ export function UplinkPage() {
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
   });
-
-  const planName = authStatus?.plan?.displayName ?? 'Free';
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
@@ -133,7 +134,6 @@ export function UplinkPage() {
               <div className="lg:space-y-1">
                 <SidebarLink href={PREVIEW_VERWALTUNG_ROUTE} icon={Settings} label="Verwaltung" />
                 <SidebarLink href={PREVIEW_OVERLAY_ROUTE} icon={MonitorPlay} label="Stream-Overlay" />
-                <SidebarLink href={PREVIEW_PRICING_ROUTE} icon={Sparkles} label={`Plan: ${planName}`} />
                 <SidebarLink href={PREVIEW_CHANGELOG_ROUTE} icon={FileText} label="Changelog" />
               </div>
             </div>
@@ -172,9 +172,9 @@ export function UplinkPage() {
                   <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5">
                     <Lock className="h-5 w-5 text-white/40" />
                   </div>
-                  <h2 className="text-lg font-bold text-white">Uplink ist ein bezahltes Add-on</h2>
+                  <h2 className="text-lg font-bold text-white">Uplink ist noch nicht freigeschaltet</h2>
                   <p className="max-w-xl text-sm text-text-secondary">
-                    Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.
+                    Du kannst dich auf die Warteliste setzen. Danach wird dein Zugang eingerichtet.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -185,12 +185,6 @@ export function UplinkPage() {
                     >
                       {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
                     </button>
-                    <a
-                      href={PREVIEW_PRICING_ROUTE}
-                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
-                    >
-                      Zum Plan
-                    </a>
                   </div>
                 </div>
               </div>
@@ -200,18 +194,16 @@ export function UplinkPage() {
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  <CopyField label="RTMP-Server" value={data.rtmp_url.replace(/\/[^/]+$/, '')} />
-                  <CopyField label="Stream-Schlüssel" value={data.ingest_key} />
-                  <CopyField label="Komplette RTMP-Adresse" value={data.rtmp_url} />
+                  <CopyField label="SRT-Adresse" value={data.srt_hint} />
                   <p className="text-xs text-text-secondary">
-                    In OBS: Dienst Benutzerdefiniert. Hardware-HEVC, VBR, Keyframe 2 s. Danach Stream starten.
+                    In OBS: Dienst Benutzerdefiniert, SRT-Adresse aus dem Dashboard. Hardware-HEVC, VBR, Keyframe 2 s. Danach Stream starten.
                   </p>
                 </Rise>
 
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">Twitch-Ziel</h2>
                   <p className="text-sm text-text-secondary">
-                    Stream-Key von Twitch, nicht unser Ingest-Key. Wird verschlüsselt gespeichert.
+                    Stream-Schlüssel von Twitch, nicht der Schlüssel für Uplink. Er wird verschlüsselt gespeichert.
                   </p>
                   <input
                     value={rtmpUrl}
@@ -237,6 +229,32 @@ export function UplinkPage() {
                 </Rise>
               </div>
             )}
+
+            <Rise className="panel-card space-y-4 rounded-2xl p-6">
+              <div>
+                <h2 className="text-lg font-bold text-white">Uplink-Hilfe</h2>
+                <p className="mt-1 text-sm text-text-secondary">
+                  Die Streamer-Hilfe erklärt Uplink, die OBS-Einrichtung und häufige Störungen.
+                </p>
+              </div>
+              {isHelpError && (
+                <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
+              )}
+              <div className="space-y-4">
+                {(helpPages ?? UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' }))).map((page) => (
+                  <div key={page.file} className="uplink-help-shell overflow-hidden rounded-xl border border-border bg-background/70">
+                    {page.html ? (
+                      <div dangerouslySetInnerHTML={{ __html: page.html }} />
+                    ) : (
+                      <div className="p-4 text-sm text-text-secondary">Hilfe wird geladen: {page.label}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <a className="text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
+                Uplink-Hilfe als eigene Seite öffnen
+              </a>
+            </Rise>
           </div>
         </div>
       </div>

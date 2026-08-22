@@ -1,0 +1,125 @@
+.uplink-help-shell .uplink-doc {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 2rem;
+  color: #ede0c4;
+  line-height: 1.65;
+  font-family: var(--font-body, "Manrope", "Segoe UI", sans-serif);
+}
+
+.uplink-help-shell .uplink-doc h1,
+.uplink-help-shell .uplink-doc h2,
+.uplink-help-shell .uplink-doc h3 {
+  font-family: var(--font-display, "Sora", "Manrope", sans-serif);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.uplink-help-shell .uplink-doc h1 {
+  margin: 0 0 1rem;
+  color: #ede0c4;
+  font-size: clamp(2rem, 5vw, 2.75rem);
+  font-weight: 800;
+}
+
+.uplink-help-shell .uplink-doc h2 {
+  margin: 2rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(201, 168, 106, 0.24);
+  color: #f1d299;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.uplink-help-shell .uplink-doc h3 {
+  margin: 1.5rem 0 0.5rem;
+  color: #c5a059;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.uplink-help-shell .uplink-doc p,
+.uplink-help-shell .uplink-doc li {
+  color: #b5a488;
+}
+
+.uplink-help-shell .uplink-doc .lede {
+  margin: 0 0 1.5rem;
+  color: #ede0c4;
+}
+
+.uplink-help-shell .uplink-doc a {
+  color: #c5a059;
+  text-decoration: none;
+}
+
+.uplink-help-shell .uplink-doc a:hover {
+  color: #f1d299;
+  text-decoration: underline;
+}
+
+.uplink-help-shell .uplink-doc code {
+  border: 1px solid rgba(201, 168, 106, 0.24);
+  border-radius: 3px;
+  background: rgba(201, 168, 106, 0.1);
+  color: #f1d299;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  padding: 0.1em 0.4em;
+}
+
+.uplink-help-shell .uplink-doc nav {
+  margin-bottom: 1.5rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid rgba(201, 168, 106, 0.24);
+  border-radius: 6px;
+  background: rgba(59, 47, 30, 0.86);
+}
+
+.uplink-help-shell .uplink-doc nav h2 {
+  margin: 0 0 0.75rem;
+  padding: 0;
+  border: 0;
+  color: #c5a059;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.uplink-help-shell .uplink-doc nav ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uplink-help-shell .uplink-doc ul,
+.uplink-help-shell .uplink-doc ol {
+  padding-left: 1.25rem;
+}
+
+.uplink-help-shell .uplink-doc table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.uplink-help-shell .uplink-doc th,
+.uplink-help-shell .uplink-doc td {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(201, 168, 106, 0.24);
+  text-align: left;
+  vertical-align: top;
+}
+
+.uplink-help-shell .uplink-doc th {
+  color: #f1d299;
+  font-weight: 700;
+}
+
+.uplink-help-shell .uplink-doc td {
+  color: #b5a488;
+}
