@@ -1759,21 +1759,11 @@ async fn persist_spam_learning(
     let Some(pat) = review.pattern.as_deref() else {
         return (None, None, false);
     };
-    if pat.chars().count() < PATTERN_MIN_LEN {
-        return (None, None, false);
-    }
-    if !crate::spam_filter::is_distinctive_spam_pattern(pat) {
-        warn!(
-            pattern = %pat,
-            "Judge-Muster abgelehnt: nur generisches Vokabular (Distinktivitäts-Gate)"
-        );
-        return (None, Some(pat.to_string()), false);
-    }
     let pattern_type = match review.pattern_type.as_deref() {
         Some("phrase") => "phrase",
         _ => "fragment",
     };
-    let learned = save_spam_pattern(
+    match learn_pattern_from_judge(
         pool,
         pat,
         pattern_type,
@@ -1782,12 +1772,93 @@ async fn persist_spam_learning(
         review.reason.as_deref().unwrap_or(""),
     )
     .await
-    .map(|id| LearnedPatternRef {
-        id,
-        pattern: pat.to_lowercase(),
-    });
-    let save_failed = learned.is_none();
-    (learned, None, save_failed)
+    {
+        LearnOutcome::Saved { id, pattern } => {
+            (Some(LearnedPatternRef { id, pattern }), None, false)
+        }
+        LearnOutcome::Rejected => (None, Some(pat.to_string()), false),
+        LearnOutcome::SaveFailed => (None, None, true),
+        LearnOutcome::Skipped => (None, None, false),
+    }
+}
+
+/// Ergebnis eines Lernversuchs aus einem Judge-Urteil.
+pub(crate) enum LearnOutcome {
+    Saved { id: i64, pattern: String },
+    /// Muster hat eine der Hürden gerissen: nicht in der Nachricht belegt oder
+    /// zu generisch.
+    Rejected,
+    /// Kein oder zu kurzes Muster — nichts zu lernen, kein Fehler.
+    Skipped,
+    /// Schreibfehler in der DB.
+    SaveFailed,
+}
+
+/// Prüft ein vom Judge vorgeschlagenes Spam-Muster und schreibt es in die
+/// gelernten Muster. Gemeinsamer Pfad für den Service-Pitch-Judge und den
+/// Konversations-Wächter (`conversation_scam`).
+///
+/// Drei Hürden, alle nötig, weil ein gelerntes Muster laut
+/// [`crate::spam_filter::has_hard_spam_signal`] ein hartes Signal ist und
+/// rückwirkend in jedem Kanal greift:
+///
+/// 1. Entfremdung entfernen (NFKC + Homoglyphen). Ein Muster mit Small Caps
+///    oder kyrillischem „а" würde sonst nie wieder matchen: beim Scoring ist
+///    der Vergleichstext normalisiert, das gespeicherte Muster war es bislang
+///    nicht.
+/// 2. Beleg in der Nachricht: das kompaktierte Muster muss im kompaktierten
+///    Quelltext vorkommen. Ein halluziniertes Muster, das so kein Chatter
+///    geschrieben hat, wird nicht gelernt.
+/// 3. Distinktivitäts-Gate ([`crate::spam_filter::is_distinctive_spam_pattern`]).
+pub(crate) async fn learn_pattern_from_judge(
+    pool: &PgPool,
+    pattern: &str,
+    pattern_type: &str,
+    source_message: &str,
+    channel: &str,
+    reasoning: &str,
+) -> LearnOutcome {
+    let canonical = crate::spam_filter::normalize_spam_text(pattern)
+        .to_lowercase()
+        .trim()
+        .to_string();
+    if canonical.chars().count() < PATTERN_MIN_LEN {
+        return LearnOutcome::Skipped;
+    }
+    let haystack = crate::spam_filter::compact(
+        &crate::spam_filter::normalize_spam_text(source_message).to_lowercase(),
+    );
+    let needle = crate::spam_filter::compact(&canonical);
+    if needle.is_empty() || !haystack.contains(&needle) {
+        warn!(
+            pattern = %canonical,
+            "Judge-Muster abgelehnt: steht so nicht in der Nachricht"
+        );
+        return LearnOutcome::Rejected;
+    }
+    if !crate::spam_filter::is_distinctive_spam_pattern(&canonical) {
+        warn!(
+            pattern = %canonical,
+            "Judge-Muster abgelehnt: nur generisches Vokabular (Distinktivitäts-Gate)"
+        );
+        return LearnOutcome::Rejected;
+    }
+    match save_spam_pattern(
+        pool,
+        &canonical,
+        pattern_type,
+        source_message,
+        channel,
+        reasoning,
+    )
+    .await
+    {
+        Some(id) => LearnOutcome::Saved {
+            id,
+            pattern: canonical,
+        },
+        None => LearnOutcome::SaveFailed,
+    }
 }
 
 /// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
@@ -2675,6 +2746,80 @@ mod tests {
         Skipped,
         None
     );
+
+    // ── Lernpfad aus Judge-Urteilen ──────────────────────────────────────────
+
+    /// Ein verfremdetes Muster muss entfremdungsfrei in der DB landen, sonst
+    /// matcht es beim naechsten Mal nie: das Scoring vergleicht normalisierten
+    /// Text gegen das rohe gespeicherte Muster.
+    #[tokio::test]
+    async fn entfremdetes_judge_muster_wird_normalisiert_gelernt() {
+        let pool = pool_or_skip!("judge_learning_obfuscation");
+        let nachricht = "𝗏𝗂𝖾𝗐𝖾𝗋𝗌 on the stream 𝗌𝗍𝗋𝖾𝖺𝗆_𝗉𝗋𝗈𝗆𝗈𝗍𝗂𝗈𝗇_𝖻𝗈𝗍 tg";
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            "𝗌𝗍𝗋𝖾𝖺𝗆_𝗉𝗋𝗈𝗆𝗈𝗍𝗂𝗈𝗇_𝖻𝗈𝗍",
+            "fragment",
+            nachricht,
+            "testchannel",
+            "Growth-Pitch",
+        )
+        .await;
+        let LearnOutcome::Saved { pattern, .. } = outcome else {
+            panic!("Muster muss gelernt werden");
+        };
+        assert_eq!(pattern, "stream_promotion_bot");
+
+        // Und der Vorfilter erkennt dieselbe Nachricht danach ohne Judge.
+        let filter =
+            crate::spam_filter::SpamFilter::new(crate::spam_filter::LearnedPatterns::load(&pool).await);
+        let verdict = filter.evaluate(nachricht, &crate::spam_filter::SpamContext::default());
+        assert!(
+            verdict.hard_signal,
+            "gelerntes Muster muss ein hartes Signal sein: {:?}",
+            verdict.matched
+        );
+    }
+
+    /// Ein Muster, das so nicht in der Nachricht steht, ist halluziniert und
+    /// darf nie gelernt werden.
+    #[tokio::test]
+    async fn halluziniertes_judge_muster_wird_abgelehnt() {
+        let pool = pool_or_skip!("judge_learning_halluzination");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            "clicknex.online",
+            "fragment",
+            "hey, schoener stream, spielst du haze?",
+            "testchannel",
+            "Grund",
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_auto_learned_spam_patterns")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "halluziniertes Muster darf nicht in der DB stehen");
+    }
+
+    /// Generisches Chat-Vokabular bleibt draussen, auch wenn es in der
+    /// Nachricht steht.
+    #[tokio::test]
+    async fn generisches_judge_muster_wird_abgelehnt() {
+        let pool = pool_or_skip!("judge_learning_generisch");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            "best viewers",
+            "fragment",
+            "best viewers on the stream",
+            "testchannel",
+            "Grund",
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Rejected));
+    }
     spam_review_decision_persistence_test!(
         spam_review_timeout_wird_persistiert,
         "spam_review_decision_timeout",

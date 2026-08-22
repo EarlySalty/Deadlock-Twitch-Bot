@@ -259,7 +259,7 @@ fn homoglyph_table() -> &'static Vec<(char, char)> {
 /// NFKC-Normalisierung + Homoglyph-Ersetzung + strip().
 /// Port von `_normalize_spam_text` (moderation.py Z. 614–617).
 /// Reihenfolge: NFKC zuerst, dann Homoglyphen, dann trim.
-fn normalize_spam_text(content: &str) -> String {
+pub(crate) fn normalize_spam_text(content: &str) -> String {
     // NFKC via unicode-normalization
     let nfkc: String = content.nfkc().collect();
     // Homoglyph-Ersetzung (char-für-char)
@@ -294,7 +294,7 @@ pub fn normalize_exact_spam_message(content: &str) -> String {
 }
 
 /// Nur a-z0-9 — für gelernte Muster (compact form).
-fn compact(lowered: &str) -> String {
+pub(crate) fn compact(lowered: &str) -> String {
     lowered
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
