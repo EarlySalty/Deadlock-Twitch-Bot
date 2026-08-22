@@ -70,9 +70,9 @@ export const UPLINK_PROFILE = [
   {
     name: '1440p60',
     label: '1440p60 (2K), 8000 kbps',
-    hinweis: 'Deine volle 2K-Auflösung, ohne Umrechnung durchgereicht.',
+    hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
     warnung:
-      'Twitch unterstützt 2K über diesen Weg offiziell nicht und deckelt die Bitrate bei 8000. Dieselben Bits verteilen sich auf fast doppelt so viele Pixel, im Teamfight sieht das oft schlechter aus als 1080p. Probier es einen Abend lang aus, bevor du dabei bleibst.',
+      'Twitch unterstützt 2K über diesen Weg offiziell nicht und deckelt die Bitrate bei 8000. Dieselben Bits verteilen sich auf 1,78-mal so viele Pixel, im Teamfight sieht das oft schlechter aus als 1080p. Probier es einen Abend lang aus, bevor du dabei bleibst. Wer aus OBS nur 1080p sendet, gewinnt hier gar nichts: wir müssten hochrechnen, und das kostet Bitrate ohne Gegenwert.',
   },
   {
     name: '720p60',

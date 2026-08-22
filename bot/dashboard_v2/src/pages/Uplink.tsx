@@ -14,6 +14,7 @@ import {
   Radio,
   Settings,
   MonitorPlay,
+  TriangleAlert,
   FileText,
 } from 'lucide-react';
 import { Rise } from '../motion/Rise';
@@ -276,6 +277,15 @@ export function UplinkPage() {
   const [profilGesetzt, setProfilGesetzt] = useState(false);
   const bestellt = gespeicherteZiele.find((z) => z.platform === 'twitch')?.requested;
   const gewaehltesProfil = UPLINK_PROFILE.find((e) => e.name === profil);
+  // Nur Hoehe und Bildrate vergleichen: die Bitrate klemmt das Relay auch im
+  // Normalfall (CBR-Zwang bei Twitch), daraus eine Warnung zu bauen hiesse,
+  // jedem Streamer eine zu zeigen.
+  const geklemmteZiele = gespeicherteZiele.filter(
+    (z) =>
+      z.requested &&
+      z.effective &&
+      (z.requested.height !== z.effective.height || z.requested.fps !== z.effective.fps),
+  );
   useEffect(() => {
     if (profilGesetzt) return;
     const name = profilNameFuer(bestellt);
@@ -394,9 +404,8 @@ export function UplinkPage() {
                     'space-y-4 md:space-y-5'
               }
             >
+              {data?.enabled && (
               <div className="space-y-4 md:space-y-5">
-                {data?.enabled && (
-                  <>
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                   {/* srt_hint liefert das Relay immer als String (rs-relay,
@@ -544,6 +553,27 @@ export function UplinkPage() {
                           </span>
                         </div>
                       ))}
+                      {/* Das Relay klemmt gegen `relay.platform_caps`, und das
+                          ist eine Tabelle in einem anderen Repo: sie kann hinter
+                          diesem Dashboard herhinken, wenn die Migration noch
+                          nicht eingespielt ist, oder wieder zurueckgedreht
+                          werden. Beides passiert still. Wer eine Stufe waehlt
+                          und eine andere bekommt, soll das hier lesen und nicht
+                          erst im Stream sehen. */}
+                      {geklemmteZiele.map((ziel) => (
+                        <div
+                          key={`geklemmt-${ziel.platform}`}
+                          className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+                        >
+                          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            Du hast {ziel.requested?.height}p{ziel.requested?.fps} gewählt, raus gehen
+                            aber {ziel.effective?.height}p{ziel.effective?.fps}.{' '}
+                            {ziel.platform === 'twitch' ? 'Twitch' : 'Die Plattform'} nimmt gerade nicht
+                            mehr an. Sag uns Bescheid, wenn das so bleibt.
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <p className="text-xs text-text-secondary">
@@ -560,9 +590,8 @@ export function UplinkPage() {
                     </p>
                   ) : null}
                 </Rise>
-                  </>
-                )}
               </div>
+              )}
 
               <div className="space-y-4 md:space-y-5">
                 {data?.enabled && (

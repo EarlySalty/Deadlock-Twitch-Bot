@@ -7,7 +7,7 @@ last_updated: 2026-08-22
 source: rs-relay/docs/obs.html
 tip_eligible: false
 ---
-Du stellst den Weg zu uns ein. CBR, das 1080p-Limit und das Keyframe für Twitch musst du nicht übernehmen. Ziel ist viel Bild bei wenig Upload und wenig Last neben dem Spiel.
+Du stellst den Weg zu uns ein. CBR und das Keyframe für Twitch musst du nicht übernehmen, und welche Auflösung rausgeht, wählst du im Dashboard. Ziel ist viel Bild bei wenig Upload und wenig Last neben dem Spiel.
 
 ### 1. Ausgabe
 
@@ -79,7 +79,7 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 | Ab 8 Mbit, wenn die GPU 1440 ohne Drops hält | 2560×1440 | 60 | HEVC, VBR 6000, maximal 8000 |
 | Wenn die GPU Drops hat oder das Spiel ruckelt | Eine Stufe kleiner oder 30 fps |  | Derselbe Encoder, nicht auf Software wechseln |
 
-1440p an uns zu schicken lohnt sich, weil wir auf 1080p runterrechnen und dabei Schärfe behalten. Es lohnt sich nicht, wenn der Encoder Frames schluckt. **Skipped frames** bleibt in OBS bei 0.
+1440p an uns zu schicken lohnt sich zweifach: entweder rechnen wir daraus 1080p und behalten dabei Schärfe, oder wir senden die vollen 2K weiter, wenn du diese Stufe im Dashboard wählst. Es lohnt sich nicht, wenn der Encoder Frames schluckt. **Skipped frames** bleibt in OBS bei 0.
 
 ### 3. Ziel: unser Dienst
 

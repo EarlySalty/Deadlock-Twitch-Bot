@@ -266,11 +266,14 @@ pub async fn destinations_handler(
 /// Feste Stufen statt freier Zahlen, damit niemand eine Kombination
 /// zusammenstellt, die das Relay hinterher still klemmt.
 ///
-/// 1440p steht mit Absicht ganz unten und nicht als Standard: Twitch
-/// unterstuetzt es ueber den normalen Ingest offiziell nicht und deckelt die
-/// Bitrate bei 8000. Auf 1,78-mal so viele Pixel verteilt sind dieselben Bits
-/// in einem Deadlock-Teamfight weniger wert als bei 1080p. Wer es trotzdem
-/// will, soll es waehlen koennen; die Oberflaeche schreibt den Haken dazu.
+/// 1440p ist bewusst nicht der Standard: Twitch unterstuetzt es ueber den
+/// normalen Ingest offiziell nicht und deckelt die Bitrate bei 8000. Auf
+/// 1,78-mal so viele Pixel verteilt sind dieselben Bits in einem
+/// Deadlock-Teamfight weniger wert als bei 1080p. Wer es trotzdem will, soll
+/// es waehlen koennen; die Oberflaeche schreibt den Haken dazu.
+///
+/// Die Reihenfolge hier ist die der Auswahlliste. `profil_aufloesen` sucht
+/// nach Namen, fuer die Aufloesung spielt sie keine Rolle.
 const PROFILE: [(&str, i32, i32, i32, i32); 5] = [
     ("1080p60", 1920, 1080, 60, 6000),
     ("1080p60-hoch", 1920, 1080, 60, 8000),

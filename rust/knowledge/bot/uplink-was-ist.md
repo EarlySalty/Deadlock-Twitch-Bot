@@ -22,7 +22,7 @@ Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Pla
 
 Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Dein Twitch-Ziel trägst du im Dashboard ein. Titel und Kategorie änderst du in den Dashboards der Plattformen.
 
-Für Twitch und Kick werden 1080p und CBR verwendet.
+Für Twitch und Kick gilt CBR. Welche Auflösung wir senden, stellst du im Dashboard ein, von 480p bis 1440p.
 
 Uplink nimmt deinen Stream über SRT an. Im Dashboard steht dafür genau eine SRT-Adresse.
 
