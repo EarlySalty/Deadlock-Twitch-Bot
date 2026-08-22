@@ -126,17 +126,94 @@ async fn relay_json(
     Ok(wert)
 }
 
+/// Wie lange ein Eintrag aus `twitch_live_state` als Aussage ueber jetzt gilt.
+///
+/// Der Poller schreibt alle Zeilen gemeinsam und liegt im Betrieb wenige
+/// Sekunden zurueck. Fuenf Minuten sind grosszuegig genug, dass ein einzelner
+/// verzoegerter Lauf niemanden aussperrt, und kurz genug, dass ein stehender
+/// Poller nicht stundenlang ein "ist nicht live" behauptet.
+const LIVE_FRISCHE: chrono::Duration = chrono::Duration::minutes(5);
+
+/// Ob der Streamer gerade sendet.
+///
+/// Drei Antworten, nicht zwei: `"live"`, `"aus"` und `"unbekannt"`. Das
+/// Unbekannt ist kein Zierrat. Steht der Poller, ist ein altes `is_live = 0`
+/// keine Aussage ueber jetzt, und genau darauf soll die Oberflaeche nicht das
+/// Aufdecken eines Schluessels stuetzen. Unbekannt wird dort wie live
+/// behandelt: verdeckt bleiben kostet nur Komfort, faelschlich aufdecken kostet
+/// den Kanal.
+/// Bewertet eine Zeile aus `twitch_live_state`, ohne Datenbank und ohne Uhr.
+///
+/// `jetzt` kommt von aussen, damit die Frist pruefbar ist statt nur behauptet.
+fn live_bewerten(
+    zeile: Option<(i32, Option<&str>)>,
+    jetzt: chrono::DateTime<chrono::Utc>,
+) -> &'static str {
+    // Keine Zeile heisst: dieser Streamer wird nicht beobachtet. Auch das ist
+    // keine Aussage ueber jetzt.
+    let Some((is_live, last_seen)) = zeile else {
+        return "unbekannt";
+    };
+
+    // `last_seen_at` ist Text in der Datenbank. Was sich nicht lesen laesst,
+    // ist keine Zeitangabe und damit kein Frischenachweis.
+    let Some(gesehen) = last_seen
+        .map(str::trim)
+        .and_then(|roh| chrono::DateTime::parse_from_rfc3339(roh).ok())
+    else {
+        return "unbekannt";
+    };
+
+    // Auch ein Stand aus der Zukunft ist keiner: eine schiefe Uhr auf der
+    // schreibenden Seite darf keine Frische vortaeuschen.
+    let alter = jetzt.signed_duration_since(gesehen.with_timezone(&chrono::Utc));
+    if alter > LIVE_FRISCHE || alter < -LIVE_FRISCHE {
+        return "unbekannt";
+    }
+    match is_live {
+        0 => "aus",
+        _ => "live",
+    }
+}
+
+async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
+    let zeile: Option<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT COALESCE(is_live, 0), last_seen_at FROM twitch_live_state WHERE twitch_user_id = $1",
+    )
+    .bind(streamer_id.to_string())
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("uplink: Live-Status fuer {streamer_id} nicht lesbar: {e}");
+        None
+    });
+
+    live_bewerten(
+        zeile.as_ref().map(|(l, g)| (*l, g.as_deref())),
+        chrono::Utc::now(),
+    )
+}
+
 pub async fn me_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
 ) -> Result<Json<Value>, Response> {
     let id = partner_id(&pool, &auth).await?;
-    let wert = relay_json(
+    let mut wert = relay_json(
         reqwest::Method::GET,
         &format!("/v1/me?streamer_id={id}"),
         None,
     )
     .await?;
+    // Der Live-Status ist Wissen des Bots, nicht des Relays: er kommt aus der
+    // Twitch-Beobachtung. Deshalb wird er hier angehaengt und nicht im Relay
+    // nachgebaut.
+    if let Some(objekt) = wert.as_object_mut() {
+        objekt.insert(
+            "live_status".to_string(),
+            Value::String(live_status(&pool, id).await.to_string()),
+        );
+    }
     Ok(Json(wert))
 }
 
@@ -223,6 +300,58 @@ mod tests {
         let (login, id) = twitch_identitaet(&auth).unwrap();
         assert_eq!(login, "earlysalty");
         assert!(id.trim().parse::<i64>().is_err());
+    }
+
+    fn zeit(roh: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(roh)
+            .expect("Testzeit")
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn frischer_stand_entscheidet_live_oder_aus() {
+        let jetzt = zeit("2026-08-22T12:00:00+00:00");
+        let gerade = Some("2026-08-22T11:59:50+00:00");
+        assert_eq!(live_bewerten(Some((1, gerade)), jetzt), "live");
+        assert_eq!(live_bewerten(Some((0, gerade)), jetzt), "aus");
+    }
+
+    /// Der Kern der Sache: ein stehender Poller darf kein "ist nicht live"
+    /// behaupten, auf das die Oberflaeche ein Aufdecken stuetzt.
+    #[test]
+    fn alter_stand_ist_unbekannt_statt_aus() {
+        let jetzt = zeit("2026-08-22T12:00:00+00:00");
+        let alt = Some("2026-08-22T11:50:00+00:00");
+        assert_eq!(live_bewerten(Some((0, alt)), jetzt), "unbekannt");
+        assert_eq!(live_bewerten(Some((1, alt)), jetzt), "unbekannt");
+    }
+
+    #[test]
+    fn ohne_zeile_oder_ohne_zeit_bleibt_es_unbekannt() {
+        let jetzt = zeit("2026-08-22T12:00:00+00:00");
+        assert_eq!(live_bewerten(None, jetzt), "unbekannt");
+        assert_eq!(live_bewerten(Some((1, None)), jetzt), "unbekannt");
+        assert_eq!(live_bewerten(Some((1, Some("gestern"))), jetzt), "unbekannt");
+    }
+
+    /// Eine schiefe Uhr auf der schreibenden Seite darf keine Frische
+    /// vortaeuschen, sonst reichte ein Stand aus der Zukunft als Freibrief.
+    #[test]
+    fn stand_aus_der_zukunft_ist_unbekannt() {
+        let jetzt = zeit("2026-08-22T12:00:00+00:00");
+        let zukunft = Some("2026-08-22T12:30:00+00:00");
+        assert_eq!(live_bewerten(Some((0, zukunft)), jetzt), "unbekannt");
+    }
+
+    /// Genau an der Grenze zaehlt der Stand noch, eine Sekunde darueber nicht.
+    #[test]
+    fn die_frist_gilt_genau() {
+        let jetzt = zeit("2026-08-22T12:00:00+00:00");
+        assert_eq!(live_bewerten(Some((0, Some("2026-08-22T11:55:00+00:00"))), jetzt), "aus");
+        assert_eq!(
+            live_bewerten(Some((0, Some("2026-08-22T11:54:59+00:00"))), jetzt),
+            "unbekannt"
+        );
     }
 
     #[test]

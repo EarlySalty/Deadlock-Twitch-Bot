@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   Copy,
+  Eye,
+  EyeOff,
   Film,
   Home,
   Loader2,
@@ -59,17 +61,39 @@ function SidebarLink({
 }
 
 /**
- * Kopierfeld: der Knopf kopiert, und das Feld selbst ist ebenfalls ein
- * Klickziel. Beides laeuft ueber denselben Weg, damit die Rueckmeldung nicht
- * an einer der beiden Stellen fehlt.
+ * Kopierfeld mit verdecktem Wert.
  *
- * `navigator.clipboard` scheitert still, wenn die Seite ohne HTTPS laeuft oder
- * der Browser die Erlaubnis verweigert. Ohne den Fehlerzweig sagt das Feld
- * dann "Kopiert", waehrend die Zwischenablage leer bleibt, und der Streamer
- * sucht den Fehler spaeter in OBS.
+ * Kopieren geht immer, auch verdeckt: dafuer muss niemand den Wert sehen.
+ * Aufdecken haengt an `darfAufdecken`. Sendet der Streamer gerade, bleibt der
+ * Wert verdeckt, denn ein geteilter Bildschirm zeigt ihn sonst der ganzen
+ * Zuschauerschaft.
+ *
+ * Der Effekt verdeckt auch wieder: wer aufdeckt und dann den Stream startet,
+ * haette den Wert sonst offen auf dem Schirm, genau im gefaehrlichsten Moment.
+ *
+ * `navigator.clipboard` scheitert still ohne HTTPS oder ohne Erlaubnis. Ohne
+ * den Fehlerzweig meldete das Feld "Kopiert", waehrend die Zwischenablage leer
+ * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
  */
-function CopyField({ label, value }: { label: string; value: string }) {
+function CopyField({
+  label,
+  value,
+  darfAufdecken,
+  grundVerdeckt,
+}: {
+  label: string;
+  value: string;
+  darfAufdecken: boolean;
+  grundVerdeckt: string;
+}) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
+  const [offen, setOffen] = useState(false);
+
+  // Sobald das Aufdecken nicht mehr erlaubt ist, faellt ein offener Wert zu.
+  useEffect(() => {
+    if (!darfAufdecken) setOffen(false);
+  }, [darfAufdecken]);
+
   if (!value) return null;
 
   const kopieren = async () => {
@@ -83,6 +107,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
   };
 
   const knopfText = stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Ging nicht' : 'Kopieren';
+  const anzeige = offen ? value : '•'.repeat(Math.min(value.length, 48));
 
   return (
     <div className="space-y-1">
@@ -96,7 +121,17 @@ function CopyField({ label, value }: { label: string; value: string }) {
           title="Klicken zum Kopieren"
           className="min-w-0 flex-1 cursor-pointer truncate rounded-xl border border-border bg-background/70 px-3 py-2 text-left font-mono text-xs text-white transition-colors hover:border-primary/40 hover:bg-background"
         >
-          {value}
+          {anzeige}
+        </button>
+        <button
+          type="button"
+          onClick={() => setOffen((vorher) => !vorher)}
+          disabled={!darfAufdecken}
+          title={darfAufdecken ? undefined : grundVerdeckt}
+          className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-secondary"
+        >
+          {offen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          {offen ? 'Verdecken' : 'Zeigen'}
         </button>
         <button
           type="button"
@@ -107,8 +142,8 @@ function CopyField({ label, value }: { label: string; value: string }) {
           {knopfText}
         </button>
       </div>
-      {/* Ein aria-live-Bereich, weil die Rueckmeldung sonst nur im Knopftext
-          steht und von einem Screenreader nicht angesagt wird. */}
+      {/* aria-live, weil die Rueckmeldung sonst nur im Knopftext steht und von
+          einem Screenreader nicht angesagt wird. */}
       <p aria-live="polite" className="sr-only">
         {stand === 'ok' ? 'In die Zwischenablage kopiert' : ''}
         {stand === 'fehler' ? 'Kopieren hat nicht geklappt' : ''}
@@ -118,6 +153,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
           Dein Browser hat das Kopieren nicht erlaubt. Markier die Adresse und kopier sie von Hand.
         </p>
       )}
+      {!darfAufdecken && <p className="text-xs text-text-secondary">{grundVerdeckt}</p>}
     </div>
   );
 }
@@ -128,6 +164,12 @@ export function UplinkPage() {
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
     retry: false,
+    // Der Live-Status steckt in dieser Antwort und entscheidet, ob die Adresse
+    // aufgedeckt werden darf. Beendet der Streamer den Stream, waehrend das
+    // Dashboard offen liegt, soll das Aufdecken kurz darauf wieder gehen, ohne
+    // dass jemand neu laedt. Andersherum genauso: Stream an, Adresse zu.
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
   });
   const { data: helpPages, isError: isHelpError } = useQuery({
     queryKey: ['uplink-help'],
@@ -244,8 +286,24 @@ export function UplinkPage() {
                       nicht freigeschalteten Zugang. Dieser Block haengt an
                       data.enabled, trotzdem faengt der Guard den Leerfall ab:
                       ein leeres Kopierfeld waere die schlechteste Antwort. */}
+                  {/* Die Felder heissen wie in OBS, nicht wie bei uns. Wer
+                      "SRT-Adresse" liest und in OBS "Server" und
+                      "Streamschluessel" vor sich hat, raet sonst, und der Key
+                      landet im falschen Feld. Bei SRT gibt es keinen zweiten
+                      Wert: die streamid steckt in der Serveradresse, das
+                      Schluesselfeld bleibt leer. Genau das steht deshalb als
+                      eigenes Feld da, statt als Nebensatz. */}
                   {data.srt_hint ? (
-                    <CopyField label="SRT-Adresse" value={data.srt_hint} />
+                    <CopyField
+                      label="OBS-Feld „Server“"
+                      value={data.srt_hint}
+                      darfAufdecken={data.live_status === 'aus'}
+                      grundVerdeckt={
+                        data.live_status === 'live'
+                          ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
+                          : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
+                      }
+                    />
                   ) : (
                     <p className="text-sm text-warning">
                       Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei, meld dich beim Support.
@@ -260,9 +318,22 @@ export function UplinkPage() {
                     Sie enthält deinen persönlichen Schlüssel. Wer sie sieht, kann auf deinem Kanal senden.
                     Blende das Dashboard aus, bevor du es teilst.
                   </p>
-                  <p className="text-xs text-text-secondary">
-                    In OBS: Dienst Benutzerdefiniert, SRT-Adresse aus dem Dashboard. Hardware-HEVC, VBR, Keyframe 2 s. Danach Stream starten.
-                  </p>
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
+                      OBS-Feld „Streamschlüssel“
+                    </div>
+                    <div className="rounded-xl border border-dashed border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
+                      Leer lassen. Dein Schlüssel steckt schon in der Serveradresse oben.
+                    </div>
+                  </div>
+
+                  <ol className="list-decimal space-y-1 pl-5 text-xs text-text-secondary marker:text-primary/70">
+                    <li>In OBS: Einstellungen, Stream, Dienst auf „Benutzerdefiniert“.</li>
+                    <li>Serveradresse oben kopieren und in „Server“ einfügen.</li>
+                    <li>„Streamschlüssel“ leer lassen.</li>
+                    <li>Ausgabe: Hardware-HEVC, VBR, Keyframe 2 s.</li>
+                    <li>Stream starten. Den Rest machen wir.</li>
+                  </ol>
                 </Rise>
 
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
