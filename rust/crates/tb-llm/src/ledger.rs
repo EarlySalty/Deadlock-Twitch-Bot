@@ -231,10 +231,22 @@ async fn record_with_pool(
 /// (`ts >= datetime('now','-N hours')`), damit alle Seiten identisch zählen.
 /// **Best-effort:** bei jedem Fehler `0` + `warn`-Log.
 pub async fn window_tokens(hours: i64) -> i64 {
+    window_tokens_gefiltert(hours, ModellFilter::Alle).await
+}
+
+/// Welche Modelle ein Fenster zaehlt. Das Ledger fuehrt seit der
+/// Zentralisierung alle Anbieter; das 5h-Budget meint aber nur MiniMax.
+#[derive(Clone, Copy)]
+enum ModellFilter {
+    Alle,
+    NurMinimax,
+}
+
+async fn window_tokens_gefiltert(hours: i64, filter: ModellFilter) -> i64 {
     let Some(pool) = pool().await else {
         return 0;
     };
-    match window_tokens_with_pool(pool, hours).await {
+    match window_tokens_with_pool(pool, hours, filter).await {
         Ok(sum) => sum,
         Err(err) => {
             tracing::warn!(error = %err, "MiniMax-Usage-Ledger: window_tokens fehlgeschlagen");
@@ -245,9 +257,16 @@ pub async fn window_tokens(hours: i64) -> i64 {
 
 /// Kern-Abfrage des Fensters gegen einen expliziten Pool — von [`window_tokens`]
 /// (gecachter Pool) und den Tests (Temp-Pool) genutzt.
-async fn window_tokens_with_pool(pool: &PgPool, hours: i64) -> sqlx::Result<i64> {
+async fn window_tokens_with_pool(
+    pool: &PgPool,
+    hours: i64,
+    filter: ModellFilter,
+) -> sqlx::Result<i64> {
     // `make_interval` nimmt int4 → hours auf i32 klemmen; negatives → 0.
     let hours = i32::try_from(hours.max(0)).unwrap_or(i32::MAX);
+    // MiniMax-Modelle heissen `MiniMax-...`; Fireworks/DeepSeek und Anthropic
+    // tragen andere Namen und zaehlen nicht zum MiniMax-Budget.
+    let nur_minimax = matches!(filter, ModellFilter::NurMinimax);
     // Textbasiertes Fenster (ts ist TEXT, siehe Modul-Doc): der Schwellwert wird
     // als ISO-8601-UTC-String im **exakt gleichen** Format wie beim Schreiben
     // gebildet (`YYYY-MM-DDThh:mm:ss+00:00`) und lexikografisch verglichen. Das
@@ -260,9 +279,11 @@ async fn window_tokens_with_pool(pool: &PgPool, hours: i64) -> sqlx::Result<i64>
             (now() AT TIME ZONE 'UTC') - make_interval(hours => $1),
             'YYYY-MM-DD"T"HH24:MI:SS'
         ) || '+00:00'
+          AND ($2 = false OR model ILIKE 'minimax%')
         "#,
     )
     .bind(hours)
+    .bind(nur_minimax)
     .fetch_one(pool)
     .await
 }
@@ -291,7 +312,9 @@ pub async fn warn_if_over_budget() {
         *last = Some(now);
     }
 
-    let used = window_tokens(WINDOW_HOURS).await;
+    // Nur MiniMax-Zeilen: Anthropic- und Fireworks-Tokens stehen seit der
+    // Zentralisierung im selben Ledger, gehoeren aber nicht zu diesem Budget.
+    let used = window_tokens_gefiltert(WINDOW_HOURS, ModellFilter::NurMinimax).await;
     if used > budget {
         tracing::warn!(
             used,
@@ -478,13 +501,30 @@ mod tests {
             .await
             .unwrap();
 
-        let sum = window_tokens_with_pool(&pool, 5)
+        let sum = window_tokens_with_pool(&pool, 5, ModellFilter::Alle)
             .await
             .expect("Fenster-Summe");
         assert_eq!(
             sum, 200,
             "nur die zwei aktuellen 100er zählen, nicht die alten 999"
         );
+
+        // Budget-Sicht: nur MiniMax-Modelle. Anthropic-Zeilen zaehlen nicht.
+        for (model, total) in [("MiniMax-M3", 50), ("claude-opus-4-6", 700)] {
+            sqlx::query(
+                "INSERT INTO minimax_usage (ts, source, model, total) VALUES ($1, 'twitch-bot', $2, $3)",
+            )
+            .bind(&now_ts)
+            .bind(model)
+            .bind(total)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let minimax = window_tokens_with_pool(&pool, 5, ModellFilter::NurMinimax)
+            .await
+            .expect("MiniMax-Summe");
+        assert_eq!(minimax, 50, "nur die MiniMax-Zeile zaehlt zum Budget");
     }
 
     #[test]
