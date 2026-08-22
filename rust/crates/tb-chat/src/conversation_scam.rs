@@ -74,10 +74,7 @@ const YOUNG_ACCOUNT_START_THRESHOLD: f32 = 0.80;
 const SUBSTANTIAL_MESSAGE_TARGET: usize = 3;
 const CROSS_CHANNEL_WINDOW_MINUTES: i64 = 60;
 const CONVERSATION_SCAM_GLOBAL_BAN_ADDED_BY: &str = "conversation_scam_ai";
-/// Ab dieser Konfidenz darf ein Scam-Urteil ein Muster in den Vorfilter
-/// schreiben. Ein gelerntes Muster ist ein hartes Signal und wirkt in allen
-/// Kanaelen, deshalb liegt die Schwelle ueber jeder Ban-Schwelle.
-const LEARN_MIN_CONFIDENCE: f32 = 0.9;
+use crate::scam_pitch::LEARN_MIN_CONFIDENCE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerdictKind {
@@ -571,9 +568,11 @@ pub trait ScamGuardStore: Send + Sync {
     async fn learn_spam_pattern(
         &self,
         _pattern: &str,
+        _evidence: &str,
         _source_message: &str,
         _channel_login: &str,
         _reasoning: &str,
+        _confidence: f32,
     ) -> Result<Option<String>, String> {
         Ok(None)
     }
@@ -817,18 +816,24 @@ impl ScamGuardStore for PgScamGuardStore {
     async fn learn_spam_pattern(
         &self,
         pattern: &str,
+        evidence: &str,
         source_message: &str,
         channel_login: &str,
         reasoning: &str,
+        confidence: f32,
     ) -> Result<Option<String>, String> {
-        use crate::scam_pitch::{LearnOutcome, learn_pattern_from_judge};
+        use crate::scam_pitch::{JudgeLearning, LearnOutcome, learn_pattern_from_judge};
         match learn_pattern_from_judge(
             &self.pool,
-            pattern,
-            "fragment",
-            source_message,
-            channel_login,
-            reasoning,
+            JudgeLearning {
+                pattern,
+                pattern_type: "fragment",
+                evidence,
+                source_message,
+                channel: channel_login,
+                reasoning,
+                confidence: Some(confidence),
+            },
         )
         .await
         {
@@ -1084,13 +1089,18 @@ impl ConversationScamGuard {
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
             {
+                // Beleg ueber den ganzen Dialog: der Judge urteilt ab der
+                // dritten Nachricht ueber den Verlauf, das Skript-Token kann
+                // also in einer frueheren Zeile stehen.
                 match self
                     .store
                     .learn_spam_pattern(
                         pattern,
+                        &dialog.transcript_snapshot(),
                         event.text(),
                         &channel_login,
                         &verdict.reasoning,
+                        verdict.confidence,
                     )
                     .await
                 {

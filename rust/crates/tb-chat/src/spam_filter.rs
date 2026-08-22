@@ -457,7 +457,7 @@ pub fn spam_signal_ist_nur_viewer_muster(matched: &[String]) -> bool {
 
 /// Baut einen Word-Boundary-Regex für ein Literal-Muster (\b...\b).
 /// Entspricht `re.search(r"\b" + re.escape(...) + r"\b", lowered)`.
-fn word_boundary_re(pattern: &str) -> Option<Regex> {
+pub(crate) fn word_boundary_re(pattern: &str) -> Option<Regex> {
     let escaped = regex::escape(pattern);
     Regex::new(&format!(r"\b{escaped}\b")).ok()
 }
