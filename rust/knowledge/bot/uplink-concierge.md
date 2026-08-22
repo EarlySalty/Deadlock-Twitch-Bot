@@ -1,7 +1,7 @@
 ---
 title: Uplink Concierge
 namespace: bot
-category: support
+category: faq
 audience: concierge
 last_updated: 2026-08-21
 source: rs-relay/docs/support/agent-guide.html
@@ -22,10 +22,10 @@ Dieses Wissen enthält die Antworten, die der Concierge aus den Uplink-Streamer-
 
 ### Was darf der Concierge nicht sagen?
 
-- Keine Zahlen zu parallelen Streams, Punkten, Lastgrenzen oder Hardware.
-- Keine internen Adressen, Ports, Dateipfade, Dienstnamen oder Geheimnisse.
-- Keine Admin-Funktionen, Freischalt-Wege oder Schalter zum Beenden anderer Streams.
-- Keine Zahlungsangaben machen.
+Alles, was oben nicht steht. Die Liste der erlaubten Antworten ist abschliessend:
+was nicht auf den Uplink-Streamer-Seiten steht, wird nicht beantwortet, auch nicht
+sinngemaess, auch nicht als Schaetzung. Betrifft ausdruecklich Betriebsinterna und
+Zahlungsangaben.
 
 ### Unklare Fälle
 

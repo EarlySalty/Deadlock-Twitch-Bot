@@ -1337,6 +1337,27 @@ impl ChatPipeline {
                             marker,
                             "Safe-Wording: reiner Viewer-Regex-Treffer, Judge übersprungen"
                         );
+                        // Der Alert geht trotzdem raus. Uebersprungen wird der
+                        // Judge, nicht die Sichtbarkeit: sonst verschwaende das
+                        // Gate seine eigenen Treffer lautlos, und niemand
+                        // merkte, wenn es zu weit greift. Aktion gibt es keine.
+                        p.alerter.send_sus_spam(SusSpamAlert {
+                            channel_login,
+                            chatter_login,
+                            chatter_id: &event.chatter_user_id,
+                            content: text,
+                            rule_reason: &format!(
+                                "Score {}: {} (Safe-Wording-Gate, Marker: {marker})",
+                                verdict.score,
+                                reasons.join(", ")
+                            ),
+                            outcome: &AiReviewOutcome::Safe {
+                                reason: format!(
+                                    "Harmlose Umgangssprache (Marker: {marker}), Judge nicht gefragt"
+                                ),
+                            },
+                            action_taken: "keine",
+                        });
                         return false;
                     }
                 }

@@ -194,7 +194,16 @@ export function UplinkPage() {
               <div className="space-y-4">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  <CopyField label="SRT-Adresse" value={data.srt_hint} />
+                  {/* Die Relay-Antwort wird als rohes JSON durchgereicht. Fehlt
+                      das Feld, stuende hier ein leeres Kopierfeld und der
+                      Streamer haette gar keine Adresse mehr. */}
+                  {data.srt_hint ? (
+                    <CopyField label="SRT-Adresse" value={data.srt_hint} />
+                  ) : (
+                    <p className="text-sm text-warning">
+                      Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei, meld dich beim Support.
+                    </p>
+                  )}
                   <p className="text-xs text-text-secondary">
                     In OBS: Dienst Benutzerdefiniert, SRT-Adresse aus dem Dashboard. Hardware-HEVC, VBR, Keyframe 2 s. Danach Stream starten.
                   </p>

@@ -346,11 +346,43 @@ const SAFE_WORDING_MARKERS: &[&str] = &[
     "bin am lurk",
 ];
 
+/// Kontaktaufnahme und Verkauf. Wer sie mitschickt, will etwas verkaufen, auch
+/// wenn er es in Gönn-Sprech verpackt: „gönn dir viewers, schreib mir" trägt
+/// sonst nur den weichen Viewer-Regex und käme ohne diese Gegenprüfung am Judge
+/// vorbei. Das Gate ist gegen falsche Timeouts bei Umgangssprache gebaut, nicht
+/// als Freifahrtschein für getarnte Angebote.
+const KONTAKT_MARKERS: &[&str] = &[
+    "schreib mir",
+    "schreibt mir",
+    "schreib mich",
+    "melde dich",
+    "meldet euch",
+    "dm mir",
+    "dm mich",
+    "schick mir",
+    "kontaktier",
+    "t.me/",
+    "telegram",
+    "whatsapp",
+    "discord.gg",
+    "billig",
+    "guenstig",
+    "günstig",
+    "kaufen",
+    "preis",
+];
+
 /// Trifft ein harmloses Umgangssprache-Muster, das den Viewer-Regex fälschlich
 /// triggert, gibt den Marker zurück. Lowercase-Contains reicht: die Marker sind
 /// distinktiv, und das Gate greift nur im reinen Viewer-Regex-Pfad.
+///
+/// Trägt der Text zusätzlich eine Kontaktaufnahme oder ein Verkaufswort, gibt es
+/// keinen Marker zurück: dann entscheidet wieder der Judge.
 pub fn matches_safe_wording(text: &str) -> Option<&'static str> {
     let lowered = text.to_lowercase();
+    if KONTAKT_MARKERS.iter().any(|k| lowered.contains(k)) {
+        return None;
+    }
     SAFE_WORDING_MARKERS
         .iter()
         .copied()
@@ -1173,6 +1205,28 @@ mod tests {
         assert_eq!(matches_safe_wording("goenn dir viewer"), Some("goenn"));
         assert_eq!(matches_safe_wording("bin nur am lurken hehe"), Some("am lurken"));
         assert_eq!(matches_safe_wording("best viewers streamboo com"), None);
+    }
+
+    /// Getarnte Angebote tragen den harmlosen Marker mit, wollen aber verkaufen.
+    /// Der reine Viewer-Regex ist dabei das einzige Spam-Signal, das Gate wuerde
+    /// sie also ohne diese Gegenpruefung am Judge vorbei durchwinken.
+    #[test]
+    fn safe_wording_greift_nicht_bei_kontakt_oder_verkauf() {
+        for text in [
+            "gönn dir viewers, schreib mir",
+            "gönn dir viewer, dm mir",
+            "goenn dir viewer, billig",
+            "gönn dir viewer, melde dich per telegram",
+            "bin am lurken, kaufen kannst du viewer bei mir",
+        ] {
+            assert_eq!(
+                matches_safe_wording(text),
+                None,
+                "Kontakt- oder Verkaufsangebot darf nicht als harmlos gelten: {text}"
+            );
+        }
+        // Die harmlose Umgangssprache bleibt harmlos.
+        assert_eq!(matches_safe_wording("gönn dir viewer bro"), Some("gönn"));
     }
 
     #[test]

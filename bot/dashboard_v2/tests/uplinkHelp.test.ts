@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { extractUplinkMain } from '../src/uplinkHelp';
+import { extractUplinkMain, UPLINK_HELP_PAGES, uplinkHelpUrl } from '../src/uplinkHelp';
 
 const DASHBOARD_ROOT = join(import.meta.dirname, '..');
 const HELP_ROOT = join(DASHBOARD_ROOT, 'public', 'uplink');
@@ -32,12 +32,40 @@ test('Dashboard bindet die Uplink-Hilfe mit main.uplink-doc ein', () => {
   }
 });
 
-test('extrahiert nur main.uplink-doc aus einer Streamer-Seite', () => {
+test('extrahiert nur main.uplink-doc und legt die Ueberschrift eine Ebene tiefer', () => {
+  // Die Seite hat schon eine h1; drei Fragmente mit eigener h1 zerlegen die
+  // Ueberschriftenstruktur fuer Screenreader.
   const html = '<body><main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main></body>';
   assert.equal(
     extractUplinkMain(html),
-    '<main class="uplink-doc" data-doc="obs"><h1>OBS</h1></main>',
+    '<main class="uplink-doc" data-doc="obs"><h2>OBS</h2></main>',
   );
+});
+
+test('nimmt nur bis zum ersten schliessenden main', () => {
+  // Gieriges Matching zoege fremdes Markup in das dangerouslySetInnerHTML.
+  const html =
+    '<main class="uplink-doc" data-doc="obs"><p>A</p></main><main><p>fremd</p></main>';
+  assert.equal(extractUplinkMain(html), '<main class="uplink-doc" data-doc="obs"><p>A</p></main>');
+});
+
+test('macht relative Links im Fragment absolut', () => {
+  // Gerendert wird das Fragment auf /twitch/uplink: `obs.html` zeigte dort auf
+  // /twitch/obs.html, eine Route, die es nicht gibt.
+  const html =
+    '<main class="uplink-doc" data-doc="was-ist"><a href="obs.html">OBS</a>' +
+    '<a href="https://twitch.tv">extern</a><a href="#anker">Anker</a></main>';
+  const fragment = extractUplinkMain(html);
+  assert.match(fragment, new RegExp(`href="${uplinkHelpUrl('obs.html')}"`));
+  assert.match(fragment, /href="https:\/\/twitch\.tv"/);
+  assert.match(fragment, /href="#anker"/);
+});
+
+test('jede eingebettete Seite existiert als Datei', () => {
+  // Ohne diese Pruefung faellt eine neue Hilfeseite lautlos aus der Einbettung.
+  for (const page of UPLINK_HELP_PAGES) {
+    assert.ok(existsSync(join(HELP_ROOT, page.file)), `Hilfequelle fehlt: ${page.file}`);
+  }
 });
 
 test('weist eine HTML-Seite ohne main.uplink-doc zurück', () => {
