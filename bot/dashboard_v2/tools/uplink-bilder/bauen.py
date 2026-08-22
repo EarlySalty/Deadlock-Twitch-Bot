@@ -157,7 +157,7 @@ s.append(f'<text x="24" y="66" class="dim" font-size="12">beim ersten Öffnen</t
 s.append(f'<text x="480" y="66" class="dim" font-size="12">danach, dauerhaft</text>')
 
 # rechts: angemeldet
-s.append(f'<rect x="480" y="74" width="396" height="180" rx="6" fill={chr(34)}{OBS_FELD}{chr(34)} stroke="{OBS_RAND}"/>')
+s.append(f'<rect x="480" y="74" width="396" height="180" rx="6" fill="{OBS_FELD}" stroke="{OBS_RAND}"/>')
 namen = [("Lea", "#4a9eff", "gg wp"), ("Mika", "#3ecf8e", "der Fight war nice"), ("Tobi", "#ff6b9d", "PogChamp"), ("Sam", "#ffb454", "wie heisst der Build?")]
 for i, (n, farbe, text) in enumerate(namen):
     y = 104 + i * 32

@@ -275,6 +275,7 @@ export function UplinkPage() {
   // Ergebnis, sonst spraenge die Auswahl auf das, was die Plattform erlaubt.
   const [profilGesetzt, setProfilGesetzt] = useState(false);
   const bestellt = gespeicherteZiele.find((z) => z.platform === 'twitch')?.requested;
+  const gewaehltesProfil = UPLINK_PROFILE.find((e) => e.name === profil);
   useEffect(() => {
     if (profilGesetzt) return;
     const name = profilNameFuer(bestellt);
@@ -296,7 +297,7 @@ export function UplinkPage() {
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <div className="relative mx-auto max-w-[1440px]">
+      <div className="relative mx-auto max-w-[1800px]">
         <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
           <Rise as="aside" className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4">
             <div className="space-y-4">
@@ -379,8 +380,23 @@ export function UplinkPage() {
               </div>
             )}
 
-            {data?.enabled && (
-              <div className="space-y-4">
+            {/* Zwei Spalten erst ab xl: darunter ist eine Spalte schmaler als
+                die Serveradresse, und ein umbrechender SRT-Link ist unlesbar.
+                `items-start` verhindert, dass die kuerzere Spalte auf die
+                Hoehe der laengeren gestreckt wird und unten leer dasteht. */}
+            <div
+              className={
+                data?.enabled
+                  ? 'grid gap-4 md:gap-5 xl:grid-cols-2 xl:items-start'
+                  : // Ohne freigeschalteten Zugang gibt es nur die Hilfe. Im
+                    // Zweispalter bliebe die linke Haelfte leer und die Hilfe
+                    // klebte rechts am Rand.
+                    'space-y-4 md:space-y-5'
+              }
+            >
+              <div className="space-y-4 md:space-y-5">
+                {data?.enabled && (
+                  <>
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                   {/* srt_hint liefert das Relay immer als String (rs-relay,
@@ -477,11 +493,16 @@ export function UplinkPage() {
                       ))}
                     </select>
                     <p className="text-xs text-text-secondary">
-                      {UPLINK_PROFILE.find((e) => e.name === profil)?.hinweis}
+                      {gewaehltesProfil?.hinweis}
                     </p>
+                    {gewaehltesProfil?.warnung ? (
+                      <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                        {gewaehltesProfil.warnung}
+                      </p>
+                    ) : null}
                     <p className="text-xs text-text-secondary">
-                      Du darfst uns 1440p schicken, wir rechnen daraus diese Stufe. Twitch selbst nimmt über
-                      diesen Weg kein 1440p an.
+                      Schick uns ruhig 1440p. Wir rechnen daraus die gewählte Stufe, ohne dass du in OBS
+                      etwas umstellst.
                     </p>
                   </div>
 
@@ -539,7 +560,12 @@ export function UplinkPage() {
                     </p>
                   ) : null}
                 </Rise>
+                  </>
+                )}
+              </div>
 
+              <div className="space-y-4 md:space-y-5">
+                {data?.enabled && (
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
                   <p className="text-sm text-text-secondary">
@@ -568,8 +594,7 @@ export function UplinkPage() {
                     speichern. Das übersteht jeden OBS-Neustart.
                   </p>
                 </Rise>
-              </div>
-            )}
+                )}
 
             <Rise className="panel-card space-y-4 rounded-2xl p-6">
               <div>
@@ -627,6 +652,8 @@ export function UplinkPage() {
                 Uplink-Hilfe als eigene Seite öffnen
               </a>
             </Rise>
+              </div>
+            </div>
           </div>
         </div>
       </div>

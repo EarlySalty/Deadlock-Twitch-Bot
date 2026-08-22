@@ -37,12 +37,7 @@ export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
 }
 
 /**
- * Die Profilnamen muessen zum Katalog in `handlers/uplink.rs` passen. Ein Name,
- * den der Server nicht kennt, gibt 400 statt still auf den Standard zu fallen.
- *
- * 1440p fehlt mit Absicht: der normale Twitch-Ingest nimmt nur 1080p60 an,
- * hoehere Aufloesungen gehen dort ausschliesslich ueber Enhanced Broadcasting,
- * und das setzt OBS mit verbundenem Twitch-Konto voraus, also ohne uns.
+ * Ein Videoprofil, wie das Relay es zurueckgibt.
  */
 export interface UplinkProfilAnsicht {
   width: number;
@@ -51,11 +46,46 @@ export interface UplinkProfilAnsicht {
   bitrate_kbps: number;
 }
 
+/**
+ * Die Profilnamen muessen zum Katalog in `handlers/uplink.rs` passen. Ein Name,
+ * den der Server nicht kennt, gibt 400 statt still auf den Standard zu fallen.
+ *
+ * `warnung` ist gesetzt, wo die Stufe zwar waehlbar, aber nicht unbedenklich
+ * ist. Getrennt vom `hinweis`, damit die Oberflaeche sie anders faerben kann:
+ * ein Nachteil, den man ueberliest, ist keiner.
+ */
 export const UPLINK_PROFILE = [
-  { name: '1080p60', label: '1080p60, 6000 kbps', hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.' },
-  { name: '1080p60-hoch', label: '1080p60, 8000 kbps', hinweis: 'Twitch-Maximum. Nur mit Partner- oder Affiliate-Status sinnvoll.' },
-  { name: '720p60', label: '720p60, 4500 kbps', hinweis: 'Weniger Serverlast und weniger Upload, immer noch 60 Bilder.' },
-  { name: '480p30', label: '480p30, 1500 kbps', hinweis: 'Notfallstufe bei schlechter Leitung.' },
+  {
+    name: '1080p60',
+    label: '1080p60, 6000 kbps',
+    hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.',
+    warnung: '',
+  },
+  {
+    name: '1080p60-hoch',
+    label: '1080p60, 8000 kbps',
+    hinweis: 'Twitch-Maximum. Nur mit Partner- oder Affiliate-Status sinnvoll.',
+    warnung: '',
+  },
+  {
+    name: '1440p60',
+    label: '1440p60 (2K), 8000 kbps',
+    hinweis: 'Deine volle 2K-Auflösung, ohne Umrechnung durchgereicht.',
+    warnung:
+      'Twitch unterstützt 2K über diesen Weg offiziell nicht und deckelt die Bitrate bei 8000. Dieselben Bits verteilen sich auf fast doppelt so viele Pixel, im Teamfight sieht das oft schlechter aus als 1080p. Probier es einen Abend lang aus, bevor du dabei bleibst.',
+  },
+  {
+    name: '720p60',
+    label: '720p60, 4500 kbps',
+    hinweis: 'Weniger Serverlast und weniger Upload, immer noch 60 Bilder.',
+    warnung: '',
+  },
+  {
+    name: '480p30',
+    label: '480p30, 1500 kbps',
+    hinweis: 'Notfallstufe bei schlechter Leitung.',
+    warnung: '',
+  },
 ] as const;
 
 export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
@@ -64,6 +94,7 @@ export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
 const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
   '1080p60': [1920, 1080, 60, 6000],
   '1080p60-hoch': [1920, 1080, 60, 8000],
+  '1440p60': [2560, 1440, 60, 8000],
   '720p60': [1280, 720, 60, 4500],
   '480p30': [854, 480, 30, 1500],
 };

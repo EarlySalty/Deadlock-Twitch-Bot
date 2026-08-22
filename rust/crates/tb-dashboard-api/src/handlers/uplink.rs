@@ -263,17 +263,34 @@ pub async fn destinations_handler(
 
 /// Erlaubte Profile fuer die Zielwahl im Dashboard.
 ///
-/// Feste Stufen statt freier Zahlen: Twitch nimmt ueber den normalen Ingest
-/// hoechstens 1080p60, und wer 1440 eintraegt, bekaeme einen Stream, den die
-/// Plattform still verwirft oder schlecht ausliefert. Das Relay klemmt zwar
-/// zusaetzlich gegen `relay.platform_caps`, aber eine geklemmte Eingabe ist
-/// eine Eingabe, die der Streamer nie so gemeint hat.
-const PROFILE: [(&str, i32, i32, i32, i32); 4] = [
+/// Feste Stufen statt freier Zahlen, damit niemand eine Kombination
+/// zusammenstellt, die das Relay hinterher still klemmt.
+///
+/// 1440p steht mit Absicht ganz unten und nicht als Standard: Twitch
+/// unterstuetzt es ueber den normalen Ingest offiziell nicht und deckelt die
+/// Bitrate bei 8000. Auf 1,78-mal so viele Pixel verteilt sind dieselben Bits
+/// in einem Deadlock-Teamfight weniger wert als bei 1080p. Wer es trotzdem
+/// will, soll es waehlen koennen; die Oberflaeche schreibt den Haken dazu.
+const PROFILE: [(&str, i32, i32, i32, i32); 5] = [
     ("1080p60", 1920, 1080, 60, 6000),
     ("1080p60-hoch", 1920, 1080, 60, 8000),
     ("720p60", 1280, 720, 60, 4500),
     ("480p30", 854, 480, 30, 1500),
+    ("1440p60", 2560, 1440, 60, 8000),
 ];
+
+/// Obergrenze, die fuer Twitch-Ziele wirklich gilt.
+///
+/// Nicht der Ingest-Deckel: das Dashboard schreibt ausschliesslich
+/// Twitch-Ziele, also ist die Twitch-Cap die Grenze, an der ein Profil still
+/// weggeklemmt wuerde. Stand seit `20260823000001_twitch_caps_2k.sql` in
+/// rs-relay: 2560x1440 bei 8000 kbps.
+#[cfg(test)]
+const TWITCH_MAX_BREITE: i32 = 2560;
+#[cfg(test)]
+const TWITCH_MAX_HOEHE: i32 = 1440;
+#[cfg(test)]
+const TWITCH_MAX_BITRATE: i32 = 8000;
 
 /// Loest einen Profilnamen auf. `None` heisst: nicht im Katalog.
 fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
@@ -345,10 +362,13 @@ mod tests {
 
     #[test]
     fn unbekannte_profile_werden_abgelehnt() {
-        // 1440p steht bewusst nicht im Katalog: der normale Twitch-Ingest
-        // nimmt es nicht an. Faellt es je durch, kaeme es hier durch.
-        assert_eq!(profil_aufloesen("1440p60"), None);
+        assert_eq!(profil_aufloesen("2160p60"), None);
         assert_eq!(profil_aufloesen(""), None);
+    }
+
+    #[test]
+    fn das_hoechste_profil_ist_1440p() {
+        assert_eq!(profil_aufloesen("1440p60"), Some((2560, 1440, 60, 8000)));
     }
 
     #[test]
@@ -358,12 +378,26 @@ mod tests {
 
     #[test]
     fn kein_profil_ueberschreitet_die_twitch_grenze() {
-        // Die Klemmung im Relay ist die zweite Verteidigungslinie. Reisst der
-        // Katalog hier aus, merkt es sonst niemand, weil geklemmt still passiert.
+        // Die Klemmung im Relay ist die zweite Verteidigungslinie, aber sie
+        // passiert still: der Streamer waehlt 1440p und bekaeme 1080p, ohne
+        // dass irgendwo ein Fehler auftaucht. Deshalb faellt der Katalog hier
+        // auf, sobald er ueber die Twitch-Cap hinauswaechst.
         for (name, w, h, _f, b) in PROFILE {
-            assert!(w <= 1920 && h <= 1080, "{name} ist groesser als 1080p");
-            assert!(b <= 8000, "{name} liegt ueber dem Twitch-Deckel");
+            assert!(w <= TWITCH_MAX_BREITE, "{name} ist breiter als Twitch annimmt");
+            assert!(h <= TWITCH_MAX_HOEHE, "{name} ist hoeher als Twitch annimmt");
+            assert!(b <= TWITCH_MAX_BITRATE, "{name} liegt ueber dem Twitch-Deckel");
         }
+    }
+
+    #[test]
+    fn die_namen_im_katalog_sind_eindeutig() {
+        // Zwei gleiche Namen: `find` nimmt den ersten, der zweite waere tot,
+        // und in der Auswahlliste staende derselbe Eintrag zweimal.
+        let mut namen: Vec<&str> = PROFILE.iter().map(|(n, ..)| *n).collect();
+        namen.sort_unstable();
+        let vorher = namen.len();
+        namen.dedup();
+        assert_eq!(namen.len(), vorher);
     }
 
     #[test]
