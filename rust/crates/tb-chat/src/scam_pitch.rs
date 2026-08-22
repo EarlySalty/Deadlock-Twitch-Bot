@@ -1789,7 +1789,7 @@ async fn persist_spam_learning(
 /// Ab dieser Konfidenz darf ein Judge-Urteil ein Muster in den Vorfilter
 /// schreiben. Ein gelerntes Muster ist ein hartes Signal und wirkt rueckwirkend
 /// in allen Kanaelen, deshalb liegt die Schwelle ueber jeder Ahndungsschwelle.
-/// Liefert ein Judge gar keine Konfidenz, entscheiden die uebrigen Huerden.
+/// Liefert ein Judge gar keine Konfidenz, wird nicht gelernt.
 pub(crate) const LEARN_MIN_CONFIDENCE: f32 = 0.9;
 
 /// Ergebnis eines Lernversuchs aus einem Judge-Urteil.
@@ -1867,8 +1867,10 @@ pub(crate) async fn learn_pattern_from_judge(pool: &PgPool, req: JudgeLearning<'
     if canonical.chars().count() < PATTERN_MIN_LEN {
         return LearnOutcome::Skipped;
     }
-    // Ein knappes Urteil darf ahnden, aber nichts dauerhaft lernen.
-    if confidence.is_some_and(|c| c < LEARN_MIN_CONFIDENCE) {
+    // Ein knappes Urteil darf ahnden, aber nichts dauerhaft lernen. Fehlt die
+    // Konfidenz ganz, gilt dasselbe wie im Ahndungspfad (`ahndung_erlaubt` in
+    // pipeline.rs): unbekannt ist nicht klar genug.
+    if !confidence.is_some_and(|c| c >= LEARN_MIN_CONFIDENCE) {
         return LearnOutcome::Skipped;
     }
     // Was das Safe-Wording-Gate von der Ahndung ausnimmt, darf erst recht kein
@@ -2871,6 +2873,27 @@ mod tests {
         assert_eq!(count, 0, "halluziniertes Muster darf nicht in der DB stehen");
     }
 
+    /// Fehlt die Konfidenz, gilt dasselbe wie im Ahndungspfad: unbekannt ist
+    /// nicht klar genug, um ein dauerhaftes hartes Signal zu setzen.
+    #[tokio::test]
+    async fn judge_ohne_konfidenz_lernt_nichts() {
+        let pool = pool_or_skip!("judge_learning_ohne_konfidenz");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "clicknex.online",
+                pattern_type: "fragment",
+                evidence: "schau mal clicknex.online an",
+                source_message: "schau mal clicknex.online an",
+                channel: "testchannel",
+                reasoning: "Grund",
+                confidence: None,
+            },
+        )
+        .await;
+        assert!(matches!(outcome, LearnOutcome::Skipped));
+    }
+
     /// Ein knappes Urteil darf ahnden, aber nichts dauerhaft lernen.
     #[tokio::test]
     async fn knappes_judge_urteil_lernt_nichts() {
@@ -3037,7 +3060,7 @@ mod tests {
         let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
         let review = AiReview {
             is_spam: true,
-            confidence: None,
+            confidence: Some(0.95),
             pattern: Some("PeakPy c0m".to_string()),
             pattern_type: Some("fragment".to_string()),
             reason: Some("obfuskierter viewer-service".to_string()),
@@ -3074,7 +3097,7 @@ mod tests {
         let pool = pool_or_skip!("scam_ai_contract_gate_reject");
         let review = AiReview {
             is_spam: true,
-            confidence: None,
+            confidence: Some(0.95),
             pattern: Some("best viewers".to_string()),
             pattern_type: Some("phrase".to_string()),
             reason: Some("viewer-bot werbung".to_string()),
@@ -3110,7 +3133,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{
                     "message": {
-                        "content": "<think>kurze analyse</think>\n{\"is_spam\": true, \"pattern\": \"PeakPy c0m\", \"pattern_type\": \"fragment\", \"reason\": \"obfuskierter viewer-service\"}"
+                        "content": "<think>kurze analyse</think>\n{\"is_spam\": true, \"confidence\": 0.95, \"pattern\": \"PeakPy c0m\", \"pattern_type\": \"fragment\", \"reason\": \"obfuskierter viewer-service\"}"
                     }
                 }],
                 "usage": { "prompt_tokens": 5, "completion_tokens": 6 }

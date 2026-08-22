@@ -60,7 +60,7 @@ URTEILSDISZIPLIN:
 Stufe nur dann als "scam" mit hoher confidence ein, wenn das fremdsprachige oder übersetzte Skript klar erkennbar ist UND echter Bezug fehlt. Reicht der Verlauf dafür nicht, antworte "unsure". Echte oder natürlich-deutschsprachige Zuschauer sind "clean". Lass deine confidence NICHT allein deshalb steigen, weil ein harmloses Gespräch weitergeht; bewerte jede Nachricht neu am realen Inhalt und behandle deine eigenen früheren Verdachtsmomente NICHT als Beweis.
 
 MUSTER FUER DEN VORFILTER:
-Urteilst du "scam", gib in "pattern" den kuerzesten woertlichen Ausschnitt der Nachricht an, an dem die Masche haengt: einen Dienstnamen, eine Domain oder ein Skript-Token wie "stream_promotion_bot". Regeln: hoechstens zwei Woerter, mindestens vier Zeichen, in normaler lateinischer Schrift (verfremdete Zeichen vorher zurueckuebersetzen), und der Ausschnitt muss genau so in der Nachricht stehen. Allgemeines Chat-Vokabular wie "viewers", "promotion", "free" oder "stream" ist kein Muster. Findest du keinen solchen Ausschnitt, lass das Feld leer. Bei "clean" und "unsure" ist das Feld immer leer.
+Urteilst du "scam", gib in "pattern" den kuerzesten woertlichen Ausschnitt der Nachricht an, an dem die Masche haengt: einen Dienstnamen, eine Domain oder ein Skript-Token wie "stream_promotion_bot". Regeln: hoechstens zwei Woerter, mindestens sechs Zeichen, in normaler lateinischer Schrift (verfremdete Zeichen vorher zurueckuebersetzen), und der Ausschnitt muss genau so in der Nachricht stehen. Allgemeines Chat-Vokabular wie "viewers", "promotion", "free" oder "stream" ist kein Muster. Findest du keinen solchen Ausschnitt, lass das Feld leer. Bei "clean" und "unsure" ist das Feld immer leer.
 
 Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, ohne Markdown und ohne weiteren Text:
 {"verdict":"scam"|"clean"|"unsure","confidence":<Zahl 0.0 bis 1.0>,"category":"<kurzes Label, z.B. befriending_pivot, growth_pitch, excuse_pivot, recon_smalltalk>","pattern":"<siehe MUSTER FUER DEN VORFILTER, sonst leerer String>","reasoning":"<2 bis 4 Sätze auf Deutsch, allgemeinverständlich für einen unerfahrenen Streamer: WARUM ist das verdächtig oder unverdächtig? Benenne die konkreten Auffälligkeiten aus dem Verlauf. Kein Fachjargon, keine Zahlen.>"}"#;
@@ -1079,9 +1079,13 @@ impl ConversationScamGuard {
         // Muster fuer den Vorfilter lernen: erkennt der Bot denselben Pitch
         // beim naechsten Mal schon am Regex, greift die Moderation sofort statt
         // erst nach dem Judge-Lauf.
+        // Nur aus tatsaechlich geahndeten Faellen lernen. Ein Kanal im
+        // Alarm-Modus liefert "suggested" und hat die Durchsetzung bewusst
+        // abgewaehlt; sein Urteil darf kein hartes Signal in fremden Kanaelen
+        // erzeugen.
         if verdict.verdict == VerdictKind::Scam
             && verdict.confidence >= LEARN_MIN_CONFIDENCE
-            && action_taken != "watching"
+            && matches!(action_taken.as_str(), "banned" | "timed_out")
         {
             if let Some(pattern) = verdict
                 .pattern
@@ -2400,6 +2404,8 @@ mod tests {
         cross_channel: StdMutex<Result<i64, String>>,
         records: StdMutex<Vec<VerdictRecord>>,
         global_bans: StdMutex<Vec<(String, Option<String>, String)>>,
+        /// (Muster, Belegtext) je Lernaufruf.
+        learned: StdMutex<Vec<(String, String)>>,
     }
 
     #[async_trait]
@@ -2433,6 +2439,22 @@ mod tests {
             let mut records = self.records.lock().unwrap();
             records.push(record.clone());
             Ok(records.len() as i64)
+        }
+
+        async fn learn_spam_pattern(
+            &self,
+            pattern: &str,
+            evidence: &str,
+            _source_message: &str,
+            _channel_login: &str,
+            _reasoning: &str,
+            _confidence: f32,
+        ) -> Result<Option<String>, String> {
+            self.learned
+                .lock()
+                .unwrap()
+                .push((pattern.to_string(), evidence.to_string()));
+            Ok(Some(pattern.to_string()))
         }
 
         async fn add_global_ban(
@@ -2713,6 +2735,7 @@ mod tests {
             cross_channel: StdMutex::new(Ok(0)),
             records: StdMutex::new(Vec::new()),
             global_bans: StdMutex::new(Vec::new()),
+            learned: StdMutex::new(Vec::new()),
         });
         let api = Arc::new(MockApi::new());
         let moderation = Arc::new(MockModeration {
@@ -2751,6 +2774,70 @@ mod tests {
         for text in messages {
             guard.process(&event(login, text)).await;
         }
+    }
+
+    fn scam_verdict_mit_muster(confidence: f32, pattern: &str) -> Verdict {
+        Verdict {
+            verdict: VerdictKind::Scam,
+            confidence,
+            category: "growth_pitch".to_string(),
+            reasoning: "Skript-Token ohne Bezug".to_string(),
+            pattern: Some(pattern.to_string()),
+        }
+    }
+
+    /// Wird geahndet, wandert das Muster in den Vorfilter — belegt am ganzen
+    /// Dialog, nicht nur an der letzten Zeile.
+    #[tokio::test]
+    async fn geahndeter_scam_lernt_das_muster() {
+        let (guard, store, _judge, api, _moderation) = build_guard(
+            GuardSettings::default(),
+            [scam_verdict_mit_muster(0.95, "clicknex.online")],
+        );
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+
+        feed(
+            &guard,
+            "pitch_account",
+            &[&format!("{REPORTED_BEFRIENDING_PIVOT} clicknex.online")],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "banned");
+        let learned = store.learned.lock().unwrap();
+        assert_eq!(learned.len(), 1, "geahndeter Scam muss lernen");
+        assert_eq!(learned[0].0, "clicknex.online");
+        assert!(
+            learned[0].1.contains("clicknex.online"),
+            "Beleg muss den Dialog enthalten: {}",
+            learned[0].1
+        );
+    }
+
+    /// Ein Kanal im Alarm-Modus hat die Durchsetzung abgewaehlt. Sein Urteil
+    /// darf kein hartes Signal in fremden Kanaelen erzeugen.
+    #[tokio::test]
+    async fn alarm_modus_lernt_nichts() {
+        let settings = GuardSettings {
+            mode: GuardMode::AlertOnly,
+            ..GuardSettings::default()
+        };
+        let (guard, store, _judge, api, _moderation) =
+            build_guard(settings, [scam_verdict_mit_muster(0.99, "clicknex.online")]);
+        *api.created_at.lock().unwrap() = Ok(Some(Utc::now()));
+
+        feed(
+            &guard,
+            "pitch_account",
+            &[&format!("{REPORTED_BEFRIENDING_PIVOT} clicknex.online")],
+        )
+        .await;
+
+        assert_eq!(store.records.lock().unwrap()[0].action_taken, "suggested");
+        assert!(
+            store.learned.lock().unwrap().is_empty(),
+            "Alarm-Modus darf nichts lernen"
+        );
     }
 
     #[tokio::test]
