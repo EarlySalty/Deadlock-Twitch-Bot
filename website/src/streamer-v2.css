@@ -411,15 +411,6 @@
   overflow:hidden;
 }
 
-.v2-clip-scan:before {
-  content:"";
-  height:32%;
-  animation:3.8s ease-in-out infinite v2-clip-scan;
-  animation-delay:var(--v2-clip-delay,0s);
-  background:linear-gradient(#0000,#efd49d3d,#0000);
-  position:absolute;
-  inset-inline:0;
-}
 
 @keyframes v2-clip-scan {
   0%,
@@ -1320,53 +1311,52 @@
   right:4px;
 }
 
-@media (prefers-reduced-motion:reduce) {
-  .v2-rail:after,
-  .v2-void-dot,
-  .v2-relay-dot,
-  .v2-marquee,
-  .v2-screen-sheen,
-  .v2-pulse,
-  .v2-ambient,
-  .v2-node-live:after,
-  .v2-link-h:after,
-  .v2-bar,
-  .v2-stream-dot,
-  .v2-hub-live:after,
-  .v2-peak-dot,
-  .v2-clip-scan:before,
-  .v2-free:before {
-    animation:none!important;
-  }
-  .v2-void-dot {
-    opacity:.25;
-  }
-  .v2-tile:hover {
-    transform:none;
-  }
-  .v2-clip-scan:before,
-  .v2-link-h:after {
-    opacity:0;
-  }
-  .v2-rd-live-dot,
-  .v2-rd-fuse:after,
-  .v2-rd .v2-screen-sheen {
-    animation:none!important;
-  }
-  .v2-rd .v2-screen-sheen {
-    opacity:0;
-  }
-  .v2-rd-card,
-  .v2-rd-line,
-  .v2-rd-sub,
-  .v2-rd-offline,
-  .v2-rd-step {
-    transition:none!important;
-  }
-}
-
 /* Reduzierte Bewegung respektieren: alles Laufende steht still. */
 @media (prefers-reduced-motion: reduce) {
+  /* aus dem zurueckgeholten Build uebernommen */
+  .v2-rail:after,
+    .v2-void-dot,
+    .v2-relay-dot,
+    .v2-marquee,
+    .v2-screen-sheen,
+    .v2-pulse,
+    .v2-ambient,
+    .v2-node-live:after,
+    .v2-link-h:after,
+    .v2-bar,
+    .v2-stream-dot,
+    .v2-hub-live:after,
+    .v2-peak-dot,
+    .v2-clip-scan:before,
+    .v2-free:before {
+      animation:none!important;
+    }
+    .v2-void-dot {
+      opacity:.25;
+    }
+    .v2-tile:hover {
+      transform:none;
+    }
+    .v2-clip-scan:before,
+    .v2-link-h:after {
+      opacity:0;
+    }
+    .v2-rd-live-dot,
+    .v2-rd-fuse:after,
+    .v2-rd .v2-screen-sheen {
+      animation:none!important;
+    }
+    .v2-rd .v2-screen-sheen {
+      opacity:0;
+    }
+    .v2-rd-card,
+    .v2-rd-line,
+    .v2-rd-sub,
+    .v2-rd-offline,
+    .v2-rd-step {
+      transition:none!important;
+    }
+
   .v2-rail::after,
   .v2-clip-scan::before,
   .v2-bar,

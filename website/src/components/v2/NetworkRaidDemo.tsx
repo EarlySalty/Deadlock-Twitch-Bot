@@ -8,9 +8,10 @@ import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
  * Übernommen aus der produktiven Landing (`components/sections/RaidDemo`), aber
  * in drei Punkten anders:
  *
- * 1. Die Karten zeigen echte Partnernamen und Twitch-Profilbilder aus
- *    `useNetworkMetrics`, keinen fest verdrahteten Pool. Ohne API-Antwort
- *    greift ein kleiner Beispiel-Pool mit selbst gehosteten Profilbildern.
+ * 1. Die Karten zeigen echte Partnernamen und Profilbilder aus
+ *    `useNetworkMetrics`, sobald die API beides liefert. Solange sie das
+ *    nicht tut (Stand heute: kein `avatar_url`), laeuft die Buehne mit
+ *    erkennbar ausgedachten Kanaelen ohne Zuschauerzahl und ohne Link.
  * 2. Statt Video-Clips (die auf Produktion nicht ausgeliefert werden) tragen
  *    die Karten eine stilisierte Fläche aus dem unscharf gezogenen Profilbild.
  *    Nichts kann hier ins Leere laufen.
@@ -21,27 +22,34 @@ import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
  * einmal in den Endzustand und bleibt stehen.
  */
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-
 interface DemoChannel {
   login: string;
   displayName: string;
   viewers: number;
-  avatarUrl: string;
+  avatarUrl?: string;
+  /**
+   * true = ausgedachter Kanal fuer die Vorfuehrung. Solche Karten werden
+   * NICHT verlinkt und tragen keine Zuschauerzahl, damit niemand sie fuer
+   * gemessene Werte haelt.
+   */
+  sample: boolean;
 }
 
 /**
- * Rückfallebene, solange die Netzwerk-API nichts geliefert hat. Die Bilder
- * liegen selbst gehostet unter `public/clips/pfp/<login>.png`, sind also nicht
- * von Twitch abhängig.
+ * Rueckfallebene, solange die Netzwerk-API keine verwertbaren Kanaele
+ * liefert.
+ *
+ * Bewusst ausgedachte Namen statt echter Partnerlogins: die Buehne zeigt ein
+ * rotes LIVE-Abzeichen und eine laufende Uhr. Stuenden dort echte Kanaele,
+ * behauptete die Seite, diese Leute seien in diesem Moment live in Deadlock,
+ * ohne das zu wissen. Diese Karten bekommen deshalb auch keine
+ * Zuschauerzahl und keinen Twitch-Link.
  */
 const FALLBACK_CHANNELS: DemoChannel[] = [
-  { login: "miracleghost9", displayName: "miracleghost9", viewers: 247, avatarUrl: `${BASE}/clips/pfp/miracleghost9.png` },
-  { login: "whysolowkey", displayName: "whysolowkey", viewers: 183, avatarUrl: `${BASE}/clips/pfp/whysolowkey.png` },
-  { login: "kdenos", displayName: "kdenos", viewers: 312, avatarUrl: `${BASE}/clips/pfp/kdenos.png` },
-  { login: "johnnyblazedx", displayName: "johnnyblazedx", viewers: 421, avatarUrl: `${BASE}/clips/pfp/johnnyblazedx.png` },
-  { login: "derechtecoolys", displayName: "derechtecoolys", viewers: 158, avatarUrl: `${BASE}/clips/pfp/derechtecoolys.png` },
-  { login: "duzzel", displayName: "duzzel", viewers: 534, avatarUrl: `${BASE}/clips/pfp/duzzel.png` },
+  { login: "", displayName: "dein_kanal", viewers: 0, sample: true },
+  { login: "", displayName: "partnerkanal", viewers: 0, sample: true },
+  { login: "", displayName: "ein_anderer_stream", viewers: 0, sample: true },
+  { login: "", displayName: "naechster_partner", viewers: 0, sample: true },
 ];
 
 /** Die vier Schritte des Ablaufs, so wie sie unter der Bühne stehen. */
@@ -126,8 +134,13 @@ function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
     .map((p) => ({
       login: p.login,
       displayName: p.displayName || p.login,
-      viewers: Math.max(p.liveDeadlock ? p.viewers : 0, Math.round(p.avgViewers30d), 8),
+      viewers: Math.max(
+        p.liveDeadlock ? p.viewers : 0,
+        Math.round(p.avgViewers30d),
+        8,
+      ),
       avatarUrl: p.avatarUrl as string,
+      sample: false,
     }));
 
   return usable.length >= 2 ? usable : FALLBACK_CHANNELS;
@@ -142,7 +155,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const poolRef = useRef(pool);
   poolRef.current = pool;
 
-  const stageRef = useRef<HTMLDivElement>(null);
   const midRef = useRef<HTMLDivElement>(null);
   const srcCardRef = useRef<HTMLDivElement>(null);
   const tgtCardRef = useRef<HTMLDivElement>(null);
@@ -200,14 +212,25 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       const view = side === "src" ? srcViewersRef : tgtViewersRef;
       const dur = side === "src" ? srcDurRef : tgtDurRef;
 
-      if (art.current) art.current.style.backgroundImage = `url("${ch.avatarUrl}")`;
-      if (avatar.current) avatar.current.style.backgroundImage = `url("${ch.avatarUrl}")`;
+      // Ohne Profilbild bleibt die Flaeche ein neutraler Verlauf statt einer
+      // kaputten Bild-URL.
+      const art_bg = ch.avatarUrl ? `url("${ch.avatarUrl}")` : "none";
+      if (art.current) art.current.style.backgroundImage = art_bg;
+      if (avatar.current) avatar.current.style.backgroundImage = art_bg;
       if (name.current) name.current.textContent = ch.displayName;
       if (barName.current) {
         barName.current.textContent = ch.displayName;
-        barName.current.href = `https://twitch.tv/${ch.login}`;
+        if (ch.sample || !ch.login) {
+          // Beispielkanal: nirgendwohin verlinken.
+          barName.current.removeAttribute("href");
+        } else {
+          barName.current.href = `https://twitch.tv/${ch.login}`;
+        }
       }
-      if (view.current) view.current.textContent = String(viewers);
+      // Beispielkarten tragen keine Zahl, sonst laese sie sich als Messwert.
+      if (view.current) {
+        view.current.textContent = ch.sample ? "–" : String(viewers);
+      }
       if (dur.current) dur.current.textContent = fmtDuration(durationSecs);
     }
 
@@ -373,8 +396,12 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
     }
 
     function setupRound(src: DemoChannel, tgt: DemoChannel) {
-      paintCard("src", src, src.viewers, 3600 + Math.floor(Math.random() * 7200));
-      paintCard("tgt", tgt, tgt.viewers, 900 + Math.floor(Math.random() * 3600));
+      // Einmal wuerfeln und beides damit speisen: sonst zeigt paintCard eine
+      // andere Uhrzeit als der Sekundentakt eine Sekunde spaeter.
+      const srcSecs = 3600 + Math.floor(Math.random() * 7200);
+      const tgtSecs = 900 + Math.floor(Math.random() * 3600);
+      paintCard("src", src, src.viewers, srcSecs);
+      paintCard("tgt", tgt, tgt.viewers, tgtSecs);
 
       if (srcCardRef.current) srcCardRef.current.className = "v2-rd-card v2-rd-card-src";
       if (tgtCardRef.current) tgtCardRef.current.className = "v2-rd-card v2-rd-card-tgt v2-rd-card-dim";
@@ -386,10 +413,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       clearLines();
       resetSteps();
 
-      startDurations(
-        3600 + Math.floor(Math.random() * 7200),
-        900 + Math.floor(Math.random() * 3600),
-      );
+      startDurations(srcSecs, tgtSecs);
     }
 
     // ── Endzustand ohne Bewegung ──────────────────────────────────────────
@@ -403,7 +427,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       setStamp(STEPS[2].time, STEPS[2].label, "good");
       if (lineRef.current) {
         lineRef.current.style.opacity = "1";
-        lineRef.current.textContent = `${src.viewers} Zuschauer bei ${tgt.displayName} angekommen`;
+        lineRef.current.textContent = src.sample
+          ? `Deine Zuschauer sind bei ${tgt.displayName} angekommen`
+          : `${src.viewers} Zuschauer bei ${tgt.displayName} angekommen`;
       }
       for (let i = 0; i < STEPS.length; i++) setStep(i, "done");
       return () => {
@@ -473,21 +499,30 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         lineRef.current.style.opacity = "1";
         lineRef.current.textContent = `zu ${tgt.displayName}`;
       }
-      if (counterRef.current) counterRef.current.style.opacity = "1";
-      if (counterNumRef.current) animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
+      // Der Zaehler laeuft nur mit, wenn die Zahl aus der API stammt.
+      if (!src.sample) {
+        if (counterRef.current) counterRef.current.style.opacity = "1";
+        if (counterNumRef.current)
+          animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
+      }
       setBeam("forward");
       spawnParticles(34, 1400);
       await sleep(1650);
       if (!running) return;
       setBeam("off");
-      if (tgtViewersRef.current)
-        tgtViewersRef.current.textContent = String(tgt.viewers + src.viewers);
+      if (tgtViewersRef.current) {
+        tgtViewersRef.current.textContent = tgt.sample
+          ? "–"
+          : String(tgt.viewers + src.viewers);
+      }
       if (tgtCardRef.current) tgtCardRef.current.className = "v2-rd-card v2-rd-card-tgt";
       if (counterRef.current) counterRef.current.style.opacity = "0";
       clearLines();
       if (lineRef.current) {
         lineRef.current.style.opacity = "1";
-        lineRef.current.textContent = `+${src.viewers} Zuschauer angekommen`;
+        lineRef.current.textContent = src.sample
+          ? "Deine Zuschauer sind angekommen"
+          : `+${src.viewers} Zuschauer angekommen`;
         lineRef.current.classList.add("v2-rd-line-good");
       }
       spawnConfetti(38);
@@ -528,7 +563,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
 
   return (
     <div className="v2-stage">
-      <div className="v2-rd" ref={stageRef}>
+      <div className="v2-rd">
         <div className="v2-rd-head">
           <span className="v2-stamp">Übergabe im Netzwerk · Beispielablauf</span>
           <span className="v2-rd-head-live">

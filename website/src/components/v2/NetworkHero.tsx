@@ -175,7 +175,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             settled={metrics.settled}
           />
           <p className="text-xs text-[rgba(183,170,145,0.5)] sm:ml-auto">
-            Alle Zahlen auf dieser Seite kommen live aus dem laufenden Betrieb.
+            Die Kennzahlen in dieser Zeile kommen live aus dem laufenden Betrieb. Die Bühne darüber ist ein Beispielablauf.
           </p>
         </motion.div>
       </div>

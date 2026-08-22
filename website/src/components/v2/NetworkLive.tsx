@@ -316,9 +316,11 @@ export function PartnerGrid({
     );
   }
 
-  // Reihenfolge: erst die live in Deadlock (grösster Impact zuerst), dann die
-  // offline/anderes Spiel (grösster Impact zuerst). Kanäle ohne Impact rutschen
-  // ans Ende und landen damit im eingeklappten Rest.
+  // Reihenfolge: erst die live laufenden, dann nach Impact. Achtung: die
+  // Netzwerk-API liefert derzeit weder deadlock_streams_30d noch
+  // avg_viewers_30d, computeImpact gibt deshalb fuer alle 0 zurueck und es
+  // bleibt faktisch bei "live zuerst". Sobald die Felder kommen, greift die
+  // Sortierung ohne weitere Aenderung.
   const impact = computeImpact(partners);
   const sorted = [...partners].sort((a, b) => {
     if (a.liveDeadlock !== b.liveDeadlock) return a.liveDeadlock ? -1 : 1;
