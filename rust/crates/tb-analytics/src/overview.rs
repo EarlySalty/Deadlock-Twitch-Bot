@@ -305,17 +305,45 @@ pub struct OverviewMonetization {
     pub hype_trains: i64,
 }
 
+/// Entscheidet, ob ein Datenbankfehler die "Tabelle gibt es hier nicht"-Lage
+/// beschreibt. Nur die zaehlt als 0; alles andere (Zeitueberschreitung beim
+/// Holen einer Verbindung, Verbindungsabbruch, Syntaxfehler) muss sichtbar
+/// bleiben, sonst zeigt der Monetarisierungs-Score still eine 0 an.
+fn ist_fehlende_tabelle(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db) => matches!(
+            db.code().as_deref(),
+            // undefined_table, undefined_column, undefined_object
+            Some("42P01") | Some("42703") | Some("42704")
+        ),
+        // Spaltenname passt nicht zum erwarteten Schema.
+        sqlx::Error::ColumnNotFound(_) => true,
+        _ => false,
+    }
+}
+
+/// Wandelt das Ergebnis einer Zaehl-Abfrage in eine Zahl: fehlende Tabelle → 0,
+/// jeder andere Fehler bleibt ein Fehler.
+fn zaehler_oder_null(res: Result<i64, sqlx::Error>) -> Result<i64, sqlx::Error> {
+    match res {
+        Ok(v) => Ok(v),
+        Err(e) if ist_fehlende_tabelle(&e) => Ok(0),
+        Err(e) => Err(e),
+    }
+}
+
 /// Zählt Sub-/Bits-/Hype-Train-Events im Zeitraum. Ohne Streamer → 0.
+/// Fehlende Event-Tabellen ergeben 0, andere Datenbankfehler werden gemeldet.
 pub async fn overview_monetization_counts(
     pool: &PgPool,
     since: &str,
     streamer_login: Option<&str>,
-) -> OverviewMonetization {
+) -> Result<OverviewMonetization, sqlx::Error> {
     let Some(login) = streamer_login else {
-        return OverviewMonetization::default();
+        return Ok(OverviewMonetization::default());
     };
 
-    let sub_events: i64 = sqlx::query_scalar!(
+    let sub_events = sqlx::query_scalar!(
         r#"
         SELECT COUNT(*)::BIGINT AS "count!"
         FROM twitch_subscription_events e
@@ -328,10 +356,10 @@ pub async fn overview_monetization_counts(
         login
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    .await;
+    let sub_events = zaehler_oder_null(sub_events)?;
 
-    let bits_events: i64 = sqlx::query_scalar!(
+    let bits_events = sqlx::query_scalar!(
         r#"
         SELECT COUNT(*)::BIGINT AS "count!"
         FROM twitch_bits_events e
@@ -344,10 +372,10 @@ pub async fn overview_monetization_counts(
         login
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    .await;
+    let bits_events = zaehler_oder_null(bits_events)?;
 
-    let hype_trains: i64 = sqlx::query_scalar!(
+    let hype_trains = sqlx::query_scalar!(
         r#"
         SELECT COUNT(*)::BIGINT AS "count!"
         FROM twitch_hype_train_events h
@@ -359,14 +387,14 @@ pub async fn overview_monetization_counts(
         login
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    .await;
+    let hype_trains = zaehler_oder_null(hype_trains)?;
 
-    OverviewMonetization {
+    Ok(OverviewMonetization {
         sub_events,
         bits_events,
         hype_trains,
-    }
+    })
 }
 
 /// Chatter pro 100 Peak-Viewer, über Sessions gemittelt (Python `chat_per_100`
