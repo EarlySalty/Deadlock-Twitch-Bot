@@ -1,7 +1,5 @@
 //! sqlx-`PgPool`-Aufbau aus `DbConfig` (ersetzt den Python-Eigenbau-LIFO-Pool).
 
-use std::time::Duration;
-
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tb_config::DbConfig;
 
@@ -23,11 +21,16 @@ pub async fn connect(cfg: &DbConfig) -> Result<PgPool, DbError> {
     //
     // Zwei und nicht mehr, weil `connect` diese Verbindungen beim Start
     // nacheinander innerhalb von `acquire_timeout` aufbauen muss.
+    //
+    // Die Ruhezeit, nach der ueberzaehlige Verbindungen abgeraeumt werden,
+    // bleibt bewusst beim Vorgabewert von zehn Minuten: der Server ist beim
+    // Arbeitsspeicher knapp bemessen, und jede offene Verbindung kostet auf
+    // der Datenbankseite einen eigenen Prozess. Nur die zwei Grundverbindungen
+    // stehen dauerhaft, alles darueber verschwindet wie bisher.
     let dauerhaft_offen = cfg.pool_max.min(2);
     let pool = PgPoolOptions::new()
         .max_connections(cfg.pool_max)
         .min_connections(dauerhaft_offen)
-        .idle_timeout(Some(Duration::from_secs(30 * 60)))
         .acquire_timeout(connection_deadline)
         .connect(&cfg.dsn)
         .await?;
