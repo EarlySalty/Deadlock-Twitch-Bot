@@ -57,7 +57,7 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
       <div className="mb-5">
         <p className="text-base font-semibold text-white mb-1">Drei Stufen, ein Bot</p>
         <p className="text-sm text-white/40">
-          Free bleibt vollwertig. Plus zeigt dir deine Entwicklung, Pro nimmt dir die Clip-Arbeit ab.
+          Free bleibt vollwertig. Plus zeigt dir deine Entwicklung, Pro kommt mit dem naechsten Ausbau.
         </p>
       </div>
 
@@ -72,8 +72,11 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
              checkout_available=false und der Checkout schickt jeden Klick mit
              missing_stripe_price_id zurueck. Lieber ehrlich "bald buchbar"
              anzeigen als einen Kauf versprechen, der abprallt. Free braucht
-             keinen Stripe-Preis und bleibt immer anklickbar. */
-          const buchbar = gratis || plan.checkout_available !== false;
+             keinen Stripe-Preis und bleibt immer anklickbar.
+             `buchbar === false` kommt aus dem Katalog und schlaegt alles: die
+             Stufe existiert als Ausblick, ihre Funktionen aber noch nicht. */
+          const buchbar =
+            plan.buchbar !== false && (gratis || plan.checkout_available !== false);
 
           return (
             <motion.div

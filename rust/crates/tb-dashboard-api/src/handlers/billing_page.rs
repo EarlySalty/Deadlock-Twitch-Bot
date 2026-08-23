@@ -196,10 +196,16 @@ pub async fn checkout_start_handler(
     let cycle = normalize_billing_cycle(parse_u32(params.cycle.as_deref(), 1));
 
     // Plan muss existieren und kostenpflichtig sein (free → kein Stripe-Price).
-    let Some(_plan) = find_plan(plan_id) else {
+    let Some(plan) = find_plan(plan_id) else {
         return Redirect::to("/twitch/pricing").into_response();
     };
     if !is_paid_plan_id(plan_id) {
+        return Redirect::to("/twitch/pricing").into_response();
+    }
+    // Nicht buchbare Stufe (heute Creator Pro): der Katalog zeigt sie, verkauft
+    // sie aber nicht. Die Pruefung steht hier und nicht nur im Frontend, sonst
+    // kauft ein direkter Aufruf der URL an der Anzeige vorbei.
+    if !plan.buchbar {
         return Redirect::to("/twitch/pricing").into_response();
     }
 
@@ -622,8 +628,11 @@ pub async fn catalog_handler(
             // Dieselbe Aufloesung wie der Checkout: eingecheckter Default,
             // sonst Vault-Map. Vorher las der Katalog nur den Default und zeigte
             // deshalb `checkout_available: false`, obwohl der Checkout gegangen waere.
+            // `buchbar` schlaegt alles: eine Stufe ohne fertiges Produkt bleibt
+            // sichtbar, aber der Knopf zeigt "Bald buchbar" statt eines Kaufs.
+            let buchbar = find_plan(&pid).is_some_and(|p| p.buchbar);
             let price_id = resolved_price_id(&pid, cycle, &price_vault);
-            plan["checkout_available"] = json!(price_id.is_some() && checkout_ready);
+            plan["checkout_available"] = json!(buchbar && price_id.is_some() && checkout_ready);
             plan["stripe_price_id"] = match price_id {
                 Some(id) => json!(id),
                 None => Value::Null,
@@ -1834,6 +1843,12 @@ mod tests {
         assert_eq!(plus["price"]["total_gross_cents"], 499);
         assert!(plus["stripe_price_id"].is_string());
         assert_eq!(plus["checkout_available"], true);
+        // Creator Pro steht im Katalog, ist aber nicht kaeuflich: seine
+        // Merkmale waren durchweg Clip-Werkzeuge, und die gibt es noch nicht.
+        // Die Karte zeigt deshalb "Bald buchbar" statt eines Kaufknopfs.
+        let pro = plans.iter().find(|p| p["id"] == "pro").unwrap();
+        assert_eq!(pro["buchbar"], false);
+        assert_eq!(pro["checkout_available"], false, "Pro darf nicht buchbar sein");
         // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
         // persistiert; recipient_name fällt auf den Login zurück, country=DE).
         assert_eq!(v["billing_profile"]["customer_reference"], "login");

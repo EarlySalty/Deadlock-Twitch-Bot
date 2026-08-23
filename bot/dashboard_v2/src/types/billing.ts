@@ -132,6 +132,10 @@ export interface CatalogPlan {
   yearly_gross_cents?: number;
   price?: CatalogPlanPrice;
   checkout_available?: boolean;
+  // `false` heisst: die Stufe steht im Katalog, ist aber nicht kaeuflich,
+  // weil ihre Funktionen noch nicht existieren. Kommt aus dem Katalog und
+  // zieht `checkout_available` serverseitig mit auf `false`.
+  buchbar?: boolean;
   stripe_price_id?: string | null;
   entitlements?: EntitlementId[];
   features: string[];

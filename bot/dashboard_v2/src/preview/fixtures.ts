@@ -59,8 +59,8 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
         'Go-Live-Post im Community-Discord',
         'Overlay-Builder und Sendeplanung',
         'Tagesform deines letzten Streams',
-        '3 Clips im Monat',
       ],
+      buchbar: true,
       is_current: false,
     },
     {
@@ -77,8 +77,8 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
         'Zeitraumvergleiche und Wachstumskurven',
         'KI-Analyse, KI-Chat, Coaching und KI-Wochenreport',
         'Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name',
-        '10 Clips im Monat',
       ],
+      buchbar: true,
       is_current: true,
     },
     {
@@ -87,7 +87,7 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
       tier: 'extended',
       price_monthly: 9.99,
       description:
-        'Alles aus Netzwerk Plus, dazu Clips ohne Limit und automatisches Posten auf deinen Kanälen.',
+        'Alles aus Netzwerk Plus, dazu Vorrang bei Support und neuen Funktionen.',
       monthly_gross_cents: 999,
       yearly_gross_cents: 9990,
       entitlements: [
@@ -99,11 +99,9 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
       ],
       features: [
         'Alles aus Netzwerk Plus',
-        'Clips ohne Mengenbegrenzung',
-        'Automatisches Posten auf TikTok, Instagram und YouTube',
-        'Untertitel und mehrere Formate',
         'Vorrang bei Support und neuen Funktionen',
       ],
+      buchbar: false,
       is_current: false,
     },
   ],

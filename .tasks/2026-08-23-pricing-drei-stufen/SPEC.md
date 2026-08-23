@@ -35,15 +35,26 @@ Bereits umgesetzt in `website/src/data/networkPage.ts`.
 ## Feature-Schnitt
 
 Die Trennlinie in einem Satz: Free zeigt dir deinen letzten Stream, Plus zeigt dir deine
-Entwicklung, Pro nimmt dir die Clip-Arbeit ab.
+Entwicklung.
 
-**Free** bleibt vollwertig und wird nicht kuenstlich beschnitten. Einzige Ausnahme ist die
-Clip-Menge.
+**Nachtrag 2026-08-23, Entscheidung des Nutzers:** es gibt noch **kein Clip-Werkzeug als
+Produkt**. Was existiert, ist der `!clip`-Befehl im Chat; alles andere (Fetch, Upload,
+Warteschlange, Auto-Posting, Wasserzeichen) ist interner Unterbau und nichts davon steht
+noch in einem nutzersichtbaren Text. Deshalb sind alle Clip-Zeilen aus den Feature-Listen
+verschwunden, in `catalog.rs`, auf der Landingpage und hier. Verkauft wird nichts, was es
+nicht gibt.
 
-**Nachtrag 2026-08-23:** das Wasserzeichen ist aus allen nutzersichtbaren Texten gestrichen.
-Es wurde nie gebaut, in der Rust-Codebase rendert nichts eines. Das Feld `clip_wasserzeichen`
-bleibt als Datenpunkt stehen, aber verkauft wird nur die Clip-Menge. Wer das Wasserzeichen
-spaeter baut, nimmt den Text danach wieder auf, nicht vorher.
+Damit bleibt bei **Creator Pro** nur der Vorrang uebrig. Die Stufe bleibt im Katalog
+sichtbar, ist aber **nicht buchbar**: `BillingPlan::buchbar = false` klemmt
+`checkout_available` und den Checkout-Einstieg, die Karte zeigt den ruhigen Zustand
+"Bald buchbar". Wer Clips baut, nimmt die Zeilen danach wieder auf und setzt `buchbar`
+zurueck, nicht vorher.
+
+Die Kontingent-Logik im Code bleibt trotzdem bestehen (Zaehlung ueber die Aufnahme in
+unsere DB, fremde Zuschauer-Clips zaehlen nicht). Sie ist Vorbereitung und sperrt heute
+niemanden aus einem beworbenen Feature aus, weil kein Text mehr ein Kontingent verspricht.
+
+**Free** bleibt vollwertig und wird nicht kuenstlich beschnitten.
 
 - Auto-Raid in beide Richtungen
 - Kompletter Chat-Schutz
@@ -51,21 +62,16 @@ spaeter baut, nimmt den Text danach wieder auf, nicht vorher.
 - Go-Live-Post im Community-Discord
 - Overlay-Builder und Sendeplanung
 - Tagesform des letzten Streams
-- 3 Clips im Monat
 
 **Plus (4,99)**
 
 - Voller Verlauf statt nur letzter Stream, Zeitraumvergleiche, Wachstum
 - KI-Analyse, KI-Chat, Coaching, KI-Wochenreport
 - Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name
-- 10 Clips im Monat
 
-**Pro (9,99)**
+**Pro (9,99), sichtbar aber nicht buchbar**
 
 - Alles aus Plus
-- Clips ohne Mengenbegrenzung
-- Automatisches Posten auf TikTok, Instagram und YouTube
-- Untertitel und mehrere Formate
 - Vorrang bei Support und neuen Funktionen
 
 Ausdruecklich **nicht** im Katalog: White-Label und API. Das ist ein Bot fuer deutsche

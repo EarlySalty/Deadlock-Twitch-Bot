@@ -38,6 +38,14 @@ pub struct BillingPlan {
     pub entitlements: &'static [&'static str],
     /// Feature-Bulletpoints für die UI.
     pub features: &'static [&'static str],
+    /// Ob die Stufe heute gekauft werden darf.
+    ///
+    /// Creator Pro steht `false`: seine Merkmale waren durchweg Clip-Werkzeuge,
+    /// und die gibt es als Produkt noch nicht (im Chat existiert nur der
+    /// `!clip`-Befehl, der Rest ist interner Unterbau). Die Stufe bleibt
+    /// sichtbar, damit der Weg nach oben erkennbar ist, aber der Checkout ist
+    /// zu, statt etwas zu verkaufen, das niemand bekommt.
+    pub buchbar: bool,
 }
 
 /// Berechnetes Preis-Tableau eines Plans fuer einen Abrechnungszyklus.
@@ -100,8 +108,8 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "Go-Live-Post im Community-Discord",
             "Overlay-Builder und Sendeplanung",
             "Tagesform deines letzten Streams",
-            "3 Clips im Monat",
         ],
+        buchbar: true,
     },
     BillingPlan {
         id: "plus",
@@ -123,15 +131,15 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "Zeitraumvergleiche und Wachstumskurven",
             "KI-Analyse, KI-Chat, Coaching und KI-Wochenreport",
             "Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name",
-            "10 Clips im Monat",
         ],
+        buchbar: true,
     },
     BillingPlan {
         id: "pro",
         name: "Creator Pro",
         tier: "extended",
         badge: "pro",
-        description: "Alles aus Netzwerk Plus, dazu Clips ohne Limit und automatisches Posten auf deinen Kanälen.",
+        description: "Alles aus Netzwerk Plus, dazu Vorrang bei Support und neuen Funktionen.",
         monthly_gross_cents: 999,
         yearly_gross_cents: 9990,
         recommended: false,
@@ -144,11 +152,9 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         ],
         features: &[
             "Alles aus Netzwerk Plus",
-            "Clips ohne Mengenbegrenzung",
-            "Automatisches Posten auf TikTok, Instagram und YouTube",
-            "Untertitel und mehrere Formate",
             "Vorrang bei Support und neuen Funktionen",
         ],
+        buchbar: false,
     },
 ];
 
@@ -375,6 +381,7 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
                 "yearly_gross_cents": plan.yearly_gross_cents,
                 "entitlements": plan.entitlements,
                 "features": plan.features,
+                "buchbar": plan.buchbar,
                 "price": {
                     "cycle_months": price.cycle_months,
                     "cycle_label": cycle_lbl,
@@ -801,6 +808,39 @@ mod tests {
         assert_eq!(p12[0]["price"]["total_gross_cents"], 0);
         // Unbekannter Zyklus faellt auf 1 zurueck.
         assert_eq!(catalog_json(7)["cycle_months"], 1);
+    }
+
+    /// Der Katalog verkauft keine Clip-Funktionen, solange es sie nicht gibt.
+    ///
+    /// Im Produkt existiert nur der `!clip`-Befehl im Chat; Fetch, Upload,
+    /// Warteschlange und Auto-Posting sind interner Unterbau. Kein
+    /// nutzersichtbarer Text darf sie versprechen.
+    #[test]
+    fn katalog_verspricht_keine_clip_funktionen() {
+        for cycle in [1u32, 12u32] {
+            let raw = catalog_json(cycle).to_string();
+            for wort in ["Clip", "Wasserzeichen", "TikTok", "Instagram", "YouTube"] {
+                assert!(
+                    !raw.contains(wort),
+                    "{wort} steht im Katalog-Text ({cycle}m)"
+                );
+            }
+        }
+    }
+
+    /// Creator Pro bleibt sichtbar, aber nicht buchbar: seine Merkmale waren
+    /// durchweg Clip-Werkzeuge, und die gibt es noch nicht.
+    #[test]
+    fn nur_free_und_plus_sind_buchbar() {
+        assert!(find_plan("free").unwrap().buchbar);
+        assert!(find_plan("plus").unwrap().buchbar);
+        assert!(!find_plan("pro").unwrap().buchbar);
+        let plans = catalog_json(1);
+        let plans = plans["plans"].as_array().unwrap();
+        assert_eq!(plans[2]["id"], "pro");
+        assert_eq!(plans[2]["buchbar"], false);
+        assert_eq!(plans[0]["buchbar"], true);
+        assert_eq!(plans[1]["buchbar"], true);
     }
 
     /// Abnahmekriterium 4: nirgends mehr eine Netto-Angabe oder ein Bundle.

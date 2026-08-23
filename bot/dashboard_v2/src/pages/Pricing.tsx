@@ -14,7 +14,7 @@ const faqData = [
   {
     question: 'Wie funktioniert die 30-tägige kostenlose Testphase?',
     answer:
-      'Du meldest dich an, wählst Netzwerk Plus im Monatstakt aus und kannst es 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher. Creator Pro und der Jahrestakt starten ohne Testphase und werden sofort abgerechnet.',
+      'Du meldest dich an, wählst Netzwerk Plus im Monatstakt aus und kannst es 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher. Der Jahrestakt startet ohne Testphase und wird sofort abgerechnet.',
   },
   {
     question: 'Kann ich meinen Plan jederzeit kündigen?',
@@ -29,7 +29,7 @@ const faqData = [
   {
     question: 'Was ist der Unterschied zwischen Free, Plus und Pro?',
     answer:
-      'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro nimmt dir dazu die Clip-Arbeit ab: Clips ohne Mengenbegrenzung und automatisches Posten auf TikTok, Instagram und YouTube.',
+      'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro ist die Stufe darüber und steht noch nicht zum Kauf bereit: sie wird erst buchbar, wenn ihre eigenen Funktionen fertig sind.',
   },
 ];
 

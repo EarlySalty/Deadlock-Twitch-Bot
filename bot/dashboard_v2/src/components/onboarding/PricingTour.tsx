@@ -61,9 +61,9 @@ const TOUR_STEPS: TourStep[] = [
   {
     anchor: 'tour-pricing-pro',
     tag: 'Creator Pro',
-    title: 'Die Clip-Arbeit übernimmt der Bot',
+    title: 'Die Stufe darüber, noch nicht buchbar',
     description:
-      'Alles aus Netzwerk Plus, dazu Clips ohne Mengenbegrenzung und automatisches Posten auf TikTok, Instagram und YouTube. 9,99 Euro im Monat.',
+      'Alles aus Netzwerk Plus, dazu Vorrang bei Support und neuen Funktionen. 9,99 Euro im Monat, sobald die eigenen Pro-Funktionen stehen.',
   },
 ];
 
