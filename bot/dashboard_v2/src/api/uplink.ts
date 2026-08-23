@@ -68,7 +68,7 @@ export const UPLINK_PROFILE = [
     label: '1440p60 (2K), 12000 kbps',
     hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
     warnung:
-      '2K gibt es bei Twitch nur mit Enhanced Broadcasting, und das ist Partnern und Affiliates vorbehalten. Enhanced Broadcasting geht an Twitchs eigenen Ingest und schließt unseren Weg aus: über Uplink kommt dein Stream als klassisches RTMP an, und darüber unterstützt Twitch 1440p offiziell nicht. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, kann nicht auf 720p wechseln, sondern puffert. Twitch nennt für 2K ohne Enhanced Broadcasting 20 Mbit/s Upload, gesendet wird über Uplink aber von uns, deine eigene Leitung muss das nicht tragen. Wählbar bleibt die Stufe: probier sie einen Abend aus, bevor du dabei bleibst. Nur aus OBS solltest du dann auch 1440p schicken, aus 1080p hochrechnen kostet Bitrate ohne Gegenwert.',
+      'Twitch nimmt 2K offiziell nur über Enhanced Broadcasting an, und das läuft über Twitchs eigenen Ingest, nicht über uns. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, puffert, statt auf 720p zu wechseln. Die 20 Mbit/s, die Twitch dafür nennt, senden wir, nicht deine Leitung. Probier es einen Abend aus und schick uns dafür auch 1440p aus OBS.',
   },
   {
     name: '1080p60-hoch',

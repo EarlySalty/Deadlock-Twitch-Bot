@@ -233,7 +233,7 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
         (bitrate.staerkstesZiel === null
           ? 'Startwert, solange kein Ziel eingerichtet ist. Sobald deine Ziele stehen, passt sich die Zahl an. '
           : `Passt zu deinen Zielen: das stärkste steht auf ${bitrate.staerkstesZiel} kbps, dazu etwas Reserve. `) +
-        'Maßstab ist dein Upload. Mehr zu senden, als deine Leitung trägt, bringt nichts. Wenn du unsicher bist, miss deinen Upload und bleib rund 20 Prozent darunter. Das ist die Qualität, aus der wir rechnen, nicht die, die rausgeht.',
+        'Maßstab ist dein Upload: miss ihn und bleib rund 20 Prozent darunter. Das ist die Qualität, aus der wir rechnen, nicht die, die rausgeht.',
     },
     {
       feld: 'Keyframe-Intervall',

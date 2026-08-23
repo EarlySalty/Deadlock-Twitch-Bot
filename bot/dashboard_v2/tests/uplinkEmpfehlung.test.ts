@@ -154,9 +154,20 @@ test('die OBS-Anleitung nennt keine feste Bitrate-Spanne mehr', () => {
 
 test('der 2K-Hinweis nennt Enhanced Broadcasting und seine Folgen', () => {
   assert.match(UPLINK_API, /Enhanced Broadcasting/);
-  assert.match(UPLINK_API, /Partnern und Affiliates/);
   assert.match(UPLINK_API, /20 Mbit\/s/);
+  // Die Folge fuer die Zuschauer ist der Teil, den man beim Ueberfliegen
+  // uebersieht und der hinterher im Chat steht.
   assert.match(UPLINK_API, /Qualitätsstufen/);
+});
+
+test('die 1440p-Warnung bleibt lesbar kurz', () => {
+  // Eine Warnung, die niemand zu Ende liest, warnt nicht. Die erste Fassung
+  // hatte acht Saetze und fuehrte jede Einzelheit aus dem Twitch-Hilfeartikel
+  // auf, auch die Partner-und-Affiliate-Schranke, die nur fuer Enhanced
+  // Broadcasting gilt und damit fuer einen Weg, den wir gar nicht gehen.
+  const stufe = UPLINK_API.slice(UPLINK_API.indexOf("name: '1440p60'"));
+  const warnung = stufe.slice(stufe.indexOf('warnung:'), stufe.indexOf("',", stufe.indexOf('warnung:')));
+  assert.ok(warnung.length < 500, `1440p-Warnung ist ${warnung.length} Zeichen lang`);
 });
 
 test('kein Em-Dash im Uplink-Text', () => {
