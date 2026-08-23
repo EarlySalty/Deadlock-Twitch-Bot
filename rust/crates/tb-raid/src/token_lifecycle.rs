@@ -1043,20 +1043,84 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                         login = %twitch_login,
                         "Bot-Ban-Verdacht aus aktiver Prüfung — nur gemeldet, keine Reaktion"
                     );
-                    let (title, description) =
-                        admin_bot_ban_verdacht_text(&twitch_login, &twitch_user_id);
-                    self.notifier
-                        .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
-                        .await;
+                    // Gemeldet wird der Zustandswechsel, nicht der Zustand. Ohne
+                    // das Gedaechtnis staende derselbe Kanal 24 Mal am Tag im
+                    // Admin-Kanal, bis jemand ihn von Hand traegt.
+                    if self.ban_probe_zustand_ist_neu(&twitch_user_id, &twitch_login).await {
+                        let (title, description) =
+                            admin_bot_ban_verdacht_text(&twitch_login, &twitch_user_id);
+                        self.notifier
+                            .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
+                            .await;
+                    }
                 }
                 // NotBanned heißt hier zugleich: der Bot ist (wieder) Moderator,
                 // die Probe setzt ihn im selben Call ein. Unknown ist ein
                 // Netz-/Token-Problem und darf niemanden pausieren.
-                BotBanStatus::NotBanned | BotBanStatus::Unknown => {}
+                BotBanStatus::NotBanned => {
+                    self.ban_probe_zustand_loeschen(&twitch_user_id).await;
+                }
+                BotBanStatus::Unknown => {}
             }
             tokio::time::sleep(BAN_PROBE_DELAY).await;
         }
         detected
+    }
+
+    /// Schreibt den Bann-Verdacht nach `twitch_ban_probe_zustand` und sagt, ob
+    /// er neu ist.
+    ///
+    /// `true` heisst: fuer diesen Kanal stand bisher kein Verdacht, also gehoert
+    /// eine Meldung raus. `false` heisst: der Zustand haelt an, die Probe wird
+    /// nur mitgezaehlt. Ein DB-Fehler meldet lieber einmal zu viel als den
+    /// Verdacht zu verschlucken.
+    async fn ban_probe_zustand_ist_neu(&self, twitch_user_id: &str, twitch_login: &str) -> bool {
+        match sqlx::query_scalar::<_, bool>(
+            r#"
+            INSERT INTO twitch_ban_probe_zustand
+                   (twitch_user_id, twitch_login, zustand, seit, letzte_probe, proben)
+            VALUES ($1, $2, 'gebannt', NOW(), NOW(), 1)
+            ON CONFLICT (twitch_user_id) DO UPDATE
+               SET twitch_login = EXCLUDED.twitch_login,
+                   letzte_probe = NOW(),
+                   proben       = twitch_ban_probe_zustand.proben + 1,
+                   -- `seit` nur zuruecksetzen, wenn der Zustand wirklich wechselt.
+                   seit = CASE
+                            WHEN twitch_ban_probe_zustand.zustand <> 'gebannt' THEN NOW()
+                            ELSE twitch_ban_probe_zustand.seit
+                          END,
+                   zustand = 'gebannt'
+            -- NOW() ist innerhalb der Anweisung konstant: `seit = letzte_probe`
+            -- gilt genau beim ersten Insert und beim Zustandswechsel, sonst
+            -- bleibt `seit` alt und der Vergleich faellt.
+            RETURNING seit = letzte_probe
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(twitch_login)
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(neu) => neu,
+            Err(error) => {
+                tracing::warn!(%error, login = %twitch_login,
+                    "Bot-Ban-Sweep: Zustand nicht schreibbar, melde vorsichtshalber");
+                true
+            }
+        }
+    }
+
+    /// Raeumt den Verdacht ab, sobald der Bot wieder Moderator ist. Damit meldet
+    /// ein spaeterer erneuter Bann wieder, statt still zu bleiben.
+    async fn ban_probe_zustand_loeschen(&self, twitch_user_id: &str) {
+        if let Err(error) =
+            sqlx::query("DELETE FROM twitch_ban_probe_zustand WHERE twitch_user_id = $1")
+                .bind(twitch_user_id)
+                .execute(&self.pool)
+                .await
+        {
+            tracing::warn!(%error, "Bot-Ban-Sweep: Zustand nicht loeschbar");
+        }
     }
 
     /// Reaktiviert Partner, die nur wegen `token_error*` pausiert sind, wenn die

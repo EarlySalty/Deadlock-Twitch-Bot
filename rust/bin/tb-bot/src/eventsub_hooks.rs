@@ -827,6 +827,7 @@ pub struct HelixModeratorProvisioner {
     token_provider: Arc<TokenProvider>,
     helix: HelixClient,
     bot_user_id: String,
+    pool: PgPool,
 }
 
 impl HelixModeratorProvisioner {
@@ -834,12 +835,41 @@ impl HelixModeratorProvisioner {
         token_provider: Arc<TokenProvider>,
         helix: HelixClient,
         bot_user_id: String,
+        pool: PgPool,
     ) -> Self {
         Self {
             token_provider,
             helix,
             bot_user_id,
+            pool,
         }
+    }
+
+    /// Steht der Kanal in der Deadlock-Pause, hat der Bot seine Mod-Rechte
+    /// bewusst abgegeben und der Streamer eine Nachricht darueber bekommen.
+    ///
+    /// Ohne diese Pruefung moddet die 403-Selbstheilung ihn binnen Minuten
+    /// wieder ein, sobald der Streamer irgendetwas streamt: der Marker bliebe
+    /// stehen, `unmod_candidates` und `detect_bot_bans` schliessen den Kanal
+    /// weiter aus, und `remod_candidates` raeumt ihn nur nach einem echten
+    /// Deadlock-Stream auf. Der Kanal faellt also dauerhaft aus jedem Sweep,
+    /// waehrend die DB Pause behauptet und der Bot Moderator ist.
+    ///
+    /// Ein DB-Fehler heilt weiter (der Alltagsfall ist "keine Pause").
+    async fn steht_in_deadlock_pause(&self, broadcaster_id: &str) -> bool {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM twitch_partners
+                 WHERE twitch_user_id = $1
+                   AND deadlock_pause_unmodded_at IS NOT NULL
+            )
+            "#,
+        )
+        .bind(broadcaster_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(false)
     }
 }
 
@@ -858,6 +888,13 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
         // Python connection.py:975-978: ohne Bot-ID kein Remod.
         if self.bot_user_id.trim().is_empty() {
             tracing::debug!(channel = login, "ensure_bot_is_mod: keine Bot-ID verfügbar");
+            return ModeratorProvisionOutcome::RetryLater;
+        }
+        if self.steht_in_deadlock_pause(broadcaster_id).await {
+            tracing::debug!(
+                channel = login,
+                "ensure_bot_is_mod: Kanal steht in der Deadlock-Pause, kein Remod"
+            );
             return ModeratorProvisionOutcome::RetryLater;
         }
         // Streamer-Token auflösen (connection.py:986 `get_tokens_for_user`) —
