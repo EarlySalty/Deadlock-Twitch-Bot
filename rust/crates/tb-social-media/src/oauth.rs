@@ -19,8 +19,6 @@ use tb_crypto::{aad, FieldCipher};
 const STATE_TTL_MINUTES: i64 = 10;
 /// HTTP-Timeout der Token-Endpoints (Python total=30s).
 const OAUTH_TIMEOUT: StdDuration = StdDuration::from_secs(30);
-/// Instagram-Token sind langlebig (Python: 60 Tage).
-const INSTAGRAM_TOKEN_DAYS: i64 = 60;
 
 /// Fehler des OAuth-Flows.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +47,11 @@ struct TokenUrls {
     tiktok: String,
     youtube: String,
     instagram: String,
+    /// Basis fuer den Langzeit-Tausch und den Instagram-Refresh. Getrennt vom
+    /// Token-Endpoint, weil Instagram beides auf zwei verschiedenen Hosts
+    /// anbietet: der Code-Tausch laeuft ueber api.instagram.com, alles danach
+    /// ueber graph.instagram.com.
+    instagram_graph: String,
 }
 
 impl Default for TokenUrls {
@@ -57,6 +60,7 @@ impl Default for TokenUrls {
             tiktok: "https://open.tiktokapis.com/v2/oauth/token/".to_string(),
             youtube: "https://oauth2.googleapis.com/token".to_string(),
             instagram: "https://api.instagram.com/oauth/access_token".to_string(),
+            instagram_graph: "https://graph.instagram.com".to_string(),
         }
     }
 }
@@ -108,7 +112,14 @@ impl OAuthManager {
             tiktok,
             youtube,
             instagram,
+            instagram_graph: self.token_urls.instagram_graph,
         };
+        self
+    }
+
+    /// Ueberschreibt die Instagram-Graph-Basis (Tests).
+    pub fn with_instagram_graph(mut self, base: String) -> Self {
+        self.token_urls.instagram_graph = base;
         self
     }
 
@@ -256,16 +267,26 @@ impl OAuthManager {
                 detail: error_detail(&data),
             });
         }
-        let d = data.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let d = tiktok_payload(&data);
+        let access_token = str_field(&d, "access_token");
+        let expires_in = d
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        // Ein leerer Token oder eine Laufzeit von null ist kein Erfolg, sondern
+        // eine Antwort, die wir nicht verstanden haben. Frueher landete genau
+        // das verschluesselt in der Datenbank: der Kanal galt als verbunden und
+        // konnte nie posten.
+        if access_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "TikTok",
+                detail: error_detail(&data),
+            });
+        }
         Ok(ExchangedTokens {
-            access_token: str_field(&d, "access_token"),
+            access_token,
             refresh_token: opt_field(&d, "refresh_token"),
-            expires_at: Utc::now()
-                + Duration::seconds(
-                    d.get("expires_in")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                ),
+            expires_at: Utc::now() + Duration::seconds(expires_in),
             scopes: opt_field(&d, "scope"),
             user_id: opt_field(&d, "open_id"),
             username: None,
@@ -339,22 +360,135 @@ impl OAuthManager {
                 ],
             )
             .await?;
-        if data.get("error_message").is_some() {
+        if data.get("error_message").is_some() || data.get("error").is_some() {
             return Err(OAuthError::Exchange {
                 platform: "Instagram",
                 detail: error_detail(&data),
             });
         }
+        let short_lived = str_field(&data, "access_token");
+        if short_lived.is_empty() {
+            return Err(OAuthError::Exchange {
+                platform: "Instagram",
+                detail: error_detail(&data),
+            });
+        }
+        // `user_id` kommt hier je nach Antwort als Zahl oder als String.
+        let user_id = opt_field(&data, "user_id").or_else(|| {
+            data.get("user_id")
+                .and_then(serde_json::Value::as_i64)
+                .map(|v| v.to_string())
+        });
+        // Der Code-Tausch liefert ein Token mit EINER Stunde Laufzeit, nicht mit
+        // 60 Tagen. Ohne den zweiten Tausch stand in der Datenbank ein Ablauf in
+        // 60 Tagen ueber einem Token, das nach 60 Minuten tot war: das Dashboard
+        // meldete zwei Monate lang gruen, waehrend jeder Upload scheiterte.
+        let (access_token, expires_at) = self
+            .instagram_exchange_long_lived(&short_lived, &client_secret)
+            .await?;
         Ok(ExchangedTokens {
-            access_token: str_field(&data, "access_token"),
+            access_token,
             refresh_token: None,
-            expires_at: Utc::now() + Duration::days(INSTAGRAM_TOKEN_DAYS),
-            scopes: None,
-            user_id: opt_field(&data, "user_id"),
+            expires_at,
+            scopes: opt_field(&data, "permissions"),
+            user_id,
             username: None,
             client_id: Some(client_id),
             client_secret: Some(client_secret),
         })
+    }
+
+    /// Tauscht das kurzlebige Token gegen ein 60-Tage-Token
+    /// (`grant_type=ig_exchange_token`).
+    async fn instagram_exchange_long_lived(
+        &self,
+        short_lived: &str,
+        client_secret: &str,
+    ) -> Result<(String, DateTime<Utc>), OAuthError> {
+        let url = format!("{}/access_token", self.token_urls.instagram_graph);
+        let data = self
+            .get_json(
+                "Instagram",
+                &url,
+                &[
+                    ("grant_type", "ig_exchange_token"),
+                    ("client_secret", client_secret),
+                    ("access_token", short_lived),
+                ],
+            )
+            .await?;
+        let access_token = str_field(&data, "access_token");
+        let expires_in = data
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if access_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "Instagram",
+                detail: error_detail(&data),
+            });
+        }
+        Ok((access_token, Utc::now() + Duration::seconds(expires_in)))
+    }
+
+    /// Instagram kennt keinen Refresh-Token: das Langzeit-Token verlaengert sich
+    /// selbst (`grant_type=ig_refresh_token`). Voraussetzung ist ein Token, das
+    /// mindestens 24 Stunden alt und noch nicht abgelaufen ist.
+    async fn refresh_instagram(&self, access_token: &str) -> Result<RefreshedTokens, OAuthError> {
+        let url = format!("{}/refresh_access_token", self.token_urls.instagram_graph);
+        let data = self
+            .get_json(
+                "instagram-refresh",
+                &url,
+                &[
+                    ("grant_type", "ig_refresh_token"),
+                    ("access_token", access_token),
+                ],
+            )
+            .await?;
+        let new_token = str_field(&data, "access_token");
+        let expires_in = data
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if new_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "instagram-refresh",
+                detail: error_detail(&data),
+            });
+        }
+        Ok(RefreshedTokens {
+            access_token: new_token,
+            refresh_token: None,
+            expires_at: Utc::now() + Duration::seconds(expires_in),
+        })
+    }
+
+    /// GET mit Query-Parametern auf einen JSON-Endpunkt. Nicht-2xx wird wie beim
+    /// Form-POST als Body zurueckgegeben, damit der Aufrufer den Fehlertext der
+    /// Plattform sieht statt nur eines Statuscodes.
+    async fn get_json(
+        &self,
+        platform: &'static str,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> Result<serde_json::Value, OAuthError> {
+        let resp =
+            self.http
+                .get(url)
+                .query(params)
+                .send()
+                .await
+                .map_err(|e| OAuthError::Exchange {
+                    platform,
+                    detail: e.to_string(),
+                })?;
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| OAuthError::Exchange {
+                platform,
+                detail: e.to_string(),
+            })
     }
 
     /// Form-POST an einen Token-Endpoint → JSON-Body. Nicht-2xx wird trotzdem als
@@ -481,6 +615,9 @@ impl OAuthManager {
                 self.refresh_youtube(refresh_token, client_id, client_secret)
                     .await
             }
+            // Instagram hat keinen Refresh-Token. Der Aufrufer uebergibt hier
+            // deshalb das aktuelle Access-Token, das sich selbst verlaengert.
+            "instagram" => self.refresh_instagram(refresh_token).await,
             other => Err(OAuthError::UnknownPlatform(other.to_string())),
         }
     }
@@ -491,42 +628,44 @@ impl OAuthManager {
         client_key: &str,
         client_secret: &str,
     ) -> Result<RefreshedTokens, OAuthError> {
-        // TikTok-Refresh nutzt JSON-Body (anders als der Form-Exchange).
-        let resp = self
-            .http
-            .post(&self.token_urls.tiktok)
-            .json(&serde_json::json!({
-                "client_key": client_key,
-                "client_secret": client_secret,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            }))
-            .send()
-            .await
-            .map_err(|e| OAuthError::Exchange {
-                platform: "tiktok-refresh",
-                detail: e.to_string(),
-            })?;
-        let data: serde_json::Value = resp.json().await.map_err(|e| OAuthError::Exchange {
-            platform: "tiktok-refresh",
-            detail: e.to_string(),
-        })?;
+        // Beide TikTok-Grants laufen ueber denselben Endpunkt und beide
+        // erwarten application/x-www-form-urlencoded. Der frueher hier
+        // verwendete JSON-Body wurde von TikTok abgelehnt, womit sich jeder
+        // Kanal nach 24 Stunden stillschweigend selbst abschaltete.
+        let data = self
+            .post_token(
+                "tiktok-refresh",
+                &self.token_urls.tiktok,
+                &[
+                    ("client_key", client_key),
+                    ("client_secret", client_secret),
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refresh_token),
+                ],
+            )
+            .await?;
         if data.get("error").is_some() {
             return Err(OAuthError::Exchange {
                 platform: "tiktok-refresh",
                 detail: error_detail(&data),
             });
         }
-        let d = data.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let d = tiktok_payload(&data);
+        let access_token = str_field(&d, "access_token");
+        let expires_in = d
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if access_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "tiktok-refresh",
+                detail: error_detail(&data),
+            });
+        }
         Ok(RefreshedTokens {
-            access_token: str_field(&d, "access_token"),
+            access_token,
             refresh_token: opt_field(&d, "refresh_token"),
-            expires_at: Utc::now()
-                + Duration::seconds(
-                    d.get("expires_in")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                ),
+            expires_at: Utc::now() + Duration::seconds(expires_in),
         })
     }
 
@@ -556,7 +695,10 @@ impl OAuthManager {
         }
         Ok(RefreshedTokens {
             access_token: str_field(&data, "access_token"),
-            refresh_token: None, // YouTube liefert beim Refresh keinen neuen.
+            // Meist liefert Google keinen neuen Refresh-Token. In den Faellen,
+            // in denen er rotiert wird, ginge er hier sonst verloren; das
+            // COALESCE beim Persistieren behaelt den alten, wenn None kommt.
+            refresh_token: opt_field(&data, "refresh_token"),
             expires_at: Utc::now()
                 + Duration::seconds(
                     data.get("expires_in")
@@ -577,6 +719,15 @@ pub struct RefreshedTokens {
 /// Normalisiert eine Redirect-URI für den Vergleich (trim + lowercase Schema/Host).
 fn normalize_redirect(value: &str) -> String {
     value.trim().trim_end_matches('/').to_lowercase()
+}
+
+/// TikTok v2 antwortet flach; nur die alte v1-Fassung packte alles in `data`.
+/// Wir lesen deshalb `data` nur dann, wenn es tatsaechlich ein Objekt ist.
+fn tiktok_payload(value: &serde_json::Value) -> serde_json::Value {
+    match value.get("data") {
+        Some(inner) if inner.is_object() => inner.clone(),
+        _ => value.clone(),
+    }
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> String {
@@ -613,7 +764,9 @@ fn env_nonempty(var: &str) -> Option<String> {
 /// Vorrang: unter `YOUTUBE_CLIENT_ID` liegt teils noch ein alter Client, der
 /// sonst den aktuellen ueberstimmen wuerde.
 fn youtube_client_id() -> Option<String> {
-    env_nonempty("GOOGLE_OAUTH_ID").or_else(|| env_nonempty("YOUTUBE_CLIENT_ID"))
+    env_nonempty("GOOGLE_OAUTH_ID")
+        .or_else(|| env_nonempty("GOOGLE_CLIENT_ID"))
+        .or_else(|| env_nonempty("YOUTUBE_CLIENT_ID"))
 }
 
 fn youtube_client_secret() -> Option<String> {
@@ -645,7 +798,7 @@ fn tiktok_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<St
 }
 
 fn youtube_auth_url(state: &str, redirect_uri: &str, verifier: &str) -> Result<String, OAuthError> {
-    let client_id = youtube_client_id().ok_or(OAuthError::MissingConfig("YOUTUBE_CLIENT_ID"))?;
+    let client_id = youtube_client_id().ok_or(OAuthError::MissingConfig("GOOGLE_OAUTH_ID"))?;
     let challenge = pkce_challenge(verifier);
     build_url(
         "https://accounts.google.com/o/oauth2/v2/auth",
@@ -675,7 +828,14 @@ fn instagram_auth_url(state: &str, redirect_uri: &str) -> Result<String, OAuthEr
         &[
             ("client_id", &client_id),
             ("redirect_uri", redirect_uri),
-            ("scope", "instagram_basic,instagram_content_publish"),
+            // Instagram Login kennt nur die instagram_business_*-Bereiche.
+            // instagram_basic/instagram_content_publish gehoeren zum
+            // Facebook-Login-Weg und werden hier mit "Invalid scope"
+            // abgewiesen, bevor der Nutzer den Zustimmungsdialog sieht.
+            (
+                "scope",
+                "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
+            ),
             ("response_type", "code"),
             ("state", state),
         ],
@@ -712,6 +872,186 @@ mod tests {
         for (k, _) in vars {
             std::env::remove_var(k);
         }
+    }
+
+    /// Pool, der nie verbunden wird. Die hier geprueften Pfade sprechen nur
+    /// HTTP, deshalb braucht der Test keine Datenbank.
+    fn lazy_pool() -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://ungenutzt@127.0.0.1:1/ungenutzt")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tiktok_exchange_liest_die_flache_v2_antwort() {
+        let server = MockServer::start().await;
+        // v2 antwortet flach. Frueher las der Code data["data"], bekam Null und
+        // schrieb einen leeren Token mit sofortigem Ablauf in die Datenbank,
+        // ohne dass irgendwo ein Fehler auftauchte.
+        Mock::given(method("POST"))
+            .and(path("/tt/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "act-1",
+                "expires_in": 86400,
+                "open_id": "open-1",
+                "refresh_token": "rft-1",
+                "refresh_expires_in": 31536000,
+                "scope": "video.publish",
+                "token_type": "Bearer"
+            })))
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(lazy_pool(), test_cipher()).with_token_urls(
+            format!("{}/tt/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+            "http://127.0.0.1:1".into(),
+        );
+        let tokens = with_env_async(
+            &[("TIKTOK_CLIENT_KEY", "ck"), ("TIKTOK_CLIENT_SECRET", "cs")],
+            mgr.tiktok_exchange_code("code", "https://cb", "verifier"),
+        )
+        .await
+        .expect("Exchange muss gelingen");
+        assert_eq!(tokens.access_token, "act-1");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("rft-1"));
+        assert_eq!(tokens.user_id.as_deref(), Some("open-1"));
+        assert!(tokens.expires_at > Utc::now() + Duration::hours(23));
+    }
+
+    #[tokio::test]
+    async fn tiktok_exchange_ohne_token_ist_ein_fehler() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/tt/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "expires_in": 0 })),
+            )
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(lazy_pool(), test_cipher()).with_token_urls(
+            format!("{}/tt/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+            "http://127.0.0.1:1".into(),
+        );
+        let result = with_env_async(
+            &[("TIKTOK_CLIENT_KEY", "ck"), ("TIKTOK_CLIENT_SECRET", "cs")],
+            mgr.tiktok_exchange_code("code", "https://cb", "verifier"),
+        )
+        .await;
+        assert!(matches!(result, Err(OAuthError::Exchange { .. })));
+    }
+
+    #[tokio::test]
+    async fn tiktok_refresh_schickt_ein_formular() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/tt/token"))
+            .and(wiremock::matchers::header(
+                "content-type",
+                "application/x-www-form-urlencoded",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "act-neu",
+                "expires_in": 86400,
+                "refresh_token": "rft-neu"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(lazy_pool(), test_cipher()).with_token_urls(
+            format!("{}/tt/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+            "http://127.0.0.1:1".into(),
+        );
+        let neu = mgr
+            .refresh_token("tiktok", "rft-alt", "ck", "cs")
+            .await
+            .expect("Refresh muss gelingen");
+        assert_eq!(neu.access_token, "act-neu");
+        assert_eq!(neu.refresh_token.as_deref(), Some("rft-neu"));
+    }
+
+    #[tokio::test]
+    async fn instagram_exchange_tauscht_auf_das_langzeit_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ig/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "kurz-1",
+                "user_id": 17841400000000000i64,
+                "permissions": "instagram_business_basic"
+            })))
+            .mount(&server)
+            .await;
+        // Ohne diesen zweiten Tausch stand in der Datenbank ein Ablauf in 60
+        // Tagen ueber einem Token, das nach 60 Minuten tot war.
+        Mock::given(method("GET"))
+            .and(path("/graph/access_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "lang-1",
+                "token_type": "bearer",
+                "expires_in": 5_183_944
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(lazy_pool(), test_cipher())
+            .with_token_urls(
+                "http://127.0.0.1:1".into(),
+                "http://127.0.0.1:1".into(),
+                format!("{}/ig/token", server.uri()),
+            )
+            .with_instagram_graph(format!("{}/graph", server.uri()));
+        let tokens = with_env_async(
+            &[
+                ("INSTAGRAM_CLIENT_ID", "cid"),
+                ("INSTAGRAM_CLIENT_SECRET", "csec"),
+            ],
+            mgr.instagram_exchange_code("code", "https://cb"),
+        )
+        .await
+        .expect("Exchange muss gelingen");
+        assert_eq!(tokens.access_token, "lang-1");
+        assert_eq!(tokens.user_id.as_deref(), Some("17841400000000000"));
+        assert!(tokens.expires_at > Utc::now() + Duration::days(59));
+    }
+
+    #[tokio::test]
+    async fn instagram_refresh_verlaengert_das_eigene_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/graph/refresh_access_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "lang-2",
+                "expires_in": 5_183_944
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(lazy_pool(), test_cipher())
+            .with_instagram_graph(format!("{}/graph", server.uri()));
+        let neu = mgr
+            .refresh_token("instagram", "lang-1", "cid", "csec")
+            .await
+            .expect("Refresh muss gelingen");
+        assert_eq!(neu.access_token, "lang-2");
+        assert!(neu.expires_at > Utc::now() + Duration::days(59));
+    }
+
+    /// Wie `with_env`, aber fuer einen await-Punkt zwischen Setzen und Aufraeumen.
+    async fn with_env_async<T>(
+        vars: &[(&str, &str)],
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+        let out = future.await;
+        for (k, _) in vars {
+            std::env::remove_var(k);
+        }
+        out
     }
 
     #[test]
