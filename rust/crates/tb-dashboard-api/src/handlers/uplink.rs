@@ -315,16 +315,50 @@ fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
         .map(|(_, w, h, f, b)| (*w, *h, *f, *b))
 }
 
+/// Eine Zahl aus einem Formularfeld, so wie sie ankommt, ungeprueft.
+///
+/// Bewusst kein `i32`. Das Feld im Dashboard nimmt beliebig viele Ziffern an,
+/// und wer sich beim Tippen vergreift, schickt eine Zahl, die nicht in einen
+/// `i32` passt. `serde` bricht dann schon beim Deserialisieren ab, axum
+/// antwortet mit 422 und einem Klartextkoerper, und die Oberflaeche zeigt
+/// "Speichern hat nicht geklappt." ohne einen Hinweis darauf, welches der
+/// vier Felder gemeint ist.
+///
+/// Deshalb nimmt dieser Typ jede JSON-Zahl an und merkt sich nur, ob sie als
+/// ganze Zahl darstellbar war. Ueber alles Weitere entscheidet
+/// [`manuell_pruefen`], mit Feldnamen und lesbarem Satz.
+///
+/// `None` heisst: keine ganze Zahl in Reichweite. Das trifft eine
+/// Kommazahl genauso wie eine Zahl mit zwanzig Stellen, die `serde_json` als
+/// Gleitkomma einliest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Formularzahl(Option<i64>);
+
+impl Formularzahl {
+    #[cfg(test)]
+    pub fn neu(wert: i64) -> Self {
+        Formularzahl(Some(wert))
+    }
+}
+
+impl<'de> Deserialize<'de> for Formularzahl {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let zahl = serde_json::Number::deserialize(d)?;
+        Ok(Formularzahl(zahl.as_i64()))
+    }
+}
+
 /// Freie Zahlen aus dem manuellen Modus.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ManuellesProfil {
-    pub width: i32,
-    pub height: i32,
-    pub fps: i32,
-    pub bitrate_kbps: i32,
+    pub width: Formularzahl,
+    pub height: Formularzahl,
+    pub fps: Formularzahl,
+    pub bitrate_kbps: Formularzahl,
 }
 
-/// Prueft ein manuelles Profil auf das, was technisch nicht gehen kann.
+/// Prueft ein manuelles Profil auf das, was technisch nicht gehen kann, und
+/// gibt die vier Zahlen so zurueck, wie das Relay sie speichert.
 ///
 /// Nach oben wird nichts mehr geprueft. Frueher stand hier ein Ingest-Deckel,
 /// und der hat eine Eingabe abgelehnt, die das Relay angenommen haette: der
@@ -334,27 +368,48 @@ pub struct ManuellesProfil {
 /// entscheidet das Punktebudget in rs-relay, und zwar mit einer Ablehnung
 /// samt Grund statt hier mit einem Formularfehler.
 ///
-/// Rueckgabe ist der Grund, warum es nicht geht, damit die Oberflaeche ihn
-/// hinschreiben kann. Ein blosses "ungueltig" laesst den Streamer raten,
+/// Die Umrechnung nach `i32` ist keine Obergrenze und will keine sein. Sie ist
+/// der Spaltentyp in rs-relay, und eine Zahl, die dort nicht hineinpasst, kann
+/// niemand speichern. Frueher hat das `serde` erledigt, mit einer 422 ohne
+/// Feldangabe; jetzt steht der Feldname und die getippte Zahl im Satz.
+///
+/// Rueckgabe ist sonst der Grund, warum es nicht geht, damit die Oberflaeche
+/// ihn hinschreiben kann. Ein blosses "ungueltig" laesst den Streamer raten,
 /// welches der vier Felder gemeint ist.
-fn manuell_pruefen(p: ManuellesProfil) -> Result<(), String> {
-    for (name, wert) in [
+fn manuell_pruefen(p: ManuellesProfil) -> Result<(i32, i32, i32, i32), String> {
+    let mut zahlen = [0i32; 4];
+    for (platz, (name, feld)) in [
         ("Breite", p.width),
         ("Höhe", p.height),
         ("Bildrate", p.fps),
         ("Bitrate", p.bitrate_kbps),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(wert) = feld.0 else {
+            return Err(format!(
+                "{name}: das ist keine ganze Zahl. Prüf das Feld auf einen Tippfehler."
+            ));
+        };
         if wert <= 0 {
             return Err(format!("{name} muss größer als 0 sein."));
         }
+        let Ok(wert) = i32::try_from(wert) else {
+            return Err(format!(
+                "{name}: {wert} ist zu groß für dieses Feld. Da hat sich wohl eine Ziffer verirrt."
+            ));
+        };
+        zahlen[platz] = wert;
     }
+    let [width, height, fps, bitrate_kbps] = zahlen;
     // Ungerade Kantenlaengen bringen den Encoder ins Straucheln: yuv420p
     // halbiert beide Achsen, und eine ungerade Zahl laesst sich nicht
     // halbieren. ffmpeg bricht dann beim Start ab, nicht beim Speichern.
-    if p.width % 2 != 0 || p.height % 2 != 0 {
+    if width % 2 != 0 || height % 2 != 0 {
         return Err("Breite und Höhe müssen gerade Zahlen sein.".into());
     }
-    Ok(())
+    Ok((width, height, fps, bitrate_kbps))
 }
 
 #[derive(Deserialize)]
@@ -421,15 +476,9 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
         (Some(name), _) => Some(profil_aufloesen(name).ok_or_else(|| {
             fehler(StatusCode::BAD_REQUEST, "unbekanntes Profil")
         })?),
-        (None, Some(manuell)) => {
-            manuell_pruefen(manuell).map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?;
-            Some((
-                manuell.width,
-                manuell.height,
-                manuell.fps,
-                manuell.bitrate_kbps,
-            ))
-        }
+        (None, Some(manuell)) => Some(
+            manuell_pruefen(manuell).map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?,
+        ),
         (None, None) => None,
     };
     if let Some((w, h, f, b)) = werte {
@@ -561,6 +610,17 @@ mod tests {
         assert_eq!(namen.len(), vorher);
     }
 
+    /// Vier Zahlen, wie sie aus dem Formular kaemen. Spart in jedem Test die
+    /// vier `Formularzahl::neu`-Huellen.
+    fn manuell(width: i64, height: i64, fps: i64, bitrate_kbps: i64) -> ManuellesProfil {
+        ManuellesProfil {
+            width: Formularzahl::neu(width),
+            height: Formularzahl::neu(height),
+            fps: Formularzahl::neu(fps),
+            bitrate_kbps: Formularzahl::neu(bitrate_kbps),
+        }
+    }
+
     fn body(platform: &str) -> DestinationBody {
         DestinationBody {
             platform: platform.into(),
@@ -589,12 +649,7 @@ mod tests {
     #[test]
     fn manuelle_werte_gehen_durch() {
         let mut b = body("youtube");
-        b.manuell = Some(ManuellesProfil {
-            width: 2560,
-            height: 1440,
-            fps: 60,
-            bitrate_kbps: 18000,
-        });
+        b.manuell = Some(manuell(2560, 1440, 60, 18000));
         let wert = ziel_nutzlast(&b).expect("darf durchgehen");
         assert_eq!(wert["width"], 2560);
         assert_eq!(wert["bitrate_kbps"], 18000);
@@ -609,54 +664,83 @@ mod tests {
     /// einem Grund statt mit einem Formularfehler.
     #[test]
     fn hohe_werte_werden_nicht_mehr_abgelehnt() {
-        assert!(manuell_pruefen(ManuellesProfil {
-            width: 3840,
-            height: 2160,
-            fps: 60,
-            bitrate_kbps: 6000,
-        })
+        assert!(manuell_pruefen(manuell(3840, 2160, 60, 6000))
         .is_ok());
-        assert!(manuell_pruefen(ManuellesProfil {
-            width: 1920,
-            height: 1080,
-            fps: 60,
-            bitrate_kbps: 60000,
-        })
+        assert!(manuell_pruefen(manuell(1920, 1080, 60, 60000))
         .is_ok());
         // Und der Fall aus dem Betrieb: 16000 kbps an Twitch. Genau diese Zahl
         // hat der Streamer eingetragen und "liegt über unserem Maximum"
         // gelesen, ohne zu erfahren, wessen Maximum gemeint war.
-        assert!(manuell_pruefen(ManuellesProfil {
-            width: 2560,
-            height: 1440,
-            fps: 60,
-            bitrate_kbps: 16000,
-        })
+        assert!(manuell_pruefen(manuell(2560, 1440, 60, 16000))
         .is_ok());
+    }
+
+    /// Der Weg, auf dem der Fehler entstanden ist: nicht der Aufruf von
+    /// `manuell_pruefen`, sondern das Deserialisieren davor.
+    ///
+    /// Mit `i32`-Feldern brach `serde` hier ab, axum machte daraus eine 422
+    /// mit Klartextkoerper, und die Oberflaeche zeigte "Speichern hat nicht
+    /// geklappt." ohne zu sagen, welches Feld gemeint ist.
+    ///
+    /// Bewusst aus Text und nicht aus `json!`: `serde_json` liest die Zahl
+    /// hier genauso ein wie im Betrieb, samt der Stelle, an der eine
+    /// zwanzigstellige Zahl zu Gleitkomma wird.
+    fn aus_json(bitrate: &str) -> Result<DestinationBody, serde_json::Error> {
+        serde_json::from_str(&format!(
+            r#"{{"platform":"twitch","manuell":{{"width":1920,"height":1080,"fps":60,"bitrate_kbps":{bitrate}}}}}"#
+        ))
+    }
+
+    #[test]
+    fn ein_vertipper_sprengt_das_deserialisieren_nicht_mehr() {
+        for zahl in ["9999999999", "99999999999999999999999", "6000.5", "-9999999999"] {
+            let b = aus_json(zahl).expect("darf nicht schon am Typ scheitern");
+            let antwort = ziel_nutzlast(&b).expect_err("und wird danach abgelehnt");
+            assert_eq!(antwort.status(), StatusCode::BAD_REQUEST, "{zahl}");
+        }
+    }
+
+    /// Die Gegenprobe: eine ganz normale Zahl geht denselben Weg durch.
+    #[test]
+    fn eine_normale_zahl_geht_durch_dieselbe_huelle() {
+        let b = aus_json("16000").expect("gueltig");
+        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        assert_eq!(wert["bitrate_kbps"], 16000);
+    }
+
+    #[test]
+    fn die_meldung_zu_einem_vertipper_nennt_das_feld() {
+        // Ohne Feldnamen sucht der Streamer in vier Feldern nach dem Fehler.
+        let fehler = manuell_pruefen(manuell(1920, 1080, 60, 9_999_999_999))
+            .expect_err("passt nicht in den Spaltentyp des Relays");
+        assert!(fehler.starts_with("Bitrate"), "{fehler}");
+        let fehler = manuell_pruefen(ManuellesProfil {
+            bitrate_kbps: Formularzahl(None),
+            ..manuell(1920, 1080, 60, 6000)
+        })
+        .expect_err("keine ganze Zahl");
+        assert!(fehler.starts_with("Bitrate"), "{fehler}");
+    }
+
+    /// Die Umrechnung nach `i32` ist der Spaltentyp des Relays und keine
+    /// wieder eingefuehrte Obergrenze: alles, was dort hineinpasst, geht durch.
+    #[test]
+    fn der_groesste_speicherbare_wert_geht_weiterhin_durch() {
+        assert!(manuell_pruefen(manuell(1920, 1080, 60, i32::MAX as i64)).is_ok());
     }
 
     /// yuv420p halbiert beide Achsen. Eine ungerade Kante laesst ffmpeg erst
     /// beim Start sterben, nicht beim Speichern, und dann steht der Stream.
     #[test]
     fn ungerade_kanten_werden_abgelehnt() {
-        assert!(manuell_pruefen(ManuellesProfil {
-            width: 1921,
-            height: 1080,
-            fps: 60,
-            bitrate_kbps: 6000,
-        })
+        assert!(manuell_pruefen(manuell(1921, 1080, 60, 6000))
         .is_err());
     }
 
     #[test]
     fn null_und_negativ_sind_keine_werte() {
         for (w, h, f, b) in [(0, 1080, 60, 6000), (1920, 0, 60, 6000), (1920, 1080, 0, 6000), (1920, 1080, 60, -1)] {
-            assert!(manuell_pruefen(ManuellesProfil {
-                width: w,
-                height: h,
-                fps: f,
-                bitrate_kbps: b,
-            })
+            assert!(manuell_pruefen(manuell(w, h, f, b))
             .is_err());
         }
     }
@@ -665,12 +749,7 @@ mod tests {
     fn stufe_und_eigene_werte_zusammen_sind_ein_fehler() {
         let mut b = body("twitch");
         b.profil = Some("1080p60".into());
-        b.manuell = Some(ManuellesProfil {
-            width: 1920,
-            height: 1080,
-            fps: 60,
-            bitrate_kbps: 6000,
-        });
+        b.manuell = Some(manuell(1920, 1080, 60, 6000));
         assert!(ziel_nutzlast(&b).is_err());
     }
 
