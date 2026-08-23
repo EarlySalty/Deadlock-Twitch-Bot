@@ -113,7 +113,7 @@ function DashboardSkeleton() {
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
       <BackgroundBlobs />
-      <div className="relative mx-auto max-w-[1440px]">
+      <div className="relative mx-auto max-w-[2200px]">
         <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
           <aside className="panel-card card-glow self-start rounded-2xl p-4">
             <div className="flex items-center gap-3">
@@ -451,7 +451,7 @@ export function InternalHomeLanding() {
     return (
       <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
         <BackgroundBlobs />
-        <div className="relative mx-auto max-w-[1440px]">
+        <div className="relative mx-auto max-w-[2200px]">
           <div className="panel-card rounded-2xl p-6 md:p-8">
             {noPartnersAtAll ? (
               <div className="space-y-2">
@@ -501,7 +501,7 @@ export function InternalHomeLanding() {
     return (
       <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
         <BackgroundBlobs />
-        <div className="relative mx-auto max-w-[1440px]">
+        <div className="relative mx-auto max-w-[2200px]">
           <div className="panel-card rounded-2xl p-6 md:p-8">
             <h2 className="text-xl font-bold text-white">Startseite nicht verfuegbar</h2>
             <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
@@ -602,8 +602,8 @@ export function InternalHomeLanding() {
       />
       <BackgroundBlobs />
 
-      <div className="relative mx-auto max-w-[1440px]">
-        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_340px]">
+      <div className="relative mx-auto max-w-[2200px]">
+        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_340px] 2xl:grid-cols-[240px_minmax(0,1fr)_420px]">
           <Rise
             as="aside"
             className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4"
