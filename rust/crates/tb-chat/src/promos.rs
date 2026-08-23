@@ -102,6 +102,8 @@ const PROMO_RUNTIME_STATE_MAX_AGE_SEC: u64 = 86400;
 const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
+/// Partner-Seite für Streamer-Pitches in den Promo-Texten.
+pub const STREAMER_PARTNER_URL: &str = "https://deutsche-deadlock-community.de/streamer";
 
 /// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
 /// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text
@@ -297,78 +299,78 @@ const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 // Promo-Texte — Ursprung constants.py:114–152, seitdem erweitert
 // ---------------------------------------------------------------------------
 
-/// Standard-Promo-Texte, kategorisiert. Placeholder `{invite}` wird ersetzt.
-/// Port von PROMO_MESSAGES_CATEGORIZED (constants.py).
+/// Standard-Promo-Texte, kategorisiert. Nur konkrete Angebote, kein
+/// „wir haben einen Discord". `{invite}` wird ersetzt, Partner-Texte tragen
+/// [`STREAMER_PARTNER_URL`].
 ///
-/// Kategorie = Routing, nicht nur Ordnung: `generic`/`hype` fehlen im
-/// `chat_activity`-Pool (siehe [`activity_promo_messages`]).
-fn promo_messages_generic() -> Vec<&'static str> {
-    vec![
-        "Wir haben einen Discord! Komm vorbei, falls du dich mit anderen Deadlock-Spielern vernetzen willst: {invite}",
-        "Falls du Deadlock mit anderen spielen willst oder einfach quatschen magst — wir haben eine Community: {invite}",
-        "Unser Discord wächst gerade — falls du dabei sein willst: {invite}",
-        "Community Discord für Deadlock-Spieler: {invite} — schau gern mal rein",
-        "Falls ihr nach Mitspielern sucht oder einfach Deadlock-Content wollt: {invite}",
-    ]
-}
-
+/// Kategorie = Routing: `hype` nur bei Viewer-Spike
+/// (siehe [`activity_promo_messages`]).
 fn promo_messages_competitive() -> Vec<&'static str> {
     vec![
-        "Solo-Queue-Grief nervig? Im Discord findet ihr Leute für Duo/Team-Queue: {invite}",
-        "Ranked-Grind läuft besser mit guten Teammates — Discord: {invite}",
-        "Meta-Talks, Tier-Listen und Guides gibt's bei uns auf Discord: {invite}",
-        "Für Duo-Queue oder einfach um über den letzten Patch zu reden: {invite}",
-        "Wir haben einen Competitive-Channel auf Discord — falls ihr Feedback wollt oder sucht: {invite}",
-        "Kein Bock mehr auf Solo-Queue-Albtraum? Meld dich im Discord: {invite}",
+        "Solo Queue nervt? Duo und Stack findest du auf Discord: {invite}",
+        "Ranked Voice und Leute zum Duo liegen auf Discord: {invite}",
     ]
 }
 
 fn promo_messages_community() -> Vec<&'static str> {
     vec![
-        "Wir machen regelmäßig Inhouses — falls ihr mitspielen wollt: {invite}",
-        "Nächstes Turnier kommt — Discord für Infos: {invite}",
-        "Community-Events, Inhouses, Drafts — alles auf Discord: {invite}",
-        "Falls ihr Deadlock-Mates sucht: {invite}",
-        "Unsere Community wächst — kommt vorbei: {invite}",
-        "Sei nicht nur während des Streams Teil der Community, komm auf unseren Discord: {invite}",
-        "Der Stream geht irgendwann offline, die Community nicht: {invite}",
-        "Community ist mehr als der Chat hier. Wir sind auch zwischen den Streams da: {invite}",
+        "Bei uns laufen Scrims. Wer mitmachen will: {invite}",
+        "Custom Games und eigene Lobbies gibt es auf Discord: {invite}",
+        "Mitspieler für Ranked oder Normals: Discord, Kanal Mitspieler Suche. {invite}",
+        "Nach dem Stream noch Voice und Leute zum Zocken: {invite}",
     ]
 }
 
 fn promo_messages_growth() -> Vec<&'static str> {
     vec![
-        "Neueinsteiger willkommen — Guides und Tipps auf Discord: {invite}",
-        "Rank-Grind mit Unterstützung — Community Discord: {invite}",
-        "Ob Einsteiger oder Veteran — unser Discord hat für alle was: {invite}",
+        "Neu in Deadlock? Paten und eine Neue Spieler Lane gibt es auf Discord: {invite}",
+        "Kein Game Invite? Auf Discord im Kanal frag die community hilft jemand: {invite}",
+    ]
+}
+
+fn promo_messages_coaching() -> Vec<&'static str> {
+    vec![
+        "Coaching bei uns ist kostenlos. Frag auf Discord nach einem Coach: {invite}",
+        "Kostenloses Deadlock Coaching gibt es auf Discord: {invite}",
+        "Coaching kostet bei uns nichts. Discord: {invite}",
     ]
 }
 
 fn promo_messages_hype() -> Vec<&'static str> {
     vec![
-        "Heute so viele Viewer — willkommen alle Neuen! Falls ihr dabei bleiben wollt: {invite}",
-        "Schön, so viele hier zu sehen! Community Discord: {invite}",
-        "Willkommen, neue Gesichter! Wer mehr Deadlock-Content will: {invite}",
+        "Viele neue Gesichter. Kostenloses Coaching und Mitspieler auf Discord: {invite}",
+        "Willkommen. Game Invite und Neue Spieler Lane sind auf Discord: {invite}",
     ]
 }
 
-/// Alle Standard-Promo-Texte kombiniert (PROMO_MESSAGES, 25 Einträge gesamt).
+fn promo_messages_partner() -> Vec<&'static str> {
+    vec![
+        "Du streamst Deadlock? Hier kannst du Partner werden: https://deutsche-deadlock-community.de/streamer",
+        "Streamer nehmen wir direkt auf. Infos: https://deutsche-deadlock-community.de/streamer",
+        "Live Posts und ein eigener Streamer Bereich. Partner werden: https://deutsche-deadlock-community.de/streamer",
+    ]
+}
+
+/// Alle Standard-Promo-Texte kombiniert.
 fn all_promo_messages() -> Vec<&'static str> {
     let mut all = Vec::new();
-    all.extend(promo_messages_generic());
     all.extend(promo_messages_competitive());
     all.extend(promo_messages_community());
     all.extend(promo_messages_growth());
+    all.extend(promo_messages_coaching());
     all.extend(promo_messages_hype());
+    all.extend(promo_messages_partner());
     all
 }
 
-/// Texte für reason="chat_activity": competitive + community + growth.
+/// Texte für reason="chat_activity". Hype bleibt dem Spike vorbehalten.
 fn activity_promo_messages() -> Vec<&'static str> {
     let mut pool = Vec::new();
     pool.extend(promo_messages_competitive());
     pool.extend(promo_messages_community());
     pool.extend(promo_messages_growth());
+    pool.extend(promo_messages_coaching());
+    pool.extend(promo_messages_partner());
     pool
 }
 
@@ -491,75 +493,92 @@ pub struct PromoPreset {
     pub tags: &'static str,
 }
 
-/// 5 globale Presets — 1:1 zu `bot/chat/promo_presets.py` (IDs/Texte/Tags stabil,
-/// damit die MiniMax-Auswahl dieselben Schlagwörter sieht).
+/// Globale Presets. IDs und Tags bleiben die MiniMax-Schlagwörter.
 pub fn global_presets() -> Vec<PromoPreset> {
     vec![
         PromoPreset {
             id: "g_competitive",
             preset_type: PresetType::Global,
-            text: "Kein Bock mehr auf Solo-Queue-Grief? Such dir feste Mates in unserer deutschen Deadlock-Community! {invite} 🔫",
+            text: "Solo Queue nervt? Duo und Stack findest du auf Discord: {invite}",
             tags: "ranked, mmr, solo_queue, competitive, mates",
         },
         PromoPreset {
             id: "g_community",
             preset_type: PresetType::Global,
-            text: "Bock auf Inhouses oder kleine Turniere? Wir organisieren regelmäßig Events – schau gerne vorbei: {invite} 🏆",
+            text: "Bei uns laufen Scrims. Wer mitmachen will: {invite}",
             tags: "inhouse, events, tournament, community, fun",
         },
         PromoPreset {
             id: "g_new_to_deadlock",
             preset_type: PresetType::Global,
-            text: "Neu in Deadlock? Unsere Community hat Guides, Tipps und Leute die gerne helfen: {invite} 📚",
+            text: "Neu in Deadlock? Paten und eine Neue Spieler Lane: {invite}",
             tags: "new_player, beginner, guide, help, learning",
         },
         PromoPreset {
             id: "g_meta",
             preset_type: PresetType::Global,
-            text: "Patch-Diskussionen, Tier-Listen, Meta-Talks – alles bei uns auf Discord: {invite}",
-            tags: "meta, patch, tierlist, discussion, build",
+            text: "Kein Game Invite? Auf Discord im Kanal frag die community hilft jemand: {invite}",
+            tags: "meta, patch, tierlist, discussion, build, invite",
+        },
+        PromoPreset {
+            id: "g_coaching",
+            preset_type: PresetType::Global,
+            text: "Coaching bei uns ist kostenlos: {invite}",
+            tags: "coaching, coach, help, learning, beginner",
         },
         PromoPreset {
             id: "g_chill",
             preset_type: PresetType::Global,
-            text: "Wer nach dem Stream noch Deadlock zockt und ne Community sucht – wir sind auf Discord: {invite} 👀",
+            text: "Nach dem Stream Voice und Leute zum Zocken: {invite}",
             tags: "chill, after_stream, looking_for_group, casual",
+        },
+        PromoPreset {
+            id: "g_partner",
+            preset_type: PresetType::Global,
+            text: "Du streamst? Partner werden: https://deutsche-deadlock-community.de/streamer",
+            tags: "streamer, partner, creator, live_post",
         },
     ]
 }
 
-/// 5 user-spezifische Presets — 1:1 zu `promo_presets.py` (type="user"). Enthalten `{login}`.
+/// User-Presets. Enthalten `{login}`.
 pub fn user_presets() -> Vec<PromoPreset> {
     vec![
         PromoPreset {
             id: "u_welcome",
             preset_type: PresetType::User,
-            text: "@{login} Willkommen! Falls du noch eine deutsche Deadlock-Community suchst – hier entlang: {invite} 🎮",
+            text: "@{login} Neu hier? Auf Discord gibt es Paten und eine Neue Spieler Lane: {invite}",
             tags: "new, first_time, welcome, lurker",
         },
         PromoPreset {
             id: "u_mates",
             preset_type: PresetType::User,
-            text: "@{login} Falls du Mates zum Zocken suchst, in unserer Community wirst du fündig: {invite}",
+            text: "@{login} Mitspieler für Ranked oder Normals sind auf Discord: {invite}",
             tags: "looking_for_group, mates, team, duo, party",
         },
         PromoPreset {
             id: "u_lurker_viewer",
             preset_type: PresetType::User,
-            text: "@{login} Regelmäßig dabei? 👀 Falls du über Deadlock reden willst, komm gerne auf unseren Discord: {invite}",
+            text: "@{login} Nach dem Stream ist auf Discord noch Voice: {invite}",
             tags: "lurker, regular_viewer, silent, watcher",
         },
         PromoPreset {
             id: "u_ranked_grind",
             preset_type: PresetType::User,
-            text: "@{login} Ranked-Grind solo macht keinen Spaß – bei uns findest du Leute für den Duo-Queue: {invite} 🔫",
+            text: "@{login} Ranked solo ist zäh. Duo Leute sind auf Discord: {invite}",
             tags: "ranked, competitive, grind, duo, elo",
         },
         PromoPreset {
             id: "u_new_player",
             preset_type: PresetType::User,
-            text: "@{login} Neu in Deadlock? Unsere Community hilft gerne beim Einstieg – schau mal vorbei: {invite} 📚",
+            text: "@{login} Neu in Deadlock? Paten und eine Neue Spieler Lane: {invite}",
             tags: "new_player, beginner, help, learning, guide",
+        },
+        PromoPreset {
+            id: "u_coaching",
+            preset_type: PresetType::User,
+            text: "@{login} Coaching bei uns ist kostenlos. Frag auf Discord nach: {invite}",
+            tags: "coaching, coach, help, learning",
         },
     ]
 }
@@ -2487,17 +2506,63 @@ mod tests {
 
     type SuppressionCall = (String, Option<String>, String, String);
 
-    /// Ein Pool-Text ohne `{invite}` wird still ohne Link gepostet, statt zu
-    /// scheitern. Doppelte Texte verzerren zusätzlich die Zufallsauswahl und
-    /// hebeln den Anti-Repeat-Filter aus (der nur auf Textgleichheit prüft).
+    fn hat_gedankenstrich(text: &str) -> bool {
+        text.contains('\u{2014}')
+            || text.contains('\u{2013}')
+            || text.contains('\u{2015}')
+            || text.contains(" -- ")
+            || text.contains(" - ")
+    }
+
+    fn alle_sichtbaren_promo_texte() -> Vec<&'static str> {
+        let mut texts = all_promo_messages();
+        texts.extend(global_presets().into_iter().map(|p| p.text));
+        texts.extend(user_presets().into_iter().map(|p| p.text));
+        texts
+    }
+
+    /// Pool-Text braucht `{invite}` oder die Partner-URL. Doppelte Texte
+    /// verzerren die Zufallsauswahl und hebeln den Anti-Repeat-Filter aus.
     #[test]
-    fn jeder_promo_text_traegt_den_invite_platzhalter_und_ist_einzigartig() {
+    fn jeder_promo_text_traegt_einen_link_und_ist_einzigartig() {
         let alle = all_promo_messages();
         for text in &alle {
-            assert!(text.contains("{invite}"), "Promo ohne Invite-Link: {text}");
+            let hat_link = text.contains("{invite}") || text.contains(STREAMER_PARTNER_URL);
+            assert!(hat_link, "Promo ohne Link: {text}");
         }
         let unique: std::collections::HashSet<_> = alle.iter().collect();
         assert_eq!(unique.len(), alle.len(), "doppelter Promo-Text im Pool");
+    }
+
+    #[test]
+    fn promo_texte_haben_keine_gedankenstriche() {
+        for text in alle_sichtbaren_promo_texte() {
+            assert!(!hat_gedankenstrich(text), "Gedankenstrich in: {text}");
+        }
+    }
+
+    #[test]
+    fn partner_texte_liegen_im_chat_activity_pool() {
+        let activity = activity_promo_messages();
+        for text in promo_messages_partner() {
+            assert!(activity.contains(&text), "partner-Text fehlt: {text}");
+        }
+    }
+
+    #[test]
+    fn coaching_texte_liegen_im_chat_activity_pool() {
+        let activity = activity_promo_messages();
+        for text in promo_messages_coaching() {
+            assert!(activity.contains(&text), "coaching-Text fehlt: {text}");
+        }
+    }
+
+    #[test]
+    fn promo_pools_sind_nicht_leer() {
+        assert!(!all_promo_messages().is_empty());
+        assert!(!activity_promo_messages().is_empty());
+        assert!(!promo_messages_hype().is_empty());
+        assert!(!promo_messages_coaching().is_empty());
     }
 
     /// Kategorie ist Routing: `community` muss im `chat_activity`-Pool landen,

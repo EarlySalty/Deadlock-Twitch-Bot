@@ -32,22 +32,22 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <main>
 <nav class="crumbs"><a href="../index.html">Startseite</a> › Module › Stream-Coaching-Audit</nav>
 <h1>Modul: Stream-Coaching-Audit <span class="tag">intern</span></h1>
-<p class="summary">Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug, mit dem das Team eine ausdrücklich freigegebene Twitch-Aufnahme auf problematische Sprache (v. a. Slurs) prüft. Es entsteht ein privates Protokoll mit Zeitstempeln als Grundlage für ein Coaching-Gespräch oder eine Partner-Prüfung. Das Werkzeug moderiert nichts automatisch und veröffentlicht nichts.</p>
+<p class="summary">Der Stream-Coaching-Audit ist ein internes Admin-Werkzeug. Es schneidet die Streams der eigenen, dafür eingetragenen Kanäle live in Blöcken mit, wandelt sie auf demselben Rechner in Text um und prüft ihn auf problematische Sprache. Es entsteht ein privates Protokoll mit Zeitstempeln als Grundlage für ein Coaching-Gespräch. Das Werkzeug moderiert nichts automatisch und veröffentlicht nichts.</p>
 
 <section id="worum-es-geht">
 <h2>Worum es geht</h2>
-<p>Das Werkzeug prüft ausschließlich <strong>ausdrücklich autorisierte</strong> Aufnahmen auf heikle gesprochene Äußerungen und liefert ein belegbares, privates Protokoll. Es verhängt keine Sanktionen, bannt und verwarnt niemanden und postet nichts öffentlich — es liefert nur Belege für eine menschliche Entscheidung.</p>
+<p>Geprüft werden ausschließlich die Kanäle, die in der Konfiguration des Dienstes stehen — eigene Leute, keine fremden Streams. Das Werkzeug liefert ein belegbares, privates Protokoll, verhängt keine Sanktionen, bannt und verwarnt niemanden und postet nichts öffentlich.</p>
 </section>
 
 <section id="ablauf">
 <h2>Ablauf (fachlich)</h2>
 <ul>
-<li>Nimmt von einer freigegebenen Quelle einen Ausschnitt auf — ein fertiges Twitch-VOD oder einen kurzen, zeitlich begrenzten Mitschnitt eines laufenden Live-Streams.</li>
-<li>Verarbeitet ausschließlich den <strong>Ton</strong> (kein Video) und wandelt ihn in Text um (Transkription).</li>
-<li>Prüft das Transkript in mehreren Stufen: zuerst über lokale, treffsichere Regeln, danach optional über eine zusätzliche KI-Kontextprüfung, die weichere Grenzfälle einordnet.</li>
-<li>Erstellt ein privates Protokoll, in dem jede Fundstelle mit Zeitpunkt und — bei VODs — einem direkten Sprunglink hinterlegt ist.</li>
-<li>Stellt das Ergebnis nur bei tatsächlichen Funden zu (private Nachricht ans Team). Gibt es nichts zu melden, bleibt es still.</li>
-<li>Räumt Roh-Audio- und Zwischendateien nach dem Lauf wieder weg; dauerhaft gespeichert wird nur das private Protokoll.</li>
+<li>Prüft im Minutentakt, welcher eingetragene Kanal sendet, und schneidet jeden davon in Blöcken von zwei Minuten mit — parallel, nicht nacheinander.</li>
+<li>Wandelt den Mitschnitt auf demselben Rechner in Text um; Ton verlässt die Maschine nicht.</li>
+<li>Prüft den Text in zwei Stufen: zuerst über lokale, treffsichere Regeln, danach über eine KI-Kontextprüfung, die weichere Grenzfälle einordnet.</li>
+<li>Erstellt je Block ein privates Protokoll, in dem jede Fundstelle mit ihrem Zeitpunkt in der Sendung steht.</li>
+<li>Stellt eine private Nachricht ans Team zu, wenn es Funde gibt — oder wenn eine Prüfung unvollständig blieb, damit Stille nie einen Ausfall verdeckt.</li>
+<li>Löscht den Mitschnitt eines sauberen Blocks. Wo etwas gefunden wurde oder die Prüfung unvollständig blieb, bleibt er bis zum Ende der Aufbewahrungsfrist liegen.</li>
 </ul>
 </section>
 
@@ -58,9 +58,8 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <tr><th>Modus</th><th>Verhalten</th></tr>
 </thead>
 <tbody>
-<tr><td>Manueller VOD-Audit</td><td>Nachträgliche Prüfung eines bestehenden VODs (z. B. Nachbesprechung), mit direkten Sprunglinks auf die Fundstellen.</td></tr>
-<tr><td>Live-Beobachtung</td><td>Schneidet einen laufenden Stream in kurzen Abschnitten mit, transkribiert und prüft fortlaufend; neue Funde erscheinen mit geringer Verzögerung. Beim Start geht eine kurze private Status-Nachricht ans Team.</td></tr>
-<tr><td>Archiv-Weg</td><td>Ein Mitschnitt/VOD wird privat zur automatischen Untertitelung abgelegt und das Ergebnis geprüft; plattformseitig zensierte Stellen werden lokal nachgeprüft, damit der echte Wortlaut ins Protokoll gelangt.</td></tr>
+<tr><td>Live-Mitschnitt (einziger Modus)</td><td>Der Dienst läuft dauerhaft und schneidet jeden eingetragenen Kanal mit, solange er sendet. Es gibt keinen manuellen Aufruf, keine VOD- und keine Archiv-Prüfung mehr: ob ein Kanal seine VODs behält, entscheidet der Kanal.</td></tr>
+<tr><td>Grenzen je Sendung</td><td>Höchstens sechs Stunden Sendungszeit je Sendung. Kommt die Auswertung nicht hinterher, pausiert die Aufnahme — und das Team bekommt eine Nachricht, weil dieser Abschnitt ungeprüft bleibt.</td></tr>
 </tbody>
 </table>
 <p>Ist ein zu beobachtender Kanal gerade offline, wartet die Beobachtung von selbst auf den nächsten Live-Start, statt abzubrechen.</p>
@@ -71,17 +70,18 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <ul>
 <li>Zuschauer im Twitch-Chat sehen davon nichts; es wird nichts öffentlich geschrieben oder veröffentlicht.</li>
 <li>Streamer und reguläre Zuschauer bemerken im laufenden Betrieb in der Regel nichts — es ist eine interne Prüfung, kein sichtbares Feature.</li>
-<li>Sichtbar ist das Ergebnis nur für das Team: ein privates Protokoll und, nur bei Funden, eine private Nachricht mit Fundstellen, Zeitpunkten und ggf. Sprunglinks.</li>
+<li>Sichtbar ist das Ergebnis nur für das Team: ein privates Protokoll und eine private Nachricht mit Fundstellen und Zeitpunkten. Nachrichten gehen auch dann raus, wenn eine Prüfung unvollständig blieb oder die Aufnahme ausfiel — Sprunglinks gibt es nicht mehr, weil nicht aus VODs geprüft wird.</li>
 </ul>
 </section>
 
 <section id="datenschutz">
 <h2>Datenschutz</h2>
 <ul>
-<li>Ein Audit läuft nur auf ausdrücklich freigegebenen Aufnahmen — die Autorisierung ist Pflicht und kein Standardverhalten.</li>
-<li>Es wird kein vollständiges Rohtranskript dauerhaft aufbewahrt; Roh-Audio- und Zwischendateien werden nach dem Lauf entfernt. Dauerhaft bleibt nur das private Protokoll mit den Fundstellen.</li>
-<li>Heikle Begriffe werden für die breiter sichtbaren Ausgabewege maskiert. Den unmaskierten Klartext-Beleg gibt es ausschließlich im streng privaten, zugriffsbeschränkten Admin-Protokoll — damit ein Fund nachprüfbar bleibt.</li>
-<li>Eine Übertragung von Ton oder Text an externe Dienste (Transkription oder zusätzliche KI-Prüfung) ist nicht automatisch aktiv, sondern muss pro Lauf gesondert freigegeben werden. Standardmäßig läuft die Transkription lokal.</li>
+<li>Geprüft werden nur die eingetragenen eigenen Kanäle, nicht fremde Streams.</li>
+<li>Der Ton wird auf demselben Rechner in Text umgewandelt und verlässt die Maschine nicht.</li>
+<li>Ein vollständiges Rohtranskript wird nur gespeichert, wenn das ausdrücklich eingeschaltet ist; Standard ist: nicht speichern.</li>
+<li>Für die KI-Kontextprüfung gehen Textausschnitte an einen externen Anbieter — dieselbe Stelle, die auch der Chat-Bot nutzt. Bekannte heikle Begriffe werden vorher maskiert, anderer Wortlaut geht mit. Das ist eine bewusst gesetzte Einstellung, keine Nebenwirkung.</li>
+<li>Protokolle und aufbewahrte Mitschnitte liegen zugriffsbeschränkt und werden nach der eingestellten Frist gelöscht.</li>
 <li>Protokolle sind privat und nicht zum Teilen bestimmt.</li>
 </ul>
 </section>
@@ -91,9 +91,9 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <ul>
 <li><strong>Keine automatischen Maßnahmen:</strong> Das Werkzeug sanktioniert niemanden; jede Konsequenz entscheidet ein Mensch nach manueller Prüfung.</li>
 <li><strong>Funde sind Hinweise, keine Urteile:</strong> Transkription und KI-Einordnung können sich irren (verhörte Wörter, falsch eingeordneter Kontext). Jede Fundstelle ist am echten Aufnahme-Kontext manuell gegenzuprüfen.</li>
-<li><strong>Nur gesprochene Sprache:</strong> Bildinhalte, Texteinblendungen oder reiner Chat-Text sind nicht Gegenstand der Prüfung.</li>
-<li><strong>Stille ist das Normalergebnis:</strong> Kein Fund bedeutet keine Nachricht — ausbleibende Meldungen heißen nicht, dass etwas defekt ist.</li>
-<li><strong>Abschnittsweise Live-Prüfung:</strong> Eine Äußerung genau an einer Abschnittsgrenze kann theoretisch ungünstig fallen; für die belastbare Auswertung dient ohnehin die VOD-/Archiv-Prüfung mit Sprunglinks.</li>
+<li><strong>Geprüft wird nur gesprochene Sprache:</strong> Bildinhalte, Texteinblendungen oder reiner Chat-Text sind nicht Gegenstand der Prüfung. Aufbewahrt wird bei einem Befund allerdings der komplette Mitschnitt mit Bild und Ton, weil er der Beleg ist.</li>
+<li><strong>Stille ist das Normalergebnis:</strong> Kein Fund bedeutet keine Nachricht. Ein Ausfall der Prüfung meldet sich dagegen ausdrücklich, damit Stille nie als „sauber" gelesen wird.</li>
+<li><strong>Abschnittsweise Prüfung:</strong> Eine Äußerung genau an einer Blockgrenze kann ungünstig fallen. Die Zeitstempel zählen ab Sendungsbeginn, damit die Stelle wiederzufinden ist.</li>
 <li><strong>Prüfmechanik bewusst abstrahiert:</strong> Ab wann eine Stelle als auffällig gilt, ist bewusst nicht im Detail dokumentiert. Die lokalen Regeln sind auf hohe Treffsicherheit ausgelegt; die KI-Prüfung fängt weichere Grenzfälle ab.</li>
 </ul>
 </section>
@@ -101,10 +101,10 @@ footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-si
 <section id="agent-hinweise">
 <h2>Hinweise für KI-Agenten &amp; Support</h2>
 <div class="box say"><strong>Der Agent darf sagen:</strong><ul>
-<li>Dass es ein internes Werkzeug ist, das nur auf ausdrücklich freigegebenen Aufnahmen läuft und nichts öffentlich postet.</li>
+<li>Dass es ein internes Werkzeug ist, das nur die eigenen, eingetragenen Kanäle betrifft und nichts öffentlich postet.</li>
 <li>Dass keine automatischen Sanktionen erfolgen — es liefert nur Belege für eine menschliche Entscheidung.</li>
-<li>Dass nur der Ton geprüft wird, Rohdateien nach dem Lauf gelöscht werden und dauerhaft nur ein privates Protokoll bleibt.</li>
-<li>Dass „keine Meldung" das erwartete Normalergebnis ist und kein Fehler.</li>
+<li>Dass nur gesprochene Sprache geprüft wird und Mitschnitte ohne Befund gelöscht werden. Auf Nachfrage auch: bleibt ein Mitschnitt wegen eines Befundes liegen, enthält er Bild und Ton. Das darf nicht verschwiegen werden.</li>
+<li>Dass „keine Meldung" in aller Regel das erwartete Normalergebnis ist. Nicht sagen, dass Stille ein Beweis für einen sauberen Stream ist — Ausfälle melden sich zwar, aber ein Zustellproblem kann eine Meldung verzögern.</li>
 </ul></div>
 <div class="box nosay"><strong>Der Agent darf nicht sagen / offenlegen:</strong><ul>
 <li>Die genauen Kriterien, Schwellen, Regeln oder Zeitfenster, ab wann eine Stelle als auffällig gilt.</li>

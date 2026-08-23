@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400" role="img" aria-labelledby="t">
+<title id="t">Dialog Benutzerdefinierte Browser-Docks mit vier eingetragenen Fenstern</title>
+<style>
+  text { font-family: system-ui, sans-serif; }
+  .lbl { fill: #e6e6e6; font-size: 15px; }
+  .dim { fill: #9a9a9a; font-size: 14px; }
+  .feld { fill: #e6e6e6; font-size: 14px; font-family: monospace; }
+  .mark { fill: #efd49d; font-size: 14px; font-weight: 700; }
+  .titel { fill: #e6e6e6; font-size: 16px; font-weight: 600; }
+</style>
+<rect width="900" height="400" rx="10" fill="#2b2b2b" stroke="#1e1e1e"/>
+<rect x="0" y="0" width="900" height="46" rx="10" fill="#3c3c3c"/>
+<rect x="0" y="36" width="900" height="10" fill="#3c3c3c"/>
+<text x="24" y="30" class="titel">Benutzerdefinierte Browser-Docks</text>
+<text x="30" y="80" class="dim">Dock-Name</text>
+<text x="250" y="80" class="dim">URL</text>
+<rect x="30" y="94" width="200" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="42" y="116" class="feld">Chat</text>
+<rect x="244" y="94" width="590" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="256" y="116" class="feld" font-size="12">https://www.twitch.tv/popout/DEINKANAL/chat</text>
+<text x="848" y="117" class="dim" font-size="18">&#10005;</text>
+<rect x="30" y="140" width="200" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="42" y="162" class="feld">Aktivität</text>
+<rect x="244" y="140" width="590" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="256" y="162" class="feld" font-size="12">https://dashboard.twitch.tv/popout/stream-manager/activity-feed</text>
+<text x="848" y="163" class="dim" font-size="18">&#10005;</text>
+<rect x="30" y="186" width="200" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="42" y="208" class="feld">Stream-Info</text>
+<rect x="244" y="186" width="590" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="256" y="208" class="feld" font-size="12">https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info</text>
+<text x="848" y="209" class="dim" font-size="18">&#10005;</text>
+<rect x="30" y="232" width="200" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="42" y="254" class="feld">Kanalpunkte</text>
+<rect x="244" y="232" width="590" height="34" rx="4" fill="#232323" stroke="#1a1a1a"/>
+<text x="256" y="254" class="feld" font-size="12">https://dashboard.twitch.tv/popout/stream-manager/community-points</text>
+<text x="848" y="255" class="dim" font-size="18">&#10005;</text>
+<rect x="25" y="89" width="814" height="182" rx="8" fill="none" stroke="#c8a86b" stroke-width="2.5"/>
+<circle cx="866" cy="100" r="14" fill="#c8a86b"/><text x="866" y="105" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">2</text>
+<rect x="30" y="292" width="40" height="32" rx="4" fill="#3c3c3c" stroke="#1e1e1e"/>
+<text x="50" y="314" text-anchor="middle" class="lbl" font-size="20">+</text>
+<rect x="25" y="287" width="50" height="42" rx="8" fill="none" stroke="#c8a86b" stroke-width="2.5"/>
+<circle cx="96" cy="308" r="14" fill="#c8a86b"/><text x="96" y="313" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">1</text>
+<rect x="726" y="292" width="108" height="34" rx="4" fill="#4a7fb5"/>
+<text x="780" y="314" text-anchor="middle" class="lbl">Übernehmen</text>
+<circle cx="862" cy="309" r="14" fill="#c8a86b"/><text x="862" y="314" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">3</text>
+<text x="30" y="368" class="mark">1 Pro Fenster einmal auf „+“ &#183; 2 Name und Adresse einfügen &#183; 3 Übernehmen</text>
+</svg>

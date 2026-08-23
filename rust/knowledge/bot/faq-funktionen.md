@@ -21,6 +21,10 @@ Der Bot kümmert sich um fünf Dinge: Er leitet beim Stream-Ende deine Zuschauer
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
+### Wie funktioniert Uplink?
+
+Uplink nimmt deinen OBS-Stream entgegen und schickt ihn an die verbundenen Plattformen. Start und Stop machst du in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html) erklärt den Ablauf und die Einrichtung.
+
 ### Moderiert der Bot auch meinen Chat?
 
 Ja. Der Bot räumt automatisch die nervigen Werbe-Bots aus dem Chat, die dir mehr Viewer oder Follower verkaufen wollen — die kennt jeder Streamer, und sie sehen im Chat einfach mies aus. Das läuft im Hintergrund, ohne dass du Wörter sperren oder Mod-Regeln pflegen musst.

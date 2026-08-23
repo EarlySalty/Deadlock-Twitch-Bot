@@ -85,7 +85,7 @@ Status: ✅ fertig · 🔜 geplant.
 | `bot/social_media/` | [social-media.md](social-media.md) | ✅ | Clip-Pipeline, Uploads (TikTok/Instagram/YouTube), Approval, Enrichment |
 | `bot/highlight_clipper/` | [highlight-clipper.md](highlight-clipper.md) | ✅ | Highlight-Erkennung, VOD-Analyse, Clip-Erstellung |
 | `bot/title_generator/` | [title-generator.md](title-generator.md) | ✅ | KI-Titelgenerierung, Steam-Lookup |
-| `bot/stream_coaching_audit/` | [stream-coaching-audit.md](stream-coaching-audit.md) | ✅ | Slur-/Coaching-Audit via Transkription |
+| `rust/*/tb-stream-audit` | [stream-coaching-audit.md](stream-coaching-audit.md) | ✅ | Coaching-Audit: Live-Mitschnitt, lokale Transkription, Regeln + Modell |
 | `bot/entitlements/` | [entitlements.md](entitlements.md) | ✅ | Plan-/Feature-Berechtigungen |
 
 ### Infrastruktur / Service-Layer

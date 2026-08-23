@@ -165,6 +165,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
         streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
+        uplink,
         viewer_timeline, viewers,
         watch_time,
     };
@@ -477,6 +478,16 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/streamers",
             get(streamers::streamers_handler),
         )
+        .route("/twitch/api/v2/uplink/me", get(uplink::me_handler))
+        .route(
+            "/twitch/api/v2/uplink/waitlist",
+            post(uplink::waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/destinations",
+            get(uplink::destinations_handler).put(uplink::put_destination_handler),
+        )
+        .route("/twitch/api/v2/uplink/caps", get(uplink::caps_handler))
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
         .route(
@@ -1448,17 +1459,28 @@ pub fn build_social_media_admin_router(pool: PgPool) -> Router {
 /// Baut die nativen Main-Domain-SPA-Seiten, die bisher vom Python-Fallback
 /// bedient wurden.
 ///
-/// Die Shell-Routen sind bewusst oeffentlich: `/twitch/pricing` ist eine
-/// Marketing-Seite, `/twitch/dashboard` und `/twitch/verwaltung` liefern nur
-/// die SPA-Shell; Auth/Gates passieren clientseitig bzw. in den JSON-APIs.
-pub fn build_v2_spa_pages_router() -> Router {
+/// Nur `/twitch/pricing` ist oeffentlich (Marketing-Seite). Die
+/// eingeloggten Shells `/twitch/dashboard`, `/twitch/verwaltung` und
+/// `/twitch/uplink` sind serverseitig gegated: ohne Session 303 auf den Login,
+/// gesperrte Partner bekommen 403. Clientseitige Gates allein reichten nicht,
+/// die komplette Dashboard-Navigation war sonst fuer jeden Besucher sichtbar.
+///
+/// Braucht deshalb den Pool: der Gate liest den Partner-Access-State.
+pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
     use handlers::{obsolete_routes, spa};
 
     Router::new()
-        .route("/twitch/dashboard", get(spa::main_domain_spa_shell_handler))
+        .route(
+            "/twitch/dashboard",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
         .route(
             "/twitch/verwaltung",
-            get(spa::main_domain_spa_shell_handler),
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
+        .route(
+            "/twitch/uplink",
+            get(spa::main_domain_spa_shell_gated_handler),
         )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
@@ -1500,6 +1522,7 @@ pub fn build_v2_spa_pages_router() -> Router {
             "/twitch/api/live-announcement/test",
             post(obsolete_routes::live_announcement_builder_gone_handler),
         )
+        .with_state(pool)
 }
 
 /// Baut den Router für die öffentliche Website (`/streamer`) + Legacy-Redirect
@@ -1564,7 +1587,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         .merge(build_raid_pages_router(pool.clone()))
         .merge(build_affiliate_portal_router())
         .merge(build_social_media_admin_router(pool.clone()))
-        .merge(build_v2_spa_pages_router())
+        .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
@@ -1787,6 +1810,64 @@ mod router_wiring_tests {
         assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
         assert_eq!(h.get("x-xss-protection").unwrap(), "0");
         assert_eq!(h.get(header::LOCATION).unwrap(), "/streamer/foo");
+    }
+
+    /// Die eingeloggten Main-Domain-Shells duerfen ausgeloggt keine Shell
+    /// zeigen: 303 auf den Login mit dem eigenen Pfad als `next`.
+    /// `/twitch/pricing` bleibt als Marketing-Seite offen.
+    #[tokio::test]
+    async fn spa_shells_sind_ohne_session_gegated_pricing_bleibt_offen() {
+        let app = build_router(lazy_pool(), "smoke-token".into());
+        let gegated = [
+            (
+                "/twitch/dashboard",
+                "/twitch/auth/login?next=%2Ftwitch%2Fdashboard",
+            ),
+            (
+                "/twitch/verwaltung",
+                "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung",
+            ),
+            (
+                "/twitch/uplink",
+                "/twitch/auth/login?next=%2Ftwitch%2Fuplink",
+            ),
+        ];
+        for (pfad, ziel) in gegated {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(pfad)
+                        .header("host", "deutsche-deadlock-community.de")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{pfad}");
+            assert_eq!(
+                resp.headers().get(header::LOCATION).unwrap(),
+                ziel,
+                "{pfad}"
+            );
+        }
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/pricing")
+                    .header("host", "deutsche-deadlock-community.de")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Ohne gebautes Bundle 404 "Dashboard not built", mit Bundle 200 —
+        // aber niemals ein Login-Redirect.
+        assert_ne!(resp.status(), StatusCode::SEE_OTHER);
+        assert!(resp.headers().get(header::LOCATION).is_none());
     }
 
     #[tokio::test]

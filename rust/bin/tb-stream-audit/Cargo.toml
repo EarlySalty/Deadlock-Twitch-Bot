@@ -1,0 +1,24 @@
+[package]
+name = "tb-stream-audit-bin"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "tb-stream-audit"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+# `sync` und `io-util` kamen bisher nur ueber die Feature-Vereinigung mit
+# tb-llm und tb-engagement herein: der Bin nutzt `tokio::sync::Mutex` und
+# `AsyncWriteExt` selbst und haette sonst gebrochen, sobald eine dieser
+# Abhaengigkeiten wegfaellt.
+tokio = { workspace = true, features = ["signal", "time", "fs", "sync", "io-util"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tb-engagement = { workspace = true }
+tb-llm = { workspace = true }
+tb-stream-audit = { workspace = true }
+tb-transport-twitch = { workspace = true }

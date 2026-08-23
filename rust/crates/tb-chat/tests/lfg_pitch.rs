@@ -17,6 +17,21 @@ fn classify_lfg_erkennt_mitspieler_suche() {
 }
 
 #[test]
+fn classify_lfg_erkennt_anschluss_an_laufende_runde() {
+    for text in [
+        "ich hau mich dann dazu?",
+        "kann ich mit?",
+        "darf ich dazu",
+        "noch platz frei?",
+        "wer zockt noch",
+        "will mitspielen",
+        "adde mich mal",
+    ] {
+        assert!(classify_lfg(text), "{text:?}");
+    }
+}
+
+#[test]
 fn classify_lfg_bleibt_bei_anderen_nachrichten_still() {
     for text in [
         "suche einen guten build",
@@ -26,6 +41,9 @@ fn classify_lfg_bleibt_bei_anderen_nachrichten_still() {
         "!lfg",
         "was für ein hero ist das",
         "gutes spiel gerade",
+        "wie komme ich rein",
+        "das ist crazy hahaha",
+        "meine freundin ist fort gegangen",
     ] {
         assert!(!classify_lfg(text), "{text:?}");
     }

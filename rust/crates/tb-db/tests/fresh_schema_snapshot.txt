@@ -1017,6 +1017,7 @@ twitch_partners_all_state|twitch_login|text|YES|
 twitch_partners_all_state|twitch_user_id|text|YES|
 twitch_partners|added_by|text|YES|
 twitch_partners|admin_archived_at|text|YES|
+twitch_partners|auto_raid_paused_until|timestamp with time zone|YES|
 twitch_partners|departnered_at|text|YES|
 twitch_partners|global_ban_enforcement_enabled|boolean|NO|true
 twitch_partners|id|bigint|NO|nextval('twitch_partners_id_seq'::regclass)
@@ -1259,6 +1260,15 @@ twitch_smalltalk_sessions|settings_existed|boolean|NO|
 twitch_smalltalk_sessions|started_at|timestamp with time zone|NO|
 twitch_smalltalk_sessions|streamer_user_id|text|NO|
 twitch_smalltalk_sessions|viewer_count|integer|YES|
+twitch_smalltalk_transcripts|channel_login|text|NO|
+twitch_smalltalk_transcripts|created_at|timestamp with time zone|NO|now()
+twitch_smalltalk_transcripts|ended_at|timestamp with time zone|NO|
+twitch_smalltalk_transcripts|engine|text|NO|
+twitch_smalltalk_transcripts|id|bigint|NO|nextval('twitch_smalltalk_transcripts_id_seq'::regclass)
+twitch_smalltalk_transcripts|model|text|YES|
+twitch_smalltalk_transcripts|session_id|uuid|NO|
+twitch_smalltalk_transcripts|started_at|timestamp with time zone|NO|
+twitch_smalltalk_transcripts|text|text|NO|
 twitch_spam_review_decisions|channel_login|text|NO|
 twitch_spam_review_decisions|chatter_id|text|YES|
 twitch_spam_review_decisions|chatter_login|text|NO|

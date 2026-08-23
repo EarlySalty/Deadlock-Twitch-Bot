@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#241c11">
+  <title>OBS einrichten</title>
+  <link rel="stylesheet" href="doc.css">
+</head>
+<body>
+<main class="uplink-doc" data-doc="obs">
+  <p class="nur-standalone"><a href="index.html">Zurück zur Hilfe</a></p>
+  <h1>OBS einrichten</h1>
+  <p class="lede">Du stellst den Weg zu uns ein. CBR und Keyframe für Twitch musst du nicht nachbauen, und welche Auflösung rausgeht, wählst du im Dashboard. Ziel: viel Bild bei wenig Upload, wenig Last neben dem Spiel.</p>
+
+  <section id="obs-ausgabe">
+    <h2>1. Ausgabe</h2>
+    <p>Einstellungen → Ausgabe → Ausgabemodus <strong>Erweitert</strong> → Reiter <strong>Stream</strong>.</p>
+
+    <h3 id="obs-encoder">Videokodierer</h3>
+    <p>Nimm den ersten Eintrag, den OBS bei dir anbietet:</p>
+    <ol>
+      <li><code>NVIDIA NVENC HEVC</code> oder <code>AMD HW H.265 (HEVC)</code> oder <code>QuickSync HEVC</code></li>
+      <li>Wenn HEVC fehlt oder das Spiel danach ruckelt: <code>NVIDIA NVENC H.264</code> / <code>AMD HW H.264</code> / <code>QuickSync H.264</code></li>
+      <li><code>x264</code> ohne Hardware-Encoder. Das kostet Kerne und mehr Upload.</li>
+    </ol>
+    <figure>
+      <img src="bilder/4-ausgabe.svg" alt="OBS-Einstellungen, Reiter Ausgabe: Ausgabemodus Erweitert, Videokodierer NVIDIA NVENC HEVC, Ratensteuerung VBR, Bitrate 6000 mit Maximum 8000, Keyframe-Intervall 2 Sekunden. Encoder und Ratensteuerung sind hervorgehoben.">
+      <figcaption>So sieht der Reiter aus, wenn er stimmt. Die Zahlen passt du unten an deinen Upload an.</figcaption>
+    </figure>
+    <p>Weglassen: <code>x265</code>, <code>SVT-AV1</code>, <code>AOM AV1</code> (zu schwer neben dem Spiel) und Hardware-AV1 (unser Eingang erwartet HEVC oder H.264).</p>
+  </section>
+
+  <section id="obs-ratenregelung">
+    <h2>Qualitätsregulierung</h2>
+    <p>CBR, VBR, ABR und CQP/CRF steuern, wie viele Bits eine Szene bekommt. Nicht den Codec.</p>
+    <table>
+      <thead>
+        <tr><th>Modus</th><th>Was er macht</th><th>In Deadlock</th><th>Zu uns</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>CBR</strong></td>
+          <td>Jede Sekunde gleich viele Bits, Lobby wie Fight.</td>
+          <td>Verschenkt Upload in ruhigen Szenen. Fight wird davon nicht schöner.</td>
+          <td>Unnötig. CBR brauchen Twitch und Kick von uns, nicht von dir.</td>
+        </tr>
+        <tr>
+          <td><strong>VBR</strong></td>
+          <td>Zielbitrate plus Maximalbitrate. Ruhig spart er, im Fight gibt er mehr, begrenzt durch das Maximum.</td>
+          <td>Planbar. Bleibt in deiner Leitung.</td>
+          <td>Empfehlung.</td>
+        </tr>
+        <tr>
+          <td><strong>CQP</strong> (bei x264: <strong>CRF</strong>)</td>
+          <td>Du setzt eine Qualitätszahl. Der Encoder nimmt so viele Bits, wie die Szene braucht.</td>
+          <td>Lobby oft 2 bis 3 Mbit, Teamfight plötzlich 10 bis 15 Mbit.</td>
+          <td>Beste Qualität pro Bit, wenn deine Leitung die Spitze trägt.</td>
+        </tr>
+        <tr>
+          <td><strong>ABR</strong></td>
+          <td>Hält im Schnitt eine Bitrate, oft ohne hartes Maximum. Vor allem bei x264 sichtbar.</td>
+          <td>Kann über deine Leitung schießen, ohne so klar zu sein wie CQP.</td>
+          <td>Weglassen. Schlechter Kompromiss.</td>
+        </tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>VBR</strong>: du begrenzst die Leitung, der Encoder verteilt innerhalb der Grenze.</li>
+      <li><strong>CQP/CRF</strong>: du bestellst Qualität, die Bitrate folgt der Szene.</li>
+      <li><strong>ABR</strong>: ungefähr VBR, aber ohne zuverlässigen Deckel.</li>
+      <li><strong>CBR</strong>: Deckel und Boden sind gleich. Für den direkten Twitch-Weg Pflicht, für uns Verschwendung.</li>
+    </ul>
+
+    <h3 id="obs-zahlen">Welche Zahl</h3>
+    <p><strong>Standard bei knapper Leitung: VBR</strong></p>
+    <ul>
+      <li>Zielbitrate: 6000 Kbps</li>
+      <li>Maximalbitrate: 8000 Kbps, oder 80 Prozent vom gemessenen Upload, falls das niedriger ist</li>
+      <li>Unter 5 Mbit realem Upload: Ziel 4000, Maximum 5000, und 30 fps</li>
+    </ul>
+    <p><strong>CQP/CRF</strong>, wenn der Upload stabil über 10 Mbit liegt und du das Maximum willst:</p>
+    <ul>
+      <li>AMD / Intel: CQP 20 (18 schärfer und schwerer, 22 sparsamer)</li>
+      <li>NVIDIA: CQP 18 bis 20</li>
+      <li>x264-Notnagel: CRF 20</li>
+    </ul>
+    <p>Danach eine echte Runde. Steigt die Bitrate in OBS dauerhaft über deine Leitung, zurück zu VBR.</p>
+    <p>Keyframeintervall: <strong>2 s</strong>. Nicht 0 (automatisch).</p>
+    <p>Ausgabe umskalieren: <strong>Deaktiviert</strong>, solange die Basis 1080 oder 1440 ist. Runterskalieren in OBS nimmt uns Detail weg.</p>
+    <p>x264-Notnagel: Preset <code>veryfast</code>, Profil <code>high</code>, Tune <code>zerolatency</code>. Tune <code>film</code> ist für Aufnahme, nicht für Live.</p>
+  </section>
+
+  <section id="obs-audio">
+    <h2>Audio</h2>
+    <ul>
+      <li>Kodierer: FFmpeg AAC</li>
+      <li>Spur 1 an</li>
+      <li>160 oder 192 Kbps, Stereo</li>
+      <li>Twitch-VOD-Spur kannst du aus lassen. Die Plattform-Spuren bauen wir.</li>
+    </ul>
+  </section>
+
+  <section id="obs-video">
+    <h2>2. Video (Auflösung und FPS)</h2>
+    <p>Einstellungen → Video.</p>
+    <table>
+      <thead>
+        <tr><th>Upload (gemessen)</th><th>Basis und Ausgabe</th><th>FPS</th><th>Kodierung</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>3 bis 5 Mbit</td><td>1920×1080</td><td>30</td><td>HEVC, VBR 4000 / max 5000</td></tr>
+        <tr><td>5 bis 8 Mbit</td><td>1920×1080</td><td>60</td><td>HEVC, VBR 6000 / max 8000</td></tr>
+        <tr><td>ab 8 Mbit, GPU hält 1440 ohne Drop</td><td>2560×1440</td><td>60</td><td>HEVC, VBR 6000 / max 8000</td></tr>
+        <tr><td>ab 14 Mbit, wenn du 2K auch rausschicken willst</td><td>2560×1440</td><td>60</td><td>HEVC, VBR 9000 / max 12000</td></tr>
+        <tr><td>GPU droppt oder Spiel ruckelt</td><td>eine Stufe kleiner oder 30 fps</td><td></td><td>gleicher Encoder, nicht auf Software wechseln</td></tr>
+      </tbody>
+    </table>
+    <p>1440p an uns zu schicken lohnt sich zweifach: entweder rechnen wir daraus 1080p und behalten dabei Schärfe, oder wir senden die vollen 2K weiter, wenn du diese Stufe im Dashboard wählst. Es lohnt nicht, wenn der Encoder Frames schluckt. In OBS unten: <strong>Skipped frames</strong> bleibt bei 0.</p>
+  </section>
+
+  <section id="obs-ziel">
+    <h2>3. Ziel: unser Server</h2>
+    <p>Einstellungen → Stream.</p>
+    <ol>
+      <li>Dienst: <strong>Benutzerdefiniert</strong></li>
+      <li>Server: die <strong>SRT-Adresse</strong> aus dem Dashboard (kopieren, nicht abtippen)</li>
+      <li>Stream-Schlüssel: bleibt leer. Dein Schlüssel steckt bei SRT bereits als <code>streamid</code> in der Adresse.</li>
+    </ol>
+    <figure>
+      <img src="bilder/1-stream.svg" alt="OBS-Einstellungen, Reiter Stream: Dienst auf Benutzerdefiniert, im Feld Server die SRT-Adresse, das Feld Streamschlüssel bleibt leer.">
+      <figcaption>Drei Felder, mehr nicht. Der Streamschlüssel bleibt leer, deiner steckt schon in der Adresse.</figcaption>
+    </figure>
+    <p>Ins Dashboard kommt nur die SRT-Adresse, und über die läuft dein Stream. SRT verträgt Wackelnetz besser, und im Dashboard steht genau eine Adresse: die SRT-Adresse. Kann dein Programm kein SRT, nimm OBS.</p>
+    <p>„Stream starten“ geht danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen, solange die Sync dafür noch nicht liegt.</p>
+  </section>
+
+  <section id="obs-docks">
+    <h2>4. Chat und die OBS-Fenster zurückholen</h2>
+    <p>Sobald der Dienst auf <strong>Benutzerdefiniert</strong> steht, verschwinden in OBS die Twitch-Fenster: Chat, Aktivitätsfeed und Stream-Informationen. Dein Chat läuft trotzdem normal weiter. Chat und Video sind bei Twitch getrennte Wege, wir fassen nur das Video an. Weg sind nur die Fenster in OBS, weil OBS die ausschließlich bei verbundenem Twitch-Konto selbst anlegt.</p>
+    <p>Es sind dieselben Seiten wie in den eingebauten Fenstern. Du legst sie einmal von Hand an, dann bleiben sie.</p>
+    <figure>
+      <img src="bilder/2-docks-menue.svg" alt="OBS-Menüleiste, das Menü Docks ist geöffnet, ganz unten der hervorgehobene Eintrag Benutzerdefinierte Browser-Docks.">
+      <figcaption>Schritt 1: Menü <strong>Docks</strong>, ganz unten <strong>Benutzerdefinierte Browser-Docks</strong>.</figcaption>
+    </figure>
+    <figure>
+      <img src="bilder/3-docks-dialog.svg" alt="Dialog Benutzerdefinierte Browser-Docks mit vier Zeilen: Chat, Aktivität, Stream-Info und Kanalpunkte, jeweils mit der zugehörigen Twitch-Adresse. Der Plus-Knopf und der Knopf Übernehmen sind hervorgehoben.">
+      <figcaption>Schritt 2: Pro Fenster einmal auf <strong>+</strong>, Name und Adresse eintragen, dann <strong>Übernehmen</strong>.</figcaption>
+    </figure>
+    <table>
+      <thead>
+        <tr><th>Fenster</th><th>Adresse</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Chat</td><td><code>https://www.twitch.tv/popout/DEINKANAL/chat?darkpopout</code></td></tr>
+        <tr><td>Aktivitätsfeed</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/activity-feed</code></td></tr>
+        <tr><td>Stream-Informationen</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info</code></td></tr>
+        <tr><td>Kanalpunkte</td><td><code>https://dashboard.twitch.tv/popout/stream-manager/community-points</code></td></tr>
+      </tbody>
+    </table>
+    <p>Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt dich Twitch automatisch auf deinen eigenen Kanal, sobald du angemeldet bist. Im Dashboard stehen alle vier fertig zum Kopieren, dann musst du gar nichts ersetzen.</p>
+    <p>Schritt 3: Fenster dahin ziehen, wo du sie haben willst, dann unter <strong>Docks</strong> das Layout speichern. Das übersteht jeden OBS-Neustart, du machst das genau einmal.</p>
+    <h3 id="obs-docks-anmeldung">„Aber ich bin doch gar nicht angemeldet“</h3>
+    <p>Das ist die häufigste Frage an dieser Stelle, und dahinter stecken zwei verschiedene Anmeldungen, die leicht durcheinandergehen:</p>
+    <ul>
+      <li><strong>Konto verbinden</strong> in den Stream-Einstellungen. Damit holt sich OBS deinen Twitch-Streamschlüssel. Die brauchst du bei uns nicht, deshalb ist sie weg.</li>
+      <li><strong>Anmeldung im Fenster.</strong> In OBS steckt ein vollständiger Browser. Der hat eigene Cookies, genau wie Chrome oder Firefox. Damit meldest du dich bei Twitch an, und darüber laufen Chat, Aktivität und Stream-Info.</li>
+    </ul>
+    <p>Beim ersten Öffnen zeigt das Fenster also einen Anmelden-Knopf. Ein Klick, einmal einloggen, fertig. OBS legt das Cookie ab und findet es beim nächsten Start wieder.</p>
+    <figure>
+      <img src="bilder/5-anmelden.svg" alt="Das Chat-Fenster in OBS in zwei Zuständen: links beim ersten Öffnen mit dem hervorgehobenen Anmelden-Knopf, rechts der angemeldete Chat mit Nachrichten und Eingabefeld.">
+      <figcaption>Einmal <strong>Anmelden</strong>, danach bleibt es so.</figcaption>
+    </figure>
+    <p>Wichtig: die eingebauten Twitch-Fenster machen es genauso. Auch die laden dieselben Seiten in denselben Browser und brauchen dasselbe Cookie. Du sparst dir mit ihnen nur das Anlegen, nicht die Anmeldung.</p>
+    <p>Und nein, wir leiten das nicht über unseren Server um. Dafür müssten wir deine Twitch-Sitzung durch unsere Hand laufen lassen, und wer bei uns einbräche, hätte damit Zugriff auf deinen Kanal. Deine Anmeldung bleibt zwischen dir und Twitch. Wir sehen davon nichts.</p>
+    <p>Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eingebauten Fenster ein.</p>
+    <p><strong>Stream starten</strong> schickt danach an uns, nicht an Twitch. Twitch geht live, sobald wir dorthin senden. <strong>Enhanced Broadcasting</strong> und Mehrspur-Video bietet OBS nur mit verbundenem Twitch-Konto an, über uns läuft das nicht. Dafür kommst du mit einem Upload gleichzeitig auf mehrere Plattformen.</p>
+  </section>
+
+  <section id="obs-check">
+    <h2>5. Check vor dem Abend</h2>
+    <ol>
+      <li>Hardware-HEVC, nicht x264.</li>
+      <li>VBR mit Ziel und Maximum, nicht CBR, nicht ABR.</li>
+      <li>Keyframe 2 s.</li>
+      <li>Eine Testminute: Skipped frames 0, Bitrate unter dem Maximum, kein Stottern im Spiel.</li>
+      <li>Bild bricht bei Fights: Maximum 1000 Kbps runter oder 30 fps. Encoder nicht wechseln.</li>
+    </ol>
+    <p>Streamlabs: viele Versionen können kein SRT. Kannst du dort die SRT-Adresse nicht eintragen, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar; dann ist der Bandbreitenvorteil weg.</p>
+  </section>
+</main>
+</body>
+</html>

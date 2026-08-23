@@ -24,6 +24,7 @@ use crate::auth::session::DashboardAuthState;
 /// Python `_PASSIVE_ALLOWED_EXACT_PATHS`.
 const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/verwaltung",
+    "/twitch/uplink",
     "/twitch/pricing",
     "/twitch/abbo",
     "/twitch/abbo/bezahlen",
@@ -55,6 +56,7 @@ const PASSIVE_ALLOWED_PREFIXES: &[&str] = &[
     "/callback/discord",
     "/twitch/api/v2/internal-home",
     "/twitch/api/v2/auth-status",
+    "/twitch/api/v2/uplink/",
     "/twitch/api/billing/",
     "/twitch/api/v2/billing/",
     "/twitch/api/affiliate/",
@@ -225,6 +227,8 @@ mod tests {
     #[test]
     fn passive_allowed_exact_und_prefix() {
         assert!(path_matches_passive_allowed("/twitch/verwaltung"));
+        assert!(path_matches_passive_allowed("/twitch/uplink"));
+        assert!(path_matches_passive_allowed("/twitch/api/v2/uplink/me"));
         assert!(path_matches_passive_allowed("/twitch/abbo/kündigen"));
         assert!(path_matches_passive_allowed("/twitch/api/billing/trial/start"));
         assert!(path_matches_passive_allowed("/twitch/api/v2/auth-status"));

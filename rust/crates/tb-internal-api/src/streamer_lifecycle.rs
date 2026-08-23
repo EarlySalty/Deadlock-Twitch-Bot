@@ -242,8 +242,22 @@ pub async fn departner_active_partner(
     // `clear_verification` ist der Opt-out-Fall (`verify mode=clear|failed`):
     // Der Streamer will nichts mehr vom Bot. Ohne das Flag hätte ein späteres
     // Promote ihn wortlos zurückgeholt — `is_partner_active` wertet es aus.
+    // `bot_banned` wird beim Trennen mit aufgeräumt: die Markierung beschreibt
+    // den Bot im Kanal, und den gibt es nach der Trennung nicht mehr. Bliebe sie
+    // stehen, läse `load_inactive_block_reason` (`tb-raid/src/partner_setup.rs`)
+    // sie beim späteren Neuverbinden als Hard-Kill, `promote_streamer_to_partner`
+    // bricht still ab und der Streamer bekommt keine Rückmeldung. Früher hat das
+    // nur der Bot-Ban-Restore-Sweep aufgeräumt, der getrennte Kanäle seit dem
+    // Trenn-Guard bewusst nicht mehr anfasst.
+    //
+    // `blocked` bleibt ausdrücklich stehen: das ist eine Admin-Sperre, die sich
+    // ein Kanal sonst durch Trennen und Neuverbinden selbst abnehmen könnte.
+    //
+    // Zwilling in `tb-analytics/src/streamers_crud.rs` (`departner_streamer`),
+    // beide Ports desselben Python-`departner_active_partner`. Änderungen hier
+    // gehören dort genauso hin.
     let opt_out = i32::from(clear_verification);
-    sqlx::query!(
+    sqlx::query(
         r#"
         UPDATE twitch_partners
         SET status = $1,
@@ -251,16 +265,21 @@ pub async fn departner_active_partner(
             admin_archived_at = NULL,
             twitch_login = $3,
             twitch_user_id = $4,
-            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6)
+            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6),
+            technical_pause_reason = CASE
+                WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'bot_banned'
+                THEN NULL
+                ELSE technical_pause_reason
+            END
         WHERE id = $5
         "#,
-        STATUS_DEPARTNERED,
-        &departnered_at,
-        &normalized_login,
-        normalized_user_id.as_deref(),
-        row.id,
-        opt_out
     )
+    .bind(STATUS_DEPARTNERED)
+    .bind(&departnered_at)
+    .bind(&normalized_login)
+    .bind(normalized_user_id.as_deref())
+    .bind(row.id)
+    .bind(opt_out)
     .execute(pool)
     .await?;
 

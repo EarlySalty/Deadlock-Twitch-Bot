@@ -14,6 +14,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
@@ -29,6 +30,7 @@ import {
   Loader2,
   MessageSquare,
   MonitorPlay,
+  Radio,
   RotateCcw,
   Settings,
   ShieldCheck,
@@ -758,6 +760,7 @@ export function InternalHomeLanding() {
       ? [{ href: analyticsTabHref('overview'), label: 'Analyse', icon: BarChart3 }]
       : []),
     { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
+    { href: PREVIEW_UPLINK_ROUTE, label: 'Uplink', icon: Radio },
   ];
   const toolNavItems: SidebarNavItem[] = [
     { href: PREVIEW_VERWALTUNG_ROUTE, label: 'Verwaltung', icon: Settings },

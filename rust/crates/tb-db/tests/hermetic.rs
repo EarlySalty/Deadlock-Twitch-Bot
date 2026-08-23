@@ -681,3 +681,59 @@ async fn row_structs_map_real_columns() {
     assert_eq!(p.plan_name, "pro");
     assert_eq!(p.promo_disabled, 0);
 }
+
+/// Prod kennt Versionen, die `main` nicht im Binary hat. Der Bot muss trotzdem
+/// starten; nur Checksummen-Brüche bleiben hart.
+#[tokio::test]
+async fn run_migrations_ueberlebt_angewandte_aber_fehlende_version() {
+    let admin_dsn = skip_without_db!();
+    let admin = tb_db::connect(&cfg(admin_dsn.clone()))
+        .await
+        .expect("admin connect");
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dbname = format!("tb_mig_gap_{}_{}", std::process::id(), nanos);
+
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+        .execute(&admin)
+        .await
+        .expect("create db");
+
+    let pool = tb_db::connect(&cfg_single(swap_db(&admin_dsn, &dbname)))
+        .await
+        .expect("connect");
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
+        .execute(&pool)
+        .await
+        .expect("timescaledb");
+
+    tb_db::run_migrations(&pool)
+        .await
+        .expect("erste Migration");
+
+    sqlx::query(
+        r#"
+        INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+        VALUES (20990101000000, 'ghost-from-other-branch', TRUE, '\x00', 0)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Geist-Version eintragen");
+
+    tb_db::run_migrations(&pool)
+        .await
+        .expect("zweite Migration trotz fehlender Datei");
+
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .ok();
+}

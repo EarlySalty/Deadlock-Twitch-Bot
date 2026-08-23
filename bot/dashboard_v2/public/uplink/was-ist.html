@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#241c11">
+  <title>Was ist Uplink</title>
+  <link rel="stylesheet" href="doc.css">
+</head>
+<body>
+<main class="uplink-doc" data-doc="was-ist">
+  <p class="nur-standalone"><a href="index.html">Zurück zur Hilfe</a></p>
+  <h1>Was ist Uplink</h1>
+  <p class="lede">Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS; einen eigenen Knopf dafür gibt es nicht.</p>
+
+  <section id="was-ist-ablauf">
+    <h2>Ablauf</h2>
+    <ol>
+      <li>Im Dashboard den Dienst freischalten lassen und die SRT-Adresse kopieren.</li>
+      <li>OBS auf unseren Server stellen, nicht mehr direkt auf Twitch.</li>
+      <li>Stream starten. Wir legen die verbundenen Ziele an.</li>
+      <li>Stream beenden. Wir beenden die Ziele mit.</li>
+    </ol>
+  </section>
+
+  <section id="was-ist-was-du-einstellst">
+    <h2>Was du einstellst, was wir machen</h2>
+    <table>
+      <thead>
+        <tr><th>Bei dir</th><th>Bei uns</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Encoder, Auflösung, FPS, Bitrate, SRT-Adresse</td><td>CBR für Twitch und Kick, Auflösung nach deiner Wahl im Dashboard, von 480p bis 1440p</td></tr>
+        <tr><td>Welches Ziel du einträgst</td><td>Push zu diesem Ziel</td></tr>
+        <tr><td>Titel und Kategorie in den Plattform-Dashboards</td><td>Start und Stop, sobald OBS läuft</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="was-ist-plaetze">
+    <h2>Wenn kein Platz frei ist</h2>
+    <p>Dann lehnt der Start ab. Dein laufender Stream bleibt unangetastet. Für diesen Abend streamst du wieder direkt zur Plattform, so wie ohne Uplink.</p>
+  </section>
+
+  <section class="nur-standalone" id="was-ist-naechste-schritte">
+    <h2>Als Nächstes</h2>
+    <p class="nur-standalone"><a href="obs.html">OBS einrichten</a> · <a href="stoerungen.html">Störungen</a></p>
+  </section>
+</main>
+</body>
+</html>

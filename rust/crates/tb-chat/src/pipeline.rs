@@ -36,7 +36,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,21 +51,24 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
-use crate::crew_guard::{crew_guard_enabled, CrewGuard, CrewJudge};
+use crate::crew_guard::{CrewGuard, CrewJudge, crew_guard_enabled};
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
-use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
+use crate::mention_scoring::{MentionResolver, WHITELISTED_BOTS, score_mention_patterns};
 use crate::moderation::{
-    AutoBanRequest, ModerationEngine, ModerationEvidence, BAN_REASON_GLOBAL, BAN_REASON_SPAM,
+    AutoBanRequest, BAN_REASON_GLOBAL, BAN_REASON_SPAM, ModerationEngine, ModerationEvidence,
     NOTICE_GLOBAL_BAN,
 };
 use crate::promos::PromoEngine;
 use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
-use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
+use crate::spam_filter::{
+    SPAM_MIN_MATCHES, SpamAction, SpamContext, SpamFilter, matches_safe_wording,
+    normalize_exact_spam_message, spam_signal_ist_nur_viewer_muster,
+};
 use crate::standard_replies::StandardReplies;
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
@@ -82,6 +85,11 @@ use crate::types::ChatMessageEvent;
 /// Test `scam_pitch_timeout_reason_ist_bewusst_klarer_als_python`).
 pub const SCAM_PITCH_TIMEOUT_REASON: &str =
     "Account-Takeover-Verdacht / wiederholter Service-Pitch";
+
+/// Zeitfenster, in dem eine schon verarbeitete Nachrichten-ID als Duplikat gilt.
+const SEEN_MESSAGE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+/// Ab dieser Groesse wird die Duplikat-Tabelle beim naechsten Eintrag geputzt.
+const SEEN_MESSAGE_MAX: usize = 4096;
 
 const SUS_INVITE_TIMEOUT_SECS: u32 = 600;
 const SUS_INVITE_TIMEOUT_REASON: &str = "Fremde Discord-Werbung ist hier nicht erlaubt";
@@ -208,6 +216,27 @@ pub struct CrewRadarAlert {
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
 
+/// Ab welcher Judge-Confidence ein Text mit harmlosem Umgangssprache-Muster
+/// trotzdem geahndet wird.
+///
+/// Der Judge hat deutsche Goenn- und Lurk-Sprache wiederholt knapp als Spam
+/// gewertet und getimeoutet. Ein getarntes Angebot dagegen ist fuer ihn
+/// eindeutig. Die Schwelle trennt beides, ohne dass eine Wortliste jeden
+/// Kontaktweg kennen muss. Fehlt die Confidence ganz, zaehlt das Urteil als
+/// nicht klar.
+const SAFE_WORDING_MIN_CONFIDENCE: f32 = 0.85;
+
+/// Darf ein Spam-Urteil geahndet werden, wenn der Text ein harmloses
+/// Umgangssprache-Muster trug?
+///
+/// Eigene Funktion, damit die Entscheidung testbar ist, ohne die halbe Pipeline
+/// aufzubauen. Ohne Safe-Wording gilt jedes Spam-Urteil; mit Safe-Wording nur
+/// ein klares. Eine fehlende Confidence zaehlt als nicht klar: der Judge hat
+/// deutsche Goenn- und Lurk-Sprache genau dort knapp falsch bewertet.
+fn ahndung_erlaubt(safe_wording: bool, confidence: Option<f32>) -> bool {
+    !safe_wording || confidence.is_some_and(|c| c >= SAFE_WORDING_MIN_CONFIDENCE)
+}
+
 /// Felder eines sus_spam-Alerts (Verdachtsfall mit Judge-Urteil).
 pub struct SusSpamAlert<'a> {
     pub channel_login: &'a str,
@@ -237,6 +266,22 @@ fn correction_learn_pattern(content: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Exakter Safe-Fallback für AI-Spam ohne gespeicherte Spam-Row.
+///
+/// Die vollständige kanonische Nachricht muss in die Discord-custom_id passen.
+/// Wenn sie dafür zu lang ist, gibt es bewusst keinen Fallback-Button: Eine
+/// gekürzte Nachricht dürfte niemals als Safe-Volltext gelernt werden.
+fn correction_safe_pattern(content: &str) -> Option<String> {
+    let pattern = normalize_exact_spam_message(content);
+    (pattern.chars().count() >= 4 && pattern.chars().count() <= 78).then_some(pattern)
+}
+
+fn safe_correction_pattern(outcome: &AiReviewOutcome, content: &str) -> Option<String> {
+    matches!(outcome, AiReviewOutcome::Spam { .. })
+        .then(|| correction_safe_pattern(content))
+        .flatten()
 }
 
 impl ModAlerter {
@@ -364,6 +409,7 @@ impl ModAlerter {
 
         let mut ai_reason = String::new();
         let mut learned_entries: Vec<serde_json::Value> = Vec::new();
+        let mut safe_feedback_pattern_value = None;
         match outcome {
             AiReviewOutcome::Spam {
                 reason,
@@ -373,6 +419,7 @@ impl ModAlerter {
                 ..
             } => {
                 ai_reason = reason.clone();
+                safe_feedback_pattern_value = safe_correction_pattern(outcome, content);
                 if let Some(l) = learned {
                     lines.push(format!("**Gelernt:** `{}`", l.pattern.replace('`', "'")));
                     learned_entries.push(serde_json::json!({
@@ -393,9 +440,8 @@ impl ModAlerter {
                     );
                 }
             }
-            AiReviewOutcome::Safe { reason } | AiReviewOutcome::Error { detail: reason } => {
-                ai_reason = reason.clone();
-            }
+            AiReviewOutcome::Safe { reason } => ai_reason = reason.clone(),
+            AiReviewOutcome::Error { detail: reason } => ai_reason = reason.clone(),
             AiReviewOutcome::Skipped => {}
         }
 
@@ -418,9 +464,11 @@ impl ModAlerter {
                 "verdict": verdict_key,
                 "ai_reason": ai_reason.chars().take(200).collect::<String>(),
                 "learned": learned_entries,
-                // Für „Als Spam korrigieren", wenn nichts gelernt wurde —
-                // reist in der Button-custom_id (restart-fest ohne Store).
-                "learn_pattern": correction_learn_pattern(content),
+                // AI-Spam hat bereits automatisch gelernt; der Gegen-Button
+                // korrigiert auf Safe. Bei Harmlos-/Fehler-/Cooldown-Urteilen
+                // kann der Moderator den Fall als Spam nachlernen.
+                "learn_pattern": (verdict_key != "spam").then(|| correction_learn_pattern(content)).flatten(),
+                "safe_feedback_pattern": safe_feedback_pattern_value,
             },
         });
         self.post("mod_alert", payload);
@@ -657,6 +705,43 @@ pub struct ChatPipelineParts {
     pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
+/// Kurzzeit-Gedaechtnis fuer schon verarbeitete Nachrichten-IDs.
+///
+/// Twitch stellt bei Shared Chat (Stream Together) dieselbe Nachricht in jedem
+/// Kanal der Session zu. Ist der Bot in mehreren davon, laeuft sie ohne diese
+/// Sperre mehrfach durch die Pipeline (doppelte Clips, doppelte Antworten,
+/// doppeltes Tracking).
+#[derive(Default)]
+struct SeenMessages {
+    inner: DashMap<String, std::time::Instant>,
+}
+
+impl SeenMessages {
+    /// `true` = ID war neu (verarbeiten), `false` = innerhalb von
+    /// `SEEN_MESSAGE_TTL` schon gesehen. Alte Eintraege werden aufgeraeumt,
+    /// sobald die Tabelle `SEEN_MESSAGE_MAX` ueberschreitet.
+    fn mark(&self, message_id: &str, now: std::time::Instant) -> bool {
+        if self.inner.len() > SEEN_MESSAGE_MAX {
+            self.inner
+                .retain(|_, seen| now.duration_since(*seen) < SEEN_MESSAGE_TTL);
+        }
+        match self.inner.entry(message_id.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                if now.duration_since(*slot.get()) >= SEEN_MESSAGE_TTL {
+                    slot.insert(now);
+                    true
+                } else {
+                    false
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(now);
+                true
+            }
+        }
+    }
+}
+
 /// Orchestriert die 15 Pipeline-Schritte für jedes `channel.chat.message`-Event.
 #[derive(Clone)]
 pub struct ChatPipeline {
@@ -666,6 +751,8 @@ pub struct ChatPipeline {
     crew_guard: Arc<CrewGuard>,
     spam_meta_cooldowns: Arc<DashMap<String, std::time::Instant>>,
     spam_meta_reply_index: Arc<std::sync::atomic::AtomicUsize>,
+    /// Zuletzt verarbeitete Nachrichten-IDs (nach Shared-Chat-Normalisierung).
+    seen_messages: Arc<SeenMessages>,
 }
 
 impl ChatPipeline {
@@ -688,7 +775,15 @@ impl ChatPipeline {
             crew_guard,
             spam_meta_cooldowns: Arc::new(DashMap::new()),
             spam_meta_reply_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            seen_messages: Arc::new(SeenMessages::default()),
         }
+    }
+
+    /// Merkt sich eine Nachrichten-ID und meldet, ob sie neu war
+    /// (`true` = verarbeiten, `false` = Shared-Chat-Duplikat).
+    fn mark_message_seen(&self, message_id: &str) -> bool {
+        self.seen_messages
+            .mark(message_id, std::time::Instant::now())
     }
 
     /// Verarbeitet ein eingehendes Chat-Event — Einstiegspunkt für den
@@ -707,6 +802,18 @@ impl ChatPipeline {
         // Ohne Shared Chat ist das ein geliehener No-op (kein Klon).
         let normalized = event.with_effective_channel();
         let event = &*normalized;
+
+        // Schritt 0a: Shared-Chat-Dedup. Nach der Normalisierung tragen beide
+        // Kopien derselben Nachricht (Host-Abo und Quell-Kanal-Abo) dieselbe
+        // `message_id` — die zweite wird hier verworfen.
+        if !event.message_id.is_empty() && !self.mark_message_seen(&event.message_id) {
+            tracing::debug!(
+                channel = %event.broadcaster_user_login,
+                message_id = %event.message_id,
+                "Shared-Chat-Duplikat verworfen"
+            );
+            return false;
+        }
 
         // Schritt 0: Echo-/Self-Filter (bot.py Z. 1528–1532)
         if event.chatter_user_id == p.bot_user_id {
@@ -1046,12 +1153,9 @@ impl ChatPipeline {
         let sus_invite = Arc::clone(&p.sus_invite);
         let event_for_step = event.clone();
         let sus_channel = channel_login.to_string();
-        let Some(hit) = run_pipeline_step(
-            "sus_invite",
-            channel_login,
-            chatter_login,
-            async move { sus_invite.check(&event_for_step, &sus_channel).await },
-        )
+        let Some(hit) = run_pipeline_step("sus_invite", channel_login, chatter_login, async move {
+            sus_invite.check(&event_for_step, &sus_channel).await
+        })
         .await
         .flatten() else {
             return;
@@ -1178,6 +1282,26 @@ impl ChatPipeline {
         let p = &self.parts;
         let text = event.message.text.as_str();
 
+        // Menschlicher Safe-Gegen-Override: vollständiger kanonisierter
+        // Volltexttreffer beendet den Spam-Pfad vor Score, Aktion und LLM.
+        if let Some(pattern) = p.spam_filter.known_safe_pattern(text) {
+            p.review_log.record(
+                channel_login,
+                chatter_login,
+                &event.chatter_user_id,
+                text,
+                "SAFE_PATTERN",
+                &format!("Manuell gelerntes Safe-Pattern: {pattern}; LLM übersprungen"),
+            );
+            info!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                pattern = %pattern,
+                "Manuelles Safe-Pattern vor LLM erkannt"
+            );
+            return false;
+        }
+
         // Pass A: Basis-Score ohne Mention/Eskalatoren — bestimmt
         // has_phrase_or_fragment_signal für den @host-Bonus (Z. 1603–1607).
         let base = p.spam_filter.evaluate(text, &SpamContext::default());
@@ -1264,6 +1388,51 @@ impl ChatPipeline {
             }
 
             SpamAction::DeleteOnly | SpamAction::None if verdict.score > 0 => {
+                // Safe-Wording: Wenn der EINZIGE Grund der weiche Viewer-Regex
+                // ist und der Text ein harmloses Umgangssprache-Muster traegt
+                // (Lurk-/Goenn-Sprech), hebt das nicht mehr den Judge auf,
+                // sondern die automatische Ahndung an eine Confidence-Schwelle.
+                //
+                // Warum nicht mehr "Judge ueberspringen": die Gegenpruefung war
+                // eine Wortliste, und eine Wortliste ist nie vollstaendig. Jede
+                // Runde fand einen weiteren Kontaktweg ("add me on discord",
+                // "hmu", "insta"), der das Gate geoeffnet und damit die
+                // Durchsetzung ganz abgeschaltet haette. Jetzt urteilt in jedem
+                // Fall der Judge; das Safe-Wording verlangt fuer die Aktion nur
+                // ein klares Urteil statt eines knappen. Falsche Timeouts bei
+                // deutscher Umgangssprache bleiben damit aus, ein getarntes
+                // Angebot faellt trotzdem.
+                //
+                // mention_score == 0 ist Teil der Bedingung: ein Host-Mention
+                // erhoeht den Score, ohne je einen Reason-String in
+                // verdict.matched zu erzeugen.
+                let safe_wording_marker = if !verdict.hard_signal
+                    && mention_score == 0
+                    && spam_signal_ist_nur_viewer_muster(&verdict.matched)
+                {
+                    matches_safe_wording(text)
+                } else {
+                    None
+                };
+                if let Some(marker) = safe_wording_marker {
+                    p.review_log.record(
+                        channel_login,
+                        chatter_login,
+                        &event.chatter_user_id,
+                        text,
+                        "SAFE_WORDING",
+                        &format!(
+                            "Harmlose Umgangssprache (Marker: {marker}), Ahndung nur bei klarem Urteil"
+                        ),
+                    );
+                    info!(
+                        channel = %channel_login,
+                        chatter = %chatter_login,
+                        marker,
+                        "Safe-Wording: reiner Viewer-Regex-Treffer, Ahndung an Confidence gebunden"
+                    );
+                }
+
                 // Verdachts-Pfad: loggen, bei hartem Signal Delete-only, dann
                 // Judge-Urteil + genau EIN Alert (asynchron) — KEIN Stopp.
                 let reasons_str = reasons.join(", ");
@@ -1318,7 +1487,14 @@ impl ChatPipeline {
                 let event_owned = event.clone();
                 let channel_owned = channel_login.to_string();
                 let chatter_owned = chatter_login.to_string();
-                let rule_reason = format!("Score {}: {}", verdict.score, reasons_str);
+                let rule_reason = match safe_wording_marker {
+                    Some(marker) => format!(
+                        "Score {}: {} (Safe-Wording, Marker: {marker})",
+                        verdict.score, reasons_str
+                    ),
+                    None => format!("Score {}: {}", verdict.score, reasons_str),
+                };
+                let safe_wording = safe_wording_marker.is_some();
                 let handle = tokio::spawn(async move {
                     this.judge_and_alert(
                         &event_owned,
@@ -1326,6 +1502,7 @@ impl ChatPipeline {
                         &chatter_owned,
                         &rule_reason,
                         already_deleted,
+                        safe_wording,
                     )
                     .await;
                 });
@@ -1371,6 +1548,10 @@ impl ChatPipeline {
     /// Verdachtsfall (Score 1–2): Judge fragen, bei Spam-Urteil handeln
     /// (Nachricht löschen + 24h-Timeout, reversibel), und in JEDEM Fall genau
     /// einen Alert mit Urteil, Begründung und Aktion schicken.
+    /// `safe_wording`: der Text trug ein harmloses Umgangssprache-Muster und als
+    /// einziges Spam-Signal den weichen Viewer-Regex. Der Judge urteilt trotzdem,
+    /// aber die automatische Ahndung verlangt dann ein klares Urteil statt eines
+    /// knappen. Siehe die Begruendung am Gate in `handle`.
     async fn judge_and_alert(
         &self,
         event: &ChatMessageEvent,
@@ -1378,6 +1559,7 @@ impl ChatPipeline {
         chatter_login: &str,
         rule_reason: &str,
         already_deleted: bool,
+        safe_wording: bool,
     ) {
         let p = &self.parts;
         let text = event.message.text.as_str();
@@ -1426,7 +1608,29 @@ impl ChatPipeline {
             "keine".to_string()
         };
         if let AiReviewOutcome::Spam { confidence, .. } = &outcome {
-            if event.chatter_user_id.is_empty()
+            // Bei Safe-Wording zaehlt nur ein klares Urteil. Ein knappes oder
+            // eines ohne Confidence-Angabe reicht nicht: genau dort lagen die
+            // falschen Timeouts auf deutsche Goenn- und Lurk-Sprache. Der Alert
+            // geht unten trotzdem raus, die Entscheidung bleibt sichtbar.
+            if !ahndung_erlaubt(safe_wording, *confidence) {
+                if confidence.is_none() {
+                    // Der Prompt fordert das Feld an. Fehlt es trotzdem, faellt
+                    // jede Ahndung im Safe-Wording-Pfad aus, und das darf nicht
+                    // still passieren: dann liefert das Modell nicht, was der
+                    // Prompt verlangt.
+                    warn!(
+                        channel = %channel_login,
+                        chatter = %chatter_login,
+                        "Judge lieferte keine Confidence, Safe-Wording-Fall bleibt ungeahndet"
+                    );
+                }
+                action_taken = format!(
+                    "keine (Safe-Wording, Judge-Confidence {})",
+                    confidence
+                        .map(|c| format!("{c:.2}"))
+                        .unwrap_or_else(|| "fehlt".to_string())
+                );
+            } else if event.chatter_user_id.is_empty()
                 || event.chatter_user_id == event.broadcaster_user_id
                 || event.is_mod_or_broadcaster()
             {
@@ -1763,22 +1967,72 @@ async fn is_first_message_for_streamer(
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Der Kern des Safe-Wording-Verhaltens: der Judge urteilt immer, aber ein
+    /// Text mit harmlosem Umgangssprache-Muster wird nur bei klarem Urteil
+    /// geahndet. Genau dort lagen die falschen Timeouts auf Goenn- und
+    /// Lurk-Sprache.
+    #[test]
+    fn safe_wording_verlangt_ein_klares_urteil_fuer_die_ahndung() {
+        // Ohne Safe-Wording zaehlt jedes Spam-Urteil, auch ohne Confidence.
+        assert!(ahndung_erlaubt(false, None));
+        assert!(ahndung_erlaubt(false, Some(0.10)));
+
+        // Mit Safe-Wording reicht ein knappes Urteil nicht.
+        assert!(!ahndung_erlaubt(true, Some(0.50)));
+        assert!(!ahndung_erlaubt(true, Some(0.84)));
+        // Und eine fehlende Confidence zaehlt als nicht klar.
+        assert!(!ahndung_erlaubt(true, None));
+
+        // Ein eindeutiges Urteil setzt sich durch: getarnte Angebote fallen,
+        // egal welchen Kontaktweg sie benutzen.
+        assert!(ahndung_erlaubt(true, Some(SAFE_WORDING_MIN_CONFIDENCE)));
+        assert!(ahndung_erlaubt(true, Some(0.99)));
+    }
 
     use crate::api::BanOutcome;
     use crate::commands::{
         AutobanEntry, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
         RaidStartResult, RaidStatusInfo, SuperModPort,
     };
+    // -----------------------------------------------------------------------
+    // Shared-Chat-Dedup (SeenMessages)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shared_chat_duplikat_wird_nur_einmal_verarbeitet() {
+        // Stream Together: dieselbe Nachricht kommt ueber zwei Kanal-Abos an und
+        // traegt nach der Normalisierung dieselbe message_id.
+        let seen = SeenMessages::default();
+        let now = std::time::Instant::now();
+
+        assert!(seen.mark("msg-1", now), "erste Kopie wird verarbeitet");
+        assert!(!seen.mark("msg-1", now), "zweite Kopie wird verworfen");
+        assert!(seen.mark("msg-2", now), "andere Nachricht bleibt unberuehrt");
+    }
+
+    #[test]
+    fn seen_message_verfaellt_nach_ttl() {
+        let seen = SeenMessages::default();
+        let now = std::time::Instant::now();
+        assert!(seen.mark("msg-1", now));
+        let spaeter = now + SEEN_MESSAGE_TTL + std::time::Duration::from_secs(1);
+        assert!(
+            seen.mark("msg-1", spaeter),
+            "nach Ablauf des Fensters ist die ID wieder frei"
+        );
+    }
+
     use crate::promos::OutboundSuppressionCheck;
     use crate::scam_pitch::AccountAgePort;
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
+    use tb_engagement::crew_review::{RICKY_TWITCH_USER_ID, RickyChatInput};
     use tb_engagement::minimax_chat::EngagementMinimaxClient;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2159,10 +2413,32 @@ mod tests {
         pipeline_with_crew_review_trigger(api, pool, None)
     }
 
+    fn pipeline_for_non_partner_with_patterns(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+        learned: crate::spam_filter::LearnedPatterns,
+    ) -> ChatPipeline {
+        pipeline_with_crew_review_trigger_and_patterns(api, pool, None, learned)
+    }
+
     fn pipeline_with_crew_review_trigger(
         api: Arc<RecordingChatApi>,
         pool: PgPool,
         crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    ) -> ChatPipeline {
+        pipeline_with_crew_review_trigger_and_patterns(
+            api,
+            pool,
+            crew_review_trigger,
+            Default::default(),
+        )
+    }
+
+    fn pipeline_with_crew_review_trigger_and_patterns(
+        api: Arc<RecordingChatApi>,
+        pool: PgPool,
+        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+        learned: crate::spam_filter::LearnedPatterns,
     ) -> ChatPipeline {
         let api_trait: Arc<dyn ChatApi> = api;
         let http = reqwest::Client::new();
@@ -2188,7 +2464,7 @@ mod tests {
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
             )),
-            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            spam_filter: Arc::new(SpamFilter::new(learned)),
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
@@ -2296,6 +2572,57 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn manuelles_safe_pattern_stoppt_spam_check_vor_llm() {
+        let Some(pool) = moderation_test_pool("pipeline_manual_safe_pre_llm").await else {
+            return;
+        };
+        sqlx::query(
+            "CREATE TABLE twitch_spam_review_decisions (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                chatter_login TEXT NOT NULL,
+                chatter_id TEXT,
+                source_message TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                confidence REAL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner_with_patterns(
+            Arc::clone(&api),
+            pool.clone(),
+            crate::spam_filter::LearnedPatterns::with_safe_patterns([
+                "8 viewer brd wild".to_string()
+            ]),
+        );
+        let mut event = strong_timeout_event();
+        event.message.text = "8 viewer brd wild".to_string();
+        event.message_id = "manual-safe-pre-llm".to_string();
+
+        assert!(
+            !pipeline
+                .run_spam_check(&event, "channel", "seller", None)
+                .await
+        );
+        let review_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_spam_review_decisions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            review_count, 0,
+            "Safe-Treffer darf den Judge nicht aufrufen"
+        );
+        assert!(api.calls().is_empty(), "Safe-Treffer darf nicht moderieren");
     }
 
     async fn seed_active_pipeline_channel(pool: &PgPool) {
@@ -2982,6 +3309,49 @@ mod tests {
         assert!(correction_learn_pattern("@nur @mentions").is_none());
         let long = "x".repeat(300);
         assert_eq!(correction_learn_pattern(&long).unwrap().chars().count(), 78);
+    }
+
+    #[test]
+    fn safe_correction_pattern_gibt_nur_spam_urteile_wieder() {
+        let content = "aha, so sammelt man also viewer Kappa";
+        assert_eq!(
+            safe_correction_pattern(
+                &AiReviewOutcome::Spam {
+                    reason: "Angebot".to_string(),
+                    confidence: Some(0.9),
+                    learned: None,
+                    rejected_pattern: None,
+                    save_failed: false,
+                },
+                content,
+            ),
+            Some(content.to_lowercase())
+        );
+        assert_eq!(
+            safe_correction_pattern(
+                &AiReviewOutcome::Safe {
+                    reason: "Gespräch".to_string(),
+                },
+                content,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn safe_correction_pattern_bewahrt_den_exakten_volltext() {
+        let outcome = AiReviewOutcome::Spam {
+            reason: "Angebot".to_string(),
+            confidence: Some(0.9),
+            learned: None,
+            rejected_pattern: None,
+            save_failed: false,
+        };
+        assert_eq!(
+            safe_correction_pattern(&outcome, " @User  Viewer\nKappa `x` "),
+            Some("@user viewer kappa `x`".to_string())
+        );
+        assert_eq!(safe_correction_pattern(&outcome, &"x".repeat(79)), None);
     }
 
     #[test]

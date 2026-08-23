@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            COALESCE(sp.twitch_login, '')     AS \"twitch_login!\",\n            COALESCE(ls.is_live, 0)           AS \"is_live!\",\n            COALESCE(ls.last_viewer_count, 0) AS \"viewer_count!\",\n            ls.last_game                      AS \"last_game?\",\n            COALESCE(agg.dl_streams, 0)       AS \"dl_streams_30d!\",\n            agg.dl_avg_viewers                AS \"dl_avg_viewers_30d?\"\n        FROM twitch_streamers_partner_state sp\n        LEFT JOIN twitch_live_state ls\n               ON LOWER(ls.streamer_login) = LOWER(sp.twitch_login)\n        LEFT JOIN (\n            SELECT LOWER(streamer_login)                         AS login,\n                   COUNT(*) FILTER (WHERE had_deadlock_in_session) AS dl_streams,\n                   AVG(avg_viewers) FILTER (WHERE had_deadlock_in_session) AS dl_avg_viewers\n            FROM twitch_stream_sessions\n            WHERE started_at >= now() - interval '30 days'\n            GROUP BY LOWER(streamer_login)\n        ) agg ON agg.login = LOWER(sp.twitch_login)\n        WHERE sp.is_partner_active = 1\n        ORDER BY COALESCE(ls.is_live, 0) DESC,\n                 COALESCE(ls.last_viewer_count, 0) DESC,\n                 LOWER(sp.twitch_login) ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_live!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "viewer_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_game?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "dl_streams_30d!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "dl_avg_viewers_30d?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "771f7c380937bce175aa05a62560acf0c76075a8fc3fe361ae9d3718d5d95dd1"
+}

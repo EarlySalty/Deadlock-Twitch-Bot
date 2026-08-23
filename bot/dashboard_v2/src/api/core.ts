@@ -1,5 +1,5 @@
 import { dashboardRuntimeConfig } from '../runtimeConfig';
-import { getPreviewApiFixture } from '../preview/fixtures';
+import { getPreviewApiFixture, getPreviewPathFixture } from '../preview/fixtures';
 import {
   PREVIEW_HOME_ROUTE,
   isPreviewLocalhost,
@@ -127,6 +127,20 @@ export async function fetchJson<T>(
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
+  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
+  // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
+  // Preview-Host, im Betrieb ist dieser Zweig tot.
+  // Nur lesende Aufrufe: eine Fixture auf ein PUT waere ein erfundener
+  // Schreib-Erfolg, und die Oberflaeche zeigte danach einen Zustand, den es
+  // nirgends gibt.
+  if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
+    const pfad = typeof input === 'string' ? input : input.toString();
+    const fixture = getPreviewPathFixture(pfad.split('?')[0]);
+    if (fixture !== undefined) {
+      return structuredClone(fixture) as T;
+    }
+  }
+
   const response = await fetch(input, init);
 
   if (response.status === 401) {

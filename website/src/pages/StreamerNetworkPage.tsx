@@ -1,6 +1,8 @@
 import { Footer } from "@/components/layout/Footer";
 import { NetworkNav } from "@/components/v2/NetworkChrome";
 import { NetworkHero } from "@/components/v2/NetworkHero";
+import { PartnersSection } from "@/components/v2/NetworkLive";
+import { NetworkSecuritySection } from "@/components/v2/NetworkSecurity";
 import {
   PillarsSection,
   PlanSection,
@@ -31,16 +33,26 @@ export function StreamerNetworkPage() {
   return (
     <>
       <NetworkNav />
-      <main>
+      {/* overflow-x-clip: die Lichtinseln ragen absichtlich ueber die
+          Textkante hinaus und duerfen dabei keine Seitenscrollleiste erzeugen. */}
+      <main className="relative overflow-x-clip">
         <NetworkHero metrics={metrics} />
+        <PartnersSection
+          partners={metrics.partnerList}
+          liveNow={metrics.liveNow}
+          total={metrics.partners}
+          settled={metrics.settled}
+          categoryKnown={metrics.categoryKnown}
+        />
         <VoidSection />
         <PlanSection />
         <PillarsSection />
+        <NetworkSecuritySection />
         <OpenMetricsSection metrics={metrics} />
         <ChannelReportSection />
         <PricingSection />
         <ObjectionsSection />
-        <NetworkCta />
+        <NetworkCta partners={metrics.partnerList} />
       </main>
       {/* Gleiche Textkante wie die Abschnitte, damit der Hinweis nicht auf
           der Leitung klebt. */}

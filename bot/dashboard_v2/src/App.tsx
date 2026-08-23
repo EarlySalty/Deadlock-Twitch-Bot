@@ -14,6 +14,7 @@ import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
+import { UplinkPage } from '@/pages/Uplink';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
@@ -30,6 +31,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from '@/preview/routes';
 import { shouldRetryApiQuery } from '@/api/httpError';
@@ -400,6 +402,7 @@ export default function App() {
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
+  const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
@@ -422,6 +425,8 @@ export default function App() {
             <OverlayBuilderPage />
           ) : isPricingRoute ? (
             <Pricing />
+          ) : isUplinkRoute ? (
+            <UplinkPage />
           ) : isInternalHomeRoute ? (
             <InternalHome />
           ) : isAnalyticsRoute ? (

@@ -55,7 +55,6 @@ Einige Funktionen schützen vor Missbrauch oder treffen automatische Auswahl-Ent
 | [highlight-clipper.md](highlight-clipper.md) | Automatische Highlight-Clips aus Deadlock-Matches |
 | [social-media-uploads.md](social-media-uploads.md) | Clips zu TikTok/Instagram/YouTube, Freigabe-Flow |
 | [titel-generator.md](titel-generator.md) | KI-Vorschläge für Stream-Titel |
-| [stream-coaching-audit.md](stream-coaching-audit.md) | Internes Sprach-/Coaching-Audit (Slur-Prüfung) |
 | [analytics-und-dashboard.md](analytics-und-dashboard.md) | Statistiken, Coaching, Streamer-Dashboard |
 | [plaene-und-billing.md](plaene-und-billing.md) | Plan-Stufen, Features, Abrechnung, Affiliate |
 | [website-und-onboarding.md](website-und-onboarding.md) | Öffentliche Website, Anmeldung, „Frag den Bot" |

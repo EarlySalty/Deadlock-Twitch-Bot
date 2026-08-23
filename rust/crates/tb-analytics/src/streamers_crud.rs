@@ -473,8 +473,26 @@ pub async fn departner_streamer(
 
     // Schritt 3: Partner departnern. GREATEST: ein bestehendes Opt-out darf die
     // Remove-Route (clear_verification=false) nicht wieder aufheben.
+    // `bot_banned` wird beim Trennen mit aufgeräumt: die Markierung beschreibt
+    // einen technischen Zustand des Bots im Kanal, und den gibt es nach der
+    // Trennung nicht mehr. Bliebe sie stehen, läse `load_inactive_block_reason`
+    // (`tb-raid/src/partner_setup.rs`) sie beim späteren Neuverbinden als
+    // Hard-Kill: `promote_streamer_to_partner` bricht dann still ab, es entsteht
+    // keine Partner-Zeile und der Streamer bekommt keine Rückmeldung. Aufräumen
+    // konnte das früher nur der Bot-Ban-Restore-Sweep, der getrennte Kanäle seit
+    // dem Trenn-Guard bewusst nicht mehr anfasst.
+    //
+    // `blocked` bleibt ausdrücklich stehen: das ist eine Admin-Sperre, die sich
+    // ein Kanal sonst durch Trennen und Neuverbinden selbst abnehmen könnte.
+    //
+    // Zwilling in `tb-internal-api/src/streamer_lifecycle.rs`
+    // (`departner_active_partner`), beide Ports desselben
+    // Python-`departner_active_partner`. Diese Route hier bedient die
+    // Dashboard-Admin-Seite, der Zwilling die interne Bot-API und damit
+    // `POST .../disconnect-bot`, `DELETE /streamers/:login` und
+    // `verify mode=clear|failed`. Änderungen gehören in beide.
     let opt_out = i32::from(clear_verification);
-    sqlx::query!(
+    sqlx::query(
         r#"
         UPDATE twitch_partners
         SET status = $1,
@@ -482,16 +500,21 @@ pub async fn departner_streamer(
             admin_archived_at = NULL,
             twitch_login = $3,
             twitch_user_id = $4,
-            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6)
+            manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6),
+            technical_pause_reason = CASE
+                WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'bot_banned'
+                THEN NULL
+                ELSE technical_pause_reason
+            END
         WHERE id = $5
         "#,
-        STATUS_DEPARTNERED,
-        &departnered_at,
-        &normalized_login,
-        normalized_user_id.as_deref(),
-        row.id,
-        opt_out
     )
+    .bind(STATUS_DEPARTNERED)
+    .bind(&departnered_at)
+    .bind(&normalized_login)
+    .bind(normalized_user_id.as_deref())
+    .bind(row.id)
+    .bind(opt_out)
     .execute(pool)
     .await?;
 
@@ -1732,6 +1755,52 @@ mod tests {
         .unwrap();
         assert_eq!(p.0.as_deref(), Some("departnered"));
         assert_eq!(p.1, Some(0), "Opt-out unberührt");
+    }
+
+    // Trennen räumt einen Bot-Ban-Marker mit ab, eine Admin-Sperre nicht.
+    // Ohne das Aufräumen liest `load_inactive_block_reason` den Marker beim
+    // späteren Neuverbinden als Hard-Kill und der Kanal käme nie zurück; ein
+    // `blocked` dagegen darf sich niemand durch Trennen selbst abnehmen.
+    #[tokio::test]
+    async fn departner_streamer_raeumt_bot_ban_marker_aber_nicht_blocked() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_departner_pause").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason)
+             VALUES ('gebannt', '81', 'active', 'bot_banned'),
+                    ('gesperrt', '82', 'active', 'blocked')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        departner_streamer(&pool, "gebannt", true)
+            .await
+            .unwrap()
+            .expect("aktiver Partner muss departnert werden");
+        departner_streamer(&pool, "gesperrt", true)
+            .await
+            .unwrap()
+            .expect("aktiver Partner muss departnert werden");
+
+        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT twitch_login, status, technical_pause_reason
+               FROM twitch_partners ORDER BY twitch_login",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("gebannt".to_string(), Some("departnered".to_string()), None),
+                (
+                    "gesperrt".to_string(),
+                    Some("departnered".to_string()),
+                    Some("blocked".to_string())
+                ),
+            ]
+        );
     }
 
     // Python: unbekannte Modi → "Unbekannter Modus" OHNE Mutation — der alte

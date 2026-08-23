@@ -15,9 +15,25 @@ pub struct NetworkStreamerRow {
     pub twitch_login: String,
     pub is_live: i32,
     pub viewer_count: i32,
+    /// Zuletzt gemeldete Twitch-Kategorie (`twitch_live_state.last_game`).
+    /// Ohne diese Spalte kann die Landing "live" nicht von "live in Deadlock"
+    /// unterscheiden und muesste jeden Live-Kanal als Deadlock-Stream ausgeben.
+    pub last_game: Option<String>,
+    /// Deadlock-Streams der letzten 30 Tage. Grundlage der Partner-Sortierung
+    /// auf der Landing; ohne den Wert faellt sie auf "live zuerst" zurueck.
+    pub dl_streams_30d: i64,
+    /// Schnitt-Zuschauer dieser Deadlock-Streams, `None` ohne Sessions.
+    pub dl_avg_viewers_30d: Option<f64>,
 }
 
 /// Lädt alle aktiven Partner, sortiert nach Live-Status und Viewer-Anzahl.
+///
+/// Das 30-Tage-Aggregat läuft bei jedem Aufruf des unauthentifizierten
+/// Endpoints mit, den offene Tabs alle 45 s pollen. Es stützt sich auf
+/// vorhandene Indizes: `idx_twitch_sessions_login (streamer_login, started_at)`
+/// aus dem Baseline-Schema und `(LOWER(streamer_login), started_at, ended_at)`
+/// aus `20260719120000_public_streamer_comparison_indexes.sql`. Wenn das
+/// Netzwerk deutlich wächst, ist hier der Punkt für einen Cache.
 pub async fn network_streamers(pool: &PgPool) -> Result<Vec<NetworkStreamerRow>, sqlx::Error> {
     sqlx::query_as!(
         NetworkStreamerRow,
@@ -25,10 +41,21 @@ pub async fn network_streamers(pool: &PgPool) -> Result<Vec<NetworkStreamerRow>,
         SELECT
             COALESCE(sp.twitch_login, '')     AS "twitch_login!",
             COALESCE(ls.is_live, 0)           AS "is_live!",
-            COALESCE(ls.last_viewer_count, 0) AS "viewer_count!"
+            COALESCE(ls.last_viewer_count, 0) AS "viewer_count!",
+            ls.last_game                      AS "last_game?",
+            COALESCE(agg.dl_streams, 0)       AS "dl_streams_30d!",
+            agg.dl_avg_viewers                AS "dl_avg_viewers_30d?"
         FROM twitch_streamers_partner_state sp
         LEFT JOIN twitch_live_state ls
                ON LOWER(ls.streamer_login) = LOWER(sp.twitch_login)
+        LEFT JOIN (
+            SELECT LOWER(streamer_login)                         AS login,
+                   COUNT(*) FILTER (WHERE had_deadlock_in_session) AS dl_streams,
+                   AVG(avg_viewers) FILTER (WHERE had_deadlock_in_session) AS dl_avg_viewers
+            FROM twitch_stream_sessions
+            WHERE started_at >= now() - interval '30 days'
+            GROUP BY LOWER(streamer_login)
+        ) agg ON agg.login = LOWER(sp.twitch_login)
         WHERE sp.is_partner_active = 1
         ORDER BY COALESCE(ls.is_live, 0) DESC,
                  COALESCE(ls.last_viewer_count, 0) DESC,
@@ -56,7 +83,14 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        // Erst droppen, dann anlegen: ein Schema aus einem frueheren Lauf
+        // behaelt sonst die alte twitch_live_state ohne last_game (CREATE
+        // TABLE IF NOT EXISTS greift dann nicht) und der Query faellt in 42703.
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
@@ -70,13 +104,29 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_live_state (
                 streamer_login    TEXT PRIMARY KEY,
                 is_live           INTEGER NOT NULL DEFAULT 0,
-                last_viewer_count INTEGER NOT NULL DEFAULT 0
+                last_viewer_count INTEGER NOT NULL DEFAULT 0,
+                last_game         TEXT
             )
             "#,
         )
         .execute(&pool)
         .await
         .expect("DDL live_state fehlgeschlagen");
+
+        // Sessions-Tabelle fuer die 30-Tage-Aggregate. Ohne sie laeuft der
+        // Query in "relation does not exist" statt in ein leeres Aggregat.
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
+                id                      BIGSERIAL PRIMARY KEY,
+                streamer_login          TEXT NOT NULL,
+                started_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+                had_deadlock_in_session BOOLEAN NOT NULL DEFAULT false,
+                avg_viewers             DOUBLE PRECISION
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL stream_sessions");
 
         // Basistabelle für die View
         sqlx::query(

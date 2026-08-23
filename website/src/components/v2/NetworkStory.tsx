@@ -7,6 +7,7 @@ import {
   Swords,
 } from "lucide-react";
 import { ProtocolSection } from "@/components/v2/NetworkChrome";
+import { PillarVisual } from "@/components/v2/NetworkPillarVisuals";
 import { planSteps, valuePillars } from "@/data/networkPage";
 import type { ValuePillar } from "@/data/networkPage";
 
@@ -26,7 +27,9 @@ export function VoidSection() {
   return (
     <ProtocolSection
       id="leere"
-      stamp="01 · Der Moment, um den es geht"
+      ambient="teal"
+      ambientSide="left"
+      stamp="02 · Der Moment, um den es geht"
       headline={
         <>
           Du klickst auf „Stream beenden“.{" "}
@@ -115,7 +118,7 @@ export function PlanSection() {
   return (
     <ProtocolSection
       id="ablauf"
-      stamp="02 · So kommst du rein"
+      stamp="03 · So kommst du rein"
       headline="Drei Schritte, dann läuft es ohne dich."
       intro="Kein Setup-Wochenende, keine Konfigurationsdatei. Du verbindest deinen Kanal und entscheidest, was an sein soll."
     >
@@ -154,9 +157,7 @@ export function PlanSection() {
 function PillarCard({ pillar, index }: { pillar: ValuePillar; index: number }) {
   const Icon = PILLAR_ICONS[pillar.icon];
   const accent =
-    pillar.tone === "primary"
-      ? "var(--color-primary)"
-      : "var(--color-accent)";
+    pillar.tone === "primary" ? "var(--color-primary)" : "var(--color-accent)";
 
   return (
     <motion.article
@@ -164,40 +165,49 @@ function PillarCard({ pillar, index }: { pillar: ValuePillar; index: number }) {
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-70px" }}
       transition={{ duration: 0.55, delay: (index % 2) * 0.1 }}
-      className="panel-card soft-elevate rounded-2xl p-8"
+      className="v2-tile panel-card soft-elevate overflow-hidden rounded-2xl"
     >
-      <div className="flex items-center gap-4">
-        <span
-          className="icon-tile flex h-11 w-11 items-center justify-center rounded-xl"
-          style={{ color: accent }}
-        >
-          <Icon size={20} />
-        </span>
-        <div>
-          <p className="v2-stamp" style={{ color: accent, opacity: 0.85 }}>
-            {pillar.kicker}
-          </p>
-          <h3 className="text-xl font-bold text-[var(--color-text-primary)]">
-            {pillar.title}
-          </h3>
-        </div>
-      </div>
+      {/* Das Bild steht oben und traegt die Karte, der Text erklaert nach. */}
+      <PillarVisual id={pillar.id} />
 
-      <p className="mt-5 leading-relaxed text-[var(--color-text-secondary)]">
-        {pillar.body}
-      </p>
-
-      <ul className="mt-6 space-y-2.5">
-        {pillar.points.map((point) => (
-          <li
-            key={point}
-            className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
+      <div className="p-8">
+        <div className="flex items-center gap-4">
+          <span
+            className="icon-tile flex h-11 w-11 items-center justify-center rounded-xl"
+            style={{ color: accent }}
           >
-            <Check size={16} className="mt-0.5 shrink-0" style={{ color: accent }} />
-            <span>{point}</span>
-          </li>
-        ))}
-      </ul>
+            <Icon size={20} />
+          </span>
+          <div>
+            <p className="v2-stamp" style={{ color: accent, opacity: 0.85 }}>
+              {pillar.kicker}
+            </p>
+            <h3 className="text-xl font-bold text-[var(--color-text-primary)]">
+              {pillar.title}
+            </h3>
+          </div>
+        </div>
+
+        <p className="mt-5 leading-relaxed text-[var(--color-text-secondary)]">
+          {pillar.body}
+        </p>
+
+        <ul className="mt-6 space-y-2.5">
+          {pillar.points.map((point) => (
+            <li
+              key={point}
+              className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
+            >
+              <Check
+                size={16}
+                className="mt-0.5 shrink-0"
+                style={{ color: accent }}
+              />
+              <span>{point}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </motion.article>
   );
 }
@@ -207,7 +217,8 @@ export function PillarsSection() {
   return (
     <ProtocolSection
       id="leistungen"
-      stamp="03 · Was du bekommst"
+      ambientSide="left"
+      stamp="04 · Was du bekommst"
       headline="Vier Dinge, die du sonst selbst machen müsstest."
       intro="Der Bot ist der Liefermechanismus. Der eigentliche Wert liegt darin, dass hinter deinem Kanal andere Kanäle stehen."
     >

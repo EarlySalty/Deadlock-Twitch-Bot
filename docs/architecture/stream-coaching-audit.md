@@ -1,60 +1,122 @@
-# stream_coaching_audit/ — Architektur & Funktionsreferenz
+# tb-stream-audit — Architektur & Funktionsreferenz
 
-> Pfad: `bot/stream_coaching_audit/` · Stand: 2026-06-08 · 2 Dateien, ~951 Zeilen
+> Pfad: `rust/crates/tb-stream-audit/`, `rust/bin/tb-stream-audit/` · Stand: 2026-08-14
 >
-> Teil der [Architektur-Doku](README.md). Verwandt: [api.md](api.md) (VOD/HLS), [core.md](core.md) (MiniMax). Produktdoku: [STREAM_COACHING_AUDIT.md](../STREAM_COACHING_AUDIT.md). Internes Admin-Tool (kein nutzersichtbares Feature).
+> Teil der [Architektur-Doku](README.md). Produktdoku:
+> [STREAM_COACHING_AUDIT.md](../STREAM_COACHING_AUDIT.md), Betriebsseite im
+> Deadlock-Docs-Korpus (`internal/deadlock-twitch-bot/stream-coaching-audit.html`).
+> Internes Admin-Werkzeug, kein nutzersichtbares Feature.
+
+> Die frueheren Python-Pfade (`bot/stream_coaching_audit/`, VOD- und
+> Datei-Modus, `--authorized`, MiniMax als fester Anbieter) gibt es nicht mehr.
 
 ## 1. Zweck & Abgrenzung
 
-`stream_coaching_audit/` erstellt **private, evidenzbasierte Audits** autorisierter Twitch-Aufnahmen — primär ein **Slur-/Verhaltens-Screening** für Partner-Kandidaten. Es lädt einen kurzen Audio-Ausschnitt (Live-HLS oder VOD), transkribiert ihn, findet auffällige Stellen über **lokale Regeln** und optional **MiniMax**, und liefert einen Report mit Zeit-/VOD-Sprunglinks. Findet es etwas, gibt es eine DM (Klartext + Zeit/VOD-Link) — sonst still.
+Der Dienst schneidet die Streams der eingetragenen eigenen Kanaele **live** mit,
+transkribiert sie auf demselben Rechner und sucht im Text nach problematischen
+Aeusserungen. Ergebnis ist ein privater Bericht mit Zeitstempeln und, wenn es
+etwas zu melden gibt, eine Discord-DM an den Admin. Der Dienst moderiert nicht,
+postet nichts oeffentlich und meldet nichts an Twitch.
 
-Abgrenzung: Reines **internes Admin-Werkzeug**. Es moderiert nicht automatisch und postet nichts öffentlich; die Slurs werden vor der Weitergabe **redigiert** (Klartext nur im privaten Admin-Excerpt).
+Kein VOD-Modus: ob ein Kanal seine VODs behaelt, entscheidet der Kanal; ein
+Audit, das darauf baut, faellt still aus.
 
-## 2. Einordnung & Abhängigkeiten
+## 2. Einordnung & Abhaengigkeiten
 
 | Richtung | Beziehung |
 |----------|-----------|
-| **Wird genutzt von** | Admin-Tooling (manueller Audit + Auto-VOD bei Stream-Ende). |
-| **Nutzt** | `api/` (HLS-URL-Auflösung/VOD), Whisper (Transkription), MiniMax (LLM-Findings), `ffmpeg`/streamlink (Audio), `storage/` (Audit-Ablage). |
-| **Daten** | `data/stream_coaching_audits/` (private Report-Markdown), transient die Audio-/Transkript-Dateien. |
-| **Externe Dienste** | Twitch (HLS/VOD), OpenAI-Whisper (Transkription), MiniMax. |
-| **Secret-Namen** | Whisper-/OpenAI-Key, MiniMax-Key. |
+| **Laeuft als** | `deadlock-twitch-stream-coaching-watch.service` (systemd, Rust-Binaerprogramm). |
+| **Nutzt** | `tb-transport-twitch` (Helix: wer sendet, `started_at`), `tb-engagement::audio_capture` (streamlink), `tb-engagement::transcribe` (lokaler STT-Dienst), `tb-llm::selection` (Anbieterwahl `stream_audit`), Master-Broker (`/internal/master/v1/discord/send-dm`). |
+| **Daten** | `STREAM_AUDIT_OUTPUT_DIR` — Berichte als `.md`/`.json` je Kanal, Aufnahmen unter `aufnahmen/<kanal>/<stream-id>/t<sekunde>-b<nummer>/<capture>/`. |
+| **Externe Dienste** | Twitch (Helix, HLS), der Anbieter aus der Twitch-Bot-Konfiguration fuer den Modellschritt. Transkription bleibt lokal. |
+| **Secret-Namen** | `TWITCH_CLIENT_ID`/`_SECRET`, Broker-Token, Anbieter-Key aus `tb-llm`. |
 
-## 3. Dateien im Überblick
+## 3. Dateien im Ueberblick
 
-| Datei | Zeilen | Rolle |
-|-------|-------:|-------|
-| `service.py` | 931 | Kompletter Audit-Flow: Media holen → transkribieren → Findings → Report. |
-| `__init__.py` | 20 | Öffentliche Symbole. |
+| Datei | Rolle |
+|-------|-------|
+| `crates/tb-stream-audit/src/rules.rs` | Drei feste Muster, Schwaerzung, Beleg-Hash, Ausschnitt. |
+| `crates/tb-stream-audit/src/llm.rs` | Prompt, anonyme Segmentnummern, Antwortpruefung, Normalisierung. |
+| `crates/tb-stream-audit/src/plan.rs` | Blocklaenge, Sendungszeit, Deckel, Warteschlange mit Wartezeiten. |
+| `crates/tb-stream-audit/src/report.rs` | Bericht als Markdown und JSON, Kurztext fuer die DM. |
+| `crates/tb-stream-audit/src/melden.rs` | Broker-Anfrage, Empfaenger, Kuerzung, Idempotenzschluessel. |
+| `crates/tb-stream-audit/src/config.rs` | Kanaele, Ablage, Schalter, Aufbewahrung. |
+| `bin/tb-stream-audit/src/main.rs` | Aufsicht, Aufnahme, Auswertung, Ablage, Aufraeumen. |
 
-## 4. Datenfluss / Lebenszyklus
+## 4. Datenfluss
 
-1. **Media holen:** `_acquire_media(source, *, source_kind, live_seconds, workdir)` löst die aktuelle HLS-URL auf (live) bzw. nutzt das VOD und nimmt eine kurze **Audio-only**-Aufnahme in einem temporären Workdir auf (`_AcquiredMedia`).
-2. **Transkribieren:** Whisper erzeugt `AuditSegment`s (Text + Zeit).
-3. **Findings (zweistufig):** `detect_rule_findings(segments)` liefert hochsichere lokale Treffer **ohne** Transkript-Versand; `_detect_llm_findings_minimax(segments)` schickt Batches (`_segment_batches`, max ~12k Zeichen) an MiniMax für weichere Treffer. Beide werden gemerged.
-4. **Redaktion & Report:** Bekannte Slurs werden via `redact_text` maskiert, bevor Evidenz den Transkript-Kontext verlässt; `AuditReport.to_dict` bündelt die Findings mit `_evidence_excerpt` (maskiert) und VOD-Sprunglinks (`_vod_jump_url`, `?t=…`). Der private Admin-Report nutzt `_evidence_excerpt_raw` (unmaskiert).
-5. **Zustellung:** Nur bei Funden geht eine DM raus; ohne Funde bleibt es still. Live-Watch + Auto-VOD bei Stream-Ende sind die zwei Auslöser.
+1. **Aufsicht** fragt alle 60 Sekunden Helix ab. Je sendendem Kanal laeuft ein
+   eigener Aufnahme-Task; der Aufnahmestand (Stream-ID, Zeitversatz) liegt bei
+   der Aufsicht, damit ein abgebrochener Task nicht bei null anfaengt.
+2. **Aufnahme** in Bloecken von 2 Minuten, hoechstens 24 Stunden aufgenommener
+   Zeit. Kurze Bloecke bleiben, weil ein Abbruch nur den letzten Block kostet.
+   Vor jedem Block entsteht `<kanal>/<stream-id>/t<sekunde>-b<nummer>/block.json`;
+   Zeit und Nummer zusammen, weil zwei sofort abgebrochene Aufnahmen dieselbe
+   Sekunde treffen koennen. Start-DM an den Admin. Die Aufnahme pausiert nur
+   bei 12 GB Mitschnitt, nicht weil die Auswertung hinterherhaengt.
+3. **Warteschlange** im Speicher. Bloecke eines noch sendenden Kanals bleiben
+   liegen, bis der Lauf freigegeben ist.
+4. **Auswertung** nach Sendungsende, seriell. Ein Last-Gate stellt sie
+   zurueck, wenn die hoehere von CPU- und RAM-Auslastung ein volles Fenster
+   (Standard 240 s) ueber der Grenze (Standard 90 Prozent) liegt, und gibt sie
+   unter der
+   Freigabe (80 Prozent) wieder frei; ein Deckel (1800 s) loest auch unter
+   Dauerlast. Aufgenommen wird derweil weiter. Dann: Transkription,
+   Regelfunde, Modellschritt in Stapeln
+   zu 20 Segmenten, Zusammenfassen, Bericht schreiben (JSON zuletzt und ueber
+   `rename`), eine Abschluss-DM mit ToS-Funden.
+5. **Ablage**: sauberer Block — Aufnahme weg, auch wenn kein Wort fiel. Fund
+   oder unvollstaendige Pruefung — Aufnahme bleibt als Beleg, markiert mit
+   `ausgewertet.json`.
+6. **Aufraeumtakt** stuendlich: Berichte und Aufnahmen aelter als
+   `STREAM_AUDIT_RETENTION_DAYS` loeschen, offene Meldungen wieder einreihen,
+   nicht zugestellte Hinweise aus `offene-hinweise/` nachreichen.
 
-## 5. Funktionsreferenz (service.py)
+## 5. Fehlerverhalten
 
-Datentypen: `AuditSegment` (transkribierter Abschnitt), `AuditFinding` (ein Treffer), `AuditReport` (`to_dict`), `_AcquiredMedia`, `AuditError`.
+| Fall | Verhalten |
+|------|-----------|
+| Transkription scheitert | Drei Versuche mit 2 und 4 Minuten Pause; danach DM "aufgegeben", Aufnahme bleibt liegen. |
+| DM scheitert | Nur die Meldung wird wiederholt: vier Anlaeufe im Abstand von 30 Minuten, danach sechsstuendlich bis zum zwoelften; danach bleibt `meldung_offen.json` liegen, das der stuendliche Aufraeumtakt wieder aufgreift. |
+| Modellschritt faellt aus | Der Bericht sagt "NICHT GELAUFEN", die Aufnahme bleibt liegen. Gemeldet wird gedrosselt: beim ersten betroffenen Block und danach bei jedem zwanzigsten. |
+| Block ohne gesprochenes Wort | Normalfall, keine Meldung, Aufnahme weg. Ab 20 stummen Bloecken am Stueck je Kanal: DM bei jedem Vielfachen, und die Aufnahmen bleiben liegen. |
+| streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
+| Helix antwortet nicht | Nach fuenf Anlaeufen eine DM. Laufende Aufnahmen laufen weiter; nur neue Kanaele werden nicht erkannt und beendete nicht aufgeraeumt. |
+| Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
+| Schleife stirbt | Prozess endet mit Code 1, `Restart=on-failure` greift. |
 
-- `redact_text(text) -> str` — bekannte Slurs maskieren, **bevor** Evidenz den transienten Transkript-Kontext verlässt.
-- `detect_rule_findings(segments) -> list[AuditFinding]` — hochsichere lokale Findings ohne LLM/Transkript-Versand.
-- `_detect_llm_findings_minimax(segments) -> list[AuditFinding]` — weichere Findings via MiniMax; `_segment_batches(segments, *, max_chars=12000)` chunked, `_extract_json_object(raw)` parst.
-- `_evidence_excerpt(text, match=None)` — maskierter Beleg-Ausschnitt; `_evidence_excerpt_raw(...)` — **unmaskiert, nur für den privaten Admin-Report**. `_evidence_hash(text)` — stabiler Hash.
-- `_vod_jump_url(source_url, seconds) -> str` — Twitch-VOD-Sprunglink (`?t=1h2m3s`); leer ohne VOD.
-- `_acquire_media(source, *, source_kind, live_seconds, workdir)` + HLS-Auflösung — kurze Audio-only-Aufnahme. `_collapse_space` als Text-Helfer.
+## 6. Datenschutz
 
-## 6. Datenbank & externe Schnittstellen
+- Auf dem STT-Weg verlaesst Audio den Rechner nicht; ein entfernter
+  STT-Endpunkt bricht den Start ab (`STREAM_AUDIT_ALLOW_REMOTE_STT`).
+- Der durchgehende 1:1-Ton-Mitschnitt geht dagegen nach dem Stream bewusst per
+  rclone in den eigenen Google-Drive-Ordner (`STREAM_AUDIT_DRIVE_ARCHIVE`,
+  Standard an) und wird lokal erst nach belegtem Upload geloescht. Ein Kanal in
+  `STREAM_AUDIT_DRIVE_EXCLUDE` bekommt gar keinen Recorder.
+- Mit hoch gehen die Berichte des Laufs (`.json`, `.md`) und, wenn
+  `STREAM_AUDIT_KEEP_TRANSCRIPT=1` gesetzt ist, das `.txt` mit dem
+  ungeschwaerzten vollen Wortlaut. Das Drive-Archiv ist damit der Vorgang zum
+  Zeitpunkt des Uploads, nicht nur der Ton. Ein Nachzuegler nach gesetzter
+  `drive_archiviert.json` geht nicht mehr hoch; der haeufige Fall (letzter Block
+  noch in Auswertung) ist ueber `offene_fuer_lauf` abgedeckt.
+- Geht der Upload nie durch, faellt der Mitschnitt derselben Aufbewahrung zu
+  wie die Berichte: `STREAM_AUDIT_RETENTION_DAYS` plus 14 Tage Gnadenfrist
+  (`ARCHIV_RUECKSTAU_GNADE_TAGE`). Die Aufnahme ist der Anker, an dem ein
+  offener Upload erkannt wird, und darf deshalb nicht frueher verschwinden.
+- Im Drive selbst laeuft nichts ab. Der Dienst loescht dort nie etwas.
+- An das Modell gehen geschwaerzte Segmenttexte mit anonymer Nummer. Die
+  Schwaerzung kennt die drei Muster aus `rules.rs`; anderer Wortlaut geht mit.
+  Deshalb ist `STREAM_AUDIT_ALLOW_REMOTE_LLM=1` eine bewusste Einstellung der
+  Unit.
+- Berichte tragen geschwaerzte Belege plus SHA-256 des Originals, Modus 0600.
+  Die DM traegt weder Zitat noch Hash.
+- Rohtranskripte nur mit `STREAM_AUDIT_KEEP_TRANSCRIPT=1`.
 
-- **Daten:** `data/stream_coaching_audits/*.md` (private Reports), transiente Audio-/Transkript-Dateien (nach Lauf entfernt).
-- **Extern:** Twitch (HLS live / VOD), Whisper (Transkription), MiniMax (LLM-Findings).
+## 7. Stolperfallen
 
-## 7. Stolperfallen / Besonderheiten
+- `FFMPEG_BIN` bleibt auf `/usr/bin/ffmpeg` gepinnt. Der systemd-Benutzer-PATH
+  stellt `~/.local/bin` nach vorn, und der statische Build dort segfaultet mit
+  leerem stderr - dann scheitert jeder Block an der Tonspur.
+- Der Ausgabeordner gehoert diesem Dienst allein: die Aufbewahrung loescht dort
+  Berichte nach Namensmuster und Aufnahmen nach Ordnerform.
 
-- **Privatsphäre by design:** Slurs werden vor Weitergabe maskiert (`redact_text`/`_evidence_excerpt`); nur der private Admin-Excerpt ist unmaskiert. Reports nicht öffentlich teilen.
-- **ffmpeg-Falle:** Für Twitch-HLS den System-`/usr/bin/ffmpeg` setzen (`FFMPEG_BIN`); der statische `~/.local`-Build segfaultet mit leerem stderr (siehe Memory).
-- **Lokale Regeln zuerst:** `detect_rule_findings` läuft ohne Transkript-Versand — nur die unsicheren Fälle gehen an MiniMax (Kosten + Datensparsamkeit).
-- **Internes Tool, kein Changelog:** bewusst ohne Nutzer-Ankündigung/Changelog (siehe Memory) — es ist ein Admin-Screening, kein Produkt-Feature.
-- **Nur bei Funden zustellen:** Kein Fund → keine DM. Stille ist das erwartete Ergebnis.

@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 const NAV_ITEMS = [
+  { href: "#partner", label: "Partner" },
   { href: "#leere", label: "Das Problem" },
   { href: "#ablauf", label: "Ablauf" },
   { href: "#leistungen", label: "Leistungen" },
@@ -74,6 +75,10 @@ interface ProtocolSectionProps {
   stamp: string;
   headline: ReactNode;
   intro?: ReactNode;
+  /** Farbe der Lichtinsel hinter dem Abschnitt. "none" laesst sie weg. */
+  ambient?: "gold" | "teal" | "none";
+  /** Seite, an der die Lichtinsel sitzt. Abwechselnd gesetzt ergibt Rhythmus. */
+  ambientSide?: "left" | "right";
   children: ReactNode;
 }
 
@@ -87,6 +92,8 @@ export function ProtocolSection({
   stamp,
   headline,
   intro,
+  ambient = "gold",
+  ambientSide = "right",
   children,
 }: ProtocolSectionProps) {
   return (
@@ -96,11 +103,30 @@ export function ProtocolSection({
       // Ankersprung darf nicht unter der festen Kopfleiste landen.
       style={{ scrollMarginTop: "5.5rem" }}
     >
+      {ambient === "none" ? null : (
+        <div
+          className={`v2-ambient ${
+            ambient === "teal" ? "v2-ambient-teal" : "v2-ambient-gold"
+          }`}
+          style={{
+            top: "6%",
+            left: ambientSide === "left" ? "-8%" : undefined,
+            right: ambientSide === "right" ? "-8%" : undefined,
+            width: "min(42rem, 70vw)",
+            height: "min(42rem, 70vw)",
+          }}
+          aria-hidden="true"
+        />
+      )}
       <div className="relative pl-6 sm:pl-12">
         <div className="v2-rail" aria-hidden="true" />
-        <div className="v2-node" style={{ top: "0.55rem" }} aria-hidden="true" />
+        <div
+          className="v2-node v2-node-live"
+          style={{ top: "0.55rem" }}
+          aria-hidden="true"
+        />
 
-        <div className="py-20 sm:py-28">
+        <div className="py-16 sm:py-20">
           <motion.div
             initial={{ opacity: 0, y: 18 }}
             whileInView={{ opacity: 1, y: 0 }}
