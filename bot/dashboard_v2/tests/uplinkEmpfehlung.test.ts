@@ -152,22 +152,50 @@ test('die OBS-Anleitung nennt keine feste Bitrate-Spanne mehr', () => {
   assert.match(UPLINK_PAGE, /obsBitrateEmpfehlung/);
 });
 
+/**
+ * Schneidet den Warntext der 1440p-Stufe aus `api/uplink.ts`.
+ *
+ * Die Tests darunter pruefen alle denselben Satz, und ein `assert.match` gegen
+ * die ganze Datei wuerde auch anschlagen, wenn die Stelle in einem Kommentar
+ * oder in einer anderen Stufe steht.
+ */
+function warnung1440(): string {
+  const stufe = UPLINK_API.slice(UPLINK_API.indexOf("name: '1440p60'"));
+  const start = stufe.indexOf('warnung:');
+  return stufe.slice(start, stufe.indexOf("',", start));
+}
+
 test('der 2K-Hinweis nennt Enhanced Broadcasting und seine Folgen', () => {
-  assert.match(UPLINK_API, /Enhanced Broadcasting/);
-  assert.match(UPLINK_API, /20 Mbit\/s/);
+  const warnung = warnung1440();
+  assert.match(warnung, /Enhanced Broadcasting/);
   // Die Folge fuer die Zuschauer ist der Teil, den man beim Ueberfliegen
   // uebersieht und der hinterher im Chat steht.
-  assert.match(UPLINK_API, /Qualitätsstufen/);
+  assert.match(warnung, /Qualitätsstufen/);
+  assert.match(warnung, /puffert/);
 });
 
-test('die 1440p-Warnung bleibt lesbar kurz', () => {
+test('die 1440p-Warnung nennt keine Bitrate', () => {
+  // Hier stand einmal "die 20 Mbit/s, die Twitch dafuer nennt, senden wir".
+  // Die Zahl stammt aus Twitchs Hilfeartikel und gilt fuer den direkten Weg
+  // an Twitch. Ueber Uplink gehen 12000 kbps raus, und was der Streamer zu
+  // uns hochlaedt, ist noch einmal etwas anderes. Keine der drei Zahlen
+  // gehoert in diese Warnung, deshalb steht dort gar keine.
+  // Aufloesungen wie "1440p" und "720p" duerfen bleiben, die sind belegt.
+  // Gemeint ist jede Datenrate.
+  const warnung = warnung1440();
+  assert.doesNotMatch(warnung, /Mbit|Mbps|kbps|Kbps|kBit|MBit/);
+});
+
+test('die 1440p-Warnung bleibt lesbar kurz und wird nicht ausgehoehlt', () => {
   // Eine Warnung, die niemand zu Ende liest, warnt nicht. Die erste Fassung
   // hatte acht Saetze und fuehrte jede Einzelheit aus dem Twitch-Hilfeartikel
   // auf, auch die Partner-und-Affiliate-Schranke, die nur fuer Enhanced
   // Broadcasting gilt und damit fuer einen Weg, den wir gar nicht gehen.
-  const stufe = UPLINK_API.slice(UPLINK_API.indexOf("name: '1440p60'"));
-  const warnung = stufe.slice(stufe.indexOf('warnung:'), stufe.indexOf("',", stufe.indexOf('warnung:')));
+  // Die Untergrenze haelt die Gegenrichtung offen: der Satz darf beim Kuerzen
+  // nicht auf einen Halbsatz zusammenfallen, der nichts mehr erklaert.
+  const warnung = warnung1440();
   assert.ok(warnung.length < 500, `1440p-Warnung ist ${warnung.length} Zeichen lang`);
+  assert.ok(warnung.length > 200, `1440p-Warnung ist nur ${warnung.length} Zeichen lang`);
 });
 
 test('kein Em-Dash im Uplink-Text', () => {

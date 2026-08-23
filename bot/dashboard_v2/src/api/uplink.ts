@@ -61,6 +61,12 @@ export interface UplinkProfilAnsicht {
  * fuer Partner und Affiliates, und es geht an Twitchs eigenen Ingest. Ueber
  * Uplink laeuft klassisches RTMP, damit ist 1440p bei Twitch offiziell nicht
  * unterstuetzt und es gibt keine Qualitaetsstufen fuer die Zuschauer.
+ *
+ * Die Bitrate aus demselben Artikel steht bewusst NICHT in der Warnung. Sie
+ * gilt fuer jemanden, der 2K direkt an Twitch schickt. Ueber Uplink geht
+ * `PROFIL_WERTE['1440p60']` an Twitch, also 12000 kbps, und was der Streamer
+ * zu uns hochlaedt, ist davon wieder unabhaengig. Eine Zahl, die auf keinen
+ * dieser drei Wege passt, gehoert nicht in eine Warnung.
  */
 export const UPLINK_PROFILE = [
   {
@@ -68,7 +74,7 @@ export const UPLINK_PROFILE = [
     label: '1440p60 (2K), 12000 kbps',
     hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
     warnung:
-      'Twitch nimmt 2K offiziell nur über Enhanced Broadcasting an, und das läuft über Twitchs eigenen Ingest, nicht über uns. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, puffert, statt auf 720p zu wechseln. Die 20 Mbit/s, die Twitch dafür nennt, senden wir, nicht deine Leitung. Probier es einen Abend aus und schick uns dafür auch 1440p aus OBS.',
+      'Twitch nimmt 2K offiziell nur über Enhanced Broadcasting an, und das läuft über Twitchs eigenen Ingest, nicht über uns. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, puffert, statt auf 720p zu wechseln. Probier es einen Abend aus und schick uns dafür auch 1440p aus OBS.',
   },
   {
     name: '1080p60-hoch',
