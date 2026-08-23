@@ -10,12 +10,17 @@ import type { CatalogPlan } from '../../types/billing';
    steht. Kein Empfohlen-Badge, keine Minus-Kreuze: was eine Stufe kann, steht
    als Liste da, was sie nicht kann, steht in der Stufe darüber.
 
-   Creator Pro bekommt bewusst KEINE eigene Säule. Solange das Clip-Werkzeug
-   fehlt, bleibt von Pro nur "alles aus Plus" plus Support-Vorrang übrig, und
-   eine Karte mit zwei Zeilen neben zwei vollen Karten wirkt wie ein Angebot,
-   das man nicht kaufen will. Es steht deshalb als ruhige Zeile darunter, bis
-   es Substanz hat. Sobald der Katalog Pro auf `buchbar` stellt und die
-   Feature-Liste trägt, gehört es zurück nach oben. */
+   Creator Pro bekommt bewusst KEINE eigene Säule, solange die Werkzeuge dafür
+   fehlen: eine Karte mit zwei Zeilen neben zwei vollen Karten wirkt wie ein
+   Angebot, das man nicht kaufen will. Es steht deshalb als ruhige Zeile
+   darunter, bis es Substanz hat. Sobald der Katalog Pro auf `buchbar` stellt
+   und die Feature-Liste trägt, gehört es zurück nach oben. Wer die Stufe über
+   ein Geschenk bereits laufen hat, sieht sie ebenfalls als Karte, sonst
+   verschwindet der eigene Stand samt Hinweis hinter der Ausblick-Zeile.
+
+   Die Ausblick-Zeile nennt bewusst kein einzelnes Merkmal: was dort stünde,
+   liefe entweder heute schon für alle oder wäre ein Versprechen auf etwas,
+   das es noch nicht gibt. */
 
 const AKZENT: Record<string, string> = {
   free: '#C5A059',
@@ -59,6 +64,33 @@ function istBuchbar(plan: CatalogPlan, gratis: boolean): boolean {
   return plan.buchbar !== false && (gratis || plan.checkout_available !== false);
 }
 
+const ZAHLWORT: Record<number, string> = {
+  1: 'Eine',
+  2: 'Zwei',
+  3: 'Drei',
+  4: 'Vier',
+};
+
+/** Überschrift aus der tatsächlichen Kartenzahl, damit sie nie zwei behauptet,
+    während drei Säulen darunter stehen. */
+function ueberschriftFuer(anzahl: number): string {
+  if (anzahl === 1) {
+    return 'Eine Stufe, ein Bot';
+  }
+  return `${ZAHLWORT[anzahl] ?? anzahl} Stufen, ein Bot`;
+}
+
+/** Unterzeile passend zur Kartenzahl: über Plus nur reden, wenn Plus dasteht. */
+function unterzeileFuer(anzahl: number): string {
+  if (anzahl <= 1) {
+    return 'Free bleibt dauerhaft vollwertig.';
+  }
+  if (anzahl === 2) {
+    return 'Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den letzten Stream.';
+  }
+  return 'Free bleibt dauerhaft vollwertig. Die bezahlten Stufen zeigen dir deine Entwicklung statt nur den letzten Stream.';
+}
+
 interface PlanStufenProps {
   plans: CatalogPlan[];
   cycle: 1 | 12;
@@ -71,17 +103,20 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
 
   const karten = plans.filter((plan) => plan.id !== 'pro');
   const pro = plans.find((plan) => plan.id === 'pro');
-  const proGehoertNachOben = pro ? istBuchbar(pro, false) : false;
+  /* Buchbar gehört nach oben, und wer die Stufe laufen hat, sieht sie auch:
+     ein unbefristetes Geschenk setzt is_current auf der Pro-Karte, ohne dass
+     der Katalog sie buchbar stellt. Ohne diese Ausnahme sähe der Beschenkte
+     weder "Deine aktuelle Stufe" noch den Hinweis dazu. */
+  const proGehoertNachOben = pro ? istBuchbar(pro, false) || pro.is_current : false;
   const obenAngezeigt = proGehoertNachOben && pro ? [...karten, pro] : karten;
 
   return (
     <div>
       <div className="mb-7">
-        <p className="text-xl font-semibold text-white mb-1.5">Zwei Stufen, ein Bot</p>
-        <p className="text-sm text-white/45">
-          Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den
-          letzten Stream.
+        <p className="text-xl font-semibold text-white mb-1.5">
+          {ueberschriftFuer(obenAngezeigt.length)}
         </p>
+        <p className="text-sm text-white/45">{unterzeileFuer(obenAngezeigt.length)}</p>
       </div>
 
       <div
@@ -183,17 +218,18 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
       {pro && !proGehoertNachOben && (
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] px-8 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="max-w-2xl">
-            <p className="text-white/80 font-medium">
-              {pro.name} kommt, sobald das Clip-Werkzeug steht.
-            </p>
+            <p className="text-white/80 font-medium">{pro.name} ist noch nicht buchbar.</p>
             <p className="text-white/40 text-sm mt-1.5 leading-relaxed">
-              Geplant sind Clips ohne Mengenbegrenzung, automatisches Posten und Untertitel.
-              Solange davon nichts läuft, gibt es dafür auch nichts zu bezahlen.
+              Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.
             </p>
           </div>
-          <span className="text-white/35 text-sm whitespace-nowrap">
-            später {eur(pro.monthly_gross_cents ?? 999)} im Monat
-          </span>
+          {/* Kein hartkodierter Ersatzpreis: fällt das Katalogfeld weg, steht
+              hier lieber nichts als stumm eine veraltete Zahl. */}
+          {typeof pro.monthly_gross_cents === 'number' && (
+            <span className="text-white/35 text-sm whitespace-nowrap">
+              später {eur(pro.monthly_gross_cents)} im Monat
+            </span>
+          )}
         </div>
       )}
 
