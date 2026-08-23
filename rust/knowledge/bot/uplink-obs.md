@@ -106,6 +106,8 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 
 1440p an uns zu schicken lohnt sich zweifach: entweder rechnen wir daraus 1080p und behalten dabei Schärfe, oder wir senden die vollen 2K weiter, wenn du diese Stufe im Dashboard wählst. Es lohnt sich nicht, wenn der Encoder Frames schluckt. **Skipped frames** bleibt in OBS bei 0.
 
+Die Qualität je Ziel kannst du auch mitten im Stream umstellen. Der Stream bleibt online, wir tauschen nur unseren Encoder aus. Änderst du dabei Auflösung oder Bildrate, sehen deine Zuschauer kurz ein Stocken, weil die Plattform das neue Bildformat annehmen muss. Änderst du nur die Bitrate, merkt niemand etwas. Neue Ziele und neue Stream-Schlüssel gelten weiterhin erst ab dem nächsten Stream: dafür müssten wir die Verbindung zur Plattform neu aufbauen, und das wäre dort ein Stream-Ende.
+
 ### 3. Ziel: unser Dienst
 
 Öffne in OBS **Einstellungen**, dann **Stream**.
