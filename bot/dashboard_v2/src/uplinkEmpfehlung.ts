@@ -50,47 +50,92 @@ export function normalisiereCaps(roh: UplinkCapsRoh): UplinkCaps {
 /**
  * Was in OBS als Bitrate eingetragen werden soll.
  *
- * Frueher stand dort eine feste Spanne von 15000 bis 25000 kbps. Die Zahl war
- * doppelt falsch: kaum ein deutscher Heimanschluss traegt 25 Mbit Upload, und
- * genau deshalb gibt es Uplink ueberhaupt. Statt einer Spanne aus dem Nichts
- * rechnen wir aus dem, was der Streamer als Ziele eingestellt hat.
+ * Zwei Fassungen davor waren falsch, und beide auf dieselbe Art: sie haben
+ * eine Zahl genannt, die kein gewoehnlicher deutscher Heimanschluss traegt.
+ * Erst stand hier eine feste Spanne von 15000 bis 25000 kbps, danach die
+ * staerkste Zielbitrate mal 1,2, was bei einem YouTube-Ziel auf 22000
+ * hinauslief. Genau wegen knapper Upload-Leitungen gibt es Uplink ueberhaupt:
+ * einmal hochladen statt viermal.
  *
- * Eigenes Modul ohne Laufzeit-Abhaengigkeit auf `api/uplink`: die Rechnung soll
+ * Die Rechnung ist deshalb keine Rechnung mehr, sondern ein Nachschlagen in
+ * der Hilfeseite `public/uplink/obs.html`, die auf derselben Dashboard-Seite
+ * eingebettet ist. Sie staffelt nach gemessenem Upload und nennt zwei Paare
+ * aus Zielbitrate und Maximalbitrate, siehe [`OBS_STUFE_STANDARD`] und
+ * [`OBS_STUFE_2K`]. Ein Test prueft, dass beide Paare woertlich in der
+ * Hilfeseite stehen: zwei Empfehlungen auf einer Seite, die sich
+ * widersprechen, waren der eigentliche Befund.
+ *
+ * Warum nicht aus der Zielbitrate hochrechnen: zu uns geht HEVC, an die
+ * Plattformen geht H.264. HEVC packt dasselbe Bild in deutlich weniger Bits,
+ * eine Ingest-Bitrate ueber der Zielbitrate ist damit in der Regel verkehrt
+ * herum. Was der Streamer zu uns hochlaedt, haengt an seiner Aufloesung und
+ * an seinem Upload, nicht an der Zahl, die spaeter zu Twitch rausgeht.
+ *
+ * Der Upload ist der harte Deckel, und wir kennen ihn nicht. Die Oberflaeche
+ * fragt ihn bewusst nicht ab: eine Zahl, die der Streamer selbst schaetzt,
+ * saehe im Feld genauso verbindlich aus wie eine gemessene, und die Messung
+ * gehoert ohnehin in die Hilfeseite. Stattdessen sagt der Text dazu, dass die
+ * Zahl unter dem gemessenen Upload bleiben muss.
+ *
+ * Eigenes Modul ohne Laufzeit-Abhaengigkeit auf `api/uplink`: die Auswahl soll
  * im nackten Node-Testlauf pruefbar sein, ohne dass der Fetch-Unterbau der
  * Oberflaeche mitgeladen wird.
  */
 
-/** Reserve auf die staerkste Zielbitrate. Der Encoder braucht Luft nach oben. */
-const RESERVE = 1.2;
-
-/** Auf volle 500 kbps runden: OBS-Bitraten sind ueberall solche Zahlen. */
-const SCHRITT = 500;
-
-/** Die Bitrate der Standardstufe (1080p60, 6000 kbps) aus dem Stufenkatalog. */
-const STANDARD_ZIEL_KBPS = 6000;
-
-function aufSchritt(kbps: number): number {
-  return Math.ceil(kbps / SCHRITT) * SCHRITT;
-}
-
-/**
- * Der Startwert, solange noch kein Ziel eingestellt ist. Keine ausgedachte
- * Zahl, sondern dieselbe Rechnung auf die Standardstufe: 6000 plus Reserve.
- */
-export const OBS_BITRATE_START = aufSchritt(STANDARD_ZIEL_KBPS * RESERVE);
-
-export interface ObsBitrateEmpfehlung {
-  /** Die eine Zahl, die in OBS eingetragen wird. */
+export interface ObsBitrateStufe {
+  /** Zielbitrate fuer VBR. */
   kbps: number;
-  /**
-   * Die staerkste Zielbitrate, aus der die Empfehlung stammt. `null` heisst:
-   * es gibt noch kein Ziel, die Empfehlung ist der Startwert.
-   */
-  staerkstesZiel: number | null;
+  /** Maximalbitrate fuer VBR. */
+  maxKbps: number;
 }
 
 /**
- * Die hoechste Bitrate ueber alle eingeschalteten Ziele, plus Reserve.
+ * Fuer alles, was bei uns hoechstens 1080p verlaesst.
+ *
+ * Woertlich aus `obs.html`, Zeile "5 bis 8 Mbit": 1920x1080, 60 fps,
+ * "HEVC, VBR 6000 / max 8000". Dieselben Zahlen stehen dort auch als
+ * "Standard bei knapper Leitung".
+ */
+export const OBS_STUFE_STANDARD: ObsBitrateStufe = { kbps: 6000, maxKbps: 8000 };
+
+/**
+ * Nur fuer den, der 2K auch wirklich weitersendet.
+ *
+ * Woertlich aus `obs.html`, Zeile "ab 14 Mbit, wenn du 2K auch rausschicken
+ * willst": 2560x1440, 60 fps, "HEVC, VBR 9000 / max 12000".
+ *
+ * Wer 1440p schickt, damit wir daraus ein schaerferes 1080p rechnen, bleibt
+ * bei [`OBS_STUFE_STANDARD`]. Auch das steht so in der Hilfeseite, Zeile
+ * "ab 8 Mbit, GPU haelt 1440".
+ */
+export const OBS_STUFE_2K: ObsBitrateStufe = { kbps: 9000, maxKbps: 12000 };
+
+/** Ab dieser Zielhoehe geht 2K raus und die groessere Stufe gilt. */
+const HOEHE_1080 = 1080;
+
+/**
+ * Woher die Empfehlung kommt. Der Unterschied zwischen `start` und
+ * `unbekannt` ist der Befund aus dem Review: ein fehlgeschlagener Abruf sah
+ * aus wie "noch kein Ziel eingerichtet", und der Text hat einem Streamer mit
+ * vier eingerichteten Zielen erzaehlt, er habe keins.
+ */
+export type ObsBitrateHerkunft = 'ziele' | 'start' | 'unbekannt';
+
+export interface ObsBitrateEmpfehlung extends ObsBitrateStufe {
+  herkunft: ObsBitrateHerkunft;
+  /**
+   * Die hoechste Bildhoehe ueber alle mitgezaehlten Ziele, aus der die Stufe
+   * stammt. `null`, wenn es keine Ziele gibt oder sie nicht abrufbar waren.
+   */
+  hoehe: number | null;
+}
+
+/**
+ * Die Stufe fuer die eingestellten Ziele.
+ *
+ * `ladefehler` ist der dritte Zustand neben "keine Ziele" und "Ziele da": der
+ * Abruf laeuft ohne Wiederholung, und ohne dieses Flag waere ein Ausfall von
+ * einem leeren Konto nicht zu unterscheiden.
  *
  * Sind alle Ziele pausiert, zaehlen die pausierten mit: der Startwert waere
  * dann eine Zahl aus dem Nichts, obwohl die eingestellten Werte direkt
@@ -98,17 +143,22 @@ export interface ObsBitrateEmpfehlung {
  */
 export function obsBitrateEmpfehlung(
   ziele: UplinkDestination[] | undefined,
+  ladefehler = false,
 ): ObsBitrateEmpfehlung {
+  if (ladefehler) {
+    return { ...OBS_STUFE_STANDARD, herkunft: 'unbekannt', hoehe: null };
+  }
   const brauchbar = (ziele ?? [])
-    .map((ziel) => ({ enabled: ziel.enabled, kbps: ziel.requested?.bitrate_kbps }))
-    .filter((ziel): ziel is { enabled: boolean; kbps: number } =>
-      typeof ziel.kbps === 'number' && Number.isFinite(ziel.kbps) && ziel.kbps > 0,
+    .map((ziel) => ({ enabled: ziel.enabled, hoehe: ziel.requested?.height }))
+    .filter((ziel): ziel is { enabled: boolean; hoehe: number } =>
+      typeof ziel.hoehe === 'number' && Number.isFinite(ziel.hoehe) && ziel.hoehe > 0,
     );
   const eingeschaltet = brauchbar.filter((ziel) => ziel.enabled);
   const quelle = eingeschaltet.length > 0 ? eingeschaltet : brauchbar;
   if (quelle.length === 0) {
-    return { kbps: OBS_BITRATE_START, staerkstesZiel: null };
+    return { ...OBS_STUFE_STANDARD, herkunft: 'start', hoehe: null };
   }
-  const staerkstesZiel = Math.max(...quelle.map((ziel) => ziel.kbps));
-  return { kbps: aufSchritt(staerkstesZiel * RESERVE), staerkstesZiel };
+  const hoehe = Math.max(...quelle.map((ziel) => ziel.hoehe));
+  const stufe = hoehe > HOEHE_1080 ? OBS_STUFE_2K : OBS_STUFE_STANDARD;
+  return { ...stufe, herkunft: 'ziele', hoehe };
 }

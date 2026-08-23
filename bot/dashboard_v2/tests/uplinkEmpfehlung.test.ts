@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
-  OBS_BITRATE_START,
+  OBS_STUFE_2K,
+  OBS_STUFE_STANDARD,
   normalisiereCaps,
   obsBitrateEmpfehlung,
 } from '../src/uplinkEmpfehlung';
@@ -14,73 +15,126 @@ const DASHBOARD_ROOT = join(import.meta.dirname, '..');
 const ZIEL_KARTE = readFileSync(join(DASHBOARD_ROOT, 'src', 'pages', 'UplinkZiel.tsx'), 'utf8');
 const UPLINK_PAGE = readFileSync(join(DASHBOARD_ROOT, 'src', 'pages', 'Uplink.tsx'), 'utf8');
 const UPLINK_API = readFileSync(join(DASHBOARD_ROOT, 'src', 'api', 'uplink.ts'), 'utf8');
+// Die Hilfeseite ist auf derselben Dashboard-Seite eingebettet. Zwei
+// Empfehlungen, die sich widersprechen, waren der Befund; deshalb ist sie
+// hier die Belegquelle und nicht nur Deko.
+const OBS_HILFE = readFileSync(
+  join(DASHBOARD_ROOT, 'public', 'uplink', 'obs.html'),
+  'utf8',
+);
 
 function ziel(
   platform: string,
-  bitrate_kbps: number | undefined,
+  hoehe: number | undefined,
   enabled = true,
+  bitrate_kbps = 6000,
 ): UplinkDestination {
   return {
     platform,
     rtmp_url: `rtmp://${platform}`,
     enabled,
     requested:
-      bitrate_kbps === undefined
+      hoehe === undefined
         ? undefined
-        : { width: 1920, height: 1080, fps: 60, bitrate_kbps },
+        : { width: Math.round((hoehe * 16) / 9), height: hoehe, fps: 60, bitrate_kbps },
   };
 }
 
-test('ohne Ziele nennt die Anleitung einen Startwert statt einer leeren Zahl', () => {
-  assert.equal(obsBitrateEmpfehlung([]).kbps, OBS_BITRATE_START);
-  assert.equal(obsBitrateEmpfehlung(undefined).kbps, OBS_BITRATE_START);
-  assert.equal(obsBitrateEmpfehlung([]).staerkstesZiel, null);
-  // Der Startwert ist die Standardstufe plus Reserve, keine ausgedachte Zahl.
-  assert.equal(OBS_BITRATE_START, 7500);
-});
-
-test('die Empfehlung nimmt das staerkste eingeschaltete Ziel plus rund 20 Prozent', () => {
-  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 6000), ziel('youtube', 8000)]);
-  // 8000 plus 20 Prozent sind 9600, aufgerundet auf volle 500 also 10000.
-  assert.equal(ergebnis.kbps, 10000);
-  assert.equal(ergebnis.staerkstesZiel, 8000);
-});
-
-test('die Empfehlung ist immer ein Vielfaches von 500', () => {
-  for (const bitrate of [1500, 4500, 6000, 8000, 12000, 16000, 18000, 24000]) {
-    const kbps = obsBitrateEmpfehlung([ziel('twitch', bitrate)]).kbps;
-    assert.equal(kbps % 500, 0, `${bitrate} ergibt ${kbps}`);
-    assert.ok(kbps >= bitrate * 1.2, `${kbps} liegt unter der Reserve auf ${bitrate}`);
-    assert.ok(kbps < bitrate * 1.2 + 500, `${kbps} rundet zu weit ueber ${bitrate}`);
+test('beide Stufen stehen woertlich so in der eingebetteten OBS-Hilfeseite', () => {
+  // Der eigentliche Befund war nicht die Zahl 22000, sondern dass sie der
+  // Hilfeseite auf derselben Seite widersprochen hat. Dieser Test ist die
+  // Klammer dagegen: eine Empfehlung, die dort nicht steht, faellt auf.
+  for (const stufe of [OBS_STUFE_STANDARD, OBS_STUFE_2K]) {
+    assert.match(
+      OBS_HILFE,
+      new RegExp(`VBR ${stufe.kbps} / max ${stufe.maxKbps}`),
+      `VBR ${stufe.kbps} / max ${stufe.maxKbps} fehlt in obs.html`,
+    );
   }
 });
 
-test('ein glatter Wert bekommt keine zusaetzliche Stufe aufgeschlagen', () => {
-  // 5000 plus 20 Prozent sind exakt 6000, das ist schon ein Vielfaches von 500.
-  assert.equal(obsBitrateEmpfehlung([ziel('twitch', 5000)]).kbps, 6000);
+test('ohne Ziele nennt die Anleitung die Standardstufe', () => {
+  for (const leer of [[], undefined]) {
+    const ergebnis = obsBitrateEmpfehlung(leer);
+    assert.equal(ergebnis.herkunft, 'start');
+    assert.equal(ergebnis.hoehe, null);
+    assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
+    assert.equal(ergebnis.maxKbps, OBS_STUFE_STANDARD.maxKbps);
+  }
+});
+
+test('ein fehlgeschlagener Abruf ist nicht dasselbe wie kein Ziel', () => {
+  // Der Abruf laeuft mit `retry: false`. Faellt er aus, hat der Streamer
+  // trotzdem Ziele, und der Text darf ihm nicht erzaehlen, er habe keine.
+  const ergebnis = obsBitrateEmpfehlung([], true);
+  assert.equal(ergebnis.herkunft, 'unbekannt');
+  assert.equal(ergebnis.hoehe, null);
+  assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
+});
+
+test('der Ladefehler schlaegt vorhandene Ziele, statt aus ihnen zu rechnen', () => {
+  // Sonst stuende eine Zahl da, die aus einem halben Abruf stammt.
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1440)], true);
+  assert.equal(ergebnis.herkunft, 'unbekannt');
+  assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
+});
+
+test('Ziele bis 1080p bekommen die Standardstufe', () => {
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1080), ziel('kick', 720)]);
+  assert.equal(ergebnis.herkunft, 'ziele');
+  assert.equal(ergebnis.hoehe, 1080);
+  assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
+  assert.equal(ergebnis.maxKbps, OBS_STUFE_STANDARD.maxKbps);
+});
+
+test('geht irgendwo 2K raus, gilt die groessere Stufe', () => {
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1080), ziel('youtube', 1440)]);
+  assert.equal(ergebnis.hoehe, 1440);
+  assert.equal(ergebnis.kbps, OBS_STUFE_2K.kbps);
+  assert.equal(ergebnis.maxKbps, OBS_STUFE_2K.maxKbps);
+});
+
+test('keine Zielbitrate treibt die Empfehlung ueber die Hilfeseite hinaus', () => {
+  // Die Vorgaengerfassung war staerkste Zielbitrate mal 1,2. Ein
+  // YouTube-Ziel auf 24000 kbps ergab daraus 29000, die Fixture-Ziele 22000,
+  // und kein gewoehnlicher Heimanschluss traegt das. Genau deshalb gibt es
+  // Uplink: einmal hochladen statt viermal.
+  for (const bitrate of [4500, 6000, 12000, 24000, 50000]) {
+    for (const hoehe of [480, 720, 1080, 1440, 2160]) {
+      const ergebnis = obsBitrateEmpfehlung([ziel('youtube', hoehe, true, bitrate)]);
+      assert.ok(
+        ergebnis.maxKbps <= OBS_STUFE_2K.maxKbps,
+        `${hoehe}p bei ${bitrate} kbps ergibt ${ergebnis.maxKbps}`,
+      );
+    }
+  }
 });
 
 test('pausierte Ziele zaehlen nicht, solange ein Ziel eingeschaltet ist', () => {
-  const ergebnis = obsBitrateEmpfehlung([
-    ziel('twitch', 6000, true),
-    ziel('youtube', 24000, false),
-  ]);
-  assert.equal(ergebnis.staerkstesZiel, 6000);
-  assert.equal(ergebnis.kbps, 7500);
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1080, true), ziel('youtube', 1440, false)]);
+  assert.equal(ergebnis.hoehe, 1080);
+  assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
 });
 
 test('sind alle Ziele pausiert, zaehlen sie trotzdem statt des Startwerts', () => {
   // Sonst stuende in der Anleitung eine Zahl aus dem Nichts, obwohl die
   // eingestellten Werte direkt danebenstehen.
-  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 12000, false)]);
-  assert.equal(ergebnis.staerkstesZiel, 12000);
-  assert.equal(ergebnis.kbps, 14500);
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1440, false)]);
+  assert.equal(ergebnis.herkunft, 'ziele');
+  assert.equal(ergebnis.hoehe, 1440);
+  assert.equal(ergebnis.kbps, OBS_STUFE_2K.kbps);
 });
 
 test('Ziele ohne eingestellte Qualitaet fallen aus der Rechnung', () => {
-  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', undefined), ziel('kick', 4500)]);
-  assert.equal(ergebnis.staerkstesZiel, 4500);
-  assert.equal(ergebnis.kbps, 5500);
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', undefined), ziel('kick', 720)]);
+  assert.equal(ergebnis.hoehe, 720);
+  assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
+});
+
+test('gar keine brauchbare Hoehe faellt auf den Startwert zurueck', () => {
+  const ergebnis = obsBitrateEmpfehlung([ziel('twitch', undefined)]);
+  assert.equal(ergebnis.herkunft, 'start');
+  assert.equal(ergebnis.hoehe, null);
 });
 
 test('normalisiereCaps liest die neuen Empfehlungsfelder', () => {
@@ -150,6 +204,22 @@ test('die OBS-Anleitung nennt keine feste Bitrate-Spanne mehr', () => {
   assert.doesNotMatch(UPLINK_PAGE, /15000 bis 25000/);
   assert.doesNotMatch(UPLINK_PAGE, /20000 kbps/);
   assert.match(UPLINK_PAGE, /obsBitrateEmpfehlung/);
+});
+
+test('die Anleitung reicht den Ladefehler an die Empfehlung durch', () => {
+  // Ohne das zweite Argument ist ein ausgefallener Abruf von einem leeren
+  // Konto nicht zu unterscheiden, und genau das war der Befund.
+  assert.match(UPLINK_PAGE, /obsBitrateEmpfehlung\(gespeicherteZiele, zieleFehler\)/);
+});
+
+test('die Anleitung sagt beim Ladefehler, dass die Zahl nicht passen muss', () => {
+  assert.match(UPLINK_PAGE, /Deine Ziele konnten wir gerade nicht laden/);
+});
+
+test('kein Kommentar verspricht einen Ersatzwert, den es nicht gibt', () => {
+  // Der Ingest-Deckel als Rueckfallwert ist mit der Klemmung weggefallen.
+  assert.doesNotMatch(UPLINK_PAGE, /Ingest-Deckel zurueck/);
+  assert.doesNotMatch(UPLINK_PAGE, /INGEST_FALLBACK/);
 });
 
 /**

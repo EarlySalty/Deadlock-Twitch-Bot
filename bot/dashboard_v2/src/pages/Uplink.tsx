@@ -205,14 +205,39 @@ function ObsSchritt({
 }
 
 /**
+ * Warum diese Bitrate. Ein Satz je Zustand, danach fuer alle derselbe
+ * Hinweis auf den Upload.
+ *
+ * Der Fall `unbekannt` ist der Grund, warum das hier drei Zweige sind und
+ * nicht zwei: der Abruf der Ziele laeuft ohne Wiederholung, und faellt er
+ * aus, stand hier vorher "solange kein Ziel eingerichtet ist" bei jemandem
+ * mit vier eingerichteten Zielen.
+ */
+function bitrateBegruendung(bitrate: ObsBitrateEmpfehlung): string {
+  const anfang =
+    bitrate.herkunft === 'unbekannt'
+      ? 'Deine Ziele konnten wir gerade nicht laden, deshalb steht hier der Standardwert. Ob er zu dem passt, was du eingerichtet hast, können wir im Moment nicht sagen. '
+      : bitrate.herkunft === 'start'
+        ? 'Startwert, solange kein Ziel eingerichtet ist. Sobald deine Ziele stehen, passt sich die Zahl an. '
+        : bitrate.hoehe !== null && bitrate.hoehe > 1080
+          ? `Du schickst 2K weiter, dein höchstes Ziel steht auf ${bitrate.hoehe}p. `
+          : `Passt zu deinen Zielen: dein höchstes geht mit ${bitrate.hoehe}p raus. `;
+  return (
+    anfang +
+    'Die Grenze ist dein Upload, und den kennen wir nicht: miss ihn und nimm 80 Prozent davon, falls das weniger ist. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.'
+  );
+}
+
+/**
  * Die Ausgabe-Einstellungen, jede mit dem Grund dahinter.
  *
  * Ohne den Grund stellt niemand etwas um, was schon laeuft. HEVC ist der
  * Punkt, an dem Uplink sich lohnt, und VBR ist genau die Einstellung, die man
  * bei Twitch direkt nicht setzen darf und hier setzen soll.
  *
- * Die Bitrate ist keine feste Zahl mehr, sondern folgt den eingestellten
- * Zielen: siehe `obsBitrateEmpfehlung`.
+ * Die Bitrate ist keine feste Zahl mehr, sondern die Stufe aus der
+ * eingebetteten Hilfeseite, die zu den eingestellten Zielen passt: siehe
+ * `obsBitrateEmpfehlung`.
  */
 function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
   return [
@@ -228,12 +253,8 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
     },
     {
       feld: 'Bitrate',
-      wert: `${bitrate.kbps} kbps`,
-      warum:
-        (bitrate.staerkstesZiel === null
-          ? 'Startwert, solange kein Ziel eingerichtet ist. Sobald deine Ziele stehen, passt sich die Zahl an. '
-          : `Passt zu deinen Zielen: das stärkste steht auf ${bitrate.staerkstesZiel} kbps, dazu etwas Reserve. `) +
-        'Maßstab ist dein Upload: miss ihn und bleib rund 20 Prozent darunter. Das ist die Qualität, aus der wir rechnen, nicht die, die rausgeht.',
+      wert: `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`,
+      warum: bitrateBegruendung(bitrate),
     },
     {
       feld: 'Keyframe-Intervall',
@@ -359,14 +380,21 @@ export function UplinkPage() {
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
   // Leitung und ohne Bezug zu dem, was hier tatsaechlich rausgeht.
-  const obsBitrate = obsBitrateEmpfehlung(gespeicherteZiele);
+  //
+  // `zieleFehler` muss mit: ohne das Flag ist ein fehlgeschlagener Abruf von
+  // einem leeren Konto nicht zu unterscheiden, und der Text behauptet dann
+  // "kein Ziel eingerichtet" bei jemandem, der Ziele hat.
+  const obsBitrate = obsBitrateEmpfehlung(gespeicherteZiele, zieleFehler);
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
   });
-  // Die Grenzen kommen vom Server, damit die Oberflaeche sie nicht doppelt
-  // pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen Repo.
-  // Faellt der Abruf aus, faellt die Karte auf den Ingest-Deckel zurueck.
+  // Die Empfehlungen kommen vom Server, damit die Oberflaeche sie nicht
+  // doppelt pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen
+  // Repo. Faellt der Abruf aus, bleibt `caps` undefiniert, und die Zielkarte
+  // schreibt an die Felder gar keine Empfehlung plus einen Satz, warum. Ein
+  // Ersatzwert stuende hier falsch: es sind Empfehlungen und keine Grenzen,
+  // und eine erfundene Empfehlung ist schlechter als keine.
   const { data: caps } = useQuery({
     queryKey: ['uplink-caps'],
     queryFn: fetchUplinkCaps,
@@ -662,11 +690,11 @@ export function UplinkPage() {
                     <strong className="font-semibold text-white">
                       Was du sendest, ist nicht das, was rausgeht.
                     </strong>{' '}
-                    Schick uns HEVC in 1440p mit VBR, so viel Bitrate, wie dein Upload sicher trägt.
-                    Wir rechnen daraus für jedes Ziel neu, in H.264 und mit den Werten, die du hier
-                    eingestellt hast: also zum Beispiel 1440p HEVC mit {obsBitrate.kbps} kbps rein
-                    und H.264 zu Twitch raus. Mehr zu schicken hilft nur, solange deine Leitung es
-                    trägt.
+                    Schick uns HEVC in 1440p mit VBR und den Werten aus Schritt 4. Wir rechnen
+                    daraus für jedes Ziel neu, in H.264 und mit den Werten, die du hier eingestellt
+                    hast: also zum Beispiel 1440p HEVC mit {obsBitrate.kbps} kbps rein und H.264 zu
+                    Twitch raus. Höher stellen musst du dafür nicht: HEVC braucht für dasselbe Bild
+                    weniger als das H.264, das wir rausschicken.
                   </p>
                 </Rise>
                 )}
