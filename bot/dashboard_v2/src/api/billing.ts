@@ -5,7 +5,9 @@ export async function fetchBillingCatalog(cycle: 1 | 12 = 1): Promise<BillingCat
   const raw = await fetchApi<any>('/billing/catalog', { cycle });
   const plans = ((raw.plans ?? []) as any[]).map((p: any) => ({
     ...p,
-    price_monthly: (p.price?.effective_monthly_net_cents ?? p.monthly_net_cents ?? 0) / 100,
+    // Endpreise (Paragraph 19 UStG). Der Jahrespreis steht als eigener Betrag
+    // im Katalog, effective_monthly_gross_cents ist nur der Umrechnungswert.
+    price_monthly: (p.price?.effective_monthly_gross_cents ?? p.monthly_gross_cents ?? 0) / 100,
   })) as CatalogPlan[];
 
   const cs = raw.current_subscription ?? null;

@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_default,
+    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle,
     price_id_map_from_env, resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
@@ -566,6 +566,7 @@ pub async fn catalog_handler(
 
     let cycle = normalize_billing_cycle(parse_u32(params.cycle.as_deref(), 1));
     let mut payload = catalog_json(cycle);
+    let price_vault = price_id_map_from_env();
     let readiness = readiness_payload(config.as_ref().map(|Extension(c)| c));
     let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
 
@@ -601,12 +602,15 @@ pub async fn catalog_handler(
                 plan["stripe_price_id"] = Value::Null;
                 continue;
             }
-            let price_id = price_id_default(&pid, cycle);
+            // Dieselbe Aufloesung wie der Checkout: eingecheckter Default,
+            // sonst Vault-Map. Vorher las der Katalog nur den Default und zeigte
+            // deshalb `checkout_available: false`, obwohl der Checkout gegangen waere.
+            let price_id = resolved_price_id(&pid, cycle, &price_vault);
+            plan["checkout_available"] = json!(price_id.is_some() && checkout_ready);
             plan["stripe_price_id"] = match price_id {
                 Some(id) => json!(id),
                 None => Value::Null,
             };
-            plan["checkout_available"] = json!(price_id.is_some() && checkout_ready);
         }
     }
 
@@ -700,14 +704,14 @@ pub async fn checkout_preview_handler(
             .into_response();
     };
 
-    let total_cents = selected_plan["price"]["total_net_cents"]
+    let total_cents = selected_plan["price"]["total_gross_cents"]
         .as_i64()
         .unwrap_or(0);
     let readiness = readiness_payload(config.as_ref().map(|Extension(c)| c));
     let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
     let price_map_ready = readiness["price_map_ready"].as_bool().unwrap_or(false);
     let price_id = if is_paid_plan_id(&selected_plan_id) {
-        price_id_default(&selected_plan_id, cycle)
+        resolved_price_id(&selected_plan_id, cycle, &price_id_map_from_env())
     } else {
         None
     };
@@ -1216,7 +1220,7 @@ mod tests {
             DashboardAuthLevel::None,
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle_months: None,
             }),
         )
@@ -1246,7 +1250,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p == "raid_boost"));
+            .any(|p| p == "plus"));
     }
 
     /// P1.44: gültiger bezahlter Plan ohne Stripe-Config → 200 mit readiness/
@@ -1257,7 +1261,7 @@ mod tests {
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle_months: Some(serde_json::json!(1)),
             }),
         )
@@ -1268,7 +1272,10 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["provider"], "stripe");
-        assert_eq!(v["plan"]["id"], "raid_boost");
+        assert_eq!(v["plan"]["id"], "plus");
+        assert_eq!(v["plan"]["price"]["total_gross_cents"], 499);
+        assert_eq!(v["tax_mode"], "small_business");
+        assert_eq!(v["gross_available"], true);
         assert_eq!(v["integration_state"], "planned");
         assert_eq!(v["ready"], false);
         assert!(v["next_steps"].as_array().unwrap().len() == 2);
@@ -1281,7 +1288,7 @@ mod tests {
             partner("login", "5"),
             None,
             Json(CheckoutPreviewBody {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle_months: None,
             }),
         )
@@ -1334,6 +1341,20 @@ mod tests {
             .unwrap()
     }
 
+    /// Seit dem Umbau auf drei Stufen stehen keine Stripe-Price-IDs mehr im
+    /// Code (die alten zeigten auf Netto-Preise). Produktiv liefert sie der
+    /// Vault; im Test setzen wir dieselbe Env-Variable einmal prozessweit.
+    fn test_price_map_setzen() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::env::set_var(
+                "STRIPE_PRICE_ID_MAP",
+                r#"{"plus":{"1":"price_test_plus_1m","12":"price_test_plus_12m"},
+                    "pro":{"1":"price_test_pro_1m","12":"price_test_pro_12m"}}"#,
+            );
+        });
+    }
+
     /// Unauth → Login-Redirect, KEIN Stripe-Call.
     #[tokio::test]
     async fn checkout_unauthenticated_redirects_to_login() {
@@ -1342,7 +1363,7 @@ mod tests {
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1357,6 +1378,7 @@ mod tests {
     /// erstellt UND auf die hosted URL redirected (302).
     #[tokio::test]
     async fn checkout_creates_session_and_redirects_to_hosted_url() {
+        test_price_map_setzen();
         let Some(pool) = pool_or_skip("bp_checkout_session").await else {
             return;
         };
@@ -1389,7 +1411,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle: Some("1".into()),
                 quantity: Some("1".into()),
             }),
@@ -1401,7 +1423,7 @@ mod tests {
         assert_eq!(loc, "https://checkout.stripe.com/c/pay/cs_test_abc");
     }
 
-    /// Free-Plan (raid_free) → kein Stripe-Price → Redirect auf Pricing, KEIN Call.
+    /// Free-Stufe → kein Stripe-Price → Redirect auf Pricing, KEIN Call.
     #[tokio::test]
     async fn checkout_free_plan_redirects_to_pricing() {
         let resp = checkout_start_handler(
@@ -1409,7 +1431,7 @@ mod tests {
             Some(Extension(cfg_with_base("http://unused.invalid"))),
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_free".into()),
+                plan_id: Some("free".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1428,7 +1450,7 @@ mod tests {
             None,
             State(lazy_pool()),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1461,7 +1483,7 @@ mod tests {
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool),
             Query(CheckoutQuery {
-                plan_id: Some("raid_boost".into()),
+                plan_id: Some("plus".into()),
                 cycle: Some("1".into()),
                 quantity: None,
             }),
@@ -1695,6 +1717,7 @@ mod tests {
     /// wird aufgelöst; bezahlte Pläne tragen checkout_available + stripe_price_id.
     #[tokio::test]
     async fn catalog_returns_plan_status_not_proxy() {
+        test_price_map_setzen();
         let Some(pool) = pool_or_skip("bp_catalog").await else {
             return;
         };
@@ -1714,19 +1737,22 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["currency"], "EUR");
+        assert_eq!(v["tax_mode"], "small_business");
+        assert_eq!(v["gross_available"], true);
         let plans = v["plans"].as_array().unwrap();
-        assert_eq!(plans.len(), 8);
-        // raid_free = aktueller Default-Plan.
+        assert_eq!(plans.len(), 3);
+        // Ohne Eintrag steht der Streamer auf dem Default raid_free (Stufe Free);
+        // die Free-Karte ist deshalb keine der drei Katalog-Karten "is_current".
         assert_eq!(v["current_subscription"]["plan_id"], "raid_free");
-        let raid_free = plans.iter().find(|p| p["id"] == "raid_free").unwrap();
-        assert_eq!(raid_free["is_current"], true);
-        assert_eq!(raid_free["checkout_available"], false);
-        assert!(raid_free["stripe_price_id"].is_null());
-        // Bezahlter Plan trägt Price-ID + checkout_available (Config ⇒ checkout_ready).
-        let raid_boost = plans.iter().find(|p| p["id"] == "raid_boost").unwrap();
-        assert_eq!(raid_boost["is_current"], false);
-        assert!(raid_boost["stripe_price_id"].is_string());
-        assert_eq!(raid_boost["checkout_available"], true);
+        let free = plans.iter().find(|p| p["id"] == "free").unwrap();
+        assert_eq!(free["checkout_available"], false);
+        assert!(free["stripe_price_id"].is_null());
+        assert_eq!(free["price"]["total_gross_cents"], 0);
+        // Bezahlte Stufe trägt Price-ID + checkout_available (Config ⇒ checkout_ready).
+        let plus = plans.iter().find(|p| p["id"] == "plus").unwrap();
+        assert_eq!(plus["price"]["total_gross_cents"], 499);
+        assert!(plus["stripe_price_id"].is_string());
+        assert_eq!(plus["checkout_available"], true);
         // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
         // persistiert; recipient_name fällt auf den Login zurück, country=DE).
         assert_eq!(v["billing_profile"]["customer_reference"], "login");

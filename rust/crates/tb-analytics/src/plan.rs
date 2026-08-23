@@ -13,10 +13,14 @@ use sqlx::PgPool;
 
 // ── Statischer Katalog ──────────────────────────────────────────────────────
 
-/// Plan-Tier aus Plan-ID ableiten (Python: `PLAN_TIER_MAP`).
+/// Plan-Tier aus Plan-ID ableiten.
+///
+/// Aktuell buchbar sind `free`, `plus`, `pro`. Die acht Vorgaenger-IDs bleiben
+/// lesbar, weil sie in der DB stehen; kaufbar sind sie nicht mehr.
 pub fn plan_tier(plan_id: &str) -> &'static str {
     match plan_id {
-        "raid_free" => "free",
+        "free" | "raid_free" => "free",
+        "plus" | "pro" => "extended",
         "chat_quiet" | "raid_boost" | "bundle_chat_quiet_raid_boost" => "basic",
         "analysis_dashboard"
         | "bundle_analysis_raid_boost"
@@ -30,6 +34,9 @@ pub fn plan_tier(plan_id: &str) -> &'static str {
 /// Anzeigename aus Plan-ID (Python: `PLAN_DISPLAY_NAME_MAP`).
 pub fn plan_display_name(plan_id: &str) -> &'static str {
     match plan_id {
+        "free" => "Netzwerk Free",
+        "plus" => "Netzwerk Plus",
+        "pro" => "Creator Pro",
         "raid_free" => "Free",
         "chat_quiet" => "Werbefrei",
         "raid_boost" => "Basic",
@@ -54,7 +61,20 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
         // Analytics-Konsolidierung auf EIN Flag: kein Flag => `last_stream`
         // (kostenlose Tagesform) ist der Default; das Flag `"analytics"` => voller
         // Analytics-Zugang (voller Verlauf, Vergleiche, KI-Analyse via Opus).
-        "raid_free" => &[],
+        "free" | "raid_free" => &[],
+        "plus" => &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        ],
+        "pro" => &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+            "social.auto_post",
+        ],
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &["chat.lurker_tax", "raid.priority"],
         "bundle_chat_quiet_raid_boost" => {
@@ -99,6 +119,9 @@ pub fn plan_has_analytics(plan_id: &str) -> bool {
 /// bzw. ganz aus dem Override (Manual) wirft. Test-Gate: siehe `tests`.
 fn normalize_plan_id(raw: &str) -> &'static str {
     match raw.trim() {
+        "free" => "free",
+        "plus" => "plus",
+        "pro" => "pro",
         "raid_free" => "raid_free",
         "chat_quiet" => "chat_quiet",
         "raid_boost" => "raid_boost",
@@ -113,7 +136,10 @@ fn normalize_plan_id(raw: &str) -> &'static str {
 }
 
 /// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
-const KNOWN_PLAN_IDS: [&str; 9] = [
+const KNOWN_PLAN_IDS: [&str; 12] = [
+    "free",
+    "plus",
+    "pro",
     "raid_free",
     "chat_quiet",
     "raid_boost",
@@ -557,11 +583,12 @@ mod tests {
 
     #[test]
     fn normalize_lehnt_legacy_aliase_ab() {
-        // Legacy-Aliase (free/werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
+        // Legacy-Aliase (werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
         // gehören in Python NUR zu normalize_plan_id_from_legacy_name (Raid-
         // Subsystem), NICHT zur Entitlement-DB-Auflösung → hier kein Mapping.
+        // `free` ist seit dem Umbau auf drei Stufen eine echte kanonische ID
+        // und steht deshalb nicht mehr in dieser Liste.
         for alias in [
-            "free",
             "werbefrei",
             "quiet",
             "analysis",
@@ -598,7 +625,7 @@ mod tests {
         // Fall-Through zu Billing) statt ihn als raid_free zu honorieren.
         assert!(!is_known_plan_id("Raid_Boost"));
         assert!(!is_known_plan_id("analysis"));
-        assert!(!is_known_plan_id("free"));
+        assert!(!is_known_plan_id("Free"));
         assert!(!is_known_plan_id(""));
         assert!(!is_known_plan_id("garbage"));
     }
@@ -627,6 +654,7 @@ mod tests {
             "raid_boost",
             "bundle_chat_quiet_raid_boost",
             "raid_free",
+            "free",
             "chat_quiet",
         ] {
             assert!(
@@ -644,6 +672,8 @@ mod tests {
             "bundle_komplett",
             "bundle_analysis_raid_boost",
             "analytics_trial",
+            "plus",
+            "pro",
         ] {
             assert!(plan_has_analytics(id), "{id} muss analytics-Flag tragen");
         }

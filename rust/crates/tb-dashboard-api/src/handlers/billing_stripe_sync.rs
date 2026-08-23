@@ -179,11 +179,12 @@ pub async fn sync_products_handler(
         let mut price_reports: Vec<Value> = Vec::new();
         for &cycle in SYNC_CYCLES.iter() {
             let cycle_catalog = catalog_json(cycle);
-            let amount_cents = cycle_plan_total_net_cents(&cycle_catalog, plan_id);
+            let amount_cents = cycle_plan_total_gross_cents(&cycle_catalog, plan_id);
             if amount_cents <= 0 {
                 continue;
             }
-            let lookup_key = format!("deadlock_{plan_id}_{cycle}m_net_v2");
+            // Ein Format, eine Quelle: der Katalog baut den Lookup-Key.
+            let lookup_key = tb_analytics::billing::lookup_key(plan_id, cycle);
 
             // 1) Eingecheckter Price-Default → gegen Stripe verifizieren (P2.113).
             //    Live: retrieve_price; schlägt er fehl (gelöscht/ungültig), wird die
@@ -274,7 +275,7 @@ pub async fn sync_products_handler(
 
             price_reports.push(json!({
                 "cycle_months": cycle,
-                "amount_net_cents": amount_cents,
+                "amount_gross_cents": amount_cents,
                 "price_id": (!price_id.is_empty()).then_some(price_id),
                 "lookup_key": lookup_key,
                 "status": price_status,
@@ -319,15 +320,14 @@ pub async fn sync_products_handler(
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
-/// Liest `total_net_cents` des Plans aus dem Zyklus-Katalog (Python
-/// `cycle_plan["price"]["total_net_cents"]`).
-fn cycle_plan_total_net_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
+/// Liest `total_gross_cents` des Plans aus dem Zyklus-Katalog.
+fn cycle_plan_total_gross_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
     cycle_catalog
         .get("plans")
         .and_then(Value::as_array)
         .and_then(|plans| plans.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(plan_id)))
         .and_then(|p| p.get("price"))
-        .and_then(|price| price.get("total_net_cents"))
+        .and_then(|price| price.get("total_gross_cents"))
         .and_then(Value::as_i64)
         .unwrap_or(0)
 }
@@ -419,14 +419,19 @@ mod tests {
     }
 
     #[test]
-    fn total_net_cents_aus_katalog() {
+    fn total_gross_cents_aus_katalog() {
         let cat = catalog_json(1);
-        // raid_boost: 199 ct/Monat × 1 Monat.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "raid_boost"), 199);
-        // raid_free ist nicht bezahlt → 0.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "raid_free"), 0);
-        // Unbekannt → 0.
-        assert_eq!(cycle_plan_total_net_cents(&cat, "gibtsnicht"), 0);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "plus"), 499);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "pro"), 999);
+        // Free ist nicht bezahlt → 0.
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "free"), 0);
+        // Unbekannt (auch alte Plan-IDs) → 0.
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "raid_boost"), 0);
+        assert_eq!(cycle_plan_total_gross_cents(&cat, "gibtsnicht"), 0);
+        // Jahreszyklus zieht den eigenen Jahresbetrag, nicht 12 Monatspreise.
+        let cat12 = catalog_json(12);
+        assert_eq!(cycle_plan_total_gross_cents(&cat12, "plus"), 4990);
+        assert_eq!(cycle_plan_total_gross_cents(&cat12, "pro"), 9990);
     }
 
     /// dry_run als Admin ohne Stripe-Config: erzeugt nichts, liefert pro bezahltem
@@ -452,8 +457,8 @@ mod tests {
         assert_eq!(v["dry_run"], true);
         assert_eq!(v["persisted_to_windows_vault"], false);
         let ops = v["operations"].as_array().unwrap();
-        // Genau die 7 bezahlten Pläne (8 Katalog-Pläne minus raid_free).
-        assert_eq!(ops.len(), 7);
+        // Genau die zwei bezahlten Stufen (drei Katalog-Pläne minus Free).
+        assert_eq!(ops.len(), 2);
         // Jeder bezahlte Plan hat Preis-Reports für beide Zyklen.
         for op in ops {
             assert!(!op["prices"].as_array().unwrap().is_empty());
@@ -465,14 +470,18 @@ mod tests {
         assert_eq!(v["readiness"]["provider"], "stripe");
         // dry_run hat keinen Stripe-Client → checkout_ready=false.
         assert_eq!(v["readiness"]["checkout_ready"], false);
-        // Eingecheckte Defaults füllen beide Maps. chat_quiet hat sowohl Product-
-        // als auch Price-Default; raid_boost nur Price-Default (kein Product).
-        let pmap = v["product_id_map"].as_object().unwrap();
-        assert!(pmap.contains_key("chat_quiet"), "product_id_map ohne chat_quiet");
-        let prmap = v["price_id_map"].as_object().unwrap();
-        let boost_cycles = prmap["raid_boost"].as_object().unwrap();
-        assert!(boost_cycles.contains_key("1"), "price_id_map ohne raid_boost/1m");
-        assert!(boost_cycles.contains_key("12"), "price_id_map ohne raid_boost/12m");
+        // Es gibt keine eingecheckten Stripe-IDs mehr: im dry_run ohne Client
+        // bleiben beide Maps leer, die Preise stehen auf would_create.
+        assert!(v["product_id_map"].as_object().unwrap().is_empty());
+        assert!(v["price_id_map"].as_object().unwrap().is_empty());
+        // Lookup-Keys tragen den neuen Brutto-Suffix.
+        for op in ops {
+            for price in op["prices"].as_array().unwrap() {
+                let key = price["lookup_key"].as_str().unwrap();
+                assert!(key.ends_with("_gross_v3"), "alter Lookup-Key: {key}");
+                assert!(price["amount_gross_cents"].as_i64().unwrap() > 0);
+            }
+        }
     }
 
     /// P2.113: Live-Sync, bei dem `retrieve_price` für eine eingecheckte Default-ID
@@ -646,9 +655,9 @@ mod tests {
 
         // Kein Produkt darf als verifizierter Default 'reused' zählen.
         assert_eq!(v["reused_products"], 0, "gelöschter Default zählte als reused");
-        // Die Default-Produkte (4 Pläne) wurden neu angelegt.
+        // Beide bezahlten Stufen wurden neu angelegt.
         assert!(
-            v["created_products"].as_u64().unwrap() >= 4,
+            v["created_products"].as_u64().unwrap() >= 2,
             "gelöschte Produkte nicht recreated"
         );
         // Kein Operations-Eintrag trägt product.status == reused.
@@ -724,7 +733,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["reused_products"], 0, "transienter Fehler zählte als reused");
         assert!(
-            v["created_products"].as_u64().unwrap() >= 4,
+            v["created_products"].as_u64().unwrap() >= 2,
             "Produkte nach Retrieve-Fehler nicht recreated"
         );
     }
