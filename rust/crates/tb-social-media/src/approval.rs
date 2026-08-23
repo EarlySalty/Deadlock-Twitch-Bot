@@ -259,11 +259,51 @@ pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
 /// Ein vollstaendig eingereihter Clip faellt dagegen heraus und belegt keinen
 /// der wenigen Batch-Plaetze.
 ///
-/// Sortiert wird nach der aeltesten Entscheidung zuerst. Bei mehr als `limit`
-/// offenen Freigaben verdraengten sonst die frischen die aelteste dauerhaft,
-/// und eine Warteschlange, die von hinten abgearbeitet wird, ist keine
-/// Warteschlange. Kein Aufrufer haengt an der Reihenfolge:
-/// `approval_worker::run_once` arbeitet die Liste einfach der Reihe nach ab.
+/// # Reihenfolge: Dauergaeste duerfen niemanden blockieren
+///
+/// Die Reihenfolge ist nicht beliebig, sie entscheidet bei fester
+/// Fenstergroesse darueber, wer verhungert. Es gibt Clips, die im Fenster
+/// stehen, aber bei jedem Lauf nichts tun koennen:
+///
+/// * eine Plattform steht auf „schon hochgeladen" (`uploaded_youtube`), es
+///   kann also nie eine Queue-Zeile entstehen (siehe `upload_already_exists`),
+/// * der Planungshorizont der Plattform ist voll (`SlotPlan::HorizontVoll`),
+///   was ausdruecklich ein Dauerzustand sein darf,
+/// * die Freigabepruefung oder `queue_upload` scheitert wiederholt.
+///
+/// Nach reinem `decided_at ASC` stehen solche Clips fuer immer vorn. Zehn davon
+/// fuellen das Zehnerfenster, und keine neue Freigabe wird je wieder
+/// eingereiht: ohne Log, ohne Fehler, nur per Hand in der Datenbank
+/// aufloesbar.
+///
+/// Deshalb sortiert die Abfrage zuerst nach `letzter_nachreih_versuch`, dem
+/// Zeitpunkt des letzten Nachreih-Versuchs (`approval_worker::run_once` setzt
+/// ihn nach jedem Versuch, siehe [`vermerke_nachreih_versuch`]). Das ergibt
+/// eine Rotation statt einer Rangliste:
+///
+/// * `NULL` zuerst, also alles, was der Nachreih-Lauf noch nie angefasst hat.
+///   Eine frische Freigabe kommt damit spaetestens im uebernaechsten Lauf
+///   dran, auch wenn zehn Dauergaeste im Fenster stehen: die tragen nach dem
+///   ersten Lauf alle einen juengeren Stempel als sie.
+/// * Danach der aelteste Versuch zuerst, jeder Clip kommt also reihum wieder
+///   an die Reihe.
+/// * `decided_at ASC` bleibt als Tiebreak: bei gleichem Stand entscheidet
+///   weiterhin die aeltere Freigabe, eine Warteschlange, die von hinten
+///   abgearbeitet wird, ist keine Warteschlange.
+///
+/// # Was als „schon eingereiht" gilt
+///
+/// Gezaehlt wird jede Queue-Zeile, auch eine mit `status = 'failed'`.
+/// `upload_already_exists` klammert `failed` aus, diese Abfrage tut es
+/// bewusst nicht, und der Unterschied ist gewollt: `queue_upload` reiht eine
+/// gescheiterte Zeile nicht neu ein, sondern legt eine zusaetzliche an
+/// (`clip_queue::queue_upload` greift nur `pending` und `processing` wieder
+/// auf). Wuerde der Nachreih-Lauf `failed` ueberspringen, bekaeme eine
+/// dauerhaft scheiternde Plattform bei jedem Fehlschlag eine weitere Zeile,
+/// endlos. Ein gescheiterter Upload wird deshalb nicht automatisch
+/// wiederbelebt; der Weg zurueck ist die ausdrueckliche erneute Freigabe im
+/// Dashboard, die ueber `handle_decision` laeuft und dort auf
+/// `upload_already_exists` trifft.
 pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec<i32> {
     sqlx::query_scalar!(
         "SELECT a.clip_db_id AS \"clip_db_id!\" \
@@ -279,7 +319,8 @@ pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec
                          SELECT 1 FROM twitch_clips_upload_queue q \
                           WHERE q.clip_id = a.clip_db_id::bigint \
                             AND q.platform = p.platform)) \
-          ORDER BY a.decided_at ASC NULLS FIRST, a.clip_db_id ASC \
+          ORDER BY a.letzter_nachreih_versuch ASC NULLS FIRST, \
+                   a.decided_at ASC NULLS FIRST, a.clip_db_id ASC \
           LIMIT $2",
         STATE_APPROVED,
         limit.max(1)
@@ -287,6 +328,38 @@ pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec
     .fetch_all(pool)
     .await
     .unwrap_or_default()
+}
+
+/// Haelt fest, dass der Nachreih-Lauf diesen Clip gerade versucht hat.
+///
+/// Das ist die Gegenseite zur Sortierung in
+/// [`iter_approved_clips_pending_queue`]: ohne diesen Stempel bliebe die Liste
+/// eine Rangliste, in der ein Clip, der nie etwas tun kann, dauerhaft Platz
+/// eins belegt. Mit dem Stempel wandert jeder gerade versuchte Clip ans Ende
+/// und macht Platz fuer die, die noch nicht dran waren.
+///
+/// Bewusst nach dem Versuch gesetzt und nicht in `ensure_queued_uploads`
+/// selbst: der Stempel beschreibt den Lauf des Workers, nicht die Freigabe.
+/// Eine frische Freigabe aus dem Dashboard behaelt deshalb `NULL` und steht
+/// beim naechsten Lauf ganz vorn.
+///
+/// Best effort: schlaegt das Schreiben fehl, verliert der Clip nur seinen
+/// Platz in der Rotation, es geht nichts kaputt.
+pub async fn vermerke_nachreih_versuch(pool: &PgPool, clip_db_id: i32) {
+    if let Err(error) = sqlx::query!(
+        "UPDATE social_media_clip_approval SET letzter_nachreih_versuch = now() \
+         WHERE clip_db_id = $1",
+        clip_db_id
+    )
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Approval: Nachreih-Versuch konnte nicht vermerkt werden"
+        );
+    }
 }
 
 /// `true`, wenn der Clip für diese Plattform freigegeben ist.
@@ -476,12 +549,18 @@ async fn teile_pausierte_ab(
 /// (Python `ensure_queued_uploads`). Nutzt die Enrichment-Texte je Plattform.
 ///
 /// Die Schleife laeuft je Plattform, und jeder ihrer Abbruchgruende
-/// (Freigabepruefung gescheitert, voller Planungshorizont, `queue_upload`
-/// gescheitert) laesst genau diese eine Plattform ohne Zeile stehen, waehrend
-/// die Schwesterplattformen ihre Zeile bekommen. Das ist gewollt und heilt sich
-/// selbst, weil `iter_approved_clips_pending_queue` plattformgenau prueft: der
-/// Clip bleibt in der Nachreih-Liste, solange auch nur eine freigegebene
-/// Plattform offen ist.
+/// (Freigabepruefung gescheitert, Plattform schon hochgeladen, voller
+/// Planungshorizont, `queue_upload` gescheitert) laesst genau diese eine
+/// Plattform ohne Zeile stehen, waehrend die Schwesterplattformen ihre Zeile
+/// bekommen. Das ist gewollt: der Clip bleibt in der Nachreih-Liste, weil
+/// `iter_approved_clips_pending_queue` plattformgenau prueft, und wird beim
+/// naechsten Lauf erneut versucht.
+///
+/// Damit das nicht zur Blockade wird, wenn eine Plattform dauerhaft nichts tun
+/// kann (Upload-Flag steht schon, Planungshorizont bleibt voll), sortiert der
+/// Nachreih-Lauf nach dem letzten Versuch und nicht nach der Entscheidung.
+/// Siehe [`iter_approved_clips_pending_queue`] und
+/// [`vermerke_nachreih_versuch`].
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
     if !clip_exists(pool, clip_db_id).await {
         return Vec::new();
@@ -744,6 +823,16 @@ async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
 
 /// `true`, wenn die Plattform schon hochgeladen ODER eine nicht-failed
 /// Queue-Zeile existiert (Python `_upload_already_exists`).
+///
+/// `failed` bleibt hier bewusst aussen vor, in
+/// [`iter_approved_clips_pending_queue`] dagegen nicht. Der Unterschied ist
+/// gewollt und nicht symmetrisch zu lesen: eine gescheiterte Zeile darf nur
+/// durch eine ausdrueckliche erneute Freigabe im Dashboard neu eingereiht
+/// werden, nie durch den automatischen Nachreih-Lauf. `queue_upload` greift
+/// eine `failed`-Zeile naemlich nicht wieder auf, sondern legt eine
+/// zusaetzliche an; ein automatischer Nachreih-Lauf wuerde einer dauerhaft
+/// scheiternden Plattform deshalb bei jedem Fehlschlag eine weitere Zeile
+/// verpassen, endlos.
 async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -> bool {
     let column = match platform {
         "youtube" => "uploaded_youtube",
@@ -803,7 +892,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
@@ -1307,15 +1396,53 @@ mod tests {
     }
 
     async fn seed_queue_zeile(pool: &PgPool, clip: i32, platform: &str) {
+        seed_queue_zeile_mit_status(pool, clip, platform, "pending").await;
+    }
+
+    async fn seed_queue_zeile_mit_status(pool: &PgPool, clip: i32, platform: &str, status: &str) {
         sqlx::query(
             "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
-             VALUES ($1, $2, 'pending')",
+             VALUES ($1, $2, $3)",
         )
         .bind(clip)
         .bind(platform)
+        .bind(status)
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    /// Festgeschrieben, was `failed` im Nachreih-Lauf bedeutet.
+    ///
+    /// `upload_already_exists` klammert `failed` aus, die Fenster-Abfrage tut
+    /// es nicht. Das ist kein Versehen: `queue_upload` belebt eine
+    /// gescheiterte Zeile nicht wieder, sondern legt eine zusaetzliche an.
+    /// Wuerde der Nachreih-Lauf `failed` als offen zaehlen, bekaeme eine
+    /// dauerhaft scheiternde Plattform bei jedem Fehlschlag eine weitere
+    /// Zeile. Der Weg zurueck ist die ausdrueckliche erneute Freigabe im
+    /// Dashboard, nicht der Automatismus.
+    #[tokio::test]
+    async fn nachreih_lauf_belebt_gescheiterte_uploads_nicht_wieder() {
+        let Some(pool) = make_pool("t_sm_approval_failed").await else {
+            return;
+        };
+
+        let gescheitert = seed_freigabe(&pool, &["youtube"], 60).await;
+        seed_queue_zeile_mit_status(&pool, gescheitert, "youtube", "failed").await;
+
+        assert!(
+            iter_approved_clips_pending_queue(&pool, 10)
+                .await
+                .is_empty(),
+            "eine gescheiterte Zeile gilt als eingereiht, der Automatismus legt keine zweite an"
+        );
+
+        // Gegenprobe: der zweite Guard sieht dieselbe Zeile anders. Genau
+        // dieser Unterschied traegt die ausdrueckliche erneute Freigabe.
+        assert!(
+            !upload_already_exists(&pool, gescheitert, "youtube").await,
+            "eine erneute Freigabe darf den gescheiterten Upload neu einreihen"
+        );
     }
 
     /// Der eigentliche Fall: das Einreihen laeuft je Plattform, die

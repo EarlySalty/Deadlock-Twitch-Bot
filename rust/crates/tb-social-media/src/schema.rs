@@ -105,10 +105,19 @@ const STATEMENTS: &[&str] = &[
         decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, \
         CONSTRAINT social_media_clip_approval_state_chk \
             CHECK (state IN ('awaiting_approval', 'approved', 'skipped', 'editing')))",
+    // Rotation des Nachreih-Laufs: "noch nie versucht" zuerst, danach der
+    // aelteste Versuch. Ohne den Stempel blockiert eine Freigabe, die nie eine
+    // Queue-Zeile bekommen kann, dauerhaft einen der zehn Batch-Plaetze.
+    "ALTER TABLE social_media_clip_approval \
+        ADD COLUMN IF NOT EXISTS letzter_nachreih_versuch TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_state \
         ON social_media_clip_approval(state)",
     "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_last_sent_at \
         ON social_media_clip_approval(last_sent_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_nachreihen \
+        ON social_media_clip_approval\
+        (letzter_nachreih_versuch ASC NULLS FIRST, decided_at ASC NULLS FIRST, clip_db_id) \
+        WHERE state = 'approved'",
     // Externe Google-Forms-Einreichungen (Dedupe pro Clip/Formular).
     "CREATE TABLE IF NOT EXISTS twitch_clip_form_submissions (\
         id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, \
@@ -152,7 +161,7 @@ mod tests {
     use std::str::FromStr;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();

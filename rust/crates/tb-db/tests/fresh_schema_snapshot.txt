@@ -211,6 +211,7 @@ social_media_clip_approval|decided_at|timestamp with time zone|YES|
 social_media_clip_approval|dm_channel_id|text|YES|
 social_media_clip_approval|dm_message_id|text|YES|
 social_media_clip_approval|last_sent_at|timestamp with time zone|YES|
+social_media_clip_approval|letzter_nachreih_versuch|timestamp with time zone|YES|
 social_media_clip_approval|state|text|NO|'awaiting_approval'::text
 social_media_clip_enrichment|clip_db_id|integer|NO|
 social_media_clip_enrichment|completed_at|timestamp with time zone|YES|

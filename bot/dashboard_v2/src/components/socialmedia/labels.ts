@@ -174,6 +174,8 @@ export const FEHLER_TEXTE: Record<string, string> = {
   // Freigabe und Veto
   invalid_decision: 'Diese Entscheidung passt nicht mehr zum Zustand des Clips.',
   // {details} traegt die betroffenen Plattformnamen aus der Servermeldung.
+  // Die stehen dort als Schluessel ("youtube, tiktok") und werden von
+  // `plattformnamenLesbar` auf die Markenschreibweise gebracht.
   only_paused_platforms:
     'Diese Plattformen stehen auf null Posts und sind damit ausgeschaltet: {details}. Stell im Zeitplan eine Kadenz ein oder gib eine andere Plattform frei.',
   approval_decision_failed: 'Die Entscheidung konnte nicht gespeichert werden.',
@@ -208,6 +210,28 @@ export const FEHLER_TEXTE: Record<string, string> = {
 };
 
 /**
+ * Plattformschluessel einer Serverliste auf die Markenschreibweise bringen.
+ *
+ * Das Backend schickt seine Plattformlisten als Schluessel und mit Komma
+ * getrennt ("youtube, tiktok"). Ungefiltert stuende in der Fehlerzeile
+ * "youtube, tiktok", waehrend die Schwestermeldung direkt daneben
+ * ("Auf {platforms} passiert nichts") ueber `PLATFORM_LABELS` laeuft und
+ * "YouTube, TikTok" zeigt. Zwei Schreibweisen fuer denselben Sachverhalt.
+ *
+ * Alles, was kein bekannter Plattformschluessel ist, bleibt unveraendert
+ * stehen. Damit bleibt die Funktion auch dann harmlos, wenn ein Fehlercode
+ * spaeter etwas anderes als eine Plattformliste in `{details}` legt.
+ */
+export function plattformnamenLesbar(details: string): string {
+  return details
+    .split(',')
+    .map((teil) => teil.trim())
+    .filter((teil) => teil !== '')
+    .map((teil) => PLATFORM_LABELS[teil.toLowerCase()] ?? teil)
+    .join(', ');
+}
+
+/**
  * Uebersetzten Satz zu einem Fehler holen. Unbekannte Codes fallen auf die
  * Servermeldung zurueck, damit nie eine leere Fehlerzeile entsteht.
  *
@@ -228,7 +252,7 @@ export function fehlerText(
     // `SocialMediaApiError` setzt `message` auf den Code, wenn der Server
     // keine Meldung mitschickt. Das ist keine Liste und darf nicht in den
     // Satz.
-    const details = message && message !== code ? message : '';
+    const details = message && message !== code ? plattformnamenLesbar(message) : '';
     return t(FEHLER_TEXTE[code], { details });
   }
   if (message && FEHLER_TEXTE[message]) return t(FEHLER_TEXTE[message]);

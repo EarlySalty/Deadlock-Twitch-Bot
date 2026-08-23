@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_clip_approval SET letzter_nachreih_versuch = now() WHERE clip_db_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "636753fc8ca97a9507583a50f1c56583dc3411d76dba780122c20ea15d93de79"
+}

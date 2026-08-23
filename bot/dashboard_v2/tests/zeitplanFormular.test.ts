@@ -88,10 +88,13 @@ test('eine neue Plattform kommt vollstaendig vom Server', () => {
  * des Validierungsfehlers. Ein Feld mit ungueltiger Eingabe blieb damit
  * dauerhaft offen, und beim naechsten Serverstand raeumte der Effekt die
  * Fehlermeldung weg, waehrend der Abgleich den ungueltigen Text festhielt.
+ *
+ * Das Schliessen selbst ist deshalb kein Feld des Plans mehr: der Aufrufer
+ * schliesst ausnahmslos. Geprueft wird hier nur noch, was tatsaechlich eine
+ * Entscheidung ist, naemlich Fehlertext und Absenden.
  */
-test('ein Feld gilt nach dem Verlassen als geschlossen, auch bei ungueltiger Eingabe', () => {
+test('eine ungueltige Eingabe meldet den Fehler und geht nie an den Server', () => {
   const plan = zeitplanFeldVerlassen({ gueltig: false, fehler: 'Bitte eine Zahl angeben.' });
-  assert.equal(plan.schliessen, true, 'verlassen heisst verlassen');
   assert.equal(plan.fehler, 'Bitte eine Zahl angeben.');
   assert.equal(plan.absenden, false, 'ungueltige Eingabe geht nie an den Server');
 });
@@ -99,14 +102,12 @@ test('ein Feld gilt nach dem Verlassen als geschlossen, auch bei ungueltiger Ein
 test('ein gueltiger, geaenderter Wert geht an den Server und raeumt den Fehler weg', () => {
   const plan = zeitplanFeldVerlassen({ gueltig: true, unveraendert: false });
   assert.equal(plan.fehler, null);
-  assert.equal(plan.schliessen, true);
   assert.equal(plan.absenden, true);
 });
 
 test('ein unveraenderter Wert schliesst das Feld ohne Mutation', () => {
   const plan = zeitplanFeldVerlassen({ gueltig: true, unveraendert: true });
   assert.equal(plan.fehler, null);
-  assert.equal(plan.schliessen, true);
   assert.equal(plan.absenden, false, 'ohne Aenderung braucht es keine Anfrage');
 });
 
@@ -118,7 +119,9 @@ test('eine ungueltige Eingabe bleibt nicht als falscher Wert ohne Hinweis stehen
   const lokal = { youtube: formular('abc', '1', '18:00') };
 
   const plan = zeitplanFeldVerlassen({ gueltig: false, fehler: 'Bitte eine Zahl angeben.' });
-  if (plan.schliessen) offen.delete(schluessel);
+  assert.equal(plan.absenden, false);
+  // Verlassen heisst verlassen: der Aufrufer schliesst ohne Bedingung.
+  offen.delete(schluessel);
 
   // Jetzt trifft ein neuer Serverstand ein. Der Effekt raeumt dabei alle
   // Feldfehler weg, der Abgleich muss deshalb auch den ungueltigen Text
