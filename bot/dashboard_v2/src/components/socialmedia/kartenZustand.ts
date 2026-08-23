@@ -65,3 +65,101 @@ export function clipFehler(clipDbId: number, staende: ClipMutationsStand[]): unk
   }
   return null;
 }
+
+/** Was in den drei Feldern einer Plattform steht, waehrend getippt wird. */
+export interface ZeitplanFormular {
+  postsProWoche: string;
+  maxProTag: string;
+  zeiten: string;
+}
+
+/** Die drei Felder einer Plattform, in fester Reihenfolge. */
+export const ZEITPLAN_FELDER: (keyof ZeitplanFormular)[] = [
+  'postsProWoche',
+  'maxProTag',
+  'zeiten',
+];
+
+/** Schluessel eines einzelnen Feldes, wie ihn die Zeitplan-Karte fuehrt. */
+export function zeitplanFeldSchluessel(
+  platform: string,
+  feld: keyof ZeitplanFormular,
+): string {
+  return `${platform}:${feld}`;
+}
+
+/** Ergebnis der Pruefung eines Zeitplan-Feldes beim Verlassen. */
+export type ZeitplanFeldPruefung =
+  | { gueltig: true; unveraendert: boolean }
+  | { gueltig: false; fehler: string };
+
+/** Was nach dem Verlassen eines Zeitplan-Feldes zu tun ist. */
+export interface FeldVerlassenPlan {
+  /** Fehlermeldung fuer das Feld, `null` raeumt eine alte weg. */
+  fehler: string | null;
+  /** `true`, wenn das Feld nicht mehr als offen gefuehrt wird. */
+  schliessen: boolean;
+  /** `true`, wenn der geprüfte Wert an den Server geht. */
+  absenden: boolean;
+}
+
+/**
+ * Der Ablauf beim Verlassen eines Zeitplan-Feldes, als eine Entscheidung statt
+ * dreimal als Bedingungskette im JSX.
+ *
+ * `schliessen` ist bewusst immer `true`: verlassen heisst verlassen, auch bei
+ * ungueltiger Eingabe. Vorher stand das Schliessen hinter dem `return` des
+ * Fehlerfalls, und ein Feld mit ungueltiger Eingabe blieb dauerhaft offen. Der
+ * Schaden zeigt sich erst beim naechsten Serverstand: der Effekt raeumt die
+ * Fehlermeldung weg, der Abgleich haelt den ungueltigen Text aber fest, weil
+ * offene Felder dort gewinnen. Uebrig bleibt ein falscher Wert ohne Hinweis
+ * darauf, dass er falsch ist. Eine ungueltige Eingabe wird ohnehin nie
+ * abgeschickt, also darf der Server das Feld wieder ueberschreiben.
+ */
+export function zeitplanFeldVerlassen(pruefung: ZeitplanFeldPruefung): FeldVerlassenPlan {
+  return {
+    fehler: pruefung.gueltig ? null : pruefung.fehler,
+    schliessen: true,
+    absenden: pruefung.gueltig && !pruefung.unveraendert,
+  };
+}
+
+/**
+ * Gleicht das Zeitplan-Formular mit einer Serverantwort ab, ohne Eingaben zu
+ * verlieren, die noch niemand abgeschickt hat.
+ *
+ * Warum es das gibt: jedes Feld schickt beim Verlassen eine eigene Mutation
+ * los, und deren Antwort bringt einen neuen Serverstand mit. Wer zwei Felder
+ * schnell hintereinander aendert, hatte die zweite Eingabe verloren, sobald
+ * die Antwort auf die erste eintraf: der Abgleich hat das Formular komplett
+ * ueberschrieben, und der neue Serverstand kennt die zweite Eingabe noch
+ * nicht.
+ *
+ * `offeneFelder` sind die Felder, die der Nutzer geaendert und noch nicht
+ * abgeschickt hat. Sie behalten ihren lokalen Wert, alle anderen uebernehmen
+ * den Server. Damit gewinnt der Server weiterhin dort, wo er den Wert
+ * normalisiert (Zeiten sortieren und entdoppeln), denn beim Abschicken gilt
+ * ein Feld nicht mehr als offen.
+ */
+export function zeitplanFormularAbgleichen(
+  aktuell: Record<string, ZeitplanFormular>,
+  vomServer: Record<string, ZeitplanFormular>,
+  offeneFelder: ReadonlySet<string>,
+): Record<string, ZeitplanFormular> {
+  const naechstes: Record<string, ZeitplanFormular> = {};
+  for (const [platform, serverWerte] of Object.entries(vomServer)) {
+    const lokal = aktuell[platform];
+    if (!lokal) {
+      naechstes[platform] = serverWerte;
+      continue;
+    }
+    const zusammengefuehrt = { ...serverWerte };
+    for (const feld of ZEITPLAN_FELDER) {
+      if (offeneFelder.has(zeitplanFeldSchluessel(platform, feld))) {
+        zusammengefuehrt[feld] = lokal[feld];
+      }
+    }
+    naechstes[platform] = zusammengefuehrt;
+  }
+  return naechstes;
+}

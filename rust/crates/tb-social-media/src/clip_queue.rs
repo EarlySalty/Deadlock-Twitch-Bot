@@ -36,12 +36,28 @@ pub struct UploadQueueItem {
     pub hashtags: Option<String>,
     pub scheduled_at: Option<String>,
     pub attempts: i32,
+    /// Vertagungen wegen vollem Tageskontingent. Eigenes Konto neben
+    /// `attempts`, damit ein volles Kontingent die Versuchsgrenze nicht
+    /// aufzehrt und sich trotzdem nicht endlos vertagen kann.
+    pub quota_deferrals: i32,
     pub twitch_clip_id: Option<String>,
     pub clip_url: Option<String>,
     pub clip_title: Option<String>,
     pub streamer_login: Option<String>,
     pub local_file_path: Option<String>,
     pub converted_file_path: Option<String>,
+}
+
+/// Auf welches Konto eine Vertagung geht.
+///
+/// Die beiden Zaehler sind bewusst getrennt: ein voller Tag beim Anbieter ist
+/// Alltag, ein kaputter Upload nicht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertagungsKonto {
+    /// Echter Fehlversuch, zaehlt gegen die normale Versuchsgrenze.
+    Versuch,
+    /// Volles Tageskontingent, zaehlt gegen die eigene Kontingent-Grenze.
+    Kontingent,
 }
 
 fn hashtags_json(hashtags: Option<&[String]>) -> Option<String> {
@@ -179,7 +195,8 @@ pub async fn get_upload_queue(
 
     let mut sql = String::from(
         "SELECT q.id, q.clip_id, q.platform, q.status, q.priority, q.title, q.description, \
-                q.hashtags, q.scheduled_at, q.attempts, c.clip_id AS twitch_clip_id, c.clip_url, \
+                q.hashtags, q.scheduled_at, q.attempts, q.quota_deferrals, \
+                c.clip_id AS twitch_clip_id, c.clip_url, \
                 c.clip_title, c.streamer_login, c.local_file_path, c.converted_file_path \
          FROM twitch_clips_upload_queue q \
          JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.status = $1",
@@ -221,6 +238,7 @@ pub async fn get_upload_queue(
             hashtags: r.try_get("hashtags").unwrap_or(None),
             scheduled_at: r.try_get("scheduled_at").unwrap_or(None),
             attempts: r.try_get("attempts").unwrap_or(0),
+            quota_deferrals: r.try_get("quota_deferrals").unwrap_or(0),
             twitch_clip_id: r.try_get("twitch_clip_id").unwrap_or(None),
             clip_url: r.try_get("clip_url").unwrap_or(None),
             clip_title: r.try_get("clip_title").unwrap_or(None),
@@ -238,23 +256,26 @@ pub async fn get_upload_queue(
 /// keine kaputten Clips: frueher landeten beide auf `failed`, und `failed` wird
 /// nie wieder abgeholt. `last_error` bleibt sichtbar.
 ///
-/// `zaehlt_als_versuch` entscheidet, ob `attempts` hochzaehlt. Bei einem vollen
+/// `konto` entscheidet, welcher Zaehler hochlaeuft. Bei einem vollen
 /// Tageskontingent ist weder der Clip noch der Zugang kaputt, es geht
-/// ausschliesslich um den Termin; zaehlte das mit, waere die Versuchsgrenze nach
-/// vier Kontingent-Vertagungen aufgebraucht und der erste harmlose Netzfehler
-/// danach wuerde den Clip verwerfen.
+/// ausschliesslich um den Termin; zaehlte das gegen `attempts`, waere die
+/// Versuchsgrenze nach vier Kontingent-Vertagungen aufgebraucht und der erste
+/// harmlose Netzfehler danach wuerde den Clip verwerfen. Umgekehrt darf sich
+/// eine Kontingent-Vertagung nicht endlos wiederholen, deshalb bekommt sie mit
+/// `quota_deferrals` ein eigenes Konto mit eigener, hoeherer Grenze.
 pub async fn reschedule_upload(
     pool: &PgPool,
     queue_id: i64,
     naechster_versuch: &str,
     error: Option<&str>,
-    zaehlt_als_versuch: bool,
+    konto: VertagungsKonto,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query!(
         "UPDATE twitch_clips_upload_queue \
             SET status = 'pending', \
                 attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END, \
+                quota_deferrals = quota_deferrals + CASE WHEN $6 THEN 1 ELSE 0 END, \
                 last_error = $1, \
                 last_attempt_at = $2::text::timestamptz, \
                 scheduled_at = $3::text::timestamptz \
@@ -263,7 +284,8 @@ pub async fn reschedule_upload(
         &now,
         naechster_versuch,
         queue_id,
-        zaehlt_als_versuch
+        konto == VertagungsKonto::Versuch,
+        konto == VertagungsKonto::Kontingent
     )
     .execute(pool)
     .await?;
@@ -353,7 +375,10 @@ mod tests {
     use std::str::FromStr;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        // Gemeinsame Notbremse statt einer Kopie je Testmodul: ohne DSN
+        // meldet ein uebersprungener DB-Test sonst gruen, ohne etwas
+        // geprueft zu haben.
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -378,7 +403,7 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
     }
 

@@ -100,6 +100,12 @@ export interface ClipApprovalRecord {
   dm_message_id: string | null;
   dm_channel_id: string | null;
   last_sent_at: string | null;
+  /**
+   * Plattformen, die bei dieser Entscheidung ausgelassen wurden, weil dort die
+   * Kadenz auf null steht. Beschreibt genau diesen einen Vorgang, nicht den
+   * gespeicherten Zustand: beim reinen Lesen ist die Liste immer leer.
+   */
+  not_scheduled: SocialPlatform[];
 }
 
 /**

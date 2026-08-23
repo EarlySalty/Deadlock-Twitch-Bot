@@ -79,6 +79,8 @@ pub mod scheduler;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod title_gate;
 pub mod upload_worker;
 pub mod uploaders;

@@ -16,7 +16,7 @@ use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
 use crate::clip_queue::{
-    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem,
+    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::uploaders::instagram::InstagramUploader;
@@ -449,6 +449,40 @@ impl UploadTask {
     /// Termin.
     const MAX_VERSUCHE: i32 = 5;
 
+    /// Wie oft ein Job wegen vollem Tageskontingent vertagt werden darf.
+    ///
+    /// Eigenes, deutlich hoeheres Konto als [`Self::MAX_VERSUCHE`]: ein voller
+    /// Tag beim Anbieter ist Alltag und darf die Versuchsgrenze nicht anfassen.
+    /// Endlos vertagen darf sich ein Job aber auch nicht, sonst haengt ein
+    /// dauerhaft abgelehnter Upload (falsche Projekt-Quota, gesperrte App) fuer
+    /// immer in der Warteschlange. Bei 24 Stunden Abstand sind 30 Vertagungen
+    /// rund ein Monat; wer danach immer noch am Kontingent scheitert, hat kein
+    /// Tagesproblem.
+    const MAX_KONTINGENT_VERTAGUNGEN: i32 = 30;
+
+    /// Auf welches Konto die Vertagung dieses Fehlers geht.
+    fn konto_fuer(error: &UploadError) -> VertagungsKonto {
+        match error {
+            UploadError::QuotaExceeded(_) => VertagungsKonto::Kontingent,
+            _ => VertagungsKonto::Versuch,
+        }
+    }
+
+    /// `true`, wenn das zustaendige Konto mit dieser Vertagung voll waere.
+    /// Ohne IO, damit die Grenzen ohne Datenbank pruefbar bleiben.
+    fn konto_erschoepft(
+        konto: VertagungsKonto,
+        attempts: i32,
+        kontingent_vertagungen: i32,
+    ) -> bool {
+        match konto {
+            VertagungsKonto::Versuch => attempts + 1 >= Self::MAX_VERSUCHE,
+            VertagungsKonto::Kontingent => {
+                kontingent_vertagungen + 1 >= Self::MAX_KONTINGENT_VERTAGUNGEN
+            }
+        }
+    }
+
     /// Trennt "kaputt" von "spaeter nochmal". Frueher landete jeder Fehler auf
     /// `failed`, und `failed` holt die Warteschlange nie wieder ab: ein einziges
     /// 502 oder ein volles Tageskontingent hat den Clip endgueltig verbrannt.
@@ -461,23 +495,18 @@ impl UploadTask {
         let text = error.to_string();
         let verzoegerung = verzoegerung_fuer(error);
         // Ein volles Tageskontingent sagt nichts ueber den Clip. Es darf
-        // deshalb weder das Versuchskonto pruefen noch es verbrauchen: sonst
+        // deshalb das Versuchskonto weder pruefen noch verbrauchen: sonst
         // haben vier Kontingent-Vertagungen den Clip so weit aufgezehrt, dass
         // die erste voruebergehende Stoerung ihn endgueltig verbrennt.
-        let zaehlt_als_versuch = !matches!(error, UploadError::QuotaExceeded(_));
-        let erschoepft = zaehlt_als_versuch && item.attempts + 1 >= Self::MAX_VERSUCHE;
+        // Umgekehrt bekommt es ein eigenes Konto, damit ein dauerhaft
+        // abgelehnter Job nicht ewig alle 24 Stunden wiederkehrt.
+        let konto = Self::konto_fuer(error);
+        let erschoepft = Self::konto_erschoepft(konto, item.attempts, item.quota_deferrals);
         match verzoegerung {
             Some(dauer) if !erschoepft => {
                 let naechster = (Utc::now() + dauer).to_rfc3339();
                 if let Err(db_error) =
-                    reschedule_upload(
-                        &self.pool,
-                        item.id,
-                        &naechster,
-                        Some(&text),
-                        zaehlt_als_versuch,
-                    )
-                    .await
+                    reschedule_upload(&self.pool, item.id, &naechster, Some(&text), konto).await
                 {
                     tracing::warn!(
                         error = %db_error,
@@ -870,7 +899,10 @@ mod tests {
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        // Gemeinsame Notbremse statt einer Kopie je Testmodul: ohne DSN
+        // meldet ein uebersprungener DB-Test sonst gruen, ohne etwas
+        // geprueft zu haben.
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -897,7 +929,7 @@ mod tests {
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -905,7 +937,10 @@ mod tests {
     }
 
     async fn make_completed_write_error_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        // Gemeinsame Notbremse statt einer Kopie je Testmodul: ohne DSN
+        // meldet ein uebersprungener DB-Test sonst gruen, ohne etwas
+        // geprueft zu haben.
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -931,7 +966,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -970,6 +1005,7 @@ mod tests {
             hashtags: Some("[\"deadlock\"]".to_string()),
             scheduled_at: None,
             attempts: 0,
+            quota_deferrals: 0,
             twitch_clip_id: Some("c1".to_string()),
             clip_url: None,
             clip_title: Some("Clip title".to_string()),
@@ -1014,6 +1050,7 @@ mod tests {
             hashtags: None,
             scheduled_at: None,
             attempts: 0,
+            quota_deferrals: 0,
             twitch_clip_id: None,
             clip_url: Some("https://clips.twitch.tv/x".to_string()),
             clip_title: Some("Titel".to_string()),
@@ -1156,6 +1193,122 @@ mod tests {
         .unwrap();
         assert_eq!(status, "pending");
         assert_eq!(attempts, 1);
+    }
+
+    /// Kontingent-Vertagungen haben ein eigenes Konto, und dieses Konto ist
+    /// endlich. Frueher vertagte sich ein dauerhaft abgelehnter Job alle 24
+    /// Stunden endlos, weil `erschoepft` fuer Kontingent-Fehler immer `false`
+    /// war.
+    #[test]
+    fn kontingent_hat_eigene_endliche_obergrenze() {
+        use super::UploadTask;
+        use crate::clip_queue::VertagungsKonto;
+        use crate::uploaders::UploadError;
+
+        let kontingent = UploadTask::konto_fuer(&UploadError::QuotaExceeded("voll".into()));
+        assert_eq!(kontingent, VertagungsKonto::Kontingent);
+        assert_eq!(
+            UploadTask::konto_fuer(&UploadError::Request("timeout".into())),
+            VertagungsKonto::Versuch
+        );
+
+        // Das Kontingent-Konto ist deutlich groesser als das Versuchskonto.
+        const { assert!(UploadTask::MAX_KONTINGENT_VERTAGUNGEN > UploadTask::MAX_VERSUCHE) };
+
+        // Viele Kontingent-Vertagungen lassen das Versuchskonto unberuehrt.
+        assert!(!UploadTask::konto_erschoepft(
+            VertagungsKonto::Kontingent,
+            UploadTask::MAX_VERSUCHE + 10,
+            0
+        ));
+
+        // Unterhalb der Grenze wird weiter vertagt.
+        assert!(!UploadTask::konto_erschoepft(
+            VertagungsKonto::Kontingent,
+            0,
+            UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 2
+        ));
+        // An der Grenze ist Schluss.
+        assert!(UploadTask::konto_erschoepft(
+            VertagungsKonto::Kontingent,
+            0,
+            UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1
+        ));
+
+        // Das Versuchskonto haengt weiter nur an `attempts`.
+        assert!(!UploadTask::konto_erschoepft(
+            VertagungsKonto::Versuch,
+            UploadTask::MAX_VERSUCHE - 2,
+            UploadTask::MAX_KONTINGENT_VERTAGUNGEN
+        ));
+        assert!(UploadTask::konto_erschoepft(
+            VertagungsKonto::Versuch,
+            UploadTask::MAX_VERSUCHE - 1,
+            0
+        ));
+    }
+
+    /// Der Weg durch die Datenbank: das Kontingent-Konto laeuft mit, und wenn es
+    /// voll ist, geht der Job auf `failed` statt sich weiter zu vertagen.
+    #[tokio::test]
+    async fn kontingent_konto_laeuft_voll_und_verwirft() {
+        let Some(pool) = make_pool("t_sm_upload_kontingent_grenze").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('q2', 'https://clips.test/q2', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let queue_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'youtube', 'processing') RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let task = task(pool.clone());
+        let mut item = upload_item(queue_id, clip, None);
+        item.platform = "youtube".to_string();
+        for _ in 0..UploadTask::MAX_KONTINGENT_VERTAGUNGEN {
+            task.handle_upload_error(
+                &item,
+                &UploadError::QuotaExceeded("quotaExceeded".into()),
+                "test_quota_grenze",
+            )
+            .await;
+            let (attempts, vertagungen): (i32, i32) = sqlx::query_as(
+                "SELECT attempts, quota_deferrals FROM twitch_clips_upload_queue WHERE id = $1",
+            )
+            .bind(queue_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            item.attempts = attempts;
+            item.quota_deferrals = vertagungen;
+        }
+
+        let (status, attempts, vertagungen): (String, i32, i32) = sqlx::query_as(
+            "SELECT status, attempts, quota_deferrals FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            status, "failed",
+            "nach der Kontingent-Obergrenze darf sich der Job nicht weiter vertagen"
+        );
+        assert_eq!(
+            attempts, 1,
+            "nur das abschliessende Verwerfen zaehlt einen Versuch, \
+             die 29 Vertagungen davor nicht"
+        );
+        assert_eq!(vertagungen, UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1);
     }
 
     #[tokio::test]

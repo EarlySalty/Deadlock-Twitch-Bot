@@ -457,7 +457,7 @@ mod tests {
             "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, \
                  status TEXT DEFAULT 'active', admin_archived_at TEXT, departnered_at TEXT, \
                  manual_partner_opt_out INTEGER DEFAULT 0, raid_bot_enabled INTEGER DEFAULT 1, \
-                 technical_pause_reason TEXT)",
+                 technical_pause_reason TEXT, deadlock_pause_unmodded_at TEXT)",
             "CREATE TABLE twitch_live_state (streamer_login TEXT PRIMARY KEY)",
             "CREATE TABLE twitch_raid_auth (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, raid_enabled BOOLEAN DEFAULT TRUE)",
         ] {

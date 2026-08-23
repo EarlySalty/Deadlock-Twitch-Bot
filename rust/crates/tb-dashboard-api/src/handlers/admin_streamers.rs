@@ -966,7 +966,10 @@ mod tests {
                 status TEXT DEFAULT 'active', admin_archived_at TEXT,
                 departnered_at TEXT,
                 technical_pause_reason TEXT, manual_partner_opt_out INTEGER DEFAULT 0,
-                raid_bot_enabled INTEGER DEFAULT 1
+                raid_bot_enabled INTEGER DEFAULT 1,
+                -- Der Trenn-Pfad raeumt die Deadlock-Pause mit ab. Fehlt die
+                -- Spalte hier, scheitert der Test an seinem eigenen Aufbau.
+                deadlock_pause_unmodded_at TEXT
             )
             "#,
         )

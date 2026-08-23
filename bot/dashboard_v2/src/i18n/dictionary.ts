@@ -356,11 +356,12 @@ const EN: Record<string, string> = {
   Eingeplant: 'Scheduled',
   'Doch nicht posten': 'Do not post after all',
   '{count} geplante Posts gestoppt.': 'Stopped {count} scheduled posts.',
+  'Auf {platforms} passiert nichts, dort steht die Kadenz auf null.':
+    'Nothing happens on {platforms}, the cadence there is set to zero.',
   'Gestoppt, aber {count} Plattform war schon durch.':
     'Stopped, but {count} platform had already gone out.',
 
   // -- Reports --------------------------------------------------------------
-  'Reports sind der Verwaltung vorbehalten.': 'Reports are for administrators only.',
 
   // -- Fehlermeldungen (stabile Codes aus dem API-Modul) --------------------
   'Dafür fehlt deinem Zugang die Berechtigung.':
@@ -371,6 +372,8 @@ const EN: Record<string, string> = {
   'Diesen Kanal gibt es nicht.': 'That channel does not exist.',
   'Diese Entscheidung passt nicht mehr zum Zustand des Clips.':
     'That decision no longer matches the state of the clip.',
+  'Diese Plattformen stehen auf null Posts und sind damit ausgeschaltet: {details}. Stell im Zeitplan eine Kadenz ein oder gib eine andere Plattform frei.':
+    'These platforms are set to zero posts and are therefore switched off: {details}. Set a cadence in the schedule or approve a different platform.',
   'Die Entscheidung konnte nicht gespeichert werden.': 'The decision could not be saved.',
   'Der geplante Post konnte nicht gestoppt werden.':
     'The scheduled post could not be stopped.',

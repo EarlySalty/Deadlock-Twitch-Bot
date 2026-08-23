@@ -37,6 +37,10 @@ import {
   clipFehler,
   istGesperrt,
   istStandUnbekannt,
+  zeitplanFeldSchluessel,
+  zeitplanFeldVerlassen,
+  zeitplanFormularAbgleichen,
+  type ZeitplanFormular,
 } from '@/components/socialmedia/kartenZustand';
 import {
   cancelScheduledPost,
@@ -654,6 +658,12 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                         approvalMutation.isPending &&
                         approvalMutation.variables?.clipDbId === clip.clip_db_id
                       }
+                      nichtEingeplant={
+                        approvalMutation.isSuccess &&
+                        approvalMutation.variables?.clipDbId === clip.clip_db_id
+                          ? (approvalMutation.data?.approval?.not_scheduled ?? [])
+                          : []
+                      }
                       onCancelScheduled={() => abbrechenMutation.mutate(clip.clip_db_id)}
                       cancelPending={
                         abbrechenMutation.isPending &&
@@ -978,13 +988,6 @@ function formatTermin(iso: string | null, locale: string): string | null {
  * Auto-Posting und Kadenz je Plattform. Die Defaults kommen aus der Recherche:
  * hoechstens ein Post pro Tag, rund vier pro Woche.
  */
-/** Was in den drei Feldern einer Plattform steht, waehrend getippt wird. */
-interface ZeitplanFormular {
-  postsProWoche: string;
-  maxProTag: string;
-  zeiten: string;
-}
-
 const ZEIT_MUSTER = /^\d{2}:\d{2}$/;
 
 /**
@@ -1079,25 +1082,44 @@ function PostingScheduleCard({
     ]),
   );
 
+  // Felder, die der Nutzer geaendert und noch nicht abgeschickt hat. Ohne
+  // diese Liste hat der Abgleich mit der Serverantwort das ganze Formular
+  // ueberschrieben: wer zwei Felder schnell hintereinander aendert, verlor die
+  // zweite Eingabe, sobald die Antwort auf die erste eintraf. Ein Ref statt
+  // eines States, weil daran nichts haengt, was neu gezeichnet werden muss.
+  const offeneFelderRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    const naechstes: Record<string, ZeitplanFormular> = {};
+    const vomServer: Record<string, ZeitplanFormular> = {};
     for (const eintrag of plan?.platforms ?? []) {
-      naechstes[eintrag.platform] = {
+      vomServer[eintrag.platform] = {
         postsProWoche: String(eintrag.posts_per_week),
         maxProTag: String(eintrag.max_posts_per_day),
         zeiten: eintrag.post_times.join(', '),
       };
     }
-    setFormular(naechstes);
+    setFormular((aktuell) =>
+      zeitplanFormularAbgleichen(aktuell, vomServer, offeneFelderRef.current),
+    );
     setFeldFehler({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverStand]);
 
   const setzeFeld = (platform: string, feld: keyof ZeitplanFormular, wert: string) => {
+    offeneFelderRef.current.add(zeitplanFeldSchluessel(platform, feld));
     setFormular((aktuell) => ({
       ...aktuell,
       [platform]: { ...aktuell[platform], [feld]: wert },
     }));
+  };
+
+  // Das Feld ist verlassen: ab jetzt darf der Server es wieder ueberschreiben,
+  // etwa mit sortierten Zeiten. Gilt auch fuer eine ungueltige Eingabe, die
+  // gar nicht erst abgeschickt wurde, sonst haelt der Abgleich den ungueltigen
+  // Text fest, waehrend der Effekt die Fehlermeldung wegraeumt (siehe
+  // `zeitplanFeldVerlassen`).
+  const feldAbgeschlossen = (platform: string, feld: keyof ZeitplanFormular) => {
+    offeneFelderRef.current.delete(zeitplanFeldSchluessel(platform, feld));
   };
 
   const setzeFehler = (schluessel: string, text: string | null) => {
@@ -1210,14 +1232,18 @@ function PostingScheduleCard({
                       }
                       onBlur={() => {
                         const wert = Number(werte.postsProWoche);
-                        const schluessel = `${eintrag.platform}:woche`;
-                        if (!Number.isFinite(wert) || werte.postsProWoche.trim() === '') {
-                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
-                          return;
+                        const gueltig =
+                          werte.postsProWoche.trim() !== '' && Number.isFinite(wert);
+                        const plan = zeitplanFeldVerlassen(
+                          gueltig
+                            ? { gueltig: true, unveraendert: wert === eintrag.posts_per_week }
+                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                        );
+                        setzeFehler(`${eintrag.platform}:woche`, plan.fehler);
+                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'postsProWoche');
+                        if (plan.absenden) {
+                          onChange(eintrag.platform, { posts_per_week: wert });
                         }
-                        setzeFehler(schluessel, null);
-                        if (wert === eintrag.posts_per_week) return;
-                        onChange(eintrag.platform, { posts_per_week: wert });
                       }}
                       className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
                     />
@@ -1240,14 +1266,17 @@ function PostingScheduleCard({
                       }
                       onBlur={() => {
                         const wert = Number(werte.maxProTag);
-                        const schluessel = `${eintrag.platform}:tag`;
-                        if (!Number.isFinite(wert) || werte.maxProTag.trim() === '') {
-                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
-                          return;
+                        const gueltig = werte.maxProTag.trim() !== '' && Number.isFinite(wert);
+                        const plan = zeitplanFeldVerlassen(
+                          gueltig
+                            ? { gueltig: true, unveraendert: wert === eintrag.max_posts_per_day }
+                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                        );
+                        setzeFehler(`${eintrag.platform}:tag`, plan.fehler);
+                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'maxProTag');
+                        if (plan.absenden) {
+                          onChange(eintrag.platform, { max_posts_per_day: wert });
                         }
-                        setzeFehler(schluessel, null);
-                        if (wert === eintrag.max_posts_per_day) return;
-                        onChange(eintrag.platform, { max_posts_per_day: wert });
                       }}
                       className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
                     />
@@ -1269,15 +1298,21 @@ function PostingScheduleCard({
                     disabled={gesperrt}
                     onChange={(event) => setzeFeld(eintrag.platform, 'zeiten', event.target.value)}
                     onBlur={() => {
-                      const schluessel = `${eintrag.platform}:zeiten`;
                       const ergebnis = pruefeZeiten(werte.zeiten);
-                      if ('fehler' in ergebnis) {
-                        setzeFehler(schluessel, ergebnis.fehler);
-                        return;
+                      const plan = zeitplanFeldVerlassen(
+                        'fehler' in ergebnis
+                          ? { gueltig: false, fehler: ergebnis.fehler }
+                          : {
+                              gueltig: true,
+                              unveraendert:
+                                ergebnis.zeiten.join(',') === eintrag.post_times.join(','),
+                            },
+                      );
+                      setzeFehler(`${eintrag.platform}:zeiten`, plan.fehler);
+                      if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'zeiten');
+                      if (plan.absenden && !('fehler' in ergebnis)) {
+                        onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                       }
-                      setzeFehler(schluessel, null);
-                      if (ergebnis.zeiten.join(',') === eintrag.post_times.join(',')) return;
-                      onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                     }}
                     className={`mt-1 w-full rounded-lg border bg-background/80 px-3 py-2 text-sm text-white ${
                       zeitenFehler ? 'border-danger' : 'border-border'
@@ -1755,6 +1790,12 @@ interface ClipCardProps {
   onCancelScheduled: () => void;
   cancelPending: boolean;
   cancelResult: { cancelled: number; already_running: number } | null;
+  /**
+   * Plattformen, die die letzte Freigabe an diesem Clip ausgelassen hat, weil
+   * dort die Kadenz auf null steht. Ohne diese Zeile quittiert die Oberflaeche
+   * eine Freigabe, die auf der gewaehlten Plattform nie stattfindet.
+   */
+  nichtEingeplant: SocialPlatform[];
   /** Fehler der letzten Aktion an genau diesem Clip. */
   fehler: unknown;
 }
@@ -1773,6 +1814,7 @@ function ClipCard({
   onCancelScheduled,
   cancelPending,
   cancelResult,
+  nichtEingeplant,
   fehler,
 }: ClipCardProps) {
   const { t, locale } = useLanguage();
@@ -2040,6 +2082,17 @@ function ClipCard({
                   count: cancelResult.already_running,
                 })
               : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
+          </div>
+        )}
+
+        {/* Eine Freigabe auf eine Plattform mit Kadenz null wird sauber
+            quittiert, aber dort passiert nichts. Ohne diese Zeile merkt das
+            niemand. */}
+        {nichtEingeplant.length > 0 && (
+          <div className="text-xs text-orange border-t border-orange/20 pt-2">
+            {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
+              platforms: nichtEingeplant.map((plattform) => PLATFORM_LABELS[plattform] ?? plattform).join(', '),
+            })}
           </div>
         )}
 
