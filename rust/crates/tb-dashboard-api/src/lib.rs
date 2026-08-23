@@ -290,6 +290,11 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/admin/approval/:clip_db_id/decision",
             post(social_media::approval_decision_handler),
         )
+        // Eingeplante Uploads wieder stoppen (Veto-Fenster).
+        .route(
+            "/social-media/api/approval/:clip_db_id/cancel",
+            post(social_media::approval_cancel_handler),
+        )
         // Zeitplan, Freigabe-Modus, Kategorien und Vorratsrechnung je Kanal.
         // Loest die frueheren globalen Auto-Approve-Flags ab.
         .route(

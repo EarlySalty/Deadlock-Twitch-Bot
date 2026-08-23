@@ -56,6 +56,12 @@ impl ApprovalMode {
     }
 
     /// `true`, wenn ein Clip ohne menschliche Sichtung eingeplant werden darf.
+    ///
+    /// `VetoWindow` und `FullAuto` planen beide ohne Sichtung ein, hier gibt es
+    /// bewusst keinen Unterschied. Der Unterschied liegt danach: im
+    /// Veto-Fenster laesst sich ein eingeplanter Clip bis zum Termin wieder
+    /// stoppen, ueber `approval::cancel_scheduled_uploads` und die Route
+    /// `POST /social-media/api/approval/:clip_db_id/cancel`.
     pub fn schedules_without_review(self) -> bool {
         !matches!(self, Self::Manual)
     }

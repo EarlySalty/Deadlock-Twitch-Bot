@@ -130,7 +130,10 @@ const EN: Record<string, string> = {
   Aufbereitet: 'Prepared',
   Freigabe: 'Approval',
   Bearbeitung: 'Editing',
-  Skipped: 'Skipped',
+  // Der Clip-Status. 'Freigegeben' ist bewusst NICHT dieser Schluessel: das ist
+  // der Admin-Knopf fuer den Dashboard-Zugang mit anderer Uebersetzung.
+  'Clip freigegeben': 'Approved',
+  Übersprungen: 'Skipped',
   'Wird gepostet': 'Publishing',
   Teilveröffentlicht: 'Partly published',
   Veröffentlicht: 'Published',
@@ -145,7 +148,6 @@ const EN: Record<string, string> = {
   '{days} Tage': '{days} days',
 
   // KPIs
-  'Clips in Pipeline': 'Clips in pipeline',
   'alle Stati': 'all states',
   'Heute veröffentlicht': 'Published today',
   'über alle Plattformen': 'across all platforms',
@@ -177,10 +179,7 @@ const EN: Record<string, string> = {
   'Retention: 14 Tage ab Erstellung': 'Retention: 14 days from creation',
   'Auto-Apply: Streamer-Default-Layout': 'Auto-apply: streamer default layout',
 
-  // Einstellungen: Auto-Approve
-  'Auto-Approve': 'Auto-approve',
-  'Plattformen mit aktivem Toggle werden nach einer Freigabe automatisch mit in die Queue gelegt, auch wenn im Approval-DM kein Häkchen gesetzt wurde.':
-    'Platforms with the toggle on are queued automatically after an approval, even when no box was ticked in the approval DM.',
+  // Plattform-Namen im Metadaten-Panel
   'YouTube Shorts': 'YouTube Shorts',
   TikTok: 'TikTok',
   'Instagram Reels': 'Instagram Reels',
@@ -214,6 +213,8 @@ const EN: Record<string, string> = {
   'Override aktiv': 'Override active',
   Approval: 'Approval',
   'Status: {state}': 'Status: {state}',
+  'Wartet auf Freigabe': 'Waiting for approval',
+  'In Bearbeitung': 'Being edited',
   'Wird nach abgeschlossenem Enrichment per DM freigegeben.':
     'Approved by DM once enrichment has finished.',
   Posten: 'Post',
@@ -294,6 +295,7 @@ const EN: Record<string, string> = {
     'Enrichment was skipped because no LLM key is set (',
   '). Setze einen Key und drücke „Neu generieren".':
     '). Set a key and press "Regenerate".',
+  Titel: 'Title',
   'Erkannte Begriffe': 'Detected terms',
   'Transkript anzeigen': 'Show transcript',
   'Ungesicherte Änderungen': 'Unsaved changes',
@@ -307,6 +309,74 @@ const EN: Record<string, string> = {
   'Kurze Beschreibung für {platform}…': 'Short description for {platform}…',
   'Hashtag eingeben + Enter…': 'Type a hashtag + Enter…',
   'Hashtag #{tag} entfernen': 'Remove hashtag #{tag}',
+
+  // -- Kategorien (deutsch geseedet, Anzeige laeuft ueber den Schluessel) ----
+  Deadlock: 'Deadlock',
+  'Andere Spiele': 'Other games',
+
+  // -- Zeitplan: Zeitzone, Kadenz, Feldpruefung -----------------------------
+  'Zeitzone des Kanals': 'Channel time zone',
+  'Gilt, sobald Auto-Posting an ist.': 'Applies as soon as auto-posting is on.',
+  'Mindestens eine Uhrzeit angeben.': 'Enter at least one time.',
+  'Höchstens zwölf Uhrzeiten.': 'Twelve times at most.',
+  'Uhrzeiten im Format 18:00 angeben.': 'Enter times as 18:00.',
+  'Diese Uhrzeit gibt es nicht.': 'That time does not exist.',
+  'Bitte eine Zahl angeben.': 'Please enter a number.',
+
+  // -- Nachschub aus Twitch -------------------------------------------------
+  'Clips jetzt holen': 'Fetch clips now',
+  '{count} Clips von Twitch geholt.': 'Fetched {count} clips from Twitch.',
+
+  // -- Verbindungen: Ablauf und Sammelverbindung ----------------------------
+  'Zugang abgelaufen, bitte neu verbinden': 'Access expired, please reconnect',
+  'nutzt die Sammelverbindung': 'uses the shared connection',
+  'Zugang läuft am {datum} ab.': 'Access expires on {datum}.',
+  'Neu verbinden': 'Reconnect',
+  '{platform} für {streamer} trennen?': 'Disconnect {platform} for {streamer}?',
+  '{platform} für {streamer} trennen? Der Kanal nutzt die Sammelverbindung.':
+    'Disconnect {platform} for {streamer}? This channel uses the shared connection.',
+
+  // -- Geplante Posts und Veto ----------------------------------------------
+  Eingeplant: 'Scheduled',
+  'Doch nicht posten': 'Do not post after all',
+  '{count} geplante Posts gestoppt.': 'Stopped {count} scheduled posts.',
+  'Gestoppt, aber {count} Plattform war schon durch.':
+    'Stopped, but {count} platform had already gone out.',
+
+  // -- Reports --------------------------------------------------------------
+  'Reports sind der Verwaltung vorbehalten.': 'Reports are for administrators only.',
+
+  // -- Fehlermeldungen (stabile Codes aus dem API-Modul) --------------------
+  'Dafür fehlt deinem Zugang die Berechtigung.':
+    'Your account is not allowed to do that.',
+  'Dieser Kanal ist für Social Media noch nicht freigeschaltet.':
+    'This channel has not been enabled for social media yet.',
+  'Für diese Aktion fehlt der Kanal.': 'This action needs a channel.',
+  'Diesen Kanal gibt es nicht.': 'That channel does not exist.',
+  'Diese Entscheidung passt nicht mehr zum Zustand des Clips.':
+    'That decision no longer matches the state of the clip.',
+  'Die Entscheidung konnte nicht gespeichert werden.': 'The decision could not be saved.',
+  'Der geplante Post konnte nicht gestoppt werden.':
+    'The scheduled post could not be stopped.',
+  'Diesen Clip gibt es nicht mehr.': 'That clip no longer exists.',
+  'Die Verbindung konnte nicht getrennt werden.': 'The connection could not be removed.',
+  'Der Verbindungsstatus ist gerade nicht abrufbar.':
+    'The connection status cannot be loaded right now.',
+  'Das Speichern hat nicht geklappt.': 'Saving did not work.',
+  'Der Zeitplan konnte nicht gespeichert werden.': 'The schedule could not be saved.',
+  'Dieses Layout ist nicht gültig.': 'This layout is not valid.',
+  'Diese Sichtbarkeit gibt es nicht.': 'That visibility does not exist.',
+  'Diese Eingabe konnte das Backend nicht verarbeiten.':
+    'The backend could not process this input.',
+  'Twitch antwortet gerade nicht. Bitte später erneut versuchen.':
+    'Twitch is not responding right now. Please try again later.',
+  'Der Clip konnte nicht eingereiht werden.': 'The clip could not be queued.',
+  'Der Report konnte nicht erzeugt werden.': 'The report could not be generated.',
+  'Die Datei ist zu groß, höchstens 200 MB.': 'The file is too large, 200 MB at most.',
+  'Falsches Dateiformat, bitte eine MP4 wählen.': 'Wrong file format, please pick an MP4.',
+  'Dieser Clip liegt schon im Pool.': 'This clip is already in the pool.',
+  'Der Upload ist fehlgeschlagen.': 'The upload failed.',
+  'Das hat nicht geklappt.': 'That did not work.',
 };
 
 const TRANSLATIONS: Record<Language, Record<string, string>> = {

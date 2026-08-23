@@ -21,26 +21,9 @@ import {
   saveClipEnrichment,
   type EnrichmentEditPayload,
 } from '@/api/socialMedia';
-import type { ClipEnrichment, EnrichmentStatus, SocialPlatform } from '@/types/socialMedia';
+import type { ClipEnrichment, SocialPlatform } from '@/types/socialMedia';
 import { useT } from '@/context/LanguageContext';
-
-const STATUS_META: Record<EnrichmentStatus, { label: string; tone: 'muted' | 'orange' | 'teal' | 'success' | 'danger' }> = {
-  pending: { label: 'Wartet', tone: 'muted' },
-  transcribing: { label: 'Transkribiert', tone: 'orange' },
-  correcting: { label: 'Wörterbuch-Korrektur', tone: 'orange' },
-  llm: { label: 'LLM-Hashtags', tone: 'teal' },
-  done: { label: 'Fertig', tone: 'success' },
-  failed: { label: 'Fehler', tone: 'danger' },
-  skipped_no_key: { label: 'API-Key fehlt', tone: 'muted' },
-};
-
-const TONE: Record<string, string> = {
-  muted: 'bg-bg/60 text-text-secondary border-border',
-  orange: 'bg-orange/15 text-orange border-orange/35',
-  teal: 'bg-teal/15 text-teal border-teal/35',
-  success: 'bg-success/15 text-success border-success/35',
-  danger: 'bg-danger/15 text-danger border-danger/35',
-};
+import { STATUS_META, TONE_BADGE as TONE } from './labels';
 
 const PLATFORMS: Array<{
   id: SocialPlatform;
@@ -336,7 +319,7 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
     <div className="space-y-4">
       <div>
         <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5">
-          {t('Title')}
+          {t('Titel')}
           <span className={`ml-2 font-mono ${titleLen > config.titleLimit ? 'text-danger' : 'text-text-secondary'}`}>
             {titleLen}/{config.titleLimit}
           </span>

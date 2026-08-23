@@ -22,22 +22,24 @@ import {
 } from 'recharts';
 import {
   fetchClipAnalytics,
+  fetchClips,
   fetchReports,
   runReport,
   SocialMediaForbiddenError,
 } from '@/api/socialMedia';
 import type {
   ClipAnalytics,
-  SocialClip,
   SocialMediaReportKind,
 } from '@/types/socialMedia';
 import { useLanguage } from '@/context/LanguageContext';
+import { fehlerText } from './labels';
 
 const BUCKET_ORDER = ['24h', '7d', '30d'] as const;
 
 interface AnalyticsTabProps {
   streamer: string;
-  clips: SocialClip[];
+  /** Die Report-Knoepfe sind admin-only; ein Partner bekaeme nur 403. */
+  isAdmin: boolean;
 }
 
 function kindLabel(kind: SocialMediaReportKind): string {
@@ -79,14 +81,31 @@ function normalizeChartRows(items: ClipAnalytics[]) {
   });
 }
 
-export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
+export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
   const queryClient = useQueryClient();
   const { t, locale } = useLanguage();
   const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
-  const eligibleClips = useMemo(
-    () => clips.filter((clip) => clip.platform_status.youtube || clip.platform_status.tiktok || clip.platform_status.instagram),
-    [clips],
-  );
+
+  // Eigene Abfrage statt der Liste aus dem Clip-Pool: die haengt am Pool-Filter
+  // (Default `pending`) und liefert deshalb praktisch nie einen
+  // veroeffentlichten Clip.
+  const publishedQuery = useQuery({
+    queryKey: ['social-media', 'clips', streamer, 'published_all'],
+    queryFn: () => fetchClips({ status: 'published_all', streamer, page: 1, page_size: 100 }),
+    enabled: !!streamer,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
+  const eligibleClips = useMemo(() => {
+    const items = publishedQuery.data?.items ?? [];
+    return items.filter(
+      (clip) =>
+        clip.platform_status.youtube || clip.platform_status.tiktok || clip.platform_status.instagram,
+    );
+  }, [publishedQuery.data]);
 
   useEffect(() => {
     if (!eligibleClips.length) {
@@ -113,7 +132,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
   const reportsQuery = useQuery({
     queryKey: ['social-media', 'reports', streamer],
     queryFn: () => fetchReports({ streamer, limit: 12 }),
-    enabled: !!streamer,
+    enabled: !!streamer && isAdmin,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -139,10 +158,17 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
   const reportItems = reportsQuery.data?.items ?? [];
   const latestAdminReport = reportItems.find((item) => item.kind === 'admin');
   const latestStreamerReport = reportItems.find((item) => item.kind === 'streamer');
+  const reportsVerboten = reportsQuery.error instanceof SocialMediaForbiddenError;
+  const reportMutationFehler =
+    fehlerText(streamerReportMutation.error, t) ?? fehlerText(crossReportMutation.error, t);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-6">
+      <div
+        className={`grid grid-cols-1 gap-6 ${
+          isAdmin ? 'xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]' : ''
+        }`}
+      >
         <section className="panel-card rounded-2xl p-5 md:p-6 space-y-5 overflow-hidden relative">
           <div className="absolute -top-12 -right-10 h-44 w-44 rounded-full bg-orange/12 blur-3xl pointer-events-none" />
           <div className="relative flex flex-wrap items-center gap-3">
@@ -167,7 +193,15 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
             </div>
           </div>
 
-          {!eligibleClips.length ? (
+          {publishedQuery.isLoading ? (
+            <div className="h-[320px] flex items-center justify-center">
+              <Loader2 className="w-5 h-5 text-orange animate-spin" />
+            </div>
+          ) : publishedQuery.error ? (
+            <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
+              {fehlerText(publishedQuery.error, t)}
+            </div>
+          ) : !eligibleClips.length ? (
             <div className="rounded-2xl border border-border bg-bg/40 p-8 text-sm text-text-secondary text-center">
               {t('Noch keine veroeffentlichten Clips mit Plattform-ID vorhanden.')}
             </div>
@@ -225,6 +259,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
           )}
         </section>
 
+        {isAdmin && (
         <aside className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-teal" />
@@ -255,6 +290,9 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
               <RefreshCw className="w-3.5 h-3.5 animate-spin" /> {t('Report wird generiert…')}
             </div>
           )}
+          {reportMutationFehler && (
+            <div className="text-xs text-danger">{reportMutationFehler}</div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-border bg-bg/40 p-3">
               <div className="text-[11px] uppercase tracking-[0.14em] text-text-secondary font-bold">{t('Letzter Streamer-Report')}</div>
@@ -266,8 +304,10 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
             </div>
           </div>
         </aside>
+        )}
       </div>
 
+      {isAdmin && (
       <section className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
         <div className="flex items-center gap-2">
           <FileText className="w-4 h-4 text-orange" />
@@ -280,6 +320,14 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
         {reportsQuery.isLoading ? (
           <div className="py-10 flex items-center justify-center">
             <Loader2 className="w-5 h-5 text-orange animate-spin" />
+          </div>
+        ) : reportsVerboten ? (
+          <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
+            {t('Reports sind der Verwaltung vorbehalten.')}
+          </div>
+        ) : reportsQuery.error ? (
+          <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
+            {fehlerText(reportsQuery.error, t)}
           </div>
         ) : reportItems.length === 0 ? (
           <div className="rounded-2xl border border-border bg-bg/35 p-8 text-sm text-text-secondary text-center">
@@ -323,6 +371,7 @@ export function AnalyticsTab({ streamer, clips }: AnalyticsTabProps) {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

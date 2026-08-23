@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { usePlan } from '@/context/PlanContext';
-import { useT } from '@/context/LanguageContext';
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import type { TimeRange } from '@/types/analytics';
 
 // Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
@@ -41,6 +42,9 @@ export function Header({
 }: HeaderProps) {
   const { view, setView, hasFullAccess, hasEntitlement } = usePlan();
   const t = useT();
+  // Der Umschalter hing bisher nur in einem Reiter der Social-Media-Seite. Wer
+  // dort nicht freigeschaltet ist, hatte keinen Weg zur Sprachwahl.
+  const { language, setLanguage } = useLanguage();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -266,6 +270,31 @@ export function Header({
                   />
                 )}
                 <span className="relative z-10">{range.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Sprachwahl */}
+          <div
+            className="flex items-center bg-background/70 rounded-xl border border-border p-1.5"
+            role="group"
+            aria-label={t('Sprache')}
+          >
+            {LANGUAGES.map((option: Language) => (
+              <button
+                key={option}
+                type="button"
+                lang={option}
+                aria-pressed={language === option}
+                title={LANGUAGE_LABELS[option]}
+                onClick={() => setLanguage(option)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                  language === option
+                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806]'
+                    : 'text-text-secondary hover:text-white'
+                }`}
+              >
+                {option.toUpperCase()}
               </button>
             ))}
           </div>

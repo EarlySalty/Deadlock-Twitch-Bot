@@ -13,6 +13,7 @@ import {
   setPartnerAccess,
 } from '@/api/socialMedia';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
+import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 
 /**
  * Eigenständiges Social-Media-Admin-Dashboard.
@@ -191,7 +192,7 @@ export function SocialMediaAdminDashboard() {
                     : 'border-border bg-background/80 text-text-secondary hover:text-white'
                 }`}
               >
-                {selectedGranted ? t('Freigegeben') : t('Freigeben')}
+                {selectedGranted ? t(ZUGRIFF_LABELS.granted) : t(ZUGRIFF_LABELS.grant)}
               </button>
             )}
             {isAdminView && (
@@ -232,13 +233,13 @@ export function SocialMediaAdminDashboard() {
           <TrialBanner />
 
           {isAdminView ? (
-            <SocialMedia streamer={streamer} />
+            <SocialMedia streamer={streamer} isAdmin />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia streamer={access.streamer ?? streamer} />
+            <SocialMedia streamer={access.streamer ?? streamer} isAdmin={false} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />

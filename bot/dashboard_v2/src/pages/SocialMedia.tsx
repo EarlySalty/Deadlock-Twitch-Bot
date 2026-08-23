@@ -22,6 +22,9 @@ import {
   Wand2,
   SlidersHorizontal,
   Languages,
+  DownloadCloud,
+  CalendarClock,
+  XCircle,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
 import { useLanguage, useT } from '@/context/LanguageContext';
@@ -30,16 +33,19 @@ import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { LayoutEditor } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import {
+  cancelScheduledPost,
   decideClipApproval,
   SocialMediaForbiddenError,
   discardClip,
   fetchPostingPlan,
   fetchClips,
+  fetchTwitchClips,
   fetchVodArchiveSettings,
   fetchPlatformStatus,
   disconnectPlatform,
   oauthStartUrl,
   type PlatformStatus,
+  type SocialClipMitPosting,
   fetchStreamerLayout,
   saveStreamerLayout,
   saveCategoryAutoPost,
@@ -50,6 +56,21 @@ import {
   uploadClip,
 } from '@/api/socialMedia';
 import {
+  APPROVAL_MODE_TEXTE,
+  APPROVAL_STATE_LABELS,
+  FELD_FEHLER,
+  fehlerText,
+  kategorieLabel,
+  PLATFORM_LABELS,
+  SOCIAL_MEDIA_TABS,
+  statusFilterLabel,
+  STATUS_FILTER_IDS,
+  STATUS_LABELS,
+  STATUS_META,
+  TONE_BADGE,
+  type SocialMediaView,
+} from '@/components/socialmedia/labels';
+import {
   type ApprovalMode,
   type ClipPoolForecast,
   type PlatformScheduleEntry,
@@ -57,7 +78,6 @@ import {
   DEFAULT_LAYOUT,
   type ClipStatus,
   type LayoutPayload,
-  type SocialClip,
   type SocialPlatform,
   type StreamerLayoutResponse,
   type VodArchivePrivacy,
@@ -66,33 +86,37 @@ import {
 
 interface SocialMediaProps {
   streamer: string;
+  /** Reports und Cross-Auswertungen sind der Verwaltung vorbehalten. */
+  isAdmin?: boolean;
 }
 
 /** Deutscher Text als Schluessel: ohne Uebersetzung bleibt er einfach stehen. */
 type Translate = (text: string, params?: Record<string, string | number>) => string;
 
-const STATUS_LABELS: Record<ClipStatus, { label: string; tone: 'orange' | 'teal' | 'success' | 'warning' | 'danger' | 'muted' }> = {
-  pending: { label: 'Wartend', tone: 'muted' },
-  enriched: { label: 'Aufbereitet', tone: 'teal' },
-  awaiting_approval: { label: 'Freigabe', tone: 'orange' },
-  approved: { label: 'Freigegeben', tone: 'success' },
-  editing: { label: 'Bearbeitung', tone: 'warning' },
-  skipped: { label: 'Skipped', tone: 'muted' },
-  publishing: { label: 'Wird gepostet', tone: 'orange' },
-  published_partial: { label: 'Teilveröffentlicht', tone: 'warning' },
-  published_all: { label: 'Veröffentlicht', tone: 'success' },
-  discarded: { label: 'Verworfen', tone: 'muted' },
-  failed: { label: 'Fehler', tone: 'danger' },
-};
+/** Die drei Plattformen in der Reihenfolge, in der sie auf der Karte stehen. */
+const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
 
-const TONE_BADGE: Record<string, string> = {
-  orange: 'bg-orange/15 text-orange border-orange/35',
-  teal: 'bg-teal/15 text-teal border-teal/35',
-  success: 'bg-success/15 text-success border-success/35',
-  warning: 'bg-warning/15 text-warning border-warning/35',
-  danger: 'bg-danger/15 text-danger border-danger/35',
-  muted: 'bg-bg/60 text-text-secondary border-border',
-};
+/**
+ * Termin in der Zeitzone des Kanals. Eine kaputte Zeitzone aus der Datenbank
+ * darf die Karte nicht kippen, deshalb faellt die Formatierung still auf die
+ * Browserzeit zurueck.
+ */
+function formatTerminInZone(iso: string, locale: string, timezone: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const optionen: Intl.DateTimeFormatOptions = {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  };
+  try {
+    return date.toLocaleString(locale, { ...optionen, timeZone: timezone });
+  } catch {
+    return date.toLocaleString(locale, optionen);
+  }
+}
 
 function formatRetention(retentionUntil: string | null, t: Translate): string {
   if (!retentionUntil) return '—';
@@ -107,14 +131,16 @@ function formatRetention(retentionUntil: string | null, t: Translate): string {
 }
 
 type EditMode = 'layout' | 'enrichment';
-/**
- * Die vier Bereiche der Seite. Getrennt statt alles auf einer Flaeche: die
- * Reihenfolge folgt dem Weg eines Clips, vom Konto ueber den Plan und den Pool
- * bis zum Veroeffentlichten.
- */
-type SocialMediaView = 'konten' | 'plan' | 'pool' | 'veroeffentlicht';
 
-export function SocialMedia({ streamer }: SocialMediaProps) {
+/** Zu jedem Bereich der Seite das Symbol; die Beschriftung kommt aus labels.ts. */
+const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: string }>> = {
+  pool: Layers3,
+  plan: Calendar,
+  veroeffentlicht: BarChart3,
+  konten: SlidersHorizontal,
+};
+
+export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
@@ -247,9 +273,11 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     onSuccess: uebernehmePlan,
   });
 
+  // Ohne Kanal zeigt und kappt das Backend die globale Sammelverbindung. Beides
+  // waere hier falsch: die Karte gehoert zum gewaehlten Kanal.
   const platformStatusQuery = useQuery({
     queryKey: ['social-media', 'platform-status', streamer],
-    queryFn: () => fetchPlatformStatus(),
+    queryFn: () => fetchPlatformStatus(streamer),
     enabled: !!streamer,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -258,9 +286,26 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
   });
 
   const disconnectMutation = useMutation({
-    mutationFn: (platform: string) => disconnectPlatform(platform),
+    mutationFn: (platform: string) => disconnectPlatform(platform, streamer),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', streamer] });
+    },
+  });
+
+  /** Nachschub aus Twitch holen, der einzige Ausweg aus der Vorratswarnung. */
+  const clipsHolenMutation = useMutation({
+    mutationFn: () => fetchTwitchClips(streamer),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+    },
+  });
+
+  /** Veto: einen bereits eingeplanten Post vor dem Termin stoppen. */
+  const abbrechenMutation = useMutation({
+    mutationFn: (clipDbId: number) => cancelScheduledPost(clipDbId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
     },
   });
 
@@ -287,9 +332,8 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
     },
-    onError: (error) => {
-      window.alert((error as Error).message);
-    },
+    // Kein window.alert mit roher Backend-Meldung: der Fehler steht als Zeile
+    // im Fuss der betroffenen Clip-Karte.
   });
 
   const stats = useMemo(() => {
@@ -349,12 +393,8 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
       <SocialHero streamer={streamer} isDefaultLayout={layoutQuery.data?.is_default ?? false} />
 
       <div className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5">
-        {[
-          { id: 'pool' as const, label: 'Clip-Pool', Icon: Layers3 },
-          { id: 'plan' as const, label: 'Zeitplan', Icon: Calendar },
-          { id: 'veroeffentlicht' as const, label: 'Veröffentlicht', Icon: BarChart3 },
-          { id: 'konten' as const, label: 'Konten', Icon: SlidersHorizontal },
-        ].map(({ id, label, Icon }) => {
+        {SOCIAL_MEDIA_TABS.map(({ id, label }) => {
+          const Icon = TAB_ICONS[id];
           const active = activeView === id;
           return (
             <button
@@ -375,23 +415,27 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
       </div>
 
       {activeView === 'veroeffentlicht' ? (
-        <AnalyticsTab streamer={streamer} clips={clipsQuery.data?.items ?? []} />
+        <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
       ) : activeView === 'plan' ? (
         <div className="space-y-6">
-          <VorratsHinweis pool={postingPlanQuery.data?.pool ?? null} />
+          <VorratsHinweis
+            pool={postingPlanQuery.data?.pool ?? null}
+            onClipsHolen={() => clipsHolenMutation.mutate()}
+            isHolend={clipsHolenMutation.isPending}
+          />
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <ApprovalModeCard
               plan={postingPlanQuery.data ?? null}
               isLoading={postingPlanQuery.isLoading}
               isSaving={approvalModeMutation.isPending}
-              error={approvalModeMutation.error as Error | null}
+              error={approvalModeMutation.error}
               onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
             />
             <CategoryCard
               plan={postingPlanQuery.data ?? null}
               isLoading={postingPlanQuery.isLoading}
               isSaving={categoryMutation.isPending}
-              error={categoryMutation.error as Error | null}
+              error={categoryMutation.error}
               onChange={(categoryKey, autoPost) =>
                 categoryMutation.mutate({ categoryKey, autoPost })
               }
@@ -401,10 +445,13 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                 plan={postingPlanQuery.data ?? null}
                 isLoading={postingPlanQuery.isLoading}
                 isSaving={platformScheduleMutation.isPending}
-                error={platformScheduleMutation.error as Error | null}
+                error={platformScheduleMutation.error}
                 onChange={(platform, payload) =>
                   platformScheduleMutation.mutate({ platform, payload })
                 }
+                isZeitzoneSaving={approvalModeMutation.isPending}
+                zeitzoneError={approvalModeMutation.error}
+                onTimezoneChange={(timezone) => approvalModeMutation.mutate({ timezone })}
               />
             </div>
           </div>
@@ -417,20 +464,25 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
             isLoading={platformStatusQuery.isLoading}
             onDisconnect={(platform) => disconnectMutation.mutate(platform)}
             isDisconnecting={disconnectMutation.isPending}
+            error={disconnectMutation.error}
           />
           <VodArchiveCard
             streamer={streamer}
             settings={vodArchiveQuery.data ?? null}
             isLoading={vodArchiveQuery.isLoading}
             isSaving={vodArchiveMutation.isPending}
-            error={vodArchiveMutation.error as Error | null}
+            error={vodArchiveMutation.error}
             onChange={(next) => vodArchiveMutation.mutate(next)}
           />
           <LanguageCard />
         </div>
       ) : (
         <>
-          <VorratsHinweis pool={postingPlanQuery.data?.pool ?? null} />
+          <VorratsHinweis
+            pool={postingPlanQuery.data?.pool ?? null}
+            onClipsHolen={() => clipsHolenMutation.mutate()}
+            isHolend={clipsHolenMutation.isPending}
+          />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <KpiCard
               title={t('Clips im Pool')}
@@ -483,7 +535,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
               {saveLayoutMutation.isError && (
                 <div className="text-xs text-danger px-3">
                   {t('Speichern fehlgeschlagen: {message}', {
-                    message: (saveLayoutMutation.error as Error).message,
+                    message: fehlerText(saveLayoutMutation.error, t) ?? '',
                   })}
                 </div>
               )}
@@ -507,12 +559,36 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                 <Layers3 className="w-5 h-5 text-orange" /> {t('Pipeline')}
               </h3>
               <StatusFilter value={statusFilter} onChange={setStatusFilter} />
+              <button
+                type="button"
+                onClick={() => clipsHolenMutation.mutate()}
+                disabled={clipsHolenMutation.isPending || !streamer}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-teal/35 bg-teal/12 px-3 py-1.5 text-xs font-bold text-teal hover:bg-teal/20 disabled:opacity-50"
+              >
+                {clipsHolenMutation.isPending ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <DownloadCloud className="w-3.5 h-3.5" />
+                )}
+                {t('Clips jetzt holen')}
+              </button>
               <div className="ml-auto text-xs text-text-secondary">
                 {clipsQuery.isFetching
                   ? t('Aktualisiere…')
                   : t('{count} Treffer', { count: clipsQuery.data?.items.length ?? 0 })}
               </div>
             </div>
+
+            {clipsHolenMutation.isError && (
+              <div className="text-xs text-danger">{fehlerText(clipsHolenMutation.error, t)}</div>
+            )}
+            {clipsHolenMutation.isSuccess && !clipsHolenMutation.isPending && (
+              <div className="text-xs text-success">
+                {t('{count} Clips von Twitch geholt.', {
+                  count: clipsHolenMutation.data?.clips_found ?? 0,
+                })}
+              </div>
+            )}
 
             {clipsQuery.isLoading ? (
               <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
@@ -537,6 +613,7 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                     <ClipCard
                       key={clip.clip_db_id}
                       clip={clip}
+                      timezone={postingPlanQuery.data?.timezone ?? 'Europe/Berlin'}
                       editingMode={editingMode}
                       onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
                       onCloseEditor={() => setEditingClip(null)}
@@ -564,6 +641,26 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
                       approvalPending={
                         approvalMutation.isPending &&
                         approvalMutation.variables?.clipDbId === clip.clip_db_id
+                      }
+                      onCancelScheduled={() => abbrechenMutation.mutate(clip.clip_db_id)}
+                      cancelPending={
+                        abbrechenMutation.isPending &&
+                        abbrechenMutation.variables === clip.clip_db_id
+                      }
+                      cancelResult={
+                        abbrechenMutation.isSuccess &&
+                        abbrechenMutation.variables === clip.clip_db_id
+                          ? abbrechenMutation.data
+                          : null
+                      }
+                      fehler={
+                        approvalMutation.variables?.clipDbId === clip.clip_db_id
+                          ? approvalMutation.error
+                          : overrideMutation.variables?.clipDbId === clip.clip_db_id
+                            ? overrideMutation.error
+                            : abbrechenMutation.variables === clip.clip_db_id
+                              ? abbrechenMutation.error
+                              : null
                       }
                     />
                   );
@@ -643,30 +740,22 @@ function StatusFilter({
   onChange: (next: ClipStatus | 'all') => void;
 }) {
   const t = useT();
-  const items: Array<{ id: ClipStatus | 'all'; label: string }> = [
-    { id: 'pending', label: 'Wartend' },
-    { id: 'enriched', label: 'Aufbereitet' },
-    { id: 'awaiting_approval', label: 'Freigabe' },
-    { id: 'published_all', label: 'Veröffentlicht' },
-    { id: 'discarded', label: 'Verworfen' },
-    { id: 'all', label: 'Alle' },
-  ];
   return (
     <div className="inline-flex flex-wrap rounded-xl border border-border bg-bg/60 p-1 gap-1">
-      {items.map((item) => {
-        const active = item.id === value;
+      {STATUS_FILTER_IDS.map((id) => {
+        const active = id === value;
         return (
           <button
-            key={item.id}
+            key={id}
             type="button"
-            onClick={() => onChange(item.id)}
+            onClick={() => onChange(id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
               active
                 ? 'bg-gradient-to-r from-orange/80 to-teal/70 text-white shadow-[0_4px_18px_-6px_rgba(201, 168, 106, 0.45)]'
                 : 'text-text-secondary hover:text-white'
             }`}
           >
-            {t(item.label)}
+            {t(statusFilterLabel(id))}
           </button>
         );
       })}
@@ -678,7 +767,8 @@ interface UploadCardProps {
   streamer: string;
   onUpload: (file: File) => void;
   isUploading: boolean;
-  uploadError: Error | null;
+  /** Kommt als Fehlercode aus dem API-Modul und wird hier erst uebersetzt. */
+  uploadError: unknown;
   uploadSuccess: boolean;
 }
 
@@ -758,9 +848,9 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
           <Loader2 className="w-4 h-4 animate-spin" /> {t('Upload läuft…')}
         </div>
       )}
-      {uploadError && (
-        <div className="text-xs text-danger">{uploadError.message}</div>
-      )}
+      {uploadError ? (
+        <div className="text-xs text-danger">{fehlerText(uploadError, t)}</div>
+      ) : null}
       {uploadSuccess && !isUploading && (
         <div className="text-xs text-success inline-flex items-center gap-1.5">
           <CheckCircle2 className="w-3.5 h-3.5" /> {t('Upload erfolgreich. Clip ist in der Pipeline.')}
@@ -779,22 +869,6 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
   );
 }
 
-/** Beschriftung und Erklaerung der drei Freigabe-Modi. */
-const APPROVAL_MODE_TEXTE: Record<ApprovalMode, { label: string; hinweis: string }> = {
-  manual: {
-    label: 'Nur nach Freigabe',
-    hinweis: 'Jeder Clip wartet auf dein Okay.',
-  },
-  veto_window: {
-    label: 'Einspruch bis zum Termin',
-    hinweis: 'Clips werden eingeplant. Du kannst sie bis zum Posting stoppen.',
-  },
-  full_auto: {
-    label: 'Vollautomatik',
-    hinweis: 'Clips gehen ohne Sichtung raus.',
-  },
-};
-
 /**
  * Freigabe-Modus des Kanals. Eine Entscheidung mit drei Stufen, deshalb
  * Segment-Knoepfe statt Dropdown: alle Optionen sind gleichzeitig sichtbar.
@@ -809,7 +883,7 @@ function ApprovalModeCard({
   plan: PostingPlan | null;
   isLoading: boolean;
   isSaving: boolean;
-  error: Error | null;
+  error: unknown;
   onChange: (mode: ApprovalMode) => void;
 }) {
   const t = useT();
@@ -853,7 +927,7 @@ function ApprovalModeCard({
           );
         })}
       </div>
-      {error && <div className="text-xs text-danger">{error.message}</div>}
+      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
 }
@@ -876,25 +950,124 @@ function formatTermin(iso: string | null, locale: string): string | null {
  * Auto-Posting und Kadenz je Plattform. Die Defaults kommen aus der Recherche:
  * hoechstens ein Post pro Tag, rund vier pro Woche.
  */
+/** Was in den drei Feldern einer Plattform steht, waehrend getippt wird. */
+interface ZeitplanFormular {
+  postsProWoche: string;
+  maxProTag: string;
+  zeiten: string;
+}
+
+const ZEIT_MUSTER = /^\d{2}:\d{2}$/;
+
+/**
+ * Prueft die Eingabe, bevor sie zum Backend geht. Das Backend antwortet auf
+ * eine leere Liste mit 400, und die alte Kadenz laeuft unbemerkt weiter: der
+ * Fehler muss deshalb am Feld stehen, nicht erst nach dem Speichern.
+ */
+function pruefeZeiten(eingabe: string): { zeiten: string[] } | { fehler: string } {
+  const zeiten = eingabe
+    .split(',')
+    .map((wert) => wert.trim())
+    .filter(Boolean);
+  if (zeiten.length === 0) return { fehler: FELD_FEHLER.zeitLeer };
+  if (zeiten.length > 12) return { fehler: FELD_FEHLER.zuVieleZeiten };
+  for (const zeit of zeiten) {
+    if (!ZEIT_MUSTER.test(zeit)) return { fehler: FELD_FEHLER.zeitFormat };
+    const [stunde, minute] = zeit.split(':').map(Number);
+    if (stunde > 23 || minute > 59) return { fehler: FELD_FEHLER.zeitUngueltig };
+  }
+  return { zeiten };
+}
+
+/** Zeitzonenliste des Browsers, der eigene Standard steht vorn. */
+function zeitzonenListe(aktuelle: string): string[] {
+  let alle: string[];
+  try {
+    alle = Intl.supportedValuesOf('timeZone');
+  } catch {
+    // Aeltere Browser kennen supportedValuesOf nicht; dann bleibt die Liste
+    // auf dem eigenen Standard plus der gespeicherten Zone.
+    alle = [];
+  }
+  const vorn = ['Europe/Berlin', aktuelle].filter(
+    (zone, index, liste) => zone && liste.indexOf(zone) === index,
+  );
+  return [...vorn, ...alle.filter((zone) => !vorn.includes(zone))];
+}
+
 function PostingScheduleCard({
   plan,
   isLoading,
   isSaving,
   error,
   onChange,
+  isZeitzoneSaving,
+  zeitzoneError,
+  onTimezoneChange,
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
   isSaving: boolean;
-  error: Error | null;
+  error: unknown;
   onChange: (
     platform: SocialPlatform,
     payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
   ) => void;
+  isZeitzoneSaving: boolean;
+  zeitzoneError: unknown;
+  onTimezoneChange: (timezone: string) => void;
 }) {
   const t = useT();
   const { language } = useLanguage();
   const locale = language === 'en' ? 'en-GB' : 'de-DE';
+  const zeitzone = plan?.timezone ?? 'Europe/Berlin';
+  const zonen = useMemo(() => zeitzonenListe(zeitzone), [zeitzone]);
+
+  const [formular, setFormular] = useState<Record<string, ZeitplanFormular>>({});
+  const [feldFehler, setFeldFehler] = useState<Record<string, string>>({});
+
+  // Kontrollierte Felder brauchen einen Abgleich mit der Serverantwort: das
+  // Backend sortiert und entdoppelt die Zeiten, und die Karte wird bei einer
+  // Planaenderung nicht neu gemountet. Nur der Inhalt ist die Abhaengigkeit,
+  // nicht die Objektidentitaet, sonst wird waehrend des Tippens ueberschrieben.
+  const serverStand = JSON.stringify(
+    (plan?.platforms ?? []).map((eintrag) => [
+      eintrag.platform,
+      eintrag.posts_per_week,
+      eintrag.max_posts_per_day,
+      eintrag.post_times,
+    ]),
+  );
+
+  useEffect(() => {
+    const naechstes: Record<string, ZeitplanFormular> = {};
+    for (const eintrag of plan?.platforms ?? []) {
+      naechstes[eintrag.platform] = {
+        postsProWoche: String(eintrag.posts_per_week),
+        maxProTag: String(eintrag.max_posts_per_day),
+        zeiten: eintrag.post_times.join(', '),
+      };
+    }
+    setFormular(naechstes);
+    setFeldFehler({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverStand]);
+
+  const setzeFeld = (platform: string, feld: keyof ZeitplanFormular, wert: string) => {
+    setFormular((aktuell) => ({
+      ...aktuell,
+      [platform]: { ...aktuell[platform], [feld]: wert },
+    }));
+  };
+
+  const setzeFehler = (schluessel: string, text: string | null) => {
+    setFeldFehler((aktuell) => {
+      const naechstes = { ...aktuell };
+      if (text) naechstes[schluessel] = text;
+      else delete naechstes[schluessel];
+      return naechstes;
+    });
+  };
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
@@ -903,15 +1076,46 @@ function PostingScheduleCard({
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
           {t('Zeitplan')}
         </h3>
-        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
+        {(isSaving || isZeitzoneSaving) && (
+          <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />
+        )}
       </div>
+
+      <label className="block">
+        <span className="text-xs text-text-secondary">{t('Zeitzone des Kanals')}</span>
+        <select
+          value={zeitzone}
+          disabled={isLoading || isZeitzoneSaving}
+          onChange={(event) => onTimezoneChange(event.target.value)}
+          className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white disabled:opacity-60"
+        >
+          {zonen.map((zone) => (
+            <option key={zone} value={zone}>
+              {zone}
+            </option>
+          ))}
+        </select>
+      </label>
       <p className="text-sm text-text-secondary">
-        {t('Zeiten gelten in {tz}.', { tz: plan?.timezone ?? 'Europe/Berlin' })}
+        {t('Zeiten gelten in {tz}.', { tz: zeitzone })}
       </p>
+      {zeitzoneError ? (
+        <div className="text-xs text-danger">{fehlerText(zeitzoneError, t)}</div>
+      ) : null}
 
       <div className="space-y-3">
         {(plan?.platforms ?? []).map((eintrag) => {
           const termin = formatTermin(eintrag.next_slot, locale);
+          const werte = formular[eintrag.platform] ?? {
+            postsProWoche: String(eintrag.posts_per_week),
+            maxProTag: String(eintrag.max_posts_per_day),
+            zeiten: eintrag.post_times.join(', '),
+          };
+          const zeitenFehler = feldFehler[`${eintrag.platform}:zeiten`];
+          // Die Kadenz bleibt sichtbar und aenderbar, auch wenn Auto-Posting
+          // aus ist: sonst laesst sie sich nicht vorbereiten und wirkt beim
+          // naechsten Einschalten wie aus dem Nichts.
+          const gedaempft = eintrag.auto_post ? '' : 'opacity-60';
           return (
             <div
               key={eintrag.platform}
@@ -944,74 +1148,115 @@ function PostingScheduleCard({
                 </button>
               </div>
 
-              {eintrag.auto_post && (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="block">
-                      <span className="text-xs text-text-secondary">{t('Posts pro Woche')}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={70}
-                        defaultValue={eintrag.posts_per_week}
-                        disabled={isSaving}
-                        onBlur={(event) => {
-                          const wert = Number(event.target.value);
-                          if (!Number.isFinite(wert) || wert === eintrag.posts_per_week) return;
-                          onChange(eintrag.platform, { posts_per_week: wert });
-                        }}
-                        className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs text-text-secondary">{t('Höchstens pro Tag')}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        defaultValue={eintrag.max_posts_per_day}
-                        disabled={isSaving}
-                        onBlur={(event) => {
-                          const wert = Number(event.target.value);
-                          if (!Number.isFinite(wert) || wert === eintrag.max_posts_per_day) return;
-                          onChange(eintrag.platform, { max_posts_per_day: wert });
-                        }}
-                        className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
-                      />
-                    </label>
-                  </div>
+              <div className={`space-y-3 ${gedaempft}`}>
+                {!eintrag.auto_post && (
+                  <p className="text-xs text-text-secondary">
+                    {t('Gilt, sobald Auto-Posting an ist.')}
+                  </p>
+                )}
+                <div className="grid grid-cols-2 gap-3">
                   <label className="block">
-                    <span className="text-xs text-text-secondary">
-                      {t('Uhrzeiten, mit Komma getrennt')}
-                    </span>
+                    <span className="text-xs text-text-secondary">{t('Posts pro Woche')}</span>
                     <input
-                      type="text"
-                      defaultValue={eintrag.post_times.join(', ')}
-                      placeholder="18:00, 21:00"
+                      type="number"
+                      min={0}
+                      max={70}
+                      value={werte.postsProWoche}
                       disabled={isSaving}
-                      onBlur={(event) => {
-                        const zeiten = event.target.value
-                          .split(',')
-                          .map((wert) => wert.trim())
-                          .filter(Boolean);
-                        if (zeiten.join(',') === eintrag.post_times.join(',')) return;
-                        onChange(eintrag.platform, { post_times: zeiten });
+                      onChange={(event) =>
+                        setzeFeld(eintrag.platform, 'postsProWoche', event.target.value)
+                      }
+                      onBlur={() => {
+                        const wert = Number(werte.postsProWoche);
+                        const schluessel = `${eintrag.platform}:woche`;
+                        if (!Number.isFinite(wert) || werte.postsProWoche.trim() === '') {
+                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
+                          return;
+                        }
+                        setzeFehler(schluessel, null);
+                        if (wert === eintrag.posts_per_week) return;
+                        onChange(eintrag.platform, { posts_per_week: wert });
                       }}
                       className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
                     />
+                    {feldFehler[`${eintrag.platform}:woche`] && (
+                      <span className="mt-1 block text-xs text-danger">
+                        {t(feldFehler[`${eintrag.platform}:woche`])}
+                      </span>
+                    )}
                   </label>
-                  {termin && (
-                    <div className="text-xs text-text-secondary">
-                      {t('Nächster Post: {termin}', { termin })}
-                    </div>
+                  <label className="block">
+                    <span className="text-xs text-text-secondary">{t('Höchstens pro Tag')}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10}
+                      value={werte.maxProTag}
+                      disabled={isSaving}
+                      onChange={(event) =>
+                        setzeFeld(eintrag.platform, 'maxProTag', event.target.value)
+                      }
+                      onBlur={() => {
+                        const wert = Number(werte.maxProTag);
+                        const schluessel = `${eintrag.platform}:tag`;
+                        if (!Number.isFinite(wert) || werte.maxProTag.trim() === '') {
+                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
+                          return;
+                        }
+                        setzeFehler(schluessel, null);
+                        if (wert === eintrag.max_posts_per_day) return;
+                        onChange(eintrag.platform, { max_posts_per_day: wert });
+                      }}
+                      className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                    />
+                    {feldFehler[`${eintrag.platform}:tag`] && (
+                      <span className="mt-1 block text-xs text-danger">
+                        {t(feldFehler[`${eintrag.platform}:tag`])}
+                      </span>
+                    )}
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-xs text-text-secondary">
+                    {t('Uhrzeiten, mit Komma getrennt')}
+                  </span>
+                  <input
+                    type="text"
+                    value={werte.zeiten}
+                    placeholder="18:00, 21:00"
+                    disabled={isSaving}
+                    onChange={(event) => setzeFeld(eintrag.platform, 'zeiten', event.target.value)}
+                    onBlur={() => {
+                      const schluessel = `${eintrag.platform}:zeiten`;
+                      const ergebnis = pruefeZeiten(werte.zeiten);
+                      if ('fehler' in ergebnis) {
+                        setzeFehler(schluessel, ergebnis.fehler);
+                        return;
+                      }
+                      setzeFehler(schluessel, null);
+                      if (ergebnis.zeiten.join(',') === eintrag.post_times.join(',')) return;
+                      onChange(eintrag.platform, { post_times: ergebnis.zeiten });
+                    }}
+                    className={`mt-1 w-full rounded-lg border bg-background/80 px-3 py-2 text-sm text-white ${
+                      zeitenFehler ? 'border-danger' : 'border-border'
+                    }`}
+                  />
+                  {zeitenFehler && (
+                    <span className="mt-1 block text-xs text-danger">{t(zeitenFehler)}</span>
                   )}
-                </>
+                </label>
+              </div>
+
+              {termin && eintrag.auto_post && (
+                <div className="text-xs text-text-secondary">
+                  {t('Nächster Post: {termin}', { termin })}
+                </div>
               )}
             </div>
           );
         })}
       </div>
-      {error && <div className="text-xs text-danger">{error.message}</div>}
+      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
 }
@@ -1030,7 +1275,7 @@ function CategoryCard({
   plan: PostingPlan | null;
   isLoading: boolean;
   isSaving: boolean;
-  error: Error | null;
+  error: unknown;
   onChange: (categoryKey: string, autoPost: boolean) => void;
 }) {
   const t = useT();
@@ -1052,7 +1297,7 @@ function CategoryCard({
           >
             <span>
               <span className="block text-sm font-semibold text-white">
-                {kategorie.display_name}
+                {t(kategorieLabel(kategorie.category_key, kategorie.display_name))}
               </span>
               <span className="block text-xs text-text-secondary mt-0.5">
                 {kategorie.enrichment_enabled
@@ -1070,7 +1315,7 @@ function CategoryCard({
           </label>
         ))}
       </div>
-      {error && <div className="text-xs text-danger">{error.message}</div>}
+      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
 }
@@ -1080,14 +1325,22 @@ function CategoryCard({
  * und nicht kleingedruckt in einer Karte: wer keinen Nachschub liefert, hoert
  * irgendwann auf zu posten, ohne es zu merken.
  */
-function VorratsHinweis({ pool }: { pool: ClipPoolForecast | null }) {
+function VorratsHinweis({
+  pool,
+  onClipsHolen,
+  isHolend,
+}: {
+  pool: ClipPoolForecast | null;
+  onClipsHolen: () => void;
+  isHolend: boolean;
+}) {
   const t = useT();
   if (!pool || pool.aktive_plattformen === 0) return null;
 
   const knapp = pool.warnung;
   return (
     <div
-      className={`rounded-xl border px-4 py-3 flex items-center gap-3 ${
+      className={`rounded-xl border px-4 py-3 flex flex-wrap items-center gap-3 ${
         knapp ? 'border-warning/45 bg-warning/10' : 'border-border bg-bg/40'
       }`}
     >
@@ -1106,6 +1359,23 @@ function VorratsHinweis({ pool }: { pool: ClipPoolForecast | null }) {
               })}
         </div>
       </div>
+      {/* Die Warnung ohne Ausweg war die eigentliche Luecke: hier steht der
+          Knopf, der den Vorrat wieder auffuellt. */}
+      {knapp && (
+        <button
+          type="button"
+          onClick={onClipsHolen}
+          disabled={isHolend}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl border border-warning/45 bg-warning/15 px-3 py-1.5 text-xs font-bold text-warning hover:bg-warning/25 disabled:opacity-50"
+        >
+          {isHolend ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <DownloadCloud className="w-3.5 h-3.5" />
+          )}
+          {t('Clips jetzt holen')}
+        </button>
+      )}
     </div>
   );
 }
@@ -1118,12 +1388,6 @@ function VorratsHinweis({ pool }: { pool: ClipPoolForecast | null }) {
  * Gilt immer fuer den gerade gewaehlten Kanal, deshalb steht er in der
  * Ueberschrift: die Seite zeigt je nach Auswahl unterschiedliche Schalter.
  */
-const PLATFORM_LABELS: Record<string, string> = {
-  youtube: 'YouTube',
-  tiktok: 'TikTok',
-  instagram: 'Instagram',
-};
-
 /// Verbindungen zu den Plattformen. Der OAuth-Flow ist ein Redirect auf den
 /// Anbieter, deshalb ist "Verbinden" ein Link und kein fetch.
 function PlatformConnectionsCard({
@@ -1132,15 +1396,16 @@ function PlatformConnectionsCard({
   isLoading,
   onDisconnect,
   isDisconnecting,
+  error,
 }: {
   streamer: string;
   platforms: PlatformStatus[];
   isLoading: boolean;
   onDisconnect: (platform: string) => void;
   isDisconnecting: boolean;
+  error: unknown;
 }) {
-  const t = useT();
-  const known = ['youtube', 'tiktok', 'instagram'];
+  const { t, locale } = useLanguage();
   const byName = new Map(platforms.map((p) => [p.platform, p]));
 
   return (
@@ -1148,15 +1413,42 @@ function PlatformConnectionsCard({
       <div className="flex items-center gap-2">
         <ExternalLink className="w-4 h-4 text-orange" />
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('Verbindungen')}
+          {t('Verbindungen')} · {streamer}
         </h3>
         {isLoading && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
 
       <div className="space-y-2">
-        {known.map((platform) => {
+        {PLATTFORMEN.map((platform) => {
           const status = byName.get(platform);
           const connected = status?.connected ?? false;
+          // Ein abgelaufener Zugang, dessen Erneuerung dauerhaft scheitert,
+          // sieht sonst aus wie eine gesunde Verbindung, waehrend jeder Upload
+          // ins Leere laeuft.
+          const abgelaufen = connected && (status?.expired ?? false);
+          const sammelverbindung = connected && !abgelaufen && (status?.uses_global_fallback ?? false);
+          const ablauf = status?.expires_at
+            ? new Date(status.expires_at).toLocaleDateString(locale, {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+              })
+            : null;
+
+          let zeile: string;
+          let tonKlasse = 'text-text-secondary';
+          if (!connected) {
+            zeile = t('nicht verbunden');
+          } else if (abgelaufen) {
+            zeile = t('Zugang abgelaufen, bitte neu verbinden');
+            tonKlasse = 'text-warning';
+          } else if (sammelverbindung) {
+            zeile = t('nutzt die Sammelverbindung');
+            tonKlasse = 'text-warning';
+          } else {
+            zeile = status?.username ?? t('verbunden');
+          }
+
           return (
             <div
               key={platform}
@@ -1166,17 +1458,32 @@ function PlatformConnectionsCard({
                 <div className="text-sm font-semibold text-white">
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
-                <div className="text-xs text-text-secondary truncate">
-                  {/* Der Ablauf des Zugangs wird selbst nachgezogen und ist
-                      deshalb keine Meldung wert. */}
-                  {connected ? (status?.username ?? t('verbunden')) : t('nicht verbunden')}
-                </div>
+                <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
+                {connected && !abgelaufen && ablauf && (
+                  <div className="text-[11px] text-text-secondary">
+                    {t('Zugang läuft am {datum} ab.', { datum: ablauf })}
+                  </div>
+                )}
               </div>
-              {connected ? (
+              {connected && !abgelaufen ? (
                 <button
                   type="button"
                   disabled={isDisconnecting}
-                  onClick={() => onDisconnect(platform)}
+                  onClick={() => {
+                    // Der Kanalname gehoert in die Frage: es gibt eine
+                    // Sammelverbindung, und niemand soll aus Versehen alle
+                    // Kanaele kappen.
+                    const frage = sammelverbindung
+                      ? t('{platform} für {streamer} trennen? Der Kanal nutzt die Sammelverbindung.', {
+                          platform: PLATFORM_LABELS[platform] ?? platform,
+                          streamer,
+                        })
+                      : t('{platform} für {streamer} trennen?', {
+                          platform: PLATFORM_LABELS[platform] ?? platform,
+                          streamer,
+                        });
+                    if (window.confirm(frage)) onDisconnect(platform);
+                  }}
                   className="rounded-xl border border-border px-3 py-1.5 text-sm font-semibold text-text-secondary hover:text-white disabled:opacity-40"
                 >
                   {t('Trennen')}
@@ -1184,15 +1491,17 @@ function PlatformConnectionsCard({
               ) : (
                 <a
                   href={oauthStartUrl(platform, streamer)}
-                  className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white"
+                  className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white shrink-0"
                 >
-                  {t('Verbinden')}
+                  {abgelaufen ? t('Neu verbinden') : t('Verbinden')}
                 </a>
               )}
             </div>
           );
         })}
       </div>
+
+      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
 }
@@ -1209,7 +1518,7 @@ function VodArchiveCard({
   settings: VodArchiveSettings | null;
   isLoading: boolean;
   isSaving: boolean;
-  error: Error | null;
+  error: unknown;
   onChange: (next: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) => void;
 }) {
   const t = useT();
@@ -1271,7 +1580,7 @@ function VodArchiveCard({
         </div>
       </div>
 
-      {error && <div className="text-xs text-danger">{error.message}</div>}
+      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
 }
@@ -1319,7 +1628,9 @@ function LanguageCard() {
 }
 
 interface ClipCardProps {
-  clip: SocialClip;
+  clip: SocialClipMitPosting;
+  /** Zeitzone des Kanals, damit geplante Termine nicht in UTC dastehen. */
+  timezone: string;
   editingMode: EditMode | null;
   onOpenEditor: (mode: EditMode) => void;
   onCloseEditor: () => void;
@@ -1328,10 +1639,16 @@ interface ClipCardProps {
   onResetOverride: () => void;
   onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
   approvalPending: boolean;
+  onCancelScheduled: () => void;
+  cancelPending: boolean;
+  cancelResult: { cancelled: number; already_running: number } | null;
+  /** Fehler der letzten Aktion an genau diesem Clip. */
+  fehler: unknown;
 }
 
 function ClipCard({
   clip,
+  timezone,
   editingMode,
   onOpenEditor,
   onCloseEditor,
@@ -1340,12 +1657,34 @@ function ClipCard({
   onResetOverride,
   onApprovalDecision,
   approvalPending,
+  onCancelScheduled,
+  cancelPending,
+  cancelResult,
+  fehler,
 }: ClipCardProps) {
   const { t, locale } = useLanguage();
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const sourceLabel = clip.source_kind === 'manual_upload' ? t('Upload') : t('Twitch');
   const enrichmentTopHashtags = clip.enrichment_summary?.top_hashtags ?? [];
   const enrichmentStatus = clip.enrichment_status;
+
+  // Fehlgeschlagene Uploads ohne Grund sind nicht zu gebrauchen: der Grund je
+  // Plattform steht am Clip und gehoert auf die Karte.
+  const uploadFehler = PLATTFORMEN.map((platform) => ({
+    platform,
+    text: clip.upload_errors?.[platform] ?? null,
+  })).filter((eintrag): eintrag is { platform: SocialPlatform; text: string } => !!eintrag.text);
+  const zeigeUploadFehler =
+    uploadFehler.length > 0 && (clip.status === 'failed' || clip.status === 'published_partial');
+
+  const termine = PLATTFORMEN.map((platform) => ({
+    platform,
+    zeit: clip.scheduled_at?.[platform] ?? null,
+  })).filter((eintrag): eintrag is { platform: SocialPlatform; zeit: string } => !!eintrag.zeit);
+  // Veto-Fenster: solange ein Termin in der Zukunft steht, laesst sich der Post
+  // noch stoppen.
+  const stoppbar = clip.status === 'approved' && termine.length > 0;
+  const fehlerZeile = fehlerText(fehler, t);
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
     clip.approval?.approved_platforms ?? [],
   );
@@ -1421,6 +1760,49 @@ function ClipCard({
           </div>
         )}
 
+        {zeigeUploadFehler && (
+          <div className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
+            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <div className="space-y-1 min-w-0">
+              {uploadFehler.map(({ platform, text }) => (
+                <div key={platform} className="break-words">
+                  <span className="font-bold">{PLATFORM_LABELS[platform] ?? platform}:</span>{' '}
+                  {text}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {termine.length > 0 && (
+          <div className="rounded-lg border border-border bg-bg/30 p-2.5 space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.14em] font-bold text-text-secondary inline-flex items-center gap-1.5">
+              <CalendarClock className="w-3 h-3" /> {t('Eingeplant')}
+            </div>
+            {termine.map(({ platform, zeit }) => (
+              <div key={platform} className="text-xs text-text-secondary">
+                {PLATFORM_LABELS[platform] ?? platform}:{' '}
+                <span className="text-white">{formatTerminInZone(zeit, locale, timezone)}</span>
+              </div>
+            ))}
+            {stoppbar && (
+              <button
+                type="button"
+                onClick={onCancelScheduled}
+                disabled={cancelPending}
+                className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/12 px-2.5 py-1.5 text-xs font-bold text-danger hover:bg-danger/20 disabled:opacity-50"
+              >
+                {cancelPending ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5" />
+                )}
+                {t('Doch nicht posten')}
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="rounded-xl border border-border bg-bg/30 p-3 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1429,7 +1811,9 @@ function ClipCard({
               </p>
               <p className="text-xs text-text-secondary">
                 {clip.approval?.state
-                  ? t('Status: {state}', { state: clip.approval.state })
+                  ? t('Status: {state}', {
+                      state: t(APPROVAL_STATE_LABELS[clip.approval.state] ?? clip.approval.state),
+                    })
                   : t('Wird nach abgeschlossenem Enrichment per DM freigegeben.')}
               </p>
             </div>
@@ -1517,7 +1901,7 @@ function ClipCard({
             <Wand2 className="w-3.5 h-3.5" /> {t('Metadaten')}
             {enrichmentStatus && enrichmentStatus !== 'done' && (
               <span className="text-[9px] uppercase tracking-[0.14em] opacity-80">
-                · {enrichmentStatus}
+                · {t(STATUS_META[enrichmentStatus]?.label ?? enrichmentStatus)}
               </span>
             )}
           </button>
@@ -1533,6 +1917,22 @@ function ClipCard({
             <Pencil className="w-3.5 h-3.5" /> {t('Layout')}
           </button>
         </div>
+
+        {/* Steht ausserhalb der Terminliste: nach dem Stoppen verschwinden die
+            Termine, die Rueckmeldung soll trotzdem stehen bleiben. */}
+        {cancelResult && (
+          <div className="text-xs text-text-secondary border-t border-border pt-2">
+            {cancelResult.already_running > 0
+              ? t('Gestoppt, aber {count} Plattform war schon durch.', {
+                  count: cancelResult.already_running,
+                })
+              : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
+          </div>
+        )}
+
+        {fehlerZeile && (
+          <div className="text-xs text-danger border-t border-danger/20 pt-2">{fehlerZeile}</div>
+        )}
       </div>
 
       {editingMode === 'layout' && (

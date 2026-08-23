@@ -472,6 +472,89 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
     queued
 }
 
+/// Was ein Abbruch tatsaechlich erreicht hat.
+///
+/// `cancelled` sind die Queue-Zeilen, die noch unangetastet waren und geloescht
+/// wurden. `already_running` sind die Zeilen, die schon laufen oder durch sind:
+/// die bleiben stehen, damit die Oberflaeche sagen kann, dass eine Plattform
+/// schon raus ist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CancelOutcome {
+    pub cancelled: i64,
+    pub already_running: i64,
+}
+
+/// Stoppt die eingeplanten, noch nicht angefassten Uploads eines Clips und
+/// setzt ihn zurueck auf „wartet auf Freigabe".
+///
+/// Das ist die Gegenrichtung zu [`ensure_queued_uploads`] und macht den Modus
+/// `veto_window` erst ehrlich: eingeplant heisst dort, dass man bis zum Termin
+/// noch eingreifen kann.
+///
+/// Angefasst wird nur, was noch `pending` ist. Eine Zeile in `processing` oder
+/// `completed` bleibt unberuehrt und wird nur gezaehlt; ein laufender oder
+/// fertiger Upload laesst sich nicht mehr zurueckholen.
+///
+/// Der Clip-Status wird wie in [`mark_clip_awaiting_approval`] nur gesetzt,
+/// solange er nicht schon in einem Endzustand steht (`published_all`,
+/// `published_partial`, `discarded`); ein bereits veroeffentlichter Clip soll
+/// durch einen ins Leere laufenden Abbruch nicht wieder als offen erscheinen.
+pub async fn cancel_scheduled_uploads(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<CancelOutcome, ApprovalError> {
+    if !clip_exists(pool, clip_db_id).await {
+        return Err(ApprovalError::ClipNotFound(clip_db_id));
+    }
+    let mut tx = pool.begin().await?;
+
+    let already_running: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clips_upload_queue \
+         WHERE clip_id = $1 AND status IN ('processing', 'completed')",
+    )
+    .bind(i64::from(clip_db_id))
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let cancelled = sqlx::query(
+        "DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status = 'pending'",
+    )
+    .bind(i64::from(clip_db_id))
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    // Approval-Zeile zurueck auf „wartet auf Freigabe": die alte Entscheidung
+    // ist mit dem Abbruch hinfaellig, die Plattform-Auswahl also auch. Die
+    // Discord-DM-Verweise bleiben stehen, die DM existiert weiterhin.
+    sqlx::query(
+        "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) \
+         VALUES ($1, $2, '[]'::jsonb) \
+         ON CONFLICT (clip_db_id) DO UPDATE SET state = EXCLUDED.state, \
+             approved_platforms = EXCLUDED.approved_platforms, approver_user_id = NULL, \
+             decided_at = NULL",
+    )
+    .bind(clip_db_id)
+    .bind(STATE_AWAITING)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET status = $1 WHERE id = $2 \
+         AND COALESCE(status, '') NOT IN ('published_all', 'published_partial', 'discarded')",
+    )
+    .bind(STATE_AWAITING)
+    .bind(i64::from(clip_db_id))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(CancelOutcome {
+        cancelled: cancelled as i64,
+        already_running,
+    })
+}
+
 async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
     sqlx::query_scalar!(
         "SELECT 1 AS \"exists!\" FROM twitch_clips_social_media WHERE id = $1",
@@ -669,5 +752,107 @@ mod tests {
         // serialize.
         let v = serialize_approval_record(&rec);
         assert_eq!(v["state"], "awaiting_approval");
+    }
+
+    #[tokio::test]
+    async fn abbruch_raeumt_rein_wartende_uploads_ab() {
+        let Some(pool) = make_pool("t_sm_approval_cancel").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string(), "tiktok".to_string()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+        let offen: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status = 'pending'",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(offen, 2, "zwei eingeplante Uploads erwartet");
+
+        let outcome = cancel_scheduled_uploads(&pool, clip).await.unwrap();
+        assert_eq!(outcome.cancelled, 2);
+        assert_eq!(outcome.already_running, 0);
+
+        let rest: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rest, 0, "Queue muss leer sein");
+
+        let rec = get_approval_record(&pool, clip).await.unwrap();
+        assert_eq!(rec.state, STATE_AWAITING);
+        assert!(rec.approved_platforms.is_empty());
+        assert!(rec.approver_user_id.is_none());
+        let cstatus: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_social_media WHERE id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(cstatus, STATE_AWAITING);
+    }
+
+    #[tokio::test]
+    async fn abbruch_laesst_laufenden_upload_stehen_und_meldet_ihn() {
+        let Some(pool) = make_pool("t_sm_approval_cancel_run").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string(), "tiktok".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+        // Eine Plattform ist schon unterwegs.
+        sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET status = 'processing' \
+             WHERE clip_id = $1 AND platform = 'youtube'",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = cancel_scheduled_uploads(&pool, clip).await.unwrap();
+        assert_eq!(outcome.cancelled, 1, "nur der wartende Upload faellt weg");
+        assert_eq!(outcome.already_running, 1);
+
+        let rest: Vec<(String, String)> = sqlx::query_as(
+            "SELECT platform, status FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(clip)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rest,
+            vec![("youtube".to_string(), "processing".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn abbruch_unbekannter_clip_ist_clip_not_found() {
+        let Some(pool) = make_pool("t_sm_approval_cancel_404").await else {
+            return;
+        };
+        assert!(matches!(
+            cancel_scheduled_uploads(&pool, 4242).await,
+            Err(ApprovalError::ClipNotFound(4242))
+        ));
     }
 }
