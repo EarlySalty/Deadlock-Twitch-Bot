@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, Loader2, Power, TriangleAlert } from 'lucide-react';
+import { Check, ChevronDown, Loader2, Power } from 'lucide-react';
 import {
   PROFIL_WERTE,
   UPLINK_PROFILE,
@@ -12,31 +12,9 @@ import type {
   UplinkDestination,
   UplinkManuellesProfil,
   UplinkPlattform,
+  UplinkProfilAnsicht,
   UplinkProfilName,
 } from '@/api/uplink';
-
-/**
- * Fallback-Grenzen, falls der Caps-Aufruf nicht durchkommt.
- *
- * Dieselben Zahlen wie der Ingest-Deckel in rs-relay. Sie sind absichtlich
- * grosszuegig: das Klemmen macht das Relay, hier geht es nur darum, einen
- * Tippfehler mit einer Null zu viel abzufangen, bevor er abgeschickt wird.
- */
-const INGEST_FALLBACK: UplinkCaps = {
-  platform: 'ingest',
-  max_width: 2560,
-  max_height: 1440,
-  max_fps: 60,
-  max_bitrate_kbps: 30000,
-  force_cbr: false,
-};
-
-/** Die kleinere der beiden Grenzen. `null` heisst "klemmt hier nicht". */
-function engereGrenze(a: number | null, b: number | null): number | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return Math.min(a, b);
-}
 
 type Modus = 'stufe' | 'manuell';
 
@@ -46,21 +24,18 @@ function ZahlFeld({
   label,
   einheit,
   wert,
-  max,
-  hart,
+  empfehlung,
   onChange,
 }: {
   label: string;
   einheit: string;
-  /** Was die Plattform annimmt. Nur ein Hinweis, kein Verbot. */
-  max: number | null;
-  hart: number | null;
+  /** Was die Plattform empfiehlt. Nur ein Hinweis, keine Grenze. */
+  empfehlung: number | null;
   wert: string;
   onChange: (wert: string) => void;
 }) {
   const zahl = Number(wert);
-  const ueberPlattform = max !== null && Number.isFinite(zahl) && zahl > max;
-  const ueberHart = hart !== null && Number.isFinite(zahl) && zahl > hart;
+  const darueber = empfehlung !== null && Number.isFinite(zahl) && zahl > empfehlung;
   return (
     <label className="block space-y-1">
       <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
@@ -75,16 +50,26 @@ function ZahlFeld({
         />
         <span className="shrink-0 text-xs text-text-secondary">{einheit}</span>
       </span>
-      {ueberHart ? (
-        <span className="block text-[11px] text-warning">nehmen wir nicht an, max. {hart}</span>
-      ) : ueberPlattform ? (
-        <span className="block text-[11px] text-warning">
-          über {max}, das rechnen wir herunter
+      {/* Bewusst dieselbe ruhige Farbe wie der Normalfall: hier ist nichts
+          kaputt und nichts abgelehnt, es ist nur ein Wert oberhalb dessen, was
+          die Plattform vorschlaegt. Ein rotes Feld waere eine Falschaussage.
+          Kurz gehalten: die Spalte ist schmal, und wessen Empfehlung das ist,
+          steht in der Ueberschrift ueber den Feldern. Was daraus folgt, steht
+          im Satz darunter, nicht viermal nebeneinander. */}
+      {empfehlung !== null ? (
+        <span className="block text-[11px] text-text-secondary">
+          {darueber ? `über der Empfehlung: ${empfehlung}` : `Empfehlung: ${empfehlung}`}
         </span>
-      ) : max !== null ? (
-        <span className="block text-[11px] text-text-secondary">bis {max} geht 1:1 raus</span>
       ) : null}
     </label>
+  );
+}
+
+/** Gleiche Werte? Entscheidet, ob im Kopf "nicht gespeichert" steht. */
+function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht | undefined) {
+  if (!a || !b) return false;
+  return (
+    a.width === b.width && a.height === b.height && a.fps === b.fps && a.bitrate_kbps === b.bitrate_kbps
   );
 }
 
@@ -102,7 +87,6 @@ export function ZielKarte({
   rtmpVorgabe,
   ziel,
   caps,
-  ingest,
   offenStart,
 }: {
   platform: UplinkPlattform;
@@ -110,7 +94,6 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
-  ingest: UplinkCaps | undefined;
   offenStart: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -177,29 +160,23 @@ export function ZielKarte({
     setModus('manuell');
   };
 
-  // Abgelehnt wird nur, was ueber den Ingest-Deckel geht: mehr nimmt das Relay
-  // physisch nicht an. Das Plattform-Cap ist ausdruecklich KEINE Ablehnung.
-  // Das Relay speichert `requested` ungeklemmt, damit eine spaeter angehobene
-  // Grenze ohne Zutun greift, und der Stufenmodus laesst 1440p fuer jede
-  // Plattform zu. Eine Client-Ablehnung an derselben Stelle waere ein
-  // Widerspruch zu beidem und zu dem Satz, der unter den Feldern steht.
-  const hartesMax = {
-    width: ingest?.max_width ?? INGEST_FALLBACK.max_width,
-    height: ingest?.max_height ?? INGEST_FALLBACK.max_height,
-    fps: ingest?.max_fps ?? INGEST_FALLBACK.max_fps,
-    bitrate_kbps: ingest?.max_bitrate_kbps ?? INGEST_FALLBACK.max_bitrate_kbps,
-  };
-  // Was die Plattform davon wirklich annimmt. Steht als Hinweis am Feld, ohne
-  // die Eingabe zu blockieren.
-  const plattformMax = {
-    width: engereGrenze(caps?.max_width ?? null, hartesMax.width),
-    height: engereGrenze(caps?.max_height ?? null, hartesMax.height),
-    fps: engereGrenze(caps?.max_fps ?? null, hartesMax.fps),
-    bitrate_kbps: engereGrenze(caps?.max_bitrate_kbps ?? null, hartesMax.bitrate_kbps),
+  // Was die Plattform vorschlaegt. Steht als Hinweis am Feld und sonst
+  // nirgends: es gibt keine Obergrenze mehr, gegen die hier jemand pruefen
+  // koennte. Was eingestellt ist, geht genau so raus.
+  const plattformEmpfehlung = {
+    width: caps?.recommended_width ?? null,
+    height: caps?.recommended_height ?? null,
+    fps: caps?.recommended_fps ?? null,
+    bitrate_kbps: caps?.recommended_bitrate_kbps ?? null,
   };
 
-  /** Prueft die manuellen Zahlen, bevor sie abgeschickt werden. Der Server
-   *  prueft noch einmal; hier geht es um die Antwort ohne Rundreise. */
+  /**
+   * Prueft die manuellen Zahlen, bevor sie abgeschickt werden.
+   *
+   * Nur noch das, was technisch nicht geht: eine fehlende Zahl und ungerade
+   * Kantenlaengen, mit denen H.264 nicht umgehen kann. Keine Obergrenze mehr,
+   * kein Vergleich gegen die Plattform. Wer 16000 kbps will, bekommt 16000.
+   */
   function manuellPruefen(): UplinkManuellesProfil | string {
     const zahlen = {
       width: Number(manuell.width),
@@ -216,10 +193,6 @@ export function ZielKarte({
     for (const [feld, name] of felder) {
       const wert = zahlen[feld];
       if (!Number.isFinite(wert) || wert <= 0) return `${name} fehlt.`;
-      const max = hartesMax[feld];
-      if (max !== null && wert > max) {
-        return `${name} darf höchstens ${max} sein, mehr nehmen wir nicht entgegen.`;
-      }
     }
     if (zahlen.width % 2 !== 0 || zahlen.height % 2 !== 0) {
       return 'Breite und Höhe müssen gerade Zahlen sein.';
@@ -278,12 +251,39 @@ export function ZielKarte({
   });
 
   const gewaehlteStufe = UPLINK_PROFILE.find((e) => e.name === profil);
-  // Nur Hoehe und Bildrate vergleichen: die Bitrate klemmt das Relay auch im
-  // Normalfall, daraus eine Warnung zu bauen hiesse, jedem eine zu zeigen.
-  const geklemmt =
-    ziel?.requested &&
-    ziel.effective &&
-    (ziel.requested.height !== ziel.effective.height || ziel.requested.fps !== ziel.effective.fps);
+
+  /**
+   * Die Werte, die gerade im Formular stehen.
+   *
+   * `null`, solange ein manuelles Feld leer ist: waehrend jemand eine Zahl
+   * loescht und neu tippt, soll im Kopf nicht kurz 0p0 stehen.
+   */
+  const eingetippt = ((): UplinkProfilAnsicht | null => {
+    if (modus === 'stufe') {
+      const [width, height, fps, bitrate_kbps] = PROFIL_WERTE[profil];
+      return { width, height, fps, bitrate_kbps };
+    }
+    const zahlen = {
+      width: Number(manuell.width),
+      height: Number(manuell.height),
+      fps: Number(manuell.fps),
+      bitrate_kbps: Number(manuell.bitrate_kbps),
+    };
+    const vollstaendig = Object.values(zahlen).every((n) => Number.isFinite(n) && n > 0);
+    return vollstaendig ? zahlen : null;
+  })();
+
+  // Der Kopf zeigt mit, was im Formular steht, und faellt auf den gespeicherten
+  // Stand zurueck, solange ein Feld leer ist. Vorher stand hier `effective`,
+  // also das Ergebnis der Klemmung: im Feld 16000, im Kopf 12000, und keiner
+  // der beiden Werte erklaerte den anderen.
+  //
+  // Vor der Vorbelegung zaehlt nur der gespeicherte Stand: das Formular steht
+  // dann noch auf seinem Anfangswert, und ein Bild lang "1080p60, nicht
+  // gespeichert" ueber einem 1440p-Ziel waere schlicht falsch.
+  const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
+  const ungespeichert =
+    eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt);
 
   return (
     <details
@@ -310,9 +310,12 @@ export function ZielKarte({
           )}
         </span>
         <span className="flex items-center gap-3">
-          {ziel?.effective && (
+          {eingerichtet && kopfWerte && (
             <span className="text-xs font-normal text-text-secondary">
-              {ziel.effective.height}p{ziel.effective.fps} · {ziel.effective.bitrate_kbps} kbps
+              {kopfWerte.height}p{kopfWerte.fps} · {kopfWerte.bitrate_kbps} kbps
+              {ungespeichert ? (
+                <span className="ml-1.5 text-primary">nicht gespeichert</span>
+              ) : null}
             </span>
           )}
           <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
@@ -419,8 +422,7 @@ export function ZielKarte({
                   label="Breite"
                   einheit="px"
                   wert={manuell.width}
-                  max={plattformMax.width}
-                  hart={hartesMax.width}
+                  empfehlung={plattformEmpfehlung.width}
                   onChange={(w) => {
                     setManuell((v) => ({ ...v, width: w }));
                     angefasst();
@@ -430,8 +432,7 @@ export function ZielKarte({
                   label="Höhe"
                   einheit="px"
                   wert={manuell.height}
-                  max={plattformMax.height}
-                  hart={hartesMax.height}
+                  empfehlung={plattformEmpfehlung.height}
                   onChange={(h) => {
                     setManuell((v) => ({ ...v, height: h }));
                     angefasst();
@@ -441,8 +442,7 @@ export function ZielKarte({
                   label="Bildrate"
                   einheit="fps"
                   wert={manuell.fps}
-                  max={plattformMax.fps}
-                  hart={hartesMax.fps}
+                  empfehlung={plattformEmpfehlung.fps}
                   onChange={(f) => {
                     setManuell((v) => ({ ...v, fps: f }));
                     angefasst();
@@ -452,8 +452,7 @@ export function ZielKarte({
                   label="Bitrate"
                   einheit="kbps"
                   wert={manuell.bitrate_kbps}
-                  max={plattformMax.bitrate_kbps}
-                  hart={hartesMax.bitrate_kbps}
+                  empfehlung={plattformEmpfehlung.bitrate_kbps}
                   onChange={(b) => {
                     setManuell((v) => ({ ...v, bitrate_kbps: b }));
                     angefasst();
@@ -461,15 +460,15 @@ export function ZielKarte({
                 />
               </div>
               {!caps && (
-                <p className="text-xs text-warning">
-                  Die Grenzen von {label} konnten wir gerade nicht abrufen. Die Hinweise an den
-                  Feldern zeigen deshalb nur, was wir überhaupt entgegennehmen. Gespeichert wird
-                  trotzdem richtig, wir rechnen beim Senden herunter.
+                <p className="text-xs text-text-secondary">
+                  Die Empfehlungen von {label} konnten wir gerade nicht abrufen, deshalb stehen
+                  keine an den Feldern. Auf das, was wir senden, hat das keinen Einfluss: deine
+                  Werte gehen so raus, wie sie hier stehen.
                 </p>
               )}
               <p className="text-xs text-text-secondary">
-                Freie Werte. Was über den Grenzen von {label} liegt, rechnen wir beim Senden
-                herunter, statt den Stream zu verweigern.
+                Freie Werte, wir senden genau das. Die Zahlen von {label} sind eine Empfehlung und
+                keine Grenze. Ob {label} mehr annimmt oder drosselt, siehst du im Stream.
                 {caps?.force_cbr
                   ? ` ${label} verlangt eine feste Bitrate, wir halten sie konstant.`
                   : ''}
@@ -506,34 +505,21 @@ export function ZielKarte({
         {eingerichtet && (
           <div className="flex items-start gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
             <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {/* Bewusst `requested` und nicht `effective`: der Satz beschreibt
+                den gespeicherten Stand, und beide Felder sind seit dem Ende der
+                Klemmung ohnehin gleich. `effective` bleibt nur fuer aeltere
+                Clients im JSON stehen. */}
             <span>
               Schlüssel liegt verschlüsselt bei uns.
-              {ziel?.effective ? (
+              {bestellt ? (
                 <>
-                  {' '}Wir senden {ziel.effective.width}x{ziel.effective.height} mit{' '}
-                  {ziel.effective.fps} Bildern und {ziel.effective.bitrate_kbps} kbps.
+                  {' '}Wir senden {bestellt.width}x{bestellt.height} mit {bestellt.fps} Bildern und{' '}
+                  {bestellt.bitrate_kbps} kbps.
                 </>
               ) : null}
-            </span>
-          </div>
-        )}
-
-        {/* Das Relay klemmt gegen `relay.platform_caps`, eine Tabelle in einem
-            anderen Repo. Sie kann sich per Migration bewegen, ohne dass hier
-            jemand etwas tut. Wer eine Stufe waehlt und eine andere bekommt,
-            soll das hier lesen und nicht erst im Stream sehen. */}
-        {geklemmt && (
-          <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            {/* Den Grund nicht raten: geklemmt wird gegen die Grenze der
-                Plattform UND gegen die aller anderen eingeschalteten Ziele,
-                weil alle denselben Encode bekommen. "{label} nimmt nicht
-                mehr an" waere in der zweiten Haelfte der Faelle falsch. */}
-            <span>
-              Du hast {ziel?.requested?.height}p{ziel?.requested?.fps} bestellt, raus gehen aber{' '}
-              {ziel?.effective?.height}p{ziel?.effective?.fps}. Entweder nimmt {label} gerade nicht
-              mehr an, oder ein anderes eingeschaltetes Ziel kann weniger: alle Ziele bekommen
-              denselben Encode.
+              {ungespeichert ? (
+                <> Im Formular stehen andere Werte, die noch nicht gespeichert sind.</>
+              ) : null}
             </span>
           </div>
         )}
