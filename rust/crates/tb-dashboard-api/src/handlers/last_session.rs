@@ -26,24 +26,13 @@ pub struct LastEndedSession {
 ///
 /// `started_at` der zurückgegebenen Zeile ist identisch zu `MAX(started_at)` der
 /// beendeten Sessions; `id` ist die zugehörige Session.
+/// Die Abfrage selbst steht in [`tb_analytics::stufe::letzte_beendete_session`]:
+/// dort haengt auch das Gratis-Fenster dran, und "letzter Stream" darf in der
+/// Paywall nur einmal definiert sein.
 pub async fn latest_ended_session(pool: &PgPool, login: &str) -> Option<LastEndedSession> {
-    let row = sqlx::query!(
-        "SELECT s.id, s.started_at \
-         FROM twitch_stream_sessions s \
-         WHERE s.ended_at IS NOT NULL \
-           AND (COALESCE($1, '') = '' OR LOWER(s.streamer_login) = $1) \
-         ORDER BY s.started_at DESC \
-         LIMIT 1",
-        login
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.map(|row| LastEndedSession {
-        id: row.id,
-        started_at: row.started_at,
-    })
+    tb_analytics::stufe::letzte_beendete_session(pool, login)
+        .await
+        .map(|(id, started_at)| LastEndedSession { id, started_at })
 }
 
 #[cfg(test)]

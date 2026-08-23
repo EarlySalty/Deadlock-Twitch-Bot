@@ -314,11 +314,18 @@ pub fn stufe_required_response(benoetigt: Stufe) -> Response {
         Stufe::Pro => "Dafür brauchst du Creator Pro.",
         _ => "Dafür brauchst du Netzwerk Plus.",
     };
+    // Das Entitlement muss zur fehlenden Stufe passen. Vorher stand hier fest
+    // `analytics`, auch im 403 des Pro-Gates — dort fehlt aber `social.auto_post`,
+    // und das Frontend bekam damit die falsche Begruendung fuer die Sperre.
+    let required_entitlements: &[&str] = match benoetigt {
+        Stufe::Pro => &["social.auto_post"],
+        _ => &["analytics"],
+    };
     (
         StatusCode::FORBIDDEN,
         Json(json!({
             "error": "plan_required",
-            "required_entitlements": ["analytics"],
+            "required_entitlements": required_entitlements,
             "required_stufe": benoetigt.as_str(),
             "required_plans": required_plans,
             "message": hinweis,

@@ -161,19 +161,45 @@ pub async fn freies_fenster_tage(pool: &PgPool, streamer: &str) -> i64 {
     if login.is_empty() {
         return FREE_VERLAUF_TAGE;
     }
-    let letzte: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT started_at FROM twitch_stream_sessions          WHERE LOWER(streamer_login) = $1 AND started_at IS NOT NULL          ORDER BY started_at DESC LIMIT 1",
+    let Some((_, started_at)) = letzte_beendete_session(pool, &login).await else {
+        return FREE_VERLAUF_TAGE;
+    };
+    let tage = (chrono::Utc::now() - started_at).num_days() + 1;
+    tage.clamp(FREE_VERLAUF_TAGE, FREE_FENSTER_MAX_TAGE)
+}
+
+/// Die zuletzt **beendete** Session eines Streamers als `(id, started_at)`.
+///
+/// Die eine Definition von "letzter Stream" fuer die ganze Paywall. Sie haengt
+/// an zwei Stellen: am Gratis-Fenster ([`freies_fenster_tage`]) und an der
+/// Klemme der Session-Detailansicht (`session_detail::letzte_session_klemme`
+/// ueber `last_session::latest_ended_session`). Vorher nahm das Fenster die
+/// zuletzt **begonnene** Session und die Klemme die zuletzt **beendete**; laeuft
+/// gerade ein Stream, liess die Klemme damit eine Session durch, die ausserhalb
+/// des Fensters lag. Laufende Sessions zaehlen hier nicht, sie liegen ohnehin
+/// immer im Fenster (das reicht bis jetzt).
+///
+/// Leerer `login` heisst Wildcard (global letzte beendete Session); das nutzt
+/// nur der privilegierte Overview-Pfad. `None`, wenn es keine beendete Session
+/// gibt oder die Abfrage scheitert.
+pub async fn letzte_beendete_session(
+    pool: &PgPool,
+    login: &str,
+) -> Option<(i64, chrono::DateTime<chrono::Utc>)> {
+    let login = login.trim().to_lowercase();
+    sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(
+        "SELECT s.id, s.started_at \
+         FROM twitch_stream_sessions s \
+         WHERE s.ended_at IS NOT NULL AND s.started_at IS NOT NULL \
+           AND ($1 = '' OR LOWER(s.streamer_login) = $1) \
+         ORDER BY s.started_at DESC \
+         LIMIT 1",
     )
     .bind(&login)
     .fetch_optional(pool)
     .await
     .ok()
-    .flatten();
-    let Some(started_at) = letzte else {
-        return FREE_VERLAUF_TAGE;
-    };
-    let tage = (chrono::Utc::now() - started_at).num_days() + 1;
-    tage.clamp(FREE_VERLAUF_TAGE, FREE_FENSTER_MAX_TAGE)
+    .flatten()
 }
 
 /// Fenster der Stufe fuer diesen Streamer und die Nachfrage nach `angefragt`
