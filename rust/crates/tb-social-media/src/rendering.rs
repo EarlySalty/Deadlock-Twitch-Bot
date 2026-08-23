@@ -5,7 +5,6 @@
 //! statisch und werden via `include_str!` in die Binary eingebettet — kein
 //! Runtime-Pfad nötig (Python liest sie aus `templates/`).
 
-const DASHBOARD_HTML: &str = include_str!("../templates/dashboard.html");
 const TERMS_HTML: &str = include_str!("../templates/terms.html");
 const PRIVACY_HTML: &str = include_str!("../templates/privacy.html");
 
@@ -26,16 +25,6 @@ fn render(template: &str, substitutions: &[(&str, &str)]) -> String {
     apply_substitutions(trimmed, substitutions)
 }
 
-/// Rendert das Social-Media-Dashboard.
-pub fn render_dashboard(safe_streamer_label: &str, safe_streamer_data: &str) -> String {
-    render(
-        DASHBOARD_HTML,
-        &[
-            ("safe_streamer_label", safe_streamer_label),
-            ("safe_streamer_data", safe_streamer_data),
-        ],
-    )
-}
 
 /// Rendert die Terms-Seite.
 pub fn render_terms() -> String {
@@ -64,16 +53,6 @@ mod tests {
     fn render_strippt_bom_und_leerzeilen() {
         let out = render("\u{feff}\n\nInhalt __X__", &[("x", "Y")]);
         assert_eq!(out, "Inhalt Y");
-    }
-
-    #[test]
-    fn dashboard_substituiert_beide_platzhalter() {
-        let out = render_dashboard("MeinLabel", "{\"k\":1}");
-        // Platzhalter sind ersetzt (nicht mehr im Output).
-        assert!(!out.contains("__SAFE_STREAMER_LABEL__"));
-        assert!(!out.contains("__SAFE_STREAMER_DATA__"));
-        assert!(out.contains("MeinLabel"));
-        assert!(out.contains("{\"k\":1}"));
     }
 
     #[test]

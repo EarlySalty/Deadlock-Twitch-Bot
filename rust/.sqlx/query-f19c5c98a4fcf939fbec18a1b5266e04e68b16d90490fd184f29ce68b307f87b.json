@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT approval_mode, timezone FROM social_media_streamer_settings WHERE streamer_login = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approval_mode",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "timezone",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f19c5c98a4fcf939fbec18a1b5266e04e68b16d90490fd184f29ce68b307f87b"
+}

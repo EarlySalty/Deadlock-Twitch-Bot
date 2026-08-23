@@ -68,6 +68,7 @@ pub mod llm;
 pub mod llm_dispatch;
 pub mod oauth;
 pub mod partner_access;
+pub mod posting_plan;
 pub mod refresh_worker;
 pub mod rendering;
 pub mod report_dispatcher;
@@ -83,6 +84,7 @@ pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
 pub mod vocab;
+pub mod vod_archive;
 
 pub use clip::{
     repository::ClipRepository,

@@ -1,12 +1,14 @@
 import { withCookieCredentials } from './core';
 import type {
-  AutoApproveSettings,
+  ApprovalMode,
   ClipAnalyticsResponse,
   ClipApprovalRecord,
   ClipEnrichment,
   ClipListResponse,
   ClipStatus,
   LayoutPayload,
+  PlatformScheduleEntry,
+  PostingPlan,
   SocialClip,
   SocialMediaReport,
   SocialMediaReportKind,
@@ -15,14 +17,33 @@ import type {
   UploadResponse,
   VocabEntry,
   VocabListResponse,
+  VodArchiveSettings,
 } from '@/types/socialMedia';
 
 const ADMIN_PREFIX = '/social-media/api/admin';
 const UPLOAD_PATH = '/social-media/api/clips/upload';
 
-export class SocialMediaForbiddenError extends Error {
-  constructor(message: string = 'Admin-Zugriff erforderlich.') {
-    super(message);
+/**
+ * Fehler mit stabilem Code. Der Code kommt aus dem Backend (`error`-Feld) und
+ * wird erst an der Anzeigestelle in einen Satz uebersetzt: ein deutscher Text,
+ * der hier fest verdrahtet ist, laeuft nie durch `t()` und steht im englischen
+ * Dashboard auf Deutsch da.
+ */
+export class SocialMediaApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message?: string, status = 0) {
+    super(message ?? code);
+    this.code = code;
+    this.status = status;
+    this.name = 'SocialMediaApiError';
+  }
+}
+
+export class SocialMediaForbiddenError extends SocialMediaApiError {
+  constructor(code: string = 'admin_required', status = 403) {
+    super(code, code, status);
     this.name = 'SocialMediaForbiddenError';
   }
 }
@@ -30,18 +51,19 @@ export class SocialMediaForbiddenError extends Error {
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, withCookieCredentials(init));
   if (response.status === 403 || response.status === 401) {
-    throw new SocialMediaForbiddenError();
+    throw new SocialMediaForbiddenError('admin_required', response.status);
   }
   if (!response.ok) {
-    let message = `Request failed: ${response.status}`;
+    let code = `http_${response.status}`;
+    let message: string | undefined;
     try {
       const data = await response.json();
+      if (data?.error) code = String(data.error);
       if (data?.message) message = String(data.message);
-      else if (data?.error) message = String(data.error);
     } catch {
       // ignore JSON parse errors
     }
-    throw new Error(message);
+    throw new SocialMediaApiError(code, message, response.status);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -119,14 +141,38 @@ export interface ClipListParams {
   page_size?: number;
 }
 
-export async function fetchClips(params: ClipListParams = {}): Promise<ClipListResponse> {
+/**
+ * Je Plattform ein Eintrag. `null` heisst "hier ist nichts schiefgegangen"
+ * beziehungsweise "hier ist nichts geplant"; ein fehlender Schluessel heisst
+ * dasselbe, deshalb sind beide Felder teiloptional.
+ */
+export type PlattformFehler = Partial<Record<SocialPlatform, string | null>>;
+export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
+
+/**
+ * Was das Backend zusaetzlich am Clip liefert: der Grund eines fehlgeschlagenen
+ * Uploads und der geplante Termin je Plattform. Steht hier und nicht in
+ * `types/socialMedia.ts`, damit die Antwortform beim Aufrufer bleibt.
+ */
+export interface ClipPostingInfo {
+  upload_errors?: PlattformFehler | null;
+  scheduled_at?: PlattformTermine | null;
+}
+
+export type SocialClipMitPosting = SocialClip & ClipPostingInfo;
+
+export interface ClipListResponseMitPosting extends Omit<ClipListResponse, 'items'> {
+  items: SocialClipMitPosting[];
+}
+
+export async function fetchClips(params: ClipListParams = {}): Promise<ClipListResponseMitPosting> {
   const qs = buildQuery({
     status: params.status && params.status !== 'all' ? params.status : undefined,
     streamer: params.streamer,
     page: params.page,
     page_size: params.page_size,
   });
-  return fetchJson<ClipListResponse>(`${ADMIN_PREFIX}/clips${qs}`);
+  return fetchJson<ClipListResponseMitPosting>(`${ADMIN_PREFIX}/clips${qs}`);
 }
 
 export async function fetchClip(clipDbId: number): Promise<SocialClip> {
@@ -248,17 +294,110 @@ export async function decideClipApproval(input: {
   );
 }
 
-export async function fetchAutoApproveSettings(): Promise<AutoApproveSettings> {
-  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`);
+/**
+ * Einen bereits eingeplanten Post stoppen (Veto-Fenster).
+ *
+ * `cancelled` zaehlt die gestoppten Plattformen, `already_running` die, bei
+ * denen der Upload schon lief. Die zweite Zahl ist der ehrliche Teil: dort
+ * kommt das Veto zu spaet.
+ */
+export async function cancelScheduledPost(
+  clipDbId: number,
+): Promise<{ cancelled: number; already_running: number }> {
+  return fetchJson<{ cancelled: number; already_running: number }>(
+    `/social-media/api/approval/${clipDbId}/cancel`,
+    { method: 'POST' },
+  );
 }
 
-export async function saveAutoApproveSettings(
-  payload: AutoApproveSettings,
-): Promise<AutoApproveSettings> {
-  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`, {
+/**
+ * Neue Twitch-Clips einsammeln. Der Weg, den die Vorratswarnung meint: ohne
+ * Nachschub hoert das Posting irgendwann auf, ohne dass jemand es merkt.
+ */
+export async function fetchTwitchClips(
+  streamerLogin: string,
+  limit = 20,
+): Promise<{ success: boolean; clips_found: number; message?: string }> {
+  return fetchJson<{ success: boolean; clips_found: number; message?: string }>(
+    '/social-media/api/fetch-clips',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ streamer: streamerLogin, limit }),
+    },
+  );
+}
+
+/**
+ * Zeitplan eines Kanals. Alle vier Aufrufe liefern den kompletten Plan zurueck,
+ * damit die Oberflaeche nach jeder Aenderung den neu berechneten Termin und die
+ * neue Vorratsrechnung sieht, ohne zweite Abfrage.
+ */
+export async function fetchPostingPlan(streamerLogin: string): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`);
+}
+
+export async function savePostingPlanSettings(
+  streamerLogin: string,
+  payload: { approval_mode?: ApprovalMode; timezone?: string },
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+}
+
+export async function savePlatformSchedule(
+  streamerLogin: string,
+  platform: SocialPlatform,
+  payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(
+    `${ADMIN_PREFIX}/settings/posting-plan/platform/${encodeURIComponent(platform)}${qs}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function saveCategoryAutoPost(
+  streamerLogin: string,
+  categoryKey: string,
+  autoPost: boolean,
+): Promise<PostingPlan> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<PostingPlan>(
+    `${ADMIN_PREFIX}/settings/posting-plan/category/${encodeURIComponent(categoryKey)}${qs}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_post: autoPost }),
+    },
+  );
+}
+
+/** Das VOD-Archiv haengt am Streamer, nicht am Dashboard: immer mit Kanal. */
+export async function fetchVodArchiveSettings(
+  streamerLogin: string,
+): Promise<VodArchiveSettings> {
+  const qs = buildQuery({ streamer_login: streamerLogin });
+  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive${qs}`);
+}
+
+export async function saveVodArchiveSettings(
+  streamerLogin: string,
+  payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>,
+): Promise<VodArchiveSettings> {
+  return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_login: streamerLogin, ...payload }),
   });
 }
 
@@ -318,19 +457,63 @@ export async function uploadClip(input: {
   if (response.status === 403 || response.status === 401) {
     throw new SocialMediaForbiddenError();
   }
-  if (response.status === 413) throw new Error('Datei zu groß (Max 200 MB).');
-  if (response.status === 415) throw new Error('Falsches Dateiformat.');
-  if (response.status === 409) throw new Error('Diese clip_id existiert bereits.');
+  if (response.status === 413) throw new SocialMediaApiError('upload_too_large', undefined, 413);
+  if (response.status === 415) throw new SocialMediaApiError('upload_wrong_format', undefined, 415);
+  if (response.status === 409) throw new SocialMediaApiError('upload_duplicate', undefined, 409);
   if (!response.ok) {
-    let message = `Upload fehlgeschlagen: ${response.status}`;
+    let code = 'upload_failed';
+    let message: string | undefined;
     try {
       const data = await response.json();
+      if (data?.error) code = String(data.error);
       if (data?.message) message = String(data.message);
-      else if (data?.error) message = String(data.error);
     } catch {
       // ignore
     }
-    throw new Error(message);
+    throw new SocialMediaApiError(code, message, response.status);
   }
   return (await response.json()) as UploadResponse;
+}
+
+export interface PlatformStatus {
+  platform: string;
+  connected: boolean;
+  username: string | null;
+  user_id?: string | null;
+  expired: boolean;
+  /** Ablauf des Zugangs, ISO-Zeit. `null`, wenn der Anbieter keinen liefert. */
+  expires_at?: string | null;
+  /**
+   * Der Kanal haengt an der Sammelverbindung statt an einem eigenen Zugang.
+   * Wichtig, weil ein Trennen dann alle Kanaele treffen wuerde.
+   */
+  uses_global_fallback?: boolean;
+}
+
+/**
+ * Verbindungsstatus je Plattform. Der OAuth-Flow selbst ist ein Redirect und
+ * laeuft deshalb nicht ueber fetch, sondern ueber `oauthStartUrl`.
+ *
+ * `streamer` ist Pflicht: ohne den Kanal antwortet das Backend mit der
+ * globalen Sammelverbindung, und die Karte behauptet nach einem erfolgreichen
+ * OAuth fuer Kanal X weiter "nicht verbunden".
+ */
+export async function fetchPlatformStatus(
+  streamer: string,
+): Promise<{ platforms: PlatformStatus[] }> {
+  const qs = buildQuery({ streamer });
+  return fetchJson<{ platforms: PlatformStatus[] }>(`/social-media/api/platforms/status${qs}`);
+}
+
+export function oauthStartUrl(platform: string, streamer: string): string {
+  return `/social-media/oauth/start/${platform}?streamer=${encodeURIComponent(streamer)}`;
+}
+
+/**
+ * Zugang eines Kanals kappen. `streamer` ist Pflicht, sonst trifft es die
+ * Sammelverbindung und damit jeden Kanal.
+ */
+export async function disconnectPlatform(platform: string, streamer: string): Promise<void> {
+  const qs = buildQuery({ streamer });
+  await fetchJson(`/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
 }

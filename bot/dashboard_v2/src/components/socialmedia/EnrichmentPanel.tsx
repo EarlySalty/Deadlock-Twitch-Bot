@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -21,25 +21,9 @@ import {
   saveClipEnrichment,
   type EnrichmentEditPayload,
 } from '@/api/socialMedia';
-import type { ClipEnrichment, EnrichmentStatus, SocialPlatform } from '@/types/socialMedia';
-
-const STATUS_META: Record<EnrichmentStatus, { label: string; tone: 'muted' | 'orange' | 'teal' | 'success' | 'danger' }> = {
-  pending: { label: 'Wartet', tone: 'muted' },
-  transcribing: { label: 'Transkribiert', tone: 'orange' },
-  correcting: { label: 'Wörterbuch-Korrektur', tone: 'orange' },
-  llm: { label: 'LLM-Hashtags', tone: 'teal' },
-  done: { label: 'Fertig', tone: 'success' },
-  failed: { label: 'Fehler', tone: 'danger' },
-  skipped_no_key: { label: 'API-Key fehlt', tone: 'muted' },
-};
-
-const TONE: Record<string, string> = {
-  muted: 'bg-bg/60 text-text-secondary border-border',
-  orange: 'bg-orange/15 text-orange border-orange/35',
-  teal: 'bg-teal/15 text-teal border-teal/35',
-  success: 'bg-success/15 text-success border-success/35',
-  danger: 'bg-danger/15 text-danger border-danger/35',
-};
+import type { ClipEnrichment, SocialPlatform } from '@/types/socialMedia';
+import { useT } from '@/context/LanguageContext';
+import { STATUS_META, TONE_BADGE as TONE } from './labels';
 
 const PLATFORMS: Array<{
   id: SocialPlatform;
@@ -71,6 +55,26 @@ interface EditState {
   hashtags_instagram: string[];
 }
 
+/**
+ * Ein Satz mit einer hervorgehobenen Stelle in der Mitte, aber nur einem
+ * Uebersetzungsschluessel. Vorher war der Satz auf zwei Schluessel aufgeteilt
+ * ('... gesetzt ist (' und '). Setze einen Key ...'); eine Sprache mit anderer
+ * Wortstellung konnte ihn damit nicht uebersetzen. Die Marke sagt jetzt nur,
+ * wo der hervorgehobene Teil landet, und darf in jeder Sprache anderswo
+ * stehen.
+ */
+function mitEinschub(satz: string, marke: string, einschub: ReactNode): ReactNode {
+  const teile = satz.split(marke);
+  if (teile.length < 2) return satz;
+  return (
+    <>
+      {teile[0]}
+      {einschub}
+      {teile.slice(1).join(marke)}
+    </>
+  );
+}
+
 function fromEnrichment(e: ClipEnrichment): EditState {
   return {
     title_youtube: e.title_youtube ?? '',
@@ -100,6 +104,7 @@ function toPayload(initial: ClipEnrichment, edit: EditState): EnrichmentEditPayl
 }
 
 export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [edit, setEdit] = useState<EditState | null>(null);
   const [activePlatform, setActivePlatform] = useState<SocialPlatform>('youtube');
@@ -163,10 +168,10 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-2">
           <Wand2 className="w-4 h-4 text-orange" />
-          <h4 className="text-sm font-bold uppercase tracking-[0.16em] text-white">Metadaten</h4>
+          <h4 className="text-sm font-bold uppercase tracking-[0.16em] text-white">{t('Metadaten')}</h4>
         </div>
         <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${TONE[status.tone]}`}>
-          {status.label}
+          {t(status.label)}
         </span>
         {enrichment.llm_provider && (
           <span className="text-[10px] font-mono text-text-secondary bg-bg/60 px-2 py-1 rounded-md border border-border">
@@ -187,14 +192,14 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             className="text-xs font-semibold text-text-secondary hover:text-white inline-flex items-center gap-1.5 disabled:opacity-40"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${runMutation.isPending ? 'animate-spin' : ''}`} />
-            Neu generieren
+            {t('Neu generieren')}
           </button>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
               className="p-1.5 rounded-lg hover:bg-bg/60 text-text-secondary hover:text-white"
-              aria-label="Enrichment-Panel schließen"
+              aria-label={t('Enrichment-Panel schließen')}
             >
               <X className="w-4 h-4" />
             </button>
@@ -211,11 +216,16 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
 
       {enrichment.status === 'skipped_no_key' && (
         <div className="text-xs text-text-secondary bg-bg/40 border border-border rounded-lg p-3 leading-relaxed">
-          Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist (
-          <code className="font-mono text-orange">MINIMAX_API_KEY</code> /
-          {' '}
-          <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
-          ). Setze einen Key und drücke „Neu generieren".
+          {mitEinschub(
+            t(
+              'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist ({keys}). Setze einen Key und drücke „Neu generieren".',
+            ),
+            '{keys}',
+            <>
+              <code className="font-mono text-orange">MINIMAX_API_KEY</code> /{' '}
+              <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
+            </>,
+          )}
         </div>
       )}
 
@@ -223,7 +233,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       {enrichment.detected_terms.length > 0 && (
         <div className="space-y-2">
           <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-teal" /> Erkannte Begriffe
+            <Sparkles className="w-3 h-3 text-teal" /> {t('Erkannte Begriffe')}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {enrichment.detected_terms.map((term) => (
@@ -254,7 +264,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
               }`}
             >
               <Icon className={`w-3.5 h-3.5 ${active ? 'text-orange' : tone}`} />
-              {label}
+              {t(label)}
             </button>
           );
         })}
@@ -270,7 +280,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       {enrichment.transcript_corrected && (
         <details className="rounded-xl border border-border bg-bg/40 p-3">
           <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <ScrollText className="w-3 h-3" /> Transkript anzeigen
+            <ScrollText className="w-3 h-3" /> {t('Transkript anzeigen')}
           </summary>
           <div className="text-xs text-text-secondary leading-relaxed mt-3 whitespace-pre-wrap font-mono">
             {enrichment.transcript_corrected}
@@ -281,7 +291,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       {/* Actions */}
       <div className="flex items-center gap-3 border-t border-border pt-3">
         <div className="text-[11px] text-text-secondary">
-          {dirty ? 'Ungesicherte Änderungen' : 'Synchron mit Server'}
+          {dirty ? t('Ungesicherte Änderungen') : t('Synchron mit Server')}
         </div>
         <div className="ml-auto flex gap-2">
           <button
@@ -290,7 +300,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             onClick={() => setEdit(fromEnrichment(enrichment))}
             className="px-3 py-2 rounded-xl text-xs font-semibold text-text-secondary border border-border hover:text-white disabled:opacity-40"
           >
-            Zurücksetzen
+            {t('Zurücksetzen')}
           </button>
           <button
             type="button"
@@ -299,13 +309,13 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            Speichern
+            {t('Speichern')}
           </button>
         </div>
       </div>
       {saveMutation.isSuccess && !dirty && (
         <div className="text-xs text-success inline-flex items-center gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5" /> Gespeichert.
+          <CheckCircle2 className="w-3.5 h-3.5" /> {t('Gespeichert.')}
         </div>
       )}
     </div>
@@ -319,6 +329,7 @@ interface PlatformEditorProps {
 }
 
 function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
+  const t = useT();
   const config = PLATFORMS.find((p) => p.id === platform)!;
   const titleKey = `title_${platform}` as const;
   const descKey = `description_${platform}` as const;
@@ -333,7 +344,7 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
     <div className="space-y-4">
       <div>
         <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5">
-          Title
+          {t('Titel')}
           <span className={`ml-2 font-mono ${titleLen > config.titleLimit ? 'text-danger' : 'text-text-secondary'}`}>
             {titleLen}/{config.titleLimit}
           </span>
@@ -343,29 +354,29 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
           value={title}
           onChange={(e) => onChange({ ...edit, [titleKey]: e.target.value })}
           maxLength={config.titleLimit + 20}
-          placeholder={`${config.label}-Title…`}
+          placeholder={t('{platform}-Title…', { platform: config.label })}
           className="w-full px-3 py-2 rounded-xl bg-bg/60 border border-border focus:border-orange/60 focus:outline-none text-sm text-white placeholder:text-text-secondary/60"
         />
       </div>
 
       <div>
         <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5">
-          Beschreibung
+          {t('Beschreibung')}
         </label>
         <textarea
           value={desc}
           onChange={(e) => onChange({ ...edit, [descKey]: e.target.value })}
           rows={3}
-          placeholder={`Kurze Beschreibung für ${config.label}…`}
+          placeholder={t('Kurze Beschreibung für {platform}…', { platform: config.label })}
           className="w-full px-3 py-2 rounded-xl bg-bg/60 border border-border focus:border-orange/60 focus:outline-none text-sm text-white placeholder:text-text-secondary/60 resize-y leading-relaxed"
         />
       </div>
 
       <div>
         <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5 inline-flex items-center gap-1.5">
-          <Hash className="w-3 h-3" /> Hashtags
+          <Hash className="w-3 h-3" /> {t('Hashtags')}
           <span className="ml-1 font-mono text-text-secondary">
-            {tags.length} · Ziel {config.hashtagTarget}
+            {t('{count} · Ziel {target}', { count: tags.length, target: config.hashtagTarget })}
           </span>
         </label>
         <HashtagsEditor
@@ -384,6 +395,7 @@ function HashtagsEditor({
   tags: string[];
   onChange: (next: string[]) => void;
 }) {
+  const t = useT();
   const [input, setInput] = useState('');
 
   const addTag = (raw: string) => {
@@ -423,7 +435,7 @@ function HashtagsEditor({
             type="button"
             onClick={() => removeTag(tag)}
             className="hover:text-white"
-            aria-label={`Hashtag #${tag} entfernen`}
+            aria-label={t('Hashtag #{tag} entfernen', { tag })}
           >
             <X className="w-3 h-3" />
           </button>
@@ -440,7 +452,7 @@ function HashtagsEditor({
             setInput('');
           }
         }}
-        placeholder={tags.length === 0 ? 'Hashtag eingeben + Enter…' : ''}
+        placeholder={tags.length === 0 ? t('Hashtag eingeben + Enter…') : ''}
         className="flex-1 min-w-[120px] bg-transparent text-sm text-white placeholder:text-text-secondary/60 outline-none px-2 py-1"
       />
     </div>

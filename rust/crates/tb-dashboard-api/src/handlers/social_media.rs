@@ -15,11 +15,12 @@
 
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -31,7 +32,8 @@ use tb_social_media::analytics::{
     list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord,
 };
 use tb_social_media::approval::{
-    get_approval_record, handle_decision, serialize_approval_record, ApprovalError,
+    cancel_scheduled_uploads, get_approval_record, handle_decision, serialize_approval_record,
+    ApprovalError,
 };
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::{
@@ -55,41 +57,32 @@ use tb_social_media::layout::{
 };
 use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
-use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
-use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
-use tb_social_media::retention::mark_clip_discarded;
-use tb_social_media::scheduler::next_free_slot;
-use tb_social_media::seed_vocab::seed_vocab;
-use tb_social_media::settings::{
-    coerce_bool, get_auto_approve_settings, get_posting_schedule, set_auto_approve_settings,
-    AutoApprove, PostingSchedule,
+use tb_social_media::posting_plan::{
+    berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
+    load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
+    verfuegbare_clips, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
+    StreamerSettings, PLATFORMS,
 };
+use tb_social_media::rendering::{render_privacy, render_terms};
+use tb_social_media::report_writer::SocialMediaReportWriter;
+use tb_social_media::retention::mark_clip_discarded;
+use tb_social_media::scheduler::{next_cadence_slot, next_free_slot};
+use tb_social_media::seed_vocab::seed_vocab;
+use tb_social_media::settings::{coerce_bool, get_posting_schedule, PostingSchedule};
 use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
+use tb_social_media::vod_archive::{
+    get_vod_archive_settings, set_vod_archive_settings, VodArchiveSettings,
+    VOD_ARCHIVE_PRIVACY_VALUES,
+};
 use tb_social_media::{ClipFetchService, ClipRepository, HelixClipSource};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::resolve_streamer_scope;
-
-/// HTML-Escape (`&`, `<`, `>`, `"`, `'`) — mirror von Pythons `html.escape(..., quote=True)`.
-fn html_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
 
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
@@ -113,21 +106,6 @@ pub async fn privacy_handler() -> Html<String> {
     Html(render_privacy())
 }
 
-/// Reine Render-Logik der Index-Seite (testbar ohne HTTP).
-fn render_index(auth: &DashboardAuthLevel) -> Result<String, Response> {
-    // Index nutzt den Scope ohne `requested` → Partner bekommt eigenen Login,
-    // Admin/Localhost `None`, None-Auth → 401.
-    let streamer = resolve_streamer_scope(auth, None, false)?;
-    let label = html_escape(
-        &streamer
-            .as_ref()
-            .map(|s| format!("@{s}"))
-            .unwrap_or_else(|| "nicht gesetzt".to_string()),
-    );
-    let data = html_escape(streamer.as_deref().unwrap_or(""));
-    Ok(render_dashboard(&label, &data))
-}
-
 /// Twitch-Login-Redirect-Ziel der unauthentifizierten HTML-Index-Seite
 /// (B15-FIX-index-redirect / finding social_media-2).
 const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
@@ -137,20 +115,70 @@ const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
 /// B15-FIX-index-redirect: Unauthentifiziert liefert die **HTML-Seite** keinen
 /// 401-JSON mehr, sondern einen 302-Redirect auf den Twitch-Login (Browser-UX,
 /// Python-Parität). Die JSON-Daten-Endpoints behalten ihr 401 (kein Redirect).
-pub async fn index_handler(auth: DashboardAuthLevel) -> Response {
+pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
     if matches!(auth, DashboardAuthLevel::None) {
         return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
     }
-    match render_index(&auth) {
-        Ok(html) => Html(html).into_response(),
-        Err(resp) => resp,
+    // Die alte HTML-Seite ist abgeloest. Bestehende Links landen auf der SPA,
+    // statt ins Leere zu laufen.
+    //
+    // Der Query-String muss mit: `oauth_callback_handler` schickt den Browser
+    // auf `/social-media?oauth_success=youtube` beziehungsweise
+    // `?oauth_error=<code>` zurueck. Ohne Weitergabe verliert der Umweg genau
+    // die eine Information, wegen der er stattfindet, und ein gescheiterter
+    // Verbindungsversuch endet wortlos auf der Kontenseite.
+    match weitergereichte_query(&uri) {
+        Some(query) => {
+            axum::response::Redirect::to(&format!("/social-media-admin?{query}")).into_response()
+        }
+        None => axum::response::Redirect::to("/social-media-admin").into_response(),
     }
+}
+
+/// Query-String, der unveraendert an die SPA weitergereicht werden darf.
+///
+/// Nur druckbares ASCII ohne Fragment-Zeichen und in vernuenftiger Laenge: der
+/// Wert landet in einem `Location`-Header, und dort hat nichts zu suchen, was
+/// nicht schon als Query durch den HTTP-Parser gekommen ist.
+fn weitergereichte_query(uri: &Uri) -> Option<String> {
+    let query = uri.query()?;
+    if query.is_empty() || query.len() > 512 {
+        return None;
+    }
+    if !query.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
+        return None;
+    }
+    Some(query.to_string())
 }
 
 /// `?streamer=` (für scope-gefilterte Endpoints).
 #[derive(Debug, Deserialize)]
 pub struct StreamerQuery {
     pub streamer: Option<String>,
+}
+
+/// Ausdrücklicher Marker für die Sammelverbindung, also die Zeile in
+/// `social_media_platform_auth` ohne `streamer_login`.
+///
+/// Vorher zeigte ein *fehlender* `?streamer=`-Parameter für Admin-Sessions
+/// stillschweigend auf genau diese Zeile: „Trennen" für einen einzelnen Kanal
+/// kappte damit die Verbindung für alle Kanäle. Die Sammelverbindung ist jetzt
+/// nur noch erreichbar, wenn jemand `?streamer=__global__` ausdrücklich
+/// mitschickt; ohne Parameter gibt es 400.
+///
+/// Ein Partner erreicht den Marker nie: `resolve_streamer_scope` klemmt jede
+/// Session auf den eigenen Login, `__global__` ist für sie ein fremder Kanal
+/// und damit 403.
+pub const GLOBAL_SCOPE_MARKER: &str = "__global__";
+
+/// Übersetzt den aufgelösten Scope in den Datenbank-Scope für die
+/// Plattform-Zugangsdaten: der Marker steht für die Sammelverbindung
+/// (`streamer_login IS NULL`), jeder andere Wert für den Kanal selbst.
+fn credential_scope(scope: Option<&str>) -> Option<&str> {
+    match scope {
+        Some(GLOBAL_SCOPE_MARKER) => None,
+        other => other,
+    }
 }
 
 /// `?streamer=&status=&limit=` für die Clip-Liste.
@@ -522,9 +550,7 @@ async fn require_clip_in_scope(
             if clip_owned_by_streamer(pool, clip_db_id, streamer).await {
                 Ok(())
             } else {
-                Err(forbidden(
-                    "Dieser Clip gehört nicht zu deinem Kanal.",
-                ))
+                Err(forbidden("Dieser Clip gehört nicht zu deinem Kanal."))
             }
         }
     }
@@ -894,8 +920,8 @@ pub async fn upload_clip_handler(
     }
 }
 
-/// `?streamer_login=` für die Layout-GET-Route.
-#[derive(Debug, Deserialize)]
+/// `?streamer_login=` für die Layout-GET-Route und den Zeitplan.
+#[derive(Debug, Clone, Deserialize)]
 pub struct StreamerLoginQuery {
     pub streamer_login: Option<String>,
 }
@@ -1630,13 +1656,18 @@ fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
     })
 }
 
-/// `GET /social-media/api/platforms/status` — Verbindungsstatus je Plattform.
+/// `GET /social-media/api/platforms/status?streamer=<kanal>` — Verbindungsstatus
+/// je Plattform.
+///
+/// Der Parameter ist Pflicht (Admin ohne `streamer` → 400). Für die
+/// Sammelverbindung ausdrücklich [`GLOBAL_SCOPE_MARKER`] (`__global__`)
+/// mitschicken; vorher zeigte ein fehlender Parameter still auf sie.
 pub async fn platforms_status_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), true) {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -1647,8 +1678,9 @@ pub async fn platforms_status_handler(
         )
             .into_response();
     };
-    let has_scope = scope.is_some();
-    let statuses = cred_mgr.get_all_platforms_status(scope.as_deref()).await;
+    let db_scope = credential_scope(scope.as_deref());
+    let has_scope = db_scope.is_some();
+    let statuses = cred_mgr.get_all_platforms_status(db_scope).await;
     let platforms: Vec<Value> = statuses
         .iter()
         .map(|s| platform_status_json(s, has_scope))
@@ -1725,9 +1757,105 @@ async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>
     })
 }
 
+/// Stand einer Plattform-Zeile in `twitch_clips_upload_queue`.
+#[derive(Debug, Default, Clone)]
+struct UploadQueueEntry {
+    /// Geplanter Termin (`scheduled_at`), RFC-3339.
+    scheduled_at: Option<String>,
+    /// Letzter Fehlergrund (`last_error`) aus `update_upload_status`.
+    last_error: Option<String>,
+}
+
+/// Queue-Stand einer Clip-Seite: Clip-ID → Plattform → Zeile.
+type UploadQueueInfo =
+    std::collections::HashMap<i64, std::collections::HashMap<String, UploadQueueEntry>>;
+
+/// Lädt Termin und Fehlergrund für eine ganze Clip-Seite in EINER Abfrage.
+///
+/// Bewusst nicht je Clip einzeln: bei `page_size=100` wären das sonst hundert
+/// Rundreisen zur Datenbank. Je Clip und Plattform gewinnt die zuletzt angelegte
+/// Zeile (höchste `id`), das ist der aktuelle Versuch.
+async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueInfo {
+    let mut info: UploadQueueInfo = std::collections::HashMap::new();
+    if clip_ids.is_empty() {
+        return info;
+    }
+    let rows = sqlx::query(
+        "SELECT clip_id, platform, scheduled_at, last_error \
+         FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) ORDER BY id ASC",
+    )
+    .bind(clip_ids)
+    .fetch_all(pool)
+    .await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => {
+            // Ein fehlender Queue-Stand darf die Clip-Liste nicht abschießen;
+            // dann bleiben Termin und Fehlergrund eben leer.
+            tracing::warn!(error = %e, "failed to load social media upload queue info");
+            return info;
+        }
+    };
+    for r in &rows {
+        let (Ok(clip_id), Ok(platform)) = (
+            r.try_get::<i64, _>("clip_id"),
+            r.try_get::<String, _>("platform"),
+        ) else {
+            continue;
+        };
+        let scheduled_at = r
+            .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")
+            .unwrap_or(None)
+            .map(|ts| ts.to_rfc3339());
+        let last_error = r
+            .try_get::<Option<String>, _>("last_error")
+            .unwrap_or(None)
+            .filter(|s| !s.trim().is_empty());
+        info.entry(clip_id).or_default().insert(
+            platform.trim().to_lowercase(),
+            UploadQueueEntry {
+                scheduled_at,
+                last_error,
+            },
+        );
+    }
+    info
+}
+
+/// Objekt mit einem Schlüssel je Plattform (`youtube`/`tiktok`/`instagram`);
+/// ohne Eintrag steht dort `null`.
+fn platform_value_map<'a>(
+    entries: Option<&'a std::collections::HashMap<String, UploadQueueEntry>>,
+    pick: impl Fn(&'a UploadQueueEntry) -> Option<&'a str>,
+) -> Value {
+    let mut out = serde_json::Map::with_capacity(PLATFORMS.len());
+    for platform in PLATFORMS {
+        let value = entries
+            .and_then(|m| m.get(platform))
+            .and_then(&pick)
+            .map(|s| Value::String(s.to_string()))
+            .unwrap_or(Value::Null);
+        out.insert(platform.to_string(), value);
+    }
+    Value::Object(out)
+}
+
 /// Baut den Clip-Detail-JSON inkl. Effective-Layout, Enrichment-Summary und
 /// Approval (Python `_serialize_clip_record`).
+///
+/// Für Einzelclips; die Listen-Endpoints holen den Queue-Stand einmal für die
+/// ganze Seite und rufen [`serialize_clip_record_with`] direkt auf.
 async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Value {
+    let queue = load_upload_queue_info(pool, &[row.id]).await;
+    serialize_clip_record_with(pool, row, queue.get(&row.id)).await
+}
+
+/// Wie [`serialize_clip_record`], nur mit schon geladenem Queue-Stand.
+async fn serialize_clip_record_with(
+    pool: &PgPool,
+    row: &ClipRow,
+    queue: Option<&std::collections::HashMap<String, UploadQueueEntry>>,
+) -> Value {
     let layout_override = row
         .layout_override_json
         .as_deref()
@@ -1811,6 +1939,12 @@ async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Value {
         "enrichment_status": enrichment_status,
         "enrichment_summary": enrichment_summary,
         "approval": approval,
+        // Geplanter Termin je Plattform (RFC 3339) und Fehlergrund je
+        // Plattform. Ohne Queue-Zeile steht dort `null`. Ohne diese beiden
+        // Felder zeigte das Dashboard nur ein nacktes „Fehler" ohne Grund und
+        // in den Zeitplan-Modi keinen Termin.
+        "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
+        "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
     })
 }
 
@@ -1973,16 +2107,23 @@ pub async fn admin_clips_handler(
         }
     };
 
-    let mut items: Vec<Value> = Vec::with_capacity(rows.len());
+    let mut clips: Vec<ClipRow> = Vec::with_capacity(rows.len());
     for r in &rows {
-        let clip = match row_to_clip(r) {
-            Ok(clip) => clip,
+        match row_to_clip(r) {
+            Ok(clip) => clips.push(clip),
             Err(e) => {
                 tracing::error!(error = %e, "failed to decode social media clip list row");
                 return clip_load_failed();
             }
-        };
-        items.push(serialize_clip_record(&pool, &clip).await);
+        }
+    }
+    // Termin und Fehlergrund einmal für die ganze Seite holen, nicht je Clip
+    // (sonst N+1 bei page_size=100).
+    let clip_ids: Vec<i64> = clips.iter().map(|c| c.id).collect();
+    let queue_info = load_upload_queue_info(&pool, &clip_ids).await;
+    let mut items: Vec<Value> = Vec::with_capacity(clips.len());
+    for clip in &clips {
+        items.push(serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await);
     }
     Json(json!({ "items": items, "page": page, "page_size": page_size, "total": total }))
         .into_response()
@@ -2615,31 +2756,305 @@ pub async fn approval_decision_handler(
     }
 }
 
-/// `GET /social-media/api/admin/settings/auto-approve` — Auto-Approve-Flags lesen.
+/// `POST /social-media/api/approval/:clip_db_id/cancel` — eingeplante Uploads
+/// eines Clips stoppen.
 ///
-/// Lesen darf jeder mit Social-Media-Zugriff: die Pipeline-Seite fragt die Flags
-/// beim Aufbau ab, ein 403 hier würde die ganze Seite für freigegebene Partner
-/// zur Admin-Wand machen. Gesetzt werden die Flags weiterhin nur vom Admin.
-pub async fn auto_approve_get_handler(
+/// Macht das Versprechen des Modus „Veto-Fenster" wahr: eingeplant heißt dort,
+/// dass man bis zum Termin noch eingreifen kann. Gestoppt wird nur, was noch
+/// wartet; eine Plattform, die schon läuft oder durch ist, bleibt stehen und
+/// wird in `already_running` gemeldet, damit die Oberfläche ehrlich sagen kann,
+/// dass eine Plattform schon raus war.
+///
+/// Abgesichert wie die übrigen clip-bezogenen Routen: Scope, Clip-Ownership,
+/// Partner-Freigabe.
+///
+/// Antwort: `{"cancelled": <gestoppte Zeilen>, "already_running": <Zeilen in
+/// processing/completed>}`.
+pub async fn approval_cancel_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Path(raw): Path<String>,
 ) -> Response {
-    if let Err(e) = require_sm_access(&auth, &pool, None).await {
+    let scope = match require_sm_access(&auth, &pool, None).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
         return e;
     }
-    let s = get_auto_approve_settings(&pool).await;
-    Json(json!({ "youtube": s.youtube, "tiktok": s.tiktok, "instagram": s.instagram }))
-        .into_response()
+    // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
+    if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
+        return guard_response;
+    }
+    let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "approval_cancel").await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match cancel_scheduled_uploads(&pool, child_clip_db_id).await {
+        Ok(outcome) => Json(json!({
+            "cancelled": outcome.cancelled,
+            "already_running": outcome.already_running,
+        }))
+        .into_response(),
+        Err(ApprovalError::ClipNotFound(_)) => clip_not_found(),
+        Err(error) => {
+            tracing::error!(%error, clip_db_id, "failed to cancel scheduled social media uploads");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "approval_cancel_failed" })),
+            )
+                .into_response()
+        }
+    }
 }
 
-/// `PUT /social-media/api/admin/settings/auto-approve` — Auto-Approve setzen (Admin).
-pub async fn auto_approve_put_handler(
+/// Erlaubte Freigabe-Modi in Anzeigereihenfolge, von vorsichtig nach automatisch.
+const APPROVAL_MODES: [&str; 3] = ["manual", "veto_window", "full_auto"];
+
+/// Obergrenzen der Kadenz. Mehr als zehn Posts am Tag ist kein Zeitplan mehr.
+const MAX_POSTS_PER_WEEK: i64 = 70;
+const MAX_POSTS_PER_DAY: i64 = 10;
+const MAX_POST_TIMES: usize = 12;
+
+fn platform_schedule_json(schedule: &PlatformSchedule, next_slot: Option<String>) -> Value {
+    json!({
+        "platform": schedule.platform,
+        "auto_post": schedule.auto_post,
+        "posts_per_week": schedule.posts_per_week,
+        "max_posts_per_day": schedule.max_posts_per_day,
+        "post_times": schedule.post_times,
+        "next_slot": next_slot,
+    })
+}
+
+fn category_json(category: &CategoryOption) -> Value {
+    json!({
+        "category_key": category.category_key,
+        "display_name": category.display_name,
+        "enrichment_enabled": category.enrichment_enabled,
+        "auto_post": category.auto_post,
+    })
+}
+
+fn pool_forecast_json(forecast: &PoolForecast) -> Value {
+    json!({
+        "verfuegbare_clips": forecast.verfuegbare_clips,
+        "aktive_plattformen": forecast.aktive_plattformen,
+        "reicht_fuer_posts": forecast.reicht_fuer_posts,
+        "posts_pro_woche": forecast.posts_pro_woche,
+        "reicht_fuer_tage": forecast.reicht_fuer_tage,
+        "warnung": forecast.warnung,
+    })
+}
+
+/// Schon vergebene Termine je Plattform, in einer Abfrage fuer den ganzen
+/// Kanal.
+///
+/// Gleiche Bedingungen wie `posting_plan::belegte_termine`, nur ohne den
+/// Plattform-Filter: der Zeitplan braucht die Termine ohnehin fuer alle drei
+/// Plattformen, und drei Einzelabfragen kosten nur Runden.
+async fn belegte_termine_je_plattform(
+    pool: &PgPool,
+    streamer_login: &str,
+) -> HashMap<String, Vec<DateTime<Utc>>> {
+    let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT q.platform, COALESCE(q.scheduled_at, q.completed_at) AS termin \
+           FROM twitch_clips_upload_queue q \
+           JOIN twitch_clips_social_media c ON c.id = q.clip_id \
+          WHERE LOWER(c.streamer_login) = $1 \
+            AND q.status <> 'failed' \
+            AND COALESCE(q.scheduled_at, q.completed_at) IS NOT NULL \
+            AND COALESCE(q.scheduled_at, q.completed_at) > CURRENT_TIMESTAMP - INTERVAL '14 days'",
+    )
+    .bind(streamer_login.trim().to_lowercase())
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut je_plattform: HashMap<String, Vec<DateTime<Utc>>> = HashMap::new();
+    for (platform, termin) in rows {
+        je_plattform.entry(platform).or_default().push(termin);
+    }
+    je_plattform
+}
+
+/// Baut die vollstaendige Antwort des Zeitplan-Endpoints.
+async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
+    // Feste Zahl an Abfragen, unabhaengig von der Zahl der Plattformen. Vorher
+    // holte `plan_next_slot` je Plattform Zeitplan, Einstellungen und belegte
+    // Termine erneut, und `pool_forecast` lud die Zeitplaene ein viertes Mal:
+    // rund zehn Abfragen pro GET, und jede Zeitplan-Mutation gibt den
+    // kompletten Plan zurueck.
+    let settings = load_streamer_settings(pool, streamer_login).await;
+    let schedules = load_platform_schedules(pool, streamer_login).await;
+    let categories = load_categories(pool, streamer_login).await;
+    let forecast = berechne_vorrat(verfuegbare_clips(pool, streamer_login).await, &schedules);
+    let belegt = belegte_termine_je_plattform(pool, streamer_login).await;
+    let now = chrono::Utc::now();
+    let leer: Vec<DateTime<Utc>> = Vec::new();
+
+    let mut platforms = Vec::with_capacity(schedules.len());
+    for schedule in &schedules {
+        let next_slot = if schedule.auto_post {
+            next_cadence_slot(
+                now,
+                belegt.get(&schedule.platform).unwrap_or(&leer),
+                &schedule.posting_schedule(&settings.timezone),
+                &schedule.limits(),
+            )
+            .map(|slot| slot.to_rfc3339())
+        } else {
+            None
+        };
+        platforms.push(platform_schedule_json(schedule, next_slot));
+    }
+
+    json!({
+        "streamer_login": streamer_login,
+        "approval_mode": settings.approval_mode.as_str(),
+        "approval_modes": APPROVAL_MODES,
+        "timezone": settings.timezone,
+        "platforms": platforms,
+        "categories": categories.iter().map(category_json).collect::<Vec<_>>(),
+        "pool": pool_forecast_json(&forecast),
+    })
+}
+
+/// `GET /social-media/api/admin/settings/posting-plan?streamer_login=` —
+/// Zeitplan, Freigabe-Modus, Kategorien und Vorratsrechnung eines Kanals.
+pub async fn posting_plan_get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Query(q): Query<StreamerLoginQuery>,
+) -> Response {
+    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    if let Err(error) = ensure_streamer_rows(&pool, &slug).await {
+        tracing::warn!(%error, streamer = %slug, "Zeitplan-Defaults konnten nicht angelegt werden");
+    }
+    Json(posting_plan_json(&pool, &slug).await).into_response()
+}
+
+/// `PUT /social-media/api/admin/settings/posting-plan` — Freigabe-Modus und
+/// Zeitzone eines Kanals setzen.
+pub async fn posting_plan_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerLoginQuery>,
     body: String,
 ) -> Response {
-    if let Err(e) = require_admin(&auth) {
-        return e;
+    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+
+    let current = load_streamer_settings(&pool, &slug).await;
+    let approval_mode = match payload.get("approval_mode").and_then(Value::as_str) {
+        Some(raw) => {
+            if !APPROVAL_MODES.contains(&raw) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "unknown approval_mode" })),
+                )
+                    .into_response();
+            }
+            ApprovalMode::parse(raw)
+        }
+        None => current.approval_mode,
+    };
+    let timezone = match payload.get("timezone").and_then(Value::as_str) {
+        Some(raw) => {
+            let raw = raw.trim();
+            if raw.parse::<chrono_tz::Tz>().is_err() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "unknown timezone" })),
+                )
+                    .into_response();
+            }
+            raw.to_string()
+        }
+        None => current.timezone,
+    };
+
+    let settings = StreamerSettings {
+        approval_mode,
+        timezone,
+    };
+    let actor = editor_user_id(&auth);
+    if save_streamer_settings(&pool, &slug, &settings, actor.as_deref())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response();
+    }
+    Json(posting_plan_json(&pool, &slug).await).into_response()
+}
+
+/// Prueft eine Liste von Posting-Zeiten im Format `HH:MM`.
+fn parse_post_times(value: &Value) -> Result<Vec<String>, &'static str> {
+    let Some(items) = value.as_array() else {
+        return Err("post_times must be an array");
+    };
+    if items.is_empty() {
+        return Err("post_times must not be empty");
+    }
+    if items.len() > MAX_POST_TIMES {
+        return Err("too many post_times");
+    }
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(raw) = item.as_str() else {
+            return Err("post_times must be strings");
+        };
+        let raw = raw.trim();
+        if chrono::NaiveTime::parse_from_str(raw, "%H:%M").is_err() {
+            return Err("post_times must use HH:MM");
+        }
+        if !out.iter().any(|existing| existing == raw) {
+            out.push(raw.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// `PUT /social-media/api/admin/settings/posting-plan/platform/:platform` —
+/// Auto-Posting und Kadenz einer Plattform setzen.
+pub async fn posting_plan_platform_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(platform): Path<String>,
+    Query(q): Query<StreamerLoginQuery>,
+    body: String,
+) -> Response {
+    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    let platform = platform.trim().to_lowercase();
+    if !PLATFORMS.contains(&platform.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unknown platform" })),
+        )
+            .into_response();
     }
     let payload: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -2648,19 +3063,266 @@ pub async fn auto_approve_put_handler(
     if !payload.is_object() {
         return invalid_payload();
     }
-    // Fehlende Keys → false (kein Merge, mirror Python).
-    let values = AutoApprove {
-        youtube: payload.get("youtube").map(coerce_bool).unwrap_or(false),
-        tiktok: payload.get("tiktok").map(coerce_bool).unwrap_or(false),
-        instagram: payload.get("instagram").map(coerce_bool).unwrap_or(false),
+
+    let current = load_platform_schedules(&pool, &slug)
+        .await
+        .into_iter()
+        .find(|s| s.platform == platform);
+    let Some(current) = current else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unknown platform" })),
+        )
+            .into_response();
     };
-    // updated_by (B15-FIX): Session-Actor (sonst NULL, wie Python-Localhost).
-    let actor = editor_user_id(&auth);
-    match set_auto_approve_settings(&pool, values, actor.as_deref()).await {
-        Ok(r) => {
-            Json(json!({ "youtube": r.youtube, "tiktok": r.tiktok, "instagram": r.instagram }))
+
+    let bounded = |key: &str, fallback: i32, max: i64| -> Result<i32, &'static str> {
+        match payload.get(key) {
+            Some(value) => {
+                let Some(number) = value.as_i64() else {
+                    return Err("must be a whole number");
+                };
+                if !(0..=max).contains(&number) {
+                    return Err("out of range");
+                }
+                Ok(number as i32)
+            }
+            None => Ok(fallback),
+        }
+    };
+    let posts_per_week = match bounded("posts_per_week", current.posts_per_week, MAX_POSTS_PER_WEEK)
+    {
+        Ok(value) => value,
+        Err(reason) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("posts_per_week {reason}") })),
+            )
                 .into_response()
         }
+    };
+    let max_posts_per_day = match bounded(
+        "max_posts_per_day",
+        current.max_posts_per_day,
+        MAX_POSTS_PER_DAY,
+    ) {
+        Ok(value) => value,
+        Err(reason) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("max_posts_per_day {reason}") })),
+            )
+                .into_response()
+        }
+    };
+    let post_times = match payload.get("post_times") {
+        Some(value) => match parse_post_times(value) {
+            Ok(times) => times,
+            Err(reason) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response()
+            }
+        },
+        None => current.post_times.clone(),
+    };
+
+    let schedule = PlatformSchedule {
+        platform,
+        auto_post: payload
+            .get("auto_post")
+            .map(coerce_bool)
+            .unwrap_or(current.auto_post),
+        posts_per_week,
+        max_posts_per_day,
+        post_times,
+    };
+    let actor = editor_user_id(&auth);
+    if save_platform_schedule(&pool, &slug, &schedule, actor.as_deref())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response();
+    }
+    Json(posting_plan_json(&pool, &slug).await).into_response()
+}
+
+/// `PUT /social-media/api/admin/settings/posting-plan/category/:category_key` —
+/// Auto-Posting einer Spielkategorie schalten.
+pub async fn posting_plan_category_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(category_key): Path<String>,
+    Query(q): Query<StreamerLoginQuery>,
+    body: String,
+) -> Response {
+    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    let category_key = category_key.trim().to_lowercase();
+    let categories = load_categories(&pool, &slug).await;
+    if !categories
+        .iter()
+        .any(|category| category.category_key == category_key)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unknown category" })),
+        )
+            .into_response();
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    let auto_post = payload.get("auto_post").map(coerce_bool).unwrap_or(false);
+    let actor = editor_user_id(&auth);
+    if save_category_setting(&pool, &slug, &category_key, auto_post, actor.as_deref())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response();
+    }
+    Json(posting_plan_json(&pool, &slug).await).into_response()
+}
+
+/// Löst den Streamer eines Aufrufs auf, der genau einen Kanal braucht.
+///
+/// Sicherheitskern dieser Endpoints: gearbeitet wird ausschließlich mit dem
+/// Scope aus [`require_sm_access`], nie mit dem angefragten Login. Für einen
+/// Partner ist der Scope immer der eigene Kanal, ein fremder `streamer_login`
+/// führt vorher schon zu 403. Ein Admin muss den Kanal benennen, „alle" gibt es
+/// hier nicht: VOD-Archiv und Zeitplan sind Entscheidungen je Kanal.
+#[allow(clippy::result_large_err)]
+async fn required_streamer_scope(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    requested: Option<&str>,
+) -> Result<String, Response> {
+    let scope = require_sm_access(auth, pool, requested).await?;
+    let Some(login) = scope else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "streamer_login is required" })),
+        )
+            .into_response());
+    };
+    let slug = normalize_safe_slug(Some(&login), "streamer_login")?.to_lowercase();
+    if !ensure_streamer_exists(pool, &slug).await {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_streamer" })),
+        )
+            .into_response());
+    }
+    Ok(slug)
+}
+
+fn vod_archive_json(s: &VodArchiveSettings) -> Value {
+    json!({
+        "streamer_login": s.streamer_login,
+        "enabled": s.enabled,
+        "privacy": s.privacy,
+        "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
+        "privacy_forced": privacy_forced(),
+    })
+}
+
+/// `GET /social-media/api/admin/settings/vod-archive?streamer_login=` —
+/// VOD-Archiv eines Streamers lesen.
+///
+/// Solange das Google-Projekt nicht auditiert ist, dreht YouTube jeden Upload
+/// auf `private` zurueck. Nach bestandenem Audit `YOUTUBE_AUDIT_PASSED=1`
+/// setzen, dann ist die Sichtbarkeit im Dashboard waehlbar.
+fn privacy_forced() -> bool {
+    !matches!(
+        std::env::var("YOUTUBE_AUDIT_PASSED").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// `privacy_forced` sagt der Oberfläche, dass YouTube ohne auditiertes
+/// API-Projekt jeden Upload auf `private` zurückdreht, egal was hier steht.
+pub async fn vod_archive_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerLoginQuery>,
+) -> Response {
+    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    Json(vod_archive_json(
+        &get_vod_archive_settings(&pool, &slug).await,
+    ))
+    .into_response()
+}
+
+/// `PUT /social-media/api/admin/settings/vod-archive` — VOD-Archiv eines
+/// Streamers setzen.
+///
+/// Bewusst `require_sm_access` statt `require_admin`: wer überhaupt ins
+/// Social-Media-Dashboard kommt, ist freigeschaltet und darf sein eigenes
+/// Archiv schalten. Geschrieben wird nur der Kanal aus dem Scope.
+pub async fn vod_archive_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: String,
+) -> Response {
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    let slug = match required_streamer_scope(
+        &auth,
+        &pool,
+        payload.get("streamer_login").and_then(Value::as_str),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &slug).await {
+        return guard_response;
+    }
+    // Fehlende Sichtbarkeit bleibt beim bisherigen Wert, statt still auf einen
+    // Default zu springen — ein Toggle-Klick darf die Sichtbarkeit nicht ändern.
+    let bisher = get_vod_archive_settings(&pool, &slug).await;
+    let privacy = payload
+        .get("privacy")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or(bisher.privacy);
+    if !VOD_ARCHIVE_PRIVACY_VALUES.contains(&privacy.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_privacy", "allowed": VOD_ARCHIVE_PRIVACY_VALUES })),
+        )
+            .into_response();
+    }
+    let values = VodArchiveSettings {
+        streamer_login: slug,
+        enabled: payload.get("enabled").map(coerce_bool).unwrap_or(false),
+        privacy,
+    };
+    let actor = editor_user_id(&auth);
+    match set_vod_archive_settings(&pool, &values, actor.as_deref()).await {
+        Ok(r) => Json(vod_archive_json(&r)).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "db" })),
@@ -2706,6 +3368,10 @@ fn is_supported_platform(p: &str) -> bool {
 }
 
 /// `GET /social-media/oauth/start/:platform` — OAuth-Flow starten (Redirect).
+///
+/// Der `streamer`-Parameter bleibt hier optional (Verbinden ist nicht
+/// zerstörend), [`GLOBAL_SCOPE_MARKER`] zeigt aber wie beim Trennen auf die
+/// Sammelverbindung, damit Verbinden und Trennen dieselbe Zeile meinen.
 pub async fn oauth_start_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2716,6 +3382,7 @@ pub async fn oauth_start_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
+    let scope = credential_scope(scope.as_deref()).map(str::to_string);
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(ref login) = scope {
         if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
@@ -2808,19 +3475,29 @@ pub async fn oauth_callback_handler(
     }
 }
 
-/// `POST /social-media/oauth/disconnect/:platform` — Plattform trennen.
+/// `POST /social-media/oauth/disconnect/:platform?streamer=<kanal>` — Plattform
+/// trennen.
+///
+/// Der Parameter ist Pflicht (Admin ohne `streamer` → 400). Vorher schickte das
+/// Frontend ihn nie mit, der Scope war für Admin-Sessions damit leer, und
+/// „Trennen" für einen einzelnen Kanal kappte die Sammelverbindung für alle
+/// Kanäle. Die Sammelverbindung wird jetzt nur noch getrennt, wenn jemand
+/// [`GLOBAL_SCOPE_MARKER`] (`?streamer=__global__`) ausdrücklich mitschickt.
 pub async fn oauth_disconnect_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(platform): Path<String>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), true) {
         Ok(s) => s,
         Err(e) => return e,
     };
-    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
-    if let Some(ref login) = scope {
+    let db_scope = credential_scope(scope.as_deref());
+    // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung. Der
+    // Sammel-Marker gehört keinem Kanal, für ihn greift nur die Admin-Prüfung
+    // aus `resolve_streamer_scope`.
+    if let Some(login) = db_scope {
         if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
             return guard_response;
         }
@@ -2837,7 +3514,7 @@ pub async fn oauth_disconnect_handler(
          WHERE platform = $1 AND (streamer_login = $2 OR (streamer_login IS NULL AND $2::text IS NULL))",
     )
     .bind(&platform)
-    .bind(scope.as_deref())
+    .bind(db_scope)
     .execute(&pool)
     .await;
     match result {
@@ -3005,12 +3682,6 @@ mod tests {
     }
 
     #[test]
-    fn html_escape_zeichen() {
-        assert_eq!(html_escape("a&b<c>\"'"), "a&amp;b&lt;c&gt;&quot;&#x27;");
-        assert_eq!(html_escape("nani_123"), "nani_123");
-    }
-
-    #[test]
     fn mp4_mime_erkennung_und_allowlist() {
         // B15-FIX: ftyp-Box an Offset 4 + Major-Brand → MIME.
         let mp4 = b"\x00\x00\x00\x18ftypisom....";
@@ -3083,22 +3754,10 @@ mod tests {
         assert!(resolve_streamer_scope(&DashboardAuthLevel::None, None, false).is_err());
     }
 
-    #[test]
-    fn index_render_label() {
-        // Admin → „nicht gesetzt".
-        let html = render_index(&DashboardAuthLevel::admin()).unwrap();
-        assert!(html.contains("nicht gesetzt"));
-        // Partner → @login (kleingeschrieben).
-        let html = render_index(&partner("Nani")).unwrap();
-        assert!(html.contains("@nani"));
-        // None → Fehler.
-        assert!(render_index(&DashboardAuthLevel::None).is_err());
-    }
-
     #[tokio::test]
     async fn index_unauth_redirectet_zum_login() {
         // B15-FIX-index-redirect: None → 302/303-Redirect, kein 401-JSON.
-        let resp = index_handler(DashboardAuthLevel::None).await;
+        let resp = index_handler(DashboardAuthLevel::None, "/social-media".parse().unwrap()).await;
         assert!(
             resp.status().is_redirection(),
             "unauth HTML-Index muss redirecten, war {}",
@@ -3108,6 +3767,44 @@ mod tests {
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
             SOCIAL_MEDIA_LOGIN_URL
         );
+    }
+
+    /// Der OAuth-Umweg endet auf `/social-media?oauth_success=…`. Faellt der
+    /// Query-String bei der Weiterleitung auf die SPA weg, gibt es nach einem
+    /// Verbindungsversuch ueberhaupt keine Rueckmeldung mehr.
+    #[tokio::test]
+    async fn index_reicht_die_oauth_rueckmeldung_weiter() {
+        async fn ziel(pfad: &str) -> String {
+            let resp = index_handler(DashboardAuthLevel::admin(), pfad.parse().unwrap()).await;
+            resp.headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        }
+
+        assert_eq!(
+            ziel("/social-media?oauth_success=youtube").await,
+            "/social-media-admin?oauth_success=youtube"
+        );
+        assert_eq!(
+            ziel("/social-media?oauth_error=token_exchange_failed").await,
+            "/social-media-admin?oauth_error=token_exchange_failed"
+        );
+        assert_eq!(ziel("/social-media").await, "/social-media-admin");
+        // Leerer Query-String haengt kein nacktes '?' an.
+        assert_eq!(ziel("/social-media?").await, "/social-media-admin");
+    }
+
+    #[test]
+    fn weitergereichte_query_bleibt_beim_druckbaren_ascii() {
+        let q = |p: &str| weitergereichte_query(&p.parse::<Uri>().unwrap());
+        assert_eq!(q("/x?a=1&b=2"), Some("a=1&b=2".to_string()));
+        assert_eq!(q("/x"), None);
+        assert_eq!(q("/x?"), None);
+        // Zu lang: nichts, was aus einem Redirect-Ziel stammt, ist so gross.
+        let lang = format!("/x?a={}", "b".repeat(600));
+        assert_eq!(q(&lang), None);
     }
 
     #[tokio::test]
@@ -3156,7 +3853,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
@@ -3171,6 +3868,12 @@ mod tests {
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
+            "CREATE TABLE social_media_category_settings (streamer_login TEXT NOT NULL, category_key TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, category_key))",
+            "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3291,21 +3994,50 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK, "Clip-Liste");
 
-        let resp = auto_approve_get_handler(sm_partner("earlysalty"), State(pool.clone())).await;
-        assert_eq!(resp.status(), StatusCode::OK, "Auto-Approve-Flags");
-
-        // Ohne Freigabe bleibt dieselbe Abfrage zu.
-        let resp = auto_approve_get_handler(sm_partner("ismile_e"), State(pool.clone())).await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
-        // Setzen bleibt Admin-Sache, auch für freigegebene Partner.
-        let resp = auto_approve_put_handler(
+        let resp = posting_plan_get_handler(
             sm_partner("earlysalty"),
             State(pool.clone()),
-            "{\"youtube\":true}".to_string(),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("earlysalty".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "Zeitplan des eigenen Kanals");
+
+        // Ohne Freigabe bleibt dieselbe Abfrage zu.
+        let resp = posting_plan_get_handler(
+            sm_partner("ismile_e"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("ismile_e".into()),
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Der Zeitplan gehoert dem Kanal: ein freigegebener Partner darf den
+        // eigenen setzen, den eines fremden Kanals nicht.
+        let resp = posting_plan_put_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("earlysalty".into()),
+            }),
+            "{\"approval_mode\":\"full_auto\"}".to_string(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "eigener Zeitplan");
+
+        let resp = posting_plan_put_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("ismile_e".into()),
+            }),
+            "{\"approval_mode\":\"full_auto\"}".to_string(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "fremder Zeitplan");
     }
 
     #[tokio::test]
@@ -3341,12 +4073,11 @@ mod tests {
         assert_eq!(items[0]["clip_id"], "eigen");
 
         // Der fremde Clip ist auch einzeln nicht erreichbar.
-        let fremd_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM twitch_clips_social_media WHERE clip_id = 'fremd'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let fremd_id: i64 =
+            sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE clip_id = 'fremd'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let resp = admin_clip_detail_handler(
             sm_partner("earlysalty"),
             State(pool.clone()),
@@ -3716,12 +4447,10 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            body_json(resp).await["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("cam_position")
-        );
+        assert!(body_json(resp).await["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cam_position"));
 
         // Ein hoher Cam-Streifen passt dagegen: 1600 < 1920 (Zielframe), auch
         // wenn die Quelle nur 1080 hoch ist.
@@ -4248,10 +4977,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_und_auto_approve() {
+    async fn approval_und_zeitplan() {
         let Some(pool) = make_pool("t_dash_sm_approval").await else {
             return;
         };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ('nani')")
+            .execute(&pool)
+            .await
+            .unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('a', 'nani', 'awaiting_approval') RETURNING id").fetch_one(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO social_media_clip_enrichment (clip_db_id, title_tiktok) VALUES ($1, 'TT')",
@@ -4303,30 +5036,154 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        // auto-approve get (Defaults false) → put → get.
-        let resp = auto_approve_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
-        let v = body_json(resp).await;
-        assert_eq!(
-            v,
-            json!({ "youtube": false, "tiktok": false, "instagram": false })
-        );
-        let resp = auto_approve_put_handler(
+        // Zeitplan lesen: Defaults aus der Kadenz-Recherche, Freigabe manuell.
+        let nani = Query(StreamerLoginQuery {
+            streamer_login: Some("nani".into()),
+        });
+        let resp = posting_plan_get_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"youtube\":true,\"tiktok\":\"on\"}".into(),
+            nani.clone(),
         )
         .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["approval_mode"], "manual");
+        assert_eq!(v["timezone"], "Europe/Berlin");
+        assert_eq!(v["platforms"].as_array().unwrap().len(), 3);
+        assert_eq!(v["platforms"][0]["posts_per_week"], 4);
+        assert_eq!(v["platforms"][0]["max_posts_per_day"], 1);
+        assert_eq!(v["platforms"][0]["auto_post"], false);
+        // Deadlock ist voreingestellt an und darf angereichert werden.
+        let deadlock = v["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["category_key"] == "deadlock")
+            .cloned()
+            .unwrap();
+        assert_eq!(deadlock["enrichment_enabled"], true);
+        assert_eq!(deadlock["auto_post"], true);
+
+        // Freigabe-Modus setzen.
+        let resp = posting_plan_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            nani.clone(),
+            "{\"approval_mode\":\"veto_window\"}".into(),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["approval_mode"], "veto_window");
+
+        // Unbekannter Modus und unbekannte Zeitzone werden abgelehnt.
+        for kaputt in [
+            "{\"approval_mode\":\"sofort\"}",
+            "{\"timezone\":\"Nirgendwo/Erfunden\"}",
+        ] {
+            let resp = posting_plan_put_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                nani.clone(),
+                kaputt.into(),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{kaputt}");
+        }
+
+        // Kadenz einer Plattform setzen.
+        let resp = posting_plan_platform_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("tiktok".into()),
+            nani.clone(),
+            "{\"auto_post\":true,\"posts_per_week\":3,\"post_times\":[\"20:00\",\"09:30\"]}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        let tiktok = v["platforms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["platform"] == "tiktok")
+            .cloned()
+            .unwrap();
+        assert_eq!(tiktok["auto_post"], true);
+        assert_eq!(tiktok["posts_per_week"], 3);
+        assert_eq!(tiktok["post_times"], json!(["09:30", "20:00"]));
+        assert!(
+            tiktok["next_slot"].is_string(),
+            "Termin wird vorausberechnet"
+        );
+
+        // Unsinnige Kadenz und kaputte Zeiten werden abgelehnt.
+        for kaputt in [
+            "{\"posts_per_week\":999}",
+            "{\"max_posts_per_day\":-1}",
+            "{\"post_times\":[\"25:00\"]}",
+            "{\"post_times\":[]}",
+        ] {
+            let resp = posting_plan_platform_put_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path("tiktok".into()),
+                nani.clone(),
+                kaputt.into(),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{kaputt}");
+        }
+        let resp = posting_plan_platform_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("mastodon".into()),
+            nani.clone(),
+            "{\"auto_post\":true}".into(),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "unbekannte Plattform"
+        );
+
+        // Kategorie-Schalter.
+        let resp = posting_plan_category_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("deadlock".into()),
+            nani.clone(),
+            "{\"auto_post\":false}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(
-            v,
-            json!({ "youtube": true, "tiktok": true, "instagram": false })
-        ); // missing instagram → false
-        let resp = auto_approve_get_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
-        assert_eq!(body_json(resp).await["youtube"], true);
-
-        // Partner → 403, invalid clip → 400.
+            v["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["category_key"] == "deadlock")
+                .unwrap()["auto_post"],
+            false
+        );
+        let resp = posting_plan_category_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("solitaer".into()),
+            nani.clone(),
+            "{\"auto_post\":true}".into(),
+        )
+        .await;
         assert_eq!(
-            auto_approve_get_handler(partner("nani"), State(pool.clone()))
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "unbekannte Kategorie"
+        );
+
+        // Partner ohne Social-Media-Freigabe → 403, invalid clip → 400.
+        assert_eq!(
+            posting_plan_get_handler(partner("nani"), State(pool.clone()), nani.clone())
                 .await
                 .status(),
             StatusCode::FORBIDDEN
@@ -4340,6 +5197,191 @@ mod tests {
             .await
             .status(),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn vod_archiv_einstellung() {
+        let Some(pool) = make_pool("t_dash_sm_vod").await else {
+            return;
+        };
+        for login in ["earlysalty", "nani"] {
+            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+                .bind(login)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let frage = |login: &str| StreamerLoginQuery {
+            streamer_login: Some(login.to_string()),
+        };
+
+        // Default: aus und privat, weil das Google-Projekt nicht auditiert ist.
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("earlysalty")),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["privacy"], "private");
+        assert_eq!(v["privacy_forced"], privacy_forced());
+        assert_eq!(v["streamer_login"], "earlysalty");
+
+        // Einschalten mit Sichtbarkeit.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["privacy"], "unlisted");
+
+        // Der zweite Kanal bleibt davon unberuehrt.
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("nani")),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
+        // Toggle ohne privacy behaelt die bisherige Sichtbarkeit.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":false}".into(),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["privacy"], "unlisted");
+
+        // Unbekannte Sichtbarkeit wird abgewiesen, nicht still ersetzt.
+        let resp = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Der abgewiesene Aufruf darf nichts geaendert haben.
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(frage("earlysalty")),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
+        // Kaputtes JSON → 400, fehlender Kanal → 400, unbekannter Kanal → 404.
+        assert_eq!(
+            vod_archive_put_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                "kein json".into()
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            vod_archive_put_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                "{\"enabled\":true}".into()
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            vod_archive_get_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(frage("gibtsnicht"))
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Der sicherheitsrelevante Kern: ein freigeschalteter Partner darf sein
+    /// eigenes Archiv schalten, aber unter keinen Umstaenden ein fremdes.
+    #[tokio::test]
+    async fn partner_schaltet_nur_den_eigenen_kanal() {
+        let Some(pool) = make_pool("t_dash_sm_vod_partner").await else {
+            return;
+        };
+        for login in ["earlysalty", "nani"] {
+            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+                .bind(login)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Eigener Kanal: geht.
+        let resp = vod_archive_put_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            "{\"streamer_login\":\"nani\",\"enabled\":true}".into(),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], true);
+
+        // Fremder Kanal: 403, und der fremde Schalter bleibt aus.
+        let resp = vod_archive_put_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = vod_archive_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("earlysalty".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["enabled"], false);
+
+        // Ohne Angabe faellt der Partner auf den eigenen Kanal zurueck, nie auf
+        // einen fremden.
+        let resp = vod_archive_get_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                streamer_login: None,
+            }),
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["streamer_login"], "nani");
+        assert_eq!(v["enabled"], true);
+
+        // Ein nicht freigeschalteter Partner kommt gar nicht erst durch.
+        assert_eq!(
+            vod_archive_put_handler(
+                sm_partner("earlysalty"),
+                State(pool.clone()),
+                "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into()
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
         );
     }
 
@@ -5004,5 +6046,392 @@ mod tests {
             .status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    /// Der zerstoerende Knopf: „Trennen" ohne `streamer` zeigte fuer
+    /// Admin-Sessions still auf die Sammelverbindung und kappte damit alle
+    /// Kanaele auf einmal.
+    #[tokio::test]
+    async fn trennen_braucht_kanal_und_trifft_nur_dessen_zeile() {
+        let Some(pool) = make_pool("t_dash_sm_disconnect_scope").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO social_media_platform_auth (platform, streamer_login, enabled) \
+             VALUES ('youtube', NULL, 1), ('youtube', 'earlysalty', 1), ('youtube', 'ismile_e', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('earlysalty', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Ohne Parameter: 400 statt stillem Griff zur Sammelverbindung.
+        let resp = oauth_disconnect_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("youtube".to_string()),
+            Query(StreamerQuery { streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Fremder Kanal: 403.
+        let resp = oauth_disconnect_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Path("youtube".to_string()),
+            Query(StreamerQuery {
+                streamer: Some("ismile_e".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Beide Abweisungen duerfen nichts angefasst haben.
+        let aktiv: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM social_media_platform_auth WHERE enabled = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(aktiv, 3, "abgewiesene Anfragen duerfen nicht wirken");
+
+        // Eigener Kanal: trifft genau die kanalgebundene Zeile.
+        let resp = oauth_disconnect_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Path("youtube".to_string()),
+            Query(StreamerQuery {
+                streamer: Some("EarlySalty".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let rows: Vec<(Option<String>, i32)> = sqlx::query_as(
+            "SELECT streamer_login, enabled FROM social_media_platform_auth ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (None, 1),
+                (Some("earlysalty".to_string()), 0),
+                (Some("ismile_e".to_string()), 1),
+            ],
+            "die Sammelverbindung und der fremde Kanal bleiben unberuehrt"
+        );
+
+        // Die Sammelverbindung nur noch ueber den ausdruecklichen Marker.
+        let resp = oauth_disconnect_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("youtube".to_string()),
+            Query(StreamerQuery {
+                streamer: Some(GLOBAL_SCOPE_MARKER.to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let global_enabled: i32 = sqlx::query_scalar(
+            "SELECT enabled FROM social_media_platform_auth WHERE streamer_login IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(global_enabled, 0);
+
+        // Ein Partner kommt an den Marker nicht heran.
+        let resp = oauth_disconnect_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Path("youtube".to_string()),
+            Query(StreamerQuery {
+                streamer: Some(GLOBAL_SCOPE_MARKER.to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn plattform_status_braucht_ebenfalls_einen_kanal() {
+        let Some(pool) = make_pool("t_dash_sm_status_scope").await else {
+            return;
+        };
+        let resp = platforms_status_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = platforms_status_handler(
+            sm_partner("earlysalty"),
+            State(pool.clone()),
+            Query(StreamerQuery {
+                streamer: Some("ismile_e".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = platforms_status_handler(
+            DashboardAuthLevel::None,
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Im Dashboard stand vorher nur ein nacktes „Fehler" ohne Grund und in den
+    /// Zeitplan-Modi kein Termin.
+    #[tokio::test]
+    async fn clip_json_liefert_termin_und_fehlergrund_je_plattform() {
+        let Some(pool) = make_pool("t_dash_sm_queue_info").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('q1', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at, last_error) \
+             VALUES ($1, 'youtube', 'pending', '2026-08-24T18:00:00Z'::timestamptz, NULL), \
+                    ($1, 'tiktok', 'failed', NULL, 'quota exceeded: daily limit')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detail = body_json(
+            admin_clip_detail_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path(clip.to_string()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            detail["scheduled_at"]["youtube"],
+            "2026-08-24T18:00:00+00:00"
+        );
+        assert!(detail["scheduled_at"]["tiktok"].is_null());
+        assert!(detail["scheduled_at"]["instagram"].is_null());
+        assert!(detail["upload_errors"]["youtube"].is_null());
+        assert_eq!(
+            detail["upload_errors"]["tiktok"],
+            "quota exceeded: daily limit"
+        );
+        assert!(detail["upload_errors"]["instagram"].is_null());
+
+        // Die Liste liefert dieselben Felder (eine Abfrage fuer die ganze Seite).
+        let liste = body_json(
+            admin_clips_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(AdminClipsQuery {
+                    page: None,
+                    page_size: None,
+                    status: None,
+                    streamer: None,
+                }),
+            )
+            .await,
+        )
+        .await;
+        let item = &liste["items"][0];
+        assert_eq!(item["scheduled_at"]["youtube"], "2026-08-24T18:00:00+00:00");
+        assert_eq!(
+            item["upload_errors"]["tiktok"],
+            "quota exceeded: daily limit"
+        );
+
+        // Ein Clip ganz ohne Queue-Zeilen bekommt drei ausdrueckliche Nullwerte.
+        let leer: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('q2', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let detail = body_json(
+            admin_clip_detail_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path(leer.to_string()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            detail["scheduled_at"],
+            json!({ "youtube": null, "tiktok": null, "instagram": null })
+        );
+        assert_eq!(
+            detail["upload_errors"],
+            json!({ "youtube": null, "tiktok": null, "instagram": null })
+        );
+    }
+
+    #[tokio::test]
+    async fn abbruch_raeumt_wartende_uploads_ab_und_meldet_laufende() {
+        let Some(pool) = make_pool("t_dash_sm_approval_cancel").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('c1', 'nani', 'approved') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) VALUES ($1, 'approved', '[\"youtube\", \"tiktok\"]'::jsonb)")
+            .bind(clip as i32)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'youtube', 'pending'), ($1, 'tiktok', 'pending')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = body_json(
+            approval_cancel_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path(clip.to_string()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(out, json!({ "cancelled": 2, "already_running": 0 }));
+
+        let rest: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rest, 0);
+        let (state, status): (String, String) = sqlx::query_as(
+            "SELECT a.state, c.status FROM social_media_clip_approval a \
+             JOIN twitch_clips_social_media c ON c.id = a.clip_db_id WHERE a.clip_db_id = $1",
+        )
+        .bind(clip as i32)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state, "awaiting_approval");
+        assert_eq!(status, "awaiting_approval");
+        let plattformen: String = sqlx::query_scalar(
+            "SELECT approved_platforms::text FROM social_media_clip_approval WHERE clip_db_id = $1",
+        )
+        .bind(clip as i32)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(plattformen, "[]");
+
+        // Zweiter Clip: eine Plattform ist schon unterwegs und bleibt stehen.
+        let laeuft: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('c2', 'nani', 'approved') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'youtube', 'processing'), ($1, 'tiktok', 'pending')",
+        )
+        .bind(laeuft)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out = body_json(
+            approval_cancel_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path(laeuft.to_string()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(out, json!({ "cancelled": 1, "already_running": 1 }));
+        let rest: Vec<(String, String)> = sqlx::query_as(
+            "SELECT platform, status FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(laeuft)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rest,
+            vec![("youtube".to_string(), "processing".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn abbruch_fremder_clip_ist_403_und_unbekannter_clip_404() {
+        let Some(pool) = make_pool("t_dash_sm_approval_cancel_scope").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let fremd: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('fremd', 'ismile_e') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'youtube', 'pending')")
+            .bind(fremd)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let resp = approval_cancel_handler(
+            sm_partner("nani"),
+            State(pool.clone()),
+            Path(fremd.to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let rest: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(fremd)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rest, 1, "der fremde Clip bleibt eingeplant");
+
+        let resp = approval_cancel_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path("999999".to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let resp = approval_cancel_handler(
+            DashboardAuthLevel::None,
+            State(pool.clone()),
+            Path(fremd.to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

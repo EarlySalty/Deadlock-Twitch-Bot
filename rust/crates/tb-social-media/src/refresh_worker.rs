@@ -19,6 +19,11 @@ use crate::oauth::OAuthManager;
 const INTERVAL_SECONDS: u64 = 5 * 60;
 const INITIAL_DELAY_SECONDS: u64 = 60;
 const REFRESH_THRESHOLD_HOURS: i64 = 1;
+/// Instagram-Token laufen 60 Tage und lassen sich nur verlaengern, solange sie
+/// noch gueltig sind. Eine Stunde Vorlauf wie bei den Stundentoken der anderen
+/// Plattformen waere hier zu knapp: faellt der Worker ueber ein Wochenende aus,
+/// ist der Zugang unwiederbringlich weg und der Streamer muss neu verbinden.
+const INSTAGRAM_THRESHOLD_DAYS: i64 = 7;
 
 /// Periodischer Auto-Refresh ablaufender Plattform-Tokens.
 pub struct TokenRefreshWorker {
@@ -48,16 +53,24 @@ impl TokenRefreshWorker {
     /// Eine Refresh-Runde: alle binnen 1h ablaufenden Tokens mit Refresh-Token
     /// erneuern (Python `_refresh_expiring_tokens`).
     pub async fn run_once(&self) {
-        let threshold =
-            (Utc::now() + chrono::Duration::hours(REFRESH_THRESHOLD_HOURS)).to_rfc3339();
+        let jetzt = Utc::now();
+        let kurz = (jetzt + chrono::Duration::hours(REFRESH_THRESHOLD_HOURS)).to_rfc3339();
+        let lang = (jetzt + chrono::Duration::days(INSTAGRAM_THRESHOLD_DAYS)).to_rfc3339();
+        // Instagram hat keinen Refresh-Token, das Langzeit-Token verlaengert
+        // sich selbst. Die alte Bedingung `refresh_token_enc IS NOT NULL` hat
+        // Instagram deshalb nie ausgewaehlt: der Zugang starb nach 60 Tagen,
+        // ohne dass irgendwo etwas passierte.
         let rows = sqlx::query!(
-            "SELECT platform AS \"platform!\", streamer_login, refresh_token_enc AS \"refresh_token_enc!\", client_id, client_secret_enc, \
+            "SELECT platform AS \"platform!\", streamer_login, access_token_enc AS \"access_token_enc!\", \
+                    refresh_token_enc, client_id, client_secret_enc, \
                     token_expires_at, enc_version \
              FROM social_media_platform_auth \
-             WHERE enabled = 1 AND refresh_token_enc IS NOT NULL AND token_expires_at IS NOT NULL \
-               AND token_expires_at < $1 \
+             WHERE enabled = 1 AND token_expires_at IS NOT NULL \
+               AND ( (platform = 'instagram' AND token_expires_at < $2) \
+                     OR (platform <> 'instagram' AND refresh_token_enc IS NOT NULL AND token_expires_at < $1) ) \
              ORDER BY token_expires_at ASC",
-            &threshold
+            &kurz,
+            &lang
         )
         .fetch_all(&self.pool)
         .await
@@ -67,6 +80,7 @@ impl TokenRefreshWorker {
             self.refresh_one(
                 row.platform,
                 row.streamer_login,
+                row.access_token_enc,
                 row.refresh_token_enc,
                 row.client_id,
                 row.client_secret_enc,
@@ -76,22 +90,38 @@ impl TokenRefreshWorker {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn refresh_one(
         &self,
         platform: String,
         streamer: Option<String>,
-        refresh_enc: Vec<u8>,
+        access_enc: Vec<u8>,
+        refresh_enc: Option<Vec<u8>>,
         client_id: Option<String>,
         client_secret_enc: Option<Vec<u8>>,
         enc_version: i64,
     ) {
         let streamer_ref = streamer.as_deref();
 
-        let Ok(refresh_token) = self.cipher.decrypt_field(
-            &refresh_enc,
-            &aad::social_media("refresh_token", &platform, streamer_ref, enc_version),
-        ) else {
-            tracing::error!(platform = %platform, "Refresh-Token-Decrypt fehlgeschlagen");
+        // Instagram verlaengert sein eigenes Access-Token; alle anderen
+        // Plattformen brauchen den gespeicherten Refresh-Token.
+        let geheimnis = if platform == "instagram" {
+            self.cipher.decrypt_field(
+                &access_enc,
+                &aad::social_media("access_token", &platform, streamer_ref, enc_version),
+            )
+        } else {
+            let Some(refresh_enc) = refresh_enc else {
+                tracing::error!(platform = %platform, "Refresh ohne gespeicherten Refresh-Token");
+                return;
+            };
+            self.cipher.decrypt_field(
+                &refresh_enc,
+                &aad::social_media("refresh_token", &platform, streamer_ref, enc_version),
+            )
+        };
+        let Ok(refresh_token) = geheimnis else {
+            tracing::error!(platform = %platform, "Token-Decrypt fuer den Refresh fehlgeschlagen");
             return;
         };
         let client_secret = client_secret_enc.and_then(|b| {
@@ -115,15 +145,43 @@ impl TokenRefreshWorker {
         {
             Ok(t) => t,
             Err(error) => {
-                // Nicht-transienter Fehler → in Python Admin-Discord-DM (B10,
-                // ausgeschlossen). Hier nur Log.
-                tracing::error!(platform = %platform, %error, "Token-Refresh fehlgeschlagen");
+                let text = error.to_string();
+                // `invalid_grant` heisst: der Nutzer hat den Zugriff entzogen,
+                // das Token ist zu lange ungenutzt oder das Passwort wurde
+                // gewechselt. Das heilt kein Retry. Frueher blieb der Eintrag
+                // dabei auf "gueltig bis irgendwann", das Dashboard meldete
+                // gruen und jeder Upload lief ins Leere. Wir setzen den Ablauf
+                // deshalb auf jetzt, damit die Oberflaeche "abgelaufen" zeigt
+                // und der Streamer neu verbinden kann.
+                if text.contains("invalid_grant") || text.contains("invalid_request") {
+                    self.markiere_abgelaufen(&platform, streamer_ref).await;
+                }
+                tracing::error!(platform = %platform, error = %text, "Token-Refresh fehlgeschlagen");
                 return;
             }
         };
 
         self.save_refreshed(&platform, streamer_ref, &new_tokens)
             .await;
+    }
+
+    /// Setzt den Ablauf auf jetzt, damit der Zustand im Dashboard als
+    /// "abgelaufen" sichtbar wird. Der Eintrag bleibt `enabled = 1`, damit ein
+    /// erneutes Verbinden dieselbe Zeile aktualisiert.
+    async fn markiere_abgelaufen(&self, platform: &str, streamer: Option<&str>) {
+        let jetzt = Utc::now().to_rfc3339();
+        let result = sqlx::query!(
+            "UPDATE social_media_platform_auth SET token_expires_at = $1 \
+             WHERE platform = $2 AND (streamer_login = $3 OR (streamer_login IS NULL AND $3 IS NULL))",
+            &jetzt,
+            platform,
+            streamer
+        )
+        .execute(&self.pool)
+        .await;
+        if let Err(error) = result {
+            tracing::error!(platform = %platform, %error, "Ablauf-Markierung fehlgeschlagen");
+        }
     }
 
     async fn save_refreshed(

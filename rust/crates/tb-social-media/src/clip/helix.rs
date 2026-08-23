@@ -172,6 +172,13 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         .and_then(|g| g.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Helix liefert die Kategorie-ID mit; sie ist stabiler als der Anzeigename
+    // und entscheidet spaeter ueber die Kategorie des Clips.
+    let game_id = v
+        .get("game_id")
+        .and_then(|g| g.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     Some(ClipRecord {
         clip_id,
@@ -184,6 +191,7 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         duration_seconds,
         view_count,
         game_name,
+        game_id,
     })
 }
 

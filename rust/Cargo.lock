@@ -2812,6 +2812,7 @@ dependencies = [
  "tb-tips",
  "tb-transport-discord",
  "tb-transport-twitch",
+ "tb-vod-archive",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3209,6 +3210,21 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "tb-vod-archive"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tb-social-media",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

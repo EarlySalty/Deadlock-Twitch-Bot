@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_category_settings (streamer_login, category_key, auto_post, updated_at, updated_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) ON CONFLICT (streamer_login, category_key) DO UPDATE SET auto_post = EXCLUDED.auto_post, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "17459636b9a0a244dece710259d19a1780d4cf0ec86570be07cfe59f5db57887"
+}

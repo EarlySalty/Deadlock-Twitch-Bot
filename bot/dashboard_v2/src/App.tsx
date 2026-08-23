@@ -20,6 +20,7 @@ import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
+import { LanguageProvider, useT } from '@/context/LanguageContext';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
@@ -70,25 +71,40 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-bg flex items-center justify-center p-8">
-          <div className="panel-card rounded-2xl p-8 max-w-lg text-center">
-            <AlertTriangle className="w-12 h-12 text-warning mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-white mb-2">Dashboard-Fehler</h2>
-            <p className="text-text-secondary mb-4">
-              {this.state.error?.message || 'Ein unerwarteter Fehler ist aufgetreten.'}
-            </p>
-            <button
-              onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-4 py-2 bg-primary text-[#0D0806] rounded-lg hover:bg-primary-hover transition-colors"
-            >
-              Erneut versuchen
-            </button>
-          </div>
-        </div>
+        <ErrorFallback
+          message={this.state.error?.message ?? null}
+          onRetry={() => this.setState({ hasError: false, error: null })}
+        />
       );
     }
     return this.props.children;
   }
+}
+
+/**
+ * Eigene Komponente, weil die Fehlergrenze eine Klasse ist und keine Hooks
+ * benutzen kann. Der Provider liegt darueber, die Sprache gilt also auch im
+ * Fehlerfall.
+ */
+function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+  const t = useT();
+  return (
+    <div className="min-h-screen bg-bg flex items-center justify-center p-8">
+      <div className="panel-card rounded-2xl p-8 max-w-lg text-center">
+        <AlertTriangle className="w-12 h-12 text-warning mx-auto mb-4" />
+        <h2 className="text-xl font-bold text-white mb-2">{t('Dashboard-Fehler')}</h2>
+        <p className="text-text-secondary mb-4">
+          {message || t('Ein unerwarteter Fehler ist aufgetreten.')}
+        </p>
+        <button
+          onClick={onRetry}
+          className="px-4 py-2 bg-primary text-[#0D0806] rounded-lg hover:bg-primary-hover transition-colors"
+        >
+          {t('Erneut versuchen')}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // Create QueryClient
@@ -131,6 +147,7 @@ function OverviewOrTagesform({ streamer, days, onSessionClick }: OverviewOrTages
 }
 
 function AnalyticsDashboard() {
+  const t = useT();
   const [streamer, setStreamer] = useState<string | null>(null);
   const [days, setDays] = useState<TimeRange>(30);
   const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
@@ -238,7 +255,7 @@ function AnalyticsDashboard() {
       return (
         <div className={`${badgeBase} bg-warning/10 border-warning/30 text-warning`}>
           <Sparkles className="w-4 h-4" />
-          <span>Demo-Daten</span>
+          <span>{t('Demo-Daten')}</span>
         </div>
       );
     }
@@ -247,7 +264,7 @@ function AnalyticsDashboard() {
       return (
         <div className={`${badgeBase} bg-error/10 border-error/30 text-error`}>
           <ShieldAlert className="w-4 h-4" />
-          <span>Nicht authentifiziert</span>
+          <span>{t('Nicht authentifiziert')}</span>
         </div>
       );
     }
@@ -256,7 +273,7 @@ function AnalyticsDashboard() {
       return (
         <div className={`${badgeBase} bg-success/10 border-success/30 text-success`}>
           <Wifi className="w-4 h-4" />
-          <span>Localhost (Admin)</span>
+          <span>{t('Localhost (Admin)')}</span>
         </div>
       );
     }
@@ -265,7 +282,7 @@ function AnalyticsDashboard() {
       return (
         <div className={`${badgeBase} bg-primary/10 border-primary/30 text-primary`}>
           <ShieldCheck className="w-4 h-4" />
-          <span>Admin</span>
+          <span>{t('Admin')}</span>
         </div>
       );
     }
@@ -273,7 +290,7 @@ function AnalyticsDashboard() {
     return (
       <div className={`${badgeBase} bg-accent/10 border-accent/30 text-accent`}>
         <Shield className="w-4 h-4" />
-        <span>Partner</span>
+        <span>{t('Partner')}</span>
       </div>
     );
   };
@@ -313,7 +330,9 @@ function AnalyticsDashboard() {
 
           {isDemoMode && (
             <div className="mb-4 rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90">
-              Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.
+              {t(
+                'Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.',
+              )}
             </div>
           )}
 
@@ -394,25 +413,29 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ErrorBoundary>
-        {isSocialMediaAdminRoute ? (
-          <SocialMediaAdminDashboard />
-        ) : isVerwaltungRoute ? (
-          <VerwaltungPage />
-        ) : isOverlayBuilderRoute ? (
-          <OverlayBuilderPage />
-        ) : isPricingRoute ? (
-          <Pricing />
-        ) : isUplinkRoute ? (
-          <UplinkPage />
-        ) : isInternalHomeRoute ? (
-          <InternalHome />
-        ) : isAnalyticsRoute ? (
-          <AnalyticsDashboard />
-        ) : (
-          <AnalyticsDashboard />
-        )}
-      </ErrorBoundary>
+      {/* Die Sprachwahl liegt ueber allem: sie gilt fuer jede Route dieses
+          Bundles, auch fuer die Fehlergrenze. */}
+      <LanguageProvider>
+        <ErrorBoundary>
+          {isSocialMediaAdminRoute ? (
+            <SocialMediaAdminDashboard />
+          ) : isVerwaltungRoute ? (
+            <VerwaltungPage />
+          ) : isOverlayBuilderRoute ? (
+            <OverlayBuilderPage />
+          ) : isPricingRoute ? (
+            <Pricing />
+          ) : isUplinkRoute ? (
+            <UplinkPage />
+          ) : isInternalHomeRoute ? (
+            <InternalHome />
+          ) : isAnalyticsRoute ? (
+            <AnalyticsDashboard />
+          ) : (
+            <AnalyticsDashboard />
+          )}
+        </ErrorBoundary>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }

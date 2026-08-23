@@ -34,6 +34,23 @@
 //!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
 //!                                   Review-Ausgang (B19). Fehlt sie, bleibt der
 //!                                   Forward-Loop aus (default aus, opt-in)
+//!   TB_VOD_ARCHIVE_DIR            — Wurzel der geladenen VODs, je Streamer
+//!                                   ein Unterordner (default data/vod-archive)
+//!   TB_VOD_ARCHIVE_MAX_DOWNLOADS  — Downloads je Lauf über alle Streamer
+//!                                   zusammen (default 6)
+//!   TB_VOD_ARCHIVE_MAX_UPLOADS    — Uploads je Lauf über alle Streamer
+//!                                   zusammen (default 2; ein Upload kostet
+//!                                   1600 der 10000 Einheiten Tagesquota)
+//!   TB_VOD_ARCHIVE_MIN_FREE_GB    — Plattenplatz-Untergrenze (default 80)
+//!   TB_VOD_ARCHIVE_KEEP_LOCAL_DAYS — lokale Dateien nach N Tagen löschen
+//!                                   (default 0 = nie)
+//!   TB_VOD_ARCHIVE_INTERVAL_HOURS — Abstand zweier Läufe (default 12)
+//!   TB_VOD_ARCHIVE_RATE_LIMIT     — yt-dlp-Bandbreitenbremse (z. B. "5M")
+//!   TB_VOD_ARCHIVE_DOWNLOAD_TIMEOUT_SECS — Zeitgrenze je Download (default 21600)
+//!   TB_VOD_ARCHIVE_FFMPEG / _FFPROBE / _CATEGORY_ID / _TITLE_TEMPLATE /
+//!   _PLAYLIST_ID                  — optional; welche Kanäle archiviert werden
+//!                                   und wie sichtbar, steht dagegen je
+//!                                   Streamer im Dashboard, nicht hier
 
 mod auto_raid;
 mod chat_wiring;
@@ -1603,8 +1620,10 @@ async fn main() {
                     async move { refresh.run().await },
                 );
 
-                let insights_creds =
-                    tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
+                let insights_creds = tb_social_media::credentials::CredentialManager::new(
+                    pool.clone(),
+                    cipher.clone(),
+                );
                 let insights = tb_social_media::insights_worker::InsightsWorker::new(
                     pool.clone(),
                     insights_creds,
@@ -1613,14 +1632,33 @@ async fn main() {
                     "social_insights_worker",
                     async move { insights.run().await },
                 );
+
+                // VOD-Archiv: Twitch-Aufzeichnungen sichern und auf YouTube
+                // spiegeln, je Streamer einzeln im Dashboard schaltbar. Der
+                // Upload nutzt den YouTube-Zugang des jeweiligen Streamers,
+                // laeuft nur zweimal taeglich und bleibt still, solange kein
+                // Kanal eingeschaltet ist. Ohne YouTube-Verbindung laedt er
+                // trotzdem lokal — das Archiv ist der Verlustschutz.
+                let vod_creds =
+                    tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
+                let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
+                // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
+                // aufloesen statt jede Crate eigene Pfade raten zu lassen.
+                vod_config.yt_dlp = yt_dlp_path();
+                let vod_archive = tb_vod_archive::VodArchiveWorker::new(
+                    pool.clone(),
+                    vod_config,
+                    vod_creds,
+                );
+                supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {
                 tracing::warn!(
-                    "Social-Media Upload/Refresh/Insights: kein Field-Cipher ({e}) — Worker aus"
+                    "Social-Media Upload/Refresh/Insights und VOD-Archiv: kein Field-Cipher ({e}) — Worker aus"
                 );
             }
         }
-        tracing::info!("Social-Media-Pipeline-Worker gestartet (7 Loops)");
+        tracing::info!("Social-Media-Pipeline-Worker gestartet (8 Loops inkl. VOD-Archiv)");
     }
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger

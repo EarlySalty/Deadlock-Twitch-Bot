@@ -42,6 +42,19 @@ const SMALLTALK_GOLD: i64 = 0xC8A86B;
 /// erzeugen, und ein zu grosser Post scheitert, laeuft nach drei Versuchen aus
 /// und der Report verschwindet genau dann, wenn es am meisten zu sehen gaebe.
 const MAX_TEXT_DISPLAYS_PER_CARD: usize = 39;
+/// Discord zaehlt nicht nur die Displays, sondern auch die Summe ihrer
+/// sichtbaren Zeichen: ueber 4000 lehnt die API die Karte mit "Components
+/// displayable text size exceeds maximum size of 4000" ab. Eine Teststunde
+/// erzeugt leicht das Zwanzigfache, deshalb ist die Zeichensumme das
+/// eigentliche Limit, nicht die Anzahl der Displays.
+const MAX_CARD_TEXT_CHARS: usize = 3_900;
+/// Platz, der fuer die Kuerzungsnotiz am Ende der Karte frei bleibt.
+const TRUNCATION_NOTE_RESERVE_CHARS: usize = 200;
+/// Wie viel Auslesetext eine einzelne Nachricht belegen darf. Ohne diese
+/// Grenze frisst ein einziger langer Chat-Auslöser das ganze Budget.
+const MAX_MESSAGE_TEXT_CHARS: usize = 240;
+/// Wie viel Stream-Ton neben einer Nachricht steht.
+const MAX_TRANSCRIPT_CONTEXT_CHARS: usize = 280;
 
 /// Beschriftungen der Smalltalk-Auswertung. Fehlt ein Feld, bleibt die
 /// Discord-Auslieferung fail-closed aus.
@@ -607,7 +620,7 @@ fn build_discord_card(
         .session
         .last_provider_error
         .as_deref()
-        .map(clean)
+        .map(|error| clean(&kuerzen(error, MAX_MESSAGE_TEXT_CHARS)))
         .unwrap_or_else(|| "-".to_string());
     let transcript_summary = if report.transcripts.is_empty() {
         copy.transcripts_missing.clone()
@@ -661,9 +674,9 @@ fn build_discord_card(
         let mut display = format!(
             "**{}**\n{}\n**{}**\n{}\n**{}**\n{}",
             copy.trigger,
-            clean(&message.trigger_text),
+            clean(&kuerzen(&message.trigger_text, MAX_MESSAGE_TEXT_CHARS)),
             copy.generated_text,
-            clean(&message.generated_text),
+            clean(&kuerzen(&message.generated_text, MAX_MESSAGE_TEXT_CHARS)),
             copy.result,
             result
         );
@@ -673,7 +686,7 @@ fn build_discord_card(
             display.push_str(&format!(
                 "\n**{}**\n{}",
                 copy.transcript_context,
-                clean(context)
+                clean(&kuerzen(context, MAX_TRANSCRIPT_CONTEXT_CHARS))
             ));
         }
         displays.push(display);
@@ -682,11 +695,24 @@ fn build_discord_card(
     // vollstaendiger, den Discord ablehnt und der nach drei Versuchen
     // verschwindet. Die Zusammenfassung steht in displays[0] und bleibt
     // dadurch immer erhalten; gekuerzt werden nur die Einzelnachrichten, und
-    // die Kuerzung steht sichtbar in der Karte.
-    if displays.len() > MAX_TEXT_DISPLAYS_PER_CARD {
-        let gezeigt = MAX_TEXT_DISPLAYS_PER_CARD - 1;
-        let verborgen = displays.len() - gezeigt;
-        displays.truncate(gezeigt);
+    // die Kuerzung steht sichtbar in der Karte. Begrenzt wird nach beidem,
+    // Anzahl und Zeichensumme, denn Discord lehnt beides ab.
+    let mut passende = 1.min(displays.len());
+    let mut zeichen = displays
+        .first()
+        .map_or(0, |display| display.chars().count());
+    let budget = MAX_CARD_TEXT_CHARS.saturating_sub(TRUNCATION_NOTE_RESERVE_CHARS);
+    for display in displays.iter().skip(1) {
+        let laenge = display.chars().count();
+        if passende + 1 > MAX_TEXT_DISPLAYS_PER_CARD - 1 || zeichen + laenge > budget {
+            break;
+        }
+        zeichen += laenge;
+        passende += 1;
+    }
+    if passende < displays.len() {
+        let verborgen = displays.len() - passende;
+        displays.truncate(passende);
         displays.push(format!(
             "**{}**\n{} von {} Nachrichten sind hier nicht abgebildet.\n{}: `{}`",
             copy.truncated_note,
@@ -698,7 +724,9 @@ fn build_discord_card(
     }
     if displays
         .iter()
-        .any(|display| display.chars().count() > 3_800)
+        .map(|display| display.chars().count())
+        .sum::<usize>()
+        > MAX_CARD_TEXT_CHARS
     {
         return Err("discord_text_too_long".to_string());
     }
@@ -736,6 +764,16 @@ fn transcript_context(
                 && generated_at - segment.ended_at <= TRANSCRIPT_CONTEXT_WINDOW
         })
         .map(|segment| segment.text.as_str())
+}
+
+/// Kuerzt vor dem Maskieren, damit kein halbes Escape am Ende stehen bleibt.
+fn kuerzen(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    let mut gekuerzt: String = value.chars().take(limit.saturating_sub(1)).collect();
+    gekuerzt.push('…');
+    gekuerzt
 }
 
 fn clean(value: &str) -> String {
@@ -867,6 +905,69 @@ mod tests {
             .expect("Hinweis");
         assert!(
             letzter.contains(&copy_text.truncated_note) && letzter.contains("120"),
+            "die Karte muss ausweisen, wie viele Nachrichten fehlen: {letzter}"
+        );
+    }
+
+    /// Discord misst nicht nur die Anzahl der Displays, sondern auch die
+    /// Summe ihrer Zeichen. Mit Stream-Ton daneben sprengen schon wenige
+    /// Nachrichten die 4000 Zeichen, und die API lehnt die ganze Karte ab.
+    #[test]
+    fn lange_nachrichten_bleiben_unter_der_zeichengrenze() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 27, 20, 0, 0).unwrap();
+        let report = SmalltalkReport {
+            session: ReportSession {
+                id: Uuid::nil(),
+                channel_login: "kandidat".to_string(),
+                started_at: now,
+                ended_at: now + ChronoDuration::minutes(60),
+                end_reason: "time_limit".to_string(),
+                viewer_count: Some(30),
+                provider_error_count: 2,
+                last_provider_error: Some("x".repeat(2_000)),
+            },
+            messages: (0..40)
+                .map(|i| SmalltalkMessage {
+                    generated_at: now + ChronoDuration::seconds(i),
+                    generated_text: format!("{i} ").repeat(400),
+                    trigger_text: format!("{i} ").repeat(400),
+                    outcome: "would_send".to_string(),
+                    reject_reason: None,
+                })
+                .collect(),
+            transcripts: vec![SmalltalkTranscript {
+                started_at: now - ChronoDuration::seconds(30),
+                ended_at: now,
+                text: "ton ".repeat(1_000),
+                engine: "whisper".to_string(),
+                model: None,
+            }],
+        };
+
+        let copy_text = DiscordCopy::test_copy();
+        let payload = build_discord_card(&report, 123, &copy_text).expect("Discord-Karte");
+        let components = payload.components.expect("Components");
+        let displays = components[0]["components"].as_array().expect("Displays");
+        let zeichen: usize = displays
+            .iter()
+            .map(|display| {
+                display["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .chars()
+                    .count()
+            })
+            .sum();
+
+        assert!(
+            zeichen <= MAX_CARD_TEXT_CHARS,
+            "die Karte muss unter der Zeichengrenze bleiben, war {zeichen}"
+        );
+        let letzter = displays[displays.len() - 1]["content"]
+            .as_str()
+            .expect("Hinweis");
+        assert!(
+            letzter.contains(&copy_text.truncated_note) && letzter.contains("40"),
             "die Karte muss ausweisen, wie viele Nachrichten fehlen: {letzter}"
         );
     }

@@ -95,13 +95,22 @@ impl ClipRepository {
             return Ok((id, false));
         }
 
+        // Kategorie einmal beim Registrieren aufloesen: die Helix-`game_id`
+        // schlaegt den Anzeigenamen, ohne Treffer landet der Clip im Fallback.
+        let category_key = crate::posting_plan::resolve_category(
+            &self.pool,
+            rec.game_id.as_deref(),
+            rec.game_name.as_deref(),
+        )
+        .await;
+
         let id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_clips_social_media
                 (clip_id, clip_url, clip_title, clip_thumbnail_url,
                  streamer_login, twitch_user_id, created_at, duration_seconds,
-                 view_count, game_name, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
+                 view_count, game_name, game_id, category_key, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending')
             RETURNING id AS "id!"
             "#,
             &rec.clip_id,
@@ -113,7 +122,9 @@ impl ClipRepository {
             created_at,
             rec.duration_seconds,
             view_count,
-            rec.game_name.as_deref()
+            rec.game_name.as_deref(),
+            rec.game_id.as_deref(),
+            category_key
         )
         .fetch_one(&self.pool)
         .await?;
@@ -197,7 +208,9 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', status TEXT DEFAULT 'pending', layout_override_json JSONB)",
+            "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100)",
+            "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -217,6 +230,7 @@ mod tests {
             duration_seconds: 28.0,
             view_count: 5,
             game_name: Some("Deadlock".to_string()),
+            game_id: Some("1422200164".to_string()),
         }
     }
 

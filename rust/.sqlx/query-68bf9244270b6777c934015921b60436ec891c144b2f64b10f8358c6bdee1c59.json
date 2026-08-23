@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id::int AS \"id!\" FROM twitch_clips_social_media c JOIN social_media_category k ON k.category_key = c.category_key LEFT JOIN social_media_clip_approval a ON a.clip_db_id = c.id WHERE c.discarded_at IS NULL AND NOT k.enrichment_enabled AND a.clip_db_id IS NULL AND COALESCE(c.status, 'pending') = 'pending' AND c.id BETWEEN 0 AND 2147483647 ORDER BY c.created_at DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "68bf9244270b6777c934015921b60436ec891c144b2f64b10f8358c6bdee1c59"
+}

@@ -102,10 +102,68 @@ export interface ClipApprovalRecord {
   last_sent_at: string | null;
 }
 
-export interface AutoApproveSettings {
-  youtube: boolean;
-  tiktok: boolean;
-  instagram: boolean;
+/**
+ * Wie viel Sichtung ein Clip braucht, bevor er rausgeht.
+ *
+ * `manual` ist der Default: jeder Clip wartet auf eine Freigabe.
+ * `veto_window` plant den Clip ein, bis zum Termin kann man ihn noch stoppen.
+ * `full_auto` plant ohne Sichtung ein.
+ */
+export type ApprovalMode = 'manual' | 'veto_window' | 'full_auto';
+
+/** Kadenz und Auto-Posting einer Plattform. */
+export interface PlatformScheduleEntry {
+  platform: SocialPlatform;
+  auto_post: boolean;
+  posts_per_week: number;
+  max_posts_per_day: number;
+  /** Tageszeiten im Format HH:MM, in der Zeitzone des Kanals. */
+  post_times: string[];
+  /** Naechster berechneter Termin, nur bei aktivem Auto-Posting. */
+  next_slot: string | null;
+}
+
+/** Eine Spielkategorie samt Schalter des Kanals. */
+export interface PostingPlanCategory {
+  category_key: string;
+  display_name: string;
+  /** LLM-Anreicherung erlaubt. Haengt am Katalog, nicht am Kanal. */
+  enrichment_enabled: boolean;
+  auto_post: boolean;
+}
+
+/** Vorratsrechnung des Clip-Pools. */
+export interface ClipPoolForecast {
+  verfuegbare_clips: number;
+  aktive_plattformen: number;
+  reicht_fuer_posts: number;
+  posts_pro_woche: number;
+  /** Reichweite in Tagen. `null`, wenn keine Plattform automatisch postet. */
+  reicht_fuer_tage: number | null;
+  warnung: boolean;
+}
+
+/** Alles, was die Zeitplan-Ansicht eines Kanals braucht. */
+export interface PostingPlan {
+  streamer_login: string;
+  approval_mode: ApprovalMode;
+  approval_modes: ApprovalMode[];
+  timezone: string;
+  platforms: PlatformScheduleEntry[];
+  categories: PostingPlanCategory[];
+  pool: ClipPoolForecast;
+}
+
+export type VodArchivePrivacy = 'private' | 'unlisted' | 'public';
+
+export interface VodArchiveSettings {
+  /** Kanal, zu dem die Einstellung gehoert. Das Archiv laeuft je Streamer. */
+  streamer_login: string;
+  enabled: boolean;
+  privacy: VodArchivePrivacy;
+  privacy_options: VodArchivePrivacy[];
+  /** YouTube erzwingt private, solange das Google-Projekt nicht auditiert ist. */
+  privacy_forced: boolean;
 }
 
 export interface ClipEnrichment {

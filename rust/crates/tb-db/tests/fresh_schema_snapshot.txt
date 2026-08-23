@@ -265,6 +265,11 @@ social_media_streamer_layout|streamer_login|text|NO|
 social_media_streamer_layout|twitch_user_id|text|YES|
 social_media_streamer_layout|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_layout|updated_by|text|YES|
+social_media_vod_archive|enabled|boolean|NO|false
+social_media_vod_archive|privacy|text|NO|'private'::text
+social_media_vod_archive|streamer_login|text|NO|
+social_media_vod_archive|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_vod_archive|updated_by|text|YES|
 streamer_dim|archived_at|timestamp with time zone|YES|
 streamer_dim|discord_display_name|text|YES|
 streamer_dim|discord_user_id|text|YES|
@@ -1473,3 +1478,28 @@ twitch_viewer_presence_ticks|streamer_login|text|NO|
 twitch_viewer_presence_ticks|tick_at|timestamp with time zone|NO|
 twitch_viewer_presence_ticks|twitch_user_id|text|YES|
 twitch_viewer_presence_ticks|viewer_login|text|NO|
+twitch_vod_archive_parts|file_path|text|NO|
+twitch_vod_archive_parts|id|bigint|NO|nextval('twitch_vod_archive_parts_id_seq'::regclass)
+twitch_vod_archive_parts|last_error|text|YES|
+twitch_vod_archive_parts|part_index|integer|NO|
+twitch_vod_archive_parts|size_bytes|bigint|NO|0
+twitch_vod_archive_parts|status|text|NO|'pending'::text
+twitch_vod_archive_parts|streamer_login|text|YES|
+twitch_vod_archive_parts|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_archive_parts|upload_offset|bigint|NO|0
+twitch_vod_archive_parts|upload_session_uri|text|YES|
+twitch_vod_archive_parts|vod_id|bigint|NO|
+twitch_vod_archive_parts|youtube_video_id|text|YES|
+twitch_vod_archive_vods|discovered_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_archive_vods|downloaded_at|timestamp with time zone|YES|
+twitch_vod_archive_vods|duration_sec|bigint|NO|0
+twitch_vod_archive_vods|id|bigint|NO|nextval('twitch_vod_archive_vods_id_seq'::regclass)
+twitch_vod_archive_vods|last_error|text|YES|
+twitch_vod_archive_vods|local_path|text|YES|
+twitch_vod_archive_vods|recorded_at|date|YES|
+twitch_vod_archive_vods|status|text|NO|'new'::text
+twitch_vod_archive_vods|streamer_login|text|NO|
+twitch_vod_archive_vods|title|text|NO|
+twitch_vod_archive_vods|twitch_id|text|NO|
+twitch_vod_archive_vods|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_archive_vods|uploaded_at|timestamp with time zone|YES|

@@ -164,30 +164,30 @@ pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> Enrichment
                 "Social-Media-Enrichment: Pending-Zeile nicht ladbar, Fallback-Record"
             );
             EnrichmentRecord {
-            clip_db_id,
-            transcript_raw: None,
-            transcript_corrected: None,
-            transcript_segments: Vec::new(),
-            transcript_lang: None,
-            detected_terms: Vec::new(),
-            title_youtube: None,
-            title_tiktok: None,
-            title_instagram: None,
-            description_youtube: None,
-            description_tiktok: None,
-            description_instagram: None,
-            hashtags_youtube: Vec::new(),
-            hashtags_tiktok: Vec::new(),
-            hashtags_instagram: Vec::new(),
-            llm_provider: None,
-            llm_model: None,
-            cost_usd_estimate: None,
-            status: STATUS_PENDING.to_string(),
-            error_message: None,
-            started_at: None,
-            completed_at: None,
-            edited_by: None,
-            updated_at: None,
+                clip_db_id,
+                transcript_raw: None,
+                transcript_corrected: None,
+                transcript_segments: Vec::new(),
+                transcript_lang: None,
+                detected_terms: Vec::new(),
+                title_youtube: None,
+                title_tiktok: None,
+                title_instagram: None,
+                description_youtube: None,
+                description_tiktok: None,
+                description_instagram: None,
+                hashtags_youtube: Vec::new(),
+                hashtags_tiktok: Vec::new(),
+                hashtags_instagram: Vec::new(),
+                llm_provider: None,
+                llm_model: None,
+                cost_usd_estimate: None,
+                status: STATUS_PENDING.to_string(),
+                error_message: None,
+                started_at: None,
+                completed_at: None,
+                edited_by: None,
+                updated_at: None,
             }
         }
     }
@@ -319,11 +319,18 @@ pub async fn save_llm_output(
 /// Clip-IDs, die Enrichment brauchen (Python `iter_pending_enrichments`):
 /// nicht verworfen, mit lokaler Datei, ohne Enrichment-Zeile ODER Status
 /// `pending`/`failed` — neueste zuerst.
+///
+/// Kategorie-Gate: angereichert wird nur, was in einer Kategorie mit
+/// `enrichment_enabled` liegt (heute allein Deadlock). Clips anderer Spiele
+/// bekommen das nackte Auto-Posting ohne LLM und laufen ueber
+/// [`crate::approval::iter_clips_ohne_enrichment`] in den Approval-Workflow.
 pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     let rows = sqlx::query!(
         "SELECT c.id AS \"id!\" FROM twitch_clips_social_media c \
          LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
+         JOIN social_media_category k ON k.category_key = c.category_key \
          WHERE c.discarded_at IS NULL \
+           AND k.enrichment_enabled \
            AND COALESCE(c.upload_local_path, c.local_file_path) IS NOT NULL \
            AND (e.status IS NULL OR e.status IN ('pending', 'failed')) \
            AND c.id BETWEEN 0 AND 2147483647 \
@@ -332,7 +339,13 @@ pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|error| {
+        // Ein Fehler hier sah frueher aus wie "keine Clips offen": die
+        // Enrichment-Strecke waere still stehen geblieben, ohne dass irgendwo
+        // etwas auffaellt.
+        tracing::error!(%error, "Offene Enrichments konnten nicht gelesen werden");
+        Vec::new()
+    });
     let mut ids = Vec::with_capacity(rows.len());
     for row in rows {
         let Ok(id) = i32::try_from(row.id) else {

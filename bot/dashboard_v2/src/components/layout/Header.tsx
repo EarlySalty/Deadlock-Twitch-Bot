@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { usePlan } from '@/context/PlanContext';
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import type { TimeRange } from '@/types/analytics';
 
 // Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
@@ -39,12 +41,16 @@ export function Header({
   isDemoMode = false,
 }: HeaderProps) {
   const { view, setView, hasFullAccess, hasEntitlement } = usePlan();
+  const t = useT();
+  // Der Umschalter hing bisher nur in einem Reiter der Social-Media-Seite. Wer
+  // dort nicht freigeschaltet ist, hatte keinen Weg zur Sprachwahl.
+  const { language, setLanguage } = useLanguage();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
 
   const viewOptions: { value: 'basic' | 'extended'; label: string }[] = [
-    { value: 'basic', label: 'Basis' },
-    { value: 'extended', label: 'Preview' },
+    { value: 'basic', label: t('Basis') },
+    { value: 'extended', label: t('Preview') },
   ];
 
   const timeRanges: { value: TimeRange; label: string }[] = [
@@ -70,7 +76,11 @@ export function Header({
   const q = search.trim().toLowerCase();
   const partners = streamers.filter(s => s.isPartner && (!q || s.login.includes(q)));
   const others = streamers.filter(s => !s.isPartner && (!q || s.login.includes(q)));
-  const allLabel = isDemoMode ? 'Demo-Profil' : canViewAllStreamers ? 'Alle Streamer' : 'Alle Partner';
+  const allLabel = isDemoMode
+    ? t('Demo-Profil')
+    : canViewAllStreamers
+    ? t('Alle Streamer')
+    : t('Alle Partner');
   const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics');
 
   // In Beta: Partner koennen vorerst alle Streamer sehen.
@@ -95,7 +105,8 @@ export function Header({
               {isLoading && <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
             </h1>
             <p className="text-text-secondary text-sm md:text-base mt-1">
-              Fokus: {streamer || allLabel} <span className="mx-1 text-border">•</span> Zeitraum: letzte {days} Tage
+              {t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}
+              <span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}
             </p>
           </div>
         </div>
@@ -159,7 +170,7 @@ export function Header({
                       <input
                         autoFocus
                         type="text"
-                        placeholder="Suchen…"
+                        placeholder={t('Suchen…')}
                         value={search}
                         onChange={e => setSearch(e.target.value)}
                         className="flex-1 bg-transparent text-sm text-white placeholder:text-text-secondary outline-none"
@@ -187,7 +198,7 @@ export function Header({
                   {visiblePartners.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
-                        Partner
+                        {t('Partner')}
                       </div>
                       {visiblePartners.map(s => (
                         <button
@@ -211,7 +222,7 @@ export function Header({
                   {visibleOthers.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
-                        Weitere Streamer
+                        {t('Weitere Streamer')}
                       </div>
                       {visibleOthers.map(s => (
                         <button
@@ -226,7 +237,7 @@ export function Header({
                           }`}
                         >
                           {s.login}
-                          <span className="ml-2 text-text-secondary text-xs">(extern)</span>
+                          <span className="ml-2 text-text-secondary text-xs">{t('(extern)')}</span>
                         </button>
                       ))}
                     </>
@@ -259,6 +270,31 @@ export function Header({
                   />
                 )}
                 <span className="relative z-10">{range.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Sprachwahl */}
+          <div
+            className="flex items-center bg-background/70 rounded-xl border border-border p-1.5"
+            role="group"
+            aria-label={t('Sprache')}
+          >
+            {LANGUAGES.map((option: Language) => (
+              <button
+                key={option}
+                type="button"
+                lang={option}
+                aria-pressed={language === option}
+                title={LANGUAGE_LABELS[option]}
+                onClick={() => setLanguage(option)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                  language === option
+                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806]'
+                    : 'text-text-secondary hover:text-white'
+                }`}
+              >
+                {option.toUpperCase()}
               </button>
             ))}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Camera, Layers, Maximize2, Save, RotateCcw, EyeOff, Eye } from 'lucide-react';
+import { useT } from '@/context/LanguageContext';
 import type { LayoutBox, LayoutPayload, LayoutMode } from '@/types/socialMedia';
 import { DEFAULT_LAYOUT, DEFAULT_SOURCE_HEIGHT, DEFAULT_SOURCE_WIDTH } from '@/types/socialMedia';
 import type { DragMode } from '@/utils/socialMediaLayout';
@@ -79,6 +80,7 @@ function EditableFrame({
   background,
   style,
 }: EditableFrameProps) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
 
@@ -168,7 +170,7 @@ function EditableFrame({
               {spec.label}
             </div>
             <div className="absolute bottom-1 right-1 text-[9px] font-mono text-white/85 bg-black/55 px-1 py-0.5 rounded">
-              {isBand ? `Höhe ${Math.round(spec.box.h)}` : formatBox(spec.box)}
+              {isBand ? t('Höhe {height}', { height: Math.round(spec.box.h) }) : formatBox(spec.box)}
             </div>
 
             {isBand ? (
@@ -236,14 +238,15 @@ interface PreviewProps {
 
 /** Twitch-Frame: was aus dem Bild ausgeschnitten wird. */
 function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChange }: PreviewProps) {
+  const t = useT();
   const boxes: FrameBox[] = [
-    { id: 'game_crop', box: layout.game_crop, label: 'Game-Ausschnitt', color: 'gold', interaction: 'free' },
+    { id: 'game_crop', box: layout.game_crop, label: t('Game-Ausschnitt'), color: 'gold', interaction: 'free' },
   ];
   if (camEnabled) {
     boxes.push({
       id: 'cam_crop',
       box: layout.cam_crop,
-      label: 'Cam-Ausschnitt',
+      label: t('Cam-Ausschnitt'),
       color: 'teal',
       interaction: 'free',
     });
@@ -257,7 +260,10 @@ function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChan
       selectedBox={selectedBox}
       onSelectBox={onSelectBox}
       onBoxChange={onBoxChange}
-      caption={`Twitch-Bild 16:9 · ${layout.source.width}×${layout.source.height}`}
+      caption={t('Twitch-Bild 16:9 · {width}×{height}', {
+        width: layout.source.width,
+        height: layout.source.height,
+      })}
       background={<div className="absolute inset-0" style={{ background: SOURCE_PATTERN }} />}
     />
   );
@@ -265,6 +271,7 @@ function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChan
 
 /** Hochformat-Frame: wo die Ausschnitte im fertigen Video landen. */
 function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onBoxChange }: PreviewProps) {
+  const t = useT();
   const bandHeight = layout.cam_position.h;
   const isStacked = mode === 'stacked';
 
@@ -277,7 +284,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
       box: isStacked
         ? { x: 0, y: 0, w: TARGET_WIDTH, h: bandHeight }
         : layout.cam_position,
-      label: isStacked ? 'Cam-Streifen' : 'Cam-Kachel',
+      label: isStacked ? t('Cam-Streifen') : t('Cam-Kachel'),
       color: 'teal',
       interaction: isStacked ? 'band' : 'free',
     });
@@ -289,12 +296,12 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
         className="absolute left-0 right-0 bottom-0 flex items-center justify-center"
         style={{ top: `${(bandHeight / TARGET_HEIGHT) * 100}%`, background: GAME_PATTERN }}
       >
-        <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">Game</span>
+        <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">{t('Game')}</span>
       </div>
     ) : (
       <div className="absolute inset-0 flex items-center justify-center" style={{ background: GAME_PATTERN }}>
         <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">
-          Game füllt das Bild
+          {t('Game füllt das Bild')}
         </span>
       </div>
     );
@@ -307,7 +314,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
       selectedBox={selectedBox}
       onSelectBox={onSelectBox}
       onBoxChange={onBoxChange}
-      caption={`Hochformat · ${TARGET_WIDTH}×${TARGET_HEIGHT}`}
+      caption={t('Hochformat · {width}×{height}', { width: TARGET_WIDTH, height: TARGET_HEIGHT })}
       background={background}
       style={{ borderColor: 'rgba(197, 160, 89, 0.24)' }}
     />
@@ -336,9 +343,10 @@ export function LayoutEditor({
   isSaving,
   onSave,
   onReset,
-  saveLabel = 'Als Standard speichern',
-  resetLabel = 'Zurücksetzen',
+  saveLabel,
+  resetLabel,
 }: LayoutEditorProps) {
+  const t = useT();
   const base = useMemo(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT), [initialLayout]);
   const [layout, setLayout] = useState<LayoutPayload>(base);
   const camEnabled = layout.cam_enabled;
@@ -391,7 +399,7 @@ export function LayoutEditor({
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-white/70">
-          <Maximize2 className="w-4 h-4 text-orange" /> Layout-Editor
+          <Maximize2 className="w-4 h-4 text-orange" /> {t('Layout-Editor')}
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -405,7 +413,7 @@ export function LayoutEditor({
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5" /> PiP
+                <Layers className="w-3.5 h-3.5" /> {t('PiP')}
               </span>
             </button>
             <button
@@ -416,7 +424,7 @@ export function LayoutEditor({
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 rotate-90" /> Stacked
+                <Layers className="w-3.5 h-3.5 rotate-90" /> {t('Stacked')}
               </span>
             </button>
           </div>
@@ -432,7 +440,7 @@ export function LayoutEditor({
             }`}
           >
             {camEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            Cam {camEnabled ? 'an' : 'aus'}
+            {camEnabled ? t('Cam an') : t('Cam aus')}
           </button>
         </div>
       </div>
@@ -443,10 +451,10 @@ export function LayoutEditor({
         <div className="space-y-3">
           <div>
             <div className="text-xs text-text-secondary uppercase tracking-[0.16em] font-bold">
-              Quelle · Twitch-Bild
+              {t('Quelle · Twitch-Bild')}
             </div>
             <div className="text-[11px] text-text-secondary">
-              Was aus dem Twitch-Bild ausgeschnitten wird.
+              {t('Was aus dem Twitch-Bild ausgeschnitten wird.')}
             </div>
           </div>
           <SourcePreview
@@ -467,7 +475,7 @@ export function LayoutEditor({
                   : 'border-border text-text-secondary hover:text-white'
               }`}
             >
-              Game-Ausschnitt
+              {t('Game-Ausschnitt')}
             </button>
             <button
               type="button"
@@ -480,7 +488,7 @@ export function LayoutEditor({
               } ${!camEnabled ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
               <span className="inline-flex items-center justify-center gap-1.5">
-                <Camera className="w-3 h-3" /> Cam-Ausschnitt
+                <Camera className="w-3 h-3" /> {t('Cam-Ausschnitt')}
               </span>
             </button>
           </div>
@@ -490,10 +498,10 @@ export function LayoutEditor({
         <div className="space-y-3 lg:w-[340px]">
           <div>
             <div className="text-xs text-text-secondary uppercase tracking-[0.16em] font-bold">
-              Ziel · Hochformat 9:16
+              {t('Ziel · Hochformat 9:16')}
             </div>
             <div className="text-[11px] text-text-secondary">
-              Wo der Cam-Ausschnitt im fertigen Video landet.
+              {t('Wo der Cam-Ausschnitt im fertigen Video landet.')}
             </div>
           </div>
           <div className="mx-auto" style={{ maxWidth: 320 }}>
@@ -508,10 +516,15 @@ export function LayoutEditor({
           </div>
           <div className="text-[11px] text-text-secondary leading-relaxed">
             {!camEnabled
-              ? 'Cam ist aus: das Game füllt das ganze Bild.'
+              ? t('Cam ist aus: das Game füllt das ganze Bild.')
               : mode === 'pip'
-              ? `Cam-Kachel frei ziehen und an den Ecken skalieren: ${formatBox(layout.cam_position)}.`
-              : `Cam-Streifen oben, Höhe an der Unterkante ziehen: ${Math.round(layout.cam_position.h)} von maximal ${MAX_BAND_HEIGHT} px.`}
+              ? t('Cam-Kachel frei ziehen und an den Ecken skalieren: {box}.', {
+                  box: formatBox(layout.cam_position),
+                })
+              : t('Cam-Streifen oben, Höhe an der Unterkante ziehen: {height} von maximal {max} px.', {
+                  height: Math.round(layout.cam_position.h),
+                  max: MAX_BAND_HEIGHT,
+                })}
           </div>
         </div>
       </div>
@@ -523,7 +536,7 @@ export function LayoutEditor({
           onClick={handleResetToDefault}
           className="text-xs font-semibold text-text-secondary hover:text-white inline-flex items-center gap-1.5"
         >
-          <RotateCcw className="w-3.5 h-3.5" /> Auf Default zurücksetzen
+          <RotateCcw className="w-3.5 h-3.5" /> {t('Auf Default zurücksetzen')}
         </button>
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -532,7 +545,7 @@ export function LayoutEditor({
             onClick={handleReset}
             className="px-3 py-2 rounded-xl text-xs font-semibold text-text-secondary border border-border hover:text-white disabled:opacity-40"
           >
-            {resetLabel}
+            {resetLabel ?? t('Zurücksetzen')}
           </button>
           <button
             type="button"
@@ -541,7 +554,7 @@ export function LayoutEditor({
             className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Save className="w-3.5 h-3.5" />
-            {isSaving ? 'Speichert…' : saveLabel}
+            {isSaving ? t('Speichert…') : (saveLabel ?? t('Als Standard speichern'))}
           </button>
         </div>
       </div>

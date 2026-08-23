@@ -533,19 +533,53 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     .await;
     assert_eq!(lb, 2, "beide Leaderboard-Indizes müssen existieren");
 
-    // M12-3: Auto-Approve-Settings-Seed (Python-Orakel `_ensure_auto_approve_settings`).
-    // Drei Keys mit JSONB-`false`, damit eine frische DB die gleiche Schema-Parität
-    // wie das gewachsene Prod-Schema hat — get_auto_approve_settings() liefert sonst
-    // erst nach erstem Dashboard-PUT konsistente Zeilen.
+    // Die globalen Auto-Approve-Keys sind abgeloest (Migration 20260815120000).
+    // Sie galten fuer die ganze Instanz und liessen sich von jedem freigegebenen
+    // Partner umschalten; ihr Ersatz steht pro Streamer in
+    // `social_media_platform_schedule` und `social_media_streamer_settings`.
     let auto_approve = scalar_i64(
         "SELECT count(*) FROM social_media_settings \
-         WHERE key IN ('auto_approve_youtube', 'auto_approve_tiktok', 'auto_approve_instagram') \
-           AND value = 'false'::jsonb",
+         WHERE key IN ('auto_approve_youtube', 'auto_approve_tiktok', 'auto_approve_instagram')",
     )
     .await;
     assert_eq!(
-        auto_approve, 3,
-        "alle drei Auto-Approve-Settings-Keys müssen mit value=false geseedet sein"
+        auto_approve, 0,
+        "die globalen Auto-Approve-Keys duerfen nicht zurueckkommen"
+    );
+
+    // Kategorie-Katalog: Deadlock wird angereichert, alles andere nicht.
+    let kategorien = scalar_i64(
+        "SELECT count(*) FROM social_media_category \
+         WHERE (category_key = 'deadlock' AND enrichment_enabled) \
+            OR (category_key = 'other' AND NOT enrichment_enabled)",
+    )
+    .await;
+    assert_eq!(
+        kategorien, 2,
+        "Kategorie-Katalog muss Deadlock (mit Enrichment) und den Fallback kennen"
+    );
+
+    // Zeitplan-Tabellen der Stufe 1.
+    let zeitplan_tabellen = scalar_i64(
+        "SELECT count(*) FROM information_schema.tables \
+         WHERE table_schema = 'public' \
+           AND table_name IN ('social_media_streamer_settings', \
+                              'social_media_platform_schedule', \
+                              'social_media_category_settings')",
+    )
+    .await;
+    assert_eq!(zeitplan_tabellen, 3, "Zeitplan-Tabellen müssen existieren");
+
+    // Kategorie am Clip, Grundlage des Kategorie-Gates im Enrichment.
+    let clip_kategorie = scalar_i64(
+        "SELECT count(*) FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'twitch_clips_social_media' \
+           AND column_name IN ('game_id', 'category_key')",
+    )
+    .await;
+    assert_eq!(
+        clip_kategorie, 2,
+        "Clips müssen game_id und category_key tragen"
     );
 
     // Conversation-Scam-Guard: Settings-Defaults und vollständiges Audit-Schema.
