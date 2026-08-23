@@ -871,16 +871,16 @@ impl HelixModeratorProvisioner {
         .await
         .unwrap_or(false)
     }
-}
 
-#[async_trait::async_trait]
-impl ModeratorProvisioner for HelixModeratorProvisioner {
-    async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool {
-        self.ensure_bot_is_mod_outcome(broadcaster_id, login).await
-            == ModeratorProvisionOutcome::Ready
-    }
-
-    async fn ensure_bot_is_mod_outcome(
+    /// Setzt den Bot ein, ohne die Deadlock-Pause zu pruefen.
+    ///
+    /// Genau ein Aufrufer darf das: der Remod-Sweep. Der arbeitet
+    /// ausschliesslich auf pausierten Kanaelen und will feststellen, ob der Bot
+    /// wieder eingesetzt werden kann. Wuerde er durch den Pausen-Guard laufen,
+    /// bekaeme er `RetryLater`, die Pause loeste sich nie auf, und die
+    /// Pausen-DM ("streamst du wieder Deadlock, ist er von selbst zurueck")
+    /// waere eine Luege.
+    pub async fn mod_setzen_ohne_pausenpruefung(
         &self,
         broadcaster_id: &str,
         login: &str,
@@ -982,6 +982,31 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
             }
         }
     }
+}
+
+#[async_trait::async_trait]
+impl ModeratorProvisioner for HelixModeratorProvisioner {
+    async fn ensure_bot_is_mod(&self, broadcaster_id: &str, login: &str) -> bool {
+        self.ensure_bot_is_mod_outcome(broadcaster_id, login).await
+            == ModeratorProvisionOutcome::Ready
+    }
+
+    async fn ensure_bot_is_mod_outcome(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> ModeratorProvisionOutcome {
+        if self.steht_in_deadlock_pause(broadcaster_id).await {
+            tracing::debug!(
+                channel = login,
+                "ensure_bot_is_mod: Kanal steht in der Deadlock-Pause, kein Remod"
+            );
+            return ModeratorProvisionOutcome::RetryLater;
+        }
+        self.mod_setzen_ohne_pausenpruefung(broadcaster_id, login)
+            .await
+    }
+
 }
 
 /// Gegenstück zum [`HelixModeratorProvisioner`]: gibt die Mod-Rechte des Bots in
@@ -1104,8 +1129,12 @@ impl tb_raid::DeadlockPauseUnmodPort for HelixModeratorRemover {
 #[async_trait::async_trait]
 impl BotBanStatusProbe for HelixModeratorProvisioner {
     async fn bot_ban_status(&self, twitch_user_id: &str, twitch_login: &str) -> BotBanStatus {
+        // Bewusst der guard-freie Pfad: dieselbe Probe bedient den Remod-Sweep,
+        // der ausschliesslich auf pausierten Kanaelen arbeitet. Mit dem
+        // Pausen-Guard bekaeme er dort immer `Unknown` und die Pause loeste
+        // sich nie auf. Der Ban-Sweep filtert pausierte Kanaele bereits in SQL.
         match self
-            .ensure_bot_is_mod_outcome(twitch_user_id, twitch_login)
+            .mod_setzen_ohne_pausenpruefung(twitch_user_id, twitch_login)
             .await
         {
             ModeratorProvisionOutcome::Ready => BotBanStatus::NotBanned,

@@ -1084,11 +1084,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                SET twitch_login = EXCLUDED.twitch_login,
                    letzte_probe = NOW(),
                    proben       = twitch_ban_probe_zustand.proben + 1,
-                   -- `seit` nur zuruecksetzen, wenn der Zustand wirklich wechselt.
-                   seit = CASE
-                            WHEN twitch_ban_probe_zustand.zustand <> 'gebannt' THEN NOW()
-                            ELSE twitch_ban_probe_zustand.seit
-                          END,
+                   -- `seit` bleibt stehen: solange eine Zeile existiert, haelt
+                   -- der Verdacht an. Endet er, loescht `NotBanned` die Zeile,
+                   -- ein spaeterer Bann legt sie neu an und meldet wieder.
                    zustand = 'gebannt'
             -- NOW() ist innerhalb der Anweisung konstant: `seit = letzte_probe`
             -- gilt genau beim ersten Insert und beim Zustandswechsel, sonst
@@ -2013,6 +2011,14 @@ mod tests {
                 reauth_notified_at timestamptz)",
             "CREATE TABLE twitch_raid_blacklist (
                 target_id text, target_login text PRIMARY KEY, reason text, added_at text)",
+            // Gedaechtnis der aktiven Ban-Probe. Ohne diese Zeile liefe
+            // `ban_probe_zustand_ist_neu` in den Fehlerzweig und meldete
+            // vorsichtshalber immer, die Dedup-Logik waere ungetestet.
+            "CREATE TABLE twitch_ban_probe_zustand (
+                twitch_user_id text PRIMARY KEY, twitch_login text NOT NULL DEFAULT '',
+                zustand text NOT NULL, seit timestamptz NOT NULL DEFAULT NOW(),
+                letzte_probe timestamptz NOT NULL DEFAULT NOW(),
+                proben bigint NOT NULL DEFAULT 1)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3113,6 +3119,27 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(blacklisted, 0, "kein Blacklist-Eintrag");
+
+        // Zweiter Lauf, unveraenderter Zustand: der Verdacht zaehlt weiter,
+        // gemeldet wird er nicht noch einmal. Ohne das Gedaechtnis staende der
+        // Kanal 24 Mal am Tag im Admin-Kanal.
+        assert_eq!(
+            reactor.detect_bot_bans().await,
+            1,
+            "der Verdacht besteht weiter"
+        );
+        assert_eq!(
+            notifier.admin_embeds.load(Ordering::SeqCst),
+            1,
+            "derselbe Zustand wird nicht erneut gemeldet"
+        );
+        let proben: i64 = sqlx::query_scalar(
+            "SELECT proben FROM twitch_ban_probe_zustand WHERE twitch_user_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(proben, 2, "beide Proben sind gezaehlt");
     }
 
     /// Der aktive Ban-Sweep probt über `add_channel_moderator` und setzt den Bot

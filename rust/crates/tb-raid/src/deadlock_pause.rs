@@ -151,8 +151,13 @@ impl From<(String, String)> for DeadlockPauseCandidate {
 /// Kandidat ist nur, wer aktiv ist, einen gültigen Streamer-Token hat (ohne
 /// den kann Twitch den Entzug gar nicht ausführen) und nicht bereits wegen
 /// Ban oder Block pausiert. Als Referenzzeitpunkt zählt der letzte
-/// Deadlock-Stream, ersatzweise der Beginn der Partnerschaft: wer nie
-/// Deadlock gestreamt hat, soll nicht sofort beim ersten Sweep fliegen.
+/// Deadlock-Stream.
+///
+/// Wer in der erfassten Historie **nie** einen Deadlock-Stream hatte, ist gar
+/// kein Kandidat, auch nicht später. Für den ist die Pause die falsche
+/// Antwort: sie verspricht "streamst du wieder Deadlock, ist der Bot zurück",
+/// obwohl es dort nie ein "wieder" gab. Solche Kanäle gehören getrennt, und
+/// das ist eine Entscheidung mit Ansage, kein Nebeneffekt eines Sweeps.
 pub async fn unmod_candidates(
     pool: &PgPool,
     pause_days: i64,
