@@ -8,6 +8,7 @@ pub mod admin_audit;
 pub mod ai_state;
 pub mod auth;
 pub mod handlers;
+pub mod obs;
 pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
@@ -1530,6 +1531,25 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Baut die WebSocket-Route der eigenen OBS-Docks (Plan Abschnitt 2.3).
+///
+/// `GET /obs/ws` traegt den Chat-, Activity- und Stream-Info-Strom eines
+/// Kanals. Die Auth laeuft ueber denselben `DashboardAuthLevel`-Extractor wie
+/// alle Dashboard-Seiten, aber ohne Redirect: ein Socket bekommt 401 statt
+/// einer Login-HTML-Seite.
+///
+/// Der Verteiler ist ein Prozess-Singleton
+/// ([`obs::bus::ObsDockBus::gemeinsam`]) und haengt als Extension am Router.
+/// Sein `PgListener` startet erst, wenn das erste Dock verbindet.
+pub fn build_obs_ws_router(pool: PgPool) -> Router {
+    let bus = obs::bus::ObsDockBus::gemeinsam(pool.clone());
+
+    Router::new()
+        .route("/obs/ws", get(obs::ws::obs_ws_handler))
+        .layer(Extension(bus))
+        .with_state(pool)
+}
+
 /// Baut den Router für die öffentliche Website (`/streamer`) + Legacy-Redirect
 /// (`/website`) — P2.67.
 ///
@@ -1593,6 +1613,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         .merge(build_affiliate_portal_router())
         .merge(build_social_media_admin_router(pool.clone()))
         .merge(build_v2_spa_pages_router(pool.clone()))
+        .merge(build_obs_ws_router(pool.clone()))
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),

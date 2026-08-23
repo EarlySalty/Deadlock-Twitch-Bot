@@ -62,6 +62,9 @@ axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
 async-trait = "0.1"
+# Nur fuer `StreamExt::split` auf dem axum-WebSocket (OBS-Dock-Gateway); liegt
+# ueber sqlx ohnehin schon im Lock.
+futures-util = "0.3"
 arc-swap = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
