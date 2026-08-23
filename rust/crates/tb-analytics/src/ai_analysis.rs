@@ -73,8 +73,7 @@ pub fn model_name_for(ai_model: &str) -> &'static str {
 }
 
 /// Reine Modellwahl aus Entitlements: das konsolidierte `analytics`-Flag → Opus,
-/// sonst kein KI-Zugang. (Frühere ai_mini→MiniMax-Stufe entfällt — Analytics ist
-/// jetzt EIN Flag und gewährt durchgängig Opus.)
+/// sonst kein KI-Zugang.
 pub fn model_for_entitlements(entitlements: &[&str]) -> Option<&'static str> {
     if entitlements.contains(&"analytics") {
         Some(AI_MODEL_OPUS)
@@ -83,14 +82,18 @@ pub fn model_for_entitlements(entitlements: &[&str]) -> Option<&'static str> {
     }
 }
 
-/// Plan-abhängiges KI-Modell eines Streamers (Python `_plan_ai_model`):
-/// Plan-Snapshot (login-only) → Entitlements → Modellwahl.
+/// Plan-abhängiges KI-Modell eines Streamers.
+///
+/// Entscheidet ueber dasselbe Praedikat wie alle anderen Sperren
+/// ([`crate::stufe::plan_stufe`]): KI gibt es ab Netzwerk Plus, `None` heisst
+/// kein Zugang. Fuer die KI gibt es bewusst keine Free-Variante, hier ist ein
+/// 403 richtig.
 pub async fn plan_ai_model(
     pool: &PgPool,
     streamer: &str,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await?;
-    Ok(model_for_entitlements(&snapshot.entitlements))
+    let stufe = crate::stufe::plan_stufe(pool, streamer).await?;
+    Ok(stufe.hat_plus().then_some(AI_MODEL_OPUS))
 }
 
 /// Sammelt den vollständigen Analytics-Kontext für die KI-Analyse (Port von

@@ -2,6 +2,11 @@
 //!
 //! Streamer-Selbstbedienung fuer den `!clip`-Command auf
 //! `streamer_plans.clip_command_enabled` (INTEGER, Default 1).
+//!
+//! Plan-Grenze: der Schalter selbst bleibt bewusst ohne 403. Chat-Befehle sind
+//! laut Katalog eine Free-Funktion; die Stufe entscheidet ueber die **Menge**
+//! der Clips, nicht ueber den Befehl. Die Antwort traegt deshalb das
+//! Monatskontingent mit, damit das Dashboard die echte Grenze anzeigen kann.
 
 use axum::{
     extract::{Query, State},
@@ -74,6 +79,11 @@ pub async fn get_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // Kontingent der Stufe: Free 3 Clips im Monat mit Wasserzeichen, Plus 10
+    // ohne, Pro unbegrenzt. Durchgesetzt wird das in der Clip-Pipeline; hier
+    // steht nur der Zaehlerstand, damit die Einstellungsseite ehrlich ist.
+    let stufe = crate::auth::stufe_fuer_auth(&pool, &auth).await;
+    let kontingent = tb_analytics::stufe::clip_kontingent(&pool, stufe, &login).await;
 
     match sqlx::query(SELECT_SQL)
         .bind(&login)
@@ -83,9 +93,17 @@ pub async fn get_handler(
     {
         Ok(Some(row)) => {
             let enabled: i32 = row.try_get("enabled").unwrap_or(1);
-            Json(json!({ "clip_command_enabled": enabled != 0 })).into_response()
+            Json(json!({
+                "clip_command_enabled": enabled != 0,
+                "kontingent": kontingent.als_json(),
+            }))
+            .into_response()
         }
-        Ok(None) => Json(json!({ "clip_command_enabled": true })).into_response(),
+        Ok(None) => Json(json!({
+            "clip_command_enabled": true,
+            "kontingent": kontingent.als_json(),
+        }))
+        .into_response(),
         Err(error) => {
             tracing::error!(%error, "clip-command-settings GET DB-Fehler");
             (
@@ -135,8 +153,14 @@ pub async fn post_handler(
 
     match result {
         Ok(res) if res.rows_affected() > 0 => {
-            Json(json!({ "ok": true, "clip_command_enabled": body.clip_command_enabled }))
-                .into_response()
+            let stufe = crate::auth::stufe_fuer_auth(&pool, &auth).await;
+            let kontingent = tb_analytics::stufe::clip_kontingent(&pool, stufe, &login).await;
+            Json(json!({
+                "ok": true,
+                "clip_command_enabled": body.clip_command_enabled,
+                "kontingent": kontingent.als_json(),
+            }))
+            .into_response()
         }
         Ok(_) => (
             StatusCode::NOT_FOUND,

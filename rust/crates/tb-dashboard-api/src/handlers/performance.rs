@@ -79,7 +79,6 @@ pub async fn monthly_stats_handler(
         Ok(m) => m,
         Err(resp) => return resp.into_response(),
     };
-    let since: DateTime<Utc> = Utc::now() - Duration::days((months as f64 * 30.44) as i64);
     // IDOR-Klemme: Partner sind auf den eigenen Login beschränkt; Admin frei
     // (None → alle Streamer aggregiert).
     let streamer =
@@ -87,6 +86,15 @@ pub async fn monthly_stats_handler(
             Ok(s) => s,
             Err(resp) => return resp,
         };
+    // Plan-Klemme statt 403: ohne Plus reicht der Verlauf bis zum letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) = crate::auth::verlauf_fenster(
+        &pool,
+        &auth,
+        streamer.as_deref().unwrap_or(""),
+        (months as f64 * 30.44) as i64,
+    )
+    .await;
+    let since: DateTime<Utc> = Utc::now() - Duration::days(fenster_tage);
     let bots: Vec<String> = tb_analytics::overview::KNOWN_CHAT_BOTS
         .iter()
         .map(|s| s.to_string())
@@ -180,7 +188,12 @@ pub async fn monthly_stats_handler(
                     })
                 })
                 .collect();
-            Json(json!(items)).into_response()
+            crate::auth::mit_plan_hinweis(
+                Json(json!(items)).into_response(),
+                stufe,
+                fenster_tage,
+                gekuerzt,
+            )
         }
     }
 }
@@ -203,13 +216,16 @@ pub async fn weekly_stats_handler(
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
     let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
             Ok(s) => s,
             Err(resp) => return resp,
         };
+    // Plan-Klemme statt 403: ohne Plus reicht der Verlauf bis zum letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) =
+        crate::auth::verlauf_fenster(&pool, &auth, streamer.as_deref().unwrap_or(""), days).await;
+    let since: DateTime<Utc> = Utc::now() - Duration::days(fenster_tage);
 
     let rows = sqlx::query(
         r#"
@@ -267,7 +283,12 @@ pub async fn weekly_stats_handler(
                     })
                 })
                 .collect();
-            Json(json!(items)).into_response()
+            crate::auth::mit_plan_hinweis(
+                Json(json!(items)).into_response(),
+                stufe,
+                fenster_tage,
+                gekuerzt,
+            )
         }
     }
 }
@@ -288,13 +309,16 @@ pub async fn hourly_heatmap_handler(
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
     let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
             Ok(s) => s,
             Err(resp) => return resp,
         };
+    // Plan-Klemme statt 403: ohne Plus reicht der Verlauf bis zum letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) =
+        crate::auth::verlauf_fenster(&pool, &auth, streamer.as_deref().unwrap_or(""), days).await;
+    let since: DateTime<Utc> = Utc::now() - Duration::days(fenster_tage);
 
     let rows = sqlx::query!(
         r#"
@@ -334,7 +358,12 @@ pub async fn hourly_heatmap_handler(
                     })
                 })
                 .collect();
-            Json(json!(items)).into_response()
+            crate::auth::mit_plan_hinweis(
+                Json(json!(items)).into_response(),
+                stufe,
+                fenster_tage,
+                gekuerzt,
+            )
         }
     }
 }
@@ -355,13 +384,16 @@ pub async fn calendar_heatmap_handler(
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     // IDOR-Klemme: Partner nur eigener Login; Admin frei (None → alle).
     let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
             Ok(s) => s,
             Err(resp) => return resp,
         };
+    // Plan-Klemme statt 403: ohne Plus reicht der Verlauf bis zum letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) =
+        crate::auth::verlauf_fenster(&pool, &auth, streamer.as_deref().unwrap_or(""), days).await;
+    let since: DateTime<Utc> = Utc::now() - Duration::days(fenster_tage);
 
     let rows = sqlx::query(
         r#"
@@ -417,7 +449,12 @@ pub async fn calendar_heatmap_handler(
                     })
                 })
                 .collect();
-            Json(json!(items)).into_response()
+            crate::auth::mit_plan_hinweis(
+                Json(json!(items)).into_response(),
+                stufe,
+                fenster_tage,
+                gekuerzt,
+            )
         }
     }
 }

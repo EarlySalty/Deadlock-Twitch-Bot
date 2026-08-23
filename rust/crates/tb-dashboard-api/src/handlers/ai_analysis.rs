@@ -113,14 +113,9 @@ pub async fn ai_analysis_handler(
         match plan_ai_model(&pool, &streamer).await {
             Ok(Some(m)) => m,
             Ok(None) => {
-                return json_err(
-                    StatusCode::FORBIDDEN,
-                    json!({
-                        "error": "plan_required",
-                        "required_entitlements": ["analytics"],
-                        "required_plans": ["analysis_dashboard", "analytics_trial", "bundle_analysis_raid_boost", "bundle_komplett", "bundle_werbefrei_analyse"],
-                    }),
-                );
+                // Eine Quelle fuer den 403-Body: derselbe Aufbau wie bei allen
+                // anderen Plan-Sperren (vorher stand hier die alte Plan-Liste fest).
+                return crate::auth::stufe_required_response(tb_analytics::stufe::Stufe::Plus);
             }
             Err(e) => {
                 tracing::error!("ai/analysis plan-Auflösung fehlgeschlagen: {e}");

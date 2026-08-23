@@ -62,9 +62,15 @@ pub struct PlanPrice {
 /// Buchbare Abrechnungszyklen in Monaten.
 pub const BILLING_CYCLES: &[u32] = &[1, 12];
 
-/// Wie viele Monatspreise ein Jahresabo kostet: zehn, also zwei Monate geschenkt.
+/// Wie viele Monatspreise ein Jahresabo kostet: zehn, also zwei Monate
+/// geschenkt (Spec M2, entschieden am 2026-08-23). Die frueheren 39,99 waren
+/// acht Monatspreise und passten nicht zum Text "zwei Monate geschenkt";
+/// korrigiert wurde der Preis, nicht der Text.
 /// Nur Doku-/Testanker; massgeblich ist `BillingPlan::yearly_gross_cents`.
 pub const YEARLY_MONTHS_CHARGED: u32 = 10;
+
+/// Geschenkte Monate im Jahresabo. Steht so im nutzersichtbaren Text.
+pub const YEARLY_MONTHS_FREE: u32 = 12 - YEARLY_MONTHS_CHARGED;
 
 /// Die drei buchbaren Stufen. Reihenfolge = Anzeigereihenfolge.
 pub const BILLING_PLANS: &[BillingPlan] = &[
@@ -571,14 +577,21 @@ mod tests {
     }
 
     /// Jahrespreis = zehn Monatspreise, also exakt zwei geschenkte Monate.
+    ///
+    /// Der Test haengt am Anker `YEARLY_MONTHS_FREE` UND an der Zwei: wer den
+    /// Anker verschiebt, ohne den nutzersichtbaren Text mitzuziehen, faellt hier
+    /// auf. Genau diese Kombination war auf der Landingpage falsch (39,99 sind
+    /// acht Monatspreise, der Text sagte trotzdem zwei Monate).
     #[test]
     fn jahrespreis_ist_zehn_monatspreise() {
+        assert_eq!(YEARLY_MONTHS_FREE, 2, "der Text sagt zwei Monate geschenkt");
         for plan in BILLING_PLANS.iter().filter(|p| p.monthly_gross_cents > 0) {
             assert_eq!(
                 plan.yearly_gross_cents,
                 plan.monthly_gross_cents * YEARLY_MONTHS_CHARGED,
-                "Jahrespreis fuer {} passt nicht zu zwei geschenkten Monaten",
-                plan.id
+                "Jahrespreis fuer {} passt nicht zu {} geschenkten Monaten",
+                plan.id,
+                YEARLY_MONTHS_FREE
             );
         }
     }

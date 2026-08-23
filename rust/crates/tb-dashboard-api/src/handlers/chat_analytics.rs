@@ -1,8 +1,11 @@
 //! Handler für `/twitch/api/v2/chat-analytics`.
 //!
-//! Port von `bot/analytics/api_insights.py:_api_v2_chat_analytics`.
-//! Auth: nur „eingeloggt" (KEIN Extended-Plan-Gate); `streamer` Pflicht,
-//! `days` (7..365, Default 30), optionaler `timezone`-Param.
+//! Auth: eingeloggt; `streamer` Pflicht, `days` (7..365, Default 30),
+//! optionaler `timezone`-Param.
+//!
+//! Plan-Grenze: kein 403. Ohne Netzwerk Plus wird `days` auf das letzte
+//! Stream-Fenster geklemmt, die Antwort behaelt ihre Form und traegt die
+//! `x-plan-*`-Header.
 
 use axum::{
     extract::{Query, State},
@@ -59,13 +62,23 @@ pub async fn chat_analytics_handler(
             Err(resp) => return resp,
         };
     let timezone = params.timezone.as_deref();
+    // Plan-Klemme statt 403: Free sieht denselben Aufbau, nur den letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) =
+        crate::auth::verlauf_fenster(&pool, &auth, &streamer, days).await;
+    let days = fenster_tage;
 
     match tb_analytics::chat_analytics::load_chat_analytics_payload(
         &pool, &streamer, days, timezone,
     )
     .await
     {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => crate::auth::mit_plan_hinweis(
+            Json(tb_analytics::stufe::hinweis_anhaengen(v, stufe, fenster_tage, gekuerzt))
+                .into_response(),
+            stufe,
+            fenster_tage,
+            gekuerzt,
+        ),
         Err(e) => {
             tracing::error!("chat-analytics Fehler: {e}");
             crate::auth::analytics_request_failed_json().into_response()

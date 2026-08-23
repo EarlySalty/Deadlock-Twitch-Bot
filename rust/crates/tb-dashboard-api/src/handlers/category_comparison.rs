@@ -79,10 +79,8 @@ pub async fn category_comparison_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ComparisonQuery>,
 ) -> impl IntoResponse {
-    // Python _api_v2_category_comparison ruft NUR _require_v2_auth (KEIN
-    // _require_extended_plan) — also reiner Authentifizierungs-Check, kein
-    // Plan-Gate. (Rust hatte hier fälschlich extended_gate → 403 für
-    // authentifizierte Nicht-Extended-Partner.)
+    // Kein 403 auf dem Vergleichsendpunkt: authentifiziert genuegt, die
+    // Plan-Grenze klemmt weiter unten nur den Zeitraum.
     if matches!(auth, DashboardAuthLevel::None) {
         return crate::auth::unauthorized_v2_response();
     }
@@ -108,7 +106,11 @@ pub async fn category_comparison_handler(
             Err(resp) => return resp,
         };
     let exclude_external = params.exclude_external.as_deref() == Some("1");
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
+    // Plan-Klemme statt 403: ohne Plus reicht der Vergleich bis zum letzten Stream.
+    let (fenster_tage, stufe, gekuerzt) =
+        crate::auth::verlauf_fenster(&pool, &auth, &streamer, days as i64).await;
+    let days = fenster_tage as i32;
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
     let bots: Vec<String> = tb_analytics::overview::KNOWN_CHAT_BOTS
         .iter()
         .map(|s| s.to_string())
@@ -637,7 +639,7 @@ pub async fn category_comparison_handler(
 
     let round1 = |v: f64| (v * 10.0).round() / 10.0;
 
-    Json(json!({
+    let payload = json!({
         "yourStats": {
             "avgViewers":   round1(your_avg),
             "peakViewers":  your_peak,
@@ -659,8 +661,19 @@ pub async fn category_comparison_handler(
         "categoryRank":  category_rank,
         "categoryTotal": category_total,
         "peerGroup":     peer_group,
-    }))
-    .into_response()
+    });
+    crate::auth::mit_plan_hinweis(
+        Json(tb_analytics::stufe::hinweis_anhaengen(
+            payload,
+            stufe,
+            fenster_tage,
+            gekuerzt,
+        ))
+        .into_response(),
+        stufe,
+        fenster_tage,
+        gekuerzt,
+    )
 }
 
 #[cfg(test)]

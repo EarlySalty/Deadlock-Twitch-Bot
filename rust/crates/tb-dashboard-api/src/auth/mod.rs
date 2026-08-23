@@ -49,6 +49,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 use sqlx::PgPool;
+use tb_analytics::stufe::Stufe;
 use tb_http_core::{ApiError, AuthLevel};
 
 use crate::auth::level::DashboardAuthLevel;
@@ -122,9 +123,7 @@ pub fn auth_required_response() -> Response {
     auth_required_error().into_response()
 }
 
-/// Prüft ob `login` das konsolidierte `analytics`-Entitlement hat — über
-/// [`tb_analytics::plan::plan_has_analytics`], das die echten Plan-IDs aus
-/// `catalog.py` kennt (analysis_dashboard, die Analyse-Bundles, analytics_trial).
+/// Prüft ob `login` mindestens die Stufe Netzwerk Plus hat.
 ///
 /// Admin überspringt die Prüfung (bypass).
 pub async fn require_extended_plan(
@@ -144,18 +143,40 @@ pub async fn require_extended_plan(
     }
 }
 
-/// `true` wenn der Streamer einen Plan mit dem konsolidierten `analytics`-Flag,
-/// ein aktives Stripe-Abo ODER einen laufenden 30-Tage-Trial hat. Nutzt denselben
-/// Resolver wie das Dashboard (`resolve_plan_snapshot`), damit Manual-Override UND
-/// Stripe-Abo (und der `user_id`-Match) berücksichtigt werden — die frühere
-/// verkürzte streamer_plans-Login-Query sperrte zahlende Stripe-Kunden ohne
-/// Manual-Eintrag fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei
-/// DB-Fehler `false` (fail-closed — kein versehentlicher Gratis-Zugang).
-pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
-    match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
-        Ok(snapshot) => snapshot.entitlements.contains(&"analytics"),
-        Err(_) => false,
+/// Die Stufe eines Streamers, fail-closed.
+///
+/// Ein einziges Praedikat fuer alle Sperren: [`tb_analytics::stufe::plan_stufe`]
+/// nutzt denselben Resolver wie das Dashboard (Manual-Override, Stripe-Abo,
+/// Trial, Ablaufpruefung). Bei DB-Fehler `Free`, damit ein Ausfall keinen
+/// Gratis-Zugang oeffnet.
+pub async fn plan_stufe(pool: &PgPool, login: &str, user_id: &str) -> Stufe {
+    tb_analytics::stufe::plan_stufe_mit_user_id(pool, login, user_id)
+        .await
+        .unwrap_or(Stufe::Free)
+}
+
+/// Stufe der aufrufenden Session.
+///
+/// Admin und Localhost zaehlen als `Pro` (Bypass, wie bisher beim Plan-Gate);
+/// eine Session ohne Auth ist `Free`. Handler, die zwischen "gekuerzt" und
+/// "voll" unterscheiden, fragen nur diesen Wert.
+pub async fn stufe_fuer_auth(pool: &PgPool, auth: &DashboardAuthLevel) -> Stufe {
+    match auth {
+        DashboardAuthLevel::Admin { .. } => Stufe::Pro,
+        DashboardAuthLevel::None => Stufe::Free,
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => plan_stufe(pool, twitch_login, twitch_user_id).await,
     }
+}
+
+/// `true` ab Netzwerk Plus. Abgeleitet aus [`plan_stufe`], damit es nur eine
+/// Entscheidungsstelle gibt; das Entitlement `"analytics"` ist die Anzeige-
+/// Ableitung, nicht mehr die Grundlage.
+pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
+    plan_stufe(pool, login, user_id).await.hat_plus()
 }
 
 /// Plan-Gate für die DashboardAuthLevel-Handler. Gibt `Some(response)` zurück,
@@ -169,21 +190,79 @@ pub async fn has_analytics_entitlement(pool: &PgPool, login: &str, user_id: &str
 /// `_require_extended_plan`): 401 trägt den vollen Message-Text + `loginUrl`,
 /// 403 trägt `error=plan_required` + `required_entitlements`.
 pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
-    match auth {
-        DashboardAuthLevel::Admin { .. } => None,
-        DashboardAuthLevel::None => Some(unauthorized_v2_response()),
-        DashboardAuthLevel::Partner {
-            twitch_login,
-            twitch_user_id,
-            ..
-        } => {
-            if has_analytics_entitlement(pool, twitch_login, twitch_user_id).await {
-                None
-            } else {
-                Some(plan_required_response())
-            }
+    stufen_gate(pool, auth, Stufe::Plus).await
+}
+
+/// Gate fuer die Pro-Grenze (Clips ohne Limit, automatisches Posten).
+pub async fn pro_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
+    stufen_gate(pool, auth, Stufe::Pro).await
+}
+
+/// Gemeinsamer Kern beider Gates: `None` heisst durchgelassen.
+///
+/// Ohne Auth 401, unterhalb der geforderten Stufe 403 mit der noetigen Stufe im
+/// Body. Admin/Localhost sind Pro und passieren immer.
+pub async fn stufen_gate(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    benoetigt: Stufe,
+) -> Option<Response> {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return Some(unauthorized_v2_response());
+    }
+    if stufe_fuer_auth(pool, auth).await >= benoetigt {
+        None
+    } else {
+        Some(stufe_required_response(benoetigt))
+    }
+}
+
+/// Verlaufsfenster fuer diese Session.
+///
+/// Kernstueck der Free-Regel: **keine 403-Wand auf Verlaufs- und Vergleichs-
+/// endpunkten.** Ohne Plus wird die angefragte Tageszahl auf das letzte
+/// Stream-Fenster geklemmt statt die Antwort zu verweigern; Free sieht damit
+/// eine vollwertige, nur kuerzere Seite. Ab Plus bleibt die Nachfrage
+/// unveraendert.
+///
+/// Liefert `(effektive_tage, stufe, gekuerzt)`.
+pub async fn verlauf_fenster(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    streamer: &str,
+    angefragt: i64,
+) -> (i64, Stufe, bool) {
+    let stufe = stufe_fuer_auth(pool, auth).await;
+    let (tage, gekuerzt) =
+        tb_analytics::stufe::verlauf_tage_fuer(pool, stufe, streamer, angefragt).await;
+    (tage, stufe, gekuerzt)
+}
+
+/// Haengt den Stufen-Hinweis als Header an eine Antwort.
+///
+/// Header statt Body, weil ein Teil der Verlaufsendpunkte ein nacktes Array
+/// liefert und die Form nicht brechen soll. `x-plan-stufe` steht immer drin,
+/// `x-plan-gekuerzt`/`x-plan-fenster-tage` nur bei gekuerzter Antwort.
+pub fn mit_plan_hinweis(
+    mut response: Response,
+    stufe: Stufe,
+    fenster_tage: i64,
+    gekuerzt: bool,
+) -> Response {
+    use axum::http::HeaderValue;
+    let headers = response.headers_mut();
+    headers.insert("x-plan-stufe", HeaderValue::from_static(match stufe {
+        Stufe::Free => "free",
+        Stufe::Plus => "plus",
+        Stufe::Pro => "pro",
+    }));
+    if gekuerzt {
+        headers.insert("x-plan-gekuerzt", HeaderValue::from_static("1"));
+        if let Ok(value) = HeaderValue::from_str(&fenster_tage.to_string()) {
+            headers.insert("x-plan-fenster-tage", value);
         }
     }
+    response
 }
 
 /// 401-Body wie Python `_require_v2_auth` (api_v2.py:1258-1262).
@@ -220,43 +299,32 @@ pub fn analytics_request_failed_json() -> (StatusCode, Json<serde_json::Value>) 
 /// die buchbaren Upgrade-Pläne anzuzeigen. Die frühere Rust-Antwort ließ das Feld
 /// weg (Shape-Divergenz) — hier korrigiert (Test `plan_required_response_*`).
 pub fn plan_required_response() -> Response {
+    stufe_required_response(Stufe::Plus)
+}
+
+/// 403 mit der Stufe, die fehlt. `required_plans` listet die Stufen, die den
+/// Zugang freischalten (Pro schaltet alles frei, was Plus schaltet).
+pub fn stufe_required_response(benoetigt: Stufe) -> Response {
+    let required_plans: Vec<&'static str> = [Stufe::Plus, Stufe::Pro]
+        .into_iter()
+        .filter(|stufe| *stufe >= benoetigt)
+        .map(Stufe::as_str)
+        .collect();
+    let hinweis = match benoetigt {
+        Stufe::Pro => "Dafür brauchst du Creator Pro.",
+        _ => "Dafür brauchst du Netzwerk Plus.",
+    };
     (
         StatusCode::FORBIDDEN,
         Json(json!({
             "error": "plan_required",
             "required_entitlements": ["analytics"],
-            "required_plans": extended_required_plans(),
+            "required_stufe": benoetigt.as_str(),
+            "required_plans": required_plans,
+            "message": hinweis,
         })),
     )
         .into_response()
-}
-
-/// Bekannte Billing-Pläne (Python `KNOWN_PLAN_IDS`), die das konsolidierte
-/// `analytics`-Entitlement tragen — alphabetisch sortiert wie Pythons `sorted(...)`.
-///
-/// Spiegelt `_require_extended_plan`s `required_plans`-Generator
-/// (`sorted(p for p in _KNOWN_BILLING_PLAN_IDS if _plan_has_entitlement(p, …))`).
-/// `tb_analytics::plan::plan_has_analytics` ist die kanonische Quelle des
-/// Analytics-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
-/// `tb-analytics` privat) und gegen Drift testgesichert.
-fn extended_required_plans() -> Vec<&'static str> {
-    const KNOWN_BILLING_PLAN_IDS: [&str; 9] = [
-        "raid_free",
-        "chat_quiet",
-        "raid_boost",
-        "bundle_chat_quiet_raid_boost",
-        "analysis_dashboard",
-        "bundle_analysis_raid_boost",
-        "bundle_werbefrei_analyse",
-        "bundle_komplett",
-        "analytics_trial",
-    ];
-    let mut plans: Vec<&'static str> = KNOWN_BILLING_PLAN_IDS
-        .into_iter()
-        .filter(|id| tb_analytics::plan::plan_has_analytics(id))
-        .collect();
-    plans.sort_unstable();
-    plans
 }
 
 #[cfg(test)]
@@ -264,52 +332,31 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
-    /// B16-VERIFY-V2AUTH-SHAPE: 403-Body trägt error + required_entitlements UND
-    /// die sortierte required_plans-Liste (vorher gefehlt → Python-Divergenz).
+    /// 403-Body: error, die fehlende Stufe und die Stufen, die freischalten.
     #[tokio::test]
-    async fn plan_required_response_traegt_required_plans() {
+    async fn plan_required_response_nennt_die_fehlende_stufe() {
         let resp = plan_required_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "plan_required");
         assert_eq!(body["required_entitlements"], json!(["analytics"]));
-        // Exakt die Analyse-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
-        assert_eq!(
-            body["required_plans"],
-            json!([
-                "analysis_dashboard",
-                "analytics_trial",
-                "bundle_analysis_raid_boost",
-                "bundle_komplett",
-                "bundle_werbefrei_analyse",
-            ])
-        );
+        assert_eq!(body["required_stufe"], "plus");
+        // Pro schaltet alles frei, was Plus freischaltet.
+        assert_eq!(body["required_plans"], json!(["plus", "pro"]));
+        assert!(body["message"].as_str().unwrap().contains("Netzwerk Plus"));
     }
 
-    /// Drift-Gate: jeder gelistete required_plan trägt tatsächlich das
-    /// `analytics`-Flag, free (raid_free) ist nie dabei. Genau die 5 Analyse-Pläne.
-    #[test]
-    fn extended_required_plans_sind_alle_extended() {
-        let plans = extended_required_plans();
-        assert_eq!(
-            plans,
-            vec![
-                "analysis_dashboard",
-                "analytics_trial",
-                "bundle_analysis_raid_boost",
-                "bundle_komplett",
-                "bundle_werbefrei_analyse",
-            ]
-        );
-        assert!(!plans.contains(&"raid_free"));
-        assert!(plans
-            .iter()
-            .all(|p| tb_analytics::plan::plan_has_analytics(p)));
-        // sortiert
-        let mut sorted = plans.clone();
-        sorted.sort_unstable();
-        assert_eq!(plans, sorted);
+    /// Pro-Grenze: nur Pro steht in der Liste, und der Text nennt Creator Pro.
+    #[tokio::test]
+    async fn stufe_required_response_fuer_pro() {
+        let resp = stufe_required_response(Stufe::Pro);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["required_stufe"], "pro");
+        assert_eq!(body["required_plans"], json!(["pro"]));
+        assert!(body["message"].as_str().unwrap().contains("Creator Pro"));
     }
 
     /// 401-Body-Shape (Python `_require_v2_auth`): error-Text + loginUrl.

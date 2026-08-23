@@ -52,6 +52,7 @@ pub mod ads_schedule_collector;
 pub mod subs_snapshot_collector;
 pub mod streamers;
 pub mod streamers_crud;
+pub mod stufe;
 pub mod stripe;
 pub mod system_database;
 pub mod system_errors;

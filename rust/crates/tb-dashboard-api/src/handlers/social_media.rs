@@ -586,6 +586,52 @@ async fn require_clip_in_scope(
     }
 }
 
+/// Stufe der Session fuer die Clip-Pipeline.
+///
+/// Admin/Localhost arbeiten ohne eigenen Kanal und zaehlen deshalb als Pro;
+/// ein Partner bekommt die Stufe seines Plans.
+async fn sm_stufe(pool: &PgPool, auth: &DashboardAuthLevel) -> tb_analytics::stufe::Stufe {
+    crate::auth::stufe_fuer_auth(pool, auth).await
+}
+
+/// Clip-Kontingent-Guard fuer alles, was neue Clips erzeugt.
+///
+/// Free 3 Clips im Monat, Plus 10, Pro unbegrenzt. Ist das Kontingent
+/// aufgebraucht, kommt 403 mit dem Zaehlerstand, damit das Dashboard es
+/// anzeigen kann, statt nur "geht nicht" zu melden. Admin ohne Kanalbezug
+/// (`streamer` leer) laeuft durch.
+async fn clip_kontingent_guard(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    streamer: &str,
+) -> Result<tb_analytics::stufe::ClipKontingent, Response> {
+    let stufe = sm_stufe(pool, auth).await;
+    let kontingent = tb_analytics::stufe::clip_kontingent(pool, stufe, streamer).await;
+    if streamer.trim().is_empty() || kontingent.frei() {
+        return Ok(kontingent);
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "clip_limit_erreicht",
+            "message": "Dein Clip-Kontingent für diesen Monat ist aufgebraucht. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt.",
+            "kontingent": kontingent.als_json(),
+        })),
+    )
+        .into_response())
+}
+
+/// Pro-Guard fuer automatisches Posten (Sammel-Einreihung, Auto-Planung).
+async fn auto_posting_guard(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
+    if tb_analytics::stufe::auto_posting_erlaubt(sm_stufe(pool, auth).await) {
+        None
+    } else {
+        Some(crate::auth::stufe_required_response(
+            tb_analytics::stufe::Stufe::Pro,
+        ))
+    }
+}
+
 /// `GET /social-media/api/access/me` — was die eigene Session darf.
 ///
 /// Das Frontend entscheidet damit zwischen Vollansicht, Eigenkanal-Ansicht und
@@ -935,6 +981,12 @@ pub async fn upload_clip_handler(
             return guard_response;
         }
     }
+    // Clip-Kontingent der Stufe: ein Upload erzeugt einen neuen Clip.
+    if let Err(resp) =
+        clip_kontingent_guard(&pool, &auth, streamer_login.as_deref().unwrap_or("")).await
+    {
+        return resp;
+    }
     match process_uploaded_clip(
         &pool,
         "data/clips/uploads",
@@ -1228,6 +1280,13 @@ pub async fn queue_upload_handler(
             .collect(),
         _ => Vec::new(),
     };
+    // Auto-Planung ist automatisches Posten → Creator Pro. Ein fester Termin
+    // oder sofortiges Einreihen bleibt ab Free moeglich.
+    if body.schedule.as_deref() == Some("auto") {
+        if let Some(resp) = auto_posting_guard(&pool, &auth).await {
+            return resp;
+        }
+    }
     let (already_taken, posting_schedule) = if body.schedule.as_deref() == Some("auto") {
         let taken = match sqlx::query_scalar::<_, DateTime<Utc>>(
             "SELECT scheduled_at FROM twitch_clips_upload_queue \
@@ -1343,11 +1402,20 @@ pub async fn fetch_clips_handler(
         Err(e) => return e,
     };
     let streamer = scope.unwrap_or_default();
-    let limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
+    let mut limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
 
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer).await {
         return guard_response;
+    }
+    // Clip-Kontingent der Stufe: der Fetch legt neue Clips an, deshalb wird die
+    // Menge auf den Rest des Monats geklemmt statt die Anfrage abzulehnen.
+    let kontingent = match clip_kontingent_guard(&pool, &auth, &streamer).await {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    if let Some(rest) = kontingent.rest() {
+        limit = limit.min(rest.max(0) as u32);
     }
 
     let Some(service) = build_clip_fetch_service(pool, limit) else {
@@ -1355,7 +1423,13 @@ pub async fn fetch_clips_handler(
     };
     let result = service.fetch_for_streamer(&streamer).await;
     let clips_found = result.clips_found.max(0);
-    Json(json!({ "success": true, "clips_found": clips_found, "message": format!("Fetched {clips_found} clips") })).into_response()
+    Json(json!({
+        "success": true,
+        "clips_found": clips_found,
+        "message": format!("Fetched {clips_found} clips"),
+        "kontingent": kontingent.als_json(),
+    }))
+    .into_response()
 }
 
 /// POST-Body von `…/api/batch-upload`.
@@ -1387,6 +1461,10 @@ pub async fn batch_upload_handler(
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer).await {
         return guard_response;
+    }
+    // Sammel-Einreihung aller neuen Clips ist automatisches Posten → Creator Pro.
+    if let Some(resp) = auto_posting_guard(&pool, &auth).await {
+        return resp;
     }
     let platforms: Vec<String> = body
         .platforms
