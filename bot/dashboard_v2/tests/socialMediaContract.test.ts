@@ -43,6 +43,7 @@ import {
   FELD_FEHLER,
   fehlerText,
   KATEGORIE_LABELS,
+  plattformnamenLesbar,
   REPORT_KIND_LABELS,
   SOCIAL_MEDIA_TABS,
   STATUS_LABELS,
@@ -489,14 +490,29 @@ test('only_paused_platforms wird uebersetzt und behaelt die Plattformnamen', () 
 
   const deutsch = fehlerText(fehler, (text, params) => translate('de', text, params));
   assert.ok(deutsch);
-  assert.match(deutsch, /youtube, tiktok/);
+  assert.match(deutsch, /YouTube, TikTok/);
   assert.doesNotMatch(deutsch, /\{details\}/);
 
   const englisch = fehlerText(fehler, (text, params) => translate('en', text, params));
   assert.ok(englisch);
-  assert.match(englisch, /youtube, tiktok/);
+  assert.match(englisch, /YouTube, TikTok/);
   assert.match(englisch, /zero posts/, 'im englischen Dashboard steht der englische Satz');
   assert.doesNotMatch(englisch, /Plattformen stehen auf null/);
+});
+
+/**
+ * Dieselbe Sache, zwei Meldungen, bisher zwei Schreibweisen: die Fehlerzeile
+ * setzte die rohen Schluessel des Backends ein ("youtube, tiktok"), die
+ * Schwesterzeile an der Clip-Karte lief ueber `PLATFORM_LABELS` und zeigte
+ * "YouTube, TikTok". Beide gehen jetzt durch dieselbe Tabelle.
+ */
+test('Plattformschluessel aus dem Backend bekommen die Markenschreibweise', () => {
+  assert.equal(plattformnamenLesbar('youtube, tiktok'), 'YouTube, TikTok');
+  assert.equal(plattformnamenLesbar('instagram'), 'Instagram');
+  // Unbekanntes bleibt unveraendert, damit ein anderer Fehlercode mit anderem
+  // Inhalt in `{details}` nicht verstuemmelt wird.
+  assert.equal(plattformnamenLesbar('mastodon'), 'mastodon');
+  assert.equal(plattformnamenLesbar(''), '');
 });
 
 /**

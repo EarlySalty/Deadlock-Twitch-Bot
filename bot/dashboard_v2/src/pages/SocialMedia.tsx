@@ -1240,7 +1240,7 @@ function PostingScheduleCard({
                             : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
                         );
                         setzeFehler(`${eintrag.platform}:woche`, plan.fehler);
-                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'postsProWoche');
+                        feldAbgeschlossen(eintrag.platform, 'postsProWoche');
                         if (plan.absenden) {
                           onChange(eintrag.platform, { posts_per_week: wert });
                         }
@@ -1273,7 +1273,7 @@ function PostingScheduleCard({
                             : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
                         );
                         setzeFehler(`${eintrag.platform}:tag`, plan.fehler);
-                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'maxProTag');
+                        feldAbgeschlossen(eintrag.platform, 'maxProTag');
                         if (plan.absenden) {
                           onChange(eintrag.platform, { max_posts_per_day: wert });
                         }
@@ -1309,7 +1309,7 @@ function PostingScheduleCard({
                             },
                       );
                       setzeFehler(`${eintrag.platform}:zeiten`, plan.fehler);
-                      if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'zeiten');
+                      feldAbgeschlossen(eintrag.platform, 'zeiten');
                       if (plan.absenden && !('fehler' in ergebnis)) {
                         onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                       }

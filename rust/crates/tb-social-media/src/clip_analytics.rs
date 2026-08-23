@@ -89,7 +89,7 @@ mod tests {
     use std::str::FromStr;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

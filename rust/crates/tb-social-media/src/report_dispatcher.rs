@@ -105,7 +105,7 @@ mod tests {
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();

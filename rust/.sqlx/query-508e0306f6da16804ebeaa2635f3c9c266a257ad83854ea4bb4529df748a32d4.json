@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.clip_db_id AS \"clip_db_id!\" FROM social_media_clip_approval a WHERE a.state = $1 AND EXISTS ( SELECT 1 FROM jsonb_array_elements_text( CASE WHEN jsonb_typeof(a.approved_platforms) = 'array' THEN a.approved_platforms ELSE '[]'::jsonb END) AS p(platform) WHERE NOT EXISTS ( SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = a.clip_db_id::bigint AND q.platform = p.platform)) ORDER BY a.letzter_nachreih_versuch ASC NULLS FIRST, a.decided_at ASC NULLS FIRST, a.clip_db_id ASC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "clip_db_id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "508e0306f6da16804ebeaa2635f3c9c266a257ad83854ea4bb4529df748a32d4"
+}
