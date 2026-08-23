@@ -112,8 +112,8 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             className="mt-6 max-w-lg text-lg leading-relaxed text-[var(--color-text-secondary)]"
           >
             Gehst du offline, übergibt das Netzwerk deine Zuschauer an einen
-            anderen deutschen Deadlock-Stream. Und schickt sie dir zurück, wenn
-            dort Schluss ist.
+            anderen deutschen Deadlock-Stream. Und wenn woanders Schluss ist,
+            bekommst du welche zurück.
           </motion.p>
 
           <motion.div
