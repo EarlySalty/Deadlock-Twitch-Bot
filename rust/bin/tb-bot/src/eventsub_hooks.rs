@@ -890,13 +890,6 @@ impl HelixModeratorProvisioner {
             tracing::debug!(channel = login, "ensure_bot_is_mod: keine Bot-ID verfügbar");
             return ModeratorProvisionOutcome::RetryLater;
         }
-        if self.steht_in_deadlock_pause(broadcaster_id).await {
-            tracing::debug!(
-                channel = login,
-                "ensure_bot_is_mod: Kanal steht in der Deadlock-Pause, kein Remod"
-            );
-            return ModeratorProvisionOutcome::RetryLater;
-        }
         // Streamer-Token auflösen (connection.py:986 `get_tokens_for_user`) —
         // unrestricted, da der Remod auch bei deaktivierten Raids greifen muss.
         let token = match self
