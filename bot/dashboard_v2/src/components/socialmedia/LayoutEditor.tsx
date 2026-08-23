@@ -11,6 +11,7 @@ import {
   TARGET_WIDTH,
   applyDrag,
   ausschnittRahmen,
+  grossesStandbild,
   cappedTileWidth,
   clampCamPositionToTarget,
   clampToFrame,
@@ -46,6 +47,12 @@ interface FrameBox {
   interaction: 'free' | 'band';
   /** Liegt in der Box unter Label und Griffen, z.B. der Bildausschnitt. */
   content?: ReactNode;
+  /**
+   * Der Rahmen liegt auf einem echten Bild. Fuellung und Weichzeichner fallen
+   * dann weg: sie verschleierten genau den Ausschnitt, der beurteilt werden
+   * soll, waehrend alles ausserhalb scharf blieb.
+   */
+  aufBild?: boolean;
 }
 
 interface DragState {
@@ -165,11 +172,11 @@ function EditableFrame({
               width: `${(spec.box.w / frameWidth) * 100}%`,
               height: `${(spec.box.h / frameHeight) * 100}%`,
               border: `2px ${dashed ? 'dashed' : 'solid'} ${border}`,
-              background: fill,
+              background: spec.aufBild ? 'transparent' : fill,
               boxShadow: isSelected
                 ? `0 0 0 3px ${border}, 0 8px 24px rgba(0,0,0,0.45)`
                 : '0 4px 14px rgba(0,0,0,0.3)',
-              backdropFilter: 'blur(2px)',
+              backdropFilter: spec.aufBild ? undefined : 'blur(2px)',
             }}
           >
             {spec.content}
@@ -246,16 +253,6 @@ export interface VorschauClip {
 }
 
 /**
- * Twitch legt dasselbe Standbild in mehreren Groessen ab. Die Liste liefert die
- * kleine Variante; im Editor steht das Bild aber auf halber Bildschirmbreite und
- * sieht in 480 Pixeln matschig aus. Die grosse Variante hat zusaetzlich exakt
- * 16:9, waehrend 480x272 leicht daneben liegt.
- */
-export function grossesStandbild(url: string): string {
-  return url.replace(/-\d+x\d+\.(jpg|jpeg|png)$/i, '-1920x1080.$1');
-}
-
-/**
  * Stellt einen Ausschnitt aus dem Quellbild genau so dar, wie der Renderer ihn
  * baut: `crop`, dann `scale` mit `force_original_aspect_ratio=increase` und
  * mittigem Nachschnitt auf die Zielgroesse (siehe `build_compose_filter` in
@@ -279,7 +276,7 @@ function AusschnittBild({
   const rahmen = ausschnittRahmen(quelle, crop, zielBreite, zielHoehe);
   if (!rahmen) return null;
   return (
-    <div className="absolute inset-0 overflow-hidden">
+    <div className="absolute overflow-hidden" style={{ top: -2, right: -2, bottom: -2, left: -2 }}>
       <img
         src={bildUrl}
         alt=""
@@ -310,8 +307,16 @@ interface PreviewProps {
 /** Twitch-Frame: was aus dem Bild ausgeschnitten wird. */
 function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChange, bildUrl }: PreviewProps) {
   const t = useT();
+  const aufBild = !!bildUrl;
   const boxes: FrameBox[] = [
-    { id: 'game_crop', box: layout.game_crop, label: t('Game-Ausschnitt'), color: 'gold', interaction: 'free' },
+    {
+      id: 'game_crop',
+      box: layout.game_crop,
+      label: t('Game-Ausschnitt'),
+      color: 'gold',
+      interaction: 'free',
+      aufBild,
+    },
   ];
   if (camEnabled) {
     boxes.push({
@@ -320,6 +325,7 @@ function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChan
       label: t('Cam-Ausschnitt'),
       color: 'messing',
       interaction: 'free',
+      aufBild,
     });
   }
 
@@ -370,6 +376,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
       label: isStacked ? t('Cam-Streifen') : t('Cam-Kachel'),
       color: 'messing',
       interaction: isStacked ? 'band' : 'free',
+      aufBild: !!bildUrl,
       content: bildUrl ? (
         <AusschnittBild
           bildUrl={bildUrl}
@@ -437,6 +444,13 @@ interface LayoutEditorProps {
    * Muster; an einem Muster laesst sich ein Ausschnitt aber nicht beurteilen.
    */
   vorschauClips?: VorschauClip[];
+  /**
+   * Wofuer das Gespeicherte gilt. Muss vom Aufrufer kommen: derselbe Editor
+   * speichert oben den Kanal-Default und in der Clip-Karte ein Override fuer
+   * genau einen Clip. Ein fester Satz waere neben einem der beiden Knoepfe die
+   * Gegenbehauptung zu dem, was der Knopf tut.
+   */
+  geltungHinweis?: string;
 }
 
 /** Gespeicherte Layouts können ein cam_position aus dem alten Quellraum tragen. */
@@ -455,6 +469,7 @@ export function LayoutEditor({
   saveLabel,
   resetLabel,
   vorschauClips = [],
+  geltungHinweis,
 }: LayoutEditorProps) {
   const t = useT();
   const base = useMemo(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT), [initialLayout]);
@@ -607,9 +622,9 @@ export function LayoutEditor({
             ))}
             <option value="">{t('Ohne Bild (Muster)')}</option>
           </select>
-          <span className="text-[11px] text-text-secondary">
-            {t('Der Ausschnitt gilt danach für alle Clips dieses Kanals.')}
-          </span>
+          {geltungHinweis && (
+            <span className="text-[11px] text-text-secondary">{geltungHinweis}</span>
+          )}
         </div>
       )}
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ausschnittRahmen } from '../src/utils/socialMediaLayout';
+import { ausschnittRahmen, grossesStandbild } from '../src/utils/socialMediaLayout';
 
 const QUELLE = { width: 1920, height: 1080 };
 
@@ -42,4 +42,33 @@ test('Breiterer Ausschnitt als das Ziel wird mittig nachgeschnitten', () => {
 test('Ausschnitt ohne Flaeche liefert nichts statt Division durch null', () => {
   assert.equal(ausschnittRahmen(QUELLE, { x: 0, y: 0, w: 0, h: 100 }, 1080, 1920), null);
   assert.equal(ausschnittRahmen(QUELLE, { x: 0, y: 0, w: 100, h: 100 }, 0, 1920), null);
+});
+
+/**
+ * Faellt die Regel auf eine fremde URL nicht an, laedt der Editor still das
+ * kleine, unscharfe Bild. Das ist kein Fehler, muss aber die Eingabe
+ * unveraendert zurueckgeben, sonst zeigt der Rahmen eine tote Grafik.
+ */
+test('grossesStandbild hebt Twitch-Standbilder auf 1920x1080', () => {
+  const klein =
+    'https://static-cdn.jtvnw.net/twitch-video-assets/prod/abc/landscape/thumb/thumb-0000000000-480x272.jpg';
+  assert.equal(
+    grossesStandbild(klein),
+    'https://static-cdn.jtvnw.net/twitch-video-assets/prod/abc/landscape/thumb/thumb-0000000000-1920x1080.jpg',
+  );
+  assert.equal(
+    grossesStandbild('https://clips-media-assets2.twitch.tv/AT-cm%7Cx-preview-480x272.jpg'),
+    'https://clips-media-assets2.twitch.tv/AT-cm%7Cx-preview-1920x1080.jpg',
+  );
+});
+
+test('grossesStandbild laesst URLs ohne Groessensuffix unveraendert', () => {
+  for (const url of [
+    '/social-media/api/clips/12/thumb.jpg',
+    'https://beispiel.de/bild.png?w=480x272',
+    'https://beispiel.de/1920x1080/bild.webp',
+    'https://beispiel.de/bild.jpg',
+  ]) {
+    assert.equal(grossesStandbild(url), url, `unerwartet umgeschrieben: ${url}`);
+  }
 });

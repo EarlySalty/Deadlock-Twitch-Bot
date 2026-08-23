@@ -189,3 +189,19 @@ export function ausschnittRahmen(
     oben: (((zielHoehe - crop.h * s) / 2 - crop.y * s) / zielHoehe) * 100,
   };
 }
+
+/**
+ * Twitch legt dasselbe Standbild in mehreren Groessen ab. Die Clipliste liefert
+ * die kleine Variante; im Editor steht das Bild aber auf halber Bildschirmbreite
+ * und sieht in 480 Pixeln matschig aus. Die grosse Variante hat zusaetzlich
+ * exakt 16:9, waehrend 480x272 bei 1,7647 liegt statt bei 1,7778.
+ *
+ * Nachgeprueft am 2026-08-23 an einer echten thumbnail_url aus der Clipliste:
+ * 480x272, 640x360, 1280x720 und 1920x1080 antworten alle mit 200.
+ *
+ * Greift die Regel nicht, kommt die Eingabe unveraendert zurueck; der Aufrufer
+ * erkennt daran, dass er sich die Probe-Anfrage sparen kann.
+ */
+export function grossesStandbild(url: string): string {
+  return url.replace(/-\d+x\d+\.(jpg|jpeg|png)$/i, '-1920x1080.$1');
+}

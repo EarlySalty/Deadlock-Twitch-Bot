@@ -199,7 +199,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const vorschauClipsQuery = useQuery({
     queryKey: ['social-media', 'vorschau-clips', streamer],
     queryFn: () => fetchClips({ status: 'all', streamer: streamer || undefined, page: 1, page_size: 12 }),
-    enabled: !!streamer,
+    // Nur im Clip-Pool: auf den anderen Reitern gibt es keinen Layout-Editor,
+    // der die Bilder braucht.
+    enabled: !!streamer && activeView === 'pool',
     staleTime: 5 * 60 * 1000,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -584,6 +586,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                   onSave={(layout) => saveLayoutMutation.mutate(layout)}
                   saveLabel={t('Default für {streamer} speichern', { streamer })}
                   vorschauClips={vorschauClips}
+                  geltungHinweis={t('Der Ausschnitt gilt danach für alle Clips dieses Kanals.')}
                 />
               )}
               {saveLayoutMutation.isError && (
@@ -2183,6 +2186,7 @@ function ClipCard({
             initialLayout={clip.effective_layout}
             saveLabel={t('Override speichern')}
             resetLabel={t('Schließen')}
+            geltungHinweis={t('Gilt nur für diesen Clip.')}
             /* In der Karte ist die Vorschau genau dieser Clip, nichts zum Waehlen. */
             vorschauClips={
               clip.thumbnail_url
