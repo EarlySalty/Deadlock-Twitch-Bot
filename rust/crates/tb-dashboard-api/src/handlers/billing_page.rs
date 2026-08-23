@@ -48,7 +48,7 @@ use tb_analytics::billing::{
 };
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
-use tb_analytics::stufe::stufe_fuer_plan;
+use tb_analytics::stufe::{stufe_fuer_plan, Stufe};
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -554,6 +554,81 @@ pub async fn legacy_invoices_redirect_handler(
 
 // ── Katalog (JSON) ──────────────────────────────────────────────────────────
 
+/// Die Katalog-Stufe, auf der ein Streamer **dauerhaft und bezahlt** steht.
+///
+/// `None` heisst: kein dauerhaft bezahlter Zugang, also gehoert auf jede Karte
+/// ein Kaufknopf. Bewusst NICHT ueber die Stufenrechnung: `stufe_fuer_plan`
+/// hebt auch den 30-Tage-Trial und die 1,99-Alt-Plaene auf `Plus`. Wer so
+/// eingestuft wird, saehe auf der Plus-Karte "Deine aktuelle Stufe" statt eines
+/// Kaufknopfs, und `PlanStufen` ist der einzige Checkout-Einstieg der Seite:
+/// genau die Zielgruppe der Umstellung koennte nicht abschliessen und fiele nach
+/// 30 Tagen auf Free. Gefragt wird deshalb die tatsaechlich laufende Zahlung.
+///
+/// - Stripe-Abo auf einer Katalog-Stufe mit Status `active`/`trialing` zaehlt.
+/// - Unbefristetes Admin-Geschenk auf einer Katalog-Stufe zaehlt: es laeuft
+///   dauerhaft, ein Kauf braeuchte niemand.
+/// - Trial, befristetes Geschenk und Alt-Plan zu anderem Preis zaehlen nicht.
+fn laufende_bezahlte_stufe(current: &tb_analytics::plan::PlanSnapshot) -> Option<&'static str> {
+    let pid = current.plan_id;
+    if !is_paid_plan_id(pid) {
+        return None;
+    }
+    match current.source {
+        "billing_subscription" => {
+            matches!(current.status.as_str(), "active" | "trialing").then_some(pid)
+        }
+        "manual_override" => current.expires_at.is_none().then_some(pid),
+        _ => None,
+    }
+}
+
+/// Ob die Karte `plan_id` die aktuelle Stufe des Streamers zeigt.
+///
+/// Genau eine Karte kann das sein: die laufende bezahlte Stufe, sonst die
+/// Gratis-Karte fuer jemanden ohne jeden erweiterten Zugang. Ein Streamer im
+/// Trial oder auf einem Alt-Plan bekommt keine "aktuelle Stufe" und damit auf
+/// jeder Karte einen Knopf.
+fn ist_aktuelle_stufe(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot) -> bool {
+    match laufende_bezahlte_stufe(current) {
+        Some(laufend) => plan_id == laufend,
+        None => plan_id == "free" && stufe_fuer_plan(current.plan_id) == Stufe::Free,
+    }
+}
+
+/// Ruhiger Zusatz unter dem Knopf, wenn der Streamer die Stufe zwar gerade
+/// nutzt, sie aber nicht dauerhaft bezahlt.
+///
+/// Der Knopf bleibt in beiden Faellen stehen, der Hinweis sagt nur, warum er da
+/// ist: sonst wirkt "Netzwerk Plus buchen" auf jemanden im Test wie ein Fehler.
+fn stufen_hinweis(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot) -> Option<String> {
+    if laufende_bezahlte_stufe(current).is_some() {
+        return None;
+    }
+    let stufe = stufe_fuer_plan(current.plan_id);
+    if stufe == Stufe::Free || plan_id != stufe.as_str() {
+        return None;
+    }
+    if current.plan_id == tb_analytics::trial::ANALYTICS_TRIAL_PLAN_ID {
+        return Some(match resttage(current.expires_at.as_deref()) {
+            Some(tage) if tage == 1 => "Läuft noch einen Tag als Test.".to_string(),
+            Some(tage) if tage > 1 => format!("Läuft noch {tage} Tage als Test."),
+            _ => "Läuft gerade als Test.".to_string(),
+        });
+    }
+    Some("Du nutzt diese Stufe über einen älteren Tarif.".to_string())
+}
+
+/// Volle Tage bis zum Ablauf, aus dem ISO-Zeitstempel des Snapshots.
+fn resttage(expires_at: Option<&str>) -> Option<i64> {
+    let roh = expires_at?.trim();
+    if roh.is_empty() {
+        return None;
+    }
+    let ziel = chrono::DateTime::parse_from_rfc3339(roh).ok()?;
+    let tage = (ziel.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days();
+    (tage >= 0).then_some(tage)
+}
+
 /// Query-Parameter des Katalog-Endpunkts.
 #[derive(Debug, Deserialize, Default)]
 pub struct CatalogQuery {
@@ -602,8 +677,6 @@ pub async fn catalog_handler(
             };
             tb_analytics::plan::PlanSnapshot::default_basic(&fallback_ref)
         });
-    let current_plan_id = current.plan_id;
-
     // Pro Plan: is_current + Stripe-Price-Verfügbarkeit annotieren.
     if let Some(plans) = payload.get_mut("plans").and_then(Value::as_array_mut) {
         for plan in plans.iter_mut() {
@@ -612,14 +685,10 @@ pub async fn catalog_handler(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            // Bestandsnutzer stehen mit einer Alt-Plan-ID in der DB
-            // (`raid_free`, `chat_quiet`, `analysis_dashboard`, `bundle_*`), die
-            // im Katalog nicht mehr vorkommt. Ein direkter ID-Vergleich haette
-            // deshalb NIE getroffen: sie saehen einen Buchen-Knopf fuer die
-            // Stufe, die sie schon haben. Verglichen wird die Stufe, die
-            // Zuordnung steht an einer Stelle (`stufe_fuer_plan`).
-            plan["is_current"] =
-                json!(stufe_fuer_plan(&pid) == stufe_fuer_plan(current_plan_id));
+            plan["is_current"] = json!(ist_aktuelle_stufe(&pid, &current));
+            if let Some(text) = stufen_hinweis(&pid, &current) {
+                plan["hinweis"] = json!(text);
+            }
             if !is_paid_plan_id(&pid) {
                 plan["checkout_available"] = json!(false);
                 plan["stripe_price_id"] = Value::Null;
@@ -1854,6 +1923,91 @@ mod tests {
         assert_eq!(v["billing_profile"]["customer_reference"], "login");
         assert_eq!(v["billing_profile"]["country_code"], "DE");
         assert!(v["billing_profile_imported_fields"].is_array());
+    }
+
+    /// Baut einen Snapshot, ohne die DB anzufassen.
+    fn snapshot(
+        plan_id: &'static str,
+        source: &'static str,
+        status: &str,
+        expires_at: Option<&str>,
+    ) -> tb_analytics::plan::PlanSnapshot {
+        let mut snap = tb_analytics::plan::PlanSnapshot::default_basic("login");
+        snap.plan_id = plan_id;
+        snap.source = source;
+        snap.status = status.to_string();
+        snap.expires_at = expires_at.map(str::to_string);
+        snap
+    }
+
+    /// Trial und Alt-Tarif bekommen einen Kaufknopf, kein "Deine aktuelle Stufe".
+    ///
+    /// `PlanStufen` ist der einzige Checkout-Einstieg der Seite. Wer dort keinen
+    /// Knopf sieht, kann nicht abschliessen und faellt nach 30 Tagen auf Free.
+    #[test]
+    fn trial_und_alt_tarif_behalten_den_kaufknopf() {
+        let trial = snapshot(
+            "analytics_trial",
+            "manual_override",
+            "active",
+            Some("2099-01-01T00:00:00Z"),
+        );
+        assert!(!ist_aktuelle_stufe("plus", &trial), "Trial ist keine Stufe");
+        assert!(!ist_aktuelle_stufe("free", &trial));
+        assert!(
+            stufen_hinweis("plus", &trial)
+                .is_some_and(|text| text.contains("Test")),
+            "Trial braucht einen ruhigen Hinweis neben dem Knopf"
+        );
+
+        // Alt-Tarif zu anderem Preis: rechnerisch Plus, aber nicht diese Stufe.
+        let alt = snapshot("chat_quiet", "manual_override", "active", None);
+        assert!(!ist_aktuelle_stufe("plus", &alt));
+        assert!(!ist_aktuelle_stufe("free", &alt));
+        assert_eq!(
+            stufen_hinweis("plus", &alt).as_deref(),
+            Some("Du nutzt diese Stufe über einen älteren Tarif.")
+        );
+    }
+
+    /// Gegenprobe: wer wirklich dauerhaft bezahlt, soll seine Stufe nicht noch
+    /// einmal kaufen koennen. Genau dafuer gab es den Stufen-Vergleich.
+    #[test]
+    fn laufende_zahlung_schliesst_den_knopf() {
+        let stripe = snapshot(
+            "plus",
+            "billing_subscription",
+            "active",
+            Some("2099-01-01T00:00:00Z"),
+        );
+        assert!(ist_aktuelle_stufe("plus", &stripe));
+        assert!(!ist_aktuelle_stufe("free", &stripe));
+        assert!(!ist_aktuelle_stufe("pro", &stripe));
+        assert!(stufen_hinweis("plus", &stripe).is_none());
+
+        // Unbefristetes Admin-Geschenk auf einer Katalog-Stufe zaehlt auch.
+        let geschenk = snapshot("pro", "manual_override", "active", None);
+        assert!(ist_aktuelle_stufe("pro", &geschenk));
+        assert!(!ist_aktuelle_stufe("plus", &geschenk));
+
+        // Befristetes Geschenk laeuft aus, also bleibt der Knopf.
+        let befristet = snapshot(
+            "plus",
+            "manual_override",
+            "active",
+            Some("2099-01-01T00:00:00Z"),
+        );
+        assert!(!ist_aktuelle_stufe("plus", &befristet));
+
+        // Abo mit Zahlungsproblem ist keine laufende Zahlung.
+        let past_due = snapshot("plus", "billing_subscription", "past_due", None);
+        assert!(!ist_aktuelle_stufe("plus", &past_due));
+
+        // Ohne jeden erweiterten Zugang ist die Gratis-Karte die aktuelle.
+        let frei = snapshot("raid_free", "default_basic", "active", None);
+        assert!(ist_aktuelle_stufe("free", &frei));
+        assert!(!ist_aktuelle_stufe("plus", &frei));
+        assert!(stufen_hinweis("free", &frei).is_none());
     }
 
     /// Katalog ohne Auth → 401 auth_required.

@@ -19,17 +19,40 @@ pub const ANALYTICS_TRIAL_PLAN_ID: &str = "analytics_trial";
 /// Trial-Dauer in Tagen (Python `catalog.TRIAL_DURATION_DAYS`).
 pub const TRIAL_DURATION_DAYS: i64 = 30;
 
-/// Bezahlpläne, die einen Self-Claim-Trial ausschließen
-/// (Python `_billing_start_trial_for_user`, `all_paid_plan_ids`).
-const PAID_PLAN_IDS: &[&str] = &[
-    "chat_quiet",
-    "raid_boost",
-    "analysis_dashboard",
-    "bundle_chat_quiet_raid_boost",
-    "bundle_werbefrei_analyse",
-    "bundle_komplett",
-    "bundle_analysis_raid_boost",
-];
+/// Plan-IDs, die kein eigenes Recht darstellen: darauf darf der Trial buchen.
+///
+/// Leer heisst "keine Zeile", `free`/`raid_free` sind die Gratis-Stufen. Alles
+/// andere ist ein Recht, das jemand vergeben hat.
+fn ist_gratis_platzhalter(plan_id: &str) -> bool {
+    matches!(plan_id.trim(), "" | "free" | "raid_free")
+}
+
+/// `true`, wenn hier ein Manual-Recht **ohne Ablaufdatum** steht.
+///
+/// Sicherung gegen Datenverlust, unabhaengig von jeder Plan-Erkennung: ein
+/// Admin-Geschenk auf Dauer wird vom Trial niemals ueberschrieben, auch wenn
+/// die Plan-ID unbekannt ist. Der Trial setzt `manual_plan_id` und
+/// `manual_plan_expires_at` per UPSERT neu; ein unbefristetes Recht waere danach
+/// unwiederbringlich weg. Lieber einen Trial ablehnen als ein Geschenk loeschen.
+fn ist_unbefristetes_manual_recht(plan_id: &str, expires_at: Option<&str>) -> bool {
+    let id = plan_id.trim();
+    if ist_gratis_platzhalter(id) || id == ANALYTICS_TRIAL_PLAN_ID {
+        return false;
+    }
+    expires_at.is_none_or(|wert| wert.trim().is_empty())
+}
+
+/// `true`, wenn die Plan-ID einen bezahlten Zugang bezeichnet.
+///
+/// Kommt aus dem Katalog ([`crate::stufe::ist_bezahlter_plan`]), nicht aus einer
+/// Liste in dieser Datei. Vorher standen hier zwei handgepflegte Namenslisten,
+/// die `plus` und `pro` nicht kannten. Seit `admin_manual_plan::set_manual_plan`
+/// nur noch Katalog-IDs annimmt, ist jedes kuenftige Admin-Geschenk `plus` oder
+/// `pro` und waere fuer diese Listen unsichtbar gewesen. Eine neue Stufe im
+/// Katalog wird hier automatisch mitgezaehlt.
+fn ist_bezahlt(plan_id: &str) -> bool {
+    crate::stufe::ist_bezahlter_plan(plan_id)
+}
 
 /// Ergebnis eines Trial-Grant-Versuchs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,25 +158,32 @@ async fn grant_trial_inner(
     .await?;
     let already_granted = trial_row.unwrap_or(0) == 1;
 
-    // Manueller Bezahlplan gesetzt?
-    let manual_row = sqlx::query_scalar!(
-        r#"SELECT manual_plan_id FROM streamer_plans
-           WHERE TRIM(COALESCE(twitch_user_id,'')) = $1
-              OR LOWER(COALESCE(twitch_login,'')) = LOWER($2)
-           LIMIT 1"#,
-        twitch_user_id,
-        twitch_login
+    // Manuelles Recht gesetzt? Plan-ID UND Ablauf lesen: die Sicherung gegen
+    // das Ueberschreiben eines unbefristeten Geschenks haengt am Ablauf, nicht
+    // an der Plan-Erkennung.
+    let manual_row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT manual_plan_id, manual_plan_expires_at::text FROM streamer_plans \
+           WHERE TRIM(COALESCE(twitch_user_id,'')) = $1 \
+              OR LOWER(COALESCE(twitch_login,'')) = LOWER($2) \
+           LIMIT 1",
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut *tx)
     .await?;
-    let manual_paid = manual_row
-        .flatten()
-        .map(|p| PAID_PLAN_IDS.contains(&p.trim()))
-        .unwrap_or(false);
+    let (manual_plan, manual_expires) = manual_row
+        .map(|(plan, expires)| (plan.unwrap_or_default(), expires))
+        .unwrap_or_default();
+    let manual_paid = ist_bezahlt(&manual_plan);
+    let manual_unbefristet =
+        ist_unbefristetes_manual_recht(&manual_plan, manual_expires.as_deref());
 
     let outcome = if already_granted {
         TrialOutcome::AlreadyUsed
-    } else if paid_billing || manual_paid {
+    } else if paid_billing || manual_paid || manual_unbefristet {
+        // `HasPaidPlan` deckt beides ab: bezahlter Zugang und jedes andere
+        // unbefristete Manual-Recht. Der Streamer verliert nur den Trial, nicht
+        // sein Recht.
         TrialOutcome::HasPaidPlan
     } else {
         let now = Utc::now();
@@ -188,21 +218,15 @@ async fn grant_trial_inner(
 
 /// Prüft tolerant, ob ein aktives/„trialing" Billing-Abo mit Bezahlplan existiert.
 /// Fehlt die Tabelle (Python-only), wird `false` angenommen.
+///
+/// Self-Claim und 24h-Auto-Grant fragen dieselbe Menge ab, und die kommt aus dem
+/// Katalog. Vorher hatte der Auto-Grant eine eigene, kleinere Liste ohne
+/// `plus`/`pro`: ein zahlender Stripe-Kunde ohne Manual-Zeile bekam beim Login
+/// den Trial-Override uebergestuelpt und verlor 30 Tage lang, was er bezahlt hat.
 async fn has_active_paid_billing_sub(
     pool: &PgPool,
     twitch_user_id: &str,
     twitch_login: &str,
-) -> bool {
-    has_active_paid_billing_sub_in(pool, twitch_user_id, twitch_login, PAID_PLAN_IDS).await
-}
-
-/// Wie [`has_active_paid_billing_sub`], aber mit konfigurierbarer Bezahlplan-
-/// Menge — der 24h-Auto-Grant prüft eine kleinere Menge als der Self-Claim.
-async fn has_active_paid_billing_sub_in(
-    pool: &PgPool,
-    twitch_user_id: &str,
-    twitch_login: &str,
-    allowed: &[&str],
 ) -> bool {
     let user_id = twitch_user_id.trim();
     let login = twitch_login.trim();
@@ -221,7 +245,7 @@ async fn has_active_paid_billing_sub_in(
     .await;
 
     match row {
-        Ok(Some(Some(plan))) => allowed.contains(&plan.trim()),
+        Ok(Some(Some(plan))) => ist_bezahlt(&plan),
         _ => false,
     }
 }
@@ -229,20 +253,12 @@ async fn has_active_paid_billing_sub_in(
 /// Grace-Periode (Stunden) vor dem 24h-Auto-Grant (Python `grace_period_hours = 24`).
 const TRIAL_GRACE_PERIOD_HOURS: f64 = 24.0;
 
-/// Bezahlpläne, die den 24h-Auto-Grant ausschließen — Python-Auto-Grant
-/// `paid_plan_ids` (kleinere Menge als der Self-Claim).
-const AUTO_GRANT_PAID_PLAN_IDS: &[&str] = &[
-    "raid_boost",
-    "analysis_dashboard",
-    "bundle_analysis_raid_boost",
-];
-
 /// Auto-Grant des 30-Tage-Trials nach 24h-Grace (Python
 /// `_billing_check_and_grant_trial_eligibility`). Wird aus der Plan-Resolution
 /// für authentifizierte User aufgerufen. Grantet NUR wenn: noch nie gewährt
 /// (`trial_ever_granted`), `first_login_at` ≥ 24 h her, KEIN aktives bezahltes
-/// Billing-Abo (raid_boost/analysis_dashboard/bundle_analysis_raid_boost) und
-/// KEIN manueller Bezahlplan (≠ `raid_free`). Idempotent über `trial_ever_granted`;
+/// Billing-Abo (Bezahlplan laut Katalog, siehe [`ist_bezahlt`]) und KEIN
+/// gesetztes Manual-Recht ausser den Gratis-Stufen. Idempotent über `trial_ever_granted`;
 /// Fehler werden geschluckt (Python try/except). `true` = frisch gewährt.
 pub async fn check_and_grant_trial_eligibility(
     pool: &PgPool,
@@ -264,13 +280,7 @@ async fn check_and_grant_inner(
     twitch_login: &str,
 ) -> Result<bool, sqlx::Error> {
     // Billing-Abo tolerant VOR der Transaktion prüfen (Tabelle evtl. Python-only).
-    let paid_billing = has_active_paid_billing_sub_in(
-        pool,
-        twitch_user_id,
-        twitch_login,
-        AUTO_GRANT_PAID_PLAN_IDS,
-    )
-    .await;
+    let paid_billing = has_active_paid_billing_sub(pool, twitch_user_id, twitch_login).await;
 
     let mut tx = pool.begin().await?;
     // Flag + manueller Plan + Stunden seit first_login_at in einer Query.
@@ -303,11 +313,10 @@ async fn check_and_grant_inner(
     if hours < TRIAL_GRACE_PERIOD_HOURS {
         return Ok(false);
     }
-    // Manueller Bezahlplan (≠ raid_free) → kein Grant.
-    if let Some(mp) = row.manual_plan_id.as_deref().map(str::trim) {
-        if !mp.is_empty() && mp != "raid_free" {
-            return Ok(false);
-        }
+    // Jedes gesetzte Manual-Recht ausser den Gratis-Stufen blockt den Grant:
+    // der UPSERT unten wuerde es ueberschreiben.
+    if !ist_gratis_platzhalter(row.manual_plan_id.as_deref().unwrap_or("")) {
+        return Ok(false);
     }
     if paid_billing {
         return Ok(false);
@@ -488,6 +497,140 @@ mod auto_grant_tests {
         assert!(!check_and_grant_trial_eligibility(&pool, "21", "ohnelogin").await);
         // gar kein Eintrag → kein Grant.
         assert!(!check_and_grant_trial_eligibility(&pool, "99", "unbekannt").await);
+    }
+
+    /// Ein unbefristetes Admin-Geschenk auf einer Katalog-Stufe darf der
+    /// Self-Claim-Trial nicht ueberschreiben. Vorher kannte die Bezahl-Liste
+    /// `plus`/`pro` nicht, der UPSERT hat das Geschenk geloescht.
+    #[tokio::test]
+    async fn trial_ueberschreibt_kein_unbefristetes_geschenk() {
+        let Some(pool) = pool_or_skip("t6e_trial_geschenk").await else {
+            return;
+        };
+        for (user, login, plan) in [
+            ("40", "plusgeschenk", "plus"),
+            ("41", "progeschenk", "pro"),
+            // Auch eine ID, die der Katalog gar nicht kennt: ohne Ablauf ist es
+            // ein Recht, das jemand vergeben hat.
+            ("42", "unbekannt", "geschenk_2027"),
+        ] {
+            sqlx::query(
+                "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id) \
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(user)
+            .bind(login)
+            .bind(plan)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let outcome = start_trial_for_user(&pool, user, login).await;
+            assert_eq!(
+                outcome,
+                TrialOutcome::HasPaidPlan,
+                "{plan}: Trial haette abgelehnt werden muessen"
+            );
+            let (flag, gespeichert) = flag_and_plan(&pool, user).await;
+            assert_eq!(gespeichert.as_deref(), Some(plan), "{plan} wurde geloescht");
+            assert_eq!(flag, 0, "{plan}: Einmal-Flag darf nicht verbraucht werden");
+            let expires: Option<String> = sqlx::query_scalar(
+                "SELECT manual_plan_expires_at FROM streamer_plans WHERE twitch_user_id = $1",
+            )
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(expires.is_none(), "{plan}: Ablauf wurde gesetzt");
+        }
+    }
+
+    /// Gegenprobe zur Sicherung: was kein dauerhaftes Recht ist, blockt auch
+    /// nicht. Sonst haette die Sicherung den Trial fuer alle zugemacht.
+    #[tokio::test]
+    async fn trial_laeuft_bei_gratis_und_befristetem_unbekannten_recht() {
+        let Some(pool) = pool_or_skip("t6e_trial_gegenprobe").await else {
+            return;
+        };
+        // Gratis-Stufen sind kein Recht: der Trial darf drueber.
+        for (user, login, plan) in [
+            ("50", "gratis_alt", Some("raid_free")),
+            ("51", "gratis_neu", Some("free")),
+            ("52", "leer", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id) \
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(user)
+            .bind(login)
+            .bind(plan)
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                start_trial_for_user(&pool, user, login).await,
+                TrialOutcome::Granted,
+                "{plan:?}: Trial haette laufen muessen"
+            );
+            let (_, gespeichert) = flag_and_plan(&pool, user).await;
+            assert_eq!(gespeichert.as_deref(), Some(ANALYTICS_TRIAL_PLAN_ID));
+        }
+
+        // Unbekannte ID MIT Ablauf ist kein dauerhaftes Recht und nicht bezahlt.
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at) \
+             VALUES ('53', 'befristet', 'aktion_maerz', (NOW() + INTERVAL '10 days')::text)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            start_trial_for_user(&pool, "53", "befristet").await,
+            TrialOutcome::Granted
+        );
+    }
+
+    /// Ein laufendes Stripe-Abo auf einer Katalog-Stufe schliesst den
+    /// Auto-Grant aus. Vorher kannte die Auto-Grant-Liste nur Alt-IDs, ein
+    /// `pro`-Kunde bekam beim Login den Trial-Override und verlor 30 Tage lang
+    /// `social.auto_post`.
+    #[tokio::test]
+    async fn auto_grant_weicht_bezahltem_abo_aus() {
+        let Some(pool) = pool_or_skip("t6e_trial_stripe_katalog").await else {
+            return;
+        };
+        for (user, login, plan, erwartet_grant) in [
+            ("60", "prokunde", "pro", false),
+            ("61", "pluskunde", "plus", false),
+            // Gegenprobe: gratis oder unbekannt blockt nicht.
+            ("62", "freikunde", "free", true),
+            ("63", "krams", "kein_plan", true),
+        ] {
+            sqlx::query(
+                "INSERT INTO twitch_billing_subscriptions (customer_reference, plan_id, status) \
+                 VALUES ($1, $2, 'active')",
+            )
+            .bind(login)
+            .bind(plan)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at) \
+                 VALUES ($1, $2, (NOW() - INTERVAL '48 hours')::text)",
+            )
+            .bind(user)
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                check_and_grant_trial_eligibility(&pool, user, login).await,
+                erwartet_grant,
+                "{plan}: Auto-Grant-Entscheidung falsch"
+            );
+        }
     }
 
     #[tokio::test]

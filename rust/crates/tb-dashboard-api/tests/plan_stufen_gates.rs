@@ -248,10 +248,27 @@ async fn ki_analyse_erst_ab_plus() {
 
 // ── Pro-Grenze: automatisches Posten ────────────────────────────────────────
 
-/// Sammel-Einreihung aller neuen Clips ist automatisches Posten.
+/// Automatisches Posten bleibt fuer alle offen, solange Creator Pro nicht
+/// buchbar ist.
+///
+/// Die Stufe steht im Katalog auf `buchbar = false`, und
+/// `checkout_start_handler` schickt jeden Pro-Kaufversuch auf `/twitch/pricing`
+/// zurueck. Eine Pro-Sperre wuerde einem Partner also eine heute laufende
+/// Funktion nehmen, ohne ihm einen Weg zurueck zu lassen. Deshalb haengt sie an
+/// `stufe::sperre_greift(Stufe::Pro)` und ist inaktiv.
+///
+/// Geprueft werden alle drei Wege in die Upload-Warteschlange (Sammel-Upload,
+/// direktes Einreihen, Approval "approve"), und zwar auf Wirkung: es kommt
+/// wirklich etwas in der Warteschlange an.
 #[tokio::test]
-async fn batch_upload_erst_ab_pro() {
-    let Some(pool) = pool("t_gate_batch").await else {
+async fn auto_posting_offen_solange_pro_nicht_buchbar() {
+    // Die Voraussetzung des Tests, sichtbar statt stillschweigend.
+    assert!(
+        !tb_analytics::stufe::sperre_greift(tb_analytics::stufe::Stufe::Pro),
+        "Creator Pro ist buchbar geworden: dieser Test und die Sperre gehoeren umgestellt"
+    );
+
+    let Some(pool) = pool("t_gate_autopost").await else {
         return;
     };
     for login in ["freistreamer", "plusstreamer", "prostreamer"] {
@@ -263,8 +280,18 @@ async fn batch_upload_erst_ab_pro() {
     }
     stufe_setzen(&pool, "plusstreamer", "plus").await;
     stufe_setzen(&pool, "prostreamer", "pro").await;
+    sqlx::query(
+        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
+         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'freistreamer'), \
+                (2, 'c2', 'https://clips.twitch.tv/c2', 'plusstreamer'), \
+                (3, 'c3', 'https://clips.twitch.tv/c3', 'prostreamer')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
-    for login in ["freistreamer", "plusstreamer"] {
+    // Weg 1: Sammel-Einreihung.
+    for login in ["freistreamer", "plusstreamer", "prostreamer"] {
         let resp = social_media::batch_upload_handler(
             partner(login),
             State(pool.clone()),
@@ -272,233 +299,126 @@ async fn batch_upload_erst_ab_pro() {
             Json(serde_json::from_value(json!({ "platforms": ["tiktok"] })).unwrap()),
         )
         .await;
-        assert_eq!(
+        assert_ne!(
             resp.status(),
             StatusCode::FORBIDDEN,
-            "{login} darf nicht sammelweise posten"
+            "{login} darf sammelweise posten, solange Pro nicht kaufbar ist"
         );
-        let body = body_json(resp).await;
-        assert_eq!(body["required_stufe"], "pro");
     }
 
-    // Pro passiert das Gate. Was danach kommt, ist nicht mehr die Plan-Sperre.
-    let pro = social_media::batch_upload_handler(
-        partner("prostreamer"),
-        State(pool),
-        Query(social_media::StreamerQuery { streamer: None }),
-        Json(serde_json::from_value(json!({ "platforms": ["tiktok"] })).unwrap()),
-    )
-    .await;
-    assert_ne!(
-        pro.status(),
-        StatusCode::FORBIDDEN,
-        "Pro darf sammelweise posten"
-    );
-}
-
-/// Einreihen in die Upload-Warteschlange ist automatisches Posten und damit
-/// Pro. Die Sperre haengt am Einreihen, nicht am `schedule`-Parameter: sie muss
-/// auch dann greifen, wenn der Aufruf gar kein `schedule` mitschickt. Genau das
-/// war der Nebeneingang, den ein direkter API-Aufruf offen fand.
-#[tokio::test]
-async fn queue_upload_erst_ab_pro() {
-    let Some(pool) = pool("t_gate_queue").await else {
-        return;
-    };
-    for login in ["plusstreamer", "prostreamer"] {
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
-            .bind(login)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    stufe_setzen(&pool, "plusstreamer", "plus").await;
-    stufe_setzen(&pool, "prostreamer", "pro").await;
-    sqlx::query(
-        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
-         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'plusstreamer'), \
-                (2, 'c2', 'https://clips.twitch.tv/c2', 'prostreamer')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    // Mit `schedule: auto` und ohne `schedule` — beide Wege muessen zumachen.
-    for body in [
-        json!({ "clip_id": 1, "platforms": ["tiktok"], "schedule": "auto" }),
-        json!({ "clip_id": 1, "platforms": ["tiktok"] }),
-        json!({ "clip_id": 1, "platforms": "all" }),
+    // Weg 2: direktes Einreihen, auch ohne `schedule` und mit `platforms: all`.
+    for (login, clip_id, body) in [
+        ("freistreamer", 1, json!({ "clip_id": 1, "platforms": ["tiktok"], "schedule": "auto" })),
+        ("plusstreamer", 2, json!({ "clip_id": 2, "platforms": ["tiktok"] })),
+        ("prostreamer", 3, json!({ "clip_id": 3, "platforms": "all" })),
     ] {
         let resp = social_media::queue_upload_handler(
-            partner("plusstreamer"),
+            partner(login),
             State(pool.clone()),
             Query(social_media::StreamerQuery { streamer: None }),
             Json(serde_json::from_value(body.clone()).unwrap()),
         )
         .await;
-        assert_eq!(
+        assert_ne!(
             resp.status(),
             StatusCode::FORBIDDEN,
-            "Plus darf nicht einreihen: {body}"
+            "{login} darf einreihen: {body}"
         );
-        assert_eq!(body_json(resp).await["required_stufe"], "pro");
-    }
-
-    // Nichts wurde eingereiht.
-    let offen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+        let eingereiht: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(clip_id as i32)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(offen, 0, "gesperrter Aufruf darf nichts einreihen");
-
-    // Pro passiert das Gate.
-    let pro = social_media::queue_upload_handler(
-        partner("prostreamer"),
-        State(pool),
-        Query(social_media::StreamerQuery { streamer: None }),
-        Json(serde_json::from_value(json!({ "clip_id": 2, "platforms": ["tiktok"] })).unwrap()),
-    )
-    .await;
-    assert_ne!(pro.status(), StatusCode::FORBIDDEN, "Pro darf einreihen");
-}
-
-/// Dritter Weg in dieselbe Warteschlange: die Approval-Entscheidung reiht bei
-/// "approve" ueber `handle_decision`/`ensure_queued_uploads` selbst Uploads ein.
-/// Also dieselbe Pro-Sperre. "skip" reiht nichts ein und bleibt offen.
-#[tokio::test]
-async fn approval_approve_erst_ab_pro() {
-    let Some(pool) = pool("t_gate_approval").await else {
-        return;
-    };
-    for login in ["plusstreamer", "prostreamer"] {
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
-            .bind(login)
-            .execute(&pool)
-            .await
-            .unwrap();
+        assert!(
+            eingereiht > 0,
+            "{login}: Status ohne Wirkung, nichts in der Warteschlange"
+        );
     }
-    stufe_setzen(&pool, "plusstreamer", "plus").await;
-    stufe_setzen(&pool, "prostreamer", "pro").await;
-    sqlx::query(
-        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
-         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'plusstreamer'), \
-                (2, 'c2', 'https://clips.twitch.tv/c2', 'prostreamer')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
 
+    // Weg 3: Approval "approve" reiht ueber `handle_decision` selbst ein.
     let approve = social_media::approval_decision_handler(
-        partner("plusstreamer"),
+        partner("freistreamer"),
         State(pool.clone()),
         axum::extract::Path("1".to_string()),
         json!({ "decision": "approve", "platforms": ["tiktok"] }).to_string(),
-    )
-    .await;
-    assert_eq!(approve.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(approve).await["required_stufe"], "pro");
-
-    // Fehlende Decision faellt in `handle_decision` auf "approve" zurueck, das
-    // Gate darf also nicht am Rohwert haengen.
-    let leer = social_media::approval_decision_handler(
-        partner("plusstreamer"),
-        State(pool.clone()),
-        axum::extract::Path("1".to_string()),
-        json!({ "platforms": ["tiktok"] }).to_string(),
-    )
-    .await;
-    assert_eq!(
-        leer.status(),
-        StatusCode::FORBIDDEN,
-        "Default-Decision ist approve und muss gesperrt sein"
-    );
-
-    let offen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(offen, 0, "gesperrte Freigabe darf nichts einreihen");
-
-    // "skip" reiht nichts ein und bleibt ab Free offen.
-    let skip = social_media::approval_decision_handler(
-        partner("plusstreamer"),
-        State(pool.clone()),
-        axum::extract::Path("1".to_string()),
-        json!({ "decision": "skip" }).to_string(),
     )
     .await;
     assert_ne!(
-        skip.status(),
+        approve.status(),
         StatusCode::FORBIDDEN,
-        "Ueberspringen ist keine Pro-Funktion"
+        "Freigabe ist keine gesperrte Funktion, solange Pro nicht kaufbar ist"
     );
 
-    // Pro passiert das Gate.
-    let pro = social_media::approval_decision_handler(
-        partner("prostreamer"),
-        State(pool),
-        axum::extract::Path("2".to_string()),
-        json!({ "decision": "approve", "platforms": ["tiktok"] }).to_string(),
-    )
-    .await;
-    assert_ne!(pro.status(), StatusCode::FORBIDDEN, "Pro darf freigeben");
+    // Gegenprobe zur Mechanik: waere die Sperre scharf, bliebe nur Pro uebrig.
+    assert!(!tb_analytics::stufe::Stufe::Free.hat_pro());
+    assert!(!tb_analytics::stufe::Stufe::Plus.hat_pro());
+    assert!(tb_analytics::stufe::Stufe::Pro.hat_pro());
 }
 
 // ── Clip-Kontingent ─────────────────────────────────────────────────────────
 
-/// Free hat 3 Clips im Monat. Ist das Kontingent voll, legt der Clip-Fetch
-/// keine weiteren an; mit Plus (10) laeuft er weiter.
+/// Das Monatskontingent zaehlt, sperrt aber niemanden.
+///
+/// Der Ausweg aus der Grenze ist Creator Pro (unbegrenzt), und die Stufe ist
+/// nicht buchbar. In keiner Feature-Liste steht ein Clip-Kontingent, also darf
+/// es auch niemanden aus einer heute unbegrenzten Funktion aussperren. Die
+/// Zaehlung ueber `kontingent_verbraucht_at` laeuft weiter, sie ist der Unterbau
+/// fuer spaeter.
 #[tokio::test]
-async fn clip_fetch_klemmt_am_monatskontingent() {
+async fn clip_kontingent_zaehlt_ohne_zu_sperren() {
     let Some(pool) = pool("t_gate_clipfetch").await else {
         return;
     };
-    for login in ["freistreamer", "plusstreamer"] {
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
-            .bind(login)
-            .execute(&pool)
-            .await
-            .unwrap();
-        for i in 0..3 {
-            // Selbst geholt: `kontingent_verbraucht_at` gesetzt. Genau das
-            // zaehlt, nicht `created_at` (das ist der Twitch-Zeitstempel).
-            sqlx::query(
-                "INSERT INTO twitch_clips_social_media \
-                     (clip_id, clip_url, streamer_login, kontingent_verbraucht_at) \
-                 VALUES ($1, 'https://clips.twitch.tv/x', $2, NOW())",
-            )
-            .bind(format!("{login}-{i}"))
-            .bind(login)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
+    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('freistreamer', TRUE)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Weit ueber der Free-Grenze von 3, alle selbst geholt.
+    for i in 0..12 {
+        sqlx::query(
+            "INSERT INTO twitch_clips_social_media \
+                 (clip_id, clip_url, streamer_login, kontingent_verbraucht_at) \
+             VALUES ($1, 'https://clips.twitch.tv/x', 'freistreamer', NOW())",
+        )
+        .bind(format!("selbst-{i}"))
+        .execute(&pool)
+        .await
+        .unwrap();
     }
-    stufe_setzen(&pool, "plusstreamer", "plus").await;
 
-    let frei = social_media::fetch_clips_handler(
+    let resp = social_media::fetch_clips_handler(
         partner("freistreamer"),
         State(pool.clone()),
         Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
     )
     .await;
-    assert_eq!(frei.status(), StatusCode::FORBIDDEN);
-    let body = body_json(frei).await;
-    assert_eq!(body["error"], "clip_limit_erreicht");
-    assert_eq!(body["kontingent"]["limit"], 3);
-    assert_eq!(body["kontingent"]["genutzt"], 3);
-    assert_eq!(body["kontingent"]["rest"], 0);
-    assert_eq!(body["kontingent"]["wasserzeichen"], true);
+    assert_ne!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "kein Kontingent im Angebot, also keine Sperre"
+    );
 
-    // Plus hat nach denselben 3 Clips noch 7 frei: die Plan-Sperre greift nicht,
-    // der Aufruf scheitert erst am fehlenden Twitch-Zugang.
-    let bezahlt = social_media::fetch_clips_handler(
-        partner("plusstreamer"),
+    // Gezaehlt wird trotzdem, und zwar richtig.
+    let stand = clip_command_settings::get_handler(
+        partner("freistreamer"),
         State(pool),
-        Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
+        Query(clip_command_settings::ClipCommandQuery { streamer: None }),
     )
     .await;
-    assert_ne!(bezahlt.status(), StatusCode::FORBIDDEN);
+    let body = body_json(stand).await;
+    assert_eq!(body["kontingent"]["genutzt"], 12, "Zaehlung muss laufen");
+    assert_eq!(body["kontingent"]["erzwungen"], false);
+    assert!(
+        body["kontingent"]["limit"].is_null(),
+        "keine Schranke behaupten, die es nicht gibt"
+    );
+    assert!(body["kontingent"]["rest"].is_null());
+    assert!(
+        body["kontingent"].get("wasserzeichen").is_none(),
+        "Wasserzeichen wird nirgends angewendet und darf nicht gemeldet werden"
+    );
 }
 
 /// Gezaehlt wird die Aufnahme in unsere DB, nicht der Twitch-Zeitstempel.
@@ -517,6 +437,16 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
         .await
         .unwrap();
 
+    let stand = |pool: PgPool| async move {
+        let resp = clip_command_settings::get_handler(
+            partner("freistreamer"),
+            State(pool),
+            Query(clip_command_settings::ClipCommandQuery { streamer: None }),
+        )
+        .await;
+        body_json(resp).await["kontingent"]["genutzt"].clone()
+    };
+
     // Zehn Clips, die Zuschauer in diesem Monat auf Twitch erstellt haben und
     // die der Hintergrund-Fetcher eingelesen hat: kein Verbrauch.
     for i in 0..10 {
@@ -530,16 +460,9 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
         .await
         .unwrap();
     }
-
-    let offen = social_media::fetch_clips_handler(
-        partner("freistreamer"),
-        State(pool.clone()),
-        Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
-    )
-    .await;
-    assert_ne!(
-        offen.status(),
-        StatusCode::FORBIDDEN,
+    assert_eq!(
+        stand(pool.clone()).await,
+        0,
         "Zuschauer-Clips duerfen das Kontingent nicht aufbrauchen"
     );
 
@@ -556,52 +479,40 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
         .await
         .unwrap();
     }
+    assert_eq!(stand(pool.clone()).await, 3);
 
-    let voll = social_media::fetch_clips_handler(
-        partner("freistreamer"),
-        State(pool),
-        Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
-    )
-    .await;
-    assert_eq!(voll.status(), StatusCode::FORBIDDEN);
-    let body = body_json(voll).await;
-    assert_eq!(body["kontingent"]["genutzt"], 3);
-    assert_eq!(body["kontingent"]["rest"], 0);
+    // Verworfene Clips zaehlen nicht mehr mit.
+    sqlx::query("UPDATE twitch_clips_social_media SET discarded_at = NOW() WHERE clip_id = 'selbst-0'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stand(pool).await, 2, "ein Fehlgriff darf nicht teuer bleiben");
 }
 
-/// Der `!clip`-Schalter bleibt ohne 403 (Chat-Befehle sind Free), traegt aber
-/// das Kontingent der Stufe mit.
+/// Der `!clip`-Schalter bleibt ohne 403 (Chat-Befehle sind Free) und traegt den
+/// Zaehlerstand mit, aber keine Grenze, die es noch nicht gibt.
 #[tokio::test]
-async fn clip_command_settings_zeigt_das_kontingent() {
+async fn clip_command_settings_zeigt_den_zaehlerstand() {
     let Some(pool) = pool("t_gate_clipcmd").await else {
         return;
     };
     stufe_setzen(&pool, "plusstreamer", "plus").await;
 
-    let frei = clip_command_settings::get_handler(
-        partner("freistreamer"),
-        State(pool.clone()),
-        Query(clip_command_settings::ClipCommandQuery { streamer: None }),
-    )
-    .await;
-    assert_eq!(frei.status(), StatusCode::OK);
-    let body = body_json(frei).await;
-    assert_eq!(body["clip_command_enabled"], true);
-    assert_eq!(body["kontingent"]["plan_stufe"], "free");
-    assert_eq!(body["kontingent"]["limit"], 3);
-    assert_eq!(body["kontingent"]["wasserzeichen"], true);
-
-    let bezahlt = clip_command_settings::get_handler(
-        partner("plusstreamer"),
-        State(pool),
-        Query(clip_command_settings::ClipCommandQuery { streamer: None }),
-    )
-    .await;
-    assert_eq!(bezahlt.status(), StatusCode::OK);
-    let body = body_json(bezahlt).await;
-    assert_eq!(body["kontingent"]["plan_stufe"], "plus");
-    assert_eq!(body["kontingent"]["limit"], 10);
-    assert_eq!(body["kontingent"]["wasserzeichen"], false);
+    for (login, stufe) in [("freistreamer", "free"), ("plusstreamer", "plus")] {
+        let resp = clip_command_settings::get_handler(
+            partner(login),
+            State(pool.clone()),
+            Query(clip_command_settings::ClipCommandQuery { streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["clip_command_enabled"], true);
+        assert_eq!(body["kontingent"]["plan_stufe"], stufe);
+        assert_eq!(body["kontingent"]["genutzt"], 0);
+        assert!(body["kontingent"]["limit"].is_null(), "{login}");
+        assert_eq!(body["kontingent"]["erzwungen"], false, "{login}");
+    }
 }
 
 // ── Weiche Sperre: verkuerztes Fenster statt 403 ────────────────────────────
@@ -806,6 +717,23 @@ async fn category_comparison_ohne_plus_verkuerzt_statt_403() {
     assert!(gekuerzt);
     assert_eq!(body["plan_limit"]["gekuerzt"], true);
     assert!(body["yourStats"].is_object(), "Free sieht dieselbe Struktur");
+    // Die eigenen Werte kommen aus dem geklemmten Fenster, die Verteilung aus
+    // dem angefragten Zeitraum. Ein Perzentil aus zwei Fenstern waere eine
+    // erfundene Zahl, also kommt keine.
+    for feld in ["avgViewers", "peakViewers", "retention10m", "chatHealth"] {
+        assert!(
+            body["percentiles"][feld].is_null(),
+            "{feld}: Perzentil aus zwei Zeitfenstern darf nicht ausgeliefert werden"
+        );
+    }
+    assert!(
+        body["categoryRank"].is_null(),
+        "Rang haengt am Perzentil und faellt mit ihm weg"
+    );
+    // Was die Kategorie ueber sich selbst sagt, bleibt: das behauptet nichts
+    // ueber den Streamer.
+    assert!(body["categoryAvg"].is_object());
+    assert!(body["categoryTotal"].is_number());
 
     let bezahlt = category_comparison::category_comparison_handler(
         partner("plusstreamer"),
@@ -822,6 +750,12 @@ async fn category_comparison_ohne_plus_verkuerzt_statt_403() {
     assert_eq!(status, StatusCode::OK);
     assert!(!gekuerzt);
     assert!(body.get("plan_limit").is_none());
+    // Gegenprobe: bei deckungsgleichem Fenster gibt es die Zahlen sehr wohl.
+    assert!(
+        body["percentiles"]["avgViewers"].is_number(),
+        "Plus vergleicht beide Seiten im selben Fenster und bekommt sein Perzentil"
+    );
+    assert!(body["categoryRank"].is_number());
 }
 
 /// Nebeneingaenge, die der Endpunkt-Durchgang zutage gefoerdert hat: die

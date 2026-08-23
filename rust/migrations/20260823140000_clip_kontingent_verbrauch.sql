@@ -17,9 +17,14 @@ ALTER TABLE public.twitch_clips_social_media
 COMMENT ON COLUMN public.twitch_clips_social_media.kontingent_verbraucht_at IS
     'Zeitpunkt der Aufnahme in unsere DB, wenn der Streamer sie selbst ausgeloest hat (Upload oder Dashboard-Fetch). NULL = zaehlt nicht gegen das Monatskontingent.';
 
--- Backfill fuer manuelle Uploads: dort ist `created_at` bereits die Insert-Zeit
--- (`clip_manager::register_manual_upload` setzt `Utc::now()`), also ist die
--- Umbuchung verlustfrei. Gefetchte Clips bleiben bewusst NULL: fuer sie ist
+-- Backfill fuer manuelle Uploads: dort ist `created_at` die Insert-Zeit und
+-- nicht der Twitch-Zeitstempel. `register_manual_upload` bildet den Wert selbst,
+-- als lokale Variable direkt vor dem INSERT
+-- (`rust/crates/tb-social-media/src/clip_manager.rs:38`:
+-- `let created_at = chrono::Utc::now().to_rfc3339();`), und laesst ihn sich
+-- nicht vom Aufrufer geben. Kein Aufrufer kann also einen fremden Monat
+-- hineinreichen, die Umbuchung ist verlustfrei und bucht in den Monat, in dem
+-- der Upload wirklich ankam. Gefetchte Clips bleiben bewusst NULL: fuer sie ist
 -- nicht rekonstruierbar, ob und wann jemand sie selbst geholt hat, und ein
 -- geratener Verbrauch waere schlimmer als ein zu niedriger Zaehlerstand.
 UPDATE public.twitch_clips_social_media

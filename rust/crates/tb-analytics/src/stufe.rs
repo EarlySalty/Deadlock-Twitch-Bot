@@ -20,12 +20,12 @@ use sqlx::PgPool;
 /// `stufe >= Stufe::Plus` als Gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Stufe {
-    /// Netzwerk Free: vollwertig, aber nur der letzte Stream und Clips mit
-    /// Wasserzeichen.
+    /// Netzwerk Free: vollwertig, aber nur der letzte Stream.
     Free,
     /// Netzwerk Plus: voller Verlauf, Vergleiche, KI, Coaching.
     Plus,
-    /// Creator Pro: alles aus Plus, Clips ohne Limit, automatisches Posten.
+    /// Creator Pro: alles aus Plus, dazu Vorrang bei Support und neuen
+    /// Funktionen. Steht im Katalog auf `buchbar = false`.
     Pro,
 }
 
@@ -82,6 +82,40 @@ pub fn stufe_fuer_plan(plan_id: &str) -> Stufe {
     }
 }
 
+/// `true`, wenn die Plan-ID einen **bezahlten** Zugang bezeichnet.
+///
+/// Eine Stelle statt zweier Namenslisten: gefragt wird der Katalog
+/// ([`crate::billing::catalog::is_paid_plan_id`], also jeder Eintrag mit Preis),
+/// und zusaetzlich gilt jede Alt-ID als bezahlt, die [`stufe_fuer_plan`] auf
+/// mindestens Plus hebt. Die acht Vorgaenger-Plaene stehen nicht mehr im
+/// Katalog, haben aber Geld gekostet. Kommt eine neue Stufe in den Katalog, ist
+/// sie hier sofort mit drin, ohne dass jemand eine Liste nachpflegen muss.
+///
+/// Der Trial ist ausdruecklich **nicht** bezahlt: er ist ein befristetes
+/// Geschenk, sonst wuerde er sich selbst blockieren.
+pub fn ist_bezahlter_plan(plan_id: &str) -> bool {
+    let id = plan_id.trim();
+    if id.is_empty() || id == crate::trial::ANALYTICS_TRIAL_PLAN_ID {
+        return false;
+    }
+    crate::billing::catalog::is_paid_plan_id(id) || stufe_fuer_plan(id).hat_plus()
+}
+
+/// `true`, wenn eine Sperre auf `verlangt` heute ueberhaupt greifen darf.
+///
+/// **Das ist die eine Stelle, an der jede Stufen-Sperre haengt.** Eine Sperre
+/// auf eine Stufe, die niemand kaufen kann, nimmt bestehenden Partnern eine
+/// heute funktionierende Funktion weg und laesst ihnen keinen Weg zurueck:
+/// `checkout_start_handler` schickt jeden Kaufversuch fuer eine nicht buchbare
+/// Stufe auf `/twitch/pricing` zurueck, nur ein Admin-Geschenk kaeme noch durch.
+/// Deshalb fragt die Sperre den Katalog, ob die verlangte Stufe `buchbar` ist.
+/// Solange Creator Pro dort `false` steht, laeuft alles wie vor dem Umbau;
+/// sobald die Stufe kaufbar wird, schaltet sich jede daran haengende Sperre von
+/// allein scharf, ohne Codeaenderung, ohne Flag und ohne Konfiguration.
+pub fn sperre_greift(verlangt: Stufe) -> bool {
+    crate::billing::catalog::find_plan(verlangt.as_str()).is_some_and(|plan| plan.buchbar)
+}
+
 /// Loest die Stufe eines Streamers aus der DB auf.
 ///
 /// Nutzt denselben Resolver wie das Dashboard
@@ -108,6 +142,11 @@ pub async fn plan_stufe_mit_user_id(
 // ── Abgeleitete Grenzen ─────────────────────────────────────────────────────
 
 /// Wie viele Clips die Stufe im Monat erlaubt. `None` heisst unbegrenzt.
+///
+/// Die Zahlen sind der Unterbau fuer spaeter. Ob sie jemanden **sperren**,
+/// entscheidet [`sperre_greift`] beim Bau des [`ClipKontingent`]: der Ausweg aus
+/// dem Kontingent ist Creator Pro, und solange die Stufe nicht buchbar ist,
+/// wird nur gezaehlt.
 pub fn clip_monatslimit(stufe: Stufe) -> Option<u32> {
     match stufe {
         Stufe::Free => Some(3),
@@ -116,15 +155,15 @@ pub fn clip_monatslimit(stufe: Stufe) -> Option<u32> {
     }
 }
 
-/// `true`, wenn Clips dieser Stufe ein Wasserzeichen tragen.
-pub fn clip_wasserzeichen(stufe: Stufe) -> bool {
-    stufe == Stufe::Free
-}
-
 /// `true`, wenn die Stufe automatisches Posten auf TikTok, Instagram und
-/// YouTube nutzen darf. Das ist die Pro-Grenze.
+/// YouTube nutzen darf.
+///
+/// Die Grenze ist Creator Pro, aber sie greift nur, wenn Pro auch kaufbar ist
+/// (siehe [`sperre_greift`]). Automatisches Posten laeuft heute fuer jeden
+/// freigeschalteten Partner, und ein Partner, der es verliert, koennte es nicht
+/// zurueckkaufen. Wird Pro buchbar, gilt die Pro-Grenze von allein.
 pub fn auto_posting_erlaubt(stufe: Stufe) -> bool {
-    stufe.hat_pro()
+    !sperre_greift(Stufe::Pro) || stufe.hat_pro()
 }
 
 /// Wie viele Tage Verlauf die Stufe sieht.
@@ -253,13 +292,23 @@ pub struct ClipKontingent {
     pub genutzt: i64,
     /// Monatsgrenze; `None` heisst unbegrenzt.
     pub limit: Option<u32>,
-    /// Ob Clips dieser Stufe ein Wasserzeichen tragen.
-    pub wasserzeichen: bool,
+    /// Ob die Grenze heute jemanden sperrt.
+    ///
+    /// `false`, solange der Ausweg (Creator Pro) nicht kaufbar ist. Gezaehlt
+    /// wird trotzdem weiter, damit die Zahlen stimmen, wenn das Kontingent
+    /// spaeter verkauft wird.
+    pub erzwungen: bool,
 }
 
 impl ClipKontingent {
     /// Wie viele Clips noch gehen. `None` heisst unbegrenzt.
+    ///
+    /// Auch `None`, solange die Grenze nicht erzwungen wird: Aufrufer klemmen
+    /// damit nichts (z. B. die Fetch-Menge) und sperren nichts.
     pub fn rest(&self) -> Option<i64> {
+        if !self.erzwungen {
+            return None;
+        }
         self.limit.map(|limit| (limit as i64 - self.genutzt).max(0))
     }
 
@@ -269,13 +318,17 @@ impl ClipKontingent {
     }
 
     /// JSON-Block fuer Antworten und Fehlermeldungen.
+    ///
+    /// `limit` und `rest` bleiben `null`, solange die Grenze nicht erzwungen
+    /// wird: das Dashboard soll keine Schranke anzeigen, die es nicht gibt.
+    /// `genutzt` steht immer da, die Zaehlung laeuft weiter.
     pub fn als_json(&self) -> serde_json::Value {
         serde_json::json!({
             "plan_stufe": self.stufe.as_str(),
             "genutzt": self.genutzt,
-            "limit": self.limit,
+            "limit": self.erzwungen.then_some(self.limit).flatten(),
             "rest": self.rest(),
-            "wasserzeichen": self.wasserzeichen,
+            "erzwungen": self.erzwungen,
         })
     }
 }
@@ -313,6 +366,12 @@ pub async fn clip_verbrauch_diesen_monat(pool: &PgPool, streamer: &str) -> i64 {
 }
 
 /// Kontingent eines Streamers fuer die gegebene Stufe.
+///
+/// Ob die Grenze sperrt, entscheidet [`sperre_greift`] fuer die Stufe, die aus
+/// dem Kontingent herausfuehrt (Creator Pro, unbegrenzt). Solange Pro nicht
+/// buchbar ist, waere die Grenze eine Einbahnstrasse: bestehende, heute
+/// unbegrenzte Funktionen wuerden zugemacht, ohne dass jemand sie aufkaufen
+/// koennte. Gezaehlt wird trotzdem.
 pub async fn clip_kontingent(pool: &PgPool, stufe: Stufe, streamer: &str) -> ClipKontingent {
     let limit = clip_monatslimit(stufe);
     let genutzt = if limit.is_some() {
@@ -325,7 +384,7 @@ pub async fn clip_kontingent(pool: &PgPool, stufe: Stufe, streamer: &str) -> Cli
         stufe,
         genutzt,
         limit,
-        wasserzeichen: clip_wasserzeichen(stufe),
+        erzwungen: sperre_greift(Stufe::Pro),
     }
 }
 
@@ -445,12 +504,101 @@ mod tests {
         assert_eq!(clip_monatslimit(Stufe::Free), Some(3));
         assert_eq!(clip_monatslimit(Stufe::Plus), Some(10));
         assert_eq!(clip_monatslimit(Stufe::Pro), None);
-        assert!(clip_wasserzeichen(Stufe::Free));
-        assert!(!clip_wasserzeichen(Stufe::Plus));
-        assert!(!clip_wasserzeichen(Stufe::Pro));
-        assert!(!auto_posting_erlaubt(Stufe::Free));
-        assert!(!auto_posting_erlaubt(Stufe::Plus));
+    }
+
+    /// Die eine Stelle, an der Sperren scharf werden: der Katalog.
+    #[test]
+    fn sperre_haengt_am_katalog_flag() {
+        for stufe in [Stufe::Free, Stufe::Plus, Stufe::Pro] {
+            let buchbar = crate::billing::catalog::find_plan(stufe.as_str())
+                .expect("jede Stufe steht im Katalog")
+                .buchbar;
+            assert_eq!(
+                sperre_greift(stufe),
+                buchbar,
+                "{}: Sperre muss dem buchbar-Flag folgen",
+                stufe.as_str()
+            );
+        }
+    }
+
+    /// Solange Creator Pro nicht buchbar ist, darf niemand aus dem
+    /// automatischen Posten fallen. Die Gegenprobe steht direkt daneben: waere
+    /// Pro buchbar, greift die Pro-Grenze.
+    #[test]
+    fn auto_posting_sperrt_nur_bei_buchbarem_pro() {
+        let pro_buchbar = sperre_greift(Stufe::Pro);
+        assert!(
+            !pro_buchbar,
+            "Erwartung dieses Umbaus: Creator Pro ist noch nicht buchbar"
+        );
+        assert!(auto_posting_erlaubt(Stufe::Free));
+        assert!(auto_posting_erlaubt(Stufe::Plus));
         assert!(auto_posting_erlaubt(Stufe::Pro));
+        // Gegenprobe zur Formel selbst: mit scharfer Sperre bliebe nur Pro uebrig.
+        let mit_sperre = |stufe: Stufe| stufe.hat_pro();
+        assert!(!mit_sperre(Stufe::Free));
+        assert!(!mit_sperre(Stufe::Plus));
+        assert!(mit_sperre(Stufe::Pro));
+    }
+
+    /// Das Kontingent zaehlt, sperrt aber nicht, solange Pro nicht buchbar ist.
+    #[test]
+    fn clip_kontingent_zaehlt_ohne_zu_sperren() {
+        let offen = ClipKontingent {
+            stufe: Stufe::Free,
+            genutzt: 99,
+            limit: clip_monatslimit(Stufe::Free),
+            erzwungen: false,
+        };
+        assert!(offen.frei(), "ohne buchbaren Ausweg darf nichts sperren");
+        assert_eq!(offen.rest(), None, "kein Rest heisst: nichts klemmen");
+        let json = offen.als_json();
+        assert_eq!(json["genutzt"], 99, "gezaehlt wird weiter");
+        assert!(json["limit"].is_null(), "keine Schranke behaupten");
+        assert!(json["rest"].is_null());
+        assert_eq!(json["erzwungen"], false);
+
+        // Gegenprobe: mit erzwungener Grenze sperrt derselbe Stand.
+        let scharf = ClipKontingent {
+            erzwungen: true,
+            ..offen
+        };
+        assert!(!scharf.frei());
+        assert_eq!(scharf.rest(), Some(0));
+        assert_eq!(scharf.als_json()["limit"], 3);
+    }
+
+    /// Bezahlt-Erkennung kommt aus dem Katalog, nicht aus einer Namensliste.
+    #[test]
+    fn bezahlte_plan_ids_kommen_aus_dem_katalog() {
+        for plan in crate::billing::catalog::BILLING_PLANS {
+            assert_eq!(
+                ist_bezahlter_plan(plan.id),
+                plan.monthly_gross_cents > 0,
+                "{} muss dem Katalogpreis folgen",
+                plan.id
+            );
+        }
+        // Alt-IDs haben Geld gekostet und gelten weiter als bezahlt.
+        for alt in [
+            "chat_quiet",
+            "raid_boost",
+            "analysis_dashboard",
+            "bundle_chat_quiet_raid_boost",
+            "bundle_werbefrei_analyse",
+            "bundle_komplett",
+            "bundle_analysis_raid_boost",
+        ] {
+            assert!(ist_bezahlter_plan(alt), "{alt} muss bezahlt bleiben");
+        }
+        // Gratis, Trial, Unbekanntes und Leeres sind nicht bezahlt.
+        assert!(!ist_bezahlter_plan("free"));
+        assert!(!ist_bezahlter_plan("raid_free"));
+        assert!(!ist_bezahlter_plan("analytics_trial"));
+        assert!(!ist_bezahlter_plan("garbage"));
+        assert!(!ist_bezahlter_plan(""));
+        assert!(!ist_bezahlter_plan("  "));
     }
 
     #[test]

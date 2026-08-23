@@ -142,6 +142,13 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                   Bald buchbar
                 </span>
               )}
+
+              {/* Wer im Test oder auf einem alten Tarif steht, nutzt die Stufe
+                  schon, hat sie aber nicht dauerhaft gekauft. Der Knopf bleibt
+                  deshalb stehen, der Hinweis sagt nur, warum. */}
+              {plan.hinweis && (
+                <p className="text-white/35 text-xs mt-2 text-center">{plan.hinweis}</p>
+              )}
             </motion.div>
           );
         })}

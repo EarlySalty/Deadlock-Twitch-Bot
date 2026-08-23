@@ -129,7 +129,7 @@ export function Comparison({ streamer, days }: ComparisonProps) {
 
         {/* Percentile Ranking */}
         <PlanGateCard featureId="rankings_extended" title="Erweiterte Rankings">
-          {comparison && comparison.percentiles.avgViewers > 0 && (
+          {comparison && (comparison.percentiles.avgViewers ?? 0) > 0 && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -141,7 +141,7 @@ export function Comparison({ streamer, days }: ComparisonProps) {
                 <span className="font-medium text-white">Dein Ranking</span>
               </div>
               <div className="text-3xl font-bold text-transparent bg-gradient-to-r from-primary to-accent bg-clip-text">
-                Top {100 - comparison.percentiles.avgViewers}%
+                Top {100 - (comparison.percentiles.avgViewers ?? 0)}%
               </div>
               <p className="text-sm text-text-secondary mt-1">
                 aller Deadlock-Streamer nach Ø Viewern
@@ -236,7 +236,9 @@ interface ComparisonMetricProps {
   label: string;
   yourValue: number;
   categoryValue: number;
-  percentile: number;
+  // `null` heisst: die Einordnung ist nicht berechenbar, weil eigener Wert und
+  // Kategorie aus verschiedenen Zeitfenstern kommen. Dann bleibt der Balken weg.
+  percentile: number | null | undefined;
   format: 'number' | 'percent' | 'decimal';
 }
 
@@ -270,14 +272,20 @@ function ComparisonMetric({ label, yourValue, categoryValue, percentile, format 
       </div>
 
       {/* Progress bar showing position relative to category */}
-      <div className="h-2 bg-border rounded-full overflow-hidden mb-2">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${Math.min(100, Math.max(0, percentile))}%` }}
-          transition={{ delay: 0.3, duration: 0.5 }}
-          className="h-full bg-gradient-to-r from-primary to-accent"
-        />
-      </div>
+      {percentile == null ? (
+        <div className="text-xs text-text-secondary mb-2">
+          Einordnung erst mit vollem Verlauf
+        </div>
+      ) : (
+        <div className="h-2 bg-border rounded-full overflow-hidden mb-2">
+          <motion.div
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.min(100, Math.max(0, percentile))}%` }}
+            transition={{ delay: 0.3, duration: 0.5 }}
+            className="h-full bg-gradient-to-r from-primary to-accent"
+          />
+        </div>
+      )}
 
       <div className={`text-sm font-medium ${isPositive ? 'text-success' : 'text-error'}`}>
         {isPositive ? '+' : ''}{diff.toFixed(1)}% vs Kategorie

@@ -139,7 +139,12 @@ export interface CatalogPlan {
   stripe_price_id?: string | null;
   entitlements?: EntitlementId[];
   features: string[];
+  // `true` nur, wenn diese Stufe dauerhaft und bezahlt laeuft. Ein Trial oder
+  // ein Alt-Tarif zu anderem Preis zaehlt nicht: dort bleibt der Kaufknopf.
   is_current: boolean;
+  // Ruhiger Zusatz unter dem Knopf, wenn die Stufe zwar gerade genutzt, aber
+  // nicht dauerhaft bezahlt wird (Testphase, alter Tarif).
+  hinweis?: string | null;
 }
 
 // Trial information derived from plan status

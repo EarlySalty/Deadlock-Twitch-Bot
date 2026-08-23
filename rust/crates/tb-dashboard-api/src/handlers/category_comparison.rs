@@ -506,18 +506,25 @@ pub async fn category_comparison_handler(
     };
 
     // ── Percentiles ──────────────────────────────────────────────────────────
-    let avg_percentile = percentile_of(&sorted_avgs, your_avg);
-    let peak_percentile = percentile_of(&peak_sorted, your_peak as f64);
-    let ret_percentile = percentile_of(&ret_sorted, your_ret);
-    let chat_percentile = percentile_of(&chat_sorted, your_chat);
+    //
+    // Ein Perzentil vergleicht zwei Zahlen und ist nur dann eine Zahl, wenn
+    // beide aus demselben Fenster stammen. Bei geklemmtem Fenster kommt der
+    // eigene Wert aus zwei Tagen, die Verteilung aus dem angefragten Zeitraum:
+    // Rang und Perzentil waeren systematisch verzerrt. Dann wird lieber nichts
+    // ausgeliefert als eine falsche Zahl. Die Kategorie-Mittelwerte
+    // (`categoryAvg`, `categoryTotal`) bleiben, sie behaupten nichts ueber den
+    // Streamer.
+    let vergleichbar = !gekuerzt;
+    let avg_percentile = vergleichbar.then(|| percentile_of(&sorted_avgs, your_avg));
+    let peak_percentile = vergleichbar.then(|| percentile_of(&peak_sorted, your_peak as f64));
+    let ret_percentile = vergleichbar.then(|| percentile_of(&ret_sorted, your_ret));
+    let chat_percentile = vergleichbar.then(|| percentile_of(&chat_sorted, your_chat));
     // Rang exakt wie Python (api_performance.py:1016): category_total -
     // int(avg_percentile/100 * category_total) — inkl. Integer-Trunkierung, damit
     // der Rang auch bei Zwischenwerten (your_avg strikt zwischen zwei Peers) stimmt.
-    let category_rank = if category_total > 0 {
-        (category_total as i64) - ((avg_percentile as f64 / 100.0 * category_total as f64) as i64)
-    } else {
-        0
-    };
+    let category_rank = avg_percentile.filter(|_| category_total > 0).map(|p| {
+        (category_total as i64) - ((p as f64 / 100.0 * category_total as f64) as i64)
+    });
 
     // ── Peer group (no threshold — same as Python _get_peer_group_stats) ─────
     let my_avg_for_tier = if your_avg > 0.0 {
@@ -644,11 +651,15 @@ pub async fn category_comparison_handler(
                     "retention10m": round1(safe_median(&ret_list).unwrap_or(0.0)),
                     "chatHealth":   round1(safe_median(&chat_list).unwrap_or(0.0)),
                 },
+                // Dieselbe Regel wie oben: die Peer-Verteilung laeuft ueber den
+                // vollen Zeitraum, die eigenen Werte ueber das geklemmte
+                // Fenster. Ist geklemmt worden, gibt es kein Perzentil. Die
+                // Peer-Mediane bleiben, sie sind eine Aussage ueber die Gruppe.
                 "peerPercentiles": {
-                    "avgViewers":   peer_percentile_of(&avg_list, my_peer_avg),
-                    "peakViewers":  my_peer_peak.and_then(|v| peer_percentile_of(&peak_list, v)),
-                    "retention10m": my_peer_ret.and_then(|v| peer_percentile_of(&ret_list, v)),
-                    "chatHealth":   my_peer_chat.and_then(|v| peer_percentile_of(&chat_list, v)),
+                    "avgViewers":   vergleichbar.then(|| peer_percentile_of(&avg_list, my_peer_avg)).flatten(),
+                    "peakViewers":  my_peer_peak.filter(|_| vergleichbar).and_then(|v| peer_percentile_of(&peak_list, v)),
+                    "retention10m": my_peer_ret.filter(|_| vergleichbar).and_then(|v| peer_percentile_of(&ret_list, v)),
+                    "chatHealth":   my_peer_chat.filter(|_| vergleichbar).and_then(|v| peer_percentile_of(&chat_list, v)),
                 },
             })
         }

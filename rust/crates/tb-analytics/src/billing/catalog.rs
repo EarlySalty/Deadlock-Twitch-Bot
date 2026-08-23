@@ -143,6 +143,11 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         monthly_gross_cents: 999,
         yearly_gross_cents: 9990,
         recommended: false,
+        // `social.auto_post` steht hier als Ziel-Zustand, nicht als heutige
+        // Grenze, und taucht deshalb bewusst nicht in `features` auf: die Stufe
+        // wird nicht damit beworben. Solange `buchbar = false` gilt, sperrt die
+        // Pro-Grenze niemanden aus dem automatischen Posten aus
+        // (`stufe::auto_posting_erlaubt` haengt an `stufe::sperre_greift`).
         entitlements: &[
             "analytics",
             "chat.lurker_tax",

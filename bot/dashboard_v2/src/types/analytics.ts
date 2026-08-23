@@ -234,13 +234,16 @@ export interface CategoryComparison {
     retention10m: number;
     chatHealth: number;
   };
+  // `null`, wenn die eigenen Werte aus einem anderen Zeitfenster stammen als
+  // die Verteilung (Gratis-Stufe sieht nur den letzten Stream). Ein Perzentil
+  // aus zwei verschiedenen Fenstern waere eine erfundene Zahl.
   percentiles: {
-    avgViewers: number;
-    peakViewers?: number;
-    retention10m: number;
-    chatHealth: number;
+    avgViewers: number | null;
+    peakViewers?: number | null;
+    retention10m: number | null;
+    chatHealth: number | null;
   };
-  categoryRank?: number;
+  categoryRank?: number | null;
   categoryTotal?: number;
   peerGroup: PeerGroup | null;
 }

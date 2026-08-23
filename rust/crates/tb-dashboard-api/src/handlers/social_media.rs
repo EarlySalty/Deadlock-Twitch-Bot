@@ -596,10 +596,16 @@ async fn sm_stufe(pool: &PgPool, auth: &DashboardAuthLevel) -> tb_analytics::stu
 
 /// Clip-Kontingent-Guard fuer alles, was der Streamer selbst anstoesst.
 ///
-/// Free 3 Clips im Monat, Plus 10, Pro unbegrenzt. Ist das Kontingent
-/// aufgebraucht, kommt 403 mit dem Zaehlerstand, damit das Dashboard es
-/// anzeigen kann, statt nur "geht nicht" zu melden. Admin ohne Kanalbezug
-/// (`streamer` leer) laeuft durch.
+/// **Sperrt heute niemanden.** Ob die Monatsgrenze greift, entscheidet
+/// `tb_analytics::stufe::sperre_greift(Stufe::Pro)` beim Bau des Kontingents:
+/// der Ausweg aus der Grenze ist Creator Pro, und die Stufe steht im Katalog auf
+/// `buchbar = false`. Bis dahin ist `ClipKontingent::frei()` immer `true` und
+/// `rest()` immer `None`, gezaehlt wird trotzdem. Wird Pro buchbar, greift die
+/// Grenze (Free 3 Clips im Monat, Plus 10, Pro unbegrenzt) ohne Codeaenderung.
+///
+/// Greift sie, kommt 403 mit dem Zaehlerstand, damit das Dashboard es anzeigen
+/// kann, statt nur "geht nicht" zu melden. Admin ohne Kanalbezug (`streamer`
+/// leer) laeuft immer durch.
 ///
 /// Zaehlung und Sperre decken sich: gebucht wird nur, was durch diese Handler
 /// laeuft (`kontingent_verbraucht_at`). Was der Hintergrund-Fetcher holt und
@@ -624,7 +630,7 @@ async fn clip_kontingent_guard(
         Json(json!({
             "error": "clip_limit_erreicht",
             "message": format!(
-                "Du hast diesen Monat {limit_text} geholt. Bis zum Monatswechsel kannst du keine neuen anlegen. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt."
+                "Du hast diesen Monat {limit_text} geholt. Bis zum Monatswechsel kannst du keine neuen anlegen."
             ),
             "kontingent": kontingent.als_json(),
         })),
@@ -633,6 +639,14 @@ async fn clip_kontingent_guard(
 }
 
 /// Pro-Guard fuer automatisches Posten (Sammel-Einreihung, Auto-Planung).
+///
+/// **Sperrt heute niemanden.** `tb_analytics::stufe::auto_posting_erlaubt`
+/// haengt an `sperre_greift(Stufe::Pro)`, und Creator Pro steht im Katalog auf
+/// `buchbar = false`: `checkout_start_handler` schickt jeden Pro-Kaufversuch auf
+/// `/twitch/pricing` zurueck, ein gesperrter Partner koennte sich also nicht
+/// freikaufen. Bis Pro buchbar ist, laeuft automatisches Posten wie vor dem
+/// Umbau fuer jeden Partner mit Social-Media-Freigabe; danach greift die
+/// Pro-Grenze von allein.
 async fn auto_posting_guard(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
     if tb_analytics::stufe::auto_posting_erlaubt(sm_stufe(pool, auth).await) {
         None

@@ -54,6 +54,25 @@ Die Kontingent-Logik im Code bleibt trotzdem bestehen (Zaehlung ueber die Aufnah
 unsere DB, fremde Zuschauer-Clips zaehlen nicht). Sie ist Vorbereitung und sperrt heute
 niemanden aus einem beworbenen Feature aus, weil kein Text mehr ein Kontingent verspricht.
 
+**Nachtrag 2026-08-23, zweite Runde:** eine Sperre auf eine nicht buchbare Stufe nimmt
+bestehenden Partnern eine heute laufende Funktion weg und laesst ihnen keinen Weg zurueck,
+weil der Checkout fuer diese Stufe zu ist. Das betraf zwei Stellen, die beide auf `Pro`
+zielten: das automatische Posten und das Clip-Monatskontingent. Beide haengen jetzt an
+**einem** Praedikat, `stufe::sperre_greift(Stufe)`, das den Katalog fragt, ob die verlangte
+Stufe `buchbar` ist. Solange `pro.buchbar = false` gilt:
+
+- laeuft automatisches Posten wie vorher fuer jeden Partner mit Social-Media-Freigabe,
+- zaehlt das Clip-Kontingent weiter, sperrt aber niemanden, und die Antwort meldet
+  `limit`/`rest` als `null` statt einer Schranke, die es nicht gibt.
+
+Wer `buchbar` auf `true` setzt, schaltet beide Sperren ohne weitere Codeaenderung scharf.
+Kein Flag von aussen, keine Konfiguration: es haengt am Katalog. `social.auto_post` bleibt
+deshalb bei den Pro-Entitlements stehen, taucht aber nicht in der Feature-Liste auf, die
+Stufe wird nicht damit beworben.
+
+Ebenfalls raus: `clip_wasserzeichen`. Die API meldete ein Wasserzeichen fuer Free, das
+nirgends angewendet wird.
+
 **Free** bleibt vollwertig und wird nicht kuenstlich beschnitten.
 
 - Auto-Raid in beide Richtungen
