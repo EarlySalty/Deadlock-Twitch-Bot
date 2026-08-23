@@ -399,6 +399,82 @@ export function getPreviewApiFixture(
   return undefined;
 }
 
+/**
+ * Uplink im Preview.
+ *
+ * Die Uplink-Aufrufe gehen ueber `fetchJson` mit absolutem Pfad, nicht ueber
+ * `fetchApi`, und liefen im Preview deshalb ins Leere: die Seite zeigte nur
+ * "Uplink ist gerade nicht erreichbar". Ohne diese Fixtures laesst sich die
+ * Zielverwaltung lokal gar nicht ansehen, und genau daran haengt jede
+ * optische Pruefung.
+ *
+ * Der Zustand ist absichtlich gemischt: Twitch mit einer Stufe aus dem
+ * Katalog, YouTube mit einem manuellen Wert, der Rest leer. So sieht man in
+ * einem Blick alle drei Zustaende einer Zielkarte.
+ */
+const UPLINK_ME_FIXTURE = {
+  enabled: true,
+  waitlisted: false,
+  ingest_key: 'rsr_preview',
+  rtmp_url: '',
+  srt_hint:
+    'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',
+  live_status: 'aus',
+  twitch_login: 'earlysalty',
+};
+
+const UPLINK_DESTINATIONS_FIXTURE = {
+  destinations: [
+    {
+      platform: 'twitch',
+      rtmp_url: 'rtmp://live.twitch.tv/app',
+      enabled: true,
+      requested: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 },
+      effective: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 },
+    },
+    {
+      platform: 'youtube',
+      rtmp_url: 'rtmp://a.rtmp.youtube.com/live2',
+      enabled: true,
+      requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
+      effective: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 18000 },
+    },
+  ],
+};
+
+const UPLINK_CAPS_FIXTURE = {
+  ingest: {
+    platform: 'ingest',
+    max_width: 2560,
+    max_height: 1440,
+    max_fps: 60,
+    max_bitrate_kbps: 30000,
+    force_cbr: false,
+  },
+  platforms: [
+    { platform: 'twitch', max_width: 2560, max_height: 1440, max_fps: 60, max_bitrate_kbps: 12000, force_cbr: true },
+    { platform: 'kick', max_width: 1920, max_height: 1080, max_fps: 60, max_bitrate_kbps: 8000, force_cbr: true },
+    { platform: 'youtube', max_width: 2560, max_height: 1440, max_fps: 60, max_bitrate_kbps: 24000, force_cbr: false },
+    { platform: 'tiktok', max_width: 1920, max_height: 1080, max_fps: 60, max_bitrate_kbps: 8000, force_cbr: false },
+  ],
+};
+
+/**
+ * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
+ * Aufruf geht wie sonst ins Netz.
+ *
+ * Schreibende Aufrufe bekommen absichtlich die unveraenderte Zielliste
+ * zurueck. Ein Preview ohne Server kann nichts speichern, und eine erfundene
+ * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
+ * nirgends gibt.
+ */
+export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
+  if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
+  if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;
+  return undefined;
+}
+
 export function getPreviewAdminFixture(pathname: string): unknown | undefined {
   void pathname;
   return undefined;

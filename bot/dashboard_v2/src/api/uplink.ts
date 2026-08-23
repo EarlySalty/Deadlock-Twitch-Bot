@@ -91,7 +91,7 @@ export const UPLINK_PROFILE = [
 export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
 
 /** Die Zahlen hinter jedem Profilnamen, gespiegelt aus `handlers/uplink.rs`. */
-const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
+export const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
   '1080p60': [1920, 1080, 60, 6000],
   '1080p60-hoch': [1920, 1080, 60, 8000],
   '1440p60': [2560, 1440, 60, 12000],
@@ -116,24 +116,78 @@ export function profilNameFuer(werte: UplinkProfilAnsicht | undefined): UplinkPr
   return treffer ?? null;
 }
 
-export function saveUplinkTwitchDestination(body: {
-  rtmp_url: string;
-  stream_key: string;
-  profil: UplinkProfilName;
-}): Promise<{ platform: string; width: number; height: number }> {
-  return fetchJson(
-    '/twitch/api/v2/uplink/destinations',
-    withCookieCredentials({
-      method: 'PUT',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: 'twitch',
-        rtmp_url: body.rtmp_url,
-        stream_key: body.stream_key,
-        profil: body.profil,
-      }),
-    })
-  );
+/**
+ * Die vier Plattformen, die das Relay kennt. Reihenfolge ist die der
+ * Zielkarten: Twitch zuerst, weil es fuer fast alle das einzige Ziel ist.
+ */
+export const UPLINK_PLATTFORMEN = [
+  { id: 'twitch', label: 'Twitch', rtmp: 'rtmp://live.twitch.tv/app' },
+  { id: 'youtube', label: 'YouTube', rtmp: 'rtmp://a.rtmp.youtube.com/live2' },
+  { id: 'kick', label: 'Kick', rtmp: 'rtmps://fa723fc1b171.global-contribute.live-video.net' },
+  { id: 'tiktok', label: 'TikTok', rtmp: '' },
+] as const;
+
+export type UplinkPlattform = (typeof UPLINK_PLATTFORMEN)[number]['id'];
+
+/** Freie Werte aus dem manuellen Modus. */
+export interface UplinkManuellesProfil {
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_kbps: number;
+}
+
+/**
+ * Ein Ziel speichern. Drei Faelle, alle ueber denselben Aufruf:
+ *
+ * - Zugangsdaten neu setzen: `rtmp_url` und `stream_key` zusammen.
+ * - Nur die Qualitaet aendern: beides weglassen. Genau das ging vorher nicht,
+ *   und deshalb sah es aus, als wuerde die Auswahl nicht gespeichert.
+ * - An- oder abschalten: `enabled`.
+ *
+ * `profil` und `manuell` schliessen sich aus; der Server lehnt beides
+ * zusammen mit 400 ab, statt sich still fuer eins zu entscheiden.
+ */
+export function saveUplinkDestination(body: {
+  platform: UplinkPlattform;
+  rtmp_url?: string;
+  stream_key?: string;
+  profil?: UplinkProfilName;
+  manuell?: UplinkManuellesProfil;
+  enabled?: boolean;
+}): Promise<{ destinations: UplinkDestination[] }> {
+  return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
+    method: 'PUT',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+}
+
+/**
+ * Eine Obergrenze aus dem Relay. `null` heisst: an dieser Stelle klemmt diese
+ * Plattform nicht, dann gilt nur noch der Ingest-Deckel.
+ */
+export interface UplinkCaps {
+  platform: string;
+  max_width: number | null;
+  max_height: number | null;
+  max_fps: number | null;
+  max_bitrate_kbps: number | null;
+  force_cbr: boolean;
+}
+
+export interface UplinkCapsAntwort {
+  ingest: UplinkCaps;
+  platforms: UplinkCaps[];
+}
+
+/**
+ * Der Grenzenkatalog. Kommt vom Server, damit die Oberflaeche ihn nicht
+ * doppelt pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen
+ * Repo und kann sich per Migration bewegen, ohne dass hier jemand etwas tut.
+ */
+export function fetchUplinkCaps(): Promise<UplinkCapsAntwort> {
+  return fetchJson<UplinkCapsAntwort>('/twitch/api/v2/uplink/caps', withCookieCredentials());
 }
 
 /**

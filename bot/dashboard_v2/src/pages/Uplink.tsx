@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
-  Check,
   ChevronDown,
   Copy,
   Eye,
@@ -14,20 +13,18 @@ import {
   Radio,
   Settings,
   MonitorPlay,
-  TriangleAlert,
   FileText,
 } from 'lucide-react';
 import { Rise } from '../motion/Rise';
 import '../uplinkHelp.css';
 import {
-  UPLINK_PROFILE,
+  UPLINK_PLATTFORMEN,
+  fetchUplinkCaps,
   fetchUplinkDestinations,
-  profilNameFuer,
   fetchUplinkMe,
   joinUplinkWaitlist,
-  saveUplinkTwitchDestination,
 } from '@/api/uplink';
-import type { UplinkProfilName } from '@/api/uplink';
+import { ZielKarte } from './UplinkZiel';
 import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
@@ -150,6 +147,91 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
   );
 }
 
+/**
+ * Ein OBS-Feldname oder Knopf, so wie er im Programm steht.
+ *
+ * Woertlich und optisch abgesetzt: wer die Anleitung neben OBS liest, sucht
+ * nach genau dieser Beschriftung. Ein umschriebener Name ("die Serverzeile")
+ * kostet an dieser Stelle mehr Zeit als jede Erklaerung spart.
+ */
+function Feld({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-md border border-border bg-background/70 px-1.5 py-0.5 font-mono text-[11px] text-white">
+      {children}
+    </span>
+  );
+}
+
+/** Eine Station im OBS-Menue. Mehrere hintereinander lesen sich als Pfad. */
+function Weg({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-semibold text-white">
+      {children}
+      <span className="px-1 text-text-secondary">›</span>
+    </span>
+  );
+}
+
+/**
+ * Ein nummerierter Schritt mit eigenem Inhalt.
+ *
+ * Vorher stand die Anleitung als Liste unter den Kopierfeldern. Wer beim
+ * Kopieren nach oben scrollte, verlor die Stelle, und die Reihenfolge stimmte
+ * nicht mit der in OBS ueberein. Jetzt steht jeder Wert in dem Schritt, in dem
+ * er gebraucht wird.
+ */
+function ObsSchritt({
+  nummer,
+  titel,
+  children,
+}: {
+  nummer: number;
+  titel: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3">
+      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-xs font-bold text-primary">
+        {nummer}
+      </span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <h3 className="text-sm font-bold text-white">{titel}</h3>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Die Ausgabe-Einstellungen, jede mit dem Grund dahinter.
+ *
+ * Ohne den Grund stellt niemand etwas um, was schon laeuft. HEVC ist der
+ * Punkt, an dem Uplink sich lohnt, und VBR ist genau die Einstellung, die man
+ * bei Twitch direkt nicht setzen darf und hier setzen soll.
+ */
+const OBS_AUSGABE = [
+  {
+    feld: 'Videoencoder',
+    wert: 'HEVC (H.265), Hardware',
+    warum: 'NVIDIA NVENC HEVC, AMD HEVC oder Apple VT HEVC. Darum geht es hier: HEVC packt dasselbe Bild in weniger Bits.',
+  },
+  {
+    feld: 'Ratensteuerung',
+    wert: 'VBR',
+    warum: 'Zu uns darf die Bitrate schwanken. Was zu den Plattformen rausgeht, machen wir selbst konstant.',
+  },
+  {
+    feld: 'Bitrate',
+    wert: '15000 bis 25000 kbps',
+    warum: 'So viel, wie dein Upload sicher trägt. Das ist die Qualität, aus der wir rechnen, nicht die, die rausgeht.',
+  },
+  {
+    feld: 'Keyframe-Intervall',
+    wert: '2 s',
+    warum: 'Feste 2 Sekunden. Bei „automatisch“ setzen manche Encoder gar keine, und dann startet kein Zuschauer sauber ein.',
+  },
+] as const;
+
 function CopyField({
   label,
   value,
@@ -267,43 +349,16 @@ export function UplinkPage() {
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
   });
-  const [rtmpUrl, setRtmpUrl] = useState('rtmp://live.twitch.tv/app');
-  const [streamKey, setStreamKey] = useState('');
-  const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
-  // Vorbelegen aus dem gespeicherten Ziel, aber nur einmal: sonst zoege ein
-  // Refetch die Auswahl unter der Hand zurueck, waehrend jemand sie gerade
-  // aendert. `bestellt` ist der Wunsch des Streamers, nicht das geklemmte
-  // Ergebnis, sonst spraenge die Auswahl auf das, was die Plattform erlaubt.
-  const [profilGesetzt, setProfilGesetzt] = useState(false);
-  const bestellt = gespeicherteZiele.find((z) => z.platform === 'twitch')?.requested;
-  const gewaehltesProfil = UPLINK_PROFILE.find((e) => e.name === profil);
-  // Nur Hoehe und Bildrate vergleichen: die Bitrate klemmt das Relay auch im
-  // Normalfall (CBR-Zwang bei Twitch), daraus eine Warnung zu bauen hiesse,
-  // jedem Streamer eine zu zeigen.
-  const geklemmteZiele = gespeicherteZiele.filter(
-    (z) =>
-      z.requested &&
-      z.effective &&
-      (z.requested.height !== z.effective.height || z.requested.fps !== z.effective.fps),
-  );
-  useEffect(() => {
-    if (profilGesetzt) return;
-    const name = profilNameFuer(bestellt);
-    if (!name) return;
-    setProfil(name);
-    setProfilGesetzt(true);
-  }, [bestellt, profilGesetzt]);
-  const saveDest = useMutation({
-    mutationFn: () =>
-      saveUplinkTwitchDestination({ rtmp_url: rtmpUrl, stream_key: streamKey, profil }),
-    onSuccess: () => {
-      setStreamKey('');
-      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
-      // Ohne das bliebe die Zielliste auf dem Stand von vor dem Speichern, und
-      // die Rueckmeldung fehlte genau in dem Moment, in dem sie zaehlt.
-      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
-    },
+  // Die Grenzen kommen vom Server, damit die Oberflaeche sie nicht doppelt
+  // pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen Repo.
+  // Faellt der Abruf aus, faellt die Karte auf den Ingest-Deckel zurueck.
+  const { data: caps } = useQuery({
+    queryKey: ['uplink-caps'],
+    queryFn: fetchUplinkCaps,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
+  const capsFuer = (platform: string) => caps?.platforms.find((c) => c.platform === platform);
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
@@ -407,194 +462,102 @@ export function UplinkPage() {
               {data?.enabled && (
               <div className="space-y-4 md:space-y-5">
                 <Rise className="panel-card space-y-4 rounded-2xl p-6">
-                  <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                  {/* srt_hint liefert das Relay immer als String (rs-relay,
-                      srt_hint_fuer in src/api/user.rs). Leer ist es genau
-                      dann, wenn kein ingest_key existiert, also fuer einen
-                      nicht freigeschalteten Zugang. Dieser Block haengt an
-                      data.enabled, trotzdem faengt der Guard den Leerfall ab:
-                      ein leeres Kopierfeld waere die schlechteste Antwort. */}
+                  <div>
+                    <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      Vier Schritte, einmal. Danach startest du wie immer über „Stream starten“.
+                    </p>
+                  </div>
+
                   {/* Die Felder heissen wie in OBS, nicht wie bei uns. Wer
                       "SRT-Adresse" liest und in OBS "Server" und
                       "Streamschluessel" vor sich hat, raet sonst, und der Key
-                      landet im falschen Feld. Bei SRT gibt es keinen zweiten
-                      Wert: die streamid steckt in der Serveradresse, das
-                      Schluesselfeld bleibt leer. Genau das steht deshalb als
-                      eigenes Feld da, statt als Nebensatz. */}
-                  {data.srt_hint ? (
-                    <CopyField
-                      label="OBS-Feld „Server“"
-                      value={data.srt_hint}
-                      darfAufdecken={data.live_status === 'aus'}
-                      grundVerdeckt={
-                        data.live_status === 'live'
-                          ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
-                          : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
-                      }
-                    />
-                  ) : (
-                    <p className="text-sm text-warning">
-                      Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei, meld dich beim Support.
-                    </p>
-                  )}
-                  {/* Die Adresse traegt den Ingest-Key als streamid. Wer sie
-                      abliest, sendet auf denselben Kanal wie der Streamer. Auf
-                      einem geteilten Bildschirm passiert genau das, deshalb
-                      steht die Warnung direkt am Feld und nicht in der Hilfe. */}
-                  <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                    <strong className="font-semibold">Zeig diese Adresse nicht im Stream.</strong>{' '}
-                    Sie enthält deinen persönlichen Schlüssel. Wer sie sieht, kann auf deinem Kanal senden.
-                    Blende das Dashboard aus, bevor du es teilst.
-                  </p>
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-                      OBS-Feld „Streamschlüssel“
-                    </div>
-                    <div className="rounded-xl border border-dashed border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
-                      Leer lassen. Dein Schlüssel steckt schon in der Serveradresse oben.
-                    </div>
-                  </div>
-
-                  <ol className="list-decimal space-y-1 pl-5 text-xs text-text-secondary marker:text-primary/70">
-                    <li>In OBS: Einstellungen, Stream, Dienst auf „Benutzerdefiniert“.</li>
-                    <li>Serveradresse oben kopieren und in „Server“ einfügen.</li>
-                    <li>„Streamschlüssel“ leer lassen.</li>
-                    <li>Ausgabe: Hardware-HEVC, VBR, Keyframe 2 s.</li>
-                    <li>Stream starten. Den Rest machen wir.</li>
-                  </ol>
-                </Rise>
-
-                <Rise className="panel-card space-y-3 rounded-2xl p-6">
-                  <h2 className="text-lg font-bold text-white">Twitch-Ziel</h2>
-                  <p className="text-sm text-text-secondary">
-                    Stream-Schlüssel von Twitch, nicht der Schlüssel für Uplink. Er wird verschlüsselt gespeichert.
-                  </p>
-                  <input
-                    value={rtmpUrl}
-                    onChange={(e) => setRtmpUrl(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
-                    placeholder="rtmp://live.twitch.tv/app"
-                  />
-                  <input
-                    value={streamKey}
-                    onChange={(e) => setStreamKey(e.target.value)}
-                    type="password"
-                    className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
-                    placeholder="Twitch Stream-Key"
-                  />
-                  <div className="space-y-1">
-                    <label
-                      htmlFor="uplink-profil"
-                      className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary"
-                    >
-                      Qualität, die wir an Twitch senden
-                    </label>
-                    <select
-                      id="uplink-profil"
-                      value={profil}
-                      onChange={(e) => setProfil(e.target.value as UplinkProfilName)}
-                      className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
-                    >
-                      {UPLINK_PROFILE.map((eintrag) => (
-                        <option key={eintrag.name} value={eintrag.name}>
-                          {eintrag.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-text-secondary">
-                      {gewaehltesProfil?.hinweis}
-                    </p>
-                    {gewaehltesProfil?.warnung ? (
-                      <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                        {gewaehltesProfil.warnung}
-                      </p>
-                    ) : null}
-                    <p className="text-xs text-text-secondary">
-                      Schick uns ruhig 1440p. Wir rechnen daraus die gewählte Stufe, ohne dass du in OBS
-                      etwas umstellst.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={saveDest.isPending || !streamKey}
-                    onClick={() => saveDest.mutate()}
-                    className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
+                      landet im falschen Feld. Deshalb steht jeder Schritt
+                      neben dem Wert, den er braucht, statt in einer Liste
+                      darunter, die man beim Kopieren aus dem Blick verliert. */}
+                  <ObsSchritt
+                    nummer={1}
+                    titel="Einstellungen, Stream, Dienst auf „Benutzerdefiniert“"
                   >
-                    {saveDest.isSuccess ? 'Gespeichert' : 'Twitch-Ziel speichern'}
-                  </button>
-
-                  {/* Der Stream-Key kommt nie zurueck, das Feld bleibt also
-                      leer, auch wenn ein Ziel gespeichert ist. Ohne diese Zeile
-                      sieht ein fertig eingerichtetes Konto aus wie ein leeres
-                      Formular, und der Streamer speichert ein zweites Mal. */}
-                  {zieleFehler ? (
-                    <p className="text-xs text-warning">
-                      Wir können deine gespeicherten Ziele gerade nicht abrufen. Das heißt nicht, dass sie
-                      weg sind. Speichere nichts doppelt, lade die Seite in einer Minute neu.
-                    </p>
-                  ) : gespeicherteZiele.length > 0 ? (
-                    <div className="space-y-1">
-                      {gespeicherteZiele.map((ziel) => (
-                        <div
-                          key={`${ziel.platform}-${ziel.rtmp_url}`}
-                          className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
-                        >
-                          <Check className="h-3.5 w-3.5 shrink-0" />
-                          <span>
-                            <strong className="font-semibold capitalize">{ziel.platform}</strong> ist
-                            gespeichert{ziel.enabled ? '' : ' (aus)'}. Schlüssel liegt verschlüsselt bei uns.
-                            {ziel.effective ? (
-                              <>
-                                {' '}Wir senden {ziel.effective.height}p{ziel.effective.fps} mit{' '}
-                                {ziel.effective.bitrate_kbps} kbps.
-                              </>
-                            ) : null}
-                          </span>
-                        </div>
-                      ))}
-                      {/* Das Relay klemmt gegen `relay.platform_caps`, und das
-                          ist eine Tabelle in einem anderen Repo: sie kann hinter
-                          diesem Dashboard herhinken, wenn die Migration noch
-                          nicht eingespielt ist, oder wieder zurueckgedreht
-                          werden. Beides passiert still. Wer eine Stufe waehlt
-                          und eine andere bekommt, soll das hier lesen und nicht
-                          erst im Stream sehen. */}
-                      {geklemmteZiele.map((ziel) => (
-                        <div
-                          key={`geklemmt-${ziel.platform}`}
-                          className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
-                        >
-                          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span>
-                            Du hast {ziel.requested?.height}p{ziel.requested?.fps} gewählt, raus gehen
-                            aber {ziel.effective?.height}p{ziel.effective?.fps}.{' '}
-                            {ziel.platform === 'twitch' ? 'Twitch' : 'Die Plattform'} nimmt gerade nicht
-                            mehr an. Sag uns Bescheid, wenn das so bleibt.
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
                     <p className="text-xs text-text-secondary">
-                      Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber nirgends hin.
+                      In OBS oben rechts <Weg>Einstellungen</Weg> <Weg>Stream</Weg>. Beim Feld{' '}
+                      <Feld>Dienst</Feld> von „Twitch“ auf <Feld>Benutzerdefiniert…</Feld> wechseln.
+                      Erst danach tauchen die beiden Felder aus Schritt 2 und 3 auf.
                     </p>
-                  )}
+                  </ObsSchritt>
 
-                  {/* NIT 4: ohne diese Zeile sieht ein 400 (etwa Katalog-Drift
-                      zwischen Client und Server) aus wie ein Klick, der nichts
-                      tut, und das Ziel ist trotzdem nicht gespeichert. */}
-                  {saveDest.isError ? (
-                    <p className="text-xs text-warning">
-                      Speichern hat nicht geklappt. Prüfe die Adresse und den Schlüssel, dann noch einmal.
+                  <ObsSchritt nummer={2} titel="Serveradresse einfügen">
+                    {/* srt_hint liefert das Relay immer als String (rs-relay,
+                        srt_hint_fuer in src/api/user.rs). Leer ist es genau
+                        dann, wenn kein ingest_key existiert. Dieser Block
+                        haengt an data.enabled, trotzdem faengt der Guard den
+                        Leerfall ab: ein leeres Kopierfeld waere die
+                        schlechteste Antwort. */}
+                    {data.srt_hint ? (
+                      <>
+                        <CopyField
+                          label="gehört in das OBS-Feld „Server“"
+                          value={data.srt_hint}
+                          darfAufdecken={data.live_status === 'aus'}
+                          grundVerdeckt={
+                            data.live_status === 'live'
+                              ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
+                              : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
+                          }
+                        />
+                        {/* Die Adresse traegt den Ingest-Key als streamid. Wer
+                            sie abliest, sendet auf denselben Kanal wie der
+                            Streamer. Auf einem geteilten Bildschirm passiert
+                            genau das, deshalb steht die Warnung direkt am Feld
+                            und nicht in der Hilfe. */}
+                        <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                          <strong className="font-semibold">Zeig diese Adresse nicht im Stream.</strong>{' '}
+                          Sie enthält deinen persönlichen Schlüssel. Wer sie sieht, kann auf deinem Kanal
+                          senden. Blende das Dashboard aus, bevor du es teilst.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-warning">
+                        Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es
+                        dabei, meld dich beim Support.
+                      </p>
+                    )}
+                  </ObsSchritt>
+
+                  <ObsSchritt nummer={3} titel="Streamschlüssel leer lassen">
+                    <div className="rounded-xl border border-dashed border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
+                      Das OBS-Feld <Feld>Streamschlüssel</Feld> bleibt leer. Falls dort noch dein alter
+                      Twitch-Schlüssel steht: markieren und löschen. Dein Schlüssel steckt schon in der
+                      Adresse aus Schritt 2.
+                    </div>
+                  </ObsSchritt>
+
+                  <ObsSchritt nummer={4} titel="Ausgabe einstellen">
+                    <p className="text-xs text-text-secondary">
+                      <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
+                      Diese vier Werte:
                     </p>
-                  ) : null}
+                    <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
+                      {OBS_AUSGABE.map((zeile) => (
+                        <div key={zeile.feld} className="flex items-baseline gap-3 px-3 py-2">
+                          <dt className="w-32 shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
+                            {zeile.feld}
+                          </dt>
+                          <dd className="min-w-0 text-xs text-white">
+                            <span className="font-semibold">{zeile.wert}</span>
+                            <span className="block text-text-secondary">{zeile.warum}</span>
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </ObsSchritt>
+
+                  <p className="rounded-xl border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-white">
+                    Fertig. Ab jetzt drückst du in OBS <Feld>Stream starten</Feld> wie immer. Wir legen
+                    die Plattform-Streams an, du musst nirgends sonst etwas starten.
+                  </p>
                 </Rise>
-              </div>
-              )}
 
-              <div className="space-y-4 md:space-y-5">
-                {data?.enabled && (
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
                   <p className="text-sm text-text-secondary">
@@ -621,6 +584,69 @@ export function UplinkPage() {
                     Im Dock musst du bei Twitch angemeldet sein, danach bleibt die Anmeldung stehen.
                     Einmal einrichten, Fenster anordnen, unter <strong>Docks</strong> das Layout
                     speichern. Das übersteht jeden OBS-Neustart.
+                  </p>
+                </Rise>
+              </div>
+              )}
+
+              <div className="space-y-4 md:space-y-5">
+                {data?.enabled && (
+                <Rise className="panel-card space-y-3 rounded-2xl p-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Wohin wir senden</h2>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      Für jede Plattform hinterlegst du Adresse, Stream-Schlüssel und die Qualität,
+                      die wir dorthin schicken. Die Schlüssel liegen verschlüsselt bei uns.
+                    </p>
+                  </div>
+
+                  {zieleFehler ? (
+                    <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                      Wir können deine gespeicherten Ziele gerade nicht abrufen. Das heißt nicht, dass sie
+                      weg sind. Speichere nichts doppelt, lade die Seite in einer Minute neu.
+                    </p>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    {UPLINK_PLATTFORMEN.map((plattform) => {
+                      const ziel = gespeicherteZiele.find((z) => z.platform === plattform.id);
+                      return (
+                        <ZielKarte
+                          key={plattform.id}
+                          platform={plattform.id}
+                          label={plattform.label}
+                          rtmpVorgabe={plattform.rtmp}
+                          ziel={ziel}
+                          caps={capsFuer(plattform.id)}
+                          ingest={caps?.ingest}
+                          // Twitch offen, der Rest zu: fuer fast alle ist
+                          // Twitch das einzige Ziel, und vier aufgeklappte
+                          // Karten fuellen mehrere Bildschirmhoehen.
+                          offenStart={plattform.id === 'twitch' || Boolean(ziel)}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {gespeicherteZiele.length === 0 && !zieleFehler ? (
+                    <p className="text-xs text-text-secondary">
+                      Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber
+                      nirgends hin.
+                    </p>
+                  ) : null}
+
+                  {/* Die haeufigste Rueckfrage, und sie hat eine gute Antwort:
+                      was reinkommt und was rausgeht sind zwei verschiedene
+                      Dinge. Ohne diesen Absatz stellen Leute ihr OBS auf die
+                      Zielbitrate herunter und verschenken Qualitaet. */}
+                  <p className="rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
+                    <strong className="font-semibold text-white">
+                      Was du sendest, ist nicht das, was rausgeht.
+                    </strong>{' '}
+                    Schick uns ruhig HEVC in 1440p mit VBR und hoher Bitrate. Wir rechnen daraus für
+                    jedes Ziel neu, in H.264 und mit der Bitrate, die du oben eingestellt hast: also
+                    zum Beispiel 1440p bei 20000 kbps rein und 1080p H.264 mit 6000 kbps zu Twitch
+                    raus. Je mehr du uns schickst, desto besser wird das Ergebnis.
                   </p>
                 </Rise>
                 )}

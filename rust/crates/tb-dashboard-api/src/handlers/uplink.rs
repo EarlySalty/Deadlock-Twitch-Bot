@@ -263,14 +263,17 @@ pub async fn destinations_handler(
 
 /// Erlaubte Profile fuer die Zielwahl im Dashboard.
 ///
-/// Feste Stufen statt freier Zahlen, damit niemand eine Kombination
-/// zusammenstellt, die das Relay hinterher still klemmt.
+/// Feste Stufen sind der bequeme Weg: ein Name, und die vier Zahlen dahinter
+/// sind auf beiden Seiten dieselben. Daneben gibt es den manuellen Modus, der
+/// die Zahlen direkt traegt. Der Katalog bleibt, weil die Auswahlliste ihn
+/// braucht und weil "1080p60" als gespeicherter Wunsch leichter zu lesen ist
+/// als vier Spalten.
 ///
 /// 1440p ist bewusst nicht der Standard: Twitch unterstuetzt es ueber den
-/// normalen Ingest offiziell nicht und deckelt die Bitrate bei 8000. Auf
-/// 1,78-mal so viele Pixel verteilt sind dieselben Bits in einem
-/// Deadlock-Teamfight weniger wert als bei 1080p. Wer es trotzdem will, soll
-/// es waehlen koennen; die Oberflaeche schreibt den Haken dazu.
+/// normalen Ingest offiziell nicht. Auf 1,78-mal so viele Pixel verteilt sind
+/// dieselben Bits in einem Deadlock-Teamfight weniger wert als bei 1080p. Wer
+/// es trotzdem will, soll es waehlen koennen; die Oberflaeche schreibt den
+/// Haken dazu.
 ///
 /// Die Reihenfolge hier ist die der Auswahlliste, absteigend von der besten
 /// zur sparsamsten Stufe. `profil_aufloesen` sucht nach Namen, fuer die
@@ -283,12 +286,27 @@ const PROFILE: [(&str, i32, i32, i32, i32); 5] = [
     ("480p30", 854, 480, 30, 1500),
 ];
 
+/// Plattformen, die das Relay kennt (`platform` Check-Constraint in rs-relay).
+///
+/// Die Pruefung passiert hier und nicht erst im Relay, damit ein Tippfehler
+/// eine lesbare 400 mit Text bekommt statt einer nackten vom Proxy dahinter.
+const PLATTFORMEN: [&str; 4] = ["twitch", "kick", "youtube", "tiktok"];
+
+/// Globaler Ingest-Deckel aus rs-relay (`transcode/profile.rs`).
+///
+/// Der manuelle Modus laesst freie Zahlen zu, aber nicht beliebige: alles
+/// darueber klemmt das Relay ohnehin still weg, und eine Bitrate mit einer
+/// Null zu viel waere im Zweifel ein Tippfehler, kein Wunsch.
+const INGEST_MAX_BREITE: i32 = 2560;
+const INGEST_MAX_HOEHE: i32 = 1440;
+const INGEST_MAX_FPS: i32 = 60;
+const INGEST_MAX_BITRATE: i32 = 30000;
+
 /// Obergrenze, die fuer Twitch-Ziele wirklich gilt.
 ///
-/// Nicht der Ingest-Deckel: das Dashboard schreibt ausschliesslich
-/// Twitch-Ziele, also ist die Twitch-Cap die Grenze, an der ein Profil still
-/// weggeklemmt wuerde. Stand seit `20260823000001_twitch_caps_2k.sql` in
-/// rs-relay: 2560x1440 bei 8000 kbps.
+/// Stand seit `20260823000001_twitch_caps_2k.sql` in rs-relay: 2560x1440 bei
+/// 12000 kbps. Nur fuer den Katalogtest; der manuelle Modus klemmt gegen den
+/// Ingest-Deckel, weil er auch fuer YouTube gilt, wo mehr erlaubt ist.
 #[cfg(test)]
 const TWITCH_MAX_BREITE: i32 = 2560;
 #[cfg(test)]
@@ -305,51 +323,170 @@ fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
         .map(|(_, w, h, f, b)| (*w, *h, *f, *b))
 }
 
+/// Freie Zahlen aus dem manuellen Modus.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManuellesProfil {
+    pub width: i32,
+    pub height: i32,
+    pub fps: i32,
+    pub bitrate_kbps: i32,
+}
+
+/// Prueft ein manuelles Profil gegen den Ingest-Deckel.
+///
+/// Rueckgabe ist der Grund, warum es nicht geht, damit die Oberflaeche ihn
+/// hinschreiben kann. Ein blosses "ungueltig" laesst den Streamer raten,
+/// welches der vier Felder gemeint ist.
+fn manuell_pruefen(p: ManuellesProfil) -> Result<(), String> {
+    let grenzen = [
+        ("Breite", p.width, INGEST_MAX_BREITE),
+        ("Höhe", p.height, INGEST_MAX_HOEHE),
+        ("Bildrate", p.fps, INGEST_MAX_FPS),
+        ("Bitrate", p.bitrate_kbps, INGEST_MAX_BITRATE),
+    ];
+    for (name, wert, max) in grenzen {
+        if wert <= 0 {
+            return Err(format!("{name} muss größer als 0 sein."));
+        }
+        if wert > max {
+            return Err(format!("{name} liegt über unserem Maximum von {max}."));
+        }
+    }
+    // Ungerade Kantenlaengen bringen den Encoder ins Straucheln: yuv420p
+    // halbiert beide Achsen, und eine ungerade Zahl laesst sich nicht
+    // halbieren. ffmpeg bricht dann beim Start ab, nicht beim Speichern.
+    if p.width % 2 != 0 || p.height % 2 != 0 {
+        return Err("Breite und Höhe müssen gerade Zahlen sein.".into());
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct DestinationBody {
     pub platform: String,
-    pub rtmp_url: String,
-    pub stream_key: String,
-    /// Weggelassen heisst: das Relay behaelt, was gespeichert ist.
+    /// Weggelassen heisst zusammen mit `stream_key`: nur das Profil aendern,
+    /// das gespeicherte Ziel bleibt stehen. Genau das fehlte vorher, und
+    /// deshalb liess sich eine Qualitaetsstufe nicht ohne erneutes Eintippen
+    /// des Stream-Keys speichern.
+    pub rtmp_url: Option<String>,
+    pub stream_key: Option<String>,
+    /// Name aus `PROFILE`. Schliesst `manuell` aus.
     pub profil: Option<String>,
+    /// Freie Zahlen. Schliesst `profil` aus.
+    pub manuell: Option<ManuellesProfil>,
+    /// Ziel an- oder abschalten, ohne es zu loeschen.
+    pub enabled: Option<bool>,
 }
 
+fn fehler(status: StatusCode, text: &str) -> Response {
+    (status, Json(json!({ "error": text }))).into_response()
+}
+
+/// Baut den Zieleintrag fuer das Relay oder liefert den Grund, warum nicht.
+fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
+    if !PLATTFORMEN.contains(&body.platform.trim()) {
+        return Err(fehler(StatusCode::BAD_REQUEST, "unbekannte Plattform"));
+    }
+    if body.profil.is_some() && body.manuell.is_some() {
+        return Err(fehler(
+            StatusCode::BAD_REQUEST,
+            "Entweder eine Stufe oder eigene Werte, nicht beides.",
+        ));
+    }
+
+    let mut eintrag = json!({ "platform": body.platform.trim() });
+    let felder = eintrag.as_object_mut().expect("json! baut hier ein Objekt");
+
+    let url = body.rtmp_url.as_deref().map(str::trim).unwrap_or_default();
+    let key = body.stream_key.as_deref().map(str::trim).unwrap_or_default();
+    match (url.is_empty(), key.is_empty()) {
+        // Beides da: Ziel anlegen oder ersetzen.
+        (false, false) => {
+            felder.insert("rtmp_url".into(), json!(url));
+            felder.insert("stream_key".into(), json!(key));
+        }
+        // Beides leer: nur das Profil eines vorhandenen Ziels aendern.
+        (true, true) => {}
+        // Halb ausgefuellt ist immer ein Fehler in der Anfrage. Das Relay
+        // lehnt es ebenfalls ab, aber ohne Text.
+        _ => {
+            return Err(fehler(
+                StatusCode::BAD_REQUEST,
+                "Adresse und Stream-Key gehören zusammen: entweder beide oder keins von beidem.",
+            ))
+        }
+    }
+
+    if let Some(enabled) = body.enabled {
+        felder.insert("enabled".into(), json!(enabled));
+    }
+
+    let werte = match (&body.profil, body.manuell) {
+        (Some(name), _) => Some(profil_aufloesen(name).ok_or_else(|| {
+            fehler(StatusCode::BAD_REQUEST, "unbekanntes Profil")
+        })?),
+        (None, Some(manuell)) => {
+            manuell_pruefen(manuell).map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?;
+            Some((
+                manuell.width,
+                manuell.height,
+                manuell.fps,
+                manuell.bitrate_kbps,
+            ))
+        }
+        (None, None) => None,
+    };
+    if let Some((w, h, f, b)) = werte {
+        felder.insert("width".into(), json!(w));
+        felder.insert("height".into(), json!(h));
+        felder.insert("fps".into(), json!(f));
+        felder.insert("bitrate_kbps".into(), json!(b));
+    }
+
+    // Ein Aufruf ohne Adresse, ohne Key und ohne Profil aendert nichts und
+    // meldete trotzdem Erfolg. Das sieht in der Oberflaeche aus wie
+    // gespeichert.
+    if felder.len() == 1 {
+        return Err(fehler(
+            StatusCode::BAD_REQUEST,
+            "Nichts zu speichern: weder Zugangsdaten noch Qualität angegeben.",
+        ));
+    }
+    Ok(eintrag)
+}
+
+/// Die Grenzenkataloge des Relays, damit die Oberflaeche freie Zahlen
+/// einordnen kann, statt sie doppelt zu pflegen.
+pub async fn caps_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    // Die Caps sind kein Geheimnis, aber der Weg zum Relay ist es: ohne
+    // Sessionpruefung waere das ein offener Proxy auf ein internes Secret.
+    partner_id(&pool, &auth).await?;
+    let wert = relay_json(reqwest::Method::GET, "/v1/caps", None).await?;
+    Ok(Json(wert))
+}
+
+/// Speichert ein Ziel: Zugangsdaten, Qualitaet oder beides.
+///
+/// Geht ueber `/v1/me/destinations` statt ueber den Admin-Weg, weil nur dieser
+/// Endpunkt eine Aenderung ohne Stream-Key annimmt. Die Antwort ist die volle
+/// Zielliste samt `requested` und `effective`, also genau das, was die
+/// Oberflaeche danach anzeigen will.
 pub async fn put_destination_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
     Json(body): Json<DestinationBody>,
 ) -> Result<Json<Value>, Response> {
     let id = partner_id(&pool, &auth).await?;
-    if body.stream_key.trim().is_empty() || body.rtmp_url.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "rtmp_url und stream_key braucht es" })),
-        )
-            .into_response());
-    }
-    let mut nutzlast = json!({
-        "streamer_id": id,
-        "platform": body.platform,
-        "rtmp_url": body.rtmp_url,
-        "stream_key": body.stream_key,
-    });
-    if let Some(name) = body.profil.as_deref() {
-        let Some((w, h, f, b)) = profil_aufloesen(name) else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "unbekanntes Profil" })),
-            )
-                .into_response());
-        };
-        let felder = nutzlast
-            .as_object_mut()
-            .expect("json! baut hier ein Objekt");
-        felder.insert("width".into(), json!(w));
-        felder.insert("height".into(), json!(h));
-        felder.insert("fps".into(), json!(f));
-        felder.insert("bitrate_kbps".into(), json!(b));
-    }
-    let wert = relay_json(reqwest::Method::PUT, "/v1/admin/destinations", Some(nutzlast)).await?;
+    let eintrag = ziel_nutzlast(&body)?;
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        "/v1/me/destinations",
+        Some(json!({ "streamer_id": id, "destinations": [eintrag] })),
+    )
+    .await?;
     Ok(Json(wert))
 }
 
@@ -402,6 +539,141 @@ mod tests {
         let vorher = namen.len();
         namen.dedup();
         assert_eq!(namen.len(), vorher);
+    }
+
+    fn body(platform: &str) -> DestinationBody {
+        DestinationBody {
+            platform: platform.into(),
+            rtmp_url: None,
+            stream_key: None,
+            profil: None,
+            manuell: None,
+            enabled: None,
+        }
+    }
+
+    /// Der Kern der Sache: eine Qualitaetsstufe laesst sich aendern, ohne den
+    /// Stream-Key erneut einzutippen. Vorher ging das nicht, und deshalb sah
+    /// es aus, als wuerde die Auswahl nicht gespeichert.
+    #[test]
+    fn nur_das_profil_aendern_geht_ohne_stream_key() {
+        let mut b = body("twitch");
+        b.profil = Some("720p60".into());
+        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        assert_eq!(wert["platform"], "twitch");
+        assert_eq!(wert["height"], 720);
+        assert_eq!(wert["bitrate_kbps"], 4500);
+        assert!(wert.get("stream_key").is_none());
+    }
+
+    #[test]
+    fn manuelle_werte_gehen_durch() {
+        let mut b = body("youtube");
+        b.manuell = Some(ManuellesProfil {
+            width: 2560,
+            height: 1440,
+            fps: 60,
+            bitrate_kbps: 18000,
+        });
+        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        assert_eq!(wert["width"], 2560);
+        assert_eq!(wert["bitrate_kbps"], 18000);
+    }
+
+    #[test]
+    fn manuelle_werte_ueber_dem_ingest_deckel_fallen_auf() {
+        assert!(manuell_pruefen(ManuellesProfil {
+            width: 3840,
+            height: 2160,
+            fps: 60,
+            bitrate_kbps: 6000,
+        })
+        .is_err());
+        assert!(manuell_pruefen(ManuellesProfil {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 60000,
+        })
+        .is_err());
+    }
+
+    /// yuv420p halbiert beide Achsen. Eine ungerade Kante laesst ffmpeg erst
+    /// beim Start sterben, nicht beim Speichern, und dann steht der Stream.
+    #[test]
+    fn ungerade_kanten_werden_abgelehnt() {
+        assert!(manuell_pruefen(ManuellesProfil {
+            width: 1921,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 6000,
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn null_und_negativ_sind_keine_werte() {
+        for (w, h, f, b) in [(0, 1080, 60, 6000), (1920, 0, 60, 6000), (1920, 1080, 0, 6000), (1920, 1080, 60, -1)] {
+            assert!(manuell_pruefen(ManuellesProfil {
+                width: w,
+                height: h,
+                fps: f,
+                bitrate_kbps: b,
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn stufe_und_eigene_werte_zusammen_sind_ein_fehler() {
+        let mut b = body("twitch");
+        b.profil = Some("1080p60".into());
+        b.manuell = Some(ManuellesProfil {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 6000,
+        });
+        assert!(ziel_nutzlast(&b).is_err());
+    }
+
+    #[test]
+    fn halb_ausgefuellte_zugangsdaten_sind_ein_fehler() {
+        let mut b = body("twitch");
+        b.rtmp_url = Some("rtmp://live.twitch.tv/app".into());
+        assert!(ziel_nutzlast(&b).is_err());
+    }
+
+    /// Ohne diese Pruefung meldete ein Aufruf, der nichts traegt, Erfolg. In
+    /// der Oberflaeche sieht das aus wie gespeichert.
+    #[test]
+    fn ein_aufruf_ohne_inhalt_ist_ein_fehler() {
+        assert!(ziel_nutzlast(&body("twitch")).is_err());
+    }
+
+    #[test]
+    fn unbekannte_plattformen_kommen_nicht_durch() {
+        let mut b = body("facebook");
+        b.profil = Some("1080p60".into());
+        assert!(ziel_nutzlast(&b).is_err());
+    }
+
+    #[test]
+    fn alle_vier_plattformen_sind_waehlbar() {
+        for platform in PLATTFORMEN {
+            let mut b = body(platform);
+            b.profil = Some("1080p60".into());
+            assert!(ziel_nutzlast(&b).is_ok(), "{platform} kommt nicht durch");
+        }
+    }
+
+    #[test]
+    fn abschalten_geht_ohne_qualitaetsangabe() {
+        let mut b = body("kick");
+        b.enabled = Some(false);
+        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        assert_eq!(wert["enabled"], false);
+        assert!(wert.get("width").is_none());
     }
 
     #[test]
