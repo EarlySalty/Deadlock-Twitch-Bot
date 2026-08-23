@@ -481,27 +481,58 @@ pub async fn auto_post_platforms(pool: &PgPool, streamer_login: &str) -> Vec<Str
         .collect()
 }
 
+/// Ergebnis der Terminsuche fuer eine Plattform.
+///
+/// Ein blosses `Option<DateTime<Utc>>` warf drei sehr verschiedene Faelle in
+/// dasselbe `None`. Das ist beim Einreihen in die Warteschlange gefaehrlich,
+/// weil ein leeres `scheduled_at` dort "sofort faellig" bedeutet: aus "kein
+/// Termin frei" wurde damit still "sofort posten".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotPlan {
+    /// Naechster freier Termin.
+    Termin(DateTime<Utc>),
+    /// Die Kadenz der Plattform steht auf null. Die Plattform ist damit
+    /// ausgeschaltet, egal was sonst eingestellt ist.
+    Ausgeschaltet,
+    /// Die Kadenz laesst Posts zu, im Planungshorizont ist aber jeder Termin
+    /// schon vergeben.
+    HorizontVoll,
+    /// Fuer diese Plattform gibt es ueberhaupt keinen Zeitplan, etwa weil der
+    /// Name nicht zu den bekannten Plattformen gehoert.
+    OhnePlan,
+}
+
 /// Naechster freier Termin fuer diese Plattform, unter Beachtung der Kadenz und
-/// der schon eingeplanten Uploads. `None`, wenn die Kadenz nichts zulaesst.
+/// der schon eingeplanten Uploads.
 pub async fn plan_next_slot(
     pool: &PgPool,
     streamer_login: &str,
     platform: &str,
     now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
+) -> SlotPlan {
     let login = streamer_login.trim().to_lowercase();
-    let schedule = load_platform_schedules(pool, &login)
+    let Some(schedule) = load_platform_schedules(pool, &login)
         .await
         .into_iter()
-        .find(|s| s.platform == platform)?;
+        .find(|s| s.platform == platform)
+    else {
+        return SlotPlan::OhnePlan;
+    };
+    let limits = schedule.limits();
+    if limits.blocks_everything() {
+        return SlotPlan::Ausgeschaltet;
+    }
     let settings = load_streamer_settings(pool, &login).await;
     let taken = belegte_termine(pool, &login, platform).await;
-    next_cadence_slot(
+    match next_cadence_slot(
         now,
         &taken,
         &schedule.posting_schedule(&settings.timezone),
-        &schedule.limits(),
-    )
+        &limits,
+    ) {
+        Some(termin) => SlotPlan::Termin(termin),
+        None => SlotPlan::HorizontVoll,
+    }
 }
 
 /// Schon vergebene Termine dieser Plattform: eingeplante und erledigte Uploads

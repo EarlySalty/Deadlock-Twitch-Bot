@@ -437,13 +437,48 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                     ),
                 });
         // Freigegeben heisst ab hier nicht mehr „sofort raus": der Clip bekommt
-        // den naechsten Termin aus der Kadenz des Kanals. Ohne Kanal oder ohne
-        // freien Termin bleibt `scheduled_at` leer, dann arbeitet der
-        // Upload-Worker den Eintrag wie bisher beim naechsten Lauf ab.
+        // den naechsten Termin aus der Kadenz des Kanals.
+        //
+        // Ein leeres `scheduled_at` heisst in `get_upload_queue` "sofort
+        // faellig". Genau deshalb darf hier nicht jedes "kein Termin" zu einem
+        // leeren Feld werden, sonst kippt "die Plattform postet nie" in "die
+        // Plattform postet sofort", also ins Gegenteil der Einstellung.
+        //
+        // Entschieden ist: nicht einreihen statt Termin in ferner Zukunft. Ein
+        // Eintrag mit einem nie erreichten Termin haengt dauerhaft in der
+        // Warteschlange, blockiert `upload_already_exists` und belegt in
+        // `belegte_termine` einen Slot. Fehlt die Zeile dagegen, ist der Zustand
+        // ehrlich, und sobald die Kadenz wieder etwas hergibt, reiht der
+        // naechste Lauf ueber `iter_approved_clips_pending_queue` den Clip
+        // nach.
+        //
+        // Ohne Kanal bleibt es beim alten Verhalten: dort gibt es keine Kadenz,
+        // an die man sich halten koennte.
         let scheduled_at = match &streamer {
-            Some(login) => posting_plan::plan_next_slot(pool, login, platform, now)
-                .await
-                .map(|slot| slot.to_rfc3339()),
+            Some(login) => match posting_plan::plan_next_slot(pool, login, platform, now).await {
+                posting_plan::SlotPlan::Termin(slot) => Some(slot.to_rfc3339()),
+                posting_plan::SlotPlan::Ausgeschaltet => {
+                    tracing::info!(
+                        clip_db_id,
+                        platform = %platform,
+                        streamer = %login,
+                        "Social-Media-Approval: Plattform steht auf null Posts, \
+                         Freigabe wird nicht eingereiht"
+                    );
+                    continue;
+                }
+                posting_plan::SlotPlan::HorizontVoll => {
+                    tracing::warn!(
+                        clip_db_id,
+                        platform = %platform,
+                        streamer = %login,
+                        "Social-Media-Approval: kein freier Termin im Planungshorizont, \
+                         Freigabe wird nicht eingereiht"
+                    );
+                    continue;
+                }
+                posting_plan::SlotPlan::OhnePlan => None,
+            },
             None => None,
         };
         match queue_upload(
@@ -854,5 +889,142 @@ mod tests {
             cancel_scheduled_uploads(&pool, 4242).await,
             Err(ApprovalError::ClipNotFound(4242))
         ));
+    }
+
+    /// Ruestet einem Test-Schema die Zeitplan-Tabellen nach, damit
+    /// `plan_next_slot` etwas zu lesen hat.
+    async fn zeitplan_tabellen(pool: &PgPool) {
+        for ddl in [
+            "ALTER TABLE twitch_clips_social_media ADD COLUMN streamer_login TEXT",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
+             approval_mode TEXT NOT NULL DEFAULT 'manual', \
+             timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', \
+             updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, \
+             platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, \
+             posts_per_week INTEGER NOT NULL DEFAULT 4, \
+             max_posts_per_day INTEGER NOT NULL DEFAULT 1, \
+             post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, \
+             updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT, \
+             PRIMARY KEY (streamer_login, platform))",
+        ] {
+            sqlx::query(ddl).execute(pool).await.unwrap();
+        }
+    }
+
+    /// Eine Plattform mit Kadenz null ist ausgeschaltet. Eine Freigabe darauf
+    /// darf keinen Upload ausloesen; frueher landete sie mit leerem
+    /// `scheduled_at` in der Warteschlange und ging damit sofort raus.
+    #[tokio::test]
+    async fn freigabe_auf_pausierte_plattform_reiht_nichts_ein() {
+        let Some(pool) = make_pool("t_sm_approval_kadenz_null").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // youtube steht auf null Posts pro Woche, tiktok auf normaler Kadenz.
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 0, 1, '[\"18:00\"]'::jsonb), \
+                    ('kanal', 'tiktok', TRUE, 4, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string(), "tiktok".to_string()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+
+        let zeilen: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+            "SELECT platform, scheduled_at FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(clip)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            zeilen.len(),
+            1,
+            "nur die aktive Plattform darf eingereiht werden, war: {zeilen:?}"
+        );
+        assert_eq!(zeilen[0].0, "tiktok");
+        assert!(
+            zeilen[0].1.is_some(),
+            "die aktive Plattform bekommt einen echten Termin statt sofort"
+        );
+    }
+
+    /// Ist der Planungshorizont voll, darf die Zeile ebenfalls nicht mit leerem
+    /// Termin eingereiht werden.
+    #[tokio::test]
+    async fn voller_horizont_reiht_nichts_mit_leerem_termin_ein() {
+        let Some(pool) = make_pool("t_sm_approval_horizont_voll").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 1, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Ein zweiter Clip belegt jeden Tag des Horizonts, damit kein Termin
+        // mehr frei ist.
+        let belegt: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) \
+             SELECT $1, 'youtube', 'pending', \
+                    (date_trunc('day', now() AT TIME ZONE 'Europe/Berlin') \
+                     + make_interval(days => g) + INTERVAL '18 hours') AT TIME ZONE 'Europe/Berlin' \
+               FROM generate_series(0, 200) AS g",
+        )
+        .bind(belegt)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        handle_decision(&pool, clip, "approve", &["youtube".to_string()], Some("admin"))
+            .await
+            .unwrap();
+
+        let offen: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(offen, 0, "ohne freien Termin wird nichts eingereiht");
     }
 }
