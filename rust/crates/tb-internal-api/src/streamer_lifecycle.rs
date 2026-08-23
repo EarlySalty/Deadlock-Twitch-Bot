@@ -283,6 +283,15 @@ pub async fn departner_active_partner(
     .execute(pool)
     .await?;
 
+    // Deadlock-Pause-Marker mit abräumen. Nach dem Trennen ist der Bot ohnehin
+    // raus; bliebe die Markierung stehen, würde ein späteres Comeback den Bot
+    // ungefragt zurückmodden. Bewusst eine eigene Anweisung statt einer Spalte
+    // mehr im UPDATE oben, damit dessen sqlx-Cache-Eintrag gültig bleibt.
+    sqlx::query("UPDATE twitch_partners SET deadlock_pause_unmodded_at = NULL WHERE id = $1")
+        .bind(row.id)
+        .execute(pool)
+        .await?;
+
     // Raid-Auth deaktivieren (Python disable_raid_auth=True default).
     sqlx::query!(
         r#"
@@ -1130,7 +1139,8 @@ mod tests {
                 admin_archived_at TEXT,
                 departnered_at TEXT,
                 technical_pause_reason TEXT,
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                deadlock_pause_unmodded_at TEXT
             )"#,
             r#"CREATE TABLE twitch_streamers (
                 twitch_login TEXT PRIMARY KEY,

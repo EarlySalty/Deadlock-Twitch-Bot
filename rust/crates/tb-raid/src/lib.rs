@@ -37,6 +37,7 @@ pub mod bot_oauth;
 pub mod candidate_selection;
 pub mod courtesy;
 pub mod courtesy_store;
+pub mod deadlock_pause;
 pub mod eligibility;
 pub mod external_recruitment_store;
 pub mod manual_suppression;
@@ -93,6 +94,11 @@ pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
     SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, FOLLOWERS_UNKNOWN,
     PARTNER_SCORE_THRESHOLD,
+};
+pub use deadlock_pause::{
+    remod_candidates, unmod_candidates, DeadlockPauseCandidate, DeadlockPauseOutcome,
+    DeadlockPauseReactor, DeadlockPauseUnmodPort, UnmodOutcome, DEADLOCK_PAUSE_DAYS,
+    MAX_REMOD_PER_SWEEP, MAX_UNMOD_PER_SWEEP,
 };
 pub use eligibility::{
     classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,

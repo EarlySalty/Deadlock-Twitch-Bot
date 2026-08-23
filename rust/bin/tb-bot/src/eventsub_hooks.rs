@@ -1031,6 +1031,26 @@ impl tb_internal_api::ModeratorRemovalPort for HelixModeratorRemover {
     }
 }
 
+/// Die Deadlock-Pause entzieht dieselben Mod-Rechte wie das bewusste Trennen und
+/// nimmt deshalb denselben Remover. Der Unterschied liegt nur im Auslöser, nicht
+/// im Helix-Aufruf — ein zweiter Unmod-Pfad wäre eine Kopie mit eigenem Bug.
+#[async_trait::async_trait]
+impl tb_raid::DeadlockPauseUnmodPort for HelixModeratorRemover {
+    async fn unmod_bot(&self, broadcaster_id: &str, twitch_login: &str) -> tb_raid::UnmodOutcome {
+        use tb_internal_api::ModeratorRemovalPort;
+        use tb_internal_api::ModeratorRemovalResult as R;
+
+        match self
+            .remove_bot_moderator(broadcaster_id, twitch_login)
+            .await
+        {
+            // "war ohnehin kein Mod" ist derselbe Zielzustand wie "entzogen".
+            R::Removed | R::NotModerator => tb_raid::UnmodOutcome::Done,
+            R::NoToken | R::Failed { .. } => tb_raid::UnmodOutcome::Failed,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl BotBanStatusProbe for HelixModeratorProvisioner {
     async fn bot_ban_status(&self, twitch_user_id: &str, twitch_login: &str) -> BotBanStatus {
