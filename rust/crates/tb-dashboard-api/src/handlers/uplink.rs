@@ -292,27 +292,19 @@ const PROFILE: [(&str, i32, i32, i32, i32); 5] = [
 /// eine lesbare 400 mit Text bekommt statt einer nackten vom Proxy dahinter.
 const PLATTFORMEN: [&str; 4] = ["twitch", "kick", "youtube", "tiktok"];
 
-/// Globaler Ingest-Deckel aus rs-relay (`transcode/profile.rs`).
+/// Werte, die Twitch fuer 2K empfiehlt. Nur fuer den Katalogtest: der
+/// manuelle Modus prueft nichts dagegen.
 ///
-/// Der manuelle Modus laesst freie Zahlen zu, aber nicht beliebige: alles
-/// darueber klemmt das Relay ohnehin still weg, und eine Bitrate mit einer
-/// Null zu viel waere im Zweifel ein Tippfehler, kein Wunsch.
-const INGEST_MAX_BREITE: i32 = 2560;
-const INGEST_MAX_HOEHE: i32 = 1440;
-const INGEST_MAX_FPS: i32 = 60;
-const INGEST_MAX_BITRATE: i32 = 30000;
-
-/// Obergrenze, die fuer Twitch-Ziele wirklich gilt.
-///
-/// Stand seit `20260823000001_twitch_caps_2k.sql` in rs-relay: 2560x1440 bei
-/// 12000 kbps. Nur fuer den Katalogtest; der manuelle Modus klemmt gegen den
-/// Ingest-Deckel, weil er auch fuer YouTube gilt, wo mehr erlaubt ist.
+/// Der Ingest-Deckel, der hier frueher stand, ist mit der Klemmung in rs-relay
+/// weggefallen. Er hat eine Eingabe abgelehnt, die das Relay angenommen
+/// haette, und damit an einer Stelle entschieden, an der niemand nach dem
+/// Grund suchen wuerde.
 #[cfg(test)]
-const TWITCH_MAX_BREITE: i32 = 2560;
+const TWITCH_EMPFOHLENE_BREITE: i32 = 2560;
 #[cfg(test)]
-const TWITCH_MAX_HOEHE: i32 = 1440;
+const TWITCH_EMPFOHLENE_HOEHE: i32 = 1440;
 #[cfg(test)]
-const TWITCH_MAX_BITRATE: i32 = 12000;
+const TWITCH_EMPFOHLENE_BITRATE: i32 = 12000;
 
 /// Loest einen Profilnamen auf. `None` heisst: nicht im Katalog.
 fn profil_aufloesen(name: &str) -> Option<(i32, i32, i32, i32)> {
@@ -332,24 +324,28 @@ pub struct ManuellesProfil {
     pub bitrate_kbps: i32,
 }
 
-/// Prueft ein manuelles Profil gegen den Ingest-Deckel.
+/// Prueft ein manuelles Profil auf das, was technisch nicht gehen kann.
+///
+/// Nach oben wird nichts mehr geprueft. Frueher stand hier ein Ingest-Deckel,
+/// und der hat eine Eingabe abgelehnt, die das Relay angenommen haette: der
+/// Streamer trug 16000 ein, bekam "liegt über unserem Maximum" und keine
+/// Erklaerung, wessen Maximum das ist. Was eine Plattform wirklich annimmt,
+/// entscheidet die Plattform an ihrem Ingest. Was der Server traegt,
+/// entscheidet das Punktebudget in rs-relay, und zwar mit einer Ablehnung
+/// samt Grund statt hier mit einem Formularfehler.
 ///
 /// Rueckgabe ist der Grund, warum es nicht geht, damit die Oberflaeche ihn
 /// hinschreiben kann. Ein blosses "ungueltig" laesst den Streamer raten,
 /// welches der vier Felder gemeint ist.
 fn manuell_pruefen(p: ManuellesProfil) -> Result<(), String> {
-    let grenzen = [
-        ("Breite", p.width, INGEST_MAX_BREITE),
-        ("Höhe", p.height, INGEST_MAX_HOEHE),
-        ("Bildrate", p.fps, INGEST_MAX_FPS),
-        ("Bitrate", p.bitrate_kbps, INGEST_MAX_BITRATE),
-    ];
-    for (name, wert, max) in grenzen {
+    for (name, wert) in [
+        ("Breite", p.width),
+        ("Höhe", p.height),
+        ("Bildrate", p.fps),
+        ("Bitrate", p.bitrate_kbps),
+    ] {
         if wert <= 0 {
             return Err(format!("{name} muss größer als 0 sein."));
-        }
-        if wert > max {
-            return Err(format!("{name} liegt über unserem Maximum von {max}."));
         }
     }
     // Ungerade Kantenlaengen bringen den Encoder ins Straucheln: yuv420p
@@ -532,15 +528,25 @@ mod tests {
     }
 
     #[test]
-    fn kein_profil_ueberschreitet_die_twitch_grenze() {
-        // Die Klemmung im Relay ist die zweite Verteidigungslinie, aber sie
-        // passiert still: der Streamer waehlt 1440p und bekaeme 1080p, ohne
-        // dass irgendwo ein Fehler auftaucht. Deshalb faellt der Katalog hier
-        // auf, sobald er ueber die Twitch-Cap hinauswaechst.
+    fn keine_fertige_stufe_geht_ueber_die_twitch_empfehlung() {
+        // Der manuelle Modus darf jede Zahl tragen, das ist der Sinn der
+        // Sache. Die fertigen Stufen sind etwas anderes: sie sind unser
+        // Vorschlag, und ein Vorschlag ueber dem, was Twitch selbst nennt,
+        // waere keiner. Wer hier absichtlich hoeher gehen will, nimmt den
+        // manuellen Modus.
         for (name, w, h, _f, b) in PROFILE {
-            assert!(w <= TWITCH_MAX_BREITE, "{name} ist breiter als Twitch annimmt");
-            assert!(h <= TWITCH_MAX_HOEHE, "{name} ist hoeher als Twitch annimmt");
-            assert!(b <= TWITCH_MAX_BITRATE, "{name} liegt ueber dem Twitch-Deckel");
+            assert!(
+                w <= TWITCH_EMPFOHLENE_BREITE,
+                "{name} ist breiter als Twitch empfiehlt"
+            );
+            assert!(
+                h <= TWITCH_EMPFOHLENE_HOEHE,
+                "{name} ist hoeher als Twitch empfiehlt"
+            );
+            assert!(
+                b <= TWITCH_EMPFOHLENE_BITRATE,
+                "{name} liegt ueber der Twitch-Empfehlung"
+            );
         }
     }
 
@@ -594,22 +600,39 @@ mod tests {
         assert_eq!(wert["bitrate_kbps"], 18000);
     }
 
+    /// Die Umkehrung des alten Tests: hohe Werte gehen durch.
+    ///
+    /// Hier stand `manuelle_werte_ueber_dem_ingest_deckel_fallen_auf` und hat
+    /// 4K und 60000 kbps abgelehnt. Beides lehnt jetzt niemand mehr ab. Ob die
+    /// Plattform das annimmt, entscheidet die Plattform; ob der Server das
+    /// traegt, entscheidet das Punktebudget in rs-relay, und das antwortet mit
+    /// einem Grund statt mit einem Formularfehler.
     #[test]
-    fn manuelle_werte_ueber_dem_ingest_deckel_fallen_auf() {
+    fn hohe_werte_werden_nicht_mehr_abgelehnt() {
         assert!(manuell_pruefen(ManuellesProfil {
             width: 3840,
             height: 2160,
             fps: 60,
             bitrate_kbps: 6000,
         })
-        .is_err());
+        .is_ok());
         assert!(manuell_pruefen(ManuellesProfil {
             width: 1920,
             height: 1080,
             fps: 60,
             bitrate_kbps: 60000,
         })
-        .is_err());
+        .is_ok());
+        // Und der Fall aus dem Betrieb: 16000 kbps an Twitch. Genau diese Zahl
+        // hat der Streamer eingetragen und "liegt über unserem Maximum"
+        // gelesen, ohne zu erfahren, wessen Maximum gemeint war.
+        assert!(manuell_pruefen(ManuellesProfil {
+            width: 2560,
+            height: 1440,
+            fps: 60,
+            bitrate_kbps: 16000,
+        })
+        .is_ok());
     }
 
     /// yuv420p halbiert beide Achsen. Eine ungerade Kante laesst ffmpeg erst
