@@ -63,7 +63,7 @@ const DDL: &[&str] = &[
      twitch_user_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), duration_seconds DOUBLE PRECISION, \
      view_count INTEGER, game_name TEXT, status TEXT DEFAULT 'pending', \
      source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, retention_until TIMESTAMPTZ, \
-     discarded_at TIMESTAMPTZ, layout_override_json JSONB, \
+     discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, \
      uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, \
      uploaded_instagram BOOLEAN DEFAULT FALSE)",
     "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, \
@@ -460,9 +460,12 @@ async fn clip_fetch_klemmt_am_monatskontingent() {
             .await
             .unwrap();
         for i in 0..3 {
+            // Selbst geholt: `kontingent_verbraucht_at` gesetzt. Genau das
+            // zaehlt, nicht `created_at` (das ist der Twitch-Zeitstempel).
             sqlx::query(
-                "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
-                 VALUES ($1, 'https://clips.twitch.tv/x', $2)",
+                "INSERT INTO twitch_clips_social_media \
+                     (clip_id, clip_url, streamer_login, kontingent_verbraucht_at) \
+                 VALUES ($1, 'https://clips.twitch.tv/x', $2, NOW())",
             )
             .bind(format!("{login}-{i}"))
             .bind(login)
@@ -496,6 +499,74 @@ async fn clip_fetch_klemmt_am_monatskontingent() {
     )
     .await;
     assert_ne!(bezahlt.status(), StatusCode::FORBIDDEN);
+}
+
+/// Gezaehlt wird die Aufnahme in unsere DB, nicht der Twitch-Zeitstempel.
+///
+/// Beide Fehlrichtungen der alten `created_at`-Zaehlung sind hier festgenagelt:
+/// Zuschauer-Clips aus diesem Monat, die der Hintergrund-Fetcher geholt hat,
+/// duerfen nichts verbrauchen, und selbst geholte Clips zaehlen auch dann, wenn
+/// Twitch sie auf einen alten Tag datiert hat.
+#[tokio::test]
+async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
+    let Some(pool) = pool("t_gate_clipzaehlung").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('freistreamer', TRUE)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Zehn Clips, die Zuschauer in diesem Monat auf Twitch erstellt haben und
+    // die der Hintergrund-Fetcher eingelesen hat: kein Verbrauch.
+    for i in 0..10 {
+        sqlx::query(
+            "INSERT INTO twitch_clips_social_media \
+                 (clip_id, clip_url, streamer_login, created_at) \
+             VALUES ($1, 'https://clips.twitch.tv/x', 'freistreamer', NOW())",
+        )
+        .bind(format!("zuschauer-{i}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let offen = social_media::fetch_clips_handler(
+        partner("freistreamer"),
+        State(pool.clone()),
+        Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
+    )
+    .await;
+    assert_ne!(
+        offen.status(),
+        StatusCode::FORBIDDEN,
+        "Zuschauer-Clips duerfen das Kontingent nicht aufbrauchen"
+    );
+
+    // Drei selbst geholte Clips, von Twitch auf den Vormonat datiert: zaehlen.
+    for i in 0..3 {
+        sqlx::query(
+            "INSERT INTO twitch_clips_social_media \
+                 (clip_id, clip_url, streamer_login, created_at, kontingent_verbraucht_at) \
+             VALUES ($1, 'https://clips.twitch.tv/x', 'freistreamer', \
+                     NOW() - INTERVAL '40 days', NOW())",
+        )
+        .bind(format!("selbst-{i}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let voll = social_media::fetch_clips_handler(
+        partner("freistreamer"),
+        State(pool),
+        Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
+    )
+    .await;
+    assert_eq!(voll.status(), StatusCode::FORBIDDEN);
+    let body = body_json(voll).await;
+    assert_eq!(body["kontingent"]["genutzt"], 3);
+    assert_eq!(body["kontingent"]["rest"], 0);
 }
 
 /// Der `!clip`-Schalter bleibt ohne 403 (Chat-Befehle sind Free), traegt aber

@@ -143,6 +143,26 @@ impl ClipRepository {
         }
     }
 
+    /// Bucht einen Clip auf das Monatskontingent des Streamers.
+    ///
+    /// Absichtlich ein eigener Aufruf und nicht Teil von `register_clip`: ob ein
+    /// Clip verbraucht, haengt nicht am Clip, sondern daran, wer ihn geholt hat.
+    /// Der Hintergrund-Fetcher ruft das nie, der vom Streamer ausgeloeste
+    /// Dashboard-Fetch schon (`ClipFetchService::mit_kontingent_verbrauch`).
+    /// `COALESCE` schuetzt eine bereits gebuchte Zeile vor der Umbuchung in
+    /// einen spaeteren Monat.
+    pub async fn mark_kontingent_verbrauch(&self, clip_db_id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE twitch_clips_social_media \
+                SET kontingent_verbraucht_at = COALESCE(kontingent_verbraucht_at, NOW()) \
+              WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Schreibt einen Eintrag in `clip_fetch_history` (Erfolg oder Fehler).
     pub async fn record_history(&self, result: &StreamerFetchResult) -> Result<(), sqlx::Error> {
         if let Some(err) = &result.error {
@@ -208,7 +228,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', status TEXT DEFAULT 'pending', layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', status TEXT DEFAULT 'pending', kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB)",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100)",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",

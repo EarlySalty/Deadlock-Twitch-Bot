@@ -569,6 +569,7 @@ twitch_clips_social_media|hashtags|text|YES|
 twitch_clips_social_media|id|bigint|NO|nextval('twitch_clips_social_media_id_seq'::regclass)
 twitch_clips_social_media|instagram_media_id|text|YES|
 twitch_clips_social_media|instagram_uploaded_at|timestamp with time zone|YES|
+twitch_clips_social_media|kontingent_verbraucht_at|timestamp with time zone|YES|
 twitch_clips_social_media|last_analytics_sync|timestamp with time zone|YES|
 twitch_clips_social_media|layout_override_json|jsonb|YES|
 twitch_clips_social_media|local_file_path|text|YES|

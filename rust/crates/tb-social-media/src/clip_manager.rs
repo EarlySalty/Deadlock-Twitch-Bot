@@ -10,6 +10,7 @@
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+use crate::clip::repository::ClipRepository;
 use crate::clip_queue::queue_upload;
 use crate::layout::apply_default_layout;
 use crate::retention::refresh_clip_publication_status;
@@ -77,6 +78,13 @@ pub async fn register_manual_upload(
     .await?;
     let clip_db_id = row.id;
     let retention_until = row.retention_until;
+
+    // Ein eigener Upload ist immer Kontingentnutzung: der Streamer hat ihn
+    // selbst angestossen. Gezaehlt wird die Aufnahme in unsere DB, nicht
+    // `created_at` — bei gefetchten Clips waere das der Twitch-Zeitstempel.
+    ClipRepository::new(pool.clone())
+        .mark_kontingent_verbrauch(clip_db_id)
+        .await?;
 
     if let Err(error) = apply_default_layout(pool, clip_db_id, streamer_login).await {
         tracing::warn!(
@@ -331,7 +339,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL UNIQUE, clip_url TEXT NOT NULL, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, custom_description TEXT, hashtags TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL UNIQUE, clip_url TEXT NOT NULL, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, custom_description TEXT, hashtags TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",

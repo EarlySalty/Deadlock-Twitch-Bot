@@ -249,7 +249,7 @@ pub fn verlauf_monate_klemmen(stufe: Stufe, angefragt: i64) -> (i64, bool) {
 pub struct ClipKontingent {
     /// Stufe, aus der die Grenze stammt.
     pub stufe: Stufe,
-    /// Bereits erzeugte Clips in diesem Monat (verworfene zaehlen nicht mit).
+    /// Bereits verbrauchte Clips in diesem Monat (verworfene zaehlen nicht mit).
     pub genutzt: i64,
     /// Monatsgrenze; `None` heisst unbegrenzt.
     pub limit: Option<u32>,
@@ -280,18 +280,31 @@ impl ClipKontingent {
     }
 }
 
-/// Zaehlt die in diesem Kalendermonat erzeugten Clips eines Streamers.
+/// Zaehlt, was ein Streamer in diesem Kalendermonat vom Kontingent verbraucht hat.
+///
+/// Gezaehlt wird die Aufnahme in unsere DB (`kontingent_verbraucht_at`), nicht
+/// `created_at`: das ist bei gefetchten Clips der Zeitstempel von Twitch. Ein
+/// Streamer mit lauter Clips aus dem Vormonat haette sonst dauerhaft 0, und
+/// Zuschauer-Clips aus diesem Monat haetten sein Kontingent aufgebraucht, bevor
+/// er selbst etwas angeklickt hat.
+///
+/// Gesetzt wird die Spalte nur dort, wo der Streamer die Aufnahme selbst
+/// ausloest (eigener Upload, eigener Clip-Fetch im Dashboard). Der
+/// Hintergrund-Fetcher laesst sie NULL, seine Clips zaehlen nicht.
 ///
 /// Verworfene Clips (`discarded_at`) zaehlen nicht, sonst waere ein
 /// Fehlgriff dauerhaft teuer. Bei DB-Fehler `0`: eine kaputte Zaehlung darf
 /// niemandem den Dienst sperren, die Sperre selbst haengt an der Stufe.
-pub async fn clips_diesen_monat(pool: &PgPool, streamer: &str) -> i64 {
+pub async fn clip_verbrauch_diesen_monat(pool: &PgPool, streamer: &str) -> i64 {
     let login = streamer.trim().to_lowercase();
     if login.is_empty() {
         return 0;
     }
     sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::bigint FROM twitch_clips_social_media          WHERE LOWER(streamer_login) = $1            AND discarded_at IS NULL            AND created_at >= DATE_TRUNC('month', NOW())",
+        "SELECT COUNT(*)::bigint FROM twitch_clips_social_media \
+           WHERE LOWER(streamer_login) = $1 \
+             AND discarded_at IS NULL \
+             AND kontingent_verbraucht_at >= DATE_TRUNC('month', NOW())",
     )
     .bind(&login)
     .fetch_one(pool)
@@ -303,7 +316,7 @@ pub async fn clips_diesen_monat(pool: &PgPool, streamer: &str) -> i64 {
 pub async fn clip_kontingent(pool: &PgPool, stufe: Stufe, streamer: &str) -> ClipKontingent {
     let limit = clip_monatslimit(stufe);
     let genutzt = if limit.is_some() {
-        clips_diesen_monat(pool, streamer).await
+        clip_verbrauch_diesen_monat(pool, streamer).await
     } else {
         // Pro hat kein Limit, dann braucht es auch keine Zaehlabfrage.
         0

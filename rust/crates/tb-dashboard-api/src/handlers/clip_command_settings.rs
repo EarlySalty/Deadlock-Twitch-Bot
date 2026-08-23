@@ -79,23 +79,16 @@ pub async fn get_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    // Kontingent der Stufe: Free 3 Clips im Monat mit Wasserzeichen, Plus 10
-    // ohne, Pro unbegrenzt. Hier steht nur der Zaehlerstand, damit die
-    // Einstellungsseite ehrlich ist.
+    // Kontingent der Stufe: Free 3 Clips im Monat, Plus 10, Pro unbegrenzt.
+    // Hier steht nur der Zaehlerstand, damit die Einstellungsseite ehrlich ist.
     //
-    // Wo die Grenze wirklich greift: in den drei HTTP-Handlern von
-    // `social_media.rs`, die ueber `clip_kontingent_guard` laufen (Clip-Fetch
-    // und Einzel-Registrierung). NICHT durchgesetzt wird sie im
-    // Hintergrund-Fetcher (`tb_social_media::ClipFetchTask` ->
-    // `ClipRepository::register`) und nicht im `!clip`-Chat-Befehl: der legt
-    // ueber Helix einen Twitch-Clip an, der Fetcher zieht ihn spaeter in
-    // `twitch_clips_social_media` und verbraucht damit das Kontingent, ohne
-    // vorher zu fragen. Absichtlich so gelassen, statt die Sperre in den
-    // Fetcher zu ziehen: sonst haette ein Free-Streamer sein Kontingent
-    // aufgebraucht, bevor er selbst etwas angeklickt hat, und liefe im
-    // Dashboard ohne eigenes Zutun in den 403. Wer das aendert, muss zuerst
-    // entscheiden, ob automatisch geholte Clips ueberhaupt gegen das
-    // Kontingent zaehlen sollen.
+    // Gezaehlt wird, was der Streamer selbst in unsere DB holt: eigener Upload
+    // und eigener Clip-Fetch im Dashboard, beide ueber `clip_kontingent_guard`
+    // in `social_media.rs`. Der Hintergrund-Fetcher
+    // (`tb_social_media::ClipFetchTask`) und der `!clip`-Chat-Befehl, den auch
+    // Zuschauer ausloesen, buchen nichts und werden auch nicht gesperrt. Das
+    // Kontingent ist eine Grenze fuer die Clip-Werkzeuge, keine Strafe dafuer,
+    // dass andere Leute den Kanal clippen.
     let stufe = crate::auth::stufe_fuer_auth(&pool, &auth).await;
     let kontingent = tb_analytics::stufe::clip_kontingent(&pool, stufe, &login).await;
 

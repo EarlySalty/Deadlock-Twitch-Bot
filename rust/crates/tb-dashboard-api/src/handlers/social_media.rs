@@ -594,12 +594,17 @@ async fn sm_stufe(pool: &PgPool, auth: &DashboardAuthLevel) -> tb_analytics::stu
     crate::auth::stufe_fuer_auth(pool, auth).await
 }
 
-/// Clip-Kontingent-Guard fuer alles, was neue Clips erzeugt.
+/// Clip-Kontingent-Guard fuer alles, was der Streamer selbst anstoesst.
 ///
 /// Free 3 Clips im Monat, Plus 10, Pro unbegrenzt. Ist das Kontingent
 /// aufgebraucht, kommt 403 mit dem Zaehlerstand, damit das Dashboard es
 /// anzeigen kann, statt nur "geht nicht" zu melden. Admin ohne Kanalbezug
 /// (`streamer` leer) laeuft durch.
+///
+/// Zaehlung und Sperre decken sich: gebucht wird nur, was durch diese Handler
+/// laeuft (`kontingent_verbraucht_at`). Was der Hintergrund-Fetcher holt und
+/// was Zuschauer per `!clip` anlegen, zaehlt nicht mit und wird hier auch nicht
+/// gesperrt.
 async fn clip_kontingent_guard(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
@@ -610,10 +615,6 @@ async fn clip_kontingent_guard(
     if streamer.trim().is_empty() || kontingent.frei() {
         return Ok(kontingent);
     }
-    // Wortlaut mit Bedacht: gezaehlt werden alle Clips des Monats, gesperrt
-    // wird aber nur das Anlegen ueber das Dashboard. Der Chat-Befehl `!clip`
-    // und der Hintergrund-Fetcher schreiben an dieser Pruefung vorbei, deshalb
-    // darf hier kein allgemeines "Kontingent aufgebraucht" stehen.
     let limit_text = match kontingent.limit {
         Some(limit) => format!("{} von {limit} Clips", kontingent.genutzt),
         None => format!("{} Clips", kontingent.genutzt),
@@ -623,7 +624,7 @@ async fn clip_kontingent_guard(
         Json(json!({
             "error": "clip_limit_erreicht",
             "message": format!(
-                "Für diesen Monat sind {limit_text} gezählt. Über das Dashboard kannst du bis zum Monatswechsel keine neuen anlegen. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt."
+                "Du hast diesen Monat {limit_text} geholt. Bis zum Monatswechsel kannst du keine neuen anlegen. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt."
             ),
             "kontingent": kontingent.als_json(),
         })),
@@ -1380,6 +1381,9 @@ pub async fn queue_upload_handler(
 
 /// Baut den Clip-Fetcher inline aus den Twitch-App-Credentials (`None`, wenn
 /// nicht konfiguriert → 503).
+/// Diesen Fetch hat der Streamer selbst ausgeloest, also zaehlen die dabei neu
+/// aufgenommenen Clips gegen sein Monatskontingent. Der Hintergrund-Fetcher
+/// baut sich seinen Service ueber `build_clip_fetch_task` und bucht nichts.
 fn build_clip_fetch_service(pool: PgPool, limit: u32) -> Option<ClipFetchService> {
     let client_id = std::env::var("TWITCH_CLIENT_ID")
         .ok()
@@ -1389,7 +1393,11 @@ fn build_clip_fetch_service(pool: PgPool, limit: u32) -> Option<ClipFetchService
         .filter(|s| !s.is_empty())?;
     let helix = HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()?;
     let source = HelixClipSource::new(Arc::new(helix));
-    Some(ClipFetchService::new(ClipRepository::new(pool), source).with_clip_limit(limit))
+    Some(
+        ClipFetchService::new(ClipRepository::new(pool), source)
+            .with_clip_limit(limit)
+            .mit_kontingent_verbrauch(true),
+    )
 }
 
 /// POST-Body von `…/api/fetch-clips`.
@@ -1432,11 +1440,14 @@ pub async fn fetch_clips_handler(
         limit = limit.min(rest.max(0) as u32);
     }
 
-    let Some(service) = build_clip_fetch_service(pool, limit) else {
+    let Some(service) = build_clip_fetch_service(pool.clone(), limit) else {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "twitch_api_unavailable", "message": "Clip-Fetch ist derzeit nicht verfügbar." }))).into_response();
     };
     let result = service.fetch_for_streamer(&streamer).await;
     let clips_found = result.clips_found.max(0);
+    // Nach dem Fetch neu zaehlen: der Stand von vorhin ist bereits verbraucht,
+    // und das Dashboard soll nicht die alte Zahl anzeigen.
+    let kontingent = tb_analytics::stufe::clip_kontingent(&pool, kontingent.stufe, &streamer).await;
     Json(json!({
         "success": true,
         "clips_found": clips_found,
@@ -4008,7 +4019,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",

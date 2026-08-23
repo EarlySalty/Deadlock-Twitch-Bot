@@ -15,6 +15,7 @@ pub struct ClipFetchService {
     helix: HelixClipSource,
     clip_limit: u32,
     rate_limit_ms: u64,
+    kontingent_verbrauch: bool,
 }
 
 impl ClipFetchService {
@@ -24,12 +25,25 @@ impl ClipFetchService {
             helix,
             clip_limit: 20,
             rate_limit_ms: 1_000,
+            // Standard ist der Hintergrundlauf, und der verbraucht nichts:
+            // dass Zuschauer den Kanal clippen, ist keine Kontingentnutzung.
+            kontingent_verbrauch: false,
         }
     }
 
     /// Überschreibt die Clip-Anzahl pro Fetch (für den manuellen Dashboard-Fetch).
     pub fn with_clip_limit(mut self, limit: u32) -> Self {
         self.clip_limit = limit.max(1);
+        self
+    }
+
+    /// Bucht neu aufgenommene Clips auf das Monatskontingent des Streamers.
+    ///
+    /// Nur fuer den vom Streamer selbst ausgeloesten Dashboard-Fetch. Der
+    /// Hintergrundlauf bleibt bei `false`, sonst haette ein Free-Streamer sein
+    /// Kontingent aufgebraucht, ohne je etwas angeklickt zu haben.
+    pub fn mit_kontingent_verbrauch(mut self, verbraucht: bool) -> Self {
+        self.kontingent_verbrauch = verbraucht;
         self
     }
 
@@ -67,9 +81,19 @@ impl ClipFetchService {
         let mut clips_new = 0i32;
         for clip in &clips {
             match self.repo.register_clip(clip).await {
-                Ok((_, is_new)) => {
+                Ok((clip_db_id, is_new)) => {
                     if is_new {
                         clips_new += 1;
+                        // Nur neue Zeilen buchen: ein zweiter Fetch derselben
+                        // Clips darf das Kontingent nicht erneut belasten.
+                        if self.kontingent_verbrauch {
+                            if let Err(e) = self.repo.mark_kontingent_verbrauch(clip_db_id).await {
+                                tracing::warn!(
+                                    "clip_fetch: Kontingent-Buchung fuer Clip {} fehlgeschlagen: {e}",
+                                    clip.clip_id
+                                );
+                            }
+                        }
                     }
                 }
                 Err(e) => {
