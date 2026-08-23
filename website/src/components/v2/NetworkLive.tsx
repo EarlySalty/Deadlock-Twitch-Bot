@@ -239,20 +239,27 @@ export function PartnersSection({
       ambientSide="right"
       stamp="01 · Entdecke unsere Partner"
       headline={
-        !categoryKnown
-          ? "Hier ist gerade jemand live."
-          : zeigtDeadlock
-            ? "Hier läuft gerade Deadlock."
-            : featured.length > 0
-              ? "Gerade läuft kein Deadlock."
-              : "Gerade ist niemand live."
+        featured.length === 0
+          ? "Gerade ist niemand live."
+          : !categoryKnown
+            ? "Hier ist gerade jemand live."
+            : zeigtDeadlock
+              ? "Hier läuft gerade Deadlock."
+              : "Gerade läuft kein Deadlock."
       }
+      // Die Intro haengt zuerst an featured.length, nicht an categoryKnown.
+      // Sonst verspricht sie laufende Kanäle, während der Block darunter
+      // "Gerade ist kein Partner live" meldet — nachts der Regelfall, weil
+      // last_game nach dem Offlinegehen stehen bleibt und categoryKnown
+      // deshalb auch ohne einen einzigen Live-Kanal true ist.
       intro={
-        !categoryKnown
-          ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
-          : zeigtDeadlock
-            ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
-            : "Gerade streamt kein Partner Deadlock. Damit du trotzdem siehst, wer hier unterwegs ist, laufen unten die Kanäle, die sonst live sind."
+        featured.length === 0
+          ? "Gerade sendet kein Partner. Unten stehen trotzdem alle Kanäle des Netzwerks, damit du siehst, in welche Szene du reinstreamst."
+          : !categoryKnown
+            ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+            : zeigtDeadlock
+              ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+              : "Gerade streamt kein Partner Deadlock. Damit du trotzdem siehst, wer hier unterwegs ist, laufen unten die Kanäle, die sonst live sind."
       }
     >
       {featured.length > 0 ? (
@@ -334,11 +341,9 @@ export function PartnerGrid({
     );
   }
 
-  // Reihenfolge: erst die live laufenden, dann nach Impact. Achtung: die
-  // Netzwerk-API liefert derzeit weder deadlock_streams_30d noch
-  // avg_viewers_30d, computeImpact gibt deshalb fuer alle 0 zurueck und es
-  // bleibt faktisch bei "live zuerst". Sobald die Felder kommen, greift die
-  // Sortierung ohne weitere Aenderung.
+  // Reihenfolge: erst die live in Deadlock, dann nach Impact aus den
+  // 30-Tage-Werten der API. Kanaele ohne Impact rutschen ans Ende und landen
+  // damit im eingeklappten Rest.
   const impact = computeImpact(partners);
   const sorted = [...partners].sort((a, b) => {
     if (a.liveDeadlock !== b.liveDeadlock) return a.liveDeadlock ? -1 : 1;

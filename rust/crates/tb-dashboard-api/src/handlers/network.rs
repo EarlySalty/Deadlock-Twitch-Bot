@@ -23,7 +23,10 @@ pub struct NetworkStreamerJson {
     pub game: Option<String>,
     /// Deadlock-Streams der letzten 30 Tage.
     pub deadlock_streams_30d: i64,
-    /// Schnitt-Zuschauer dieser Streams, 0 wenn es keine gab.
+    /// Ungewichteter Mittelwert der `avg_viewers` ueber die Deadlock-Sessions
+    /// der letzten 30 Tage. Sessions ohne gemessenen Schnitt zaehlen NICHT
+    /// mit, der Wert kann also aus weniger Sessions stammen, als
+    /// `deadlock_streams_30d` angibt. 0, wenn es keine Messung gab.
     pub avg_viewers_30d: f64,
 }
 
@@ -357,6 +360,90 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.get("streamers").is_some(), "Feld 'streamers' fehlt");
         assert!(json["streamers"].as_array().unwrap().is_empty());
+    }
+
+    /// Die 30-Tage-Aggregate waren bislang nur gegen die leere Tabelle
+    /// geprueft. Dieser Test deckt ab, was dabei stumm falsch sein koennte:
+    /// der `FILTER (WHERE had_deadlock_in_session)`, das 30-Tage-Fenster und
+    /// der `LOWER()`-Join auf den Login.
+    #[tokio::test]
+    async fn network_dreissig_tage_aggregate() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "api_network_agg").await;
+
+        sqlx::query("INSERT INTO _partner_state_base VALUES ('AggUser', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            r#"INSERT INTO twitch_stream_sessions
+                   (streamer_login, started_at, had_deadlock_in_session, avg_viewers)
+               VALUES
+                   -- zaehlt: Deadlock, innerhalb des Fensters, Login in anderer Schreibweise
+                   ('agguser', now() - interval '2 days',  true,  100),
+                   ('AGGUSER', now() - interval '5 days',  true,  200),
+                   -- zaehlt fuer die Anzahl, nicht fuer den Schnitt (kein Messwert)
+                   ('agguser', now() - interval '7 days',  true,  NULL),
+                   -- kein Deadlock
+                   ('agguser', now() - interval '3 days',  false, 999),
+                   -- ausserhalb des Fensters
+                   ('agguser', now() - interval '40 days', true,  999)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = build_public_router(pool);
+        let req = Request::builder()
+            .uri("/twitch/api/v2/public/network")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let row = json["streamers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["login"] == "agguser")
+            .expect("Partner fehlt, der LOWER()-Join greift nicht");
+
+        assert_eq!(
+            row["deadlock_streams_30d"], 3,
+            "nur Deadlock-Sessions der letzten 30 Tage zaehlen, war: {row}"
+        );
+        assert_eq!(
+            row["avg_viewers_30d"], 150.0,
+            "Schnitt aus 100 und 200; die NULL-Session und die 999er duerfen \
+             nicht eingehen, war: {row}"
+        );
+    }
+
+    /// Ohne Sessions bleiben beide Werte bei 0 statt null.
+    #[tokio::test]
+    async fn network_aggregate_ohne_sessions_sind_null_werte() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "api_network_agg_leer").await;
+
+        sqlx::query("INSERT INTO _partner_state_base VALUES ('lonely', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = build_public_router(pool);
+        let req = Request::builder()
+            .uri("/twitch/api/v2/public/network")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let row = &json["streamers"][0];
+        assert_eq!(row["deadlock_streams_30d"], 0);
+        assert_eq!(row["avg_viewers_30d"], 0.0);
     }
 
     /// Reiner Logik-Test ohne DB: ein Nicht-Datenbank-Fehler ist keine fehlende Relation.
