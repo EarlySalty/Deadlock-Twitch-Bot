@@ -32,8 +32,8 @@ use tb_social_media::analytics::{
     list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord,
 };
 use tb_social_media::approval::{
-    cancel_scheduled_uploads, get_approval_record, handle_decision, serialize_approval_record,
-    ApprovalError,
+    cancel_scheduled_uploads, get_approval_record, handle_decision, normalize_decision,
+    serialize_approval_record, ApprovalError, DECISION_APPROVE,
 };
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::{
@@ -1280,9 +1280,13 @@ pub async fn queue_upload_handler(
             .collect(),
         _ => Vec::new(),
     };
-    // Auto-Planung ist automatisches Posten → Creator Pro. Ein fester Termin
-    // oder sofortiges Einreihen bleibt ab Free moeglich.
-    if body.schedule.as_deref() == Some("auto") {
+    // Automatisches Posten auf TikTok, Instagram und YouTube ist Creator Pro.
+    // Die Sperre haengt am Einreihen selbst, nicht am `schedule`-Parameter:
+    // vorher griff sie nur bei `schedule="auto"`, ein Aufruf ohne das Feld
+    // reihte dieselben Uploads fuer jeden authentifizierten Partner ein.
+    // Ohne Plattformen wird nichts eingereiht (reiner Formular-Pfad), dann
+    // greift die Sperre nicht.
+    if !platforms.is_empty() {
         if let Some(resp) = auto_posting_guard(&pool, &auth).await {
             return resp;
         }
@@ -2832,6 +2836,15 @@ pub async fn approval_decision_handler(
         Ok(p) => p,
         Err(e) => return e,
     };
+    // Dritter Weg in die Upload-Warteschlange: `handle_decision` ruft bei
+    // "approve" `ensure_queued_uploads` auf und schreibt damit selbst in
+    // `twitch_clips_upload_queue`. Also dieselbe Pro-Sperre wie beim direkten
+    // Einreihen. "skip" und "edit" reihen nichts ein und bleiben ab Free offen.
+    if normalize_decision(&decision) == DECISION_APPROVE {
+        if let Some(resp) = auto_posting_guard(&pool, &auth).await {
+            return resp;
+        }
+    }
     // user_id (B15-FIX): Session-Actor für das Approval-Audit (sonst NULL).
     let actor = editor_user_id(&auth);
     match handle_decision(

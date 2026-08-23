@@ -55,14 +55,43 @@ const DDL: &[&str] = &[
     "CREATE TABLE twitch_stats_tracked (streamer TEXT, ts_utc TIMESTAMPTZ, viewer_count INTEGER)",
     "CREATE TABLE twitch_stats_category (id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, \
      streamer TEXT, viewer_count INTEGER)",
+    // Spaltensatz wie `CLIP_COLUMNS` in `social_media.rs`: der Approval-Pfad
+    // laedt die volle Zeile, eine schmale Testtabelle liefert sonst 500 statt
+    // der Plan-Antwort.
     "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT, \
-     clip_url TEXT, clip_title TEXT, streamer_login TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), \
-     discarded_at TIMESTAMPTZ, source_kind TEXT DEFAULT 'twitch')",
+     clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, \
+     twitch_user_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), duration_seconds DOUBLE PRECISION, \
+     view_count INTEGER, game_name TEXT, status TEXT DEFAULT 'pending', \
+     source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, retention_until TIMESTAMPTZ, \
+     discarded_at TIMESTAMPTZ, layout_override_json JSONB, \
+     uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, \
+     uploaded_instagram BOOLEAN DEFAULT FALSE)",
     "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, \
      granted BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ DEFAULT NOW(), \
      updated_by TEXT)",
     "CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, \
      viewer_count INTEGER, executed_at TIMESTAMPTZ, success BOOLEAN)",
+    "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, \
+     platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, \
+     description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, \
+     last_error TEXT, last_attempt_at TIMESTAMPTZ, \
+     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+    "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, \
+     state TEXT NOT NULL DEFAULT 'awaiting_approval', \
+     approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, \
+     decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
+    "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, \
+     transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, \
+     transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, \
+     title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, \
+     description_tiktok TEXT, description_instagram TEXT, \
+     hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, \
+     hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, \
+     cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, \
+     started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, \
+     updated_at TIMESTAMPTZ DEFAULT NOW())",
+    "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, \
+     updated_at TIMESTAMPTZ, updated_by TEXT)",
 ];
 
 /// Frisches Schema mit allen Tabellen. `None` ohne `TB_TEST_DATABASE_URL`.
@@ -267,40 +296,152 @@ async fn batch_upload_erst_ab_pro() {
     );
 }
 
-/// Auto-Planung in der Upload-Warteschlange ist ebenfalls Pro; ein fester
-/// Termin bleibt ab Free moeglich.
+/// Einreihen in die Upload-Warteschlange ist automatisches Posten und damit
+/// Pro. Die Sperre haengt am Einreihen, nicht am `schedule`-Parameter: sie muss
+/// auch dann greifen, wenn der Aufruf gar kein `schedule` mitschickt. Genau das
+/// war der Nebeneingang, den ein direkter API-Aufruf offen fand.
 #[tokio::test]
-async fn queue_upload_auto_erst_ab_pro() {
+async fn queue_upload_erst_ab_pro() {
     let Some(pool) = pool("t_gate_queue").await else {
         return;
     };
-    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('plusstreamer', TRUE)")
-        .execute(&pool)
-        .await
-        .unwrap();
+    for login in ["plusstreamer", "prostreamer"] {
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     stufe_setzen(&pool, "plusstreamer", "plus").await;
+    stufe_setzen(&pool, "prostreamer", "pro").await;
     sqlx::query(
         "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
-         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'plusstreamer')",
+         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'plusstreamer'), \
+                (2, 'c2', 'https://clips.twitch.tv/c2', 'prostreamer')",
     )
     .execute(&pool)
     .await
     .unwrap();
 
-    let resp = social_media::queue_upload_handler(
-        partner("plusstreamer"),
+    // Mit `schedule: auto` und ohne `schedule` — beide Wege muessen zumachen.
+    for body in [
+        json!({ "clip_id": 1, "platforms": ["tiktok"], "schedule": "auto" }),
+        json!({ "clip_id": 1, "platforms": ["tiktok"] }),
+        json!({ "clip_id": 1, "platforms": "all" }),
+    ] {
+        let resp = social_media::queue_upload_handler(
+            partner("plusstreamer"),
+            State(pool.clone()),
+            Query(social_media::StreamerQuery { streamer: None }),
+            Json(serde_json::from_value(body.clone()).unwrap()),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Plus darf nicht einreihen: {body}"
+        );
+        assert_eq!(body_json(resp).await["required_stufe"], "pro");
+    }
+
+    // Nichts wurde eingereiht.
+    let offen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(offen, 0, "gesperrter Aufruf darf nichts einreihen");
+
+    // Pro passiert das Gate.
+    let pro = social_media::queue_upload_handler(
+        partner("prostreamer"),
         State(pool),
         Query(social_media::StreamerQuery { streamer: None }),
-        Json(serde_json::from_value(json!({
-            "clip_id": 1,
-            "platforms": ["tiktok"],
-            "schedule": "auto",
-        }))
-        .unwrap()),
+        Json(serde_json::from_value(json!({ "clip_id": 2, "platforms": ["tiktok"] })).unwrap()),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(resp).await["required_stufe"], "pro");
+    assert_ne!(pro.status(), StatusCode::FORBIDDEN, "Pro darf einreihen");
+}
+
+/// Dritter Weg in dieselbe Warteschlange: die Approval-Entscheidung reiht bei
+/// "approve" ueber `handle_decision`/`ensure_queued_uploads` selbst Uploads ein.
+/// Also dieselbe Pro-Sperre. "skip" reiht nichts ein und bleibt offen.
+#[tokio::test]
+async fn approval_approve_erst_ab_pro() {
+    let Some(pool) = pool("t_gate_approval").await else {
+        return;
+    };
+    for login in ["plusstreamer", "prostreamer"] {
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    stufe_setzen(&pool, "plusstreamer", "plus").await;
+    stufe_setzen(&pool, "prostreamer", "pro").await;
+    sqlx::query(
+        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
+         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'plusstreamer'), \
+                (2, 'c2', 'https://clips.twitch.tv/c2', 'prostreamer')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let approve = social_media::approval_decision_handler(
+        partner("plusstreamer"),
+        State(pool.clone()),
+        axum::extract::Path("1".to_string()),
+        json!({ "decision": "approve", "platforms": ["tiktok"] }).to_string(),
+    )
+    .await;
+    assert_eq!(approve.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(approve).await["required_stufe"], "pro");
+
+    // Fehlende Decision faellt in `handle_decision` auf "approve" zurueck, das
+    // Gate darf also nicht am Rohwert haengen.
+    let leer = social_media::approval_decision_handler(
+        partner("plusstreamer"),
+        State(pool.clone()),
+        axum::extract::Path("1".to_string()),
+        json!({ "platforms": ["tiktok"] }).to_string(),
+    )
+    .await;
+    assert_eq!(
+        leer.status(),
+        StatusCode::FORBIDDEN,
+        "Default-Decision ist approve und muss gesperrt sein"
+    );
+
+    let offen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(offen, 0, "gesperrte Freigabe darf nichts einreihen");
+
+    // "skip" reiht nichts ein und bleibt ab Free offen.
+    let skip = social_media::approval_decision_handler(
+        partner("plusstreamer"),
+        State(pool.clone()),
+        axum::extract::Path("1".to_string()),
+        json!({ "decision": "skip" }).to_string(),
+    )
+    .await;
+    assert_ne!(
+        skip.status(),
+        StatusCode::FORBIDDEN,
+        "Ueberspringen ist keine Pro-Funktion"
+    );
+
+    // Pro passiert das Gate.
+    let pro = social_media::approval_decision_handler(
+        partner("prostreamer"),
+        State(pool),
+        axum::extract::Path("2".to_string()),
+        json!({ "decision": "approve", "platforms": ["tiktok"] }).to_string(),
+    )
+    .await;
+    assert_ne!(pro.status(), StatusCode::FORBIDDEN, "Pro darf freigeben");
 }
 
 // ── Clip-Kontingent ─────────────────────────────────────────────────────────

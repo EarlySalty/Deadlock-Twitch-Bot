@@ -79,7 +79,12 @@ fn normalize_platforms<I: IntoIterator<Item = String>>(platforms: I) -> Vec<Stri
 }
 
 /// Mappt Eingabe-Decision auf den kanonischen Wert.
-fn normalize_decision(decision: &str) -> &'static str {
+///
+/// Oeffentlich, weil ein Aufrufer wissen muss, ob seine Eingabe auf `approve`
+/// hinauslaeuft, bevor er [`handle_decision`] ruft: nur `approve` reiht Uploads
+/// ein, und unbekannte Eingaben fallen hier auf `approve` zurueck. Ein Gate, das
+/// stattdessen den Rohwert mit `"approve"` vergleicht, waere umgehbar.
+pub fn normalize_decision(decision: &str) -> &'static str {
     match decision.trim().to_lowercase().as_str() {
         "approve" | "approved" => DECISION_APPROVE,
         "skip" | "skipped" => DECISION_SKIP,
