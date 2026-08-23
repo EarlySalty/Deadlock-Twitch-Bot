@@ -108,9 +108,15 @@ pub async fn category_comparison_handler(
     let exclude_external = params.exclude_external.as_deref() == Some("1");
     // Plan-Klemme statt 403: ohne Plus reicht der Vergleich bis zum letzten Stream.
     let (fenster_tage, stufe, gekuerzt) =
-        crate::auth::verlauf_fenster(&pool, &auth, &streamer, days as i64).await;
-    let days = fenster_tage as i32;
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+        crate::auth::verlauf_fenster(&pool, &auth, &streamer, days).await;
+    // Zwei Fenster, mit Absicht getrennt: geklemmt wird nur, was der Streamer
+    // ueber SICH sieht. Die Kategorie-Aggregate (categoryAvg, Perzentile,
+    // categoryRank, Peer-Gruppe) laufen weiter ueber den angefragten Zeitraum.
+    // Vorher hing beides am geklemmten Fenster, damit verglich sich Free nicht
+    // gegen den 30-Tage-Schnitt der Kategorie, sondern gegen einen
+    // Zwei-Tage-Schnitt: Perzentil und Rang waren frei erfunden.
+    let since_eigene: DateTime<Utc> = Utc::now() - Duration::days(fenster_tage);
+    let since_kategorie: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = tb_analytics::overview::KNOWN_CHAT_BOTS
         .iter()
         .map(|s| s.to_string())
@@ -121,7 +127,7 @@ pub async fn category_comparison_handler(
         "SELECT AVG(viewer_count)::float8 AS \"avg_vc?\", MAX(viewer_count)::float8 AS \"peak_vc?\"
          FROM twitch_stats_tracked
          WHERE ts_utc >= $1 AND LOWER(streamer) = $2",
-        since,
+        since_eigene,
         &streamer
     )
     .fetch_optional(&pool)
@@ -164,7 +170,7 @@ pub async fn category_comparison_handler(
         LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
         WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
     "#)
-    .bind(since)
+    .bind(since_eigene)
     .bind(&streamer)
     .bind(&bots)
     .fetch_optional(&pool)
@@ -203,7 +209,7 @@ pub async fn category_comparison_handler(
     let all_avgs_rows = sqlx::query!(
         "SELECT streamer, AVG(viewer_count)::float8 AS \"avg_vc?\" FROM twitch_stats_category
          WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 2",
-        since
+        since_kategorie
     )
     .fetch_all(&pool)
     .await
@@ -243,7 +249,7 @@ pub async fn category_comparison_handler(
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
                  WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2
              ) s",
-            since,
+            since_kategorie,
             EXTERNAL_REACH_AVG_THRESHOLD
         )
         .fetch_optional(&pool)
@@ -258,7 +264,7 @@ pub async fn category_comparison_handler(
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
                  WHERE ts_utc >= $1 GROUP BY streamer
              ) s",
-            since
+            since_kategorie
         )
         .fetch_optional(&pool)
         .await
@@ -300,7 +306,7 @@ pub async fn category_comparison_handler(
                   GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) > $2
               )
         "#)
-        .bind(since)
+        .bind(since_kategorie)
         .bind(EXTERNAL_REACH_AVG_THRESHOLD)
         .bind(&bots)
         .fetch_optional(&pool)
@@ -343,7 +349,7 @@ pub async fn category_comparison_handler(
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
             WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
         "#)
-        .bind(since)
+        .bind(since_kategorie)
         .bind(&bots)
         .fetch_optional(&pool)
         .await
@@ -370,7 +376,7 @@ pub async fn category_comparison_handler(
              WHERE started_at >= $1 AND ended_at IS NOT NULL
              GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) <= $2 ORDER BY ret",
         )
-        .bind(since)
+        .bind(since_kategorie)
         .bind(EXTERNAL_REACH_AVG_THRESHOLD)
         .fetch_all(&pool)
         .await
@@ -409,7 +415,7 @@ pub async fn category_comparison_handler(
             GROUP BY LOWER(s.streamer_login) HAVING AVG(s.avg_viewers) <= $2
             ORDER BY ch
             "#,
-        ).bind(since).bind(EXTERNAL_REACH_AVG_THRESHOLD).bind(&bots).fetch_all(&pool).await.unwrap_or_default();
+        ).bind(since_kategorie).bind(EXTERNAL_REACH_AVG_THRESHOLD).bind(&bots).fetch_all(&pool).await.unwrap_or_default();
         chat_sorted = chat_rows
             .iter()
             .filter_map(|r| r.try_get::<Option<f64>, _>("ch").ok().flatten())
@@ -420,7 +426,7 @@ pub async fn category_comparison_handler(
             "SELECT AVG(retention_10m) AS \"ret?\" FROM twitch_stream_sessions
              WHERE started_at >= $1 AND ended_at IS NOT NULL
              GROUP BY LOWER(streamer_login) ORDER BY 1",
-            since
+            since_kategorie
         )
         .fetch_all(&pool)
         .await
@@ -459,7 +465,7 @@ pub async fn category_comparison_handler(
             GROUP BY LOWER(s.streamer_login) ORDER BY 1
             "#,
         )
-        .bind(since)
+        .bind(since_kategorie)
         .bind(&bots)
         .fetch_all(&pool)
         .await
@@ -476,7 +482,7 @@ pub async fn category_comparison_handler(
         sqlx::query!(
             "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
              WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2 ORDER BY 1",
-            since,
+            since_kategorie,
             EXTERNAL_REACH_AVG_THRESHOLD
         )
         .fetch_all(&pool)
@@ -489,7 +495,7 @@ pub async fn category_comparison_handler(
         sqlx::query!(
             "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
              WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 1",
-            since
+            since_kategorie
         )
         .fetch_all(&pool)
         .await
@@ -517,11 +523,21 @@ pub async fn category_comparison_handler(
     let my_avg_for_tier = if your_avg > 0.0 {
         your_avg
     } else {
-        all_avgs
-            .iter()
-            .find(|(s, _)| s == &streamer)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0)
+        // Eigener Kategorie-Schnitt, aber im geklemmten Fenster. `all_avgs`
+        // laeuft seit der Fenstertrennung ueber den vollen Zeitraum und wuerde
+        // hier genau den Verlauf durchreichen, den die Stufe gerade sperrt.
+        sqlx::query_scalar::<_, Option<f64>>(
+            "SELECT AVG(viewer_count)::float8 FROM twitch_stats_category \
+              WHERE ts_utc >= $1 AND LOWER(streamer) = $2",
+        )
+        .bind(since_eigene)
+        .bind(&streamer)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0.0)
     };
 
     let peer_group: serde_json::Value = if my_avg_for_tier > 0.0 {
@@ -538,7 +554,6 @@ pub async fn category_comparison_handler(
         } else {
             // Q9: Peer session metrics
             struct PeerRow {
-                login: String,
                 avg_v: Option<f64>,
                 peak_v: Option<f64>,
                 ret10: Option<f64>,
@@ -576,21 +591,18 @@ pub async fn category_comparison_handler(
                 GROUP BY LOWER(s.streamer_login)
             "#)
             .bind(&peer_logins[..])
-            .bind(since)
+            .bind(since_kategorie)
             .bind(&bots)
             .fetch_all(&pool)
             .await
             .unwrap_or_default();
             let peer_rows: Vec<PeerRow> = peer_rows_raw
                 .into_iter()
-                .filter_map(|r| {
-                    Some(PeerRow {
-                        login: r.try_get("login").ok()?,
-                        avg_v: r.try_get("avg_v").ok().flatten(),
-                        peak_v: r.try_get("peak_v").ok().flatten(),
-                        ret10: r.try_get("ret10").ok().flatten(),
-                        chat_h: r.try_get("chat_h").ok().flatten(),
-                    })
+                .map(|r| PeerRow {
+                    avg_v: r.try_get("avg_v").ok().flatten(),
+                    peak_v: r.try_get("peak_v").ok().flatten(),
+                    ret10: r.try_get("ret10").ok().flatten(),
+                    chat_h: r.try_get("chat_h").ok().flatten(),
                 })
                 .collect();
 
@@ -607,11 +619,18 @@ pub async fn category_comparison_handler(
             let mut chat_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.chat_h).collect();
             chat_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-            let my_row = peer_rows.iter().find(|r| r.login == streamer);
-            let my_peer_avg = my_row.and_then(|r| r.avg_v).unwrap_or(my_avg_for_tier);
-            let my_peer_peak = my_row.and_then(|r| r.peak_v);
-            let my_peer_ret = my_row.and_then(|r| r.ret10).map(|v| v * 100.0);
-            let my_peer_chat = my_row.and_then(|r| r.chat_h);
+            // Die eigenen Werte kommen aus dem geklemmten Fenster (Q1/Q2), nicht
+            // aus der Peer-Abfrage: die laeuft ueber den vollen Zeitraum und
+            // haette sonst genau den Verlauf zurueckgegeben, den die Stufe
+            // sperrt. Ohne eigene Zahl im Fenster gibt es kein Perzentil.
+            let my_peer_avg = if your_avg > 0.0 {
+                your_avg
+            } else {
+                my_avg_for_tier
+            };
+            let my_peer_peak = (your_peak > 0).then_some(your_peak as f64);
+            let my_peer_ret = (your_ret > 0.0).then_some(your_ret);
+            let my_peer_chat = (your_chat > 0.0).then_some(your_chat);
 
             let round1 = |v: f64| (v * 10.0).round() / 10.0;
 
