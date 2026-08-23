@@ -125,6 +125,10 @@ impl AudioCapturer {
             "--hls-duration".to_string(),
             format_hls_duration(duration_seconds),
             "--twitch-disable-ads".to_string(),
+            // Prefetcht HLS-Segmente und setzt `--hls-live-edge` auf 2 statt 3.
+            // Spart rund ein Segment Puffer — der grösste Einzelhebel gegen den
+            // Abstand zum Live-Rand, ohne den keine zeitnahe Reaktion möglich ist.
+            "--twitch-low-latency".to_string(),
             "--quiet".to_string(),
             "-o".to_string(),
             media_path.to_string_lossy().to_string(),

@@ -9,6 +9,9 @@
 //!   benachrichtigt neu blacklistete Streamer einmalig (Admin-Embed + User-DM)
 //!   entzieht nach 7 Tagen abgelaufener Grace die Streamer-Rolle und hebt
 //!   technische `bot_banned`-Pausen nach Health-Restore wieder auf.
+//! - **Aktive Ban-Prüfung** — im selben stündlichen Sweep: fragt für jeden
+//!   gesunden Partner-Kanal bei Twitch nach, ob der Bot dort gebannt ist. Ohne
+//!   sie fällt ein Ban nur auf, wenn der Bot in dem Kanal gerade sendet.
 //! - **Blacklist-Cleanup** — alle 3,5 h (Python `cleanup_old_entries`, >30 Tage).
 //!
 //! Discord-Reaktionen laufen ausschließlich über den Broker (der Twitch-Bot hat
@@ -33,6 +36,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(3 * 60 * 60 + 30 * 60);
 /// Blacklist-Aufbewahrung in Tagen (Python `cleanup_old_entries` Default).
 const CLEANUP_DAYS: i64 = 30;
+/// Deadlock-Pause-Sweep: 15 Minuten. Der Unmod-Teil hat es nicht eilig (er greift
+/// erst nach zwei Monaten), aber ein Comeback soll nicht bis zum nächsten
+/// Stundenschlag warten. Ohne Treffer kostet der Lauf zwei DB-Queries.
+const DEADLOCK_PAUSE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// Embed-Farbe für Token-Fehler-Alerts (rot).
 const ALERT_COLOR: i64 = 0xE7_4C_3C;
 
@@ -62,7 +69,7 @@ fn env_u64(name: &str) -> Option<u64> {
 
 /// Broker-gestützte Umsetzung des Discord-Reaktions-Ports. Alle Methoden sind
 /// best-effort: Fehler werden geloggt, nie propagiert (Python-Parität).
-struct BrokerTokenLifecycleNotifier {
+pub(crate) struct BrokerTokenLifecycleNotifier {
     relay: Option<BrokerRelay>,
     guild_id: Option<u64>,
     role_id: u64,
@@ -261,16 +268,22 @@ fn spawn_token_lifecycle_tasks(
                     .reactivate_token_error_partners_with_valid_auth()
                     .await;
                 let reconciled = reactor.reconcile_healthy_raid_toggles().await;
+                // Aktive Ban-Prüfung zuletzt: sie sendet Helix-Requests und soll
+                // erst laufen, wenn die reinen DB-Sweeps ihren Zustand gesetzt
+                // haben (sonst probt sie Kanäle, die gerade restauriert wurden).
+                let banned_detected = reactor.detect_bot_bans().await;
                 if notified > 0
                     || expired > 0
                     || restored > 0
                     || token_reactivated > 0
                     || reconciled > 0
+                    || banned_detected > 0
                 {
                     tracing::info!(
                         notified,
                         grace_expired = expired,
                         bot_ban_restored = restored,
+                        bot_ban_detected = banned_detected,
                         token_error_reactivated = token_reactivated,
                         raid_toggle_reconciled = reconciled,
                         "Token-Lifecycle-Sweep abgeschlossen"
@@ -295,6 +308,75 @@ fn spawn_token_lifecycle_tasks(
     tracing::info!(
         "Token-Lifecycle-Scheduler aktiv (Fehler-Reaktion + Grace + Bot-Ban-Restore stündlich, Cleanup 3,5 h)"
     );
+}
+
+/// Der Reactor des Deadlock-Pause-Sweeps, geteilt zwischen Timer-Task und
+/// MCP-Connector. Ein manuell ausgelöster Sweep soll denselben Reactor fahren
+/// wie der Timer, nicht einen zweiten mit eigener Verdrahtung.
+pub(crate) type SharedDeadlockPauseReactor =
+    Arc<tb_raid::DeadlockPauseReactor<BrokerTokenLifecycleNotifier>>;
+
+/// Spawnt den Deadlock-Pause-Sweep: Mod-Rechte abgeben, wenn ein Partner
+/// [`tb_raid::DEADLOCK_PAUSE_DAYS`] lang kein Deadlock gestreamt hat, und beim
+/// Comeback zurückholen.
+///
+/// Eigener Task statt eines weiteren Schritts im Token-Lifecycle-Sweep: der läuft
+/// stündlich, hier soll ein Comeback schneller beantwortet werden. Ohne Unmod-Port
+/// oder Ban-Probe (fehlender `DB_MASTER_KEY_V1`, keine Bot-ID) startet er nicht,
+/// statt halb zu arbeiten und Kanäle unmarkiert zu lassen.
+///
+/// Gibt den Reactor zurück, damit ein Aufrufer denselben Lauf auch außer der
+/// Reihe auslösen kann (MCP-Connector). `None` heißt: es gibt keinen Sweep.
+pub(crate) fn spawn_deadlock_pause_scheduler(
+    supervisor: &TaskSupervisor,
+    pool: PgPool,
+    broker: &tb_config::BrokerConfig,
+    unmod: Option<Arc<dyn tb_raid::DeadlockPauseUnmodPort>>,
+    remod: Option<Arc<dyn BotBanStatusProbe>>,
+) -> Option<SharedDeadlockPauseReactor> {
+    let (Some(unmod), Some(remod)) = (unmod, remod) else {
+        tracing::info!(
+            "Deadlock-Pause-Sweep nicht gestartet — Mod-Entzug oder Ban-Probe nicht verdrahtet"
+        );
+        return None;
+    };
+    let notifier = match BrokerRelay::new(broker) {
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_env(relay),
+        Err(error) => {
+            tracing::warn!(
+                "Deadlock-Pause-Sweep ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {error}"
+            );
+            BrokerTokenLifecycleNotifier::disabled()
+        }
+    };
+    let reactor = Arc::new(tb_raid::DeadlockPauseReactor::new(
+        pool, notifier, unmod, remod,
+    ));
+    let shared = reactor.clone();
+    supervisor.spawn("deadlock_pause_sweep", async move {
+        let mut tick = tokio::time::interval(DEADLOCK_PAUSE_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Der erste Tick von `interval` feuert sofort. Ohne dieses Vorab-Warten
+        // gingen Sekunden nach jedem Deploy die ersten Unmods samt echter
+        // Streamer-DMs raus, bevor irgendjemand die Vorschau gesehen hat.
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let outcome = reactor.sweep().await;
+            if outcome.any() {
+                tracing::info!(
+                    unmodded = outcome.unmodded,
+                    remodded = outcome.remodded,
+                    "Deadlock-Pause-Sweep abgeschlossen"
+                );
+            }
+        }
+    });
+    tracing::info!(
+        pause_days = tb_raid::DEADLOCK_PAUSE_DAYS,
+        "Deadlock-Pause-Sweep aktiv (Unmod nach Deadlock-Pause, Remod beim Comeback)"
+    );
+    Some(shared)
 }
 
 #[cfg(test)]

@@ -34,6 +34,11 @@ use crate::auth::session::{
 const DEFAULT_ADMIN_BASE_URL: &str = "https://admin.deutsche-deadlock-community.de";
 const DEFAULT_COOKIE_DOMAIN: &str = "deutsche-deadlock-community.de";
 const DEFAULT_DASHBOARD_MODERATOR_ROLE_ID: u64 = 1_337_518_124_647_579_661;
+/// Discord-Rollen, die das Twitch-Admin-Dashboard ohne Moderator-Rolle oeffnen:
+/// `1541055931079729302` = "Twitch Admin Dashboard",
+/// `1524268805424025651` = "Scrim Match Leiter".
+const DEFAULT_DASHBOARD_ADMIN_ROLE_IDS: &[u64] =
+    &[1_541_055_931_079_729_302, 1_524_268_805_424_025_651];
 const BROKER_BASE_URL: &str = "http://127.0.0.1:8766";
 const BROKER_INITIATE_PATH: &str = "/internal/v1/discord/initiate";
 const BROKER_CONSUME_PATH: &str = "/internal/v1/discord/consume-result";
@@ -141,6 +146,8 @@ pub struct DiscordAdminLoginConfig {
     pub cookie_domain: Option<String>,
     pub owner_user_id: Option<u64>,
     pub moderator_role_id: u64,
+    /// Weitere Rollen mit Dashboard-Zugriff (siehe [`DEFAULT_DASHBOARD_ADMIN_ROLE_IDS`]).
+    pub admin_role_ids: Vec<u64>,
     pub admin_guild_ids: Vec<u64>,
     pub client: Arc<dyn DiscordAdminOAuthClient>,
 }
@@ -329,6 +336,7 @@ pub fn discord_admin_login_config_from_env() -> Option<DiscordAdminLoginConfig> 
         cookie_domain,
         owner_user_id,
         moderator_role_id: DEFAULT_DASHBOARD_MODERATOR_ROLE_ID,
+        admin_role_ids: DEFAULT_DASHBOARD_ADMIN_ROLE_IDS.to_vec(),
         admin_guild_ids,
         client: Arc::new(client),
     })
@@ -731,6 +739,13 @@ fn discord_admin_privilege_reason<'a>(
     let moderator = config.moderator_role_id.to_string();
     if role_ids.iter().any(|role| role.trim() == moderator) {
         return (true, "moderator_role:delegated");
+    }
+    if role_ids.iter().any(|role| {
+        role.trim()
+            .parse::<u64>()
+            .is_ok_and(|id| config.admin_role_ids.contains(&id))
+    }) {
+        return (true, "dashboard_role:delegated");
     }
     if config.admin_guild_ids.is_empty() {
         return (false, "admin_guild_not_configured");
@@ -1300,6 +1315,7 @@ mod tests {
             cookie_domain: Some(DEFAULT_COOKIE_DOMAIN.into()),
             owner_user_id: None,
             moderator_role_id: DEFAULT_DASHBOARD_MODERATOR_ROLE_ID,
+            admin_role_ids: DEFAULT_DASHBOARD_ADMIN_ROLE_IDS.to_vec(),
             admin_guild_ids: vec![42],
             client,
         }
@@ -1413,6 +1429,18 @@ mod tests {
             canonical_discord_admin_post_login_path(Some("/twitch/not-allowed")),
             ADMIN_FALLBACK_PATH
         );
+    }
+
+    #[test]
+    fn privileg_check_akzeptiert_dashboard_rollen_ohne_moderator() {
+        let cfg = config(fake_client(Vec::new()));
+        for role in DEFAULT_DASHBOARD_ADMIN_ROLE_IDS {
+            assert_eq!(
+                discord_admin_privilege_reason(10, &[role.to_string()], &cfg),
+                (true, "dashboard_role:delegated"),
+                "Rolle {role}"
+            );
+        }
     }
 
     #[test]

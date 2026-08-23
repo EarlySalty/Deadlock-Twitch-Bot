@@ -17,7 +17,7 @@ const streamerPool: Streamer[] = [
   { name: 'whysolowkey',    avatar: 'W',  color: '#55978f', viewers: 183, video: `${BASE}/clips/whysolowkey.mp4` },
   { name: 'kdenos',         avatar: 'K',  color: '#55978f', viewers: 312, video: `${BASE}/clips/kdenos.mp4` },
   { name: 'johnnyblazedx',  avatar: 'J',  color: '#55978f', viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4` },
-  { name: 'derechtecoolys', avatar: 'D',  color: '#e0912f', viewers: 158, video: `${BASE}/clips/derechtecoolys.mp4` },
+  { name: 'coolysdl',       avatar: 'C',  color: '#e0912f', viewers: 158, video: `${BASE}/clips/coolysdl.mp4` },
   { name: 'duzzel',         avatar: 'Du', color: '#dd6a4d', viewers: 534, video: `${BASE}/clips/duzzel.mp4` },
 ]
 

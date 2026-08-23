@@ -44,6 +44,16 @@ Der Bot meldet sich per Twitch-Login an und braucht ein paar Standard-Rechte: Ch
 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
 
+### Was passiert, wenn ich kein Deadlock mehr streame?
+
+Streamst du zwei Monate lang kein Deadlock, gibt der Bot seine Moderator-Rechte in deinem Kanal von allein ab. Deine Partnerschaft und deine Einstellungen bleiben dabei bestehen. Streamst du wieder Deadlock, moddet er sich automatisch zurück, ohne dass du etwas tun musst.
+
+- Du bekommst eine Discord-Nachricht, wenn der Bot sich entmoddet. Kommt er später zurück, läuft das still im Hintergrund.
+- Voraussetzung fürs Zurückkommen ist eine gültige Twitch-Verbindung; ist die abgelaufen, verbinde deinen Kanal einmal neu.
+- Willst du dauerhaft aufhören, trenn den Bot lieber ganz: das geht im Dashboard unter Bot-Einstellungen.
+
+[Bot-Einstellungen](https://deutsche-deadlock-community.de/twitch/verwaltung#bot)
+
 ### Was passiert, wenn ich offline bin?
 
 Der Bot bleibt erreichbar, schickt aber keine Chat-Aktionen mehr — Werbung, Lurker-Erinnerungen und ähnliches greifen nur, wenn dein Stream läuft. Sobald dein Stream endet, prüft der Bot, ob er deine Zuschauer per Auto-Raid weiterleiten kann.

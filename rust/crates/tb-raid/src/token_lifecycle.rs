@@ -31,9 +31,33 @@ use crate::util::mask_log_identifier as mask;
 /// `TOKEN_ERROR_CHANNEL_ID`). Konstante 1:1 übernommen.
 pub const TOKEN_ERROR_CHANNEL_ID: i64 = 1374364800817303632;
 
-/// Standard-Re-Auth-Ziel: die Website-Streamer-Aktivierungsseite. Per Env
-/// `STREAMER_REAUTH_URL` überschreibbar (kein Domain-Raten im Code).
-pub const DEFAULT_REAUTH_URL: &str = "https://deadlock-twitch.de/streamer/";
+/// Standard-Re-Auth-Ziel: das Verwaltungs-Dashboard. Dort ist "Twitch-Verbindung"
+/// der erste Punkt, über den der Streamer den Bot neu autorisiert — damit gilt das
+/// Dashboard sofort wieder als vertraut. Per Env `STREAMER_REAUTH_URL`
+/// überschreibbar (kein Domain-Raten im Code).
+pub const DEFAULT_REAUTH_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung";
+
+/// Obergrenze an Kanälen pro aktivem Ban-Sweep. Reine Sicherheitsleine gegen
+/// einen Helix-Ansturm, wenn die Partner-Zahl unerwartet wächst.
+const BAN_PROBE_MAX_PER_SWEEP: i64 = 400;
+
+/// Pause zwischen zwei Ban-Proben. Hält den Sweep weit unter dem Helix-Budget,
+/// ohne dass ein Lauf spürbar länger dauert.
+const BAN_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Anker der Bot-Sektion im Verwaltungs-Dashboard. Dort unten sitzt
+/// "Bot vom Kanal trennen" — der einzige saubere Weg, den Bot loszuwerden.
+pub const BOT_SECTION_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung#bot";
+
+/// Twitch-Login des Bots, wie ihn der Streamer in seinem Chat tippt. Per Env
+/// `BOT_TWITCH_LOGIN` überschreibbar.
+pub fn bot_twitch_login() -> String {
+    std::env::var("BOT_TWITCH_LOGIN")
+        .ok()
+        .map(|v| v.trim().to_lowercase())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "deutschedeadlockcommunity".to_string())
+}
 
 // ---------------------------------------------------------------------------
 // Notifier-Port (F4-Broker-Außenkopplung)
@@ -102,7 +126,7 @@ pub fn admin_grace_expired_text(
         Some(id) if !id.is_empty() => format!("<@{id}>"),
         _ => format!("`{twitch_login}`"),
     };
-    let title = "🚨 Grace-Period abgelaufen – Streamer-Rolle entzogen".to_string();
+    let title = "🚨 Grace-Period abgelaufen, Streamer-Rolle entzogen".to_string();
     let description = format!(
         "Der Streamer **{twitch_login}** hat seinen Token innerhalb von \
          **{GRACE_PERIOD_DAYS} Tagen** nicht erneuert. Die Streamer-Rolle wurde \
@@ -110,56 +134,108 @@ pub fn admin_grace_expired_text(
          Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
          Discord: {mention}\n\
          User ID: `{twitch_user_id}`\n\
-         Bitte kontaktiere {mention} direkt — Re-Auth über die Website stellt die \
+         Bitte kontaktiere {mention} direkt. Ein Re-Auth über die Website stellt die \
          Rolle automatisch wieder her."
     );
     (title, description)
 }
 
+/// Admin-Embed-Inhalt bei Kanal-seitigem Bot-Ban.
+///
+/// Bis dahin lief der Bot-Ban komplett lautlos: der Streamer bekam eine DM, im
+/// Admin-Log stand nichts. Damit war nicht zu sehen, dass ein Partner den Bot
+/// rausgeworfen hat, obwohl er die Streamer-Rolle behielt. `quelle` benennt, wer
+/// den Ban gemeldet hat (Chat-Signal, EventSub oder aktive Prüfung).
+pub fn admin_bot_banned_text(
+    twitch_login: &str,
+    twitch_user_id: &str,
+    discord_user_id: Option<&str>,
+    quelle: &str,
+    error_message: &str,
+) -> (String, String) {
+    let mention = match discord_user_id {
+        Some(id) if !id.is_empty() => format!("<@{id}>"),
+        _ => "unbekannt".to_string(),
+    };
+    let title = "🚫 Bot im Partner-Kanal gebannt".to_string();
+    let err = truncate_chars(error_message.trim(), 200);
+    let detail = if err.is_empty() {
+        String::new()
+    } else {
+        format!("Signal: ```{err}```\n")
+    };
+    let description = format!(
+        "Der Bot ist in **{twitch_login}** gebannt oder entmoddet. Auto-Raid, \
+         Chat-Schutz und Analytics sind für diesen Kanal pausiert.\n\n\
+         Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
+         Discord: {mention}\n\
+         User ID: `{twitch_user_id}`\n\
+         Erkannt über: `{quelle}`\n\
+         {detail}\n\
+         Der Streamer hat eine DM mit Recovery- und Trenn-Anleitung bekommen. \
+         Die Streamer-Rolle bleibt vorerst bestehen."
+    );
+    (title, description)
+}
+
 /// User-DM-Text bei Token-Fehler (Erst-DM). Text-only mit Re-Auth-Link.
+///
+/// Der Re-Auth läuft bewusst über das Verwaltungs-Dashboard und nicht über einen
+/// nackten OAuth-Link: nach der Neu-Autorisierung im ersten Punkt
+/// "Twitch-Verbindung" gilt das Dashboard sofort wieder als vertraut.
 pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String {
     format!(
-        "⚠️ **Twitch Bot – Verbindung fehlgeschlagen**\n\n\
-         Die Verbindung für **{twitch_login}** ist fehlgeschlagen und muss erneuert \
-         werden (z. B. nach Passwort-/2FA-Änderung oder Deautorisierung).\n\n\
-         Bis zur erneuten Verbindung bleiben Auto-Raid, Chat-Schutz und Analytics \
-         für deinen Kanal deaktiviert. Du hast {GRACE_PERIOD_DAYS} Tage Zeit, bevor \
-         die Streamer-Rolle entzogen wird.\n\n\
-         🔗 Jetzt neu verbinden: {reauth_url}\n\n\
-         Wenn du die Verbindung bewusst entfernt hast und kein Partner mehr sein \
-         möchtest, kannst du diese Nachricht ignorieren."
+        "⚠️ **Twitch-Verbindung fehlgeschlagen**\n\n\
+         Die Verbindung für **{twitch_login}** ist abgelaufen (z. B. nach Passwort- \
+         oder 2FA-Änderung). Auto-Raid, Chat-Schutz und Analytics pausieren, bis sie \
+         wieder steht.\n\n\
+         **So verbindest du neu:**\n\
+         1️⃣ Dashboard öffnen: {reauth_url}\n\
+         2️⃣ Erster Punkt **Twitch-Verbindung**\n\
+         3️⃣ **Bot neu autorisieren** klicken\n\n\
+         Danach läuft alles von allein weiter.\n\n\
+         ⏳ Du hast {GRACE_PERIOD_DAYS} Tage, danach entfällt die Streamer-Rolle.\n\n\
+         Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
     )
 }
 
 /// User-DM-Text als Grace-Reminder (Python `is_reminder=True`).
 pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
     format!(
-        "⚠️ **Twitch Bot – Aktivierung weiterhin ausstehend**\n\n\
-         Die Verbindung für **{twitch_login}** wurde seit {GRACE_PERIOD_DAYS} Tagen \
-         noch nicht erneuert. Die Bot-Funktionen bleiben deaktiviert, bis dein Kanal \
-         wieder verbunden ist.\n\n\
-         🔗 Jetzt neu verbinden: {reauth_url}\n\n\
-         Wenn du die Verbindung bewusst entfernt hast, kannst du diese Nachricht \
-         ignorieren."
+        "⚠️ **Twitch-Verbindung fehlt weiterhin**\n\n\
+         Für **{twitch_login}** ist die Verbindung seit {GRACE_PERIOD_DAYS} Tagen \
+         offen. Die Bot-Funktionen bleiben so lange aus.\n\n\
+         **So verbindest du neu:**\n\
+         1️⃣ Dashboard öffnen: {reauth_url}\n\
+         2️⃣ Erster Punkt **Twitch-Verbindung**\n\
+         3️⃣ **Bot neu autorisieren** klicken\n\n\
+         Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
     )
 }
 
 /// User-DM-Text bei Kanal-seitigem Bot-Ban (Python `_send_user_dm_bot_banned`).
 /// Der technische `error_message` fließt bewusst NICHT in die DM (verwirrt den
 /// Streamer) — er bleibt im Blacklist-`reason` und in den Logs erhalten.
+///
+/// Zweiter Block ist der saubere Ausstieg: ein Ban allein trennt den Bot nicht,
+/// er lässt ihn nur blockiert zurück. Wer ihn wirklich loswerden will, muss erst
+/// entbannen (sonst kann der Bot seine Mod-Rechte nicht abgeben) und dann im
+/// Dashboard trennen.
 pub fn user_dm_bot_banned_text(twitch_login: &str, _error_message: &str) -> String {
+    let bot = bot_twitch_login();
     format!(
-        "⚠️ **Twitch Bot – in deinem Channel blockiert**\n\n\
+        "⚠️ **Der Bot ist in deinem Kanal blockiert**\n\n\
          Der Bot wurde in **{twitch_login}** gebannt oder als Moderator entfernt. \
-         Solange das so ist, pausieren Auto-Raid, Chat-Schutz und Analytics für \
-         deinen Kanal.\n\n\
-         **So holst du ihn zurück** – schick diese beiden Befehle in deinem eigenen \
-         Twitch-Chat:\n\
-         1️⃣ Ban aufheben: `/unban deutschedeadlockcommunity`\n\
-         2️⃣ Wieder zum Mod machen: `/mod deutschedeadlockcommunity`\n\n\
-         Sobald das erledigt ist, läuft alles von allein wieder an – du musst sonst \
-         nichts weiter tun. War der Ban Absicht, kannst du diese Nachricht einfach \
-         ignorieren."
+         Auto-Raid, Chat-Schutz und Analytics pausieren so lange.\n\n\
+         **War das ein Versehen?** Zwei Befehle in deinem Chat:\n\
+         1️⃣ `/unban {bot}`\n\
+         2️⃣ `/mod {bot}`\n\n\
+         Danach läuft alles von allein wieder an.\n\n\
+         **Willst du den Bot loswerden?** Bitte in dieser Reihenfolge:\n\
+         1️⃣ `/unban {bot}` in deinem Chat (ohne das behält der Bot seine Rechte)\n\
+         2️⃣ {BOT_SECTION_URL} öffnen\n\
+         3️⃣ Ganz unten **Bot vom Kanal trennen** klicken\n\n\
+         Damit ist er sauber raus und wird nicht mehr für dich tätig."
     )
 }
 
@@ -218,8 +294,26 @@ pub struct BotBannedOutcome {
     pub opt_out_marked: bool,
     /// Recovery-DM wurde ueber den Notifier-Port zugestellt.
     pub user_dm_sent: bool,
+    /// Admin-Log-Embed wurde zugestellt.
+    pub admin_sent: bool,
     /// Vorher existierte bereits ein `bot_banned`-Blacklist-Grund.
     pub already_flagged: bool,
+}
+
+/// Leitet aus dem internen Ban-Grund ab, welcher Pfad den Ban gemeldet hat.
+/// Landet als `Erkannt über` im Admin-Embed, damit im Log unterscheidbar ist,
+/// ob der Ban beim Senden aufgefallen ist oder erst die aktive Prüfung ihn fand.
+fn quelle_aus_reason(reason: &str) -> &'static str {
+    let reason = reason.to_lowercase();
+    if reason.contains("ban_probe") {
+        "aktive Prüfung"
+    } else if reason.contains("eventsub") {
+        "EventSub"
+    } else if reason.contains("chat") {
+        "Chat-Sendeversuch"
+    } else {
+        "unbekannt"
+    }
 }
 
 /// Token-Lifecycle-Reaktor: bindet `twitch_token_blacklist` an den Discord-Port.
@@ -412,7 +506,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             // 2. Streamer-Rolle entziehen (best-effort via Broker).
             if let Some(ref did) = discord_user_id {
                 let reason = format!(
-                    "Twitch-Token seit {GRACE_PERIOD_DAYS} Tagen ungültig – Grace-Period abgelaufen"
+                    "Twitch-Token seit {GRACE_PERIOD_DAYS} Tagen ungültig, Grace-Period abgelaufen"
                 );
                 self.notifier.revoke_streamer_role(did, &reason).await;
             }
@@ -427,7 +521,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 processed += 1;
                 tracing::info!(
                     user = %mask(&row.twitch_user_id),
-                    "Grace-Period abgelaufen – Rolle entzogen, token_error_expired gesetzt"
+                    "Grace-Period abgelaufen: Rolle entzogen, token_error_expired gesetzt"
                 );
             }
         }
@@ -630,14 +724,31 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             false
         };
 
+        // Admin-Log: ein Partner-Ban ist ein Vorgang, der gesehen werden muss.
+        // Ohne diese Meldung fiel ein Rauswurf nur auf, wenn zufällig jemand die
+        // Blacklist gelesen hat.
+        let (title, description) = admin_bot_banned_text(
+            twitch_login,
+            twitch_user_id,
+            discord_user_id.as_deref(),
+            quelle_aus_reason(error_message),
+            error_message,
+        );
+        let admin_sent = self
+            .notifier
+            .send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &title, &description)
+            .await;
+
         tracing::info!(
             user = %mask(twitch_login),
             user_dm = user_dm_sent,
+            admin = admin_sent,
             "Bot-Ban-Opt-out verarbeitet"
         );
         BotBannedOutcome {
             opt_out_marked: true,
             user_dm_sent,
+            admin_sent,
             already_flagged: false,
         }
     }
@@ -734,6 +845,101 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             }
         }
         restored
+    }
+
+    /// Aktive Ban-Prüfung über alle gesunden Partner-Kanäle.
+    ///
+    /// Die bisherige Erkennung war rein reaktiv: sie hing daran, dass der Bot in
+    /// dem Kanal etwas sendet oder eine EventSub-Subscription scheitert. In einem
+    /// Kanal, in dem der Bot gerade still ist, blieb ein Ban deshalb beliebig
+    /// lange unbemerkt, der Partner galt weiter als aktiv und behielt seine
+    /// Streamer-Rolle. Dieser Sweep fragt den Zustand stattdessen selbst ab.
+    ///
+    /// Kandidaten sind nur Kanäle mit gesundem Streamer-Token und ohne bereits
+    /// gesetzten Bot-Ban-/Blocked-Marker. Kanäle in der Deadlock-Pause bleiben
+    /// außen vor: dort ist der Bot bewusst entmoddet, die Probe würde ihn sofort
+    /// wieder einsetzen.
+    ///
+    /// Liefert die Anzahl neu erkannter Bans.
+    pub async fn detect_bot_bans(&self) -> u64 {
+        let Some(probe) = &self.bot_ban_status_probe else {
+            tracing::debug!("Bot-Ban-Sweep übersprungen: kein Ban-Status-Provisioner verdrahtet");
+            return 0;
+        };
+
+        let rows = match sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT p.twitch_user_id,
+                   COALESCE(NULLIF(LOWER(p.twitch_login), ''),
+                            NULLIF(LOWER(a.twitch_login), ''),
+                            '') AS twitch_login
+              FROM twitch_partners p
+              JOIN twitch_raid_auth a
+                ON a.twitch_user_id = p.twitch_user_id
+             WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
+               AND COALESCE(a.needs_reauth, TRUE) = FALSE
+               AND a.access_token_enc IS NOT NULL
+               AND OCTET_LENGTH(a.access_token_enc) > 0
+               AND LOWER(TRIM(COALESCE(p.technical_pause_reason, '')))
+                   NOT IN ('blocked', 'bot_banned')
+               -- Kanäle in der Deadlock-Pause bleiben außen vor: dort ist der
+               -- Bot absichtlich entmoddet, und die Probe würde ihn im selben
+               -- Call wieder einsetzen (siehe `crate::deadlock_pause`).
+               AND p.deadlock_pause_unmodded_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM twitch_raid_blacklist rb
+                    WHERE (rb.target_id = p.twitch_user_id
+                        OR LOWER(rb.target_login) = LOWER(p.twitch_login))
+                      AND LOWER(COALESCE(rb.reason, '')) LIKE '%bot_banned%'
+               )
+             ORDER BY p.twitch_login
+             LIMIT $1
+            "#,
+        )
+        .bind(BAN_PROBE_MAX_PER_SWEEP)
+        .fetch_all(&self.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "Bot-Ban-Sweep: DB-Query fehlgeschlagen");
+                return 0;
+            }
+        };
+
+        let mut detected = 0u64;
+        for (twitch_user_id, twitch_login) in rows {
+            if twitch_login.is_empty() {
+                continue;
+            }
+            match probe.bot_ban_status(&twitch_user_id, &twitch_login).await {
+                BotBanStatus::Banned => {
+                    let outcome = self
+                        .handle_bot_banned_channel(
+                            &twitch_user_id,
+                            &twitch_login,
+                            "ban_probe: Twitch lehnt die Moderator-Einsetzung mit Ban-Hinweis ab",
+                        )
+                        .await;
+                    if outcome.opt_out_marked {
+                        detected += 1;
+                        tracing::warn!(
+                            login = %twitch_login,
+                            dm = outcome.user_dm_sent,
+                            admin = outcome.admin_sent,
+                            "Bot-Ban aktiv erkannt"
+                        );
+                    }
+                }
+                // NotBanned heißt hier zugleich: der Bot ist (wieder) Moderator,
+                // die Probe setzt ihn im selben Call ein. Unknown ist ein
+                // Netz-/Token-Problem und darf niemanden pausieren.
+                BotBanStatus::NotBanned | BotBanStatus::Unknown => {}
+            }
+            tokio::time::sleep(BAN_PROBE_DELAY).await;
+        }
+        detected
     }
 
     /// Reaktiviert Partner, die nur wegen `token_error*` pausiert sind, wenn die
@@ -1308,9 +1514,24 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         twitch_user_id: &str,
         twitch_login: &str,
     ) -> Option<String> {
-        let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
-        let row: Result<Option<String>, _> = sqlx::query_scalar!(
-            r#"
+        discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
+    }
+}
+
+/// Discord-ID eines Streamers aus `twitch_streamer_identities`, gesucht über
+/// User-ID oder Login. Freie Funktion, damit alle Lifecycle-Pfade (Token-Fehler,
+/// Bot-Ban, Deadlock-Pause) dieselbe Auflösung benutzen statt je eigener Queries.
+pub async fn discord_user_id_for(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Option<String> {
+    let login = tb_domain::normalize_twitch_login(twitch_login).unwrap_or_default();
+    // Einrückung des Query-Strings bewusst unverändert gelassen: der
+    // sqlx-Offline-Cache hasht den Literal-Text, ein Umformatieren würde den
+    // vorbereiteten Eintrag verwaisen lassen.
+    let row: Result<Option<String>, _> = sqlx::query_scalar!(
+        r#"
             SELECT discord_user_id AS "discord_user_id?"
             FROM twitch_streamer_identities
             WHERE ($1 <> '' AND twitch_user_id = $1)
@@ -1318,18 +1539,17 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             ORDER BY updated_at DESC
             LIMIT 1
             "#,
-            twitch_user_id.trim(),
-            &login
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map(Option::flatten);
-        match row {
-            Ok(raw) => sanitize_discord_user_id(raw.as_deref()),
-            Err(error) => {
-                tracing::warn!(%error, user = %mask(twitch_login), "discord_user_id-Lookup fehlgeschlagen");
-                None
-            }
+        twitch_user_id.trim(),
+        &login
+    )
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten);
+    match row {
+        Ok(raw) => sanitize_discord_user_id(raw.as_deref()),
+        Err(error) => {
+            tracing::warn!(%error, user = %mask(twitch_login), "discord_user_id-Lookup fehlgeschlagen");
+            None
         }
     }
 }
@@ -1397,6 +1617,20 @@ mod tests {
         }
     }
 
+    /// Merkt sich, welche Kanäle die Ban-Probe überhaupt angefasst hat.
+    #[derive(Default)]
+    struct RecordingBanProbe {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BotBanStatusProbe for Arc<RecordingBanProbe> {
+        async fn bot_ban_status(&self, _twitch_user_id: &str, twitch_login: &str) -> BotBanStatus {
+            self.seen.lock().unwrap().push(twitch_login.to_string());
+            BotBanStatus::NotBanned
+        }
+    }
+
     // --- Reine Logik (kein DB nötig) ------------------------------------
 
     #[tokio::test]
@@ -1438,6 +1672,26 @@ mod tests {
         assert!(!text.to_lowercase().contains("klicke auf den button"));
     }
 
+    /// Der Re-Auth-Weg ist bewusst der Dashboard-Weg: erst dadurch gilt das
+    /// Dashboard danach wieder als vertraut. Ein nackter OAuth-Link tut das nicht.
+    #[test]
+    fn token_error_dm_fuehrt_durchs_dashboard() {
+        let text = user_dm_token_error_text("foo", DEFAULT_REAUTH_URL);
+        assert!(text.contains("https://deutsche-deadlock-community.de/twitch/verwaltung"));
+        assert!(text.contains("Twitch-Verbindung"));
+        assert!(text.contains("Bot neu autorisieren"));
+    }
+
+    #[test]
+    fn default_reauth_url_zeigt_aufs_verwaltungs_dashboard() {
+        assert_eq!(
+            DEFAULT_REAUTH_URL,
+            "https://deutsche-deadlock-community.de/twitch/verwaltung"
+        );
+        assert!(BOT_SECTION_URL.starts_with(DEFAULT_REAUTH_URL));
+        assert!(BOT_SECTION_URL.ends_with("#bot"));
+    }
+
     #[test]
     fn bot_banned_dm_nennt_kanal_und_recovery_schritte() {
         let text = user_dm_bot_banned_text("foo", "sender_banned");
@@ -1452,11 +1706,31 @@ mod tests {
         assert_ne!(text, "Platzhalter");
     }
 
+    /// Ein Ban ist kein Trennen: ohne Unban behält der Bot seine Mod-Rechte, weil
+    /// Twitch den Unmod-Call für einen gebannten User ablehnt. Die DM muss die
+    /// Reihenfolge deshalb ausdrücklich nennen.
+    #[test]
+    fn bot_banned_dm_erklaert_sauberes_trennen_in_reihenfolge() {
+        let text = user_dm_bot_banned_text("foo", "");
+        let unban_pos = text
+            .find("/unban deutschedeadlockcommunity` in deinem Chat")
+            .expect("Unban-Schritt der Trenn-Anleitung fehlt");
+        let dashboard_pos = text.find(BOT_SECTION_URL).expect("Dashboard-Link fehlt");
+        let trennen_pos = text
+            .find("Bot vom Kanal trennen")
+            .expect("Trenn-Button fehlt");
+        assert!(
+            unban_pos < dashboard_pos && dashboard_pos < trennen_pos,
+            "Reihenfolge muss Unban → Dashboard → Trennen sein"
+        );
+    }
+
     #[test]
     fn reminder_dm_referenziert_grace_dauer() {
         let text = user_dm_reminder_text("foo", DEFAULT_REAUTH_URL);
         assert!(text.contains(&GRACE_PERIOD_DAYS.to_string()));
-        assert!(text.contains("Aktivierung weiterhin ausstehend"));
+        assert!(text.contains("Verbindung fehlt weiterhin"));
+        assert!(text.contains("Bot neu autorisieren"));
     }
 
     #[test]
@@ -2501,5 +2775,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1);
+    }
+
+    /// Der aktive Ban-Sweep probt über `add_channel_moderator` und setzt den Bot
+    /// dabei als Moderator ein. In einem Kanal, der wegen Deadlock-Pause
+    /// absichtlich entmoddet ist, würde er die Pause damit sofort aufheben.
+    #[tokio::test]
+    async fn ban_sweep_fasst_kanaele_in_der_deadlock_pause_nicht_an() {
+        if test_db_url().is_none() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("tl_ban_sweep_pause").await;
+        sqlx::query(
+            "ALTER TABLE twitch_partners ADD COLUMN IF NOT EXISTS deadlock_pause_unmodded_at text",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (uid, login) in [("1", "normal"), ("2", "pausiert")] {
+            sqlx::query(
+                "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ($1, $2, 'active')",
+            )
+            .bind(uid)
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+            seed_raid_auth(
+                &pool,
+                uid,
+                login,
+                true,
+                false,
+                Utc::now() + chrono::Duration::days(1),
+            )
+            .await;
+        }
+        sqlx::query(
+            "UPDATE twitch_partners SET deadlock_pause_unmodded_at = '2026-01-01T00:00:00+00:00'
+              WHERE twitch_login = 'pausiert'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let probe = Arc::new(RecordingBanProbe::default());
+        let reactor =
+            TokenLifecycleReactor::new(pool.clone(), Arc::new(CountingNotifier::default()))
+                .with_bot_ban_status_probe(Arc::new(probe.clone()));
+        reactor.detect_bot_bans().await;
+
+        let seen = probe.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec!["normal".to_string()],
+            "der pausierte Kanal darf nicht geprobt werden"
+        );
     }
 }

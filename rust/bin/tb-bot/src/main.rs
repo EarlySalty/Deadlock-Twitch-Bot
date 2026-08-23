@@ -59,6 +59,7 @@ mod confirm_resolver;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
 mod irc_lurker_wiring;
+mod mcp;
 mod oauth_followups;
 mod offline_side_effects;
 mod outreach_shadow_wiring;
@@ -1835,7 +1836,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
-        bot_ban_status_probe,
+        bot_ban_status_probe.clone(),
     );
 
     // Shadow-Review-Ausgang (B19): leitet gestagte Shadow-KI-Antworten periodisch
@@ -1944,7 +1945,10 @@ async fn main() {
     // Mod-Entzug für den Trenn-Endpoint. Braucht Streamer-Token-Provider
     // (DB_MASTER_KEY_V1), Helix und die Bot-User-ID; fehlt eines, meldet der
     // Endpoint "unavailable" statt so zu tun, als wäre entmoddet worden.
-    let moderator_removal: Option<Arc<dyn tb_internal_api::ModeratorRemovalPort>> = match (
+    // Ein Remover, zwei Abnehmer: der Trenn-Endpoint im Dashboard und der
+    // Deadlock-Pause-Sweep. Deshalb erst konkret bauen, dann in beide Ports
+    // geben, statt zweimal denselben Helix-Aufruf zu verdrahten.
+    let moderator_remover: Option<Arc<eventsub_hooks::HelixModeratorRemover>> = match (
         helix
             .as_ref()
             .clone()
@@ -1957,8 +1961,7 @@ async fn main() {
                 token_provider,
                 helix_client,
                 internal_bot_user_id.clone(),
-            ))
-                as Arc<dyn tb_internal_api::ModeratorRemovalPort>)
+            )))
         }
         _ => {
             tracing::info!(
@@ -1968,6 +1971,22 @@ async fn main() {
             None
         }
     };
+    let moderator_removal: Option<Arc<dyn tb_internal_api::ModeratorRemovalPort>> =
+        moderator_remover
+            .clone()
+            .map(|r| r as Arc<dyn tb_internal_api::ModeratorRemovalPort>);
+
+    // Deadlock-Pause: Mod-Rechte ruhen lassen, wenn ein Partner seit zwei
+    // Monaten kein Deadlock streamt, und beim Comeback zurückholen.
+    // Der Reactor kommt zurück, damit der MCP-Connector denselben Lauf außer
+    // der Reihe auslösen kann statt einen zweiten aufzubauen.
+    let deadlock_pause_reactor = token_lifecycle_wiring::spawn_deadlock_pause_scheduler(
+        &supervisor,
+        pool.clone(),
+        &settings.broker,
+        moderator_remover.map(|r| r as Arc<dyn tb_raid::DeadlockPauseUnmodPort>),
+        bot_ban_status_probe.clone(),
+    );
     let scam_revoke: Option<Arc<dyn tb_internal_api::ScamRevokePort>> =
         scam_revoke_impl::build_scam_revoke_port(scam_revoke_api, pool.clone());
     let scam_enforce: Option<Arc<dyn tb_internal_api::ScamEnforcePort>> =
@@ -1976,6 +1995,22 @@ async fn main() {
         Some(Arc::new(InternalBulkReauthAdapter {
             store: tb_raid::ReauthAdminStore::new(pool.clone()),
         }));
+
+    // MCP-Connector (loopback-only, default 127.0.0.1:8891): zweite Oberfläche
+    // auf dieselben Ports und Handler wie die interne API, damit eine
+    // Claude-Sitzung den Bot ohne eigene Secrets verwalten kann. Ein Bind-Fehler
+    // kostet nur den Connector, nicht den Bot.
+    mcp::spawn(
+        &supervisor,
+        Arc::new(mcp::McpState::new(
+            pool.clone(),
+            tb_internal_api::DiscordRoleExt(discord_role.clone()),
+            tb_internal_api::ModeratorRemovalExt(moderator_removal.clone()),
+            bot_ban_status_probe,
+            deadlock_pause_reactor,
+        )),
+    );
+
     let app = build_internal_router(
         pool,
         token,
