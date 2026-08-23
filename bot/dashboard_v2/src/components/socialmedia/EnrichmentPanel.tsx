@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -53,6 +53,26 @@ interface EditState {
   hashtags_youtube: string[];
   hashtags_tiktok: string[];
   hashtags_instagram: string[];
+}
+
+/**
+ * Ein Satz mit einer hervorgehobenen Stelle in der Mitte, aber nur einem
+ * Uebersetzungsschluessel. Vorher war der Satz auf zwei Schluessel aufgeteilt
+ * ('... gesetzt ist (' und '). Setze einen Key ...'); eine Sprache mit anderer
+ * Wortstellung konnte ihn damit nicht uebersetzen. Die Marke sagt jetzt nur,
+ * wo der hervorgehobene Teil landet, und darf in jeder Sprache anderswo
+ * stehen.
+ */
+function mitEinschub(satz: string, marke: string, einschub: ReactNode): ReactNode {
+  const teile = satz.split(marke);
+  if (teile.length < 2) return satz;
+  return (
+    <>
+      {teile[0]}
+      {einschub}
+      {teile.slice(1).join(marke)}
+    </>
+  );
 }
 
 function fromEnrichment(e: ClipEnrichment): EditState {
@@ -196,11 +216,16 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
 
       {enrichment.status === 'skipped_no_key' && (
         <div className="text-xs text-text-secondary bg-bg/40 border border-border rounded-lg p-3 leading-relaxed">
-          {t('Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist (')}
-          <code className="font-mono text-orange">MINIMAX_API_KEY</code> /
-          {' '}
-          <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
-          {t('). Setze einen Key und drücke „Neu generieren".')}
+          {mitEinschub(
+            t(
+              'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist ({keys}). Setze einen Key und drücke „Neu generieren".',
+            ),
+            '{keys}',
+            <>
+              <code className="font-mono text-orange">MINIMAX_API_KEY</code> /{' '}
+              <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
+            </>,
+          )}
         </div>
       )}
 

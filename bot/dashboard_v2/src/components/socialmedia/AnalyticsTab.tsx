@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   CalendarRange,
@@ -29,23 +29,21 @@ import {
 } from '@/api/socialMedia';
 import type {
   ClipAnalytics,
+  ClipStatus,
   SocialMediaReportKind,
 } from '@/types/socialMedia';
 import { useLanguage } from '@/context/LanguageContext';
-import { fehlerText } from './labels';
+import { fehlerText, REPORT_KIND_LABELS } from './labels';
 
 const BUCKET_ORDER = ['24h', '7d', '30d'] as const;
+
+/** Clip-Stati mit Plattform-IDs: beide liefern Analytics-Zahlen. */
+const VEROEFFENTLICHTE_STATI: ClipStatus[] = ['published_all', 'published_partial'];
 
 interface AnalyticsTabProps {
   streamer: string;
   /** Die Report-Knoepfe sind admin-only; ein Partner bekaeme nur 403. */
   isAdmin: boolean;
-}
-
-function kindLabel(kind: SocialMediaReportKind): string {
-  if (kind === 'streamer') return 'Streamer';
-  if (kind === 'cross') return 'Cross';
-  return 'Admin';
 }
 
 function toneClass(kind: SocialMediaReportKind): string {
@@ -86,26 +84,38 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
   const { t, locale } = useLanguage();
   const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
 
-  // Eigene Abfrage statt der Liste aus dem Clip-Pool: die haengt am Pool-Filter
-  // (Default `pending`) und liefert deshalb praktisch nie einen
+  // Eigene Abfragen statt der Liste aus dem Clip-Pool: die haengt am
+  // Pool-Filter (Default `pending`) und liefert deshalb praktisch nie einen
   // veroeffentlichten Clip.
-  const publishedQuery = useQuery({
-    queryKey: ['social-media', 'clips', streamer, 'published_all'],
-    queryFn: () => fetchClips({ status: 'published_all', streamer, page: 1, page_size: 100 }),
-    enabled: !!streamer,
-    retry: (failureCount, err) => {
-      if (err instanceof SocialMediaForbiddenError) return false;
-      return failureCount < 2;
-    },
+  //
+  // Beide Stati werden gebraucht: ein teilveroeffentlichter Clip hat auf den
+  // geglueckten Plattformen eine ID und damit Zahlen. Nur `published_all`
+  // abzufragen liess ihn aus der Auswahl fallen, sobald eine der drei
+  // Plattformen gescheitert war.
+  const publishedQueries = useQueries({
+    queries: VEROEFFENTLICHTE_STATI.map((status) => ({
+      queryKey: ['social-media', 'clips', streamer, status],
+      queryFn: () => fetchClips({ status, streamer, page: 1, page_size: 100 }),
+      enabled: !!streamer,
+      retry: (failureCount: number, err: Error) => {
+        if (err instanceof SocialMediaForbiddenError) return false;
+        return failureCount < 2;
+      },
+    })),
   });
+  const publishedLoading = publishedQueries.some((abfrage) => abfrage.isLoading);
+  const publishedError = publishedQueries.find((abfrage) => abfrage.error)?.error ?? null;
+  // Stabile Abhaengigkeit: das Array aus `useQueries` ist bei jedem Rendern neu.
+  const publishedStand = publishedQueries.map((abfrage) => abfrage.dataUpdatedAt).join(':');
 
   const eligibleClips = useMemo(() => {
-    const items = publishedQuery.data?.items ?? [];
+    const items = publishedQueries.flatMap((abfrage) => abfrage.data?.items ?? []);
     return items.filter(
       (clip) =>
         clip.platform_status.youtube || clip.platform_status.tiktok || clip.platform_status.instagram,
     );
-  }, [publishedQuery.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishedStand]);
 
   useEffect(() => {
     if (!eligibleClips.length) {
@@ -193,13 +203,13 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
             </div>
           </div>
 
-          {publishedQuery.isLoading ? (
+          {publishedLoading ? (
             <div className="h-[320px] flex items-center justify-center">
               <Loader2 className="w-5 h-5 text-orange animate-spin" />
             </div>
-          ) : publishedQuery.error ? (
+          ) : publishedError ? (
             <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
-              {fehlerText(publishedQuery.error, t)}
+              {fehlerText(publishedError, t)}
             </div>
           ) : !eligibleClips.length ? (
             <div className="rounded-2xl border border-border bg-bg/40 p-8 text-sm text-text-secondary text-center">
@@ -339,7 +349,7 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
               <article key={report.id} className="rounded-2xl border border-border bg-bg/35 p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${toneClass(report.kind)}`}>
-                    {t(kindLabel(report.kind))}
+                    {t(REPORT_KIND_LABELS[report.kind])}
                   </span>
                   {report.streamer_login && (
                     <span className="text-[10px] font-mono text-text-secondary bg-bg/60 px-2 py-1 rounded-md border border-border">

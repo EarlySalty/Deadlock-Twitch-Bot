@@ -291,10 +291,8 @@ const EN: Record<string, string> = {
   'API-Key fehlt': 'API key missing',
   'Neu generieren': 'Regenerate',
   'Enrichment-Panel schließen': 'Close enrichment panel',
-  'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist (':
-    'Enrichment was skipped because no LLM key is set (',
-  '). Setze einen Key und drücke „Neu generieren".':
-    '). Set a key and press "Regenerate".',
+  'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist ({keys}). Setze einen Key und drücke „Neu generieren".':
+    'Enrichment was skipped because no LLM key is set ({keys}). Set a key and press "Regenerate".',
   Titel: 'Title',
   'Erkannte Begriffe': 'Detected terms',
   'Transkript anzeigen': 'Show transcript',
@@ -326,6 +324,24 @@ const EN: Record<string, string> = {
   // -- Nachschub aus Twitch -------------------------------------------------
   'Clips jetzt holen': 'Fetch clips now',
   '{count} Clips von Twitch geholt.': 'Fetched {count} clips from Twitch.',
+
+  // -- Karten ohne geladenen Stand ------------------------------------------
+  'Gespeicherter Stand nicht abrufbar': 'Saved settings could not be loaded',
+  'Solange bleibt diese Karte gesperrt, damit nichts Falsches gespeichert wird. Bitte die Seite neu laden.':
+    'Until then this card stays locked so nothing wrong gets saved. Please reload the page.',
+  'Zustand unbekannt': 'State unknown',
+
+  // -- Rueckmeldung nach dem OAuth-Umweg ------------------------------------
+  '{platform} ist jetzt verbunden.': '{platform} is connected now.',
+  'Das Konto ist jetzt verbunden.': 'The account is connected now.',
+  'Verbinden hat nicht geklappt': 'Connecting did not work',
+  'Die Plattform hat die Verbindung abgelehnt.': 'The platform refused the connection.',
+  'Die Antwort der Plattform passte nicht zur Anfrage. Bitte neu verbinden.':
+    'The reply from the platform did not match the request. Please connect again.',
+  'Der Zugang konnte nicht abgeholt werden. Bitte neu verbinden.':
+    'The access token could not be fetched. Please connect again.',
+  'Die Verbindung konnte nicht abgeschlossen werden. Bitte neu verbinden.':
+    'The connection could not be completed. Please connect again.',
 
   // -- Verbindungen: Ablauf und Sammelverbindung ----------------------------
   'Zugang abgelaufen, bitte neu verbinden': 'Access expired, please reconnect',

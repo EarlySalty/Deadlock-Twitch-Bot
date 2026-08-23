@@ -15,11 +15,12 @@
 
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -60,15 +61,15 @@ use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
-    ensure_streamer_rows, load_categories, load_platform_schedules, load_streamer_settings,
-    plan_next_slot, pool_forecast, save_category_setting, save_platform_schedule,
-    save_streamer_settings, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
+    berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
+    load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
+    verfuegbare_clips, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
     StreamerSettings, PLATFORMS,
 };
 use tb_social_media::rendering::{render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::retention::mark_clip_discarded;
-use tb_social_media::scheduler::next_free_slot;
+use tb_social_media::scheduler::{next_cadence_slot, next_free_slot};
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::settings::{coerce_bool, get_posting_schedule, PostingSchedule};
 use tb_social_media::video_processor::VideoProcessor;
@@ -114,13 +115,40 @@ const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
 /// B15-FIX-index-redirect: Unauthentifiziert liefert die **HTML-Seite** keinen
 /// 401-JSON mehr, sondern einen 302-Redirect auf den Twitch-Login (Browser-UX,
 /// Python-Parität). Die JSON-Daten-Endpoints behalten ihr 401 (kein Redirect).
-pub async fn index_handler(auth: DashboardAuthLevel) -> Response {
+pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
     if matches!(auth, DashboardAuthLevel::None) {
         return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
     }
     // Die alte HTML-Seite ist abgeloest. Bestehende Links landen auf der SPA,
     // statt ins Leere zu laufen.
-    axum::response::Redirect::to("/social-media-admin").into_response()
+    //
+    // Der Query-String muss mit: `oauth_callback_handler` schickt den Browser
+    // auf `/social-media?oauth_success=youtube` beziehungsweise
+    // `?oauth_error=<code>` zurueck. Ohne Weitergabe verliert der Umweg genau
+    // die eine Information, wegen der er stattfindet, und ein gescheiterter
+    // Verbindungsversuch endet wortlos auf der Kontenseite.
+    match weitergereichte_query(&uri) {
+        Some(query) => {
+            axum::response::Redirect::to(&format!("/social-media-admin?{query}")).into_response()
+        }
+        None => axum::response::Redirect::to("/social-media-admin").into_response(),
+    }
+}
+
+/// Query-String, der unveraendert an die SPA weitergereicht werden darf.
+///
+/// Nur druckbares ASCII ohne Fragment-Zeichen und in vernuenftiger Laenge: der
+/// Wert landet in einem `Location`-Header, und dort hat nichts zu suchen, was
+/// nicht schon als Query durch den HTTP-Parser gekommen ist.
+fn weitergereichte_query(uri: &Uri) -> Option<String> {
+    let query = uri.query()?;
+    if query.is_empty() || query.len() > 512 {
+        return None;
+    }
+    if !query.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
+        return None;
+    }
+    Some(query.to_string())
 }
 
 /// `?streamer=` (für scope-gefilterte Endpoints).
@@ -2822,20 +2850,62 @@ fn pool_forecast_json(forecast: &PoolForecast) -> Value {
     })
 }
 
+/// Schon vergebene Termine je Plattform, in einer Abfrage fuer den ganzen
+/// Kanal.
+///
+/// Gleiche Bedingungen wie `posting_plan::belegte_termine`, nur ohne den
+/// Plattform-Filter: der Zeitplan braucht die Termine ohnehin fuer alle drei
+/// Plattformen, und drei Einzelabfragen kosten nur Runden.
+async fn belegte_termine_je_plattform(
+    pool: &PgPool,
+    streamer_login: &str,
+) -> HashMap<String, Vec<DateTime<Utc>>> {
+    let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT q.platform, COALESCE(q.scheduled_at, q.completed_at) AS termin \
+           FROM twitch_clips_upload_queue q \
+           JOIN twitch_clips_social_media c ON c.id = q.clip_id \
+          WHERE LOWER(c.streamer_login) = $1 \
+            AND q.status <> 'failed' \
+            AND COALESCE(q.scheduled_at, q.completed_at) IS NOT NULL \
+            AND COALESCE(q.scheduled_at, q.completed_at) > CURRENT_TIMESTAMP - INTERVAL '14 days'",
+    )
+    .bind(streamer_login.trim().to_lowercase())
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut je_plattform: HashMap<String, Vec<DateTime<Utc>>> = HashMap::new();
+    for (platform, termin) in rows {
+        je_plattform.entry(platform).or_default().push(termin);
+    }
+    je_plattform
+}
+
 /// Baut die vollstaendige Antwort des Zeitplan-Endpoints.
 async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
+    // Feste Zahl an Abfragen, unabhaengig von der Zahl der Plattformen. Vorher
+    // holte `plan_next_slot` je Plattform Zeitplan, Einstellungen und belegte
+    // Termine erneut, und `pool_forecast` lud die Zeitplaene ein viertes Mal:
+    // rund zehn Abfragen pro GET, und jede Zeitplan-Mutation gibt den
+    // kompletten Plan zurueck.
     let settings = load_streamer_settings(pool, streamer_login).await;
     let schedules = load_platform_schedules(pool, streamer_login).await;
     let categories = load_categories(pool, streamer_login).await;
-    let forecast = pool_forecast(pool, streamer_login).await;
+    let forecast = berechne_vorrat(verfuegbare_clips(pool, streamer_login).await, &schedules);
+    let belegt = belegte_termine_je_plattform(pool, streamer_login).await;
     let now = chrono::Utc::now();
+    let leer: Vec<DateTime<Utc>> = Vec::new();
 
     let mut platforms = Vec::with_capacity(schedules.len());
     for schedule in &schedules {
         let next_slot = if schedule.auto_post {
-            plan_next_slot(pool, streamer_login, &schedule.platform, now)
-                .await
-                .map(|slot| slot.to_rfc3339())
+            next_cadence_slot(
+                now,
+                belegt.get(&schedule.platform).unwrap_or(&leer),
+                &schedule.posting_schedule(&settings.timezone),
+                &schedule.limits(),
+            )
+            .map(|slot| slot.to_rfc3339())
         } else {
             None
         };
@@ -3687,7 +3757,7 @@ mod tests {
     #[tokio::test]
     async fn index_unauth_redirectet_zum_login() {
         // B15-FIX-index-redirect: None → 302/303-Redirect, kein 401-JSON.
-        let resp = index_handler(DashboardAuthLevel::None).await;
+        let resp = index_handler(DashboardAuthLevel::None, "/social-media".parse().unwrap()).await;
         assert!(
             resp.status().is_redirection(),
             "unauth HTML-Index muss redirecten, war {}",
@@ -3697,6 +3767,44 @@ mod tests {
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
             SOCIAL_MEDIA_LOGIN_URL
         );
+    }
+
+    /// Der OAuth-Umweg endet auf `/social-media?oauth_success=…`. Faellt der
+    /// Query-String bei der Weiterleitung auf die SPA weg, gibt es nach einem
+    /// Verbindungsversuch ueberhaupt keine Rueckmeldung mehr.
+    #[tokio::test]
+    async fn index_reicht_die_oauth_rueckmeldung_weiter() {
+        async fn ziel(pfad: &str) -> String {
+            let resp = index_handler(DashboardAuthLevel::admin(), pfad.parse().unwrap()).await;
+            resp.headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        }
+
+        assert_eq!(
+            ziel("/social-media?oauth_success=youtube").await,
+            "/social-media-admin?oauth_success=youtube"
+        );
+        assert_eq!(
+            ziel("/social-media?oauth_error=token_exchange_failed").await,
+            "/social-media-admin?oauth_error=token_exchange_failed"
+        );
+        assert_eq!(ziel("/social-media").await, "/social-media-admin");
+        // Leerer Query-String haengt kein nacktes '?' an.
+        assert_eq!(ziel("/social-media?").await, "/social-media-admin");
+    }
+
+    #[test]
+    fn weitergereichte_query_bleibt_beim_druckbaren_ascii() {
+        let q = |p: &str| weitergereichte_query(&p.parse::<Uri>().unwrap());
+        assert_eq!(q("/x?a=1&b=2"), Some("a=1&b=2".to_string()));
+        assert_eq!(q("/x"), None);
+        assert_eq!(q("/x?"), None);
+        // Zu lang: nichts, was aus einem Redirect-Ziel stammt, ist so gross.
+        let lang = format!("/x?a={}", "b".repeat(600));
+        assert_eq!(q(&lang), None);
     }
 
     #[tokio::test]

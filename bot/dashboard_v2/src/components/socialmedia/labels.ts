@@ -16,6 +16,7 @@ import type {
   ApprovalState,
   ClipStatus,
   EnrichmentStatus,
+  SocialMediaReportKind,
 } from '@/types/socialMedia';
 
 export type LabelTone = 'orange' | 'teal' | 'success' | 'warning' | 'danger' | 'muted';
@@ -98,6 +99,18 @@ export const STATUS_META: Record<EnrichmentStatus, { label: string; tone: LabelT
   skipped_no_key: { label: 'API-Key fehlt', tone: 'muted' },
 };
 
+/**
+ * Art eines LLM-Reports. Stand vorher als `kindLabel()` mitten in der
+ * Analytics-Ansicht: die Texte gingen zwar durch `t()`, aber durch keine der
+ * vom Vertragstest geprueften Tabellen. Ein fehlender englischer Eintrag waere
+ * damit unbemerkt geblieben.
+ */
+export const REPORT_KIND_LABELS: Record<SocialMediaReportKind, string> = {
+  streamer: 'Streamer',
+  cross: 'Cross',
+  admin: 'Admin',
+};
+
 /** Zugang zum eigenen Dashboard, nicht zu verwechseln mit dem Clip-Status. */
 export const ZUGRIFF_LABELS = {
   granted: 'Freigegeben',
@@ -166,6 +179,11 @@ export const FEHLER_TEXTE: Record<string, string> = {
   // Verbindungen
   disconnect_failed: 'Die Verbindung konnte nicht getrennt werden.',
   platform_status_failed: 'Der Verbindungsstatus ist gerade nicht abrufbar.',
+  // Rueckmeldung des OAuth-Umwegs, als `?oauth_error=` an der Rueckkehr-URL.
+  provider_error: 'Die Plattform hat die Verbindung abgelehnt.',
+  invalid_callback: 'Die Antwort der Plattform passte nicht zur Anfrage. Bitte neu verbinden.',
+  token_exchange_failed: 'Der Zugang konnte nicht abgeholt werden. Bitte neu verbinden.',
+  callback_failed: 'Die Verbindung konnte nicht abgeschlossen werden. Bitte neu verbinden.',
   // Speichern
   save_failed: 'Das Speichern hat nicht geklappt.',
   schedule_failed: 'Der Zeitplan konnte nicht gespeichert werden.',

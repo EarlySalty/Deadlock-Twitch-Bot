@@ -20,8 +20,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+
+// Die Node-Tests laufen ohne Vite und damit ohne den automatischen
+// JSX-Transform, wie in languageProvider.test.tsx.
+(globalThis as { React?: typeof React }).React = React;
 
 import { dictionaryFor } from '../src/i18n/dictionary';
+import { LanguageProvider } from '../src/context/LanguageContext';
+import {
+  clipFehler,
+  istGesperrt,
+  istStandUnbekannt,
+} from '../src/components/socialmedia/kartenZustand';
+import { LadeFehlerHinweis } from '../src/components/socialmedia/LadeFehlerHinweis';
 import {
   ALLE_LABEL,
   APPROVAL_MODE_TEXTE,
@@ -29,6 +42,7 @@ import {
   FEHLER_TEXTE,
   FELD_FEHLER,
   KATEGORIE_LABELS,
+  REPORT_KIND_LABELS,
   SOCIAL_MEDIA_TABS,
   STATUS_LABELS,
   STATUS_META,
@@ -53,6 +67,7 @@ const OBERFLAECHE = [
   'src/components/socialmedia/AnalyticsTab.tsx',
   'src/components/socialmedia/EnrichmentPanel.tsx',
   'src/components/socialmedia/LayoutEditor.tsx',
+  'src/components/socialmedia/LadeFehlerHinweis.tsx',
   'src/components/layout/Header.tsx',
 ];
 
@@ -86,6 +101,10 @@ const TABELLEN: Record<string, string[]> = {
   STATUS_FILTER: [ALLE_LABEL],
   ZUGRIFF_LABELS: Object.values(ZUGRIFF_LABELS),
   KATEGORIE_LABELS: Object.values(KATEGORIE_LABELS),
+  // Stand vorher als Funktion `kindLabel()` in AnalyticsTab und fiel damit
+  // durch dieses Netz: ein fehlender englischer Eintrag waere unbemerkt
+  // geblieben.
+  REPORT_KIND_LABELS: Object.values(REPORT_KIND_LABELS),
   FELD_FEHLER: Object.values(FELD_FEHLER),
   FEHLER_TEXTE: Object.values(FEHLER_TEXTE),
 };
@@ -266,4 +285,193 @@ test('die Liste "bewusst ohne UI" bleibt ehrlich', () => {
     assert.ok(routen.has(route), `${route} steht in BEWUSST_OHNE_UI, gibt es aber nicht mehr.`);
     assert.ok(!gebaut.has(route), `${route} wird inzwischen aufgerufen und gehoert aus der Liste.`);
   }
+});
+
+// ── 4. Karten ohne geladenen Stand bleiben gesperrt ──────────────────────────
+
+/**
+ * Der rote Faden hinter den Befunden 4 bis 7: eine Karte, deren GET
+ * gescheitert ist, kennt den gespeicherten Stand nicht. Sie faellt auf ihre
+ * Vorgabewerte zurueck ("aus", "Privat", "Nur nach Freigabe", "nicht
+ * verbunden") und sieht dabei aus wie eine Karte mit echten Daten. Ein Klick
+ * schreibt den erfundenen Wert fest, und der Serverschutz "fehlendes Feld
+ * bleibt beim bisherigen Wert" hilft nicht, weil die Oberflaeche das Feld
+ * ausdruecklich mitschickt.
+ *
+ * Geprueft wird deshalb beides: die Sperrmechanik selbst und die Verdrahtung
+ * jeder betroffenen Karte.
+ */
+
+const SEITE = 'src/pages/SocialMedia.tsx';
+
+/** Rumpf einer Komponente aus der Seite, von `function X(` bis zur schliessenden Klammer in Spalte 0. */
+function komponentenRumpf(quelle: string, name: string): string {
+  const start = quelle.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name} gibt es in ${SEITE} nicht mehr.`);
+  const ende = quelle.indexOf('\n}\n', start);
+  assert.ok(ende > start, `${name} laesst sich nicht abgrenzen.`);
+  return quelle.slice(start, ende);
+}
+
+/**
+ * Die Attribute genau eines JSX-Elements, von `<Name` bis zum ersten `/>`.
+ * Ohne diese Begrenzung wuerde ein `[\s\S]*?` bis in die naechste Karte
+ * laufen und deren Attribut als Treffer verkaufen.
+ */
+function elementAttribute(quelle: string, name: string): string {
+  const start = quelle.indexOf(`<${name}`);
+  assert.ok(start >= 0, `<${name}> steht nicht mehr in ${SEITE}.`);
+  const ende = quelle.indexOf('/>', start);
+  assert.ok(ende > start, `<${name}> ist nicht selbstschliessend.`);
+  return quelle.slice(start, ende);
+}
+
+/** Alle `disabled={...}`-Ausdruecke eines Komponentenrumpfs. */
+function disabledAusdruecke(rumpf: string): string[] {
+  return [...rumpf.matchAll(/disabled=\{([^}]*)\}/g)].map((m) => m[1].trim());
+}
+
+test('istGesperrt sperrt weiter, wenn der Ladevorgang vorbei und gescheitert ist', () => {
+  assert.equal(istGesperrt({ isLoading: false, isSaving: false, ladeFehler: null }), false);
+  assert.equal(istGesperrt({ isLoading: true, isSaving: false, ladeFehler: null }), true);
+  assert.equal(istGesperrt({ isLoading: false, isSaving: true, ladeFehler: null }), true);
+  // Der eigentliche Befund: nach dem gescheiterten GET steht isLoading wieder
+  // auf false, und ohne den Ladefehler waere die Karte wieder bedienbar.
+  assert.equal(
+    istGesperrt({ isLoading: false, isSaving: false, ladeFehler: new Error('boom') }),
+    true,
+  );
+  assert.equal(istStandUnbekannt(new Error('boom')), true);
+  assert.equal(istStandUnbekannt(null), false);
+  assert.equal(istStandUnbekannt(undefined), false);
+});
+
+test('der Ladefehler wird sichtbar und nennt die Sperre', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(
+      LanguageProvider,
+      null,
+      React.createElement(LadeFehlerHinweis, { fehler: { code: 'save_failed' } }),
+    ),
+  );
+  assert.match(html, /Gespeicherter Stand nicht abrufbar/);
+  assert.match(html, /Das Speichern hat nicht geklappt/);
+  assert.match(html, /gesperrt/);
+  assert.match(html, /role="alert"/);
+
+  // Ohne Fehler bleibt die Karte still.
+  const leer = renderToStaticMarkup(
+    React.createElement(
+      LanguageProvider,
+      null,
+      React.createElement(LadeFehlerHinweis, { fehler: null }),
+    ),
+  );
+  assert.equal(leer, '');
+});
+
+test('Befund 4: die VOD-Archiv-Karte sperrt nach gescheitertem GET', () => {
+  const quelle = lies(SEITE);
+  assert.match(
+    elementAttribute(quelle, 'VodArchiveCard'),
+    /ladeFehler=\{vodArchiveQuery\.error\}/,
+    'Die Karte bekommt den Fehler von GET /settings/vod-archive nicht.',
+  );
+  const rumpf = komponentenRumpf(quelle, 'VodArchiveCard');
+  assert.match(rumpf, /LadeFehlerHinweis fehler=\{ladeFehler\}/);
+  assert.match(rumpf, /const gesperrt = istGesperrt\(\{ isLoading, isSaving, ladeFehler \}\)/);
+  const ausdruecke = disabledAusdruecke(rumpf);
+  assert.ok(ausdruecke.length >= 2, 'Der Schalter und die Sichtbarkeits-Knoepfe fehlen.');
+  for (const ausdruck of ausdruecke) {
+    assert.ok(
+      ausdruck.includes('gesperrt'),
+      `disabled={${ausdruck}} ignoriert die Sperre: der Schalter schickt sonst privacy: 'private' mit.`,
+    );
+  }
+});
+
+test('Befund 5: die Verbindungskarte erfindet keinen Verbindungszustand', () => {
+  const quelle = lies(SEITE);
+  assert.match(
+    elementAttribute(quelle, 'PlatformConnectionsCard'),
+    /ladeFehler=\{platformStatusQuery\.error\}/,
+    'Die Karte bekommt den Fehler des Status-Abrufs nicht.',
+  );
+  const rumpf = komponentenRumpf(quelle, 'PlatformConnectionsCard');
+  assert.match(rumpf, /LadeFehlerHinweis fehler=\{ladeFehler\}/);
+  assert.match(rumpf, /const standUnbekannt = istStandUnbekannt\(ladeFehler\)/);
+
+  // Ohne Status darf keine Zeile "nicht verbunden" behaupten.
+  const unbekannt = rumpf.indexOf('if (standUnbekannt) {');
+  const nichtVerbunden = rumpf.indexOf("t('nicht verbunden')");
+  assert.ok(unbekannt >= 0 && unbekannt < nichtVerbunden, 'Der unbekannte Stand wird nicht zuerst geprueft.');
+
+  // Und es darf kein Knopf dastehen, der einen ueberfluessigen OAuth-Flow startet.
+  const sperre = rumpf.indexOf('{standUnbekannt ? null :');
+  const oauth = rumpf.indexOf('oauthStartUrl');
+  assert.ok(sperre >= 0 && sperre < oauth, 'Der Verbinden-Knopf steht auch ohne Status noch da.');
+  for (const ausdruck of disabledAusdruecke(rumpf)) {
+    assert.ok(ausdruck.includes('gesperrt'), `disabled={${ausdruck}} ignoriert die Sperre.`);
+  }
+});
+
+test('Befund 6: die drei Zeitplan-Karten sperren nach gescheitertem GET', () => {
+  const quelle = lies(SEITE);
+  for (const karte of ['ApprovalModeCard', 'CategoryCard', 'PostingScheduleCard']) {
+    assert.match(
+      elementAttribute(quelle, karte),
+      /ladeFehler=\{postingPlanQuery\.error\}/,
+      `${karte} bekommt den Fehler von GET posting-plan nicht.`,
+    );
+    const rumpf = komponentenRumpf(quelle, karte);
+    assert.match(rumpf, /LadeFehlerHinweis fehler=\{ladeFehler\}/, `${karte} zeigt den Fehler nicht.`);
+    const ausdruecke = disabledAusdruecke(rumpf);
+    assert.ok(ausdruecke.length > 0, `${karte} hat kein einziges gesperrtes Bedienelement.`);
+    for (const ausdruck of ausdruecke) {
+      assert.ok(
+        ausdruck.includes('gesperrt') || ausdruck.includes('Gesperrt'),
+        `${karte}: disabled={${ausdruck}} ignoriert die Sperre.`,
+      );
+    }
+  }
+
+  // Ein Kanal auf full_auto darf nicht "Nur nach Freigabe" markiert sehen.
+  const approval = komponentenRumpf(quelle, 'ApprovalModeCard');
+  assert.match(
+    approval,
+    /istStandUnbekannt\(ladeFehler\) \? null : 'manual'/,
+    'Ohne Plan wird weiterhin manual als aktiver Modus markiert.',
+  );
+});
+
+test('Befund 7: ein gescheitertes Verwerfen landet an der Clip-Karte', () => {
+  const clipDbId = 42;
+  const verwerfen = new Error('discard');
+  // Genau der Fall aus dem Befund: nur das Verwerfen ist gescheitert.
+  assert.equal(
+    clipFehler(clipDbId, [
+      { clipDbId: undefined, error: null },
+      { clipDbId, error: verwerfen },
+    ]),
+    verwerfen,
+  );
+  // Eine erfolgreiche Freigabe am selben Clip darf den Fehler nicht verdecken.
+  assert.equal(
+    clipFehler(clipDbId, [
+      { clipDbId, error: null },
+      { clipDbId, error: verwerfen },
+    ]),
+    verwerfen,
+  );
+  // Ein Fehler an einem anderen Clip gehoert nicht auf diese Karte.
+  assert.equal(clipFehler(clipDbId, [{ clipDbId: 7, error: verwerfen }]), null);
+  assert.equal(clipFehler(clipDbId, []), null);
+
+  // Und die Seite reicht das Verwerfen ueberhaupt durch.
+  const quelle = lies(SEITE);
+  assert.match(
+    quelle,
+    /fehler=\{clipFehler\(clip\.clip_db_id, \[[\s\S]*?discardMutation\.error[\s\S]*?\]\)\}/,
+    'discardMutation.error kommt nicht an der Clip-Karte an.',
+  );
 });

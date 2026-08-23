@@ -32,6 +32,12 @@ import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { LayoutEditor } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
+import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
+import {
+  clipFehler,
+  istGesperrt,
+  istStandUnbekannt,
+} from '@/components/socialmedia/kartenZustand';
 import {
   cancelScheduledPost,
   decideClipApproval,
@@ -332,8 +338,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
     },
-    // Kein window.alert mit roher Backend-Meldung: der Fehler steht als Zeile
-    // im Fuss der betroffenen Clip-Karte.
+    // Kein window.alert mit roher Backend-Meldung. Der Fehler geht ueber
+    // `clipFehler` als Zeile in den Fuss der betroffenen Clip-Karte, genau wie
+    // bei Override, Abbrechen und Verwerfen.
   });
 
   const stats = useMemo(() => {
@@ -427,6 +434,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             <ApprovalModeCard
               plan={postingPlanQuery.data ?? null}
               isLoading={postingPlanQuery.isLoading}
+              ladeFehler={postingPlanQuery.error}
               isSaving={approvalModeMutation.isPending}
               error={approvalModeMutation.error}
               onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
@@ -434,6 +442,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             <CategoryCard
               plan={postingPlanQuery.data ?? null}
               isLoading={postingPlanQuery.isLoading}
+              ladeFehler={postingPlanQuery.error}
               isSaving={categoryMutation.isPending}
               error={categoryMutation.error}
               onChange={(categoryKey, autoPost) =>
@@ -444,6 +453,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
               <PostingScheduleCard
                 plan={postingPlanQuery.data ?? null}
                 isLoading={postingPlanQuery.isLoading}
+                ladeFehler={postingPlanQuery.error}
                 isSaving={platformScheduleMutation.isPending}
                 error={platformScheduleMutation.error}
                 onChange={(platform, payload) =>
@@ -462,6 +472,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             streamer={streamer}
             platforms={platformStatusQuery.data?.platforms ?? []}
             isLoading={platformStatusQuery.isLoading}
+            ladeFehler={platformStatusQuery.error}
             onDisconnect={(platform) => disconnectMutation.mutate(platform)}
             isDisconnecting={disconnectMutation.isPending}
             error={disconnectMutation.error}
@@ -470,6 +481,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             streamer={streamer}
             settings={vodArchiveQuery.data ?? null}
             isLoading={vodArchiveQuery.isLoading}
+            ladeFehler={vodArchiveQuery.error}
             isSaving={vodArchiveMutation.isPending}
             error={vodArchiveMutation.error}
             onChange={(next) => vodArchiveMutation.mutate(next)}
@@ -653,15 +665,18 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                           ? abbrechenMutation.data
                           : null
                       }
-                      fehler={
-                        approvalMutation.variables?.clipDbId === clip.clip_db_id
-                          ? approvalMutation.error
-                          : overrideMutation.variables?.clipDbId === clip.clip_db_id
-                            ? overrideMutation.error
-                            : abbrechenMutation.variables === clip.clip_db_id
-                              ? abbrechenMutation.error
-                              : null
-                      }
+                      fehler={clipFehler(clip.clip_db_id, [
+                        {
+                          clipDbId: approvalMutation.variables?.clipDbId,
+                          error: approvalMutation.error,
+                        },
+                        {
+                          clipDbId: overrideMutation.variables?.clipDbId,
+                          error: overrideMutation.error,
+                        },
+                        { clipDbId: abbrechenMutation.variables, error: abbrechenMutation.error },
+                        { clipDbId: discardMutation.variables, error: discardMutation.error },
+                      ])}
                     />
                   );
                 })}
@@ -876,19 +891,29 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
 function ApprovalModeCard({
   plan,
   isLoading,
+  ladeFehler,
   isSaving,
   error,
   onChange,
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
+  /** Fehler des Zeitplan-Abrufs: dann ist der gespeicherte Modus unbekannt. */
+  ladeFehler: unknown;
   isSaving: boolean;
   error: unknown;
   onChange: (mode: ApprovalMode) => void;
 }) {
   const t = useT();
+  // Ohne Plan zeigt die Karte 'manual' als aktiv an. Ein Kanal auf
+  // 'full_auto' saehe damit den falschen Modus markiert, und ein Klick auf
+  // einen der Knoepfe wuerde ihn festschreiben.
+  const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
   const modi = plan?.approval_modes ?? (['manual', 'veto_window', 'full_auto'] as ApprovalMode[]);
-  const aktiv = plan?.approval_mode ?? 'manual';
+  // Ist der Stand unbekannt, wird kein Modus als aktiv markiert: lieber gar
+  // keine Angabe als eine falsche.
+  const aktiv: ApprovalMode | null =
+    plan?.approval_mode ?? (istStandUnbekannt(ladeFehler) ? null : 'manual');
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
@@ -899,6 +924,9 @@ function ApprovalModeCard({
         </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
       </div>
+
+      <LadeFehlerHinweis fehler={ladeFehler} />
+
       <div className="space-y-2">
         {modi.map((mode) => {
           const texte = APPROVAL_MODE_TEXTE[mode];
@@ -908,7 +936,7 @@ function ApprovalModeCard({
             <button
               key={mode}
               type="button"
-              disabled={isLoading || isSaving}
+              disabled={gesperrt}
               onClick={() => onChange(mode)}
               className={`w-full text-left rounded-xl border px-4 py-3 disabled:opacity-60 ${
                 active
@@ -998,6 +1026,7 @@ function zeitzonenListe(aktuelle: string): string[] {
 function PostingScheduleCard({
   plan,
   isLoading,
+  ladeFehler,
   isSaving,
   error,
   onChange,
@@ -1007,6 +1036,8 @@ function PostingScheduleCard({
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
+  /** Fehler des Zeitplan-Abrufs: dann sind Zeitzone und Kadenz unbekannt. */
+  ladeFehler: unknown;
   isSaving: boolean;
   error: unknown;
   onChange: (
@@ -1022,6 +1053,15 @@ function PostingScheduleCard({
   const locale = language === 'en' ? 'en-GB' : 'de-DE';
   const zeitzone = plan?.timezone ?? 'Europe/Berlin';
   const zonen = useMemo(() => zeitzonenListe(zeitzone), [zeitzone]);
+  // Ohne Plan zeigt die Karte Europe/Berlin und eine leere Plattformliste.
+  // Beides ist geraten, deshalb bleibt hier bis zum naechsten erfolgreichen
+  // Abruf alles gesperrt.
+  const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
+  const zeitzoneGesperrt = istGesperrt({
+    isLoading,
+    isSaving: isZeitzoneSaving,
+    ladeFehler,
+  });
 
   const [formular, setFormular] = useState<Record<string, ZeitplanFormular>>({});
   const [feldFehler, setFeldFehler] = useState<Record<string, string>>({});
@@ -1081,11 +1121,13 @@ function PostingScheduleCard({
         )}
       </div>
 
+      <LadeFehlerHinweis fehler={ladeFehler} />
+
       <label className="block">
         <span className="text-xs text-text-secondary">{t('Zeitzone des Kanals')}</span>
         <select
           value={zeitzone}
-          disabled={isLoading || isZeitzoneSaving}
+          disabled={zeitzoneGesperrt}
           onChange={(event) => onTimezoneChange(event.target.value)}
           className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white disabled:opacity-60"
         >
@@ -1130,7 +1172,7 @@ function PostingScheduleCard({
                   role="switch"
                   aria-checked={eintrag.auto_post}
                   aria-label={t('Automatisch posten')}
-                  disabled={isLoading || isSaving}
+                  disabled={gesperrt}
                   onClick={() => onChange(eintrag.platform, { auto_post: !eintrag.auto_post })}
                   className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border disabled:opacity-60 ${
                     eintrag.auto_post
@@ -1162,7 +1204,7 @@ function PostingScheduleCard({
                       min={0}
                       max={70}
                       value={werte.postsProWoche}
-                      disabled={isSaving}
+                      disabled={gesperrt}
                       onChange={(event) =>
                         setzeFeld(eintrag.platform, 'postsProWoche', event.target.value)
                       }
@@ -1192,7 +1234,7 @@ function PostingScheduleCard({
                       min={0}
                       max={10}
                       value={werte.maxProTag}
-                      disabled={isSaving}
+                      disabled={gesperrt}
                       onChange={(event) =>
                         setzeFeld(eintrag.platform, 'maxProTag', event.target.value)
                       }
@@ -1224,7 +1266,7 @@ function PostingScheduleCard({
                     type="text"
                     value={werte.zeiten}
                     placeholder="18:00, 21:00"
-                    disabled={isSaving}
+                    disabled={gesperrt}
                     onChange={(event) => setzeFeld(eintrag.platform, 'zeiten', event.target.value)}
                     onBlur={() => {
                       const schluessel = `${eintrag.platform}:zeiten`;
@@ -1268,17 +1310,21 @@ function PostingScheduleCard({
 function CategoryCard({
   plan,
   isLoading,
+  ladeFehler,
   isSaving,
   error,
   onChange,
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
+  /** Fehler des Zeitplan-Abrufs: dann ist unbekannt, welche Kategorien an sind. */
+  ladeFehler: unknown;
   isSaving: boolean;
   error: unknown;
   onChange: (categoryKey: string, autoPost: boolean) => void;
 }) {
   const t = useT();
+  const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
@@ -1289,6 +1335,9 @@ function CategoryCard({
         </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
       </div>
+
+      <LadeFehlerHinweis fehler={ladeFehler} />
+
       <div className="space-y-2">
         {(plan?.categories ?? []).map((kategorie) => (
           <label
@@ -1308,7 +1357,7 @@ function CategoryCard({
             <input
               type="checkbox"
               checked={kategorie.auto_post}
-              disabled={isLoading || isSaving}
+              disabled={gesperrt}
               onChange={(event) => onChange(kategorie.category_key, event.target.checked)}
               className="h-4 w-4 shrink-0 accent-primary"
             />
@@ -1390,10 +1439,32 @@ function VorratsHinweis({
  */
 /// Verbindungen zu den Plattformen. Der OAuth-Flow ist ein Redirect auf den
 /// Anbieter, deshalb ist "Verbinden" ein Link und kein fetch.
+/**
+ * Rueckmeldung nach dem OAuth-Umweg. Der Server schickt den Browser mit
+ * `?oauth_success=` oder `?oauth_error=` auf das Dashboard zurueck. Ohne diese
+ * Auswertung endet jeder Verbindungsversuch wortlos auf derselben Seite, und
+ * ein gescheiterter Versuch sieht aus wie ein abgebrochener.
+ */
+type OauthRueckmeldung =
+  | { art: 'ok'; platform: string }
+  | { art: 'fehler'; code: string }
+  | null;
+
+function leseOauthRueckmeldung(): OauthRueckmeldung {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const erfolg = params.get('oauth_success');
+  if (erfolg) return { art: 'ok', platform: erfolg };
+  const fehler = params.get('oauth_error');
+  if (fehler) return { art: 'fehler', code: fehler };
+  return null;
+}
+
 function PlatformConnectionsCard({
   streamer,
   platforms,
   isLoading,
+  ladeFehler,
   onDisconnect,
   isDisconnecting,
   error,
@@ -1401,12 +1472,20 @@ function PlatformConnectionsCard({
   streamer: string;
   platforms: PlatformStatus[];
   isLoading: boolean;
+  /** Fehler des Status-Abrufs: dann ist unbekannt, was verbunden ist. */
+  ladeFehler: unknown;
   onDisconnect: (platform: string) => void;
   isDisconnecting: boolean;
   error: unknown;
 }) {
   const { t, locale } = useLanguage();
   const byName = new Map(platforms.map((p) => [p.platform, p]));
+  // Ohne Statusabruf ist jede Zeile geraten. Ein verbundener Kanal saehe dann
+  // wie "nicht verbunden" aus und der Streamer startet einen ueberfluessigen
+  // OAuth-Flow, deshalb verschwinden hier alle Knoepfe.
+  const standUnbekannt = istStandUnbekannt(ladeFehler);
+  const gesperrt = istGesperrt({ isLoading, isSaving: isDisconnecting, ladeFehler });
+  const rueckmeldung = leseOauthRueckmeldung();
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
@@ -1417,6 +1496,27 @@ function PlatformConnectionsCard({
         </h3>
         {isLoading && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
+
+      {rueckmeldung?.art === 'ok' && (
+        <div className="rounded-xl border border-success/40 bg-success/10 px-4 py-3 text-xs text-success">
+          {PLATFORM_LABELS[rueckmeldung.platform]
+            ? t('{platform} ist jetzt verbunden.', {
+                platform: PLATFORM_LABELS[rueckmeldung.platform],
+              })
+            : t('Das Konto ist jetzt verbunden.')}
+        </div>
+      )}
+      {rueckmeldung?.art === 'fehler' && (
+        <div
+          role="alert"
+          className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-xs text-danger space-y-1"
+        >
+          <div className="font-semibold">{t('Verbinden hat nicht geklappt')}</div>
+          <div>{fehlerText({ code: rueckmeldung.code }, t)}</div>
+        </div>
+      )}
+
+      <LadeFehlerHinweis fehler={ladeFehler} />
 
       <div className="space-y-2">
         {PLATTFORMEN.map((platform) => {
@@ -1437,7 +1537,10 @@ function PlatformConnectionsCard({
 
           let zeile: string;
           let tonKlasse = 'text-text-secondary';
-          if (!connected) {
+          if (standUnbekannt) {
+            zeile = t('Zustand unbekannt');
+            tonKlasse = 'text-danger';
+          } else if (!connected) {
             zeile = t('nicht verbunden');
           } else if (abgelaufen) {
             zeile = t('Zugang abgelaufen, bitte neu verbinden');
@@ -1459,16 +1562,16 @@ function PlatformConnectionsCard({
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
                 <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
-                {connected && !abgelaufen && ablauf && (
+                {!standUnbekannt && connected && !abgelaufen && ablauf && (
                   <div className="text-[11px] text-text-secondary">
                     {t('Zugang läuft am {datum} ab.', { datum: ablauf })}
                   </div>
                 )}
               </div>
-              {connected && !abgelaufen ? (
+              {standUnbekannt ? null : connected && !abgelaufen ? (
                 <button
                   type="button"
-                  disabled={isDisconnecting}
+                  disabled={gesperrt}
                   onClick={() => {
                     // Der Kanalname gehoert in die Frage: es gibt eine
                     // Sammelverbindung, und niemand soll aus Versehen alle
@@ -1510,6 +1613,7 @@ function VodArchiveCard({
   streamer,
   settings,
   isLoading,
+  ladeFehler,
   isSaving,
   error,
   onChange,
@@ -1517,11 +1621,17 @@ function VodArchiveCard({
   streamer: string;
   settings: VodArchiveSettings | null;
   isLoading: boolean;
+  /** Fehler des Einstellungs-Abrufs: dann ist der gespeicherte Stand unbekannt. */
+  ladeFehler: unknown;
   isSaving: boolean;
   error: unknown;
   onChange: (next: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) => void;
 }) {
   const t = useT();
+  // Ohne geladene Einstellungen zeigt die Karte "aus / Privat". Ein Klick auf
+  // den Schalter schickt `privacy: 'private'` mit und stuft eine gespeicherte
+  // Sichtbarkeit still herunter, deshalb bleibt hier alles gesperrt.
+  const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
   const enabled = settings?.enabled ?? false;
   const privacy = settings?.privacy ?? 'private';
   const options = settings?.privacy_options ?? ['private', 'unlisted', 'public'];
@@ -1540,12 +1650,15 @@ function VodArchiveCard({
         </h3>
         {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
       </div>
+
+      <LadeFehlerHinweis fehler={ladeFehler} />
+
       <label className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3">
         <span className="text-sm font-semibold text-white">{t('Automatisch sichern')}</span>
         <input
           type="checkbox"
           checked={enabled}
-          disabled={isLoading || isSaving}
+          disabled={gesperrt}
           onChange={(event) => onChange({ enabled: event.target.checked, privacy })}
           className="h-4 w-4 accent-orange"
         />
@@ -1566,7 +1679,7 @@ function VodArchiveCard({
             <button
               key={option}
               type="button"
-              disabled={isLoading || isSaving || settings?.privacy_forced}
+              disabled={gesperrt || settings?.privacy_forced}
               onClick={() => onChange({ enabled, privacy: option })}
               className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
                 privacy === option
