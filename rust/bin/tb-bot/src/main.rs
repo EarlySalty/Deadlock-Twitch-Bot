@@ -733,6 +733,7 @@ async fn main() {
                             token_provider,
                             helix_client.clone(),
                             bot_user_id,
+                            pool.clone(),
                         ));
                         manager_builder =
                             manager_builder.with_moderator_provisioner(provisioner.clone());
@@ -1894,6 +1895,7 @@ async fn main() {
                     token_provider,
                     helix_client,
                     bot_user_id,
+                    pool.clone(),
                 )))
             }
             _ => None,

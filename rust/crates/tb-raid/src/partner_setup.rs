@@ -1146,6 +1146,22 @@ impl PartnerSetupService {
         };
 
         // Schritt 4: Bot als Moderator einsetzen (Impl loggt alle Ausgänge).
+        //
+        // Vorher die Deadlock-Pause beenden: Wer hier ankommt, hat seine
+        // Twitch-Verbindung gerade bewusst erneuert, oft direkt auf die
+        // Pausen-DM hin. Bliebe der Marker stehen, waere der Bot Moderator,
+        // waehrend die DB Pause behauptet — dann faellt der Kanal aus
+        // `unmod_candidates` und aus `detect_bot_bans` heraus und wird von
+        // keinem Sweep je wieder angefasst.
+        if let Err(error) = sqlx::query(
+            "UPDATE twitch_partners SET deadlock_pause_unmodded_at = NULL WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%error, "complete_setup: Deadlock-Pause-Marker nicht loeschbar für {twitch_login}");
+        }
         let _ = self
             .moderator
             .add_channel_moderator(twitch_user_id, bot_user_id, streamer_access_token)

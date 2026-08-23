@@ -26,7 +26,10 @@ const PROVIDER_DEFAULT_ENV: &str = "TB_LLM_PROVIDER_DEFAULT";
 pub const FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 /// DeepSeek über Fireworks. Benchmark 11.07.2026: 56/56 auf echten
 /// Produktionsfällen (30 obfuskierter Spam, 26 harmlose Viewer-Sätze).
-pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash";
+/// Die undatierte Fassung wurde am 2026-08-15 bei Fireworks abgeschaltet
+/// (404); Nachfolger derselben Klasse ist die datierte 0731-Fassung,
+/// verifiziert per Testcall mit echtem Judge-Prompt (scam, confidence 0.95).
+pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash-0731";
 
 /// Adresse, Modell und Key eines Anbieters — alles, was ein
 /// OpenAI-kompatibler Call braucht. Der Key wird nie geloggt.
