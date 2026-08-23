@@ -1250,11 +1250,18 @@
   width:8px;
   height:8px;
   margin-left:-4px;
-  animation:2.4s ease-in-out infinite v2-pulse;
+  animation:2.4s ease-in-out infinite v2-peak-pulse;
   position:absolute;
   top:4px;
   left:50%;
   box-shadow:0 0 0 3px #c9a86a29,0 0 16px #c9a86acc;
+}
+
+/* Eigener Puls: v2-pulse setzt einen gruenen box-shadow und faerbt den
+   goldenen Marker sonst um. */
+@keyframes v2-peak-pulse {
+  0%, 100% { opacity: 1;   box-shadow: 0 0 0 3px rgba(201, 168, 106, 0.16), 0 0 16px rgba(201, 168, 106, 0.8); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 7px rgba(201, 168, 106, 0),    0 0 16px rgba(201, 168, 106, 0.8); }
 }
 
 .v2-peak-label {

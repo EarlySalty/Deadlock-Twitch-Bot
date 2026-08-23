@@ -131,7 +131,7 @@ function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
   // Kanal an dieser Stelle waere dieselbe falsche Behauptung wie zuvor die
   // erfundenen Zuschauerzahlen.
   const usable = partners
-    .filter((p) => p.avatarUrl && p.liveDeadlock)
+    .filter((p) => p.avatarUrl && p.liveDeadlock && p.viewers > 0)
     .sort((a, b) => {
       if (a.liveDeadlock !== b.liveDeadlock) return a.liveDeadlock ? -1 : 1;
       return b.avgViewers30d - a.avgViewers30d;
@@ -140,11 +140,9 @@ function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
     .map((p) => ({
       login: p.login,
       displayName: p.displayName || p.login,
-      viewers: Math.max(
-        p.liveDeadlock ? p.viewers : 0,
-        Math.round(p.avgViewers30d),
-        8,
-      ),
+      // Echte Karte, echte Zahl: keine Untergrenze und kein 30-Tage-Ersatz.
+      // Kanaele ohne gemessene Zuschauer kommen oben schon nicht durch.
+      viewers: p.viewers,
       avatarUrl: p.avatarUrl as string,
       sample: false,
     }));
@@ -395,6 +393,12 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
     // ── Ausgangslage eines Durchgangs ─────────────────────────────────────
     function pickPair(): [DemoChannel, DemoChannel] {
       const list = poolRef.current;
+      // Beim Beispiel-Pool steht "dein_kanal" fest auf der linken Karte
+      // ("an dieser Stelle stehst du") und nie auf der rechten.
+      if (list[0]?.sample) {
+        const b = 1 + Math.floor(Math.random() * (list.length - 1));
+        return [list[0], list[b]];
+      }
       const a = Math.floor(Math.random() * list.length);
       let b = Math.floor(Math.random() * list.length);
       if (b === a) b = (a + 1) % list.length;
