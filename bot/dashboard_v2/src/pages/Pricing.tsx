@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, HelpCircle } from 'lucide-react';
 import { useBillingCatalog } from '../hooks/useAnalytics';
 import PricingHero from '../components/pricing/PricingHero';
-import FeaturePicker from '../components/pricing/FeaturePicker';
-import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
+import PlanStufen from '../components/pricing/PlanStufen';
 import MySubscriptionCard from '../components/pricing/MySubscriptionCard';
 import BillingStatusBanner from '../components/pricing/BillingStatusBanner';
 import { PREVIEW_HOME_ROUTE, PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
@@ -15,7 +14,7 @@ const faqData = [
   {
     question: 'Wie funktioniert die 30-tägige kostenlose Testphase?',
     answer:
-      'Du meldest dich an, wählst einen Plan aus und kannst ihn 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet – vorausgesetzt, du kündigst nicht vorher.',
+      'Du meldest dich an, wählst eine bezahlte Stufe im Monatstakt aus und kannst sie 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher.',
   },
   {
     question: 'Kann ich meinen Plan jederzeit kündigen?',
@@ -28,9 +27,9 @@ const faqData = [
       'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
   },
   {
-    question: 'Was ist im Analyse-Zugang enthalten?',
+    question: 'Was ist der Unterschied zwischen Free, Plus und Pro?',
     answer:
-      'Der Analyse-Zugang schaltet alle Analytics-Features frei: detaillierte Stream-Auswertungen, KI-gestützte Analysen, Coaching-Empfehlungen und Wachstums-Insights in einem einzigen Plan.',
+      'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro nimmt dir dazu die Clip-Arbeit ab: Clips ohne Mengenbegrenzung und automatisches Posten auf TikTok, Instagram und YouTube.',
   },
 ];
 
@@ -122,18 +121,15 @@ export default function Pricing() {
         </div>
       </div>
 
-      {/* Feature Picker */}
+      {/* Die drei Stufen des Katalogs */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.15 }}
         className="mb-12"
       >
-        <FeaturePicker plans={plans} cycle={cycle} />
+        <PlanStufen plans={plans} cycle={cycle} />
       </motion.div>
-
-      {/* Feature Comparison */}
-      <FeatureComparisonGrid />
 
       {/* FAQ Section */}
       <motion.div

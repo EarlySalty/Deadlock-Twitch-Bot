@@ -45,25 +45,25 @@ interface PopoverPosition {
 
 const TOUR_STEPS: TourStep[] = [
   {
-    anchor: 'tour-pricing-werbefrei',
-    tag: 'Werbefrei',
-    title: 'Chat-Werbung dauerhaft abschalten',
+    anchor: 'tour-pricing-free',
+    tag: 'Netzwerk Free',
+    title: 'Kostenlos und vollwertig',
     description:
-      'Mit dem Werbefrei-Plan schaltest du Chat-Werbung permanent aus — auch bei aktiven Admin-Events. Ab 3,99 €/Mo., monatlich kündbar.',
+      'Auto-Raid in beide Richtungen, kompletter Chat-Schutz, alle Chat-Befehle, Overlay-Builder und die Tagesform deines letzten Streams. 0 Euro, für immer.',
   },
   {
-    anchor: 'tour-pricing-raid',
-    tag: 'Raid Boost',
-    title: 'Mehr eingehende Raids',
+    anchor: 'tour-pricing-plus',
+    tag: 'Netzwerk Plus',
+    title: 'Deine Entwicklung statt nur gestern',
     description:
-      'Bevorzugte Platzierung im Raid-System und Lurker-Tax-Erinnerungen für eine aktivere Community.',
+      'Voller Verlauf, Zeitraumvergleiche und Wachstumskurven, dazu KI-Analyse, KI-Chat, Coaching und der Wochenreport. 4,99 Euro im Monat, monatlich kündbar.',
   },
   {
-    anchor: 'tour-pricing-analyse',
-    tag: 'Analyse',
-    title: 'KI-Coaching & vollständiges Dashboard',
+    anchor: 'tour-pricing-pro',
+    tag: 'Creator Pro',
+    title: 'Die Clip-Arbeit übernimmt der Bot',
     description:
-      'Viewer-Profile, Retention-Analyse und KI-gestütztes Coaching — alle Analytics-Tabs freigeschaltet. Kombinierbar mit anderen Features.',
+      'Alles aus Netzwerk Plus, dazu Clips ohne Mengenbegrenzung und automatisches Posten auf TikTok, Instagram und YouTube. 9,99 Euro im Monat.',
   },
 ];
 

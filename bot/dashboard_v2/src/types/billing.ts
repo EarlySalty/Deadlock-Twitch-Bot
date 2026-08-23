@@ -4,7 +4,9 @@ export type EntitlementId =
   | 'analytics'
   | 'chat.lurker_tax'
   | 'chat.promos.disable'
-  | 'raid.priority';
+  | 'raid.priority'
+  // Nur Creator Pro: automatisches Posten auf TikTok, Instagram und YouTube.
+  | 'social.auto_post';
 
 // Dashboard view mode (what the user is currently viewing)
 export type DashboardView = 'basic' | 'extended';
@@ -37,6 +39,7 @@ export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'chat.lurker_tax',
   'chat.promos.disable',
   'raid.priority',
+  'social.auto_post',
 ];
 
 // Tab visibility configuration per entitlement.
@@ -103,11 +106,33 @@ export function getTierDisplayName(tier: PlanTier): string {
 }
 
 // Billing catalog plan
+// Preis-Tableau einer Stufe fuer den abgefragten Zyklus (Katalog-Feld `price`).
+// Alle Betraege sind Endpreise in Cent (Paragraph 19 UStG).
+export interface CatalogPlanPrice {
+  cycle_months: number;
+  cycle_label: string;
+  subtotal_gross_cents: number;
+  discount_percent: number;
+  discount_cents: number;
+  total_gross_cents: number;
+  effective_monthly_gross_cents: number;
+}
+
 export interface CatalogPlan {
   id: string;
   name: string;
   tier: PlanTier;
+  // Rechnerischer Monatspreis in Euro. Kein Katalog-Feld, sondern in
+  // `api/billing.ts` aus den Cent-Betraegen abgeleitet.
   price_monthly: number;
+  description?: string;
+  badge?: string;
+  recommended?: boolean;
+  monthly_gross_cents?: number;
+  yearly_gross_cents?: number;
+  price?: CatalogPlanPrice;
+  checkout_available?: boolean;
+  stripe_price_id?: string | null;
   entitlements?: EntitlementId[];
   features: string[];
   is_current: boolean;
