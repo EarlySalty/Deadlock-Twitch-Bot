@@ -3,12 +3,19 @@ import { Check } from 'lucide-react';
 import { getPlanCheckoutHref } from '../../preview/routes';
 import type { CatalogPlan } from '../../types/billing';
 
-/* Die drei Stufen des Katalogs, so wie das Backend sie liefert: free, plus, pro.
+/* Die Stufen des Katalogs, so wie das Backend sie liefert: free, plus, pro.
    Der frühere Baukasten setzte Feature-Kacheln zu Plan-IDs zusammen, die es seit
    dem Umbau nicht mehr gibt; jede Auswahl landete deshalb bei "Kostenlos" und
    verlinkte am Checkout vorbei. Hier wird nur noch angezeigt, was im Katalog
    steht. Kein Empfohlen-Badge, keine Minus-Kreuze: was eine Stufe kann, steht
-   als Liste da, was sie nicht kann, steht in der Stufe darüber. */
+   als Liste da, was sie nicht kann, steht in der Stufe darüber.
+
+   Creator Pro bekommt bewusst KEINE eigene Säule. Solange das Clip-Werkzeug
+   fehlt, bleibt von Pro nur "alles aus Plus" plus Support-Vorrang übrig, und
+   eine Karte mit zwei Zeilen neben zwei vollen Karten wirkt wie ein Angebot,
+   das man nicht kaufen will. Es steht deshalb als ruhige Zeile darunter, bis
+   es Substanz hat. Sobald der Katalog Pro auf `buchbar` stellt und die
+   Feature-Liste trägt, gehört es zurück nach oben. */
 
 const AKZENT: Record<string, string> = {
   free: '#C5A059',
@@ -42,6 +49,16 @@ function monatsBetragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   return Math.round(betragCents(plan, cycle) / cycle);
 }
 
+/* Bezahlte Stufen nur anbieten, wenn das Backend sie auch verkaufen kann: ohne
+   hinterlegte Stripe-Preis-ID meldet der Katalog checkout_available=false und
+   der Checkout schickt jeden Klick mit missing_stripe_price_id zurück. Lieber
+   ehrlich "bald buchbar" anzeigen als einen Kauf versprechen, der abprallt.
+   Free braucht keinen Stripe-Preis und bleibt immer anklickbar. `buchbar`
+   schlägt alles: die Stufe existiert als Ausblick, ihre Funktionen noch nicht. */
+function istBuchbar(plan: CatalogPlan, gratis: boolean): boolean {
+  return plan.buchbar !== false && (gratis || plan.checkout_available !== false);
+}
+
 interface PlanStufenProps {
   plans: CatalogPlan[];
   cycle: 1 | 12;
@@ -52,31 +69,32 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
     return null;
   }
 
+  const karten = plans.filter((plan) => plan.id !== 'pro');
+  const pro = plans.find((plan) => plan.id === 'pro');
+  const proGehoertNachOben = pro ? istBuchbar(pro, false) : false;
+  const obenAngezeigt = proGehoertNachOben && pro ? [...karten, pro] : karten;
+
   return (
     <div>
-      <div className="mb-5">
-        <p className="text-base font-semibold text-white mb-1">Drei Stufen, ein Bot</p>
-        <p className="text-sm text-white/40">
-          Free bleibt vollwertig. Plus zeigt dir deine Entwicklung, Pro kommt mit dem naechsten Ausbau.
+      <div className="mb-7">
+        <p className="text-xl font-semibold text-white mb-1.5">Zwei Stufen, ein Bot</p>
+        <p className="text-sm text-white/45">
+          Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den
+          letzten Stream.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {plans.map((plan, index) => {
+      <div
+        className={`grid grid-cols-1 gap-6 ${
+          obenAngezeigt.length > 2 ? 'lg:grid-cols-3' : 'lg:grid-cols-2'
+        }`}
+      >
+        {obenAngezeigt.map((plan, index) => {
           const akzent = AKZENT[plan.id] ?? AKZENT_FALLBACK;
           const cents = betragCents(plan, cycle);
           const gratis = cents === 0;
           const monatlich = monatsBetragCents(plan, cycle);
-          /* Bezahlte Stufen nur anbieten, wenn das Backend sie auch verkaufen
-             kann: ohne hinterlegte Stripe-Preis-ID meldet der Katalog
-             checkout_available=false und der Checkout schickt jeden Klick mit
-             missing_stripe_price_id zurueck. Lieber ehrlich "bald buchbar"
-             anzeigen als einen Kauf versprechen, der abprallt. Free braucht
-             keinen Stripe-Preis und bleibt immer anklickbar.
-             `buchbar === false` kommt aus dem Katalog und schlaegt alles: die
-             Stufe existiert als Ausblick, ihre Funktionen aber noch nicht. */
-          const buchbar =
-            plan.buchbar !== false && (gratis || plan.checkout_available !== false);
+          const buchbar = istBuchbar(plan, gratis);
 
           return (
             <motion.div
@@ -85,51 +103,59 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: 0.05 * index }}
               data-tour-id={`tour-pricing-${plan.id}`}
-              className="rounded-2xl border p-6 flex flex-col"
+              className="rounded-2xl border p-8 flex flex-col"
               style={{
                 borderColor: akzent + (plan.is_current ? '80' : '35'),
                 backgroundColor: akzent + '0B',
               }}
             >
-              <p className="font-semibold text-white text-lg">{plan.name}</p>
+              <p className="font-semibold text-white text-xl">{plan.name}</p>
               {plan.description && (
-                <p className="text-white/40 text-xs leading-snug mt-1">{plan.description}</p>
+                <p className="text-white/45 text-sm leading-relaxed mt-2 max-w-md">
+                  {plan.description}
+                </p>
               )}
 
-              <div className="mt-4 mb-1 flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold text-white">
+              <div className="mt-7 mb-1 flex items-baseline gap-2">
+                <span className="text-4xl font-bold text-white tracking-tight">
                   {gratis ? '0 €' : eur(cents)}
                 </span>
-                <span className="text-white/40 text-sm">
+                <span className="text-white/45 text-base">
                   {gratis ? 'für immer' : cycle === 12 ? '/ Jahr' : '/ Monat'}
                 </span>
               </div>
               {!gratis && cycle === 12 && (
-                <p className="text-white/30 text-xs">
+                <p className="text-white/35 text-sm">
                   entspricht {eur(monatlich)} im Monat, zwei Monate geschenkt
                 </p>
               )}
               {!gratis && cycle === 1 && (
-                <p className="text-white/30 text-xs">monatlich kündbar</p>
+                <p className="text-white/35 text-sm">monatlich kündbar</p>
               )}
 
-              <ul className="space-y-1.5 mt-5 mb-6 flex-1">
+              <ul className="space-y-3 mt-8 mb-8 flex-1">
                 {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2 text-xs text-white/60">
-                    <Check className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color: akzent }} />
+                  <li
+                    key={feature}
+                    className="flex items-start gap-3 text-sm text-white/70 leading-relaxed"
+                  >
+                    <Check
+                      className="w-4 h-4 mt-0.5 flex-shrink-0"
+                      style={{ color: akzent }}
+                    />
                     {feature}
                   </li>
                 ))}
               </ul>
 
               {plan.is_current ? (
-                <span className="px-6 py-3 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
+                <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
                   Deine aktuelle Stufe
                 </span>
               ) : buchbar ? (
                 <a
                   href={getPlanCheckoutHref(gratis ? null : plan.id, gratis, cycle)}
-                  className={`px-6 py-3 rounded-xl text-sm font-semibold text-center transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
+                  className={`px-6 py-3.5 rounded-xl text-sm font-semibold text-center transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
                     gratis
                       ? 'bg-white/10 hover:bg-white/15 text-white'
                       : 'bg-white/15 hover:bg-white/20 text-white'
@@ -138,7 +164,7 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                   {gratis ? 'Kostenlos nutzen' : `${plan.name} buchen`}
                 </a>
               ) : (
-                <span className="px-6 py-3 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
+                <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
                   Bald buchbar
                 </span>
               )}
@@ -147,14 +173,31 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                   schon, hat sie aber nicht dauerhaft gekauft. Der Knopf bleibt
                   deshalb stehen, der Hinweis sagt nur, warum. */}
               {plan.hinweis && (
-                <p className="text-white/35 text-xs mt-2 text-center">{plan.hinweis}</p>
+                <p className="text-white/35 text-sm mt-3 text-center">{plan.hinweis}</p>
               )}
             </motion.div>
           );
         })}
       </div>
 
-      <p className="text-white/30 text-xs mt-4 text-center">
+      {pro && !proGehoertNachOben && (
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] px-8 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="text-white/80 font-medium">
+              {pro.name} kommt, sobald das Clip-Werkzeug steht.
+            </p>
+            <p className="text-white/40 text-sm mt-1.5 leading-relaxed">
+              Geplant sind Clips ohne Mengenbegrenzung, automatisches Posten und Untertitel.
+              Solange davon nichts läuft, gibt es dafür auch nichts zu bezahlen.
+            </p>
+          </div>
+          <span className="text-white/35 text-sm whitespace-nowrap">
+            später {eur(pro.monthly_gross_cents ?? 999)} im Monat
+          </span>
+        </div>
+      )}
+
+      <p className="text-white/30 text-sm mt-6 text-center">
         Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein
         Umsatzsteuerausweis.
       </p>

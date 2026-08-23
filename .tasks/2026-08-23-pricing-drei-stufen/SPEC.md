@@ -86,7 +86,7 @@ nirgends angewendet wird.
 
 - Voller Verlauf statt nur letzter Stream, Zeitraumvergleiche, Wachstum
 - KI-Analyse, KI-Chat, Coaching, KI-Wochenreport
-- Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name
+- Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung
 
 **Pro (9,99), sichtbar aber nicht buchbar**
 

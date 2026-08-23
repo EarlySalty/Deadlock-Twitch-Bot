@@ -74,7 +74,7 @@ export default function Pricing() {
   const invoiceHref = data?.payment?.invoice_page_path ?? '/twitch/abbo/rechnungen';
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
+    <div className="max-w-7xl mx-auto px-6 lg:px-10 py-10">
       <PricingTour onComplete={() => {
         localStorage.removeItem('analytics-tour-dismissed');
         localStorage.setItem('analytics-tour-pending', '1');

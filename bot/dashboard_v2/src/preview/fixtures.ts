@@ -76,7 +76,7 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
         'Voller Verlauf statt nur letztem Stream',
         'Zeitraumvergleiche und Wachstumskurven',
         'KI-Analyse, KI-Chat, Coaching und KI-Wochenreport',
-        'Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name',
+        'Werbefreier Chat, Raid-Vorrang und Lurker-Erinnerung',
       ],
       buchbar: true,
       is_current: true,

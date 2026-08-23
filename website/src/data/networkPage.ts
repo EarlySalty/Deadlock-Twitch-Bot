@@ -160,7 +160,7 @@ export const plans: Plan[] = [
       { label: "Bevorzugte Platzierung im Raid-Netzwerk", included: true },
       { label: "Werbefreier Chat", included: true },
       { label: "Volle Auswertung und KI-Wochenreport", included: true },
-      { label: "Lurker-Erinnerung und eigener Bot-Name", included: true },
+      { label: "Lurker-Erinnerung im Chat", included: true },
     ],
     note: "Startet mit dem Netzwerk-Update. Bestehende Abos werden übernommen.",
   },
