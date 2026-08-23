@@ -35,10 +35,13 @@ pub enum ApprovalError {
     /// Alle gewaehlten Plattformen stehen auf null Posts und sind damit
     /// ausgeschaltet. Die Freigabe wuerde nie stattfinden, deshalb wird sie
     /// gar nicht erst quittiert.
-    #[error(
-        "Diese Plattformen stehen auf null Posts und sind damit ausgeschaltet: {0}. \
-         Stell im Zeitplan eine Kadenz ein oder gib eine andere Plattform frei."
-    )]
+    ///
+    /// Traegt bewusst nur einen stabilen Code plus die betroffenen
+    /// Plattformen, wie die uebrigen Varianten auch. Der Satz fuer Menschen
+    /// steht im Dashboard und laeuft dort durch die Uebersetzung; ein
+    /// deutscher Fliesstext von hier stuende im englischen Dashboard auf
+    /// Deutsch da.
+    #[error("only_paused_platforms: {0}")]
     NurPausiertePlattformen(String),
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
@@ -242,25 +245,45 @@ pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
     .unwrap_or_default()
 }
 
-/// Freigegebene Clips, die noch in die Queue müssen.
+/// Freigegebene Clips, bei denen mindestens eine freigegebene Plattform noch
+/// keine Queue-Zeile hat.
 ///
-/// Der Zusatz `NOT EXISTS` ist der Unterschied zwischen dem Namen und dem, was
-/// die Abfrage frueher tat: sie lieferte einfach die juengsten Freigaben. Bei
-/// `LIMIT 10` belegten damit zehn laengst vollstaendig eingereihte Freigaben
-/// das Fenster dauerhaft, und ein Clip, der beim ersten Anlauf keinen Termin
-/// bekommen hat, wurde nie wieder angefasst.
+/// Die Pruefung laeuft plattformgenau, weil das Einreihen plattformgenau
+/// laeuft: `ensure_queued_uploads` legt je freigegebener Plattform eine eigene
+/// Zeile an. Eine Pruefung pro Clip ("gibt es ueberhaupt eine Zeile") wirft
+/// einen Clip dauerhaft aus dem Fenster, sobald eine einzige seiner
+/// Plattformen einen Termin bekommen hat. Freigegeben fuer youtube und tiktok,
+/// tiktok bekommt einen Termin, youtube laeuft in einen vollen Horizont: die
+/// tiktok-Zeile allein reichte, damit youtube nie wieder versucht wird.
+///
+/// Ein vollstaendig eingereihter Clip faellt dagegen heraus und belegt keinen
+/// der wenigen Batch-Plaetze.
+///
+/// Sortiert wird nach der aeltesten Entscheidung zuerst. Bei mehr als `limit`
+/// offenen Freigaben verdraengten sonst die frischen die aelteste dauerhaft,
+/// und eine Warteschlange, die von hinten abgearbeitet wird, ist keine
+/// Warteschlange. Kein Aufrufer haengt an der Reihenfolge:
+/// `approval_worker::run_once` arbeitet die Liste einfach der Reihe nach ab.
 pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar::<_, i32>(
-        "SELECT a.clip_db_id FROM social_media_clip_approval a WHERE a.state = $1 \
-           AND NOT EXISTS ( \
-                 SELECT 1 FROM twitch_clips_upload_queue q \
-                  WHERE q.clip_id = a.clip_db_id::bigint) \
-         ORDER BY CASE WHEN a.decided_at IS NULL THEN 1 ELSE 0 END, \
-                  a.decided_at DESC, a.clip_db_id DESC \
-         LIMIT $2",
+    sqlx::query_scalar!(
+        "SELECT a.clip_db_id AS \"clip_db_id!\" \
+           FROM social_media_clip_approval a \
+          WHERE a.state = $1 \
+            AND EXISTS ( \
+                  SELECT 1 \
+                    FROM jsonb_array_elements_text( \
+                           CASE WHEN jsonb_typeof(a.approved_platforms) = 'array' \
+                                THEN a.approved_platforms \
+                                ELSE '[]'::jsonb END) AS p(platform) \
+                   WHERE NOT EXISTS ( \
+                         SELECT 1 FROM twitch_clips_upload_queue q \
+                          WHERE q.clip_id = a.clip_db_id::bigint \
+                            AND q.platform = p.platform)) \
+          ORDER BY a.decided_at ASC NULLS FIRST, a.clip_db_id ASC \
+          LIMIT $2",
+        STATE_APPROVED,
+        limit.max(1)
     )
-    .bind(STATE_APPROVED)
-    .bind(limit.max(1))
     .fetch_all(pool)
     .await
     .unwrap_or_default()
@@ -451,6 +474,14 @@ async fn teile_pausierte_ab(
 
 /// Reiht die freigegebenen Plattformen eines Clips in die Upload-Queue
 /// (Python `ensure_queued_uploads`). Nutzt die Enrichment-Texte je Plattform.
+///
+/// Die Schleife laeuft je Plattform, und jeder ihrer Abbruchgruende
+/// (Freigabepruefung gescheitert, voller Planungshorizont, `queue_upload`
+/// gescheitert) laesst genau diese eine Plattform ohne Zeile stehen, waehrend
+/// die Schwesterplattformen ihre Zeile bekommen. Das ist gewollt und heilt sich
+/// selbst, weil `iter_approved_clips_pending_queue` plattformgenau prueft: der
+/// Clip bleibt in der Nachreih-Liste, solange auch nur eine freigegebene
+/// Plattform offen ist.
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
     if !clip_exists(pool, clip_db_id).await {
         return Vec::new();
@@ -510,9 +541,10 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         // Warteschlange, blockiert `upload_already_exists` und belegt in
         // `belegte_termine` einen Slot. Ohne Zeile bleibt der Clip dagegen in
         // `iter_approved_clips_pending_queue` stehen, weil diese Abfrage
-        // ausdruecklich nur Freigaben ohne Queue-Zeile liefert; er wird also
-        // bei jedem Lauf erneut versucht, sobald die Kadenz wieder etwas
-        // hergibt.
+        // plattformgenau prueft: schon eine einzige freigegebene Plattform ohne
+        // Queue-Zeile haelt den Clip im Fenster, auch wenn die
+        // Schwesterplattformen laengst ihre Zeile haben. Er wird also bei jedem
+        // Lauf erneut versucht, sobald die Kadenz wieder etwas hergibt.
         //
         // Ohne Kanal bleibt es beim alten Verhalten: dort gibt es keine Kadenz,
         // an die man sich halten koennte.
@@ -743,26 +775,7 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
-    /// Test-DSN, mit Notbremse.
-    ///
-    /// Ohne `TB_TEST_DATABASE_URL` verlassen die DB-Tests ihren Rumpf und
-    /// melden gruen, ohne eine einzige Zusicherung geprueft zu haben. Fuer
-    /// einen Lauf am Arbeitsplatz ist das bequem, fuer einen Lauf, der als
-    /// Nachweis gilt, ist es eine Luege. `TB_TEST_REQUIRE_DB=1` macht daraus
-    /// einen Abbruch.
-    fn test_dsn() -> Option<String> {
-        match std::env::var("TB_TEST_DATABASE_URL") {
-            Ok(dsn) if !dsn.trim().is_empty() => Some(dsn),
-            _ => {
-                assert!(
-                    std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
-                    "TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt: \
-                     dieser Test haette nichts geprueft"
-                );
-                None
-            }
-        }
-    }
+    use crate::test_support::test_dsn;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = test_dsn()?;
@@ -1271,6 +1284,98 @@ mod tests {
             .is_empty());
     }
 
+    /// Legt eine Freigabe mit beliebigen Plattformen an und gibt die Clip-ID
+    /// zurueck. `vor_minuten` steuert das Alter der Entscheidung.
+    async fn seed_freigabe(pool: &PgPool, plattformen: &[&str], vor_minuten: i32) -> i32 {
+        let clip: i32 =
+            sqlx::query_scalar("INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let liste = serde_json::to_string(plattformen).unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms, decided_at) \
+             VALUES ($1, 'approved', $2::text::jsonb, now() - make_interval(mins => $3))",
+        )
+        .bind(clip)
+        .bind(liste)
+        .bind(vor_minuten)
+        .execute(pool)
+        .await
+        .unwrap();
+        clip
+    }
+
+    async fn seed_queue_zeile(pool: &PgPool, clip: i32, platform: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, $2, 'pending')",
+        )
+        .bind(clip)
+        .bind(platform)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Der eigentliche Fall: das Einreihen laeuft je Plattform, die
+    /// Nachreih-Abfrage muss deshalb auch je Plattform pruefen.
+    ///
+    /// Ein Clip, der fuer youtube und tiktok freigegeben ist und nur fuer
+    /// tiktok eine Zeile bekommen hat, war mit der clip-weiten Pruefung
+    /// dauerhaft aus dem Fenster: die tiktok-Zeile allein machte `NOT EXISTS`
+    /// falsch, youtube wurde nie wieder versucht. Ohne Fehler, ohne Log, ohne
+    /// Weg zurueck ausser Handarbeit in der Datenbank.
+    #[tokio::test]
+    async fn nachreih_lauf_findet_den_clip_mit_halb_eingereihten_plattformen() {
+        let Some(pool) = make_pool("t_sm_approval_teilweise").await else {
+            return;
+        };
+
+        let halb = seed_freigabe(&pool, &["youtube", "tiktok"], 60).await;
+        seed_queue_zeile(&pool, halb, "tiktok").await;
+
+        // Gegenprobe: derselbe Clip-Zuschnitt, aber vollstaendig eingereiht.
+        // Der darf das Zehnerfenster nicht belegen.
+        let voll = seed_freigabe(&pool, &["youtube", "tiktok"], 30).await;
+        seed_queue_zeile(&pool, voll, "tiktok").await;
+        seed_queue_zeile(&pool, voll, "youtube").await;
+
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        assert_eq!(
+            batch,
+            vec![halb],
+            "eine offene Plattform haelt den Clip im Fenster, ein vollstaendig \
+             eingereihter Clip faellt heraus"
+        );
+    }
+
+    /// Die aelteste offene Freigabe kommt zuerst dran.
+    ///
+    /// Mit `decided_at DESC` verdraengten zehn frische Freigaben die aelteste
+    /// bei jedem Lauf aufs Neue, und zwar schon bei normalem Andrang, ohne
+    /// dass eine Kadenz auf null stehen muss. Eine Warteschlange, die von
+    /// hinten abgearbeitet wird, ist keine Warteschlange.
+    #[tokio::test]
+    async fn nachreih_lauf_nimmt_die_aelteste_offene_freigabe_zuerst() {
+        let Some(pool) = make_pool("t_sm_approval_reihenfolge").await else {
+            return;
+        };
+
+        let aelteste = seed_freigabe(&pool, &["youtube"], 600).await;
+        for minuten in 1..=10 {
+            seed_freigabe(&pool, &["youtube"], minuten).await;
+        }
+
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        assert_eq!(batch.len(), 10);
+        assert_eq!(
+            batch.first().copied(),
+            Some(aelteste),
+            "die aelteste offene Freigabe darf nicht aus dem Fenster fallen"
+        );
+    }
+
     /// Ein Clip ohne freien Termin bleibt in der Nachreih-Liste, auch wenn
     /// danach viele vollstaendig eingereihte Freigaben dazukommen. Vorher
     /// lieferte `iter_approved_clips_pending_queue` einfach die juengsten zehn
@@ -1389,5 +1494,86 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(offen, 0, "ohne freien Termin wird nichts eingereiht");
+    }
+
+    /// Derselbe Fall wie oben, aber mit einer zweiten Plattform daneben: der
+    /// ganze Ablauf von der Freigabe bis in die Nachreih-Liste.
+    ///
+    /// tiktok bekommt einen Termin, youtube laeuft in `SlotPlan::HorizontVoll`
+    /// und bleibt ohne Zeile. Genau hier war der Clip vorher endgueltig raus,
+    /// weil die tiktok-Zeile die clip-weite Pruefung erfuellte. Im Dashboard
+    /// stand er weiter als "freigegeben fuer youtube", und auf youtube
+    /// passierte nie etwas.
+    #[tokio::test]
+    async fn horizont_voll_auf_einer_plattform_haelt_den_clip_in_der_nachreih_liste() {
+        let Some(pool) = make_pool("t_sm_approval_horizont_teilweise").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 1, 1, '[\"18:00\"]'::jsonb), \
+                    ('kanal', 'tiktok', TRUE, 7, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Nur der youtube-Horizont ist dicht, tiktok bleibt frei.
+        let belegt: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) \
+             SELECT $1, 'youtube', 'pending', \
+                    (date_trunc('day', now() AT TIME ZONE 'Europe/Berlin') \
+                     + make_interval(days => g) + INTERVAL '18 hours') AT TIME ZONE 'Europe/Berlin' \
+               FROM generate_series(0, 200) AS g",
+        )
+        .bind(belegt)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string(), "tiktok".to_string()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+
+        let plattformen: Vec<String> = sqlx::query_scalar(
+            "SELECT platform FROM twitch_clips_upload_queue WHERE clip_id = $1 ORDER BY platform",
+        )
+        .bind(clip)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            plattformen,
+            vec!["tiktok".to_string()],
+            "tiktok bekommt einen Termin, youtube bleibt ohne Zeile"
+        );
+
+        assert!(
+            iter_approved_clips_pending_queue(&pool, 10)
+                .await
+                .contains(&clip),
+            "die offene youtube-Freigabe muss den Clip in der Nachreih-Liste halten"
+        );
     }
 }

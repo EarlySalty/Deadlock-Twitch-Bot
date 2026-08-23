@@ -173,6 +173,9 @@ export const FEHLER_TEXTE: Record<string, string> = {
   unknown_streamer: 'Diesen Kanal gibt es nicht.',
   // Freigabe und Veto
   invalid_decision: 'Diese Entscheidung passt nicht mehr zum Zustand des Clips.',
+  // {details} traegt die betroffenen Plattformnamen aus der Servermeldung.
+  only_paused_platforms:
+    'Diese Plattformen stehen auf null Posts und sind damit ausgeschaltet: {details}. Stell im Zeitplan eine Kadenz ein oder gib eine andere Plattform frei.',
   approval_decision_failed: 'Die Entscheidung konnte nicht gespeichert werden.',
   approval_cancel_failed: 'Der geplante Post konnte nicht gestoppt werden.',
   clip_not_found: 'Diesen Clip gibt es nicht mehr.',
@@ -207,6 +210,12 @@ export const FEHLER_TEXTE: Record<string, string> = {
 /**
  * Uebersetzten Satz zu einem Fehler holen. Unbekannte Codes fallen auf die
  * Servermeldung zurueck, damit nie eine leere Fehlerzeile entsteht.
+ *
+ * Manche Fehler brauchen eine Liste im Satz, etwa die betroffenen
+ * Plattformnamen. Die steht im `message`-Feld der Serverantwort und wird als
+ * `{details}` in den uebersetzten Satz eingesetzt. So bleibt der Satz selbst
+ * uebersetzbar: ein fertiger deutscher Satz aus dem Backend stuende im
+ * englischen Dashboard auf Deutsch da.
  */
 export function fehlerText(
   error: unknown,
@@ -214,8 +223,14 @@ export function fehlerText(
 ): string | null {
   if (!error) return null;
   const code = (error as { code?: string }).code;
-  if (code && FEHLER_TEXTE[code]) return t(FEHLER_TEXTE[code]);
   const message = (error as { message?: string }).message;
+  if (code && FEHLER_TEXTE[code]) {
+    // `SocialMediaApiError` setzt `message` auf den Code, wenn der Server
+    // keine Meldung mitschickt. Das ist keine Liste und darf nicht in den
+    // Satz.
+    const details = message && message !== code ? message : '';
+    return t(FEHLER_TEXTE[code], { details });
+  }
   if (message && FEHLER_TEXTE[message]) return t(FEHLER_TEXTE[message]);
   // Ein blosser Code ("invalid_decision") ist keine Meldung fuer Menschen.
   if (message && !/^[a-z0-9_]+$/.test(message)) return message;

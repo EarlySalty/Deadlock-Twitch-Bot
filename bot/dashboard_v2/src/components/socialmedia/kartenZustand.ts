@@ -88,6 +88,42 @@ export function zeitplanFeldSchluessel(
   return `${platform}:${feld}`;
 }
 
+/** Ergebnis der Pruefung eines Zeitplan-Feldes beim Verlassen. */
+export type ZeitplanFeldPruefung =
+  | { gueltig: true; unveraendert: boolean }
+  | { gueltig: false; fehler: string };
+
+/** Was nach dem Verlassen eines Zeitplan-Feldes zu tun ist. */
+export interface FeldVerlassenPlan {
+  /** Fehlermeldung fuer das Feld, `null` raeumt eine alte weg. */
+  fehler: string | null;
+  /** `true`, wenn das Feld nicht mehr als offen gefuehrt wird. */
+  schliessen: boolean;
+  /** `true`, wenn der geprüfte Wert an den Server geht. */
+  absenden: boolean;
+}
+
+/**
+ * Der Ablauf beim Verlassen eines Zeitplan-Feldes, als eine Entscheidung statt
+ * dreimal als Bedingungskette im JSX.
+ *
+ * `schliessen` ist bewusst immer `true`: verlassen heisst verlassen, auch bei
+ * ungueltiger Eingabe. Vorher stand das Schliessen hinter dem `return` des
+ * Fehlerfalls, und ein Feld mit ungueltiger Eingabe blieb dauerhaft offen. Der
+ * Schaden zeigt sich erst beim naechsten Serverstand: der Effekt raeumt die
+ * Fehlermeldung weg, der Abgleich haelt den ungueltigen Text aber fest, weil
+ * offene Felder dort gewinnen. Uebrig bleibt ein falscher Wert ohne Hinweis
+ * darauf, dass er falsch ist. Eine ungueltige Eingabe wird ohnehin nie
+ * abgeschickt, also darf der Server das Feld wieder ueberschreiben.
+ */
+export function zeitplanFeldVerlassen(pruefung: ZeitplanFeldPruefung): FeldVerlassenPlan {
+  return {
+    fehler: pruefung.gueltig ? null : pruefung.fehler,
+    schliessen: true,
+    absenden: pruefung.gueltig && !pruefung.unveraendert,
+  };
+}
+
 /**
  * Gleicht das Zeitplan-Formular mit einer Serverantwort ab, ohne Eingaben zu
  * verlieren, die noch niemand abgeschickt hat.

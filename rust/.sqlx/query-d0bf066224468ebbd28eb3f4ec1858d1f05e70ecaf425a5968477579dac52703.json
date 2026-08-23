@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_upload_queue SET status = 'pending', attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END, quota_deferrals = quota_deferrals + CASE WHEN $6 THEN 1 ELSE 0 END, last_error = $1, last_attempt_at = $2::text::timestamptz, scheduled_at = $3::text::timestamptz WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d0bf066224468ebbd28eb3f4ec1858d1f05e70ecaf425a5968477579dac52703"
+}

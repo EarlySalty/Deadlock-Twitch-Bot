@@ -38,6 +38,7 @@ import {
   istGesperrt,
   istStandUnbekannt,
   zeitplanFeldSchluessel,
+  zeitplanFeldVerlassen,
   zeitplanFormularAbgleichen,
   type ZeitplanFormular,
 } from '@/components/socialmedia/kartenZustand';
@@ -1112,8 +1113,11 @@ function PostingScheduleCard({
     }));
   };
 
-  // Das Feld ist abgeschickt (oder war unveraendert): ab jetzt darf der
-  // Server es wieder ueberschreiben, etwa mit sortierten Zeiten.
+  // Das Feld ist verlassen: ab jetzt darf der Server es wieder ueberschreiben,
+  // etwa mit sortierten Zeiten. Gilt auch fuer eine ungueltige Eingabe, die
+  // gar nicht erst abgeschickt wurde, sonst haelt der Abgleich den ungueltigen
+  // Text fest, waehrend der Effekt die Fehlermeldung wegraeumt (siehe
+  // `zeitplanFeldVerlassen`).
   const feldAbgeschlossen = (platform: string, feld: keyof ZeitplanFormular) => {
     offeneFelderRef.current.delete(zeitplanFeldSchluessel(platform, feld));
   };
@@ -1228,15 +1232,18 @@ function PostingScheduleCard({
                       }
                       onBlur={() => {
                         const wert = Number(werte.postsProWoche);
-                        const schluessel = `${eintrag.platform}:woche`;
-                        if (!Number.isFinite(wert) || werte.postsProWoche.trim() === '') {
-                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
-                          return;
+                        const gueltig =
+                          werte.postsProWoche.trim() !== '' && Number.isFinite(wert);
+                        const plan = zeitplanFeldVerlassen(
+                          gueltig
+                            ? { gueltig: true, unveraendert: wert === eintrag.posts_per_week }
+                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                        );
+                        setzeFehler(`${eintrag.platform}:woche`, plan.fehler);
+                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'postsProWoche');
+                        if (plan.absenden) {
+                          onChange(eintrag.platform, { posts_per_week: wert });
                         }
-                        setzeFehler(schluessel, null);
-                        feldAbgeschlossen(eintrag.platform, 'postsProWoche');
-                        if (wert === eintrag.posts_per_week) return;
-                        onChange(eintrag.platform, { posts_per_week: wert });
                       }}
                       className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
                     />
@@ -1259,15 +1266,17 @@ function PostingScheduleCard({
                       }
                       onBlur={() => {
                         const wert = Number(werte.maxProTag);
-                        const schluessel = `${eintrag.platform}:tag`;
-                        if (!Number.isFinite(wert) || werte.maxProTag.trim() === '') {
-                          setzeFehler(schluessel, FELD_FEHLER.keineZahl);
-                          return;
+                        const gueltig = werte.maxProTag.trim() !== '' && Number.isFinite(wert);
+                        const plan = zeitplanFeldVerlassen(
+                          gueltig
+                            ? { gueltig: true, unveraendert: wert === eintrag.max_posts_per_day }
+                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                        );
+                        setzeFehler(`${eintrag.platform}:tag`, plan.fehler);
+                        if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'maxProTag');
+                        if (plan.absenden) {
+                          onChange(eintrag.platform, { max_posts_per_day: wert });
                         }
-                        setzeFehler(schluessel, null);
-                        feldAbgeschlossen(eintrag.platform, 'maxProTag');
-                        if (wert === eintrag.max_posts_per_day) return;
-                        onChange(eintrag.platform, { max_posts_per_day: wert });
                       }}
                       className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
                     />
@@ -1289,16 +1298,21 @@ function PostingScheduleCard({
                     disabled={gesperrt}
                     onChange={(event) => setzeFeld(eintrag.platform, 'zeiten', event.target.value)}
                     onBlur={() => {
-                      const schluessel = `${eintrag.platform}:zeiten`;
                       const ergebnis = pruefeZeiten(werte.zeiten);
-                      if ('fehler' in ergebnis) {
-                        setzeFehler(schluessel, ergebnis.fehler);
-                        return;
+                      const plan = zeitplanFeldVerlassen(
+                        'fehler' in ergebnis
+                          ? { gueltig: false, fehler: ergebnis.fehler }
+                          : {
+                              gueltig: true,
+                              unveraendert:
+                                ergebnis.zeiten.join(',') === eintrag.post_times.join(','),
+                            },
+                      );
+                      setzeFehler(`${eintrag.platform}:zeiten`, plan.fehler);
+                      if (plan.schliessen) feldAbgeschlossen(eintrag.platform, 'zeiten');
+                      if (plan.absenden && !('fehler' in ergebnis)) {
+                        onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                       }
-                      setzeFehler(schluessel, null);
-                      feldAbgeschlossen(eintrag.platform, 'zeiten');
-                      if (ergebnis.zeiten.join(',') === eintrag.post_times.join(',')) return;
-                      onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                     }}
                     className={`mt-1 w-full rounded-lg border bg-background/80 px-3 py-2 text-sm text-white ${
                       zeitenFehler ? 'border-danger' : 'border-border'

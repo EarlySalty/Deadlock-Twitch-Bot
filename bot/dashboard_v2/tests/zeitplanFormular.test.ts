@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 
 import {
   zeitplanFeldSchluessel,
+  zeitplanFeldVerlassen,
   zeitplanFormularAbgleichen,
   type ZeitplanFormular,
 } from '../src/components/socialmedia/kartenZustand';
@@ -78,4 +79,58 @@ test('eine neue Plattform kommt vollstaendig vom Server', () => {
     new Set([zeitplanFeldSchluessel('instagram', 'postsProWoche')]),
   );
   assert.deepEqual(abgeglichen.instagram, formular('3', '1', '19:00'));
+});
+
+/**
+ * Verlassen eines Feldes mit ungueltiger Eingabe.
+ *
+ * Das Schliessen des Feldes stand in allen drei `onBlur` hinter dem `return`
+ * des Validierungsfehlers. Ein Feld mit ungueltiger Eingabe blieb damit
+ * dauerhaft offen, und beim naechsten Serverstand raeumte der Effekt die
+ * Fehlermeldung weg, waehrend der Abgleich den ungueltigen Text festhielt.
+ */
+test('ein Feld gilt nach dem Verlassen als geschlossen, auch bei ungueltiger Eingabe', () => {
+  const plan = zeitplanFeldVerlassen({ gueltig: false, fehler: 'Bitte eine Zahl angeben.' });
+  assert.equal(plan.schliessen, true, 'verlassen heisst verlassen');
+  assert.equal(plan.fehler, 'Bitte eine Zahl angeben.');
+  assert.equal(plan.absenden, false, 'ungueltige Eingabe geht nie an den Server');
+});
+
+test('ein gueltiger, geaenderter Wert geht an den Server und raeumt den Fehler weg', () => {
+  const plan = zeitplanFeldVerlassen({ gueltig: true, unveraendert: false });
+  assert.equal(plan.fehler, null);
+  assert.equal(plan.schliessen, true);
+  assert.equal(plan.absenden, true);
+});
+
+test('ein unveraenderter Wert schliesst das Feld ohne Mutation', () => {
+  const plan = zeitplanFeldVerlassen({ gueltig: true, unveraendert: true });
+  assert.equal(plan.fehler, null);
+  assert.equal(plan.schliessen, true);
+  assert.equal(plan.absenden, false, 'ohne Aenderung braucht es keine Anfrage');
+});
+
+test('eine ungueltige Eingabe bleibt nicht als falscher Wert ohne Hinweis stehen', () => {
+  // Der Nutzer tippt "abc" bei "Posts pro Woche" und verlaesst das Feld.
+  const offen = new Set<string>();
+  const schluessel = zeitplanFeldSchluessel('youtube', 'postsProWoche');
+  offen.add(schluessel);
+  const lokal = { youtube: formular('abc', '1', '18:00') };
+
+  const plan = zeitplanFeldVerlassen({ gueltig: false, fehler: 'Bitte eine Zahl angeben.' });
+  if (plan.schliessen) offen.delete(schluessel);
+
+  // Jetzt trifft ein neuer Serverstand ein. Der Effekt raeumt dabei alle
+  // Feldfehler weg, der Abgleich muss deshalb auch den ungueltigen Text
+  // ersetzen: sonst steht "abc" ohne Fehlerhinweis im Feld.
+  const abgeglichen = zeitplanFormularAbgleichen(
+    lokal,
+    { youtube: formular('4', '1', '18:00') },
+    offen,
+  );
+  assert.equal(
+    abgeglichen.youtube.postsProWoche,
+    '4',
+    'der Serverstand muss die ungueltige Eingabe ersetzen',
+  );
 });

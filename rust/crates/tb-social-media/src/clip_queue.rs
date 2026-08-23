@@ -271,7 +271,7 @@ pub async fn reschedule_upload(
     konto: VertagungsKonto,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
+    sqlx::query!(
         "UPDATE twitch_clips_upload_queue \
             SET status = 'pending', \
                 attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END, \
@@ -280,13 +280,13 @@ pub async fn reschedule_upload(
                 last_attempt_at = $2::text::timestamptz, \
                 scheduled_at = $3::text::timestamptz \
           WHERE id = $4",
+        error,
+        &now,
+        naechster_versuch,
+        queue_id,
+        konto == VertagungsKonto::Versuch,
+        konto == VertagungsKonto::Kontingent
     )
-    .bind(error)
-    .bind(&now)
-    .bind(naechster_versuch)
-    .bind(queue_id)
-    .bind(konto == VertagungsKonto::Versuch)
-    .bind(konto == VertagungsKonto::Kontingent)
     .execute(pool)
     .await?;
     Ok(())
@@ -375,7 +375,10 @@ mod tests {
     use std::str::FromStr;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        // Gemeinsame Notbremse statt einer Kopie je Testmodul: ohne DSN
+        // meldet ein uebersprungener DB-Test sonst gruen, ohne etwas
+        // geprueft zu haben.
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

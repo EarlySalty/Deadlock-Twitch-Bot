@@ -27,7 +27,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 // JSX-Transform, wie in languageProvider.test.tsx.
 (globalThis as { React?: typeof React }).React = React;
 
-import { dictionaryFor } from '../src/i18n/dictionary';
+import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import {
   clipFehler,
@@ -41,6 +41,7 @@ import {
   APPROVAL_STATE_LABELS,
   FEHLER_TEXTE,
   FELD_FEHLER,
+  fehlerText,
   KATEGORIE_LABELS,
   REPORT_KIND_LABELS,
   SOCIAL_MEDIA_TABS,
@@ -474,4 +475,38 @@ test('Befund 7: ein gescheitertes Verwerfen landet an der Clip-Karte', () => {
     /fehler=\{clipFehler\(clip\.clip_db_id, \[[\s\S]*?discardMutation\.error[\s\S]*?\]\)\}/,
     'discardMutation.error kommt nicht an der Clip-Karte an.',
   );
+});
+
+/**
+ * Ein Backend-Fehler darf keinen fertigen deutschen Satz mitschicken: der
+ * laeuft nie durch `translate` und stuende im englischen Dashboard auf Deutsch
+ * da. `only_paused_platforms` traegt deshalb nur einen stabilen Code, die
+ * betroffenen Plattformnamen kommen als `message` und werden hier in den
+ * uebersetzten Satz eingesetzt.
+ */
+test('only_paused_platforms wird uebersetzt und behaelt die Plattformnamen', () => {
+  const fehler = { code: 'only_paused_platforms', message: 'youtube, tiktok' };
+
+  const deutsch = fehlerText(fehler, (text, params) => translate('de', text, params));
+  assert.ok(deutsch);
+  assert.match(deutsch, /youtube, tiktok/);
+  assert.doesNotMatch(deutsch, /\{details\}/);
+
+  const englisch = fehlerText(fehler, (text, params) => translate('en', text, params));
+  assert.ok(englisch);
+  assert.match(englisch, /youtube, tiktok/);
+  assert.match(englisch, /zero posts/, 'im englischen Dashboard steht der englische Satz');
+  assert.doesNotMatch(englisch, /Plattformen stehen auf null/);
+});
+
+/**
+ * Ohne `message` faellt `SocialMediaApiError` auf den Code zurueck. Der ist
+ * keine Liste und darf nicht als Platzhalterinhalt im Satz landen.
+ */
+test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
+  const satz = fehlerText(
+    { code: 'approval_decision_failed', message: 'approval_decision_failed' },
+    (text, params) => translate('en', text, params),
+  );
+  assert.equal(satz, 'The decision could not be saved.');
 });

@@ -2778,6 +2778,15 @@ pub async fn approval_decision_handler(
             Json(json!({ "error": "approval_decision_failed" })),
         )
             .into_response(),
+        // Eigener Code statt `invalid_decision`: die Oberfläche kennt dafür
+        // einen übersetzten Satz. `message` trägt nur die Plattformnamen, die
+        // dort in den Satz eingesetzt werden; ein fertiger deutscher Satz aus
+        // dem Backend stünde im englischen Dashboard auf Deutsch da.
+        Err(ApprovalError::NurPausiertePlattformen(plattformen)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "only_paused_platforms", "message": plattformen })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "invalid_decision", "message": e.to_string() })),

@@ -69,7 +69,10 @@ mod tests {
     use std::str::FromStr;
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        // Gemeinsame Notbremse statt einer Kopie je Testmodul: ohne DSN
+        // meldet ein uebersprungener DB-Test sonst gruen, ohne etwas
+        // geprueft zu haben.
+        let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
