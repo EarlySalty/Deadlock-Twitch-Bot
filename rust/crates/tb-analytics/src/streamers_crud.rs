@@ -501,6 +501,10 @@ pub async fn departner_streamer(
             twitch_login = $3,
             twitch_user_id = $4,
             manual_partner_opt_out = GREATEST(COALESCE(manual_partner_opt_out, 0), $6),
+            -- Deadlock-Pause-Marker mit abraeumen, wie im Zwilling
+            -- tb-internal-api/src/streamer_lifecycle.rs. Bliebe er stehen,
+            -- wuerde ein spaeteres Comeback den Bot ungefragt zurueckmodden.
+            deadlock_pause_unmodded_at = NULL,
             technical_pause_reason = CASE
                 WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'bot_banned'
                 THEN NULL

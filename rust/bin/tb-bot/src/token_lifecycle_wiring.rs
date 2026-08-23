@@ -356,6 +356,10 @@ pub(crate) fn spawn_deadlock_pause_scheduler(
     supervisor.spawn("deadlock_pause_sweep", async move {
         let mut tick = tokio::time::interval(DEADLOCK_PAUSE_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Der erste Tick von `interval` feuert sofort. Ohne dieses Vorab-Warten
+        // gingen Sekunden nach jedem Deploy die ersten Unmods samt echter
+        // Streamer-DMs raus, bevor irgendjemand die Vorschau gesehen hat.
+        tick.tick().await;
         loop {
             tick.tick().await;
             let outcome = reactor.sweep().await;
