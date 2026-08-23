@@ -11,10 +11,13 @@ pub enum AddModeratorOutcome {
     Added,
     /// 422 oder 400 mit "already a mod" im Body — war bereits Moderator.
     AlreadyModerator,
-    /// 400 mit Ban-/Block-Hinweis im Body — der Bot ist im Zielkanal gebannt und
-    /// kann nicht automatisch wieder als Moderator gesetzt werden. Siehe
-    /// [`looks_like_banned_body`] für die abgedeckten Formulierungen.
-    BotBanned,
+    /// 400/403 mit eindeutigem Ban-/Block-Hinweis im Body und ohne Auth-Signal.
+    /// Der `body` bleibt erhalten: ohne ihn ist ein Fehlurteil hinterher nicht
+    /// mehr nachvollziehbar, und genau das ist schon passiert.
+    BotBanned { status: u16, body: String },
+    /// Token abgelaufen, ungültig oder ohne passenden Scope. Ein Fall für den
+    /// Token-Lifecycle, ausdrücklich **kein** Bann.
+    AuthError { status: u16, body: String },
     /// Alle übrigen Antworten (Python: Warning, kein Abbruch).
     Failed { status: u16, body: String },
 }
@@ -35,18 +38,42 @@ pub enum RemoveModeratorOutcome {
     Failed { status: u16, body: String },
 }
 
+/// Erkennt an einem Helix-Fehlerbody ein Autorisierungsproblem: abgelaufener oder
+/// ungültiger Token, fehlender Scope, falscher Broadcaster.
+///
+/// Hat Vorrang vor [`looks_like_banned_body`]. Ein kaputter Token ist ein Fall für
+/// den Token-Lifecycle mit seinem Re-Auth-Flow, kein Bann. Die Verwechslung ist
+/// teuer: sie pausiert einen gesunden Partner und schickt ihm eine DM über einen
+/// Bann, den es nie gab.
+pub fn looks_like_auth_error(status: u16, body: &str) -> bool {
+    if status == 401 {
+        // 401 ist per Definition ein Authentifizierungsfehler. Twitch benutzt
+        // ihn nicht, um einen Kanal-Bann zu melden.
+        return true;
+    }
+    let body = body.to_lowercase();
+    body.contains("oauth")
+        || body.contains("unauthorized")
+        || body.contains("invalid token")
+        || body.contains("token is invalid")
+        || body.contains("token expired")
+        || body.contains("missing scope")
+        || body.contains("scope")
+        || body.contains("must match the user id")
+}
+
 /// Erkennt an einem Helix-Fehlerbody, dass der Bot im Zielkanal gebannt ist.
 ///
 /// Twitch formuliert das je nach Endpunkt und Zeitpunkt unterschiedlich
 /// ("user is banned", "is banned from the broadcaster's chat room", "blocked from
-/// the broadcaster's chat room"). Die frühere Prüfung auf exakt `"user is banned"`
-/// hat die Block-Formulierung durchgelassen: der Ban blieb dann unerkannt, der
-/// Kanal lief scheinbar normal weiter und weder Log noch Streamer-DM kamen an.
-/// Deshalb wird hier auf alle bekannten Varianten geprüft.
+/// the broadcaster's chat room"). Eine Prüfung auf exakt `"user is banned"` würde
+/// die Block-Formulierung durchlassen.
+///
+/// Der Aufrufer muss [`looks_like_auth_error`] zuerst prüfen: ein Auth-Fehler darf
+/// niemals als Bann durchgehen.
 pub fn looks_like_banned_body(body: &str) -> bool {
     let body = body.to_lowercase();
     body.contains("is banned")
-        || body.contains("user is banned")
         || body.contains("banned from")
         || body.contains("is blocked")
         || body.contains("blocked from")
@@ -123,15 +150,35 @@ impl HelixClient {
                     }
                 };
                 let body_lower = body.to_lowercase();
+                let snippet: String = body.chars().take(200).collect();
                 if status == 400 && body_lower.contains("already a mod") {
                     Ok(AddModeratorOutcome::AlreadyModerator)
-                } else if matches!(status, 400 | 401 | 403) && looks_like_banned_body(&body_lower) {
-                    // Nicht auf 400 festnageln: Twitch hat denselben Sachverhalt
-                    // schon als 401/403 ausgeliefert. Der Body entscheidet.
-                    // (422 ist oben bereits als "already a mod" abgefangen.)
-                    Ok(AddModeratorOutcome::BotBanned)
+                } else if looks_like_auth_error(status, &body_lower) {
+                    // Reihenfolge ist entscheidend: Auth schlägt Bann. Ein
+                    // kaputter Token hat schon einmal als Kanal-Bann gegolten und
+                    // einem gesunden Partner eine Bann-DM eingebracht.
+                    tracing::info!(
+                        status,
+                        body = %snippet,
+                        "Twitch Add-Moderator: Autorisierungsproblem, kein Bann"
+                    );
+                    Ok(AddModeratorOutcome::AuthError {
+                        status,
+                        body: snippet,
+                    })
+                } else if matches!(status, 400 | 403) && looks_like_banned_body(&body_lower) {
+                    // Body mitloggen: die Ban-Klassifikation loest eine Reaktion
+                    // mit Aussenwirkung aus und muss nachpruefbar bleiben.
+                    tracing::warn!(
+                        status,
+                        body = %snippet,
+                        "Twitch Add-Moderator: Antwort als Kanal-Bann gewertet"
+                    );
+                    Ok(AddModeratorOutcome::BotBanned {
+                        status,
+                        body: snippet,
+                    })
                 } else {
-                    let snippet: String = body.chars().take(200).collect();
                     Ok(AddModeratorOutcome::Failed {
                         status,
                         body: snippet,
@@ -206,11 +253,14 @@ mod tests {
         assert_eq!(outcome, AddModeratorOutcome::AlreadyModerator);
     }
 
+    /// `Failed` ist der Rest-Topf für alles, was weder Erfolg, noch Bann, noch
+    /// Auth-Problem ist. Ein 401 gehört seit der miracleghost9-Regression
+    /// ausdrücklich nicht mehr dazu, der ist `AuthError`.
     #[tokio::test]
     async fn failed_bei_sonstigem_status() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal server error"))
             .mount(&server)
             .await;
         let client = client_with(&server).await;
@@ -220,7 +270,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             outcome,
-            AddModeratorOutcome::Failed { status: 401, .. }
+            AddModeratorOutcome::Failed { status: 500, .. }
         ));
     }
 
@@ -304,7 +354,7 @@ mod tests {
             .add_channel_moderator("111", "bot", "tok")
             .await
             .unwrap();
-        assert_eq!(outcome, AddModeratorOutcome::BotBanned);
+        assert!(matches!(outcome, AddModeratorOutcome::BotBanned { .. }));
     }
 
     /// Regression: Twitch liefert den Ban auch als "blocked from the
@@ -322,7 +372,6 @@ mod tests {
                 403u16,
                 r#"{"message":"The user is banned from the broadcaster's chat room."}"#,
             ),
-            (401u16, r#"{"message":"sender is banned"}"#),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -334,10 +383,9 @@ mod tests {
                 .add_channel_moderator("111", "bot", "tok")
                 .await
                 .unwrap();
-            assert_eq!(
-                outcome,
-                AddModeratorOutcome::BotBanned,
-                "Status {status} mit Body {body} muss als Bot-Ban gelten"
+            assert!(
+                matches!(outcome, AddModeratorOutcome::BotBanned { .. }),
+                "Status {status} mit Body {body} muss als Bot-Ban gelten, war: {outcome:?}"
             );
         }
     }

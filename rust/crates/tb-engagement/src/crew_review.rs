@@ -27,7 +27,7 @@ pub fn is_crew_own_channel(login: &str) -> bool {
         .any(|channel| channel.eq_ignore_ascii_case(login))
 }
 pub const FIREWORKS_DEFAULT_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
-pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash";
+pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash-0731";
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const ALLOWED_EPISTEMIC_PHRASE: &str = "nach dem was ich dazu mitbekommen habe";
 
@@ -1037,7 +1037,7 @@ mod tests {
             .and(path("/chat/completions"))
             .and(header("authorization", "Bearer dummy-test-key"))
             .and(body_partial_json(json!({
-                "model": "accounts/fireworks/models/deepseek-v4-flash",
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
                 "temperature": 0.0,
                 "response_format": {"type": "json_object"},
             })))
@@ -1240,7 +1240,7 @@ mod tests {
         assert_eq!(defaults.base_url, "https://api.fireworks.ai/inference/v1");
         assert_eq!(
             defaults.model,
-            "accounts/fireworks/models/deepseek-v4-flash"
+            "accounts/fireworks/models/deepseek-v4-flash-0731"
         );
 
         std::env::set_var("FIREWORKS_API_KEY", "dummy-primary");

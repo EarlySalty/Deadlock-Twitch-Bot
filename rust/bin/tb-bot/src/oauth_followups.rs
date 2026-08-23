@@ -255,9 +255,16 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
                 );
                 Ok(())
             }
-            Ok(AddModeratorOutcome::BotBanned) => {
+            Ok(AddModeratorOutcome::BotBanned { status, body }) => {
                 let error = format!(
-                    "Bot (ID: {bot_user_id}) is banned in channel {broadcaster_id}; moderator setup skipped"
+                    "Bot (ID: {bot_user_id}) is banned in channel {broadcaster_id} (HTTP {status}: {body}); moderator setup skipped"
+                );
+                tracing::warn!("{error}");
+                Err(error)
+            }
+            Ok(AddModeratorOutcome::AuthError { status, body }) => {
+                let error = format!(
+                    "Streamer-Autorisierung für Kanal {broadcaster_id} trägt nicht (HTTP {status}: {body}); Moderator-Einsetzung übersprungen"
                 );
                 tracing::warn!("{error}");
                 Err(error)
