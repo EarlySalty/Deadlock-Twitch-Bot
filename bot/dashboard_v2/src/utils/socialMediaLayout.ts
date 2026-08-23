@@ -153,3 +153,39 @@ export function cappedTileWidth(box: LayoutBox): LayoutBox {
 export function formatBox(box: LayoutBox): string {
   return `${Math.round(box.w)}×${Math.round(box.h)} @ (${Math.round(box.x)},${Math.round(box.y)})`;
 }
+
+/** Platzierung eines Bildes so, dass ein Ausschnitt daraus ein Zielrechteck fuellt. */
+export interface AusschnittRahmen {
+  /** Alle Werte in Prozent des Zielrechtecks, direkt als CSS verwendbar. */
+  breite: number;
+  hoehe: number;
+  links: number;
+  oben: number;
+}
+
+/**
+ * Rechnet nach, was der Renderer mit einem Ausschnitt macht:
+ * `crop=w:h:x:y, scale=zw:zh:force_original_aspect_ratio=increase, crop=zw:zh`
+ * (siehe `build_compose_filter` in rust/crates/tb-social-media/src/video_processor.rs).
+ * `increase` skaliert so, dass beide Zielkanten erreicht werden, der zweite
+ * `crop` schneidet mittig nach. Das Ergebnis positioniert das VOLLE Quellbild,
+ * damit die Vorschau ohne Canvas auskommt.
+ *
+ * Wird die Rechnung falsch, zeigt der Editor einen anderen Ausschnitt als das
+ * fertige Video, und der Streamer stellt gegen eine Luege ein.
+ */
+export function ausschnittRahmen(
+  quelle: { width: number; height: number },
+  crop: { x: number; y: number; w: number; h: number },
+  zielBreite: number,
+  zielHoehe: number,
+): AusschnittRahmen | null {
+  if (crop.w <= 0 || crop.h <= 0 || zielBreite <= 0 || zielHoehe <= 0) return null;
+  const s = Math.max(zielBreite / crop.w, zielHoehe / crop.h);
+  return {
+    breite: ((quelle.width * s) / zielBreite) * 100,
+    hoehe: ((quelle.height * s) / zielHoehe) * 100,
+    links: (((zielBreite - crop.w * s) / 2 - crop.x * s) / zielBreite) * 100,
+    oben: (((zielHoehe - crop.h * s) / 2 - crop.y * s) / zielHoehe) * 100,
+  };
+}

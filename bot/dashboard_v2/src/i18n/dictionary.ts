@@ -256,6 +256,10 @@ const EN: Record<string, string> = {
 
   // -- Layout-Editor ------------------------------------------------------
   'Layout-Editor': 'Layout editor',
+  'Vorschau-Clip': 'Preview clip',
+  'Ohne Bild (Muster)': 'No image (pattern)',
+  'Der Ausschnitt gilt danach für alle Clips dieses Kanals.':
+    'The crop then applies to every clip on this channel.',
   PiP: 'PiP',
   Stacked: 'Stacked',
   'Cam an': 'Cam on',

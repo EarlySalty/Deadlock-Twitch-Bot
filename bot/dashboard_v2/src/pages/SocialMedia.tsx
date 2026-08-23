@@ -31,7 +31,7 @@ import { KpiCard } from '@/components/cards/KpiCard';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
-import { LayoutEditor } from '@/components/socialmedia/LayoutEditor';
+import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
 import {
@@ -192,6 +192,33 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
       return failureCount < 2;
     },
   });
+
+  // Vorschauclips fuer den Layout-Editor. Bewusst eine eigene Abfrage ohne den
+  // Statusfilter der Liste: steht der Filter auf "Veroeffentlicht" und ist dort
+  // nichts drin, haette der Editor sonst kein Bild.
+  const vorschauClipsQuery = useQuery({
+    queryKey: ['social-media', 'vorschau-clips', streamer],
+    queryFn: () => fetchClips({ status: 'all', streamer: streamer || undefined, page: 1, page_size: 12 }),
+    enabled: !!streamer,
+    staleTime: 5 * 60 * 1000,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
+  const vorschauClips: VorschauClip[] = useMemo(
+    () =>
+      (vorschauClipsQuery.data?.items ?? [])
+        .filter((clip) => !!clip.thumbnail_url)
+        .slice(0, 12)
+        .map((clip) => ({
+          id: String(clip.clip_db_id),
+          titel: clip.title || clip.clip_id,
+          bildUrl: clip.thumbnail_url as string,
+        })),
+    [vorschauClipsQuery.data],
+  );
 
   const postingPlanQuery = useQuery<PostingPlan, Error>({
     queryKey: ['social-media', 'posting-plan', streamer],
@@ -556,6 +583,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                   isSaving={saveLayoutMutation.isPending}
                   onSave={(layout) => saveLayoutMutation.mutate(layout)}
                   saveLabel={t('Default für {streamer} speichern', { streamer })}
+                  vorschauClips={vorschauClips}
                 />
               )}
               {saveLayoutMutation.isError && (
@@ -2155,6 +2183,12 @@ function ClipCard({
             initialLayout={clip.effective_layout}
             saveLabel={t('Override speichern')}
             resetLabel={t('Schließen')}
+            /* In der Karte ist die Vorschau genau dieser Clip, nichts zum Waehlen. */
+            vorschauClips={
+              clip.thumbnail_url
+                ? [{ id: String(clip.clip_db_id), titel: clip.title, bildUrl: clip.thumbnail_url }]
+                : []
+            }
             onSave={(layout) => {
               onSaveOverride(layout);
               onCloseEditor();
