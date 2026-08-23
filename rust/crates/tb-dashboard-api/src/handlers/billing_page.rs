@@ -61,6 +61,11 @@ const DEFAULT_PUBLIC_ORIGIN: &str = "https://admin.deutsche-deadlock-community.d
 /// nach § 356 Abs. 5 BGB; Python-Vorlage: abbo_billing_routes.py:99-107).
 const CHECKOUT_TOS_MESSAGE: &str = "Mit dem Kauf stimmst du unseren AGB zu. Du verlangst ausdrücklich, dass die Leistung sofort beginnt, und bestätigst, dass dein Widerrufsrecht mit der vollständigen Vertragserfüllung gemäß § 356 Abs. 5 BGB erlischt.";
 
+/// Testphase in Tagen, die die Stripe-Checkout-Session fuer einen Monatszyklus
+/// mitgibt. Unveraendert 30 Tage wie vor dem Drei-Stufen-Umbau; die Umstellung
+/// auf 14 plus 14 ist SPEC M3.
+const CHECKOUT_TRIAL_DAYS: u32 = 30;
+
 /// P1.44: User-sichtbare Status-Meldungen der Checkout-Preview (vier Zweige aus
 /// `routes_billing.py:api_billing_checkout_preview`). PLATZHALTER — finaler
 /// deutscher Wortlaut wird von Claude gesetzt.
@@ -241,21 +246,25 @@ pub async fn checkout_start_handler(
         },
     });
 
-    // 30-Tage-Trial nur für analysis_dashboard im Monatszyklus; +2 Bonus-Monate
-    // beim Jahreszyklus (vom Webhook via subscription_data.metadata verarbeitet).
-    if plan_id == "analysis_dashboard" && cycle == 1 {
-        session_payload["subscription_data"] = json!({ "trial_period_days": 30 });
+    // Trial im Monatszyklus. Der Trial hing bis zum Drei-Stufen-Umbau an der
+    // Plan-ID `analysis_dashboard`; die gibt es im Katalog nicht mehr, damit war
+    // die Bedingung tot und kein Checkout setzte noch `trial_period_days`. Er
+    // haengt jetzt am Zyklus: an dieser Stelle ist der Plan bereits als
+    // kostenpflichtig geprueft (`is_paid_plan_id` oben), also gilt der Trial fuer
+    // Plus und Pro. Dauer bleibt vorerst 30 Tage; die Umstellung auf 14 plus 14
+    // ist SPEC M3 und laeuft separat.
+    if cycle == 1 {
+        session_payload["subscription_data"] =
+            json!({ "trial_period_days": CHECKOUT_TRIAL_DAYS });
     }
-    if cycle == 12 {
-        // Auf bestehende subscription_data mergen (für Jahreszyklus ist sie leer,
-        // da der Trial nur bei Monatszyklus greift — Python-Parität).
-        let mut sub_data = session_payload
-            .get("subscription_data")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        sub_data["metadata"] = json!({ "bonus_months": "2" });
-        session_payload["subscription_data"] = sub_data;
-    }
+    // KEINE Bonus-Monate mehr beim Jahreszyklus. Der Jahresvorteil steckt seit
+    // dem Drei-Stufen-Umbau im Preis (49,90 bzw. 99,90 sind zehn Monatspreise,
+    // also zwei geschenkte Monate). Die zusaetzlichen zwei Bonus-Monate stammten
+    // aus der Zeit, als der Jahresbetrag zwoelf Monatspreise war; zusammen mit
+    // dem neuen Preis haetten Jahreszahler 14 Monate fuer zehn bekommen.
+    // Der Lesepfad im Webhook (`webhook_apply::grant_bonus_access_months`)
+    // bleibt absichtlich stehen: Bestands-Subscriptions, in deren Stripe-
+    // Metadaten `bonus_months` noch gesetzt ist, behalten ihren Bonus.
 
     let (profile, _) =
         crate::handlers::billing_profile::resolve_profile(&pool, &auth, Some(&config), None).await;
@@ -1492,6 +1501,67 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get("location").unwrap().to_str().unwrap();
         assert!(loc.contains("reason=checkout_create_failed"), "got {loc}");
+    }
+
+    /// Startet einen Checkout gegen einen Mock-Stripe und liefert den rohen
+    /// Request-Body der Checkout-Session zurueck.
+    async fn checkout_session_body(cycle: &str) -> String {
+        test_price_map_setzen();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/checkout/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "cs_test_abc",
+                "url": "https://checkout.stripe.com/c/pay/cs_test_abc",
+            })))
+            .mount(&server)
+            .await;
+        let resp = checkout_start_handler(
+            partner("login", "1"),
+            Some(Extension(cfg_with_base(&server.uri()))),
+            State(lazy_pool()),
+            Query(CheckoutQuery {
+                plan_id: Some("plus".into()),
+                cycle: Some(cycle.to_string()),
+                quantity: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "genau eine Checkout-Session erwartet");
+        String::from_utf8(requests[0].body.clone()).unwrap()
+    }
+
+    /// Der Jahreszyklus darf KEINE Bonus-Monate mehr in die Subscription-
+    /// Metadaten schreiben. Der Jahresvorteil steckt seit dem Drei-Stufen-Umbau
+    /// im Preis (49,90 sind zehn Monatspreise). Vorher setzte der Checkout
+    /// zusaetzlich `bonus_months=2`, der Webhook schob daraufhin
+    /// `manual_plan_expires_at` um 2*31 Tage: 14 Monate fuer zehn Monatspreise.
+    #[tokio::test]
+    async fn jahres_checkout_setzt_keine_bonus_monate() {
+        let body = checkout_session_body("12").await;
+        assert!(
+            !body.contains("bonus_months"),
+            "Jahres-Checkout darf keine Bonus-Monate mehr mitschicken: {body}"
+        );
+    }
+
+    /// Der Monatszyklus gibt weiterhin einen Trial mit. Die Bedingung hing bis
+    /// zum Drei-Stufen-Umbau an der Plan-ID `analysis_dashboard`, die es im
+    /// Katalog nicht mehr gibt — damit war sie tot und kein Checkout setzte
+    /// noch `trial_period_days`.
+    #[tokio::test]
+    async fn monats_checkout_setzt_trial() {
+        let body = checkout_session_body("1").await;
+        assert!(
+            body.contains("trial_period_days"),
+            "Monats-Checkout ohne Trial: {body}"
+        );
+        assert!(
+            !body.contains("bonus_months"),
+            "Monats-Checkout darf keine Bonus-Monate mitschicken: {body}"
+        );
     }
 
     // ── Cancel + Katalog (DB — skip ohne TB_TEST_DATABASE_URL) ──────────────

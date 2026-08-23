@@ -108,11 +108,18 @@ impl StreamerPlanSync {
 
 /// `plan_id` (Stripe-/Katalog-seitig) → `streamer_plans.plan_name`.
 ///
-/// 1:1 `_billing_plan_name_from_id`: nur drei Pläne mappen auf einen
-/// Nicht-Frei-Namen, alles andere fällt auf `"free"`. (Bewusst KEINE
-/// Voll-Auflösung des Katalogs — diese Engführung ist das Python-Orakel.)
+/// Die aktuellen Stufen (`plus`, `pro`) stehen unter ihrer eigenen ID in der
+/// Spalte. Ohne sie landete jeder neue zahlende Kunde auf `"free"`, und die
+/// Admin-Ansicht sowie `auth_status` zeigten Falsches an.
+///
+/// Die drei Alt-IDs bleiben stehen (Bestandsschutz): sie sind ueber den Katalog
+/// nicht mehr buchbar, stehen aber in der DB und koennen aus Stripe-Events fuer
+/// laufende Alt-Abos nachkommen. Alles Unbekannte faellt weiterhin auf `"free"`
+/// (bewusst KEINE Voll-Aufloesung des Katalogs).
 pub fn plan_name_from_id(plan_id: &str) -> &'static str {
     match plan_id.trim() {
+        "plus" => "plus",
+        "pro" => "pro",
         "raid_boost" => "raid_boost",
         "analysis_dashboard" => "analysis",
         "bundle_analysis_raid_boost" => "bundle",
@@ -821,18 +828,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── Plan-Name-Mapping (Geld-kritisch: nur 3 Pläne ≠ free) ───────────────
+    // ── Plan-Name-Mapping (Geld-kritisch) ──────────────────────────────────
     #[test]
-    fn plan_name_map_matches_python_oracle() {
+    fn plan_name_map_kennt_die_drei_stufen_und_die_alt_ids() {
+        // Aktueller Katalog: die bezahlten Stufen stehen unter eigener ID.
+        assert_eq!(plan_name_from_id("plus"), "plus");
+        assert_eq!(plan_name_from_id("pro"), "pro");
+        assert_eq!(plan_name_from_id("free"), "free");
+        // Bestandsschutz: Alt-IDs aus laufenden Abos bleiben abgebildet.
         assert_eq!(plan_name_from_id("raid_boost"), "raid_boost");
         assert_eq!(plan_name_from_id("analysis_dashboard"), "analysis");
         assert_eq!(plan_name_from_id("bundle_analysis_raid_boost"), "bundle");
-        // Alles andere → free (auch sonst bezahlte Pläne — Python-Engführung).
+        // Alles Unbekannte → free.
         assert_eq!(plan_name_from_id("chat_quiet"), "free");
         assert_eq!(plan_name_from_id("bundle_komplett"), "free");
         assert_eq!(plan_name_from_id("raid_free"), "free");
         assert_eq!(plan_name_from_id(""), "free");
         assert_eq!(plan_name_from_id("  raid_boost  "), "raid_boost");
+        assert_eq!(plan_name_from_id("  plus  "), "plus");
     }
 
     // ── Subscription-Payload-Extraktion ─────────────────────────────────────
