@@ -10,6 +10,7 @@ members = [
     "crates/tb-transport-twitch",
     "crates/tb-transport-discord",
     "crates/tb-monitoring",
+    "crates/tb-platform-core",
     "crates/tb-raid",
     "crates/tb-http-core",
     "crates/tb-analytics",
@@ -77,6 +78,7 @@ tb-db = { path = "crates/tb-db" }
 tb-transport-twitch = { path = "crates/tb-transport-twitch" }
 tb-transport-discord = { path = "crates/tb-transport-discord" }
 tb-monitoring = { path = "crates/tb-monitoring" }
+tb-platform-core = { path = "crates/tb-platform-core" }
 tb-raid = { path = "crates/tb-raid" }
 tb-http-core     = { path = "crates/tb-http-core" }
 tb-analytics     = { path = "crates/tb-analytics" }
