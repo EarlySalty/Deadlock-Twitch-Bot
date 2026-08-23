@@ -30,7 +30,7 @@ CBR, VBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. Sie
 | Modus | Was er macht | In Deadlock | Zu uns |
 | --- | --- | --- | --- |
 | **CBR** | Jede Sekunde bekommt gleich viele Bits, in der Lobby wie im Fight. | Upload wird in ruhigen Szenen verschenkt. Der Fight wird dadurch nicht schöner. | Nicht nötig. Twitch und Kick brauchen CBR von uns, nicht von dir. |
-| **VBR** | Zielbitrate plus Maximalbitrate. In ruhigen Szenen spart VBR, im Fight gibt es mehr, begrenzt durch das Maximum. | Planbar und passend für deine Leitung. | Empfehlung. |
+| **VBR** | Zielbitrate plus Maximalbitrate. In ruhigen Szenen spart VBR, im Fight gibt es mehr, begrenzt durch das Maximum. Bei AMD gibt es kein Feld für das Maximum, dort liegt es fest beim Anderthalbfachen der Zielbitrate. | Planbar und passend für deine Leitung. | Empfehlung. |
 | **CQP** oder bei x264 **CRF** | Du setzt eine Qualitätszahl. Der Encoder nimmt so viele Bits, wie die Szene braucht. | In der Lobby oft 2 bis 3 Mbit, im Teamfight plötzlich 10 bis 15 Mbit. | Beste Qualität pro Bit, wenn deine Leitung die Spitze trägt. |
 | **ABR** | Hält im Schnitt eine Bitrate, oft ohne hartes Maximum. Das fällt vor allem bei x264 auf. | Kann über deine Leitung schießen, ohne so klar zu sein wie CQP. | Weglassen. Das ist der schlechtere Kompromiss. |
 
@@ -46,6 +46,30 @@ CBR, VBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. Sie
 - Zielbitrate: 6000 Kbps
 - Maximalbitrate: 8000 Kbps oder 80 Prozent vom gemessenen Upload, falls das niedriger ist
 - Unter 5 Mbit realem Upload: Ziel 4000, Maximum 5000 und 30 fps
+
+##### Wenn du eine AMD-Karte hast
+
+Bei **AMD HW H.264/H.265/AV1** gibt es im VBR-Modus **kein Feld für die Maximalbitrate**. Es steht nur eine Zahl da, und OBS setzt die Spitze selbst: **anderthalbmal die Zielbitrate**. Wer 16000 einträgt, sendet in Spitzen bis 24000, ohne dass es irgendwo steht. Das Feld "AMF/FFmpeg-Optionen" hilft nicht, es kennt `maxrate` und `bufsize` nicht.
+
+Damit gibt es zwei Wege:
+
+- **CBR**: Die eingetragene Zahl ist auch die Obergrenze. Einfachster Weg, und zu uns kostet er nichts an Qualität, weil wir für jede Plattform ohnehin neu rechnen. Nur die Leitung zahlt in ruhigen Szenen drauf.
+- **VBR** mit einer Zielbitrate, die mal 1,5 noch in die Leitung passt. Die Rechnung: **Zielbitrate = gemessener Upload × 0,8 ÷ 1,5**.
+
+##### Deine Leitung, deine Zahl
+
+Miss deinen Upload, wenn nichts anderes läuft. Danach sind 80 Prozent davon die Obergrenze. Der Rest ist Reserve für Schwankungen und alles, was nebenbei hochlädt.
+
+| Gemessener Upload | NVIDIA, Intel, Apple | AMD (VBR) | AMD (CBR) |
+| --- | --- | --- | --- |
+| 6 Mbit | Ziel 4000, max 5000, 30 fps | Ziel 3200 | 4800 |
+| 10 Mbit | Ziel 6000, max 8000 | Ziel 5300 | 8000 |
+| 14 Mbit | Ziel 9000, max 12000 | Ziel 7400 | 11000 |
+| Ab 20 Mbit | Ziel 9000, max 12000 | Ziel 9000 | 12000 |
+
+Die AMD-VBR-Spalte sieht kleiner aus und ist es nicht: 5300 mit Spitze 8000 ist dieselbe Last auf der Leitung wie 6000 mit Maximum 8000. Nur die Zahl im Feld ist eine andere, weil das Feld etwas anderes bedeutet.
+
+Mehr als die oberste Zeile braucht niemand. Zu uns geht HEVC, wir rechnen daraus für jede Plattform H.264, und HEVC packt dasselbe Bild in deutlich weniger Bits.
 
 **CQP oder CRF**, wenn der Upload stabil über 10 Mbit liegt und du das Maximum willst:
 

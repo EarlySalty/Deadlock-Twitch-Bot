@@ -35,7 +35,7 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
-import { obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
 function SidebarLink({
@@ -224,8 +224,24 @@ function bitrateBegruendung(bitrate: ObsBitrateEmpfehlung): string {
           : `Passt zu deinen Zielen: dein höchstes geht mit ${bitrate.hoehe}p raus. `;
   return (
     anfang +
-    'Die Grenze ist dein Upload, und den kennen wir nicht: miss ihn und nimm 80 Prozent davon, falls das weniger ist. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.'
+    `Die Grenze ist dein Upload, und den kennen wir nicht: dafür brauchst du gemessene ${noetigerUploadMbit(bitrate)} Mbit, bei einer AMD-Karte ${noetigerUploadMbit(bitrate, true)} Mbit. Miss ihn, und wenn er darunter liegt, geh eine Stufe runter. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.`
   );
+}
+
+/**
+ * Was im Bitraten-Feld steht, samt der Spitze, die AMD daraus macht.
+ *
+ * Die Maximalbitrate ist bei "AMD HW H.264/H.265/AV1" kein Feld: OBS setzt sie
+ * dort selbst auf das Anderthalbfache. Wer das nicht weiss, haelt die zweite
+ * Zahl fuer eine Grenze und plant seine Leitung ein Drittel zu knapp. Deshalb
+ * steht die echte Spitze hier und nicht in einer Fussnote.
+ */
+function bitrateWert(bitrate: ObsBitrateEmpfehlung): string {
+  return `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`;
+}
+
+function bitrateAmdHinweis(bitrate: ObsBitrateEmpfehlung): string {
+  return `Bei AMD gibt es das Feld „Maximalbitrate“ nicht. Trag dort nur die ${bitrate.kbps} ein, OBS macht daraus von selbst eine Spitze von ${amdSpitzeKbps(bitrate)} kbps. Wenn deine Leitung das nicht trägt, nimm stattdessen CBR: dann ist die eingetragene Zahl auch die Obergrenze.`;
 }
 
 /**
@@ -253,8 +269,8 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
     },
     {
       feld: 'Bitrate',
-      wert: `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`,
-      warum: bitrateBegruendung(bitrate),
+      wert: bitrateWert(bitrate),
+      warum: `${bitrateBegruendung(bitrate)} ${bitrateAmdHinweis(bitrate)}`,
     },
     {
       feld: 'Keyframe-Intervall',

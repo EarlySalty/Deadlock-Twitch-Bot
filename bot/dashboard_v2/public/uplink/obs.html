@@ -47,7 +47,7 @@
         </tr>
         <tr>
           <td><strong>VBR</strong></td>
-          <td>Zielbitrate plus Maximalbitrate. Ruhig spart er, im Fight gibt er mehr, begrenzt durch das Maximum.</td>
+          <td>Zielbitrate plus Maximalbitrate. Ruhig spart er, im Fight gibt er mehr, begrenzt durch das Maximum. Bei AMD gibt es kein Feld für das Maximum, dort liegt es fest beim Anderthalbfachen der Zielbitrate.</td>
           <td>Planbar. Bleibt in deiner Leitung.</td>
           <td>Empfehlung.</td>
         </tr>
@@ -79,6 +79,30 @@
       <li>Maximalbitrate: 8000 Kbps, oder 80 Prozent vom gemessenen Upload, falls das niedriger ist</li>
       <li>Unter 5 Mbit realem Upload: Ziel 4000, Maximum 5000, und 30 fps</li>
     </ul>
+
+    <h4 id="obs-amd-vbr">Wenn du eine AMD-Karte hast</h4>
+    <p>Bei <strong>AMD HW H.264/H.265/AV1</strong> gibt es im VBR-Modus <strong>kein Feld für die Maximalbitrate</strong>. Es steht nur eine Zahl da, und OBS setzt die Spitze selbst: <strong>anderthalbmal die Zielbitrate</strong>. Wer 16000 einträgt, sendet in Spitzen bis 24000, ohne dass es irgendwo steht. Das Feld „AMF/FFmpeg-Optionen“ hilft nicht, es kennt <code>maxrate</code> und <code>bufsize</code> nicht.</p>
+    <p>Damit gibt es zwei Wege:</p>
+    <ul>
+      <li><strong>CBR</strong>: die eingetragene Zahl ist auch die Obergrenze. Einfachster Weg, und zu uns kostet er dich nichts an Qualität, weil wir für jede Plattform ohnehin neu rechnen. Nur deine Leitung zahlt in ruhigen Szenen drauf.</li>
+      <li><strong>VBR</strong> mit einer Zielbitrate, die mal 1,5 noch in deine Leitung passt. Die Rechnung: <strong>Zielbitrate = gemessener Upload × 0,8 ÷ 1,5</strong>.</li>
+    </ul>
+
+    <h4 id="obs-leitung">Deine Leitung, deine Zahl</h4>
+    <p>Miss deinen Upload, wenn nichts anderes läuft. Danach sind 80 Prozent davon deine Obergrenze; der Rest ist Reserve für Schwankungen und alles, was nebenbei hochlädt.</p>
+    <table>
+      <thead>
+        <tr><th>Gemessener Upload</th><th>NVIDIA, Intel, Apple</th><th>AMD (VBR)</th><th>AMD (CBR)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>6 Mbit</td><td>Ziel 4000, max 5000, 30 fps</td><td>Ziel 3200</td><td>4800</td></tr>
+        <tr><td>10 Mbit</td><td>Ziel 6000, max 8000</td><td>Ziel 5300</td><td>8000</td></tr>
+        <tr><td>14 Mbit</td><td>Ziel 9000, max 12000</td><td>Ziel 7400</td><td>11000</td></tr>
+        <tr><td>ab 20 Mbit</td><td>Ziel 9000, max 12000</td><td>Ziel 9000</td><td>12000</td></tr>
+      </tbody>
+    </table>
+    <p>Die AMD-VBR-Spalte sieht kleiner aus und ist es nicht: 5300 mit Spitze 8000 ist dieselbe Last auf der Leitung wie 6000 mit Maximum 8000. Nur die Zahl im Feld ist eine andere, weil das Feld etwas anderes bedeutet.</p>
+    <p>Mehr als die oberste Zeile brauchst du nicht. Du schickst HEVC, wir rechnen daraus für jede Plattform H.264, und HEVC packt dasselbe Bild in deutlich weniger Bits.</p>
     <p><strong>CQP/CRF</strong>, wenn der Upload stabil über 10 Mbit liegt und du das Maximum willst:</p>
     <ul>
       <li>AMD / Intel: CQP 20 (18 schärfer und schwerer, 22 sparsamer)</li>

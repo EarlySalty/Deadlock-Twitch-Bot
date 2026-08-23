@@ -114,6 +114,66 @@ export const OBS_STUFE_2K: ObsBitrateStufe = { kbps: 9000, maxKbps: 12000 };
 const HOEHE_1080 = 1080;
 
 /**
+ * Um wie viel die AMD-Encoder im VBR-Modus ueber die eingetragene Bitrate
+ * hinausgehen.
+ *
+ * Bei "AMD HW H.264/H.265/AV1" gibt es kein Feld fuer die Maximalbitrate. OBS
+ * setzt sie selbst, und zwar auf das Anderthalbfache der Zielbitrate; im
+ * Quelltext steht das als `set_hevc_property(enc, PEAK_BITRATE, bitrate * 1.5)`
+ * in `texture-amf.cpp`. Wer 16000 eintraegt, sendet also in Spitzen 24000.
+ *
+ * Das ist kein Randfall, den man in einem Nebensatz erwaehnt: die Empfehlung
+ * neben dem Feld nennt eine Zielbitrate und eine Maximalbitrate, und bei einer
+ * AMD-Karte ist die zweite Zahl nicht einstellbar. Wer sie fuer eine Grenze
+ * haelt, plant seine Leitung um ein Drittel zu knapp.
+ */
+export const AMD_VBR_SPITZENFAKTOR = 1.5;
+
+/**
+ * Anteil der Leitung, den ein Stream hoechstens belegen soll.
+ *
+ * Der Rest ist fuer alles andere, was gleichzeitig hochlaedt, und fuer die
+ * Schwankung der Leitung selbst. Eine Leitung, die zu 100 Prozent belegt ist,
+ * ist eine Leitung, die aussetzt.
+ */
+export const UPLOAD_RESERVE = 0.8;
+
+/**
+ * Die Spitze, die eine AMD-Karte bei dieser Stufe wirklich sendet.
+ *
+ * Nicht `stufe.maxKbps`: das ist die Zahl fuer die Encoder, bei denen man sie
+ * eintragen kann.
+ */
+export function amdSpitzeKbps(stufe: ObsBitrateStufe): number {
+  return Math.round(stufe.kbps * AMD_VBR_SPITZENFAKTOR);
+}
+
+/**
+ * Welchen gemessenen Upload diese Stufe braucht, in Mbit, aufgerundet.
+ *
+ * `amd` schaltet auf die Spitze um, die OBS dort selbst setzt. Ohne das stuende
+ * bei einer AMD-Karte eine Zahl da, die der Streamer gar nicht erreicht.
+ */
+export function noetigerUploadMbit(stufe: ObsBitrateStufe, amd = false): number {
+  const spitze = amd ? amdSpitzeKbps(stufe) : stufe.maxKbps;
+  return Math.ceil(spitze / UPLOAD_RESERVE / 1000);
+}
+
+/**
+ * Die Zielbitrate, die auf eine gemessene Leitung passt, in kbps.
+ *
+ * Der Weg andersherum, und der, den ein Streamer mit knapper Leitung braucht:
+ * er kennt seinen Upload und sucht die Zahl fuer das Feld. Auf 100 kbps
+ * gerundet, weil eine Empfehlung auf 33 kbps genau eine Genauigkeit vortaeuscht,
+ * die eine Leitungsmessung nicht hergibt.
+ */
+export function zielbitrateFuerUploadKbps(uploadKbps: number, amd = false): number {
+  const nutzbar = uploadKbps * UPLOAD_RESERVE;
+  const ziel = amd ? nutzbar / AMD_VBR_SPITZENFAKTOR : nutzbar;
+  return Math.floor(ziel / 100) * 100;
+}
+
+/**
  * Woher die Empfehlung kommt. Der Unterschied zwischen `start` und
  * `unbekannt` ist der Befund aus dem Review: ein fehlgeschlagener Abruf sah
  * aus wie "noch kein Ziel eingerichtet", und der Text hat einem Streamer mit
