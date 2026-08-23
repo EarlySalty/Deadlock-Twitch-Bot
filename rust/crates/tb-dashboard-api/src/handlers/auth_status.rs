@@ -206,14 +206,19 @@ fn admin_response(
     admin_mode: bool,
     csrf_token: Option<&str>,
 ) -> Response {
+    // Admin gilt serverseitig als Creator Pro (`auth::stufe_fuer_auth`), also
+    // steht hier auch Pro. Vorher lieferte der synthetische Plan die
+    // Entitlements von `bundle_analysis_raid_boost`, also ohne
+    // `social.auto_post`: das Dashboard blendete dem Admin Funktionen aus, die
+    // der Server ihm erlaubt. Eine Wahrheit, aus dem Katalog gelesen.
     let plan = json!({
-        "planId": "analysis_dashboard",
-        "planName": "Erweitert (Admin)",
-        "tier": "extended",
-        "isExtended": true,
+        "planId": "pro",
+        "planName": "Creator Pro (Admin)",
+        "tier": tb_analytics::plan::plan_tier("pro"),
+        "isExtended": tb_analytics::plan::plan_is_extended("pro"),
         "expiresAt": null,
         "source": "admin",
-        "entitlements": tb_analytics::plan::plan_entitlements("bundle_analysis_raid_boost"),
+        "entitlements": tb_analytics::plan::plan_entitlements("pro"),
     });
     let is_localhost = level == "localhost";
     let payload = json!({
@@ -441,7 +446,15 @@ mod tests {
         assert_eq!(value["adminEligible"], true);
         assert_eq!(value["adminMode"], true);
         assert_eq!(value["plan"]["tier"], "extended");
-        assert_eq!(value["plan"]["planName"], "Erweitert (Admin)");
+        assert_eq!(value["plan"]["planName"], "Creator Pro (Admin)");
+        // Admin gilt serverseitig als Pro, also muss der synthetische Plan auch
+        // `social.auto_post` tragen; sonst blendet das Dashboard Funktionen aus,
+        // die der Server erlaubt.
+        assert_eq!(value["plan"]["planId"], "pro");
+        let entitlements = value["plan"]["entitlements"].as_array().unwrap();
+        assert!(entitlements.iter().any(|e| e == "social.auto_post"));
+        assert!(entitlements.iter().any(|e| e == "raid.priority"));
+        assert!(entitlements.iter().any(|e| e == "analytics"));
     }
 
     #[tokio::test]

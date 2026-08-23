@@ -383,12 +383,21 @@ fn resolve_target_timezone(requested: Option<&str>) -> (Tz, String) {
 }
 
 /// Lädt + aggregiert die chat-analytics (Python `_api_v2_chat_analytics`-Body).
+///
+/// `days` ist das Rückblickfenster in Tagen und darf **kleiner als die 7 Tage
+/// der Query-Validierung** sein: die Plan-Klemme für Netzwerk Free schneidet
+/// auf den letzten Stream herunter, teils auf ein oder zwei Tage. Der Wert
+/// steckt nur im `since`-Zeitpunkt und in der Loyalitäts-Schwelle
+/// (`days <= 7` → 2 Sessions), Wochen-Buckets oder Wochendurchschnitte gibt es
+/// hier nicht. Werte unter 1 werden auf 1 angehoben, damit `since` nie in der
+/// Zukunft liegt.
 pub async fn load_chat_analytics_payload(
     pool: &PgPool,
     streamer: &str,
     days: i64,
     timezone: Option<&str>,
 ) -> Result<Value, sqlx::Error> {
+    let days = days.max(1);
     let since = Utc::now() - Duration::days(days);
     let (target_tz, timezone_name) = resolve_target_timezone(timezone);
     let snap = load_chat_analytics_snapshot(pool, streamer, since).await?;

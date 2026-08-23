@@ -48,6 +48,7 @@ use tb_analytics::billing::{
 };
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
+use tb_analytics::stufe::stufe_fuer_plan;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -246,14 +247,14 @@ pub async fn checkout_start_handler(
         },
     });
 
-    // Trial im Monatszyklus. Der Trial hing bis zum Drei-Stufen-Umbau an der
-    // Plan-ID `analysis_dashboard`; die gibt es im Katalog nicht mehr, damit war
-    // die Bedingung tot und kein Checkout setzte noch `trial_period_days`. Er
-    // haengt jetzt am Zyklus: an dieser Stelle ist der Plan bereits als
-    // kostenpflichtig geprueft (`is_paid_plan_id` oben), also gilt der Trial fuer
-    // Plus und Pro. Dauer bleibt vorerst 30 Tage; die Umstellung auf 14 plus 14
-    // ist SPEC M3 und laeuft separat.
-    if cycle == 1 {
+    // Trial im Monatszyklus, und nur fuer Netzwerk Plus. Der Trial hing bis zum
+    // Drei-Stufen-Umbau an der Plan-ID `analysis_dashboard`; die gibt es im
+    // Katalog nicht mehr, damit war die Bedingung tot und kein Checkout setzte
+    // noch `trial_period_days`. Er nur am Zyklus aufzuhaengen war zu weit: dann
+    // bekaeme auch Creator Pro 30 Tage geschenkt. Zum Ausprobieren gedacht ist
+    // die Einstiegsstufe, deshalb `plus`. Dauer bleibt vorerst 30 Tage; die
+    // Umstellung auf 14 plus 14 ist SPEC M3 und laeuft separat.
+    if cycle == 1 && plan_id == "plus" {
         session_payload["subscription_data"] =
             json!({ "trial_period_days": CHECKOUT_TRIAL_DAYS });
     }
@@ -605,7 +606,14 @@ pub async fn catalog_handler(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            plan["is_current"] = json!(pid == current_plan_id);
+            // Bestandsnutzer stehen mit einer Alt-Plan-ID in der DB
+            // (`raid_free`, `chat_quiet`, `analysis_dashboard`, `bundle_*`), die
+            // im Katalog nicht mehr vorkommt. Ein direkter ID-Vergleich haette
+            // deshalb NIE getroffen: sie saehen einen Buchen-Knopf fuer die
+            // Stufe, die sie schon haben. Verglichen wird die Stufe, die
+            // Zuordnung steht an einer Stelle (`stufe_fuer_plan`).
+            plan["is_current"] =
+                json!(stufe_fuer_plan(&pid) == stufe_fuer_plan(current_plan_id));
             if !is_paid_plan_id(&pid) {
                 plan["checkout_available"] = json!(false);
                 plan["stripe_price_id"] = Value::Null;

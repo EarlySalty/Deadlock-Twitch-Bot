@@ -610,11 +610,21 @@ async fn clip_kontingent_guard(
     if streamer.trim().is_empty() || kontingent.frei() {
         return Ok(kontingent);
     }
+    // Wortlaut mit Bedacht: gezaehlt werden alle Clips des Monats, gesperrt
+    // wird aber nur das Anlegen ueber das Dashboard. Der Chat-Befehl `!clip`
+    // und der Hintergrund-Fetcher schreiben an dieser Pruefung vorbei, deshalb
+    // darf hier kein allgemeines "Kontingent aufgebraucht" stehen.
+    let limit_text = match kontingent.limit {
+        Some(limit) => format!("{} von {limit} Clips", kontingent.genutzt),
+        None => format!("{} Clips", kontingent.genutzt),
+    };
     Err((
         StatusCode::FORBIDDEN,
         Json(json!({
             "error": "clip_limit_erreicht",
-            "message": "Dein Clip-Kontingent für diesen Monat ist aufgebraucht. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt.",
+            "message": format!(
+                "Für diesen Monat sind {limit_text} gezählt. Über das Dashboard kannst du bis zum Monatswechsel keine neuen anlegen. Mit Netzwerk Plus sind es 10 Clips, mit Creator Pro unbegrenzt."
+            ),
             "kontingent": kontingent.als_json(),
         })),
     )

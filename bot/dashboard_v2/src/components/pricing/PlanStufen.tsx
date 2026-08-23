@@ -67,6 +67,13 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
           const cents = betragCents(plan, cycle);
           const gratis = cents === 0;
           const monatlich = monatsBetragCents(plan, cycle);
+          /* Bezahlte Stufen nur anbieten, wenn das Backend sie auch verkaufen
+             kann: ohne hinterlegte Stripe-Preis-ID meldet der Katalog
+             checkout_available=false und der Checkout schickt jeden Klick mit
+             missing_stripe_price_id zurueck. Lieber ehrlich "bald buchbar"
+             anzeigen als einen Kauf versprechen, der abprallt. Free braucht
+             keinen Stripe-Preis und bleibt immer anklickbar. */
+          const buchbar = gratis || plan.checkout_available !== false;
 
           return (
             <motion.div
@@ -116,7 +123,7 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                 <span className="px-6 py-3 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
                   Deine aktuelle Stufe
                 </span>
-              ) : (
+              ) : buchbar ? (
                 <a
                   href={getPlanCheckoutHref(gratis ? null : plan.id, gratis, cycle)}
                   className={`px-6 py-3 rounded-xl text-sm font-semibold text-center transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
@@ -127,6 +134,10 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                 >
                   {gratis ? 'Kostenlos nutzen' : `${plan.name} buchen`}
                 </a>
+              ) : (
+                <span className="px-6 py-3 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
+                  Bald buchbar
+                </span>
               )}
             </motion.div>
           );

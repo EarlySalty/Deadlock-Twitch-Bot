@@ -63,6 +63,10 @@ pub async fn chat_analytics_handler(
         };
     let timezone = params.timezone.as_deref();
     // Plan-Klemme statt 403: Free sieht denselben Aufbau, nur den letzten Stream.
+    // Die 7-Tage-Untergrenze oben gilt der Nutzereingabe; die Klemme darf sie
+    // unterschreiten (letzter Stream heisst oft ein oder zwei Tage). Dass der
+    // Loader damit umgeht, steht in seinem Vertrag
+    // (`load_chat_analytics_payload`: kein Wochen-Bucket, kein Wochenmittel).
     let (fenster_tage, stufe, gekuerzt) =
         crate::auth::verlauf_fenster(&pool, &auth, &streamer, days).await;
     let days = fenster_tage;
