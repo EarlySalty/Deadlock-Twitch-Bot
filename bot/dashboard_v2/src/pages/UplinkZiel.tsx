@@ -115,9 +115,14 @@ export function ZielKarte({
   // dauerhaftes "Gespeichert" auf dem Knopf sagt nichts mehr ueber den
   // aktuellen Stand und deckt genau die Faelle zu, in denen etwas offen ist.
   const [gespeichert, setGespeichert] = useState(false);
+  // Was der Server ueber den gerade laufenden Stream gesagt hat. Ohne diesen
+  // Satz stuende hier ein "Gespeichert", waehrend auf der Plattform weiter
+  // das alte Bild laeuft, und niemand wuesste, ob das noch kommt.
+  const [livetext, setLivetext] = useState('');
   const angefasst = () => {
     setGespeichert(false);
     setFehlertext('');
+    setLivetext('');
   };
 
   const bestellt = ziel?.requested;
@@ -237,10 +242,11 @@ export function ZielKarte({
       }
       return saveUplinkDestination(body);
     },
-    onSuccess: () => {
+    onSuccess: (antwort) => {
       setStreamKey('');
       setFehlertext('');
       setGespeichert(true);
+      setLivetext(antwort.live_quality?.message ?? '');
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
@@ -478,6 +484,7 @@ export function ZielKarte({
         </div>
 
         {fehlertext && <p className="text-xs text-warning">{fehlertext}</p>}
+        {livetext && <p className="text-xs text-text-secondary">{livetext}</p>}
 
         <div className="flex flex-wrap items-center gap-2">
           <button

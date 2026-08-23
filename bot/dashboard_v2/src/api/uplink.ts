@@ -152,6 +152,20 @@ export interface UplinkManuellesProfil {
 }
 
 /**
+ * Was die Aenderung mit einem gerade laufenden Stream gemacht hat.
+ *
+ * Fehlt, wenn es nichts zu sagen gibt: kein Stream, oder es lief ohnehin
+ * schon so. `applied` heisst, dass nur die Bitrate wechselt und niemand
+ * etwas merkt; `applied_restart` heisst, dass das Bildformat wechselt und die
+ * Zuschauer kurz ein Stocken sehen; `too_busy` heisst, gespeichert ist es,
+ * aber der laufende Stream bleibt bis zum naechsten Mal, wie er ist.
+ */
+export interface UplinkLiveQualitaet {
+  status: 'applied' | 'applied_restart' | 'too_busy';
+  message: string;
+}
+
+/**
  * Ein Ziel speichern. Drei Faelle, alle ueber denselben Aufruf:
  *
  * - Zugangsdaten neu setzen: `rtmp_url` und `stream_key` zusammen.
@@ -169,7 +183,7 @@ export function saveUplinkDestination(body: {
   profil?: UplinkProfilName;
   manuell?: UplinkManuellesProfil;
   enabled?: boolean;
-}): Promise<{ destinations: UplinkDestination[] }> {
+}): Promise<{ destinations: UplinkDestination[]; live_quality?: UplinkLiveQualitaet }> {
   return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
     method: 'PUT',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
