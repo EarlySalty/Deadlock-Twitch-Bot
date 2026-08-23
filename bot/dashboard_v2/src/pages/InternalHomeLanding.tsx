@@ -603,7 +603,7 @@ export function InternalHomeLanding() {
       <BackgroundBlobs />
 
       <div className="relative mx-auto max-w-[1440px]">
-        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_340px]">
           <Rise
             as="aside"
             className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4"
@@ -1070,61 +1070,57 @@ export function InternalHomeLanding() {
               lastStream={lastStream}
               delay={0.1}
             />
-
-            <Rise
-              step={{ seconds: 0.16 }}
-              as="section"
-              className="grid gap-4 lg:grid-cols-2"
-            >
-              <aside
-                id="changelog"
-                className="panel-card card-glow rounded-2xl p-5 md:p-6 lg:col-start-2"
-              >
-                <div className="mb-4">
-                  <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-                    Updates
-                  </p>
-                  <h2 className="display-font text-xl font-bold text-white">
-                    Was gibt&apos;s Neues
-                  </h2>
-                </div>
-
-                {changelogEntries.length === 0 ? (
-                  <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
-                    Keine neuen Updates verfuegbar.
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {changelogEntries.map((entry, index) => {
-                      const title = entry.title?.trim() || 'Update';
-                      const content = entry.content?.trim() || 'Kein Beschreibungstext';
-                      const primaryDate = entry.entryDate || entry.createdAt;
-
-                      return (
-                        <article
-                          key={changelogKey(entry, index)}
-                          className="panel-card internal-home-changelog-entry rounded-xl p-3.5"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                            <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
-                              {formatCalendarDate(primaryDate)}
-                            </span>
-                            {entry.createdAt ? (
-                              <span className="text-text-secondary">
-                                {formatDateTime(entry.createdAt)}
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-2 text-sm font-semibold text-white">{title}</p>
-                          <p className="mt-1 text-xs leading-5 text-text-secondary">{content}</p>
-                        </article>
-                      );
-                    })}
-                  </div>
-                )}
-              </aside>
-            </Rise>
           </main>
+
+          <Rise
+            step={{ seconds: 0.16 }}
+            as="aside"
+            id="changelog"
+            className="panel-card card-glow self-start rounded-2xl p-5 md:p-6 lg:col-start-2 xl:col-start-3 xl:row-start-1"
+          >
+            <div className="mb-4">
+              <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
+                Updates
+              </p>
+              <h2 className="display-font text-xl font-bold text-white">
+                Was gibt&apos;s Neues
+              </h2>
+            </div>
+
+            {changelogEntries.length === 0 ? (
+              <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
+                Keine neuen Updates verfuegbar.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {changelogEntries.map((entry, index) => {
+                  const title = entry.title?.trim() || 'Update';
+                  const content = entry.content?.trim() || 'Kein Beschreibungstext';
+                  const primaryDate = entry.entryDate || entry.createdAt;
+
+                  return (
+                    <article
+                      key={changelogKey(entry, index)}
+                      className="panel-card internal-home-changelog-entry rounded-xl p-3.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
+                          {formatCalendarDate(primaryDate)}
+                        </span>
+                        {entry.createdAt ? (
+                          <span className="text-text-secondary">
+                            {formatDateTime(entry.createdAt)}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-white">{title}</p>
+                      <p className="mt-1 text-xs leading-5 text-text-secondary">{content}</p>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </Rise>
         </div>
       </div>
     </div>
