@@ -26,10 +26,14 @@ pub mod anthropic;
 pub mod keys;
 pub mod ledger;
 pub mod minimax;
+pub mod model_resolver;
 pub mod provider;
 pub mod selection;
 
 pub use anthropic::AnthropicClient;
 pub use minimax::MiniMaxClient;
+pub use model_resolver::{
+    invalidate_and_refresh, model_cache_pool, refresh_fireworks, spawn_refresh_loop,
+};
 pub use provider::{CompletionRequest, CompletionResponse, LlmError, LlmProvider, Message};
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

@@ -356,32 +356,36 @@ impl PersonaMode {
     /// Wann sich der Bot überhaupt meldet.
     fn trigger_rule(self) -> &'static str {
         match self {
-            PersonaMode::Veteran =>
+            PersonaMode::Veteran => {
                 "Melden darfst du dich nur SELTEN — und nur, wenn jemand etwas Echtes über \
 DEADLOCK in die offene Runde wirft: eine konkrete Frage zu Helden/Items/Builds/Meta/\
 Matchups, einen echten Take oder eine Meinung zum Spiel, oder ein offenes \
 Deadlock-Banter, das nicht an eine Person geht. Genau richtig ist z.B. 'lohnt sich \
 trophy collector auf haze?' oder 'bebop auf der lane wäre besser' — da hast du eine \
-echte Meinung, die sagst du kurz und mit Kante.",
-            PersonaMode::Rookie =>
+echte Meinung, die sagst du kurz und mit Kante."
+            }
+            PersonaMode::Rookie => {
                 "Melden darfst du dich nur SELTEN — und nur, wenn gerade etwas über DEADLOCK \
 läuft, das dich als Neuling wirklich anspringt: etwas, das du nicht kennst und kurz \
 nachfragst, etwas das im Stream gerade krass aussah, oder etwas das dir selbst im Spiel \
 passiert ist. Genau richtig ist z.B. 'was macht trophy collector eigentlich' oder 'wie \
 überlebt der das lol'. Du meldest dich NIE, um jemandem etwas zu erklären oder eine \
-Einschätzung zur Meta abzugeben — die hast du nicht.",
+Einschätzung zur Meta abzugeben — die hast du nicht."
+            }
         }
     }
 
     /// Die Tonlage in der Sprach-Sektion.
     fn voice_rule(self) -> &'static str {
         match self {
-            PersonaMode::Veteran =>
+            PersonaMode::Veteran => {
                 "Klare Meinung mit Kante, gern trockener Banter oder ein Spruch — kein 'naja', \
-kein 'hmm kommt drauf an', kein abwägender Absatz.",
-            PersonaMode::Rookie =>
+kein 'hmm kommt drauf an', kein abwägender Absatz."
+            }
+            PersonaMode::Rookie => {
                 "Echte Reaktion oder echte Frage — kein 'naja', kein 'hmm kommt drauf an', kein \
-abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör.",
+abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör."
+            }
         }
     }
 
@@ -390,7 +394,7 @@ abwägender Absatz. Eine Frage ist EINE kurze Frage, kein Verhör.",
     fn knowledge_override(self) -> &'static str {
         match self {
             PersonaMode::Veteran => "",
-            PersonaMode::Rookie =>
+            PersonaMode::Rookie => {
                 "\n\nNOCH WICHTIG, und das sticht alles oben Gesagte über Wissenslücken: Du bist \
 NEU. Du darfst offen sagen, dass du etwas nicht kennst — 'keine ahnung was das macht', \
 'was ist das', 'nie gesehen' sind für dich völlig normale Chatzeilen und genau richtig. \
@@ -401,7 +405,8 @@ Bekommst du Deadlock-Fakten mitgeliefert, spielst du sie NICHT als dein Wissen a
 Neuling, der plötzlich Item-Werte referiert, ist unglaubwürdiger als einer, der nichts \
 sagt. Nutz sie höchstens, um deine Frage präziser zu stellen, oder lass sie liegen.\n\
 Du gibst KEINE Tipps und korrigierst niemanden — auch nicht, wenn jemand offensichtlich \
-falsch liegt. Das ist nicht deine Rolle.",
+falsch liegt. Das ist nicht deine Rolle."
+            }
         }
     }
 }
@@ -724,6 +729,14 @@ impl EngagementMinimaxClient {
         &self.model
     }
 
+    /// Ob dieser Client wirklich Fireworks bedient. Entscheidet, ob ein 404
+    /// den Fireworks-Resolver anstoßen darf — bei MiniMax wäre das ein
+    /// zweiter Fehlschlag gegen die falsche Adresse.
+    fn serves_fireworks(&self) -> bool {
+        self.model.starts_with("accounts/fireworks/models/")
+            || self.base_url.contains("fireworks.ai")
+    }
+
     /// Generiert eine Chat-Antwort. `messages = [system] + history` (Sprecher
     /// wird in den Content gefaltet, s. Insight), `temperature=0.7`. Die
     /// Rohantwort läuft durch [`process_response_text`]; `text == None` =
@@ -937,15 +950,48 @@ impl EngagementMinimaxClient {
             .map_err(|e| GenerateError::Http(e.to_string()))?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let started = std::time::Instant::now();
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| GenerateError::Http(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| GenerateError::Http(e.to_string()))?;
+        let mut versuch = 0;
+        let resp = loop {
+            let antwort = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| GenerateError::Http(e.to_string()))?;
+            let status = antwort.status();
+            match antwort.error_for_status() {
+                Ok(ok) => break ok,
+                Err(e) => {
+                    // Ein 404 auf `/chat/completions` heisst bei Fireworks:
+                    // das Modell gibt es nicht mehr. Genau so ist am 15.08.2026
+                    // `deepseek-v4-flash` verschwunden. Nur dieser Anbieter
+                    // dreht Namen unter uns weg; bei MiniMax würde der Resolver
+                    // einen Fireworks-Pfad in den MiniMax-Call schreiben.
+                    let modell_weg = status == reqwest::StatusCode::NOT_FOUND
+                        && versuch == 0
+                        && self.serves_fireworks();
+                    if !modell_weg {
+                        return Err(GenerateError::Http(e.to_string()));
+                    }
+                    versuch += 1;
+                    let aktuelles = body["model"].as_str().unwrap_or_default().to_string();
+                    match tb_llm::invalidate_and_refresh(tb_llm::model_cache_pool(), &aktuelles)
+                        .await
+                    {
+                        Some(neu) => {
+                            tracing::warn!(
+                                alt = %aktuelles,
+                                neu = %neu,
+                                "Modell war weg, wiederhole Call mit aufgeloestem Namen"
+                            );
+                            body["model"] = serde_json::json!(neu);
+                        }
+                        None => return Err(GenerateError::Http(e.to_string())),
+                    }
+                }
+            }
+        };
         let payload: serde_json::Value = resp
             .json()
             .await
@@ -1021,6 +1067,8 @@ mod tests {
             "FIREWORKS_API_KEY",
             "FIREWORKS_MODEL",
             "FIREWORK_MODEL",
+            "FIREWORK_BASE_URL",
+            "FIREWORKS_BASE_URL",
             "MINIMAX_API_KEY",
             "MINIMAX_TOKEN_PLAN_KEY",
             "MINIMAX_BASE_URL",
@@ -1429,6 +1477,103 @@ mod tests {
     // Begründung (geteilter OnceCell-PG-Pool über viele `#[tokio::test]`-Runtimes).
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn fireworks_404_wiederholt_mit_aufgeloestem_namen() {
+        redirect_ledger_for_tests();
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek-v4-flash\""))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("deepseek-v4-flash-0731"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "fw-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let client = EngagementMinimaxClient::new(
+            Some("fw-key".to_string()),
+            Some(server.uri()),
+            Some("accounts/fireworks/models/deepseek-v4-flash".to_string()),
+            None,
+        );
+        let text = client
+            .messages_completion_uncapped(
+                serde_json::json!([{"role": "user", "content": "ping"}]),
+                0.0,
+            )
+            .await
+            .expect("404 muss mit der neuen Fassung geheilt werden");
+        assert_eq!(text, "ok");
+
+        clear_provider_env();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn minimax_404_laesst_fireworks_resolver_in_ruhe() {
+        redirect_ledger_for_tests();
+        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        clear_provider_env();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("FIREWORK_API_KEY", "fw-key");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
+
+        let client = client_for(&server);
+        let err = client
+            .messages_completion_uncapped(
+                serde_json::json!([{"role": "user", "content": "ping"}]),
+                0.0,
+            )
+            .await
+            .expect_err("MiniMax-404 darf nicht geheilt werden");
+        assert!(
+            matches!(err, GenerateError::Http(_)),
+            "erwartete Http, war {err:?}"
+        );
+
+        clear_provider_env();
+    }
+
+    #[tokio::test]
     async fn generate_ohne_key_unavailable() {
         // Der leere Key faellt auf die Env zurueck. Ohne den gemeinsamen Lock
         // konnte ein Nachbar-Test zwischen Pruefung und Aufruf MINIMAX_API_KEY
@@ -1448,4 +1593,3 @@ mod tests {
         }
     }
 }
-
