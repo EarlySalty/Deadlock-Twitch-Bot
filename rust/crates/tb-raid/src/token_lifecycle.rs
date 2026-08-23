@@ -752,6 +752,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                   JOIN twitch_raid_auth a
                     ON a.twitch_user_id = p.twitch_user_id
                  WHERE LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
+                   -- `remove_streamer` archiviert per `admin_archived_at` und
+                   -- lässt `status` auf 'active' stehen. Ohne diese Zeile
+                   -- reaktiviert der Sweep archivierte Kanäle.
+                   AND COALESCE(TRIM(p.admin_archived_at::TEXT), '') = ''
+                   AND COALESCE(TRIM(p.departnered_at::TEXT), '') = ''
                    AND LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) LIKE 'token_error%'
                    AND COALESCE(a.needs_reauth, TRUE) = FALSE
                    AND a.access_token_enc IS NOT NULL
@@ -2186,7 +2191,12 @@ mod tests {
                 ('803', 'hardban', 0, 'bot_banned', 0),
                 ('804', 'expiredtoken', 0, 'token_error_retry', 0),
                 ('805', 'reauth', 0, 'token_error_retry', 0),
-                ('806', 'sharedlogin', 0, 'token_error_retry', 0)",
+                ('806', 'sharedlogin', 0, 'token_error_retry', 0),
+                -- Archiviert: `remove_streamer` setzt nur admin_archived_at und
+                -- lässt status auf 'active'. Ohne den Filter hätte der Sweep
+                -- diesen Kanal reaktiviert.
+                ('807', 'archiviert', 0, 'token_error_retry', 0),
+                ('808', 'getrennt', 0, 'token_error_retry', 0)",
         )
         .execute(&pool)
         .await
@@ -2200,6 +2210,20 @@ mod tests {
         seed_raid_auth(&pool, "804", "expiredtoken", false, false, expired_at).await;
         seed_raid_auth(&pool, "805", "reauth", false, true, valid_until).await;
         seed_raid_auth(&pool, "900", "sharedlogin", false, false, valid_until).await;
+        seed_raid_auth(&pool, "807", "archiviert", false, false, valid_until).await;
+        seed_raid_auth(&pool, "808", "getrennt", false, false, valid_until).await;
+        sqlx::query(
+            "UPDATE twitch_partners SET admin_archived_at = now()::text WHERE twitch_user_id = '807'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_partners SET departnered_at = now()::text WHERE twitch_user_id = '808'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
              VALUES ('802', 'stale-banmarker', 'chat_bot_banned_in_channel: sender_banned', $1)",
@@ -2225,7 +2249,7 @@ mod tests {
         let healed: Vec<PartnerStateRow> = sqlx::query_as(
             "SELECT twitch_user_id, manual_partner_opt_out, technical_pause_reason, raid_bot_enabled
              FROM twitch_partners
-             WHERE twitch_user_id IN ('800', '801', '802', '803', '804', '805', '806')
+             WHERE twitch_user_id IN ('800', '801', '802', '803', '804', '805', '806', '807', '808')
              ORDER BY twitch_user_id",
         )
         .fetch_all(&pool)
@@ -2262,6 +2286,18 @@ mod tests {
                 ),
                 (
                     "806".to_string(),
+                    Some(0),
+                    Some("token_error_retry".to_string()),
+                    Some(0),
+                ),
+                (
+                    "807".to_string(),
+                    Some(0),
+                    Some("token_error_retry".to_string()),
+                    Some(0),
+                ),
+                (
+                    "808".to_string(),
                     Some(0),
                     Some("token_error_retry".to_string()),
                     Some(0),
