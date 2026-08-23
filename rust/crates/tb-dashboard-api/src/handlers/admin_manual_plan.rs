@@ -557,7 +557,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, twitch_login TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1)",
-            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, plan_name TEXT, \
                  manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT DEFAULT '', \
                  manual_plan_updated_at TEXT, raid_boost_enabled INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, \
@@ -595,29 +595,47 @@ mod tests {
     }
 
     /// P2.129: Setzt man eine Stufe mit Raid-Vorrang, muss der Partner-Raid-Score
-    /// sofort neu berechnet werden (Boost-Multiplikator > 1.0 sofort wirksam).
+    /// sofort neu berechnet werden UND den Boost tragen. Der Boost kommt dabei
+    /// aus dem Entitlement der Stufe (`plus` trägt `raid.priority`), nicht aus
+    /// der Spalte `raid_boost_enabled`.
     #[tokio::test]
     async fn set_manual_plan_refreshes_raid_score() {
         let Some(pool) = make_pool_with_scores("t_manplan_score").await else {
             return;
         };
-        // Der Raid-Vorrang greift im Refresher über streamer_plans.raid_boost_enabled.
-        // set_manual_plan setzt manual_plan_id; für den Boost-Flag im Refresher
-        // setzen wir raid_boost_enabled direkt (Entitlement-Auflösung ist eigene
-        // Slice, siehe partner_score_refresh.rs:load_boost_flag).
+        // Gegenprobe zuerst: Free trägt kein raid.priority, der Refresh muss
+        // ohne Boost durchlaufen. Sonst wäre der Boost-Assert unten wertlos.
+        let frei = set_manual_plan(&pool, "booststreamer", "free", "", "")
+            .await
+            .expect("set free ok");
+        assert_eq!(frei, "free");
+        let ohne_boost: (String, f64) = sqlx::query_as(
+            "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='77'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("score row geschrieben (Refresh lief)");
+        assert!(!ohne_boost.0.is_empty());
+        assert!(
+            (ohne_boost.1 - 1.0).abs() < f64::EPSILON,
+            "free ohne Boost erwartet, war {}",
+            ohne_boost.1
+        );
+
+        // Das Geschenk auf plus muss den Boost allein aus dem Plan auslösen —
+        // KEIN Handschalter, `raid_boost_enabled` bleibt 0. Genau das hat der
+        // vorherige Test verdeckt, indem er die Spalte selbst gesetzt hat.
         let plan = set_manual_plan(&pool, "booststreamer", "plus", "", "")
             .await
             .expect("set ok");
         assert_eq!(plan, "plus");
-        sqlx::query("UPDATE streamer_plans SET raid_boost_enabled = 1 WHERE twitch_user_id = '77'")
-            .execute(&pool)
-            .await
-            .unwrap();
-        // Refresh erneut auslösen (clear→set würde Score erneut schreiben); wir
-        // rufen den Refresh-Pfad direkt über einen zweiten set auf.
-        let _ = set_manual_plan(&pool, "booststreamer", "plus", "", "")
-            .await
-            .unwrap();
+        let handschalter: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(raid_boost_enabled, 0) FROM streamer_plans WHERE twitch_user_id='77'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(handschalter, 0, "der Boost darf nicht am Handschalter hängen");
 
         let row: (String, f64) = sqlx::query_as(
             "SELECT last_computed_at, raid_boost_multiplier FROM twitch_partner_raid_scores WHERE twitch_user_id='77'",

@@ -175,8 +175,11 @@ async fn create_schema(pool: &PgPool) {
     sqlx::query(
         r#"
         CREATE TABLE streamer_plans (
-            twitch_user_id     TEXT PRIMARY KEY,
-            raid_boost_enabled INTEGER NOT NULL DEFAULT 0
+            twitch_user_id         TEXT PRIMARY KEY,
+            raid_boost_enabled     INTEGER NOT NULL DEFAULT 0,
+            plan_name              TEXT,
+            manual_plan_id         TEXT,
+            manual_plan_expires_at TEXT
         )
         "#,
     )

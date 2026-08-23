@@ -78,84 +78,29 @@ struct BoostFlagRaw {
     manual_plan_expires_at: Option<String>,
 }
 
-// ─── Entitlement-Katalog (raid.priority-Teilmenge) ──────────────────────────
+// ─── Boost-Entscheidung (raid.priority) ────────────────────────────────────
 //
-// 1:1 aus `bot/entitlements/catalog.py` (PLAN_ENTITLEMENTS_MAP +
-// LEGACY_PLAN_NAME_TO_ID_MAP). Der Katalog ist dort statischer Code — bei
-// Plan-Änderungen BEIDE Stellen pflegen (vollständige Portierung: Schritt 7).
+// Hier standen zwei handgeführte Plan-Listen (Plan-ID und Legacy-Plan-Name),
+// die den Entitlement-Katalog nachbauten. Beide kannten die neuen Stufen
+// `plus`/`pro` nicht: ein Admin-Geschenk auf `plus` und jeder neue
+// Stripe-Zahler liefen deshalb ohne Boost. Die Entscheidung liegt jetzt an
+// EINER Stelle, direkt am Katalog: `tb_analytics::plan::raid_boost_active`.
+// Derselbe Resolver hängt im Sofort-Refresh des Billing-Pfads
+// (`tb_raid::PartnerScoreRefresher::with_boost_resolver`), damit beide
+// Refresh-Wege dasselbe entscheiden.
 
-/// Plan-IDs, deren Entitlements `raid.priority` enthalten.
-fn plan_id_has_raid_priority(plan_id: &str) -> bool {
-    matches!(
-        plan_id,
-        "raid_boost"
-            | "bundle_chat_quiet_raid_boost"
-            | "bundle_analysis_raid_boost"
-            | "bundle_komplett"
-    )
-}
-
-/// Legacy-`plan_name` → Plan-ID → raid.priority?
-/// (Nur die Teilmenge der Legacy-Map, die auf Pläne mit raid.priority zeigt;
-/// alle anderen Namen normalisieren auf Pläne ohne dieses Entitlement.)
-fn legacy_plan_name_has_raid_priority(plan_name: &str) -> bool {
-    let plan_id = match plan_name {
-        "raid_boost" => "raid_boost",
-        "chat_quiet_bundle" | "bundle_chat_quiet_raid_boost" => "bundle_chat_quiet_raid_boost",
-        "bundle" | "bundle_analysis_raid_boost" => "bundle_analysis_raid_boost",
-        "bundle_komplett" => "bundle_komplett",
-        _ => return false,
-    };
-    plan_id_has_raid_priority(plan_id)
-}
-
-/// ISO-Timestamp wie Pythons `_parse_dt`: "Z" → +00:00, naive Werte als UTC.
-fn parse_plan_expiry(raw: &str) -> Option<DateTime<Utc>> {
-    let text = raw.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let normalized = text.replace('Z', "+00:00");
-    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
-        return Some(dt.with_timezone(&Utc));
-    }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
-            return Some(naive.and_utc());
-        }
-    }
-    None
-}
-
-/// Boost-Entscheidung mit Python-Parität (`_load_boost_flags`):
-/// `raid_boost_enabled`-Flag ODER Legacy-Plan-Name mit raid.priority ODER
-/// aktiver manueller Plan-Override (nicht abgelaufen) mit raid.priority.
+/// Boost-Entscheidung (Python-Parität `_load_boost_flags`), delegiert an den
+/// katalog-gestützten Resolver in tb-analytics.
 fn boost_active(row: &BoostFlagRaw, now: DateTime<Utc>) -> bool {
-    if row.raid_boost_enabled.unwrap_or(0) != 0 {
-        return true;
-    }
-    let plan_name = row.plan_name.as_deref().unwrap_or("").trim().to_lowercase();
-    if legacy_plan_name_has_raid_priority(&plan_name) {
-        return true;
-    }
-    let manual_plan_id = row
-        .manual_plan_id
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-    if manual_plan_id.is_empty() {
-        return false;
-    }
-    let expires = row
-        .manual_plan_expires_at
-        .as_deref()
-        .and_then(parse_plan_expiry);
-    let override_active = match expires {
-        None => true,
-        Some(ts) => ts >= now,
-    };
-    override_active && plan_id_has_raid_priority(&manual_plan_id)
+    tb_analytics::plan::raid_boost_active(
+        &tb_raid::RaidBoostRow {
+            raid_boost_enabled: row.raid_boost_enabled.unwrap_or(0) != 0,
+            plan_name: row.plan_name.clone().unwrap_or_default(),
+            manual_plan_id: row.manual_plan_id.clone().unwrap_or_default(),
+            manual_plan_expires_at: row.manual_plan_expires_at.clone(),
+        },
+        now,
+    )
 }
 
 // ─── Haupt-Resolver ────────────────────────────────────────────────────────
@@ -881,15 +826,42 @@ mod tests {
         ));
     }
 
+    /// Die beiden aktuellen Stufen tragen `raid.priority` im Katalog und müssen
+    /// den Boost auslösen — über den Stripe-Weg (`plan_name`) genauso wie über
+    /// das Admin-Geschenk (`manual_plan_id`).
+    #[test]
+    fn boost_fuer_plus_und_pro() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
+        assert!(boost_active(&boost_row(0, "plus", "", None), now));
+        assert!(boost_active(&boost_row(0, "pro", "", None), now));
+        assert!(boost_active(&boost_row(0, "", "plus", None), now));
+        assert!(boost_active(&boost_row(0, "", "pro", None), now));
+        // Free trägt kein raid.priority, weder als Name noch als Geschenk.
+        assert!(!boost_active(&boost_row(0, "free", "", None), now));
+        assert!(!boost_active(&boost_row(0, "", "free", None), now));
+        // Abgelaufenes Geschenk auf plus zählt nicht mehr.
+        assert!(!boost_active(
+            &boost_row(0, "", "plus", Some("2026-01-01T00:00:00Z")),
+            now
+        ));
+    }
+
     #[test]
     fn plan_expiry_parsing_wie_python() {
-        // RFC3339, Z-Suffix und naive ISO-Formate (Python fromisoformat).
-        assert!(parse_plan_expiry("2026-06-10T12:00:00+00:00").is_some());
-        assert!(parse_plan_expiry("2026-06-10T12:00:00Z").is_some());
-        assert!(parse_plan_expiry("2026-06-10T12:00:00").is_some());
-        assert!(parse_plan_expiry("2026-06-10 12:00:00").is_some());
-        assert!(parse_plan_expiry("").is_none());
-        assert!(parse_plan_expiry("kaputt").is_none());
+        // RFC3339, Z-Suffix und naive ISO-Formate (Python fromisoformat) —
+        // geprüft über den Override-Ablauf, der Parser selbst liegt jetzt in
+        // tb-analytics (`parse_datetime_value`).
+        let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
+        let abgelaufen = |raw: &str| {
+            !boost_active(&boost_row(0, "", "bundle_komplett", Some(raw)), now)
+        };
+        assert!(abgelaufen("2026-01-01T00:00:00+00:00"));
+        assert!(abgelaufen("2026-01-01T00:00:00Z"));
+        assert!(abgelaufen("2026-01-01T00:00:00"));
+        assert!(abgelaufen("2026-01-01 00:00:00"));
+        // Leer/unparsbar → kein Ablauf, Override bleibt aktiv (fail-open).
+        assert!(!abgelaufen(""));
+        assert!(!abgelaufen("kaputt"));
     }
 
     // ─── Unit-Tests: reine Funktionen ──────────────────────────────────────

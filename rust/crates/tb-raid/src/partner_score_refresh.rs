@@ -284,6 +284,48 @@ struct PartnerRow {
     twitch_login: String,
 }
 
+/// Roh-Spalten aus `streamer_plans` (Decode-Form, alles nullable).
+#[derive(Debug, sqlx::FromRow)]
+struct BoostPlanRaw {
+    raid_boost_enabled: Option<i32>,
+    plan_name: Option<String>,
+    manual_plan_id: Option<String>,
+    manual_plan_expires_at: Option<String>,
+}
+
+/// Rohzeile aus `streamer_plans`, aus der der Raid-Vorrang folgt.
+///
+/// Die Spalte `raid_boost_enabled` ist der alte Handschalter; Plan-Name und
+/// manueller Override tragen die Stufe, aus der der Vorrang abgeleitet wird.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RaidBoostRow {
+    /// Handschalter `streamer_plans.raid_boost_enabled` (Spalte != 0).
+    pub raid_boost_enabled: bool,
+    /// `streamer_plans.plan_name` (Stripe-Pfad), bereits getrimmt/kleingeschrieben.
+    pub plan_name: String,
+    /// `streamer_plans.manual_plan_id` (Admin-Geschenk), getrimmt/kleingeschrieben.
+    pub manual_plan_id: String,
+    /// `streamer_plans.manual_plan_expires_at` als Roh-Text (ISO oder Date-only).
+    pub manual_plan_expires_at: Option<String>,
+}
+
+/// Entscheidet, ob eine Plan-Zeile den Raid-Vorrang trägt.
+///
+/// tb-raid kennt den Entitlement-Katalog **nicht**: der liegt in tb-analytics,
+/// und tb-analytics setzt seinerseits auf tb-raid auf. Statt den Katalog hier
+/// ein zweites Mal zu führen (genau der Fehler, der `plus`/`pro` monatelang
+/// ohne Boost gelassen hätte), reicht der Aufrufer die Entscheidung herein:
+/// `tb_analytics::plan::raid_boost_active` ist der katalog-gestützte Resolver.
+pub type RaidBoostResolver = fn(&RaidBoostRow, DateTime<Utc>) -> bool;
+
+/// Resolver ohne Katalogwissen: nur der Handschalter zählt.
+///
+/// Default in [`PartnerScoreRefresher::new`], damit ein Aufrufer ohne Katalog
+/// (Tests, tb-raid-interne Nutzung) nichts verkabeln muss.
+pub fn raid_boost_nur_spalte(row: &RaidBoostRow, _now: DateTime<Utc>) -> bool {
+    row.raid_boost_enabled
+}
+
 /// Orchestriert den Score-Refresh: lädt Partner + Begleitdaten, aggregiert,
 /// upsertet. Port von `PartnerRaidScoreService._refresh_scores_for_ids`.
 #[derive(Clone)]
@@ -291,6 +333,7 @@ pub struct PartnerScoreRefresher {
     pool: PgPool,
     store: ScoreStore,
     courtesy: CourtesyStore,
+    boost_resolver: RaidBoostResolver,
 }
 
 impl PartnerScoreRefresher {
@@ -301,7 +344,15 @@ impl PartnerScoreRefresher {
             pool,
             store,
             courtesy,
+            boost_resolver: raid_boost_nur_spalte,
         }
+    }
+
+    /// Hängt den katalog-gestützten Boost-Resolver ein (siehe
+    /// [`RaidBoostResolver`]). Ohne ihn zählt nur `raid_boost_enabled`.
+    pub fn with_boost_resolver(mut self, resolver: RaidBoostResolver) -> Self {
+        self.boost_resolver = resolver;
+        self
     }
 
     /// Refresht alle AKTIVEN Partner (Python `refresh_all_partner_scores`).
@@ -350,7 +401,9 @@ impl PartnerScoreRefresher {
         let internal_metrics = self
             .load_internal_metrics(&partner.twitch_user_id, now_utc)
             .await?;
-        let raid_boost_enabled = self.load_boost_flag(&partner.twitch_user_id).await?;
+        let raid_boost_enabled = self
+            .load_boost_flag(&partner.twitch_user_id, now_utc)
+            .await?;
         let live_state = self.load_live_state(&partner.twitch_user_id).await?;
         let existing_cache = self.load_existing_cache(&partner.twitch_user_id).await?;
         let courtesy = self
@@ -507,22 +560,38 @@ impl PartnerScoreRefresher {
         Ok((sent_30d, received_30d, received_7d))
     }
 
-    /// Lädt den Raid-Boost-Flag (vereinfachter Pfad: `raid_boost_enabled`-Spalte
-    /// in `streamer_plans`). Die vollständige Entitlement-Auflösung
-    /// (plan_name/manual_plan_id) aus Python `_load_boost_flags` ist eine eigene
-    /// Slice (Entitlement-Katalog noch nicht in tb-raid portiert).
-    async fn load_boost_flag(&self, user_id: &str) -> Result<bool, sqlx::Error> {
-        let row: Option<i32> = sqlx::query_scalar!(
-            r#"
-            SELECT COALESCE(raid_boost_enabled, 0) AS "raid_boost_enabled!"
-            FROM streamer_plans
-            WHERE twitch_user_id = $1
-            "#,
-            user_id
+    /// Lädt die Plan-Zeile und lässt den [`RaidBoostResolver`] entscheiden.
+    ///
+    /// Gelesen wird die ganze Zeile (Handschalter, Plan-Name, manueller
+    /// Override), entschieden wird ausserhalb: den Entitlement-Katalog kennt
+    /// tb-raid nicht. Vorher zählte hier nur `raid_boost_enabled`, deshalb blieb
+    /// ein frisch geschenkter oder gekaufter Plan bis zum nächsten
+    /// Voll-Refresh ohne Boost.
+    ///
+    /// Bewusst ohne `sqlx::query!`-Makro: der Kern läuft mit `SQLX_OFFLINE`, und
+    /// die vier Spalten stehen in jedem Prod-Schema (`streamer_plans`).
+    async fn load_boost_flag(
+        &self,
+        user_id: &str,
+        now_utc: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        let row: Option<BoostPlanRaw> = sqlx::query_as(
+            "SELECT raid_boost_enabled, plan_name, manual_plan_id, manual_plan_expires_at \
+             FROM streamer_plans WHERE twitch_user_id = $1",
         )
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|v| v != 0).unwrap_or(false))
+        let Some(raw) = row else {
+            return Ok(false);
+        };
+        let boost_row = RaidBoostRow {
+            raid_boost_enabled: raw.raid_boost_enabled.unwrap_or(0) != 0,
+            plan_name: raw.plan_name.unwrap_or_default().trim().to_lowercase(),
+            manual_plan_id: raw.manual_plan_id.unwrap_or_default().trim().to_lowercase(),
+            manual_plan_expires_at: raw.manual_plan_expires_at,
+        };
+        Ok((self.boost_resolver)(&boost_row, now_utc))
     }
 
     async fn load_live_state(&self, user_id: &str) -> Result<LiveState, sqlx::Error> {

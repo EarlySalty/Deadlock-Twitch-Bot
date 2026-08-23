@@ -683,7 +683,12 @@ pub async fn refresh_partner_raid_score_for_login(
     if user_id.is_empty() {
         return Ok(());
     }
-    let refresher = PartnerScoreRefresher::new(pool.clone());
+    // Boost-Resolver einhaengen: tb-raid liest die Plan-Zeile, den
+    // Entitlement-Katalog kennt nur tb-analytics. Ohne ihn zaehlt allein der
+    // Handschalter `raid_boost_enabled`, und ein frisch gekaufter oder
+    // geschenkter Plan mit `raid.priority` bliebe hier ohne Boost.
+    let refresher =
+        PartnerScoreRefresher::new(pool.clone()).with_boost_resolver(crate::plan::raid_boost_active);
     refresher.refresh_for_ids(&[user_id], Utc::now()).await?;
     Ok(())
 }
@@ -1494,7 +1499,9 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER NOT NULL DEFAULT 1)",
-            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, raid_boost_enabled INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+                 raid_boost_enabled INTEGER NOT NULL DEFAULT 0, plan_name TEXT, \
+                 manual_plan_id TEXT, manual_plan_expires_at TEXT)",
             "CREATE TABLE twitch_stream_sessions (streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds BIGINT)",
             "CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_id TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_started_at TIMESTAMPTZ)",

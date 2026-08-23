@@ -104,6 +104,76 @@ pub fn plan_has_analytics(plan_id: &str) -> bool {
     plan_entitlements(plan_id).contains(&"analytics")
 }
 
+// ── Raid-Vorrang (`raid.priority`) ──────────────────────────────────────────
+//
+// Der Raid-Vorrang hing bis hierher an zwei handgeführten Plan-Listen im
+// Score-Refresher (bin/tb-bot). Beide kannten `plus`/`pro` nicht, obwohl beide
+// Stufen im Katalog `raid.priority` tragen: ein Admin-Geschenk auf `plus` und
+// jeder neue Stripe-Zahler bekamen deshalb nie einen Boost. Jetzt gibt es nur
+// noch DIESEN Anker, und er liest den Katalog statt ihn zu wiederholen.
+
+/// `true`, wenn die Plan-ID laut Katalog `raid.priority` trägt.
+///
+/// Anker für alles, was den Raid-Vorrang entscheidet. Neue Stufen brauchen
+/// keine Pflege mehr: sie tragen das Entitlement oder eben nicht.
+pub fn plan_has_raid_priority(plan_id: &str) -> bool {
+    plan_entitlements(plan_id.trim()).contains(&"raid.priority")
+}
+
+/// `streamer_plans.plan_name` → Plan-ID.
+///
+/// Die Spalte trägt seit dem Drei-Stufen-Umbau die kanonische ID (`plus`,
+/// `pro`, siehe `stripe::plan_name_from_id`), davor abgekürzte Alt-Namen. Nur
+/// die Abkürzungen brauchen eine Zuordnung, alles andere geht unverändert in
+/// den Katalog und fällt dort auf "kein Entitlement", wenn es unbekannt ist.
+fn plan_id_aus_plan_name(plan_name: &str) -> &str {
+    match plan_name.trim() {
+        "chat_quiet_bundle" => "bundle_chat_quiet_raid_boost",
+        "bundle" => "bundle_analysis_raid_boost",
+        "analysis" => "analysis_dashboard",
+        "werbefrei" => "chat_quiet",
+        anderer => anderer,
+    }
+}
+
+/// Entscheidet aus einer `streamer_plans`-Zeile, ob der Raid-Vorrang gilt.
+///
+/// Reihenfolge wie Python `_load_boost_flags`: Handschalter `raid_boost_enabled`
+/// ODER Plan-Name mit `raid.priority` ODER aktiver (nicht abgelaufener)
+/// manueller Override mit `raid.priority`.
+///
+/// Signatur passt auf [`tb_raid::RaidBoostResolver`], damit der Sofort-Refresh
+/// im Billing-Pfad dieselbe Entscheidung trifft wie der periodische Refresh im
+/// Bot. Der Ablaufzeitpunkt läuft durch denselben Parser wie der
+/// Plan-Snapshot (`parse_datetime_value`), also inklusive Date-only-Werten.
+pub fn raid_boost_active(
+    row: &tb_raid::RaidBoostRow,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if row.raid_boost_enabled {
+        return true;
+    }
+    let plan_name = row.plan_name.trim().to_lowercase();
+    if plan_has_raid_priority(plan_id_aus_plan_name(&plan_name)) {
+        return true;
+    }
+    let manual_plan_id = row.manual_plan_id.trim().to_lowercase();
+    if manual_plan_id.is_empty() {
+        return false;
+    }
+    // Kein Ablaufdatum (oder unparsbar) heißt "läuft" — fail-open wie im
+    // Plan-Resolver.
+    let override_active = match row
+        .manual_plan_expires_at
+        .as_deref()
+        .and_then(parse_datetime_value)
+    {
+        None => true,
+        Some(ts) => ts >= now,
+    };
+    override_active && plan_has_raid_priority(&manual_plan_id)
+}
+
 /// Normalisiert eine Plan-ID strikt-kanonisch auf einen bekannten Plan.
 ///
 /// Spiegelt Python `catalog.py:normalize_plan_id` (Zeile 138-140):
@@ -677,6 +747,112 @@ mod tests {
         ] {
             assert!(plan_has_analytics(id), "{id} muss analytics-Flag tragen");
         }
+    }
+
+    // ── Raid-Vorrang: ein Anker statt zweier Plan-Listen ────────────────────
+
+    fn boost_row(
+        enabled: bool,
+        plan_name: &str,
+        manual_plan_id: &str,
+        expires: Option<&str>,
+    ) -> tb_raid::RaidBoostRow {
+        tb_raid::RaidBoostRow {
+            raid_boost_enabled: enabled,
+            plan_name: plan_name.to_string(),
+            manual_plan_id: manual_plan_id.to_string(),
+            manual_plan_expires_at: expires.map(str::to_string),
+        }
+    }
+
+    fn testzeitpunkt() -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap()
+    }
+
+    /// Drift-Guard: das Prädikat liest den Katalog, statt ihn zu wiederholen.
+    #[test]
+    fn raid_priority_folgt_dem_katalog() {
+        for plan in crate::billing::catalog::BILLING_PLANS {
+            assert_eq!(
+                plan_has_raid_priority(plan.id),
+                plan.entitlements.contains(&"raid.priority"),
+                "raid.priority-Drift zwischen Prädikat und Katalog bei {}",
+                plan.id
+            );
+        }
+        // Alt-IDs (nicht mehr buchbar, stehen aber in der DB).
+        assert!(plan_has_raid_priority("raid_boost"));
+        assert!(plan_has_raid_priority("bundle_komplett"));
+        assert!(!plan_has_raid_priority("analysis_dashboard"));
+        assert!(!plan_has_raid_priority("unbekannt"));
+    }
+
+    /// Der eigentliche Fund: `plus`/`pro` müssen den Boost auslösen, egal ob sie
+    /// als Stripe-Plan-Name oder als Admin-Geschenk in der Zeile stehen.
+    #[test]
+    fn boost_fuer_plus_und_pro_auf_beiden_wegen() {
+        let now = testzeitpunkt();
+        for stufe in ["plus", "pro"] {
+            assert!(
+                raid_boost_active(&boost_row(false, stufe, "", None), now),
+                "{stufe} als plan_name muss den Boost auslösen"
+            );
+            assert!(
+                raid_boost_active(&boost_row(false, "", stufe, None), now),
+                "{stufe} als manual_plan_id muss den Boost auslösen"
+            );
+        }
+        assert!(!raid_boost_active(&boost_row(false, "free", "", None), now));
+        assert!(!raid_boost_active(&boost_row(false, "", "free", None), now));
+    }
+
+    #[test]
+    fn boost_aus_handschalter_und_alt_planname() {
+        let now = testzeitpunkt();
+        assert!(raid_boost_active(&boost_row(true, "", "", None), now));
+        assert!(!raid_boost_active(&boost_row(false, "", "", None), now));
+        // Abgekürzte Alt-Namen aus `plan_name_from_id`.
+        assert!(raid_boost_active(&boost_row(false, "Bundle", "", None), now));
+        assert!(raid_boost_active(
+            &boost_row(false, "raid_boost", "", None),
+            now
+        ));
+        assert!(raid_boost_active(
+            &boost_row(false, "chat_quiet_bundle", "", None),
+            now
+        ));
+        assert!(!raid_boost_active(
+            &boost_row(false, "analysis", "", None),
+            now
+        ));
+        assert!(!raid_boost_active(
+            &boost_row(false, "werbefrei", "", None),
+            now
+        ));
+        assert!(!raid_boost_active(
+            &boost_row(false, "unbekannt", "", None),
+            now
+        ));
+    }
+
+    #[test]
+    fn boost_override_laeuft_ab() {
+        let now = testzeitpunkt();
+        assert!(raid_boost_active(&boost_row(false, "", "plus", None), now));
+        assert!(raid_boost_active(
+            &boost_row(false, "", "plus", Some("2026-12-31T00:00:00+00:00")),
+            now
+        ));
+        assert!(!raid_boost_active(
+            &boost_row(false, "", "plus", Some("2026-01-01T00:00:00Z")),
+            now
+        ));
+        // Unparsbar → kein Ablauf (fail-open wie im Plan-Resolver).
+        assert!(raid_boost_active(
+            &boost_row(false, "", "plus", Some("kaputt")),
+            now
+        ));
     }
 
     // ── B20-ent-2: expiresAt isoformat-normalisiert ─────────────────────────

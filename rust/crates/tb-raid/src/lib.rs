@@ -124,8 +124,9 @@ pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };
 pub use partner_score_refresh::{
-    build_score_upsert, ExistingCache, LiveState, PartnerScoreRefresher, ScoreBuildInput,
-    SessionRow, LOOKBACK_DAYS, MIN_RELIABLE_SESSIONS,
+    build_score_upsert, raid_boost_nur_spalte, ExistingCache, LiveState, PartnerScoreRefresher,
+    RaidBoostResolver, RaidBoostRow, ScoreBuildInput, SessionRow, LOOKBACK_DAYS,
+    MIN_RELIABLE_SESSIONS,
 };
 pub use pending_raids::{
     build_pending_timeout_detail, normalize_broadcaster_login, normalize_pending_raid_key,
