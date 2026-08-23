@@ -1819,15 +1819,18 @@ mod tests {
         assert_eq!(v["gross_available"], true);
         let plans = v["plans"].as_array().unwrap();
         assert_eq!(plans.len(), 3);
-        // Ohne Eintrag steht der Streamer auf dem Default raid_free (Stufe Free);
-        // die Free-Karte ist deshalb keine der drei Katalog-Karten "is_current".
+        // Ohne Eintrag steht der Streamer auf dem Default raid_free. Verglichen
+        // wird die Stufe, und `raid_free` wie `free` sind beide Stufe Free, also
+        // ist genau die Free-Karte "is_current" und die beiden bezahlten nicht.
         assert_eq!(v["current_subscription"]["plan_id"], "raid_free");
         let free = plans.iter().find(|p| p["id"] == "free").unwrap();
+        assert_eq!(free["is_current"], true, "Free-Karte muss is_current sein");
         assert_eq!(free["checkout_available"], false);
         assert!(free["stripe_price_id"].is_null());
         assert_eq!(free["price"]["total_gross_cents"], 0);
         // Bezahlte Stufe trägt Price-ID + checkout_available (Config ⇒ checkout_ready).
         let plus = plans.iter().find(|p| p["id"] == "plus").unwrap();
+        assert_eq!(plus["is_current"], false, "Plus ist nicht die eigene Stufe");
         assert_eq!(plus["price"]["total_gross_cents"], 499);
         assert!(plus["stripe_price_id"].is_string());
         assert_eq!(plus["checkout_available"], true);

@@ -1,6 +1,6 @@
 // React Query hooks for analytics data
 
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   fetchOverview,
   fetchMonthlyStats,
@@ -512,6 +512,10 @@ export function useBillingCatalog(cycle: 1 | 12 = 1) {
     queryKey: ['billing-catalog', cycle],
     queryFn: () => fetchBillingCatalog(cycle),
     staleTime: STALE_TIME,
+    // Beim Umschalten monatlich/jaehrlich haelt der vorherige Katalog die
+    // Karten stehen. Ohne das ist `data` waehrend des Nachladens undefined,
+    // die Plan-Liste leer und die drei Karten verschwinden bei jedem Klick.
+    placeholderData: keepPreviousData,
   });
 }
 

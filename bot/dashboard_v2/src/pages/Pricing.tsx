@@ -14,7 +14,7 @@ const faqData = [
   {
     question: 'Wie funktioniert die 30-tägige kostenlose Testphase?',
     answer:
-      'Du meldest dich an, wählst eine bezahlte Stufe im Monatstakt aus und kannst sie 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher.',
+      'Du meldest dich an, wählst Netzwerk Plus im Monatstakt aus und kannst es 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher. Creator Pro und der Jahrestakt starten ohne Testphase und werden sofort abgerechnet.',
   },
   {
     question: 'Kann ich meinen Plan jederzeit kündigen?',

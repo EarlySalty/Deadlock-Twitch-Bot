@@ -100,7 +100,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "Go-Live-Post im Community-Discord",
             "Overlay-Builder und Sendeplanung",
             "Tagesform deines letzten Streams",
-            "3 Clips im Monat, mit Wasserzeichen",
+            "3 Clips im Monat",
         ],
     },
     BillingPlan {
@@ -123,7 +123,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "Zeitraumvergleiche und Wachstumskurven",
             "KI-Analyse, KI-Chat, Coaching und KI-Wochenreport",
             "Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name",
-            "10 Clips im Monat, ohne Wasserzeichen",
+            "10 Clips im Monat",
         ],
     },
     BillingPlan {

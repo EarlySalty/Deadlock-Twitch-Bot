@@ -37,8 +37,13 @@ Bereits umgesetzt in `website/src/data/networkPage.ts`.
 Die Trennlinie in einem Satz: Free zeigt dir deinen letzten Stream, Plus zeigt dir deine
 Entwicklung, Pro nimmt dir die Clip-Arbeit ab.
 
-**Free** bleibt vollwertig und wird nicht kuenstlich beschnitten. Einzige Ausnahme ist das
-Wasserzeichen auf Clips.
+**Free** bleibt vollwertig und wird nicht kuenstlich beschnitten. Einzige Ausnahme ist die
+Clip-Menge.
+
+**Nachtrag 2026-08-23:** das Wasserzeichen ist aus allen nutzersichtbaren Texten gestrichen.
+Es wurde nie gebaut, in der Rust-Codebase rendert nichts eines. Das Feld `clip_wasserzeichen`
+bleibt als Datenpunkt stehen, aber verkauft wird nur die Clip-Menge. Wer das Wasserzeichen
+spaeter baut, nimmt den Text danach wieder auf, nicht vorher.
 
 - Auto-Raid in beide Richtungen
 - Kompletter Chat-Schutz
@@ -46,14 +51,14 @@ Wasserzeichen auf Clips.
 - Go-Live-Post im Community-Discord
 - Overlay-Builder und Sendeplanung
 - Tagesform des letzten Streams
-- 3 Clips im Monat, mit Wasserzeichen
+- 3 Clips im Monat
 
 **Plus (4,99)**
 
 - Voller Verlauf statt nur letzter Stream, Zeitraumvergleiche, Wachstum
 - KI-Analyse, KI-Chat, Coaching, KI-Wochenreport
 - Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung, eigener Bot-Name
-- 10 Clips im Monat, ohne Wasserzeichen
+- 10 Clips im Monat
 
 **Pro (9,99)**
 
