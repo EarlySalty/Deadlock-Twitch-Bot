@@ -21,10 +21,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use serde_json::Value;
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
 use tb_social_media::uploaders::youtube::{ChunkOutcome, ResumeStand, YouTubeUploader};
+use tb_social_media::uploaders::UploadError;
 use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
 
 use crate::config::{wurzel_oder_elternteil, VodArchiveConfig};
@@ -37,10 +40,103 @@ use crate::twitch::{self, CommandRunner};
 /// mehrstuendigen Download anwirft.
 const INITIAL_DELAY_SECS: u64 = 300;
 
+/// Der Upload-Weg eines einzelnen Teils. Als Trait wie [`CommandRunner`],
+/// damit der Ablauf des Worker samt seiner Deckel ohne echtes YouTube
+/// pruefbar bleibt. Im Betrieb steckt dahinter der [`YouTubeUploader`] des
+/// jeweiligen Streamers.
+#[async_trait]
+pub trait TeilHochlader: Send + Sync {
+    async fn resumable_offset(
+        &self,
+        sitzung: &str,
+        groesse: u64,
+    ) -> Result<ResumeStand, UploadError>;
+    async fn start_resumable_upload(
+        &self,
+        metadaten: &Value,
+        groesse: u64,
+    ) -> Result<String, UploadError>;
+    async fn upload_chunk(
+        &self,
+        sitzung: &str,
+        pfad: &Path,
+        offset: u64,
+    ) -> Result<ChunkOutcome, UploadError>;
+}
+
+#[async_trait]
+impl TeilHochlader for YouTubeUploader {
+    async fn resumable_offset(
+        &self,
+        sitzung: &str,
+        groesse: u64,
+    ) -> Result<ResumeStand, UploadError> {
+        YouTubeUploader::resumable_offset(self, sitzung, groesse).await
+    }
+
+    async fn start_resumable_upload(
+        &self,
+        metadaten: &Value,
+        groesse: u64,
+    ) -> Result<String, UploadError> {
+        YouTubeUploader::start_resumable_upload(self, metadaten, groesse).await
+    }
+
+    async fn upload_chunk(
+        &self,
+        sitzung: &str,
+        pfad: &Path,
+        offset: u64,
+    ) -> Result<ChunkOutcome, UploadError> {
+        YouTubeUploader::upload_chunk(self, sitzung, pfad, offset).await
+    }
+}
+
+/// Woher der YouTube-Zugang eines Kanals kommt. `None` heisst: keine
+/// Verbindung, es wird nur lokal archiviert.
+#[async_trait]
+pub trait HochladerQuelle: Send + Sync {
+    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>>;
+}
+
+/// Betriebsfassung: der Zugang kommt aus den Credentials **dieses** Streamers.
+///
+/// Der globale Rueckfall von [`CredentialManager::get_credentials`] wird
+/// bewusst verworfen: er wuerde das VOD eines Partners auf den YouTube-Kanal
+/// des Betreibers schieben.
+pub struct StreamerZugang {
+    credentials: CredentialManager,
+}
+
+#[async_trait]
+impl HochladerQuelle for StreamerZugang {
+    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
+        let creds = self
+            .credentials
+            .get_credentials("youtube", Some(streamer_login))
+            .await?;
+        let gehoert_dem_streamer = creds
+            .streamer_login
+            .as_deref()
+            .is_some_and(|login| login.eq_ignore_ascii_case(streamer_login));
+        if !gehoert_dem_streamer {
+            tracing::info!(
+                kanal = %streamer_login,
+                "Nur ein globaler YouTube-Zugang vorhanden, der gilt hier nicht"
+            );
+            return None;
+        }
+        if creds.access_token.is_empty() {
+            return None;
+        }
+        Some(Arc::new(youtube_uploader(&creds)))
+    }
+}
+
 pub struct VodArchiveWorker {
     pool: PgPool,
     config: VodArchiveConfig,
-    credentials: CredentialManager,
+    zugang: Arc<dyn HochladerQuelle>,
     runner: Arc<dyn CommandRunner>,
     /// Zaehlt die Laeufe, damit der Startplatz der Warteschlange wandert.
     laeufe: AtomicUsize,
@@ -49,17 +145,72 @@ pub struct VodArchiveWorker {
 /// Was ein Lauf bewegt hat. Nur fuer Log und Tests.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LaufBilanz {
+    /// Geladene VODs.
     pub geladen: usize,
+    /// Hochgeladene **Teile**, nicht VODs. Das Kontingent kostet je Teil: ein
+    /// geschnittenes VOD kostet so viel wie es Teile hat.
     pub hochgeladen: usize,
     pub uebersprungen: usize,
 }
 
+/// Was mit dem naechsten VOD geschieht. Ausgelagert, damit die beiden Deckel
+/// ohne Download und ohne YouTube pruefbar sind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aktion {
+    Bearbeite,
+    /// Passt nicht mehr in diesen Lauf, das naechste VOD vielleicht schon.
+    Ueberspringe,
+    /// Beide Deckel sind voll, weitersuchen bringt nichts mehr.
+    Beende,
+}
+
+/// Entscheidet anhand beider Deckel, was mit dem naechsten VOD geschieht.
+///
+/// Ein VOD, das noch geladen werden muss, darf auch dann laufen, wenn das
+/// Upload-Budget schon leer ist: das lokale Archiv ist der Verlustschutz, und
+/// hochgeladen wird dann eben beim naechsten Lauf. Der Upload-Deckel greift in
+/// diesem Fall weiter unten, je Teil.
+pub fn naechste_aktion(
+    config: &VodArchiveConfig,
+    bilanz: &LaufBilanz,
+    braucht_download: bool,
+) -> Aktion {
+    let downloads_frei = bilanz.geladen < config.max_downloads_per_run;
+    let uploads_frei = bilanz.hochgeladen < config.max_uploads_per_run;
+    if !downloads_frei && !uploads_frei {
+        return Aktion::Beende;
+    }
+    if braucht_download {
+        // Ohne Download-Budget ist an diesem VOD nichts zu holen: hochladen
+        // laesst sich nur, was lokal liegt.
+        if downloads_frei {
+            Aktion::Bearbeite
+        } else {
+            Aktion::Ueberspringe
+        }
+    } else if uploads_frei {
+        Aktion::Bearbeite
+    } else {
+        Aktion::Ueberspringe
+    }
+}
+
 impl VodArchiveWorker {
     pub fn new(pool: PgPool, config: VodArchiveConfig, credentials: CredentialManager) -> Self {
+        Self::mit_zugang(pool, config, Arc::new(StreamerZugang { credentials }))
+    }
+
+    /// Wie [`Self::new`], aber mit fertiger Upload-Quelle statt der
+    /// Credential-Tabelle (Tests).
+    pub fn mit_zugang(
+        pool: PgPool,
+        config: VodArchiveConfig,
+        zugang: Arc<dyn HochladerQuelle>,
+    ) -> Self {
         Self {
             pool,
             config,
-            credentials,
+            zugang,
             runner: Arc::new(twitch::TokioCommandRunner),
             laeufe: AtomicUsize::new(0),
         }
@@ -129,9 +280,9 @@ impl VodArchiveWorker {
         }
 
         // Ohne YouTube-Zugang wird nur geladen. Das ist der wichtigere Teil.
-        let mut uploader: HashMap<String, Option<YouTubeUploader>> = HashMap::new();
+        let mut uploader: HashMap<String, Option<Arc<dyn TeilHochlader>>> = HashMap::new();
         for einstellung in streamer {
-            let zugang = self.baue_uploader(&einstellung.streamer_login).await;
+            let zugang = self.zugang.fuer(&einstellung.streamer_login).await;
             if zugang.is_none() {
                 tracing::info!(
                     kanal = %einstellung.streamer_login,
@@ -158,19 +309,16 @@ impl VodArchiveWorker {
         let versatz = self.laeufe.fetch_add(1, Ordering::Relaxed);
         for (einstellung, vod) in verschraenke(warteschlangen, versatz) {
             let braucht_download = vod.braucht_download();
-            if braucht_download && bilanz.geladen >= self.config.max_downloads_per_run {
-                bilanz.uebersprungen += 1;
-                continue;
-            }
-            if !braucht_download && bilanz.hochgeladen >= self.config.max_uploads_per_run {
-                bilanz.uebersprungen += 1;
-                continue;
-            }
-            if bilanz.geladen >= self.config.max_downloads_per_run
-                && bilanz.hochgeladen >= self.config.max_uploads_per_run
-            {
-                tracing::info!("Grenzen erreicht, der Rest folgt beim naechsten Lauf");
-                break;
+            match naechste_aktion(&self.config, &bilanz, braucht_download) {
+                Aktion::Beende => {
+                    tracing::info!("Grenzen erreicht, der Rest folgt beim naechsten Lauf");
+                    break;
+                }
+                Aktion::Ueberspringe => {
+                    bilanz.uebersprungen += 1;
+                    continue;
+                }
+                Aktion::Bearbeite => {}
             }
             if !self.platz_reicht() {
                 tracing::warn!("Plattenplatz aufgebraucht, der Rest folgt spaeter");
@@ -179,12 +327,15 @@ impl VodArchiveWorker {
 
             let zugang = uploader
                 .get(&einstellung.streamer_login)
-                .and_then(|u| u.as_ref());
-            match self.bearbeite(&vod, zugang, einstellung).await {
-                Ok((geladen, hochgeladen)) => {
-                    bilanz.geladen += usize::from(geladen);
-                    bilanz.hochgeladen += usize::from(hochgeladen);
-                }
+                .and_then(|u| u.clone());
+            // Die Bilanz geht mit hinein, damit jeder einzelne Teil sofort
+            // gegen den Deckel zaehlt. Bricht das VOD auf halbem Weg ab,
+            // bleiben die bis dahin verbrauchten Einheiten trotzdem gezaehlt.
+            match self
+                .bearbeite(&vod, zugang.as_deref(), einstellung, &mut bilanz)
+                .await
+            {
+                Ok(()) => {}
                 Err(fehler) if fehler.ist_kontingent() => {
                     // Das Tageskontingent haengt am Google-Projekt, nicht am
                     // Nutzertoken: ist es leer, ist es fuer alle Kanaele leer.
@@ -244,15 +395,18 @@ impl VodArchiveWorker {
         Ok(())
     }
 
-    /// Liefert `(geladen, hochgeladen)`.
+    /// Laedt das VOD (falls noetig) und schiebt seine Teile hoch. Alles, was
+    /// wirklich passiert ist, landet sofort in `bilanz`: der Upload-Deckel
+    /// zaehlt Teile, und ein Abbruch mittendrin darf die bereits verbrauchten
+    /// Kontingent-Einheiten nicht vergessen.
     async fn bearbeite(
         &self,
         vod: &store::Vod,
-        uploader: Option<&YouTubeUploader>,
+        uploader: Option<&dyn TeilHochlader>,
         einstellung: &VodArchiveSettings,
-    ) -> Result<(bool, bool), VodArchiveError> {
+        bilanz: &mut LaufBilanz,
+    ) -> Result<(), VodArchiveError> {
         let kanal = einstellung.streamer_login.as_str();
-        let mut geladen = false;
         let mut aufgenommen_am = vod.recorded_at;
 
         if vod.braucht_download() {
@@ -287,29 +441,68 @@ impl VodArchiveWorker {
             .await?;
             let dateien: Vec<String> = teile.iter().map(|p| p.display().to_string()).collect();
             store::setze_teile(&self.pool, vod.id, kanal, &dateien).await?;
-            geladen = true;
+            bilanz.geladen += 1;
             tracing::info!(kanal = %kanal, vod = %vod.twitch_id, teile = dateien.len(), "VOD liegt lokal");
         }
 
         let Some(uploader) = uploader else {
             // Kein Login: das VOD bleibt offen und wartet auf die Verbindung.
-            return Ok((geladen, false));
+            return Ok(());
         };
 
         let teile = store::teile(&self.pool, vod.id).await?;
+        if teile.is_empty() {
+            // Ein frueherer Lauf ist zwischen `setze_geladen` und `setze_teile`
+            // gestorben. Hier "hochgeladen" einzutragen waere eine Luege: bei
+            // YouTube liegt nichts, und das Aufraeumen wuerde danach die
+            // einzige lokale Kopie loeschen, waehrend das Original auf Twitch
+            // laengst weg ist. Also zurueck in die Download-Warteschlange.
+            tracing::warn!(
+                kanal = %kanal,
+                vod = %vod.twitch_id,
+                "Keine Teile eingetragen, das VOD wird erneut geladen"
+            );
+            store::setze_fehler(
+                &self.pool,
+                vod.id,
+                store::STATUS_DOWNLOAD_FEHLER,
+                "keine Teile eingetragen, der Download wird wiederholt",
+            )
+            .await?;
+            return Ok(());
+        }
+
         let anzahl = teile.len();
-        let mut hochgeladen = false;
+        let mut offen = 0usize;
         for teil in &teile {
             if teil.status == store::TEIL_FERTIG {
                 continue;
             }
+            if bilanz.hochgeladen >= self.config.max_uploads_per_run {
+                // Der Deckel zaehlt Uploads, nicht VODs: ein 20-Stunden-VOD
+                // kostet zwei Uploads, also 3200 Einheiten.
+                offen += 1;
+                continue;
+            }
             self.lade_teil_hoch(vod, teil, anzahl, aufgenommen_am, uploader, einstellung)
                 .await?;
-            hochgeladen = true;
+            bilanz.hochgeladen += 1;
         }
 
+        if offen > 0 {
+            tracing::info!(
+                kanal = %kanal,
+                vod = %vod.twitch_id,
+                offen,
+                "Upload-Deckel erreicht, die restlichen Teile folgen beim naechsten Lauf"
+            );
+            return Ok(());
+        }
+
+        // Erst jetzt: jeder Teil liegt wirklich bei YouTube. Danach darf die
+        // lokale Kopie weg.
         store::setze_hochgeladen(&self.pool, vod.id).await?;
-        Ok((geladen, hochgeladen))
+        Ok(())
     }
 
     async fn lade_teil_hoch(
@@ -318,7 +511,7 @@ impl VodArchiveWorker {
         teil: &store::Teil,
         anzahl: usize,
         aufgenommen_am: Option<chrono::NaiveDate>,
-        uploader: &YouTubeUploader,
+        uploader: &dyn TeilHochlader,
         einstellung: &VodArchiveSettings,
     ) -> Result<(), VodArchiveError> {
         let pfad = PathBuf::from(&teil.file_path);
@@ -327,9 +520,12 @@ impl VodArchiveWorker {
         }
         let groesse = tokio::fs::metadata(&pfad).await?.len();
 
-        // Wiederaufnahme: gibt es eine Sitzung, entscheidet YouTube, wie weit
-        // sie gekommen ist. Der eigene Stand aus der Datenbank ist nur der
-        // Rueckfall, falls die Nachfrage scheitert.
+        // Wiederaufnahme: gibt es eine Sitzung, entscheidet allein YouTube, wie
+        // weit sie gekommen ist. Der eigene Stand aus der Datenbank ist nur
+        // Anzeige; scheitert die Nachfrage, bricht der Teil ab und der
+        // naechste Lauf fragt erneut. Blind auf dem gespeicherten Stand
+        // weiterzuschreiben waere geraten, und bei abweichendem Stand liegt
+        // drueben eine kaputte Datei.
         let (sitzung, mut offset) = match teil.upload_session_uri.as_deref() {
             Some(uri) => match uploader.resumable_offset(uri, groesse).await? {
                 ResumeStand::Fertig(video_id) => {
@@ -432,7 +628,7 @@ impl VodArchiveWorker {
         teil: &store::Teil,
         anzahl: usize,
         aufgenommen_am: Option<chrono::NaiveDate>,
-        uploader: &YouTubeUploader,
+        uploader: &dyn TeilHochlader,
         einstellung: &VodArchiveSettings,
         groesse: u64,
     ) -> Result<String, VodArchiveError> {
@@ -449,34 +645,6 @@ impl VodArchiveWorker {
         let uri = uploader.start_resumable_upload(&metadaten, groesse).await?;
         store::setze_teil_sitzung(&self.pool, teil.id, &uri, 0).await?;
         Ok(uri)
-    }
-
-    /// Baut den YouTube-Uploader aus den Credentials **dieses** Streamers.
-    /// `None` heisst: keine Verbindung, es wird nur lokal archiviert.
-    ///
-    /// Der globale Rueckfall von [`CredentialManager::get_credentials`] wird
-    /// hier bewusst verworfen: er wuerde das VOD eines Partners auf den
-    /// YouTube-Kanal des Betreibers schieben.
-    async fn baue_uploader(&self, streamer_login: &str) -> Option<YouTubeUploader> {
-        let creds = self
-            .credentials
-            .get_credentials("youtube", Some(streamer_login))
-            .await?;
-        let gehoert_dem_streamer = creds
-            .streamer_login
-            .as_deref()
-            .is_some_and(|login| login.eq_ignore_ascii_case(streamer_login));
-        if !gehoert_dem_streamer {
-            tracing::info!(
-                kanal = %streamer_login,
-                "Nur ein globaler YouTube-Zugang vorhanden, der gilt hier nicht"
-            );
-            return None;
-        }
-        if creds.access_token.is_empty() {
-            return None;
-        }
-        Some(youtube_uploader(&creds))
     }
 
     /// Loescht lokale Dateien nach der eingestellten Frist. 0 heisst nie.
@@ -654,5 +822,378 @@ mod tests {
     fn leere_warteschlange_bleibt_leer() {
         let leer: Vec<(&str, Vec<store::Vod>)> = Vec::new();
         assert!(verschraenke(leer, 7).is_empty());
+    }
+
+    #[test]
+    fn der_download_pfad_haengt_nicht_am_upload_budget() {
+        let cfg = VodArchiveConfig::default();
+        let voll = LaufBilanz {
+            geladen: 0,
+            hochgeladen: cfg.max_uploads_per_run,
+            uebersprungen: 0,
+        };
+        // Ohne Upload-Budget wird trotzdem geladen: das lokale Archiv ist der
+        // Verlustschutz. Ein reines Upload-VOD hat dagegen nichts zu tun.
+        assert_eq!(naechste_aktion(&cfg, &voll, true), Aktion::Bearbeite);
+        assert_eq!(naechste_aktion(&cfg, &voll, false), Aktion::Ueberspringe);
+
+        let downloads_voll = LaufBilanz {
+            geladen: cfg.max_downloads_per_run,
+            hochgeladen: 0,
+            uebersprungen: 0,
+        };
+        assert_eq!(
+            naechste_aktion(&cfg, &downloads_voll, true),
+            Aktion::Ueberspringe
+        );
+        assert_eq!(
+            naechste_aktion(&cfg, &downloads_voll, false),
+            Aktion::Bearbeite
+        );
+
+        let beides_voll = LaufBilanz {
+            geladen: cfg.max_downloads_per_run,
+            hochgeladen: cfg.max_uploads_per_run,
+            uebersprungen: 0,
+        };
+        assert_eq!(naechste_aktion(&cfg, &beides_voll, true), Aktion::Beende);
+    }
+
+    // ----------------------------------------------------------------------
+    // Ablauf-Tests gegen ein Wegwerf-Schema. Ohne TB_TEST_DATABASE_URL
+    // ueberspringen sie still, wie im uebrigen Workspace.
+    // ----------------------------------------------------------------------
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use crate::twitch::CommandOutput;
+
+    async fn pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .ok()?;
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_vod_archive_vods (id BIGSERIAL PRIMARY KEY, twitch_id TEXT NOT NULL UNIQUE, \
+             streamer_login TEXT NOT NULL, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
+             recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
+             discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
+             uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE twitch_vod_archive_parts (id BIGSERIAL PRIMARY KEY, vod_id BIGINT NOT NULL \
+             REFERENCES twitch_vod_archive_vods (id) ON DELETE CASCADE, streamer_login TEXT, \
+             part_index INTEGER NOT NULL, \
+             file_path TEXT NOT NULL, size_bytes BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', \
+             upload_session_uri TEXT, upload_offset BIGINT NOT NULL DEFAULT 0, youtube_video_id TEXT, \
+             last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+             UNIQUE (vod_id, part_index))",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    /// Zaehlt, wie oft wirklich ein Teil zu YouTube geschoben wurde. Genau
+    /// diese Zahl kostet Tageskontingent.
+    #[derive(Default)]
+    struct ZaehlenderHochlader {
+        uploads: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl TeilHochlader for ZaehlenderHochlader {
+        async fn resumable_offset(
+            &self,
+            _sitzung: &str,
+            _groesse: u64,
+        ) -> Result<ResumeStand, UploadError> {
+            Ok(ResumeStand::Offset(0))
+        }
+
+        async fn start_resumable_upload(
+            &self,
+            _metadaten: &Value,
+            _groesse: u64,
+        ) -> Result<String, UploadError> {
+            Ok("https://sitzung.test/1".to_string())
+        }
+
+        async fn upload_chunk(
+            &self,
+            _sitzung: &str,
+            _pfad: &Path,
+            _offset: u64,
+        ) -> Result<ChunkOutcome, UploadError> {
+            let nummer = self.uploads.fetch_add(1, Ordering::SeqCst);
+            Ok(ChunkOutcome::Fertig(format!("yt-{nummer}")))
+        }
+    }
+
+    struct FesteQuelle(Arc<ZaehlenderHochlader>);
+
+    #[async_trait]
+    impl HochladerQuelle for FesteQuelle {
+        async fn fuer(&self, _streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// Ersatz fuer yt-dlp und ffprobe: keine neuen VODs in der Liste, ein
+    /// Download legt eine echte Datei an, die Laenge bleibt unter der
+    /// Schnittgrenze.
+    struct WerkzeugAttrappe {
+        aufrufe: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl WerkzeugAttrappe {
+        fn neu() -> Self {
+            Self {
+                aufrufe: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn antwort(stdout: &str) -> CommandOutput {
+            CommandOutput {
+                success: true,
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CommandRunner for WerkzeugAttrappe {
+        async fn run(
+            &self,
+            _program: &Path,
+            args: &[String],
+            _timeout: Duration,
+        ) -> Result<CommandOutput, VodArchiveError> {
+            self.aufrufe.lock().unwrap().push(args.to_vec());
+            if args.iter().any(|a| a == "-J") {
+                return Ok(Self::antwort("{}"));
+            }
+            if let Some(stelle) = args.iter().position(|a| a == "-o") {
+                let ziel = args[stelle + 1].replace("%(ext)s", "mp4");
+                if let Some(eltern) = Path::new(&ziel).parent() {
+                    std::fs::create_dir_all(eltern).unwrap();
+                }
+                std::fs::write(&ziel, b"videodaten").unwrap();
+                return Ok(Self::antwort(""));
+            }
+            if args.iter().any(|a| a == "format=duration") {
+                return Ok(Self::antwort("60"));
+            }
+            Ok(Self::antwort(""))
+        }
+    }
+
+    fn einstellung(login: &str) -> VodArchiveSettings {
+        VodArchiveSettings {
+            streamer_login: login.to_string(),
+            enabled: true,
+            privacy: "unlisted".to_string(),
+        }
+    }
+
+    fn temp_verzeichnis(name: &str) -> PathBuf {
+        let mut pfad = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        pfad.push(format!("tb_vod_{name}_{nanos}"));
+        std::fs::create_dir_all(&pfad).unwrap();
+        pfad
+    }
+
+    fn config(verzeichnis: &Path) -> VodArchiveConfig {
+        VodArchiveConfig {
+            download_dir: verzeichnis.to_path_buf(),
+            // Der Plattenplatz ist hier nicht das Thema.
+            min_free_gb: 0,
+            ..VodArchiveConfig::default()
+        }
+    }
+
+    fn worker(
+        pool: &PgPool,
+        cfg: VodArchiveConfig,
+        hochlader: &Arc<ZaehlenderHochlader>,
+    ) -> VodArchiveWorker {
+        VodArchiveWorker::mit_zugang(
+            pool.clone(),
+            cfg,
+            Arc::new(FesteQuelle(hochlader.clone())),
+        )
+        .with_runner(Arc::new(WerkzeugAttrappe::neu()))
+    }
+
+    /// Fund 1: der Upload-Deckel griff nur auf dem reinen Upload-Pfad. Sechs
+    /// frische VODs wurden geladen **und** hochgeladen, also sechs Uploads
+    /// statt zwei, und damit zweimal taeglich 9600 statt 3200 Einheiten.
+    #[tokio::test]
+    async fn der_upload_deckel_gilt_auch_auf_dem_download_pfad() {
+        let Some(pool) = pool("t_vod_deckel_download").await else {
+            return;
+        };
+        for nummer in 0..6 {
+            store::merke_vod(&pool, &format!("v{nummer}"), "earlysalty", "Stream", 60)
+                .await
+                .unwrap();
+        }
+        let verzeichnis = temp_verzeichnis("deckel_download");
+        let cfg = config(&verzeichnis);
+        assert_eq!((cfg.max_downloads_per_run, cfg.max_uploads_per_run), (6, 2));
+
+        let hochlader = Arc::new(ZaehlenderHochlader::default());
+        let bilanz = worker(&pool, cfg, &hochlader)
+            .lauf(&[einstellung("earlysalty")])
+            .await
+            .unwrap();
+
+        assert_eq!(bilanz.geladen, 6, "alle sechs duerfen lokal gesichert werden");
+        assert_eq!(
+            hochlader.uploads.load(Ordering::SeqCst),
+            2,
+            "der Upload-Deckel muss auch dann greifen, wenn im selben Lauf geladen wurde"
+        );
+        assert_eq!(bilanz.hochgeladen, 2);
+        // Vier VODs liegen lokal und warten auf den naechsten Lauf.
+        let offen = store::offene_vods(&pool, "earlysalty", 50).await.unwrap();
+        assert_eq!(offen.len(), 4);
+        assert!(offen.iter().all(|vod| !vod.braucht_download()));
+
+        let _ = std::fs::remove_dir_all(verzeichnis);
+    }
+
+    /// Fund 2: der Deckel zaehlte ein VOD, nicht einen Upload. Ein
+    /// geschnittenes VOD verbrauchte so viel Kontingent wie es Teile hat und
+    /// buchte trotzdem nur eine Einheit.
+    #[tokio::test]
+    async fn jeder_teil_zaehlt_einzeln_gegen_den_upload_deckel() {
+        let Some(pool) = pool("t_vod_deckel_teile").await else {
+            return;
+        };
+        let verzeichnis = temp_verzeichnis("deckel_teile");
+        let mut dateien = Vec::new();
+        for teil in 0..3 {
+            let pfad = verzeichnis.join(format!("v1.part00{teil}.mp4"));
+            std::fs::write(&pfad, b"videodaten").unwrap();
+            dateien.push(pfad.display().to_string());
+        }
+
+        store::merke_vod(&pool, "v1", "earlysalty", "Langer Stream", 60_000)
+            .await
+            .unwrap();
+        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        store::setze_geladen(
+            &pool,
+            vod.id,
+            &verzeichnis.join("v1.mp4").display().to_string(),
+            None,
+            60_000,
+        )
+        .await
+        .unwrap();
+        store::setze_teile(&pool, vod.id, "earlysalty", &dateien)
+            .await
+            .unwrap();
+
+        let hochlader = Arc::new(ZaehlenderHochlader::default());
+        let bilanz = worker(&pool, config(&verzeichnis), &hochlader)
+            .lauf(&[einstellung("earlysalty")])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            hochlader.uploads.load(Ordering::SeqCst),
+            2,
+            "drei Teile duerfen bei einem Deckel von zwei nicht alle laufen"
+        );
+        assert_eq!(bilanz.hochgeladen, 2);
+        let teile = store::teile(&pool, vod.id).await.unwrap();
+        assert_eq!(
+            teile
+                .iter()
+                .filter(|teil| teil.status == store::TEIL_FERTIG)
+                .count(),
+            2
+        );
+        // Ein Teil fehlt noch, also ist das VOD nicht fertig und bleibt in der
+        // Warteschlange.
+        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        assert_eq!(offen.len(), 1);
+
+        let _ = std::fs::remove_dir_all(verzeichnis);
+    }
+
+    /// Fund 3: `setze_hochgeladen` lief bedingungslos. Ein VOD, dessen
+    /// Teileliste nie geschrieben wurde, galt danach als hochgeladen, obwohl
+    /// bei YouTube nichts ankam. Das Aufraeumen haette die einzige Kopie
+    /// geloescht.
+    #[tokio::test]
+    async fn ein_vod_ohne_teile_gilt_nicht_als_hochgeladen() {
+        let Some(pool) = pool("t_vod_ohne_teile").await else {
+            return;
+        };
+        let verzeichnis = temp_verzeichnis("ohne_teile");
+        store::merke_vod(&pool, "v1", "earlysalty", "Abgebrochen", 60)
+            .await
+            .unwrap();
+        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        // Zustand nach einem Lauf, der zwischen setze_geladen und setze_teile
+        // gestorben ist: Status downloaded, aber keine Teile.
+        store::setze_geladen(
+            &pool,
+            vod.id,
+            &verzeichnis.join("v1.mp4").display().to_string(),
+            None,
+            60,
+        )
+        .await
+        .unwrap();
+        assert!(store::teile(&pool, vod.id).await.unwrap().is_empty());
+
+        let hochlader = Arc::new(ZaehlenderHochlader::default());
+        let bilanz = worker(&pool, config(&verzeichnis), &hochlader)
+            .lauf(&[einstellung("earlysalty")])
+            .await
+            .unwrap();
+
+        assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 0);
+        assert_eq!(bilanz.hochgeladen, 0);
+        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        assert_eq!(
+            offen.len(),
+            1,
+            "ohne einen einzigen Teil darf das VOD nicht als hochgeladen gelten"
+        );
+        // Und es geht zurueck in die Download-Warteschlange, sonst haengt es
+        // fuer immer im Upload-Pfad ohne etwas zum Hochladen.
+        assert!(offen[0].braucht_download());
+
+        let _ = std::fs::remove_dir_all(verzeichnis);
     }
 }

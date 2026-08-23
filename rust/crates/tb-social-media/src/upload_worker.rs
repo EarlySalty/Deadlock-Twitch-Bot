@@ -460,13 +460,24 @@ impl UploadTask {
     ) {
         let text = error.to_string();
         let verzoegerung = verzoegerung_fuer(error);
-        let erschoepft = !matches!(error, UploadError::QuotaExceeded(_))
-            && item.attempts + 1 >= Self::MAX_VERSUCHE;
+        // Ein volles Tageskontingent sagt nichts ueber den Clip. Es darf
+        // deshalb weder das Versuchskonto pruefen noch es verbrauchen: sonst
+        // haben vier Kontingent-Vertagungen den Clip so weit aufgezehrt, dass
+        // die erste voruebergehende Stoerung ihn endgueltig verbrennt.
+        let zaehlt_als_versuch = !matches!(error, UploadError::QuotaExceeded(_));
+        let erschoepft = zaehlt_als_versuch && item.attempts + 1 >= Self::MAX_VERSUCHE;
         match verzoegerung {
             Some(dauer) if !erschoepft => {
                 let naechster = (Utc::now() + dauer).to_rfc3339();
                 if let Err(db_error) =
-                    reschedule_upload(&self.pool, item.id, &naechster, Some(&text)).await
+                    reschedule_upload(
+                        &self.pool,
+                        item.id,
+                        &naechster,
+                        Some(&text),
+                        zaehlt_als_versuch,
+                    )
+                    .await
                 {
                     tracing::warn!(
                         error = %db_error,
@@ -1082,6 +1093,69 @@ mod tests {
             .starts_with("completed_write_failed:"));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Ein erschoepftes Tageskontingent vertagt, verbraucht aber keinen
+    /// Anlauf. Vorher zaehlte jede Kontingent-Vertagung mit, und nach vier
+    /// davon hat die erste voruebergehende Stoerung den Clip endgueltig auf
+    /// `failed` gesetzt, obwohl er nie wirklich abgelehnt wurde.
+    #[tokio::test]
+    async fn kontingent_vertagt_ohne_versuch_zu_verbrauchen() {
+        let Some(pool) = make_pool("t_sm_upload_kontingent").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('q1', 'https://clips.test/q1', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let queue_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'youtube', 'processing') RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let task = task(pool.clone());
+        let mut item = upload_item(queue_id, clip, None);
+        for _ in 0..4 {
+            task.handle_upload_error(
+                &item,
+                &UploadError::QuotaExceeded("quotaExceeded".into()),
+                "test_quota",
+            )
+            .await;
+        }
+        let (status, attempts): (String, i32) = sqlx::query_as(
+            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
+        assert_eq!(
+            attempts, 0,
+            "ein volles Tageskontingent darf das Versuchskonto nicht aufzehren"
+        );
+
+        // Und danach steht der volle Vorrat fuer echte Stoerungen bereit.
+        item.attempts = attempts;
+        task.handle_upload_error(&item, &UploadError::Request("timeout".into()), "test_request")
+            .await;
+        let (status, attempts): (String, i32) = sqlx::query_as(
+            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
+        assert_eq!(attempts, 1);
     }
 
     #[tokio::test]

@@ -236,25 +236,34 @@ pub async fn get_upload_queue(
 /// Legt einen Job zurueck in die Warteschlange, statt ihn endgueltig zu
 /// verbrennen. Ein erschoepftes Tageskontingent und ein Netzwerkzucken sind
 /// keine kaputten Clips: frueher landeten beide auf `failed`, und `failed` wird
-/// nie wieder abgeholt. `attempts` zaehlt weiter, damit der Aufrufer eine
-/// Obergrenze ziehen kann, und `last_error` bleibt sichtbar.
+/// nie wieder abgeholt. `last_error` bleibt sichtbar.
+///
+/// `zaehlt_als_versuch` entscheidet, ob `attempts` hochzaehlt. Bei einem vollen
+/// Tageskontingent ist weder der Clip noch der Zugang kaputt, es geht
+/// ausschliesslich um den Termin; zaehlte das mit, waere die Versuchsgrenze nach
+/// vier Kontingent-Vertagungen aufgebraucht und der erste harmlose Netzfehler
+/// danach wuerde den Clip verwerfen.
 pub async fn reschedule_upload(
     pool: &PgPool,
     queue_id: i64,
     naechster_versuch: &str,
     error: Option<&str>,
+    zaehlt_als_versuch: bool,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query!(
         "UPDATE twitch_clips_upload_queue \
-            SET status = 'pending', attempts = attempts + 1, last_error = $1, \
+            SET status = 'pending', \
+                attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END, \
+                last_error = $1, \
                 last_attempt_at = $2::text::timestamptz, \
                 scheduled_at = $3::text::timestamptz \
           WHERE id = $4",
         error,
         &now,
         naechster_versuch,
-        queue_id
+        queue_id,
+        zaehlt_als_versuch
     )
     .execute(pool)
     .await?;

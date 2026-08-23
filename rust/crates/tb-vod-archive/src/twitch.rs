@@ -107,8 +107,28 @@ pub fn vod_url(twitch_id: &str) -> String {
     )
 }
 
+/// Sagt die Fehlerausgabe von yt-dlp eindeutig, dass der Kanal gerade nicht
+/// sendet? Ein Exit-Code ungleich null allein sagt das nicht: ein Netzfehler,
+/// ein 403 oder eine Sperre enden genauso. Nur diese Meldungen sind eine
+/// Aussage ueber den Sendebetrieb.
+///
+/// Nachgemessen mit yt-dlp 2026.07.04:
+/// offline liefert "ERROR: [twitch:stream] kanal: The channel is not currently
+/// live", ein unerreichbarer Twitch-Endpunkt dagegen "Unable to download JSON
+/// metadata: ...". Aeltere yt-dlp-Fassungen schreiben "<kanal> is offline".
+pub fn meldet_offline(stderr: &str) -> bool {
+    let text = stderr.to_lowercase();
+    text.contains("not currently live")
+        || text.contains("is offline")
+        || text.contains("does not exist")
+}
+
 /// Laeuft gerade ein Stream? Dann ist das neueste VOD noch nicht vollstaendig
 /// und wird ausgelassen, sonst landet ein halber Stream im Archiv.
+///
+/// Im Zweifel gilt der Kanal als live: ein spaeter geladenes VOD ist besser
+/// als ein abgeschnittenes. "Im Zweifel" heisst hier alles ausser einer
+/// eindeutigen Offline-Meldung, also auch ein gescheitertes yt-dlp.
 pub async fn ist_live(runner: &dyn CommandRunner, cfg: &VodArchiveConfig, kanal: &str) -> bool {
     let args = vec![
         "--no-warnings".to_string(),
@@ -116,13 +136,26 @@ pub async fn ist_live(runner: &dyn CommandRunner, cfg: &VodArchiveConfig, kanal:
         "--quiet".to_string(),
         format!("https://www.twitch.tv/{kanal}"),
     ];
-    runner
-        .run(&cfg.yt_dlp, &args, Duration::from_secs(120))
-        .await
-        .map(|output| output.success)
-        // Im Zweifel als live behandeln: ein spaeter geladenes VOD ist besser
-        // als ein abgeschnittenes.
-        .unwrap_or(true)
+    match runner.run(&cfg.yt_dlp, &args, Duration::from_secs(120)).await {
+        Ok(output) if output.success => true,
+        Ok(output) if meldet_offline(&output.stderr) => false,
+        Ok(output) => {
+            tracing::warn!(
+                kanal = %kanal,
+                meldung = %kurzfassung(&output.stderr),
+                "Live-Pruefung nicht eindeutig, der Kanal gilt als live"
+            );
+            true
+        }
+        Err(fehler) => {
+            tracing::warn!(
+                kanal = %kanal,
+                %fehler,
+                "Live-Pruefung nicht ausfuehrbar, der Kanal gilt als live"
+            );
+            true
+        }
+    }
 }
 
 /// Zerlegt die yt-dlp-Playlist. Eintraege ohne ID sind unbrauchbar und fallen
@@ -554,6 +587,49 @@ mod tests {
             }
         }
         assert!(tokio_test_block(ist_live(&Kaputt, &cfg, "earlysalty")));
+    }
+
+    #[test]
+    fn nur_eine_eindeutige_offline_meldung_zaehlt_als_nicht_live() {
+        let cfg = VodArchiveConfig::default();
+        // Echte yt-dlp-Ausgaben, siehe Kommentar an `meldet_offline`.
+        let offline = TestRunner::neu(
+            false,
+            "",
+            "ERROR: [twitch:stream] earlysalty: The channel is not currently live",
+        );
+        assert!(!tokio_test_block(ist_live(&offline, &cfg, "earlysalty")));
+
+        // Ein Netzfehler sagt nichts ueber den Sendebetrieb. Frueher galt der
+        // Kanal hier als offline, das laufende VOD wurde angeschnitten
+        // archiviert und hochgeladen.
+        let netzfehler = TestRunner::neu(
+            false,
+            "",
+            "ERROR: [twitch:stream] earlysalty: Unable to download JSON metadata: \
+             [Errno 111] Connection refused",
+        );
+        assert!(tokio_test_block(ist_live(&netzfehler, &cfg, "earlysalty")));
+
+        // Erfolg heisst: es laeuft etwas.
+        let laeuft = TestRunner::neu(true, "", "");
+        assert!(tokio_test_block(ist_live(&laeuft, &cfg, "earlysalty")));
+    }
+
+    #[test]
+    fn offline_meldungen_werden_erkannt() {
+        assert!(meldet_offline(
+            "ERROR: [twitch:stream] nani: The channel is not currently live"
+        ));
+        // Aeltere yt-dlp-Fassung.
+        assert!(meldet_offline("ERROR: [twitch:stream] nani: nani is offline"));
+        assert!(meldet_offline(
+            "ERROR: [twitch:stream] nani: nani does not exist"
+        ));
+        assert!(!meldet_offline(
+            "ERROR: HTTP Error 403: Forbidden (caused by TransportError)"
+        ));
+        assert!(!meldet_offline(""));
     }
 
     /// Kleiner Runtime-Helfer, damit die Tests ohne tokio-Attribut auskommen.

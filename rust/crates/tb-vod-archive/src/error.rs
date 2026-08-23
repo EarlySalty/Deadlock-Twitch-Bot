@@ -10,8 +10,6 @@ pub enum VodArchiveError {
     Werkzeug { schritt: String, meldung: String },
     #[error("Datei fehlt: {0}")]
     DateiFehlt(String),
-    #[error("kein YouTube-Zugang hinterlegt")]
-    KeinYouTubeZugang,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
@@ -41,6 +39,6 @@ mod tests {
         assert!(kontingent.ist_kontingent());
         let anderer = VodArchiveError::Upload(UploadError::Api("kaputt".into()));
         assert!(!anderer.ist_kontingent());
-        assert!(!VodArchiveError::KeinYouTubeZugang.ist_kontingent());
+        assert!(!VodArchiveError::DateiFehlt("/archiv/v1.mp4".into()).ist_kontingent());
     }
 }
