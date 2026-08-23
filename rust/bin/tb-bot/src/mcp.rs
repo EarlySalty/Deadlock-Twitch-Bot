@@ -198,6 +198,45 @@ fn auth_ok(st: &McpState, headers: &HeaderMap, query: &HashMap<String, String>) 
         .unwrap_or(false)
 }
 
+/// Schuetzt gegen DNS-Rebinding und CSRF aus dem Browser.
+///
+/// Ein lokaler MCP-Client (Claude Code, curl) schickt keinen `Origin`. Eine
+/// Webseite dagegen setzt ihn bei jedem Cross-Origin-Request, auch bei einem
+/// CORS-Simple-Request, dessen Antwort sie nie zu sehen bekommt. Genau der
+/// wuerde hier sonst reichen, um `disconnect_bot` mit `confirm=true`
+/// auszuloesen. `Host` faengt zusaetzlich Rebinding ab: der Dienst bindet auf
+/// Loopback, ein Name, der dorthin aufloest, ist trotzdem fremd.
+///
+/// Deshalb: kein `Origin` ist in Ordnung, ein gesetzter muss auf Loopback
+/// zeigen. Die MCP-Streamable-HTTP-Spec verlangt genau diese Pruefung.
+fn origin_ok(headers: &HeaderMap) -> bool {
+    fn ist_loopback_host(wert: &str) -> bool {
+        let ohne_schema = wert
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(wert);
+        let host = ohne_schema
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(ohne_schema.split('/').next().unwrap_or(""));
+        let host = host.trim_matches(|c| c == '[' || c == ']');
+        matches!(host, "localhost" | "127.0.0.1" | "::1")
+    }
+
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if !ist_loopback_host(origin) {
+            return false;
+        }
+    }
+    match headers.get(header::HOST).and_then(|v| v.to_str().ok()) {
+        Some(host) => ist_loopback_host(host),
+        None => true,
+    }
+}
+
 async fn mcp_get() -> Response {
     // Kein server-initiierter SSE-Stream nötig — Streamable HTTP erlaubt 405.
     json_response(
@@ -212,6 +251,12 @@ async fn mcp_post(
     headers: HeaderMap,
     body: String,
 ) -> Response {
+    if !origin_ok(&headers) {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({"error": "nur ueber Loopback erreichbar"}),
+        );
+    }
     if !auth_ok(&st, &headers, &query) {
         return json_response(StatusCode::UNAUTHORIZED, json!({"error": "unauthorized"}));
     }
@@ -859,6 +904,51 @@ mod tests {
 
     fn args(value: Value) -> Value {
         value
+    }
+
+    fn headers_mit(paare: &[(header::HeaderName, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, wert) in paare {
+            headers.insert(name.clone(), wert.parse().expect("Header-Wert"));
+        }
+        headers
+    }
+
+    #[test]
+    fn ohne_origin_geht_der_lokale_client_durch() {
+        assert!(origin_ok(&headers_mit(&[(header::HOST, "127.0.0.1:8891")])));
+        assert!(origin_ok(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn fremder_origin_wird_abgewiesen() {
+        // Eine Webseite kann per CORS-Simple-Request POSTen, ohne die Antwort
+        // zu sehen. Der Schreibvorgang liefe trotzdem, deshalb hier der Riegel.
+        assert!(!origin_ok(&headers_mit(&[
+            (header::ORIGIN, "https://boese.example"),
+            (header::HOST, "127.0.0.1:8891"),
+        ])));
+    }
+
+    #[test]
+    fn loopback_origin_bleibt_erlaubt() {
+        for origin in ["http://localhost:5173", "http://127.0.0.1:8891", "http://[::1]:8891"] {
+            assert!(
+                origin_ok(&headers_mit(&[
+                    (header::ORIGIN, origin),
+                    (header::HOST, "127.0.0.1:8891"),
+                ])),
+                "{origin} sollte durchgehen"
+            );
+        }
+    }
+
+    #[test]
+    fn fremder_host_faengt_dns_rebinding() {
+        assert!(!origin_ok(&headers_mit(&[(
+            header::HOST,
+            "angreifer.example:8891"
+        )])));
     }
 
     /// Zustand ohne Ports und ohne erreichbare DB. Reicht für alles, was die
