@@ -19,6 +19,7 @@ import {
   Gamepad2,
   ExternalLink,
   Pencil,
+  PlayCircle,
   Wand2,
   SlidersHorizontal,
   Languages,
@@ -126,6 +127,15 @@ function formatTerminInZone(iso: string, locale: string, timezone: string): stri
   } catch {
     return date.toLocaleString(locale, optionen);
   }
+}
+
+// Clip-Laenge als m:ss auf der Kachel. Reine Sekunden ("30s") lasen sich in der
+// Metazeile schlecht, sobald ein Clip ueber eine Minute geht.
+function formatClipDauer(sekunden: number | null | undefined): string {
+  const gesamt = Math.max(0, Math.round(sekunden ?? 0));
+  const minuten = Math.floor(gesamt / 60);
+  const rest = gesamt % 60;
+  return `${minuten}:${String(rest).padStart(2, '0')}`;
 }
 
 function formatRetention(retentionUntil: string | null, t: Translate): string {
@@ -1843,6 +1853,13 @@ function ClipCard({
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
     clip.approval?.approved_platforms ?? [],
   );
+  // Twitch raeumt Clip-Thumbnails irgendwann weg; eine 404-URL darf die Kachel
+  // nicht mit Alt-Text fluten, sondern faellt auf das Ersatzbild zurueck.
+  const [vorschauFehlt, setVorschauFehlt] = useState(false);
+  useEffect(() => {
+    setVorschauFehlt(false);
+  }, [clip.thumbnail_url]);
+  const vorschauSichtbar = Boolean(clip.thumbnail_url) && !vorschauFehlt;
 
   useEffect(() => {
     setSelectedPlatforms(clip.approval?.approved_platforms ?? []);
@@ -1861,30 +1878,61 @@ function ClipCard({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="panel-card card-glow rounded-2xl overflow-hidden flex flex-col"
+      className="panel-card card-glow group rounded-2xl overflow-hidden flex flex-col"
     >
-      <div className="relative aspect-video bg-bg overflow-hidden">
-        {clip.thumbnail_url ? (
+      <div className="relative aspect-video overflow-hidden bg-[radial-gradient(120%_120%_at_50%_0%,rgba(255,255,255,0.06),transparent_60%)] bg-black/50">
+        {vorschauSichtbar ? (
           <img
-            src={clip.thumbnail_url}
-            alt={clip.title}
-            className="w-full h-full object-cover"
+            src={clip.thumbnail_url ?? ''}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            onError={() => setVorschauFehlt(true)}
+            className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-text-secondary">
-            <Film className="w-10 h-10" />
+          // Kein Alt-Text als Ersatzbild: eine tote URL malte sonst den vollen
+          // Clip-Titel ueber die schwarze Kachel.
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-text-secondary">
+            <Film className="w-8 h-8 opacity-40" />
+            <span className="text-[10px] uppercase tracking-[0.16em] opacity-60">
+              {t('Keine Vorschau')}
+            </span>
           </div>
         )}
-        <div className="absolute top-2 left-2 flex items-center gap-2">
-          <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${TONE_BADGE[status.tone]}`}>
+
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/0 to-black/75" />
+
+        {clip.clip_url && (
+          <a
+            href={clip.clip_url}
+            target="_blank"
+            rel="noreferrer"
+            title={t('Original ansehen')}
+            className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            <span className="grid h-12 w-12 place-items-center rounded-full border border-white/25 bg-black/55 backdrop-blur-sm">
+              <PlayCircle className="w-7 h-7 text-white" />
+            </span>
+          </a>
+        )}
+
+        <div className="pointer-events-none absolute top-2 left-2 flex items-center gap-1.5">
+          <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border backdrop-blur-sm ${TONE_BADGE[status.tone]}`}>
             {t(status.label)}
           </span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border bg-bg/70 text-white border-border">
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border border-white/15 bg-black/50 text-white/90 backdrop-blur-sm">
             {sourceLabel}
           </span>
         </div>
-        <div className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 text-[10px] font-mono text-white/90 bg-black/55 px-1.5 py-0.5 rounded">
-          <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until, t)}
+
+        <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-end justify-between gap-2">
+          <span className="inline-flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white backdrop-blur-sm">
+            {formatClipDauer(clip.duration_seconds)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded bg-black/55 px-1.5 py-0.5 font-mono text-[10px] text-white/85 backdrop-blur-sm">
+            <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until, t)}
+          </span>
         </div>
       </div>
 
@@ -1892,7 +1940,7 @@ function ClipCard({
         <div className="space-y-1">
           <h4 className="font-bold text-white line-clamp-2">{clip.title}</h4>
           <p className="text-xs text-text-secondary">
-            {clip.streamer_login} · {(clip.duration_seconds ?? 0).toFixed(0)}s ·{' '}
+            {clip.streamer_login} ·{' '}
             {t('{views} Views', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
           </p>
           {clip.layout_override && (

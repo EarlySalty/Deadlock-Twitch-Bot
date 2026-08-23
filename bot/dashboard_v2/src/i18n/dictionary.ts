@@ -208,6 +208,8 @@ const EN: Record<string, string> = {
 
   // Clip-Karte
   Upload: 'Upload',
+  'Keine Vorschau': 'No preview',
+  'Original ansehen': 'Watch original',
   Twitch: 'Twitch',
   '{views} Views': '{views} views',
   'Override aktiv': 'Override active',
