@@ -484,6 +484,13 @@ pub async fn departner_streamer(
     //
     // `blocked` bleibt ausdrücklich stehen: das ist eine Admin-Sperre, die sich
     // ein Kanal sonst durch Trennen und Neuverbinden selbst abnehmen könnte.
+    //
+    // Zwilling in `tb-internal-api/src/streamer_lifecycle.rs`
+    // (`departner_active_partner`), beide Ports desselben
+    // Python-`departner_active_partner`. Diese Route hier bedient die
+    // Dashboard-Admin-Seite, der Zwilling die interne Bot-API und damit
+    // `POST .../disconnect-bot`, `DELETE /streamers/:login` und
+    // `verify mode=clear|failed`. Änderungen gehören in beide.
     let opt_out = i32::from(clear_verification);
     sqlx::query(
         r#"

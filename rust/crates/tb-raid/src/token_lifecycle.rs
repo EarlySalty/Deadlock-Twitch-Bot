@@ -756,6 +756,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                    -- lässt `status` auf 'active' stehen. Ohne diese Zeile
                    -- reaktiviert der Sweep archivierte Kanäle.
                    AND COALESCE(TRIM(p.admin_archived_at::TEXT), '') = ''
+                   -- `departnered_at` ist heute redundant zum Statusfilter oben
+                   -- (jeder Schreiber setzt beides). Bleibt als Gürtel neben dem
+                   -- Hosenträger: der Zustand ist billig zu prüfen und teuer,
+                   -- wenn er einmal auseinanderläuft.
                    AND COALESCE(TRIM(p.departnered_at::TEXT), '') = ''
                    AND LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) LIKE 'token_error%'
                    AND COALESCE(a.needs_reauth, TRUE) = FALSE
@@ -2307,7 +2311,7 @@ mod tests {
         let auth_enabled: Vec<(String, Option<bool>)> = sqlx::query_as(
             "SELECT twitch_user_id, raid_enabled
              FROM twitch_raid_auth
-             WHERE twitch_user_id IN ('800', '801', '802', '803', '804', '805', '900')
+             WHERE twitch_user_id IN ('800', '801', '802', '803', '804', '805', '807', '808', '900')
              ORDER BY twitch_user_id",
         )
         .fetch_all(&pool)
@@ -2322,6 +2326,10 @@ mod tests {
                 ("803".to_string(), Some(false)),
                 ("804".to_string(), Some(false)),
                 ("805".to_string(), Some(false)),
+                // Archiviert und getrennt: die updated_auth-CTE schreibt für
+                // jede eligible Zeile, hier darf sie also nicht greifen.
+                ("807".to_string(), Some(false)),
+                ("808".to_string(), Some(false)),
                 ("900".to_string(), Some(false)),
             ]
         );
