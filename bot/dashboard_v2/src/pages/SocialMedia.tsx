@@ -37,6 +37,9 @@ import {
   clipFehler,
   istGesperrt,
   istStandUnbekannt,
+  zeitplanFeldSchluessel,
+  zeitplanFormularAbgleichen,
+  type ZeitplanFormular,
 } from '@/components/socialmedia/kartenZustand';
 import {
   cancelScheduledPost,
@@ -654,6 +657,12 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                         approvalMutation.isPending &&
                         approvalMutation.variables?.clipDbId === clip.clip_db_id
                       }
+                      nichtEingeplant={
+                        approvalMutation.isSuccess &&
+                        approvalMutation.variables?.clipDbId === clip.clip_db_id
+                          ? (approvalMutation.data?.approval?.not_scheduled ?? [])
+                          : []
+                      }
                       onCancelScheduled={() => abbrechenMutation.mutate(clip.clip_db_id)}
                       cancelPending={
                         abbrechenMutation.isPending &&
@@ -978,13 +987,6 @@ function formatTermin(iso: string | null, locale: string): string | null {
  * Auto-Posting und Kadenz je Plattform. Die Defaults kommen aus der Recherche:
  * hoechstens ein Post pro Tag, rund vier pro Woche.
  */
-/** Was in den drei Feldern einer Plattform steht, waehrend getippt wird. */
-interface ZeitplanFormular {
-  postsProWoche: string;
-  maxProTag: string;
-  zeiten: string;
-}
-
 const ZEIT_MUSTER = /^\d{2}:\d{2}$/;
 
 /**
@@ -1079,25 +1081,41 @@ function PostingScheduleCard({
     ]),
   );
 
+  // Felder, die der Nutzer geaendert und noch nicht abgeschickt hat. Ohne
+  // diese Liste hat der Abgleich mit der Serverantwort das ganze Formular
+  // ueberschrieben: wer zwei Felder schnell hintereinander aendert, verlor die
+  // zweite Eingabe, sobald die Antwort auf die erste eintraf. Ein Ref statt
+  // eines States, weil daran nichts haengt, was neu gezeichnet werden muss.
+  const offeneFelderRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    const naechstes: Record<string, ZeitplanFormular> = {};
+    const vomServer: Record<string, ZeitplanFormular> = {};
     for (const eintrag of plan?.platforms ?? []) {
-      naechstes[eintrag.platform] = {
+      vomServer[eintrag.platform] = {
         postsProWoche: String(eintrag.posts_per_week),
         maxProTag: String(eintrag.max_posts_per_day),
         zeiten: eintrag.post_times.join(', '),
       };
     }
-    setFormular(naechstes);
+    setFormular((aktuell) =>
+      zeitplanFormularAbgleichen(aktuell, vomServer, offeneFelderRef.current),
+    );
     setFeldFehler({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverStand]);
 
   const setzeFeld = (platform: string, feld: keyof ZeitplanFormular, wert: string) => {
+    offeneFelderRef.current.add(zeitplanFeldSchluessel(platform, feld));
     setFormular((aktuell) => ({
       ...aktuell,
       [platform]: { ...aktuell[platform], [feld]: wert },
     }));
+  };
+
+  // Das Feld ist abgeschickt (oder war unveraendert): ab jetzt darf der
+  // Server es wieder ueberschreiben, etwa mit sortierten Zeiten.
+  const feldAbgeschlossen = (platform: string, feld: keyof ZeitplanFormular) => {
+    offeneFelderRef.current.delete(zeitplanFeldSchluessel(platform, feld));
   };
 
   const setzeFehler = (schluessel: string, text: string | null) => {
@@ -1216,6 +1234,7 @@ function PostingScheduleCard({
                           return;
                         }
                         setzeFehler(schluessel, null);
+                        feldAbgeschlossen(eintrag.platform, 'postsProWoche');
                         if (wert === eintrag.posts_per_week) return;
                         onChange(eintrag.platform, { posts_per_week: wert });
                       }}
@@ -1246,6 +1265,7 @@ function PostingScheduleCard({
                           return;
                         }
                         setzeFehler(schluessel, null);
+                        feldAbgeschlossen(eintrag.platform, 'maxProTag');
                         if (wert === eintrag.max_posts_per_day) return;
                         onChange(eintrag.platform, { max_posts_per_day: wert });
                       }}
@@ -1276,6 +1296,7 @@ function PostingScheduleCard({
                         return;
                       }
                       setzeFehler(schluessel, null);
+                      feldAbgeschlossen(eintrag.platform, 'zeiten');
                       if (ergebnis.zeiten.join(',') === eintrag.post_times.join(',')) return;
                       onChange(eintrag.platform, { post_times: ergebnis.zeiten });
                     }}
@@ -1755,6 +1776,12 @@ interface ClipCardProps {
   onCancelScheduled: () => void;
   cancelPending: boolean;
   cancelResult: { cancelled: number; already_running: number } | null;
+  /**
+   * Plattformen, die die letzte Freigabe an diesem Clip ausgelassen hat, weil
+   * dort die Kadenz auf null steht. Ohne diese Zeile quittiert die Oberflaeche
+   * eine Freigabe, die auf der gewaehlten Plattform nie stattfindet.
+   */
+  nichtEingeplant: SocialPlatform[];
   /** Fehler der letzten Aktion an genau diesem Clip. */
   fehler: unknown;
 }
@@ -1773,6 +1800,7 @@ function ClipCard({
   onCancelScheduled,
   cancelPending,
   cancelResult,
+  nichtEingeplant,
   fehler,
 }: ClipCardProps) {
   const { t, locale } = useLanguage();
@@ -2040,6 +2068,17 @@ function ClipCard({
                   count: cancelResult.already_running,
                 })
               : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
+          </div>
+        )}
+
+        {/* Eine Freigabe auf eine Plattform mit Kadenz null wird sauber
+            quittiert, aber dort passiert nichts. Ohne diese Zeile merkt das
+            niemand. */}
+        {nichtEingeplant.length > 0 && (
+          <div className="text-xs text-orange border-t border-orange/20 pt-2">
+            {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
+              platforms: nichtEingeplant.map((plattform) => PLATFORM_LABELS[plattform] ?? plattform).join(', '),
+            })}
           </div>
         )}
 

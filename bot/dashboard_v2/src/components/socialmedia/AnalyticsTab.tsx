@@ -168,7 +168,6 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
   const reportItems = reportsQuery.data?.items ?? [];
   const latestAdminReport = reportItems.find((item) => item.kind === 'admin');
   const latestStreamerReport = reportItems.find((item) => item.kind === 'streamer');
-  const reportsVerboten = reportsQuery.error instanceof SocialMediaForbiddenError;
   const reportMutationFehler =
     fehlerText(streamerReportMutation.error, t) ?? fehlerText(crossReportMutation.error, t);
 
@@ -330,10 +329,6 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
         {reportsQuery.isLoading ? (
           <div className="py-10 flex items-center justify-center">
             <Loader2 className="w-5 h-5 text-orange animate-spin" />
-          </div>
-        ) : reportsVerboten ? (
-          <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
-            {t('Reports sind der Verwaltung vorbehalten.')}
           </div>
         ) : reportsQuery.error ? (
           <div className="rounded-2xl border border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">

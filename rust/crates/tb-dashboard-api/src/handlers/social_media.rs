@@ -135,20 +135,50 @@ pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
     }
 }
 
-/// Query-String, der unveraendert an die SPA weitergereicht werden darf.
+/// Parameter, die an die SPA weitergereicht werden. Mehr braucht der Umweg
+/// nicht: `oauth_callback_handler` setzt genau diese beiden.
+const WEITERGEREICHTE_PARAMETER: [&str; 2] = ["oauth_success", "oauth_error"];
+
+/// Laengstens so lang darf ein weitergereichter Wert sein. Plattformnamen und
+/// Fehlerkuerzel bleiben weit darunter.
+const MAX_PARAMETER_LAENGE: usize = 64;
+
+/// Query-String, der an die SPA weitergereicht werden darf.
 ///
-/// Nur druckbares ASCII ohne Fragment-Zeichen und in vernuenftiger Laenge: der
-/// Wert landet in einem `Location`-Header, und dort hat nichts zu suchen, was
-/// nicht schon als Query durch den HTTP-Parser gekommen ist.
+/// Erlaubnisliste statt Zeichenklassenfilter: der Wert landet in einem
+/// `Location`-Header, und dorthin gehoert nur, was wir selbst gesetzt haben.
+/// Frueher wanderte jeder beliebige, nutzerkontrollierte Query-String
+/// unveraendert mit; das war zwar nicht ausnutzbar, aber deutlich weiter
+/// gefasst als noetig.
+///
+/// Werte muessen die Form haben, die wir selbst erzeugen (Plattformname oder
+/// Fehlerkuerzel). Alles andere faellt weg, damit ohne Neukodierung nichts
+/// Fremdes in den Header kommt.
 fn weitergereichte_query(uri: &Uri) -> Option<String> {
     let query = uri.query()?;
-    if query.is_empty() || query.len() > 512 {
+    let erlaubt: Vec<String> = query
+        .split('&')
+        .filter_map(|paar| {
+            let (schluessel, wert) = paar.split_once('=')?;
+            if !WEITERGEREICHTE_PARAMETER.contains(&schluessel) {
+                return None;
+            }
+            if wert.is_empty() || wert.len() > MAX_PARAMETER_LAENGE {
+                return None;
+            }
+            if !wert
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return None;
+            }
+            Some(format!("{schluessel}={wert}"))
+        })
+        .collect();
+    if erlaubt.is_empty() {
         return None;
     }
-    if !query.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
-        return None;
-    }
-    Some(query.to_string())
+    Some(erlaubt.join("&"))
 }
 
 /// `?streamer=` (für scope-gefilterte Endpoints).
@@ -3797,13 +3827,28 @@ mod tests {
     }
 
     #[test]
-    fn weitergereichte_query_bleibt_beim_druckbaren_ascii() {
+    fn weitergereichte_query_nimmt_nur_die_erlaubnisliste() {
         let q = |p: &str| weitergereichte_query(&p.parse::<Uri>().unwrap());
-        assert_eq!(q("/x?a=1&b=2"), Some("a=1&b=2".to_string()));
+        assert_eq!(
+            q("/x?oauth_success=youtube"),
+            Some("oauth_success=youtube".to_string())
+        );
+        assert_eq!(
+            q("/x?oauth_error=token_exchange_failed"),
+            Some("oauth_error=token_exchange_failed".to_string())
+        );
+        // Fremde Parameter fallen weg, auch neben einem erlaubten.
+        assert_eq!(
+            q("/x?next=%2Fboese&oauth_success=tiktok&a=1"),
+            Some("oauth_success=tiktok".to_string())
+        );
+        assert_eq!(q("/x?a=1&b=2"), None);
         assert_eq!(q("/x"), None);
         assert_eq!(q("/x?"), None);
-        // Zu lang: nichts, was aus einem Redirect-Ziel stammt, ist so gross.
-        let lang = format!("/x?a={}", "b".repeat(600));
+        // Werte ausserhalb der erwarteten Form fallen weg.
+        assert_eq!(q("/x?oauth_success=you%20tube"), None);
+        assert_eq!(q("/x?oauth_success="), None);
+        let lang = format!("/x?oauth_success={}", "b".repeat(600));
         assert_eq!(q(&lang), None);
     }
 
@@ -3856,7 +3901,7 @@ mod tests {
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",

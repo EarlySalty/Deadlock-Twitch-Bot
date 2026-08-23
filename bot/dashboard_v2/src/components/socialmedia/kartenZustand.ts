@@ -65,3 +65,65 @@ export function clipFehler(clipDbId: number, staende: ClipMutationsStand[]): unk
   }
   return null;
 }
+
+/** Was in den drei Feldern einer Plattform steht, waehrend getippt wird. */
+export interface ZeitplanFormular {
+  postsProWoche: string;
+  maxProTag: string;
+  zeiten: string;
+}
+
+/** Die drei Felder einer Plattform, in fester Reihenfolge. */
+export const ZEITPLAN_FELDER: (keyof ZeitplanFormular)[] = [
+  'postsProWoche',
+  'maxProTag',
+  'zeiten',
+];
+
+/** Schluessel eines einzelnen Feldes, wie ihn die Zeitplan-Karte fuehrt. */
+export function zeitplanFeldSchluessel(
+  platform: string,
+  feld: keyof ZeitplanFormular,
+): string {
+  return `${platform}:${feld}`;
+}
+
+/**
+ * Gleicht das Zeitplan-Formular mit einer Serverantwort ab, ohne Eingaben zu
+ * verlieren, die noch niemand abgeschickt hat.
+ *
+ * Warum es das gibt: jedes Feld schickt beim Verlassen eine eigene Mutation
+ * los, und deren Antwort bringt einen neuen Serverstand mit. Wer zwei Felder
+ * schnell hintereinander aendert, hatte die zweite Eingabe verloren, sobald
+ * die Antwort auf die erste eintraf: der Abgleich hat das Formular komplett
+ * ueberschrieben, und der neue Serverstand kennt die zweite Eingabe noch
+ * nicht.
+ *
+ * `offeneFelder` sind die Felder, die der Nutzer geaendert und noch nicht
+ * abgeschickt hat. Sie behalten ihren lokalen Wert, alle anderen uebernehmen
+ * den Server. Damit gewinnt der Server weiterhin dort, wo er den Wert
+ * normalisiert (Zeiten sortieren und entdoppeln), denn beim Abschicken gilt
+ * ein Feld nicht mehr als offen.
+ */
+export function zeitplanFormularAbgleichen(
+  aktuell: Record<string, ZeitplanFormular>,
+  vomServer: Record<string, ZeitplanFormular>,
+  offeneFelder: ReadonlySet<string>,
+): Record<string, ZeitplanFormular> {
+  const naechstes: Record<string, ZeitplanFormular> = {};
+  for (const [platform, serverWerte] of Object.entries(vomServer)) {
+    const lokal = aktuell[platform];
+    if (!lokal) {
+      naechstes[platform] = serverWerte;
+      continue;
+    }
+    const zusammengefuehrt = { ...serverWerte };
+    for (const feld of ZEITPLAN_FELDER) {
+      if (offeneFelder.has(zeitplanFeldSchluessel(platform, feld))) {
+        zusammengefuehrt[feld] = lokal[feld];
+      }
+    }
+    naechstes[platform] = zusammengefuehrt;
+  }
+  return naechstes;
+}

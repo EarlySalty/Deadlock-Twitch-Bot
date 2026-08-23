@@ -32,6 +32,14 @@ pub enum ApprovalError {
     ClipIdOutOfRange(i64),
     #[error("at least one platform must be approved")]
     NoPlatform,
+    /// Alle gewaehlten Plattformen stehen auf null Posts und sind damit
+    /// ausgeschaltet. Die Freigabe wuerde nie stattfinden, deshalb wird sie
+    /// gar nicht erst quittiert.
+    #[error(
+        "Diese Plattformen stehen auf null Posts und sind damit ausgeschaltet: {0}. \
+         Stell im Zeitplan eine Kadenz ein oder gib eine andere Plattform frei."
+    )]
+    NurPausiertePlattformen(String),
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -47,6 +55,11 @@ pub struct ApprovalRecord {
     pub dm_message_id: Option<String>,
     pub dm_channel_id: Option<String>,
     pub last_sent_at: Option<String>,
+    /// Plattformen, die bei dieser Entscheidung ausgelassen wurden, weil ihre
+    /// Kadenz auf null steht. Steht nur in der Antwort auf eine Entscheidung,
+    /// nicht in der Datenbank: sonst quittiert die Oberflaeche eine Freigabe,
+    /// die auf dieser Plattform nie stattfindet.
+    pub nicht_eingeplant: Vec<String>,
 }
 
 /// Trimmt, kleinschreibt, dedupliziert, nur unterstützte Plattformen.
@@ -100,6 +113,7 @@ fn row_to_record(r: Row) -> ApprovalRecord {
         dm_message_id: r.5,
         dm_channel_id: r.6,
         last_sent_at: r.7,
+        nicht_eingeplant: Vec::new(),
     }
 }
 
@@ -164,6 +178,7 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
             dm_message_id: None,
             dm_channel_id: None,
             last_sent_at: None,
+            nicht_eingeplant: Vec::new(),
         })
 }
 
@@ -228,14 +243,24 @@ pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
 }
 
 /// Freigegebene Clips, die noch in die Queue müssen.
+///
+/// Der Zusatz `NOT EXISTS` ist der Unterschied zwischen dem Namen und dem, was
+/// die Abfrage frueher tat: sie lieferte einfach die juengsten Freigaben. Bei
+/// `LIMIT 10` belegten damit zehn laengst vollstaendig eingereihte Freigaben
+/// das Fenster dauerhaft, und ein Clip, der beim ersten Anlauf keinen Termin
+/// bekommen hat, wurde nie wieder angefasst.
 pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar!(
-        "SELECT clip_db_id FROM social_media_clip_approval WHERE state = $1 \
-         ORDER BY CASE WHEN decided_at IS NULL THEN 1 ELSE 0 END, decided_at DESC, clip_db_id DESC \
+    sqlx::query_scalar::<_, i32>(
+        "SELECT a.clip_db_id FROM social_media_clip_approval a WHERE a.state = $1 \
+           AND NOT EXISTS ( \
+                 SELECT 1 FROM twitch_clips_upload_queue q \
+                  WHERE q.clip_id = a.clip_db_id::bigint) \
+         ORDER BY CASE WHEN a.decided_at IS NULL THEN 1 ELSE 0 END, \
+                  a.decided_at DESC, a.clip_db_id DESC \
          LIMIT $2",
-        STATE_APPROVED,
-        limit.max(1)
     )
+    .bind(STATE_APPROVED)
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
     .unwrap_or_default()
@@ -272,6 +297,7 @@ pub fn serialize_approval_record(record: &ApprovalRecord) -> Value {
         "dm_message_id": record.dm_message_id,
         "dm_channel_id": record.dm_channel_id,
         "last_sent_at": record.last_sent_at,
+        "not_scheduled": record.nicht_eingeplant,
     })
 }
 
@@ -343,21 +369,32 @@ pub async fn handle_decision(
     let decision = normalize_decision(decision);
     let selected = normalize_platforms(approved_platforms.iter().cloned());
 
+    let mut nicht_eingeplant: Vec<String> = Vec::new();
     let (final_platforms, next_state) = match decision {
         DECISION_APPROVE => {
             // Wer ausdruecklich Plattformen waehlt, bekommt genau diese. Nur wenn
             // nichts gewaehlt wurde, greifen die Auto-Posting-Plattformen des
             // Kanals. Frueher wurden globale Flags immer dazugemischt, was die
             // Auswahl des Nutzers still ueberschrieb.
-            let final_platforms = if selected.is_empty() {
+            let gewaehlt = if selected.is_empty() {
                 normalize_platforms(auto_platforms(pool, clip_db_id).await)
             } else {
                 selected
             };
-            if final_platforms.is_empty() {
+            if gewaehlt.is_empty() {
                 return Err(ApprovalError::NoPlatform);
             }
-            (final_platforms, STATE_APPROVED)
+            // Eine Plattform mit Kadenz null ist ausgeschaltet. Wuerde sie in
+            // `approved_platforms` landen, waere die Freigabe erfolgreich
+            // quittiert und wuerde trotzdem nie stattfinden: es entsteht keine
+            // Queue-Zeile, und der Clip bliebe als "freigegeben" liegen, ohne
+            // dass es irgendwo sichtbar waere.
+            let (eingeplant, pausiert) = teile_pausierte_ab(pool, clip_db_id, gewaehlt).await;
+            if eingeplant.is_empty() {
+                return Err(ApprovalError::NurPausiertePlattformen(pausiert.join(", ")));
+            }
+            nicht_eingeplant = pausiert;
+            (eingeplant, STATE_APPROVED)
         }
         DECISION_SKIP => (Vec::new(), STATE_SKIPPED),
         _ => (selected, STATE_EDITING),
@@ -387,7 +424,29 @@ pub async fn handle_decision(
     if decision == DECISION_APPROVE {
         ensure_queued_uploads(pool, clip_db_id).await;
     }
-    Ok(ensure_approval_row(pool, clip_db_id).await)
+    let mut record = ensure_approval_row(pool, clip_db_id).await;
+    record.nicht_eingeplant = nicht_eingeplant;
+    Ok(record)
+}
+
+/// Trennt die gewaehlten Plattformen in "kann eingeplant werden" und "steht auf
+/// null Posts".
+///
+/// Ohne Kanal gibt es keine Kadenz, an die man sich halten koennte; dann bleibt
+/// alles wie gewaehlt.
+async fn teile_pausierte_ab(
+    pool: &PgPool,
+    clip_db_id: i32,
+    gewaehlt: Vec<String>,
+) -> (Vec<String>, Vec<String>) {
+    let Some(streamer) = clip_streamer(pool, clip_db_id).await else {
+        return (gewaehlt, Vec::new());
+    };
+    let pausierte = posting_plan::pausierte_plattformen(pool, &streamer).await;
+    let (pausiert, eingeplant): (Vec<String>, Vec<String>) = gewaehlt
+        .into_iter()
+        .partition(|platform| pausierte.contains(platform));
+    (eingeplant, pausiert)
 }
 
 /// Reiht die freigegebenen Plattformen eines Clips in die Upload-Queue
@@ -404,6 +463,8 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
     let streamer = clip_streamer(pool, clip_db_id).await;
     let now = chrono::Utc::now();
     let mut queued = Vec::new();
+    // Plattformen, die der Kanal nach der Freigabe auf null gestellt hat.
+    let mut nachtraeglich_pausiert: Vec<String> = Vec::new();
     for platform in &record.approved_platforms {
         match is_clip_approved_for(pool, i64::from(clip_db_id), platform).await {
             Ok(true) => {}
@@ -447,10 +508,11 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         // Entschieden ist: nicht einreihen statt Termin in ferner Zukunft. Ein
         // Eintrag mit einem nie erreichten Termin haengt dauerhaft in der
         // Warteschlange, blockiert `upload_already_exists` und belegt in
-        // `belegte_termine` einen Slot. Fehlt die Zeile dagegen, ist der Zustand
-        // ehrlich, und sobald die Kadenz wieder etwas hergibt, reiht der
-        // naechste Lauf ueber `iter_approved_clips_pending_queue` den Clip
-        // nach.
+        // `belegte_termine` einen Slot. Ohne Zeile bleibt der Clip dagegen in
+        // `iter_approved_clips_pending_queue` stehen, weil diese Abfrage
+        // ausdruecklich nur Freigaben ohne Queue-Zeile liefert; er wird also
+        // bei jedem Lauf erneut versucht, sobald die Kadenz wieder etwas
+        // hergibt.
         //
         // Ohne Kanal bleibt es beim alten Verhalten: dort gibt es keine Kadenz,
         // an die man sich halten koennte.
@@ -458,13 +520,12 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
             Some(login) => match posting_plan::plan_next_slot(pool, login, platform, now).await {
                 posting_plan::SlotPlan::Termin(slot) => Some(slot.to_rfc3339()),
                 posting_plan::SlotPlan::Ausgeschaltet => {
-                    tracing::info!(
-                        clip_db_id,
-                        platform = %platform,
-                        streamer = %login,
-                        "Social-Media-Approval: Plattform steht auf null Posts, \
-                         Freigabe wird nicht eingereiht"
-                    );
+                    // Die Plattform wurde nach der Freigabe abgeschaltet.
+                    // `handle_decision` laesst sie gar nicht erst zu, hier
+                    // bleibt nur der nachtraegliche Fall. Die Freigabe gilt
+                    // dort nicht mehr, sie wird deshalb weiter unten aus
+                    // `approved_platforms` entfernt statt endlos wiederholt.
+                    nachtraeglich_pausiert.push(platform.clone());
                     continue;
                 }
                 posting_plan::SlotPlan::HorizontVoll => {
@@ -473,11 +534,10 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                         platform = %platform,
                         streamer = %login,
                         "Social-Media-Approval: kein freier Termin im Planungshorizont, \
-                         Freigabe wird nicht eingereiht"
+                         Freigabe bleibt offen und wird spaeter erneut versucht"
                     );
                     continue;
                 }
-                posting_plan::SlotPlan::OhnePlan => None,
             },
             None => None,
         };
@@ -504,7 +564,55 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
             }
         }
     }
+    if !nachtraeglich_pausiert.is_empty() {
+        entferne_pausierte_freigaben(pool, clip_db_id, &record, &nachtraeglich_pausiert).await;
+    }
     queued
+}
+
+/// Nimmt abgeschaltete Plattformen aus der Freigabe heraus.
+///
+/// Bleibt danach keine Plattform uebrig, geht der Clip zurueck auf „wartet auf
+/// Freigabe". Sonst stuende er dauerhaft als freigegeben ohne Queue-Zeile da
+/// und wuerde in `iter_approved_clips_pending_queue` bei jedem Lauf einen der
+/// wenigen Batch-Plaetze belegen, ohne dass je etwas passieren kann.
+async fn entferne_pausierte_freigaben(
+    pool: &PgPool,
+    clip_db_id: i32,
+    record: &ApprovalRecord,
+    pausiert: &[String],
+) {
+    let verbleibend: Vec<String> = record
+        .approved_platforms
+        .iter()
+        .filter(|platform| !pausiert.contains(platform))
+        .cloned()
+        .collect();
+    tracing::info!(
+        clip_db_id,
+        pausiert = ?pausiert,
+        verbleibend = ?verbleibend,
+        "Social-Media-Approval: abgeschaltete Plattform aus der Freigabe entfernt"
+    );
+    if let Err(error) = sqlx::query(
+        "UPDATE social_media_clip_approval SET approved_platforms = $1::text::jsonb \
+         WHERE clip_db_id = $2",
+    )
+    .bind(serde_json::to_string(&verbleibend).unwrap_or_else(|_| "[]".to_string()))
+    .bind(clip_db_id)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            %error,
+            clip_db_id,
+            "Social-Media-Approval: Freigabe konnte nicht bereinigt werden"
+        );
+        return;
+    }
+    if verbleibend.is_empty() {
+        mark_clip_awaiting_approval(pool, clip_db_id).await;
+    }
 }
 
 /// Was ein Abbruch tatsaechlich erreicht hat.
@@ -635,8 +743,29 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    /// Test-DSN, mit Notbremse.
+    ///
+    /// Ohne `TB_TEST_DATABASE_URL` verlassen die DB-Tests ihren Rumpf und
+    /// melden gruen, ohne eine einzige Zusicherung geprueft zu haben. Fuer
+    /// einen Lauf am Arbeitsplatz ist das bequem, fuer einen Lauf, der als
+    /// Nachweis gilt, ist es eine Luege. `TB_TEST_REQUIRE_DB=1` macht daraus
+    /// einen Abbruch.
+    fn test_dsn() -> Option<String> {
+        match std::env::var("TB_TEST_DATABASE_URL") {
+            Ok(dsn) if !dsn.trim().is_empty() => Some(dsn),
+            _ => {
+                assert!(
+                    std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
+                    "TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt: \
+                     dieser Test haette nichts geprueft"
+                );
+                None
+            }
+        }
+    }
+
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -733,7 +862,19 @@ mod tests {
                 .unwrap();
         assert_eq!(n, 1);
 
-        // iter_approved findet den Clip.
+        // iter_approved liefert nur Freigaben, die noch keine Queue-Zeile
+        // haben. Dieser Clip ist vollstaendig eingereiht und gehoert deshalb
+        // nicht mehr ins Batch-Fenster.
+        assert!(iter_approved_clips_pending_queue(&pool, 10)
+            .await
+            .is_empty());
+
+        // Ohne Queue-Zeile taucht dieselbe Freigabe wieder auf.
+        sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1")
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert_eq!(
             iter_approved_clips_pending_queue(&pool, 10).await,
             vec![clip]
@@ -893,6 +1034,16 @@ mod tests {
 
     /// Ruestet einem Test-Schema die Zeitplan-Tabellen nach, damit
     /// `plan_next_slot` etwas zu lesen hat.
+    ///
+    /// Das DDL ist von Hand aus `20260815120000_social_media_scheduling.sql`
+    /// uebernommen und nicht daraus gezogen. Die Migration ist durchgehend auf
+    /// `public.` verdrahtet und haengt an `twitch_streamers`,
+    /// `social_media_partner_access` und `social_media_settings`; sie laesst
+    /// sich nicht in ein isoliertes Test-Schema ausfuehren, ohne sie
+    /// umzuschreiben. Der Preis ist bekannt: driftet eine Spalte, faellt es
+    /// hier nicht auf. Dagegen steht der Snapshot-Vertrag in
+    /// `tb-db/tests/fresh_migrations_schema.rs`, der das echte Schema gegen
+    /// eine eingecheckte Datei prueft.
     async fn zeitplan_tabellen(pool: &PgPool) {
         for ddl in [
             "ALTER TABLE twitch_clips_social_media ADD COLUMN streamer_login TEXT",
@@ -970,6 +1121,213 @@ mod tests {
         );
     }
 
+    /// Eine Freigabe ausschliesslich auf eine pausierte Plattform darf nicht
+    /// erfolgreich quittiert werden. Sonst meldet das Dashboard "freigegeben",
+    /// und passieren wird nie etwas.
+    #[tokio::test]
+    async fn freigabe_nur_auf_pausierte_plattform_wird_abgelehnt() {
+        let Some(pool) = make_pool("t_sm_approval_nur_pausiert").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 0, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let fehler = handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string()],
+            Some("admin"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&fehler, ApprovalError::NurPausiertePlattformen(p) if p == "youtube"),
+            "war: {fehler:?}"
+        );
+
+        let record = ensure_approval_row(&pool, clip).await;
+        assert_eq!(
+            record.state, STATE_AWAITING,
+            "eine abgelehnte Entscheidung darf den Clip nicht auf freigegeben setzen"
+        );
+        let offen: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(offen, 0);
+    }
+
+    /// Wird nur ein Teil der Auswahl pausiert, laeuft die Freigabe durch, die
+    /// Quittung nennt die ausgelassene Plattform aber ausdruecklich.
+    #[tokio::test]
+    async fn quittung_nennt_die_pausierte_plattform() {
+        let Some(pool) = make_pool("t_sm_approval_quittung").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('kanal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 0, 1, '[\"18:00\"]'::jsonb), \
+                    ('kanal', 'tiktok', TRUE, 4, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let record = handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string(), "tiktok".to_string()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(record.approved_platforms, vec!["tiktok".to_string()]);
+        assert_eq!(record.nicht_eingeplant, vec!["youtube".to_string()]);
+        assert_eq!(
+            serialize_approval_record(&record)["not_scheduled"],
+            serde_json::json!(["youtube"])
+        );
+    }
+
+    /// Wird eine Plattform nach der Freigabe abgeschaltet, faellt sie aus der
+    /// Freigabe heraus. Bleibt nichts uebrig, geht der Clip zurueck auf
+    /// „wartet auf Freigabe" statt dauerhaft als freigegeben ohne Queue-Zeile
+    /// im Batch-Fenster zu haengen.
+    #[tokio::test]
+    async fn nachtraeglich_abgeschaltete_plattform_faellt_aus_der_freigabe() {
+        let Some(pool) = make_pool("t_sm_approval_nachtraeglich_aus").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login, status) \
+             VALUES ('kanal', 'approved') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Die Freigabe steht schon, die Plattform wird erst danach auf null
+        // gestellt. Diesen Weg kann `handle_decision` nicht abfangen.
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms, decided_at) \
+             VALUES ($1, 'approved', '[\"youtube\"]'::jsonb, now())",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('kanal', 'youtube', TRUE, 0, 1, '[\"18:00\"]'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(ensure_queued_uploads(&pool, clip).await.is_empty());
+
+        let record = ensure_approval_row(&pool, clip).await;
+        assert!(record.approved_platforms.is_empty());
+        assert_eq!(
+            record.state, STATE_AWAITING,
+            "ohne verbleibende Plattform gehoert der Clip zurueck in die Sichtung"
+        );
+        let offen: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(offen, 0);
+        // Und damit ist der Clip auch aus dem Batch-Fenster raus.
+        assert!(iter_approved_clips_pending_queue(&pool, 10)
+            .await
+            .is_empty());
+    }
+
+    /// Ein Clip ohne freien Termin bleibt in der Nachreih-Liste, auch wenn
+    /// danach viele vollstaendig eingereihte Freigaben dazukommen. Vorher
+    /// lieferte `iter_approved_clips_pending_queue` einfach die juengsten zehn
+    /// Freigaben, und der Clip fiel nach zehn weiteren aus dem Fenster.
+    #[tokio::test]
+    async fn nachreih_lauf_findet_den_clip_ohne_termin_auch_spaeter_noch() {
+        let Some(pool) = make_pool("t_sm_approval_nachreihen").await else {
+            return;
+        };
+        let ohne_termin: i32 =
+            sqlx::query_scalar("INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms, decided_at) \
+             VALUES ($1, 'approved', '[\"youtube\"]'::jsonb, now() - INTERVAL '1 hour')",
+        )
+        .bind(ohne_termin)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Zwanzig juengere Freigaben, alle vollstaendig eingereiht.
+        for _ in 0..20 {
+            let clip: i32 = sqlx::query_scalar(
+                "INSERT INTO twitch_clips_social_media DEFAULT VALUES RETURNING id",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms, decided_at) \
+                 VALUES ($1, 'approved', '[\"youtube\"]'::jsonb, now())",
+            )
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+                 VALUES ($1, 'youtube', 'pending')",
+            )
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        assert_eq!(
+            batch,
+            vec![ohne_termin],
+            "das Batch-Fenster darf nur wirklich offene Freigaben enthalten"
+        );
+    }
+
     /// Ist der Planungshorizont voll, darf die Zeile ebenfalls nicht mit leerem
     /// Termin eingereiht werden.
     #[tokio::test]
@@ -1014,17 +1372,22 @@ mod tests {
         .await
         .unwrap();
 
-        handle_decision(&pool, clip, "approve", &["youtube".to_string()], Some("admin"))
-            .await
-            .unwrap();
-
-        let offen: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".to_string()],
+            Some("admin"),
         )
-        .bind(clip)
-        .fetch_one(&pool)
         .await
         .unwrap();
+
+        let offen: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(offen, 0, "ohne freien Termin wird nichts eingereiht");
     }
 }

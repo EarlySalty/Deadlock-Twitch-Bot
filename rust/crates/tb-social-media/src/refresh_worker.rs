@@ -153,7 +153,12 @@ impl TokenRefreshWorker {
                 // gruen und jeder Upload lief ins Leere. Wir setzen den Ablauf
                 // deshalb auf jetzt, damit die Oberflaeche "abgelaufen" zeigt
                 // und der Streamer neu verbinden kann.
-                if text.contains("invalid_grant") || text.contains("invalid_request") {
+                //
+                // Nur `invalid_grant`. `invalid_request` sagt nichts ueber den
+                // Zugang aus, sondern nur, dass diese eine Anfrage falsch
+                // geformt war; daran haette ein Streamer einen intakten Zugang
+                // neu verbunden, obwohl der Fehler bei uns lag.
+                if text.contains("invalid_grant") {
                     self.markiere_abgelaufen(&platform, streamer_ref).await;
                 }
                 tracing::error!(platform = %platform, error = %text, "Token-Refresh fehlgeschlagen");

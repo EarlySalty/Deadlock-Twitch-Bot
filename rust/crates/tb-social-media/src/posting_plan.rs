@@ -481,6 +481,19 @@ pub async fn auto_post_platforms(pool: &PgPool, streamer_login: &str) -> Vec<Str
         .collect()
 }
 
+/// Plattformen dieses Kanals, deren Kadenz auf null steht.
+///
+/// Eine solche Plattform ist ausgeschaltet: sie bekommt nie einen Termin, also
+/// darf auch keine Freigabe auf ihr landen.
+pub async fn pausierte_plattformen(pool: &PgPool, streamer_login: &str) -> Vec<String> {
+    load_platform_schedules(pool, streamer_login)
+        .await
+        .into_iter()
+        .filter(|s| s.limits().blocks_everything())
+        .map(|s| s.platform)
+        .collect()
+}
+
 /// Ergebnis der Terminsuche fuer eine Plattform.
 ///
 /// Ein blosses `Option<DateTime<Utc>>` warf drei sehr verschiedene Faelle in
@@ -497,9 +510,6 @@ pub enum SlotPlan {
     /// Die Kadenz laesst Posts zu, im Planungshorizont ist aber jeder Termin
     /// schon vergeben.
     HorizontVoll,
-    /// Fuer diese Plattform gibt es ueberhaupt keinen Zeitplan, etwa weil der
-    /// Name nicht zu den bekannten Plattformen gehoert.
-    OhnePlan,
 }
 
 /// Naechster freier Termin fuer diese Plattform, unter Beachtung der Kadenz und
@@ -511,13 +521,15 @@ pub async fn plan_next_slot(
     now: DateTime<Utc>,
 ) -> SlotPlan {
     let login = streamer_login.trim().to_lowercase();
-    let Some(schedule) = load_platform_schedules(pool, &login)
+    let schedule = load_platform_schedules(pool, &login)
         .await
         .into_iter()
         .find(|s| s.platform == platform)
-    else {
-        return SlotPlan::OhnePlan;
-    };
+        // `load_platform_schedules` fuellt jede Plattform aus `PLATFORMS` auf,
+        // die Zeile greift also nur, wenn jemand einen Namen ausserhalb der
+        // Liste hereinreicht. Auch dann gilt eine echte Kadenz: einen Pfad
+        // "kein Plan, also sofort" soll es hier bewusst nicht geben.
+        .unwrap_or_else(|| PlatformSchedule::default_for(platform));
     let limits = schedule.limits();
     if limits.blocks_everything() {
         return SlotPlan::Ausgeschaltet;
