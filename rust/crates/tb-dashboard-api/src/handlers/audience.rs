@@ -58,13 +58,18 @@ pub struct OverlapQuery {
 }
 
 /// `GET /twitch/api/v2/viewer-overlap?streamer=&limit=20`
+///
+/// Ueberschneidung der eigenen Zuschauerschaft mit anderen Kanaelen. Das ist
+/// dieselbe Zuschaueranalyse wie `audience-sharing` und `viewer-profiles` und
+/// gehoert wie die zu Netzwerk Plus. Ohne Gate war es der offene Nebeneingang
+/// zu den gesperrten Nachbarendpunkten.
 pub async fn viewer_overlap_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<OverlapQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →

@@ -101,32 +101,8 @@ pub async fn session_detail_handler(
     // (MAX(started_at) der beendeten Sessions). Localhost/Admin überspringen den
     // Clamp. Die IDOR-Grenze (Owner-Query unten) bleibt unangetastet: das Flag
     // weitet NUR das Zeitfenster, nie den Zugriff auf fremde Sessions.
-    if let DashboardAuthLevel::Partner {
-        twitch_login,
-        twitch_user_id,
-        ..
-    } = &auth
-    {
-        let login = twitch_login.to_lowercase();
-        let has_analytics =
-            crate::auth::has_analytics_entitlement(&pool, &login, twitch_user_id).await;
-        if !has_analytics {
-            // Geteilte „letzte beendete Session"-Definition (siehe overview.rs):
-            // ohne analytics-Flag nur die zuletzt beendete eigene Session.
-            let latest = crate::handlers::last_session::latest_ended_session(&pool, &login)
-                .await
-                .map(|s| s.id);
-            if latest != Some(session_id) {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "error": "plan_required",
-                        "required_entitlements": ["analytics"],
-                    })),
-                )
-                    .into_response();
-            }
-        }
+    if let Some(resp) = letzte_session_klemme(&pool, &auth, session_id).await {
+        return resp;
     }
 
     // ── Haupt-Session-Row ────────────────────────────────────────────────────
@@ -311,6 +287,43 @@ pub async fn session_detail_handler(
     .into_response()
 }
 
+/// Last-Stream-Klemme gegen den Historie-Leak.
+///
+/// Ohne Netzwerk Plus darf ein Partner nur die zuletzt BEENDETE eigene Session
+/// abrufen, exakt dieselbe Definition wie in `overview.rs`. Admin und Localhost
+/// ueberspringen die Klemme. Die IDOR-Grenze bleibt unangetastet: die Stufe
+/// weitet nur das Zeitfenster, nie den Zugriff auf fremde Sessions.
+///
+/// Steht als eigene Funktion da, weil sie an ZWEI Endpunkten haengt: die
+/// Session-Detailansicht und die Ereignisliste derselben Session. Die
+/// Ereignisliste hatte sie frueher nicht und war damit der Nebeneingang zur
+/// kompletten Historie.
+async fn letzte_session_klemme(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    session_id: i64,
+) -> Option<axum::response::Response> {
+    let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = auth
+    else {
+        return None;
+    };
+    let login = twitch_login.to_lowercase();
+    if crate::auth::has_analytics_entitlement(pool, &login, twitch_user_id).await {
+        return None;
+    }
+    let latest = crate::handlers::last_session::latest_ended_session(pool, &login)
+        .await
+        .map(|s| s.id);
+    if latest == Some(session_id) {
+        return None;
+    }
+    Some(crate::auth::plan_required_response())
+}
+
 /// `GET /twitch/api/v2/session/{id}/events`
 pub async fn session_events_handler(
     auth: DashboardAuthLevel,
@@ -331,6 +344,11 @@ pub async fn session_events_handler(
                 .into_response()
         }
     };
+
+    // Dieselbe Klemme wie in der Detailansicht: ohne Plus nur der letzte Stream.
+    if let Some(resp) = letzte_session_klemme(&pool, &auth, session_id).await {
+        return resp;
+    }
 
     let owner = owner_login(&auth);
 
