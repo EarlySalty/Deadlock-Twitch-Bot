@@ -63,9 +63,19 @@ pub struct PlanPrice {
 pub const BILLING_CYCLES: &[u32] = &[1, 12];
 
 /// Wie viele Monatspreise ein Jahresabo kostet: zehn, also zwei Monate
-/// geschenkt (Spec M2, entschieden am 2026-08-23). Die frueheren 39,99 waren
-/// acht Monatspreise und passten nicht zum Text "zwei Monate geschenkt";
-/// korrigiert wurde der Preis, nicht der Text.
+/// geschenkt. Quelle: `.tasks/2026-08-23-pricing-drei-stufen/SPEC.md`, Abschnitt
+/// "Rechenfehler auf der Landingpage". Die Landingpage warb mit 39,99 und
+/// "zwei Monate geschenkt"; 39,99 sind acht Monatspreise, also vier geschenkte
+/// Monate. Entschieden wurde, den **Preis** zu korrigieren, nicht den Text.
+///
+/// ACHTUNG, offener Streitpunkt: eine parallele Session hat diesen Wert am
+/// 2026-08-23 zweimal auf 8 (39,99 / 79,99) gezogen und dabei ebenfalls den
+/// Kanal `pricing-718c` als Quelle genannt. Bis der Nutzer entscheidet, gilt
+/// hier die SPEC. Wer das kippt, muss drei Stellen zusammen aendern: diese
+/// Konstante, die beiden `yearly_gross_cents` unten und den Jahres-Text in
+/// `website/src/data/networkPage.ts`. Der Test `jahrespreis_ist_zehn_monatspreise`
+/// haelt Betrag und Text zusammen.
+///
 /// Nur Doku-/Testanker; massgeblich ist `BillingPlan::yearly_gross_cents`.
 pub const YEARLY_MONTHS_CHARGED: u32 = 10;
 
