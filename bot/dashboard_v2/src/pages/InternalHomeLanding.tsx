@@ -4,7 +4,6 @@ import { Rise } from '../motion/Rise';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchInternalHome,
-  type InternalHomeActionEntry,
   type InternalHomeChangelogEntry,
 } from '@/api/home';
 import { setAdminMode } from '@/api/auth';
@@ -270,8 +269,6 @@ interface SidebarNavItem {
   active?: boolean;
 }
 
-const INTERNAL_HOME_BOT_MODERATOR_LOGIN = 'deutschedeadlockcommunity';
-
 function initialInternalHomeStreamer(): string | null {
   const params = new URLSearchParams(window.location.search);
   const streamer = params.get('streamer')?.trim().toLowerCase() || '';
@@ -334,194 +331,9 @@ function formatRelativeShort(value: string | null | undefined): string | null {
   return formatCalendarDate(value);
 }
 
-function actionLogTone(entry: InternalHomeActionEntry): {
-  label: string;
-  badgeClass: string;
-} {
-  const severity = String(entry.severity || 'info').toLowerCase();
-  if (severity === 'critical' || severity === 'error') {
-    return { label: 'Kritisch', badgeClass: 'border-error/35 bg-error/10 text-error' };
-  }
-  if (severity === 'warning') {
-    return { label: 'Warnung', badgeClass: 'border-warning/35 bg-warning/10 text-warning' };
-  }
-  if (severity === 'success') {
-    return { label: 'Positiv', badgeClass: 'border-success/35 bg-success/10 text-success' };
-  }
-  return { label: 'Info', badgeClass: 'border-accent/35 bg-accent/10 text-accent' };
-}
-
-function formatActionUser(entry: InternalHomeActionEntry): string {
-  const targetLogin = entry.targetLogin?.trim();
-  const actorLogin = entry.actorLogin?.trim();
-  if (targetLogin) return `@${targetLogin}`;
-  if (actorLogin) return `@${actorLogin}`;
-  return 'System';
-}
-
-function isBanAction(entry: InternalHomeActionEntry): boolean {
-  const haystack = [
-    entry.eventType,
-    entry.statusLabel,
-    entry.title,
-    entry.summary,
-    entry.reason,
-    entry.description,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  return haystack.includes('ban') || haystack.includes('banned') || haystack.includes('gebannt');
-}
-
-function isServicePitchWarningAction(entry: InternalHomeActionEntry): boolean {
-  const haystack = [
-    entry.eventType,
-    entry.statusLabel,
-    entry.title,
-    entry.summary,
-    entry.reason,
-    entry.description,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  return (
-    haystack.includes('service_pitch_warning') ||
-    haystack.includes('service-pitch') ||
-    haystack.includes('service pitch') ||
-    haystack.includes('pitch warn')
-  );
-}
-
-function stripActionNoise(value: string): string {
-  return value
-    .replace(/auto[_\s-]*raid[_\s-]*on[_\s-]*offline/gi, '')
-    .replace(/auto[_\s-]*offline[_\s-]*raid/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .trim();
-}
-
-function stripActionModeratorSegment(value: string): string {
-  return value
-    .replace(/\|\s*mod(?:erator)?\s*:\s*@?[a-z0-9_]+/gi, '')
-    .replace(/\bmod(?:erator)?\s*:\s*@?[a-z0-9_]+/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .trim();
-}
-
-function splitActionDetailSegments(value: string | null | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split('|')
-    .map((segment) => stripActionNoise(segment.trim()))
-    .filter(Boolean);
-}
-
-function normalizeActionEventType(entry: InternalHomeActionEntry): string {
-  return String(entry.eventType || '').trim().toLowerCase();
-}
-
-function isVisibleChannelAction(entry: InternalHomeActionEntry, channelLogin: string): boolean {
-  const eventType = normalizeActionEventType(entry);
-  if (!eventType) return false;
-  if (eventType === 'ban' || eventType === 'ban_keyword_hit' || eventType === 'unban') return true;
-  if (eventType === 'raid' || eventType === 'raid_history') return true;
-  if (eventType === 'service_pitch_warning') {
-    if (!channelLogin) return true;
-    const actorLogin = String(entry.actorLogin || '').trim().toLowerCase();
-    if (!actorLogin) return true;
-    return actorLogin === channelLogin;
-  }
-  return false;
-}
-
-function buildPriorityActionDetails(
-  entry: InternalHomeActionEntry,
-  isServicePitchWarning: boolean
-): string[] {
-  const detailLines: string[] = [];
-  const summary = stripActionNoise(stripActionModeratorSegment(entry.summary?.trim() || ''));
-  const targetLogin = entry.targetLogin?.trim() || '';
-  const actorLogin = entry.actorLogin?.trim() || '';
-  const metric = stripActionNoise(entry.metric?.trim() || '');
-  const reason = stripActionNoise(entry.reason?.trim() || '');
-
-  if (summary) detailLines.push(summary);
-  if (targetLogin) detailLines.push(`Nutzer: @${targetLogin}`);
-  if (isServicePitchWarning) {
-    if (actorLogin) detailLines.push(`Kanal: @${actorLogin}`);
-  } else {
-    detailLines.push(`Moderator: @${INTERNAL_HOME_BOT_MODERATOR_LOGIN}`);
-  }
-  if (metric) detailLines.push(`Metrik: ${metric}`);
-  if (reason) detailLines.push(`Grund: ${reason}`);
-  detailLines.push(...splitActionDetailSegments(entry.description));
-
-  const seen = new Set<string>();
-  return detailLines.filter((line) => {
-    const normalized = line.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) return false;
-    seen.add(normalized);
-    return true;
-  });
-}
-
-function sortActionLogByTimeline(
-  entries: InternalHomeActionEntry[],
-  limit: number
-): InternalHomeActionEntry[] {
-  if (limit <= 0 || entries.length === 0) return [];
-  const withMeta = entries.map((entry, index) => {
-    const parsedTimestamp = Date.parse(entry.timestamp || '');
-    return {
-      entry,
-      index,
-      timestampMs: Number.isFinite(parsedTimestamp)
-        ? parsedTimestamp
-        : Number.NEGATIVE_INFINITY,
-    };
-  });
-
-  withMeta.sort((left, right) => {
-    if (left.timestampMs === right.timestampMs) return left.index - right.index;
-    return right.timestampMs - left.timestampMs;
-  });
-
-  return withMeta.slice(0, limit).map(({ entry }) => entry);
-}
-
-function actionKey(entry: InternalHomeActionEntry, index: number): string {
-  if (entry.id !== null && entry.id !== undefined) return String(entry.id);
-  return `action-${index}`;
-}
-
 function changelogKey(entry: InternalHomeChangelogEntry, index: number): string {
   if (entry.id !== null && entry.id !== undefined) return String(entry.id);
   return `changelog-${index}`;
-}
-
-type ActionFilter = 'all' | 'raid' | 'ban' | 'warning';
-
-const ACTION_FILTERS: Array<{ id: ActionFilter; label: string }> = [
-  { id: 'all', label: 'Alle' },
-  { id: 'raid', label: 'Raids' },
-  { id: 'ban', label: 'Bans' },
-  { id: 'warning', label: 'Warnungen' },
-];
-
-const ACTION_PAGE_SIZE = 5;
-
-function matchesActionFilter(entry: InternalHomeActionEntry, filter: ActionFilter): boolean {
-  if (filter === 'all') return true;
-  const eventType = String(entry.eventType || '').trim().toLowerCase();
-  if (filter === 'raid') return eventType === 'raid' || eventType === 'raid_history';
-  if (filter === 'ban') {
-    return eventType === 'ban' || eventType === 'ban_keyword_hit' || eventType === 'unban';
-  }
-  return isServicePitchWarningAction(entry);
 }
 
 export function InternalHomeLanding() {
@@ -530,16 +342,10 @@ export function InternalHomeLanding() {
   const [selectedStreamer, setSelectedStreamer] = useState<string | null>(
     initialInternalHomeStreamer
   );
-  const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
-  const [actionLimit, setActionLimit] = useState<number>(ACTION_PAGE_SIZE);
   // Laedt das Twitch-CDN-Bild nicht (geloescht, geblockt, veraltete URL), faellt der
   // Avatar auf die Initiale zurueck statt ein leeres Kaestchen zu zeigen.
   const [avatarFailed, setAvatarFailed] = useState(false);
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
-
-  useEffect(() => {
-    setActionLimit(ACTION_PAGE_SIZE);
-  }, [actionFilter, normalizedSelectedStreamer]);
 
   const partnerStreamers = useMemo(
     () =>
@@ -738,21 +544,6 @@ export function InternalHomeLanding() {
     community: 0,
   };
 
-  const rawActionLog = home.actionLog ?? [];
-  const channelScopeLogin = (normalizedSelectedStreamer || twitchLogin || '')
-    .trim()
-    .toLowerCase();
-  const baseActionLog = rawActionLog
-    .filter((entry) => String(entry.id || '').trim() !== 'impact-note')
-    .filter((entry) => isVisibleChannelAction(entry, channelScopeLogin));
-  const filteredActionLog = baseActionLog.filter((entry) =>
-    matchesActionFilter(entry, actionFilter)
-  );
-  const actionLog = sortActionLogByTimeline(filteredActionLog, actionLimit);
-  const totalFilteredActions = filteredActionLog.length;
-  const hasMoreActions = totalFilteredActions > actionLog.length;
-
-  const recentStreams = (home.recentStreams ?? []).slice(0, 5);
   const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
   const mainNavItems: SidebarNavItem[] = [
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: true },
@@ -1280,117 +1071,15 @@ export function InternalHomeLanding() {
               delay={0.1}
             />
 
-            {recentStreams.length > 0 ? (
-              <Rise
-                step={{ seconds: 0.14 }}
-                as="section"
-                className="panel-card card-glow rounded-2xl p-5 md:p-6"
-              >
-                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-                      Stream-Verlauf
-                    </p>
-                    <h2 className="display-font text-xl font-bold text-white">
-                      Letzte Streams
-                    </h2>
-                  </div>
-                  <a
-                    href={analyticsTabHref('streams')}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/70 px-3 py-1.5 text-xs font-semibold text-text-secondary no-underline transition-colors hover:border-border-hover hover:text-white"
-                  >
-                    Alle Streams
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </a>
-                </div>
-
-                <ul className="space-y-2">
-                  {recentStreams.map((stream, index) => {
-                    const startedAt = stream.startedAt;
-                    const durationSeconds =
-                      stream.durationMinutes != null ? stream.durationMinutes * 60 : null;
-                    const followerDelta = stream.followerDelta ?? 0;
-                    const followerColor =
-                      followerDelta > 0
-                        ? 'text-success'
-                        : followerDelta < 0
-                          ? 'text-danger'
-                          : 'text-text-secondary';
-                    return (
-                      <motion.li
-                        key={stream.id ?? `stream-row-${index}`}
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.24, delay: Math.min(index * 0.04, 0.24) }}
-                      >
-                        <a
-                          href={analyticsTabHref('streams')}
-                          className="internal-home-stream accent-bar block rounded-xl border border-border bg-background/55 pl-5 pr-3.5 py-3.5 no-underline"
-                        >
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
-                                <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
-                                  {formatCalendarDate(startedAt)}
-                                </span>
-                                {durationSeconds != null ? (
-                                  <span className="rounded-full border border-border/70 bg-background/70 px-2.5 py-1 font-semibold text-text-secondary">
-                                    {formatDuration(durationSeconds)}
-                                  </span>
-                                ) : null}
-                              </div>
-                              {stream.title ? (
-                                <p className="mt-2 truncate text-sm font-semibold text-white">
-                                  {stream.title}
-                                </p>
-                              ) : null}
-                            </div>
-                            <div className="grid grid-cols-3 gap-3 text-right md:gap-5">
-                              <div>
-                                <div className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
-                                  {'Ø Viewer'}
-                                </div>
-                                <div className="text-sm font-bold text-white">
-                                  {stream.avgViewers != null
-                                    ? formatNumber(stream.avgViewers)
-                                    : '–'}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
-                                  Peak
-                                </div>
-                                <div className="text-sm font-bold text-white">
-                                  {stream.peakViewers != null
-                                    ? formatNumber(stream.peakViewers)
-                                    : '–'}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
-                                  Follower
-                                </div>
-                                <div className={`text-sm font-bold ${followerColor}`}>
-                                  {followerDelta > 0 ? '+' : ''}
-                                  {formatNumber(followerDelta)}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </a>
-                      </motion.li>
-                    );
-                  })}
-                </ul>
-              </Rise>
-            ) : null}
-
             <Rise
               step={{ seconds: 0.16 }}
               as="section"
               className="grid gap-4 lg:grid-cols-2"
             >
-              <aside id="changelog" className="panel-card card-glow rounded-2xl p-5 md:p-6">
+              <aside
+                id="changelog"
+                className="panel-card card-glow rounded-2xl p-5 md:p-6 lg:col-start-2"
+              >
                 <div className="mb-4">
                   <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
                     Updates
@@ -1434,146 +1123,6 @@ export function InternalHomeLanding() {
                   </div>
                 )}
               </aside>
-
-              <article className="panel-card card-glow rounded-2xl p-5 md:p-6">
-                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-                      Aktivitaet
-                    </p>
-                    <h2 className="display-font text-xl font-bold text-white">
-                      Letzte Aktionen
-                    </h2>
-                  </div>
-                  <span className="inline-flex items-center rounded-full border border-border bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
-                    {totalFilteredActions} Eintraege
-                  </span>
-                </div>
-
-                <div className="mb-4 flex flex-wrap gap-1.5">
-                  {ACTION_FILTERS.map((filter) => {
-                    const isActive = actionFilter === filter.id;
-                    return (
-                      <button
-                        key={filter.id}
-                        type="button"
-                        onClick={() => setActionFilter(filter.id)}
-                        className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
-                          isActive
-                            ? 'border-primary/40 bg-primary/15 text-primary'
-                            : 'border-border bg-background/60 text-text-secondary hover:border-border-hover hover:text-white'
-                        }`}
-                      >
-                        {filter.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {actionLog.length === 0 ? (
-                  <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
-                    Keine Aktionen vorhanden.
-                  </div>
-                ) : (
-                  <ul className="space-y-2.5">
-                    {actionLog.map((entry, index) => {
-                      const entryIsBan = isBanAction(entry);
-                      const isServicePitch = isServicePitchWarningAction(entry);
-                      const isPriorityWarning = entryIsBan || isServicePitch;
-                      const tone = actionLogTone(entry);
-                      const rawTitle =
-                        entry.title?.trim() || entry.eventType?.trim() || 'Bot Aktion';
-                      const title = stripActionNoise(rawTitle) || 'Bot Aktion';
-                      const rawSummary =
-                        entry.summary?.trim() ||
-                        entry.description?.trim() ||
-                        entry.reason?.trim() ||
-                        entry.metric?.trim() ||
-                        '';
-                      const summaryText = stripActionNoise(rawSummary);
-                      const statusText = entryIsBan
-                        ? 'BAN'
-                        : isServicePitch
-                          ? 'SERVICE-PITCH'
-                          : entry.statusLabel?.trim() || tone.label;
-                      const accountText = formatActionUser(entry);
-                      const statusBadgeClass = isPriorityWarning
-                        ? 'border-warning/35 bg-warning/10 text-warning'
-                        : tone.badgeClass;
-                      const cardClass = isPriorityWarning
-                        ? 'internal-home-action-item accent-bar rounded-xl border border-warning/35 bg-warning/10 pl-5 pr-3.5 py-3.5'
-                        : 'internal-home-action-item accent-bar rounded-xl border border-border bg-background/55 pl-5 pr-3.5 py-3.5';
-                      const accentTone = entryIsBan
-                        ? 'danger'
-                        : isServicePitch
-                          ? 'warning'
-                          : entry.eventType === 'raid' || entry.eventType === 'raid_history'
-                            ? 'success'
-                            : 'primary';
-                      const detailLines = isPriorityWarning
-                        ? buildPriorityActionDetails(entry, isServicePitch)
-                        : [];
-
-                      return (
-                        <motion.li
-                          key={actionKey(entry, index)}
-                          className={cardClass}
-                          data-tone={accentTone}
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.22, delay: Math.min(index * 0.04, 0.24) }}
-                        >
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
-                            <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
-                              {formatDateTime(entry.timestamp)}
-                            </span>
-                            <span className="rounded-full border border-border/70 bg-background/70 px-2.5 py-1 font-semibold text-text-secondary">
-                              {accountText}
-                            </span>
-                            <span
-                              className={`rounded-full border px-2.5 py-1 font-semibold uppercase tracking-wider ${statusBadgeClass}`}
-                            >
-                              {statusText}
-                            </span>
-                          </div>
-
-                          {isPriorityWarning ? (
-                            <>
-                              {detailLines.length === 0 ? (
-                                <p className="mt-2 text-xs leading-5 text-text-primary">
-                                  Keine Details gespeichert.
-                                </p>
-                              ) : (
-                                <div className="mt-2 space-y-1 text-xs leading-5 text-text-primary">
-                                  {detailLines.map((line, detailIndex) => (
-                                    <p key={`detail-${detailIndex}`}>{line}</p>
-                                  ))}
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <p className="mt-2 text-sm leading-5 text-text-secondary">
-                              <span className="font-semibold text-white">{title}</span>
-                              {summaryText ? ` \u00B7 ${summaryText}` : ''}
-                            </p>
-                          )}
-                        </motion.li>
-                      );
-                    })}
-                  </ul>
-                )}
-
-                {hasMoreActions ? (
-                  <button
-                    type="button"
-                    onClick={() => setActionLimit((prev) => prev + ACTION_PAGE_SIZE)}
-                    className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background/60 px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:border-border-hover hover:text-white"
-                  >
-                    Mehr laden
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                ) : null}
-              </article>
             </Rise>
           </main>
         </div>
