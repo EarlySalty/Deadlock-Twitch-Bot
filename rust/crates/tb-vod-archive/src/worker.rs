@@ -24,7 +24,7 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
-use tb_social_media::uploaders::youtube::{ChunkOutcome, YouTubeUploader};
+use tb_social_media::uploaders::youtube::{ChunkOutcome, ResumeStand, YouTubeUploader};
 use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
 
 use crate::config::{wurzel_oder_elternteil, VodArchiveConfig};
@@ -332,11 +332,24 @@ impl VodArchiveWorker {
         // Rueckfall, falls die Nachfrage scheitert.
         let (sitzung, mut offset) = match teil.upload_session_uri.as_deref() {
             Some(uri) => match uploader.resumable_offset(uri, groesse).await? {
-                Some(stand) => {
+                ResumeStand::Fertig(video_id) => {
+                    // YouTube hat den Upload schon abgeschlossen und liefert die
+                    // Video-ID gleich mit. Frueher fiel sie hier weg und ein
+                    // fertiges VOD galt als Fehlschlag, der beim naechsten Lauf
+                    // erneut hochgeladen wurde.
+                    store::setze_teil_fertig(&self.pool, teil.id, &video_id).await?;
+                    tracing::info!(
+                        vod = %vod.twitch_id,
+                        teil = teil.part_index,
+                        "Bereits vollstaendig hochgeladen: https://youtu.be/{video_id}"
+                    );
+                    return Ok(());
+                }
+                ResumeStand::Offset(stand) => {
                     tracing::info!(vod = %vod.twitch_id, teil = teil.part_index, stand, "Setze Upload fort");
                     (uri.to_string(), stand)
                 }
-                None => {
+                ResumeStand::Verfallen => {
                     tracing::info!(vod = %vod.twitch_id, teil = teil.part_index, "Sitzung verfallen, beginne neu");
                     store::loesche_teil_sitzung(&self.pool, teil.id).await?;
                     (

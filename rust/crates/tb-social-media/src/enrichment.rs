@@ -164,30 +164,30 @@ pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> Enrichment
                 "Social-Media-Enrichment: Pending-Zeile nicht ladbar, Fallback-Record"
             );
             EnrichmentRecord {
-            clip_db_id,
-            transcript_raw: None,
-            transcript_corrected: None,
-            transcript_segments: Vec::new(),
-            transcript_lang: None,
-            detected_terms: Vec::new(),
-            title_youtube: None,
-            title_tiktok: None,
-            title_instagram: None,
-            description_youtube: None,
-            description_tiktok: None,
-            description_instagram: None,
-            hashtags_youtube: Vec::new(),
-            hashtags_tiktok: Vec::new(),
-            hashtags_instagram: Vec::new(),
-            llm_provider: None,
-            llm_model: None,
-            cost_usd_estimate: None,
-            status: STATUS_PENDING.to_string(),
-            error_message: None,
-            started_at: None,
-            completed_at: None,
-            edited_by: None,
-            updated_at: None,
+                clip_db_id,
+                transcript_raw: None,
+                transcript_corrected: None,
+                transcript_segments: Vec::new(),
+                transcript_lang: None,
+                detected_terms: Vec::new(),
+                title_youtube: None,
+                title_tiktok: None,
+                title_instagram: None,
+                description_youtube: None,
+                description_tiktok: None,
+                description_instagram: None,
+                hashtags_youtube: Vec::new(),
+                hashtags_tiktok: Vec::new(),
+                hashtags_instagram: Vec::new(),
+                llm_provider: None,
+                llm_model: None,
+                cost_usd_estimate: None,
+                status: STATUS_PENDING.to_string(),
+                error_message: None,
+                started_at: None,
+                completed_at: None,
+                edited_by: None,
+                updated_at: None,
             }
         }
     }
@@ -339,7 +339,13 @@ pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     )
     .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|error| {
+        // Ein Fehler hier sah frueher aus wie "keine Clips offen": die
+        // Enrichment-Strecke waere still stehen geblieben, ohne dass irgendwo
+        // etwas auffaellt.
+        tracing::error!(%error, "Offene Enrichments konnten nicht gelesen werden");
+        Vec::new()
+    });
     let mut ids = Vec::with_capacity(rows.len());
     for row in rows {
         let Ok(id) = i32::try_from(row.id) else {

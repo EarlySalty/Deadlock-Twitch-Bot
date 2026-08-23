@@ -178,21 +178,30 @@ impl InsightsWorker {
             .credentials
             .get_credentials(platform, Some(streamer_login))
             .await?;
+        // Kein Rueckfall auf die Sammelverbindung. Der VOD-Worker sperrt ihn
+        // bewusst, hier fehlte er: ein privates oder ungelistetes Partner-Video
+        // wurde mit dem Betreiber-Token abgefragt, lieferte eine leere Trefferliste
+        // und wurde als "0 Views" verbucht.
+        if creds.streamer_login.as_deref() != Some(streamer_login) {
+            tracing::debug!(
+                platform = %platform,
+                streamer = %streamer_login,
+                "Insights uebersprungen: keine eigene Plattform-Verbindung"
+            );
+            return None;
+        }
         resolve_insights_client(platform, &creds)
     }
 
     async fn schedule_retry(&self, target: &AnalyticsTarget, provider: &str) {
         let next_pull = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-        let _ = upsert_clip_analytics(
+        let _ = crate::analytics::schedule_clip_analytics_retry(
             &self.pool,
-            &ClipAnalyticsUpsert {
-                clip_db_id: target.clip_db_id,
-                platform: target.platform.clone(),
-                bucket: target.bucket.clone(),
-                provider: Some(provider.to_string()),
-                next_pull_at: Some(next_pull),
-                ..Default::default()
-            },
+            target.clip_db_id,
+            &target.platform,
+            &target.bucket,
+            Some(provider),
+            &next_pull,
         )
         .await;
     }

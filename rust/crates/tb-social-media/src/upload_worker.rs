@@ -15,7 +15,9 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
-use crate::clip_queue::{get_upload_queue, update_upload_status, UploadQueueItem};
+use crate::clip_queue::{
+    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem,
+};
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
@@ -218,6 +220,24 @@ impl UploadTask {
                     .await
                 {
                     Ok(external_id) => {
+                        // TikTok liefert nur eine `publish_id`, also "zur
+                        // Verarbeitung angenommen". Wer das als Erfolg verbucht,
+                        // merkt nie, wenn TikTok den Post danach ablehnt.
+                        let external_id = if item.platform == "tiktok" {
+                            match self
+                                .warte_auf_tiktok(&item, uploader.as_ref(), &external_id)
+                                .await
+                            {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    self.handle_upload_error(&item, &e, "tiktok_publish_failed")
+                                        .await;
+                                    return false;
+                                }
+                            }
+                        } else {
+                            external_id
+                        };
                         if let Err(e) = update_upload_status(
                             &self.pool,
                             item.id,
@@ -241,15 +261,8 @@ impl UploadTask {
                         true
                     }
                     Err(e) => {
-                        let err = e.to_string();
-                        self.update_upload_status_logged(
-                            &item,
-                            "failed",
-                            None,
-                            Some(&err),
-                            "platform_upload_failed",
-                        )
-                        .await;
+                        self.handle_upload_error(&item, &e, "platform_upload_failed")
+                            .await;
                         false
                     }
                 }
@@ -279,8 +292,14 @@ impl UploadTask {
             local_path = self
                 .download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id)
                 .await?;
-            self.update_upload_status_logged(item, "processing", None, None, "processing_downloaded")
-                .await;
+            self.update_upload_status_logged(
+                item,
+                "processing",
+                None,
+                None,
+                "processing_downloaded",
+            )
+            .await;
         }
 
         let converted_path = self
@@ -363,6 +382,115 @@ impl UploadTask {
         Ok(output_path)
     }
 
+    /// Wie lange auf die Veroeffentlichungsbestaetigung von TikTok gewartet
+    /// wird, und in welchem Abstand nachgefragt wird.
+    const TIKTOK_BESTAETIGUNG_MAX: Duration = Duration::from_secs(180);
+    const TIKTOK_BESTAETIGUNG_ABSTAND: Duration = Duration::from_secs(10);
+
+    /// Fragt TikTok, ob aus der `publish_id` wirklich ein Post geworden ist.
+    /// `PUBLISH_COMPLETE` liefert die echte Post-ID zurueck, `FAILED` den Grund.
+    /// Antwortet TikTok innerhalb des Zeitfensters gar nicht abschliessend,
+    /// bleibt es bei der `publish_id`: ein zweiter Upload waere schlimmer als
+    /// eine fehlende Bestaetigung, weil er den Clip doppelt posten wuerde.
+    async fn warte_auf_tiktok(
+        &self,
+        item: &UploadQueueItem,
+        uploader: &dyn PlatformUploader,
+        publish_id: &str,
+    ) -> Result<String, UploadError> {
+        let start = std::time::Instant::now();
+        loop {
+            let status = uploader.get_video_status(publish_id).await;
+            let zustand = status
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            match zustand.as_str() {
+                "PUBLISH_COMPLETE" => {
+                    let post_id = status
+                        .get("publicaly_available_post_id")
+                        .and_then(|v| v.as_array())
+                        .and_then(|a| a.first())
+                        .map(|v| match v.as_str() {
+                            Some(text) => text.to_string(),
+                            None => v.to_string(),
+                        })
+                        .unwrap_or_else(|| publish_id.to_string());
+                    return Ok(post_id);
+                }
+                "FAILED" => {
+                    let grund = status
+                        .get("fail_reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unbekannt");
+                    return Err(UploadError::Api(format!(
+                        "TikTok hat den Post abgelehnt: {grund}"
+                    )));
+                }
+                _ => {}
+            }
+            if start.elapsed() >= Self::TIKTOK_BESTAETIGUNG_MAX {
+                tracing::warn!(
+                    queue_id = item.id,
+                    publish_id,
+                    letzter_zustand = %zustand,
+                    "TikTok hat den Post im Zeitfenster nicht bestaetigt; \
+                     Eintrag bleibt bei der publish_id, kein zweiter Upload"
+                );
+                return Ok(publish_id.to_string());
+            }
+            tokio::time::sleep(Self::TIKTOK_BESTAETIGUNG_ABSTAND).await;
+        }
+    }
+
+    /// Wie viele Anlaeufe ein Job bekommt, bevor er wirklich als kaputt gilt.
+    /// Ein erschoepftes Kontingent zaehlt nicht mit, dort geht es nur um den
+    /// Termin.
+    const MAX_VERSUCHE: i32 = 5;
+
+    /// Trennt "kaputt" von "spaeter nochmal". Frueher landete jeder Fehler auf
+    /// `failed`, und `failed` holt die Warteschlange nie wieder ab: ein einziges
+    /// 502 oder ein volles Tageskontingent hat den Clip endgueltig verbrannt.
+    async fn handle_upload_error(
+        &self,
+        item: &UploadQueueItem,
+        error: &UploadError,
+        context: &'static str,
+    ) {
+        let text = error.to_string();
+        let verzoegerung = verzoegerung_fuer(error);
+        let erschoepft = !matches!(error, UploadError::QuotaExceeded(_))
+            && item.attempts + 1 >= Self::MAX_VERSUCHE;
+        match verzoegerung {
+            Some(dauer) if !erschoepft => {
+                let naechster = (Utc::now() + dauer).to_rfc3339();
+                if let Err(db_error) =
+                    reschedule_upload(&self.pool, item.id, &naechster, Some(&text)).await
+                {
+                    tracing::warn!(
+                        error = %db_error,
+                        queue_id = item.id,
+                        platform = %item.platform,
+                        "Neuer Termin konnte nicht gesetzt werden"
+                    );
+                    return;
+                }
+                tracing::info!(
+                    queue_id = item.id,
+                    platform = %item.platform,
+                    naechster_versuch = %naechster,
+                    grund = %text,
+                    "Upload vertagt statt verworfen"
+                );
+            }
+            _ => {
+                self.update_upload_status_logged(item, "failed", None, Some(&text), context)
+                    .await;
+            }
+        }
+    }
+
     async fn update_upload_status_logged(
         &self,
         item: &UploadQueueItem,
@@ -371,9 +499,14 @@ impl UploadTask {
         error_message: Option<&str>,
         context: &'static str,
     ) {
-        if let Err(error) =
-            update_upload_status(&self.pool, item.id, status, external_video_id, error_message)
-                .await
+        if let Err(error) = update_upload_status(
+            &self.pool,
+            item.id,
+            status,
+            external_video_id,
+            error_message,
+        )
+        .await
         {
             tracing::warn!(
                 %error,
@@ -535,8 +668,60 @@ impl UploadWorker {
     }
 }
 
+/// Wartezeit bis zum naechsten Anlauf, oder `None`, wenn der Fehler beim
+/// naechsten Mal genauso auftritt. Bewusst als freie Funktion, damit die
+/// Einordnung ohne Datenbank pruefbar ist.
+fn verzoegerung_fuer(error: &UploadError) -> Option<chrono::Duration> {
+    match error {
+        // Kontingent voll: das heilt keine Wiederholung in fuenf Minuten, aber
+        // morgen ist es wieder da. Der Clip selbst ist in Ordnung.
+        UploadError::QuotaExceeded(_) => Some(chrono::Duration::hours(24)),
+        // Voruebergehende Stoerung der Gegenseite oder der Leitung.
+        UploadError::Request(_) => Some(chrono::Duration::minutes(15)),
+        // Abgelaufener Zugang: der Refresh-Worker laeuft alle fuenf Minuten,
+        // ein Anlauf spaeter kann also schon wieder gehen.
+        UploadError::NotAuthenticated => Some(chrono::Duration::minutes(30)),
+        // Validierung, API-Ablehnung, IO, nicht implementiert: bleibt kaputt.
+        UploadError::Validation(_)
+        | UploadError::Api(_)
+        | UploadError::NotImplemented(_)
+        | UploadError::Io(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fehler_einordnung_trennt_vertagen_von_verwerfen() {
+        use super::verzoegerung_fuer;
+        use crate::uploaders::UploadError;
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::QuotaExceeded("voll".into())),
+            Some(chrono::Duration::hours(24))
+        );
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::Request("timeout".into())),
+            Some(chrono::Duration::minutes(15))
+        );
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::NotAuthenticated),
+            Some(chrono::Duration::minutes(30))
+        );
+        // Diese vier bleiben beim naechsten Anlauf genauso kaputt.
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::Validation("zu lang".into())),
+            None
+        );
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::Api("invalidTitle".into())),
+            None
+        );
+        assert_eq!(
+            verzoegerung_fuer(&UploadError::NotImplemented("kein Scope".into())),
+            None
+        );
+    }
+
     use super::*;
     use serde_json::Value;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};

@@ -233,6 +233,34 @@ pub async fn get_upload_queue(
 
 /// Aktualisiert den Queue-Status. Bei `completed` werden zusätzlich die
 /// Clip-Upload-Spalten gesetzt + der Publication-Status aufgefrischt.
+/// Legt einen Job zurueck in die Warteschlange, statt ihn endgueltig zu
+/// verbrennen. Ein erschoepftes Tageskontingent und ein Netzwerkzucken sind
+/// keine kaputten Clips: frueher landeten beide auf `failed`, und `failed` wird
+/// nie wieder abgeholt. `attempts` zaehlt weiter, damit der Aufrufer eine
+/// Obergrenze ziehen kann, und `last_error` bleibt sichtbar.
+pub async fn reschedule_upload(
+    pool: &PgPool,
+    queue_id: i64,
+    naechster_versuch: &str,
+    error: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query!(
+        "UPDATE twitch_clips_upload_queue \
+            SET status = 'pending', attempts = attempts + 1, last_error = $1, \
+                last_attempt_at = $2::text::timestamptz, \
+                scheduled_at = $3::text::timestamptz \
+          WHERE id = $4",
+        error,
+        &now,
+        naechster_versuch,
+        queue_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn update_upload_status(
     pool: &PgPool,
     queue_id: i64,

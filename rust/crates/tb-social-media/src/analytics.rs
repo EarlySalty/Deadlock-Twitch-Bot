@@ -73,6 +73,51 @@ fn optional_int4_metric(field: &str, value: Option<i64>) -> Result<Option<i32>, 
     })
 }
 
+/// Schreibt nur Provider und naechsten Abholtermin, ohne die Messwerte
+/// anzufassen. Der Retry-Pfad hat frueher den vollen Upsert benutzt und dabei
+/// die Standardwerte 0 mitgeschickt: ein einziger API-Fehler ueberschrieb damit
+/// einen Snapshot mit 50.000 Views durch eine glaubwuerdig aussehende Null.
+/// Existiert noch keine Zeile, wird eine mit Nullen angelegt; dort gibt es
+/// nichts zu zerstoeren.
+pub async fn schedule_clip_analytics_retry(
+    pool: &PgPool,
+    clip_db_id: i64,
+    platform: &str,
+    bucket: &str,
+    provider: Option<&str>,
+    next_pull_at: &str,
+) -> Result<(), sqlx::Error> {
+    let provider = clean_provider(provider);
+    let updated = sqlx::query!(
+        "UPDATE twitch_clips_social_analytics \
+            SET provider = COALESCE($1, provider), next_pull_at = $2::text::timestamptz \
+          WHERE clip_id = $3 AND platform = $4 AND bucket = $5",
+        provider.as_deref(),
+        next_pull_at,
+        clip_db_id,
+        platform,
+        bucket
+    )
+    .execute(pool)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        sqlx::query!(
+            "INSERT INTO twitch_clips_social_analytics \
+                (clip_id, platform, bucket, views, likes, comments, shares, provider, synced_at, next_pull_at) \
+             VALUES ($1, $2, $3, 0, 0, 0, 0, $4, CURRENT_TIMESTAMP, $5::text::timestamptz)",
+            clip_db_id,
+            platform,
+            bucket,
+            provider.as_deref(),
+            next_pull_at
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Aktualisiert den Snapshot oder legt ihn an (UPDATE → bei 0 Zeilen INSERT).
 pub async fn upsert_clip_analytics(
     pool: &PgPool,
