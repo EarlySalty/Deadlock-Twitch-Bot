@@ -468,12 +468,26 @@ pub async fn caps_handler(
     Ok(Json(wert))
 }
 
+/// Der Relay-Pfad zum Speichern eines Ziels.
+///
+/// `/v1/me/destinations` und nicht `/v1/admin/destinations`: nur dieser
+/// Endpunkt nimmt eine Aenderung ohne Stream-Key an, und genau daran scheiterte
+/// vorher jede Qualitaetsaenderung an einem eingerichteten Ziel.
+const RELAY_ZIEL_PFAD: &str = "/v1/me/destinations";
+
+/// Die Huelle, die `PutDestinations` in rs-relay erwartet
+/// (`rs-relay/src/api/user.rs`): Streamer-ID und eine Liste von Zielen.
+///
+/// Eigene Funktion, damit die Form pruefbar ist und nicht nur im Handler
+/// steht, wo sie ohne laufendes Relay niemand zu Gesicht bekommt.
+fn nutzlast_fuer(streamer_id: i64, eintrag: Value) -> Value {
+    json!({ "streamer_id": streamer_id, "destinations": [eintrag] })
+}
+
 /// Speichert ein Ziel: Zugangsdaten, Qualitaet oder beides.
 ///
-/// Geht ueber `/v1/me/destinations` statt ueber den Admin-Weg, weil nur dieser
-/// Endpunkt eine Aenderung ohne Stream-Key annimmt. Die Antwort ist die volle
-/// Zielliste samt `requested` und `effective`, also genau das, was die
-/// Oberflaeche danach anzeigen will.
+/// Die Antwort ist die volle Zielliste samt `requested` und `effective`, also
+/// genau das, was die Oberflaeche danach anzeigen will.
 pub async fn put_destination_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
@@ -483,8 +497,8 @@ pub async fn put_destination_handler(
     let eintrag = ziel_nutzlast(&body)?;
     let wert = relay_json(
         reqwest::Method::PUT,
-        "/v1/me/destinations",
-        Some(json!({ "streamer_id": id, "destinations": [eintrag] })),
+        RELAY_ZIEL_PFAD,
+        Some(nutzlast_fuer(id, eintrag)),
     )
     .await?;
     Ok(Json(wert))
@@ -674,6 +688,28 @@ mod tests {
         let wert = ziel_nutzlast(&b).expect("darf durchgehen");
         assert_eq!(wert["enabled"], false);
         assert!(wert.get("width").is_none());
+    }
+
+    /// Die Form, die rs-relay erwartet. Ohne diesen Test faellt ein
+    /// vertippter Feldname erst im Betrieb auf, und zwar als nackte 400 vom
+    /// Relay ohne Hinweis darauf, welches Feld gemeint war.
+    #[test]
+    fn die_nutzlast_hat_die_huelle_des_relays() {
+        let mut b = body("twitch");
+        b.profil = Some("1080p60".into());
+        let nutzlast = nutzlast_fuer(4711, ziel_nutzlast(&b).expect("darf durchgehen"));
+        assert_eq!(nutzlast["streamer_id"], 4711);
+        let ziele = nutzlast["destinations"].as_array().expect("Liste");
+        assert_eq!(ziele.len(), 1, "eine Anfrage traegt genau ein Ziel");
+        assert_eq!(ziele[0]["platform"], "twitch");
+        assert_eq!(ziele[0]["height"], 1080);
+    }
+
+    /// Der Weg ueber den Admin-Endpunkt war der Grund, warum sich eine
+    /// Qualitaetsstufe ohne Stream-Key nicht speichern liess.
+    #[test]
+    fn gespeichert_wird_ueber_den_nutzer_endpunkt() {
+        assert_eq!(RELAY_ZIEL_PFAD, "/v1/me/destinations");
     }
 
     #[test]

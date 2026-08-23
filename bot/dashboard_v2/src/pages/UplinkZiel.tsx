@@ -47,14 +47,20 @@ function ZahlFeld({
   einheit,
   wert,
   max,
+  hart,
   onChange,
 }: {
   label: string;
   einheit: string;
-  wert: string;
+  /** Was die Plattform annimmt. Nur ein Hinweis, kein Verbot. */
   max: number | null;
+  hart: number | null;
+  wert: string;
   onChange: (wert: string) => void;
 }) {
+  const zahl = Number(wert);
+  const ueberPlattform = max !== null && Number.isFinite(zahl) && zahl > max;
+  const ueberHart = hart !== null && Number.isFinite(zahl) && zahl > hart;
   return (
     <label className="block space-y-1">
       <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
@@ -69,9 +75,15 @@ function ZahlFeld({
         />
         <span className="shrink-0 text-xs text-text-secondary">{einheit}</span>
       </span>
-      {max !== null && (
-        <span className="block text-[11px] text-text-secondary">max. {max}</span>
-      )}
+      {ueberHart ? (
+        <span className="block text-[11px] text-warning">nehmen wir nicht an, max. {hart}</span>
+      ) : ueberPlattform ? (
+        <span className="block text-[11px] text-warning">
+          über {max}, das rechnen wir herunter
+        </span>
+      ) : max !== null ? (
+        <span className="block text-[11px] text-text-secondary">bis {max} geht 1:1 raus</span>
+      ) : null}
     </label>
   );
 }
@@ -116,6 +128,14 @@ export function ZielKarte({
   });
   const [vorbelegt, setVorbelegt] = useState(false);
   const [fehlertext, setFehlertext] = useState('');
+  // Nur wahr, solange seit dem letzten Erfolg nichts angefasst wurde. Ein
+  // dauerhaftes "Gespeichert" auf dem Knopf sagt nichts mehr ueber den
+  // aktuellen Stand und deckt genau die Faelle zu, in denen etwas offen ist.
+  const [gespeichert, setGespeichert] = useState(false);
+  const angefasst = () => {
+    setGespeichert(false);
+    setFehlertext('');
+  };
 
   const bestellt = ziel?.requested;
 
@@ -157,14 +177,25 @@ export function ZielKarte({
     setModus('manuell');
   };
 
-  const grenze = {
-    width: engereGrenze(caps?.max_width ?? null, ingest?.max_width ?? INGEST_FALLBACK.max_width),
-    height: engereGrenze(caps?.max_height ?? null, ingest?.max_height ?? INGEST_FALLBACK.max_height),
-    fps: engereGrenze(caps?.max_fps ?? null, ingest?.max_fps ?? INGEST_FALLBACK.max_fps),
-    bitrate_kbps: engereGrenze(
-      caps?.max_bitrate_kbps ?? null,
-      ingest?.max_bitrate_kbps ?? INGEST_FALLBACK.max_bitrate_kbps,
-    ),
+  // Abgelehnt wird nur, was ueber den Ingest-Deckel geht: mehr nimmt das Relay
+  // physisch nicht an. Das Plattform-Cap ist ausdruecklich KEINE Ablehnung.
+  // Das Relay speichert `requested` ungeklemmt, damit eine spaeter angehobene
+  // Grenze ohne Zutun greift, und der Stufenmodus laesst 1440p fuer jede
+  // Plattform zu. Eine Client-Ablehnung an derselben Stelle waere ein
+  // Widerspruch zu beidem und zu dem Satz, der unter den Feldern steht.
+  const hartesMax = {
+    width: ingest?.max_width ?? INGEST_FALLBACK.max_width,
+    height: ingest?.max_height ?? INGEST_FALLBACK.max_height,
+    fps: ingest?.max_fps ?? INGEST_FALLBACK.max_fps,
+    bitrate_kbps: ingest?.max_bitrate_kbps ?? INGEST_FALLBACK.max_bitrate_kbps,
+  };
+  // Was die Plattform davon wirklich annimmt. Steht als Hinweis am Feld, ohne
+  // die Eingabe zu blockieren.
+  const plattformMax = {
+    width: engereGrenze(caps?.max_width ?? null, hartesMax.width),
+    height: engereGrenze(caps?.max_height ?? null, hartesMax.height),
+    fps: engereGrenze(caps?.max_fps ?? null, hartesMax.fps),
+    bitrate_kbps: engereGrenze(caps?.max_bitrate_kbps ?? null, hartesMax.bitrate_kbps),
   };
 
   /** Prueft die manuellen Zahlen, bevor sie abgeschickt werden. Der Server
@@ -185,8 +216,10 @@ export function ZielKarte({
     for (const [feld, name] of felder) {
       const wert = zahlen[feld];
       if (!Number.isFinite(wert) || wert <= 0) return `${name} fehlt.`;
-      const max = grenze[feld];
-      if (max !== null && wert > max) return `${name} darf höchstens ${max} sein.`;
+      const max = hartesMax[feld];
+      if (max !== null && wert > max) {
+        return `${name} darf höchstens ${max} sein, mehr nehmen wir nicht entgegen.`;
+      }
     }
     if (zahlen.width % 2 !== 0 || zahlen.height % 2 !== 0) {
       return 'Breite und Höhe müssen gerade Zahlen sein.';
@@ -202,14 +235,27 @@ export function ZielKarte({
       if (!key && !eingerichtet) {
         throw new Error(`Für ${label} fehlt uns noch der Stream-Schlüssel.`);
       }
+      // Adresse und Schluessel gehoeren zusammen: das Relay nimmt sie nur
+      // gemeinsam an, weil beide gleich wieder als Argument an ffmpeg gehen
+      // und gemeinsam geprueft werden. Eine geaenderte Adresse ohne Schluessel
+      // wuerde also stillschweigend unter den Tisch fallen, waehrend der
+      // Knopf "Gespeichert" meldet und das Feld die neue Adresse behaelt.
+      // Deshalb hier ein Halt mit Grund statt eines verworfenen Feldes.
+      if (!key && eingerichtet && url !== (ziel?.rtmp_url ?? '')) {
+        throw new Error(
+          'Die Serveradresse können wir nur zusammen mit dem Stream-Schlüssel ändern. Trag beides ein.',
+        );
+      }
       const body: Parameters<typeof saveUplinkDestination>[0] = { platform };
       if (key) {
         body.rtmp_url = url;
         body.stream_key = key;
       }
-      if (enabled !== undefined) {
-        body.enabled = enabled;
-      } else if (modus === 'manuell') {
+      if (enabled !== undefined) body.enabled = enabled;
+      // Die Qualitaet geht immer mit, auch beim Pausieren. Sonst verliert ein
+      // Klick auf "Ziel pausieren" die Stufe, die daneben im Formular steht,
+      // wortlos: die Auswahl bliebe stehen, gespeichert waere sie nicht.
+      if (modus === 'manuell') {
         const geprueft = manuellPruefen();
         if (typeof geprueft === 'string') throw new Error(geprueft);
         body.manuell = geprueft;
@@ -221,6 +267,7 @@ export function ZielKarte({
     onSuccess: () => {
       setStreamKey('');
       setFehlertext('');
+      setGespeichert(true);
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
@@ -279,10 +326,18 @@ export function ZielKarte({
           </label>
           <input
             value={rtmpUrl}
-            onChange={(e) => setRtmpUrl(e.target.value)}
+            onChange={(e) => {
+              setRtmpUrl(e.target.value);
+              angefasst();
+            }}
             placeholder={rtmpVorgabe || 'rtmp://…'}
             className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
           />
+          {eingerichtet && (
+            <p className="text-[11px] text-text-secondary">
+              Adresse ändern geht nur zusammen mit dem Stream-Schlüssel: wir prüfen beide gemeinsam.
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
@@ -290,7 +345,10 @@ export function ZielKarte({
           </label>
           <input
             value={streamKey}
-            onChange={(e) => setStreamKey(e.target.value)}
+            onChange={(e) => {
+              setStreamKey(e.target.value);
+              angefasst();
+            }}
             type="password"
             placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
             className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
@@ -310,14 +368,20 @@ export function ZielKarte({
             <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setModus('stufe')}
+                onClick={() => {
+                  setModus('stufe');
+                  angefasst();
+                }}
                 className={`px-3 py-1 ${modus === 'stufe' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
                 Stufe
               </button>
               <button
                 type="button"
-                onClick={nachManuell}
+                onClick={() => {
+                  nachManuell();
+                  angefasst();
+                }}
                 className={`px-3 py-1 ${modus === 'manuell' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
                 Manuell
@@ -329,7 +393,10 @@ export function ZielKarte({
             <div className="space-y-1">
               <select
                 value={profil}
-                onChange={(e) => setProfil(e.target.value as UplinkProfilName)}
+                onChange={(e) => {
+                  setProfil(e.target.value as UplinkProfilName);
+                  angefasst();
+                }}
                 className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
               >
                 {UPLINK_PROFILE.map((eintrag) => (
@@ -352,31 +419,54 @@ export function ZielKarte({
                   label="Breite"
                   einheit="px"
                   wert={manuell.width}
-                  max={grenze.width}
-                  onChange={(w) => setManuell((v) => ({ ...v, width: w }))}
+                  max={plattformMax.width}
+                  hart={hartesMax.width}
+                  onChange={(w) => {
+                    setManuell((v) => ({ ...v, width: w }));
+                    angefasst();
+                  }}
                 />
                 <ZahlFeld
                   label="Höhe"
                   einheit="px"
                   wert={manuell.height}
-                  max={grenze.height}
-                  onChange={(h) => setManuell((v) => ({ ...v, height: h }))}
+                  max={plattformMax.height}
+                  hart={hartesMax.height}
+                  onChange={(h) => {
+                    setManuell((v) => ({ ...v, height: h }));
+                    angefasst();
+                  }}
                 />
                 <ZahlFeld
                   label="Bildrate"
                   einheit="fps"
                   wert={manuell.fps}
-                  max={grenze.fps}
-                  onChange={(f) => setManuell((v) => ({ ...v, fps: f }))}
+                  max={plattformMax.fps}
+                  hart={hartesMax.fps}
+                  onChange={(f) => {
+                    setManuell((v) => ({ ...v, fps: f }));
+                    angefasst();
+                  }}
                 />
                 <ZahlFeld
                   label="Bitrate"
                   einheit="kbps"
                   wert={manuell.bitrate_kbps}
-                  max={grenze.bitrate_kbps}
-                  onChange={(b) => setManuell((v) => ({ ...v, bitrate_kbps: b }))}
+                  max={plattformMax.bitrate_kbps}
+                  hart={hartesMax.bitrate_kbps}
+                  onChange={(b) => {
+                    setManuell((v) => ({ ...v, bitrate_kbps: b }));
+                    angefasst();
+                  }}
                 />
               </div>
+              {!caps && (
+                <p className="text-xs text-warning">
+                  Die Grenzen von {label} konnten wir gerade nicht abrufen. Die Hinweise an den
+                  Feldern zeigen deshalb nur, was wir überhaupt entgegennehmen. Gespeichert wird
+                  trotzdem richtig, wir rechnen beim Senden herunter.
+                </p>
+              )}
               <p className="text-xs text-text-secondary">
                 Freie Werte. Was über den Grenzen von {label} liegt, rechnen wir beim Senden
                 herunter, statt den Stream zu verweigern.
@@ -398,7 +488,7 @@ export function ZielKarte({
             className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
           >
             {speichern.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {speichern.isSuccess && !speichern.isPending ? 'Gespeichert' : `${label} speichern`}
+            {gespeichert && !speichern.isPending ? 'Gespeichert' : `${label} speichern`}
           </button>
           {eingerichtet && (
             <button

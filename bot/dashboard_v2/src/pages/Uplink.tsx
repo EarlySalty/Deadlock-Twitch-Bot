@@ -607,7 +607,10 @@ export function UplinkPage() {
                     </p>
                   ) : null}
 
-                  <div className="space-y-2">
+                  {/* Bei einem Abrufausfall keine Karten: vier Stueck, die
+                      alle "nicht eingerichtet" behaupten und einen Schluessel
+                      verlangen, sind das Gegenteil der Warnung darueber. */}
+                  <div className={zieleFehler ? 'hidden' : 'space-y-2'}>
                     {UPLINK_PLATTFORMEN.map((plattform) => {
                       const ziel = gespeicherteZiele.find((z) => z.platform === plattform.id);
                       return (
