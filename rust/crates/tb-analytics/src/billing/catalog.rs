@@ -204,6 +204,128 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
     },
 ];
 
+// ── Drei-Stufen-Katalog (SPEC `.tasks/2026-08-23-pricing-drei-stufen`) ──────
+
+/// Ein Eintrag des Drei-Stufen-Katalogs.
+///
+/// Bewusst neben `BillingPlan` und nicht statt seiner: die acht alten Plaene
+/// stehen so in der DB und muessen weiter aufloesbar bleiben (SPEC M2). Sie
+/// werden nur nicht mehr verkauft.
+///
+/// Zwei Unterschiede zum alten Blueprint, beide aus der SPEC:
+///
+/// 1. **Brutto statt netto.** Der alte Katalog rechnete netto und beschriftete
+///    brutto. Hier sind alle Betraege Endpreise, Kleinunternehmer nach
+///    Paragraph 19 UStG, kein Umsatzsteuerausweis.
+/// 2. **Jahrespreis als eigener Betrag**, nicht ueber einen Rabattsatz
+///    gerechnet. Ein gerechneter Rabatt ergibt krumme Zahlen, die niemand so
+///    auszeichnen will.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StufenPlan {
+    /// Plan-ID des Monatsabos.
+    pub id: &'static str,
+    /// Plan-ID des Jahresabos (`None` bei Free).
+    pub id_jahr: Option<&'static str>,
+    /// Stufen-Schluessel (`"free" | "plus" | "pro"`).
+    pub stufe: &'static str,
+    /// Anzeigename.
+    pub name: &'static str,
+    /// Monatspreis brutto in Cent (`0` = kostenlos).
+    pub monatlich_brutto_cents: u32,
+    /// Jahrespreis brutto in Cent (`0` = kein Jahresangebot).
+    pub jaehrlich_brutto_cents: u32,
+    /// Freigeschaltete Entitlements (alphabetisch, gleiche Quelle wie
+    /// `plan_entitlements`).
+    pub entitlements: &'static [&'static str],
+    /// Was der Betrachter auf der Seite liest.
+    pub features: &'static [&'static str],
+}
+
+/// Wie viele Monatspreise das Jahresabo kostet — daraus folgt der Satz
+/// "vier Monate geschenkt". Bestaetigt am 2026-08-23: 39,99 sind acht
+/// Monatspreise zu 4,99, 79,99 sind acht zu 9,99.
+pub const JAHR_MONATE_BEZAHLT: u32 = 8;
+
+/// Geschenkte Monate im Jahresabo (`12 - JAHR_MONATE_BEZAHLT`).
+pub const JAHR_MONATE_GESCHENKT: u32 = 12 - JAHR_MONATE_BEZAHLT;
+
+/// Die drei Stufen in Verkaufsreihenfolge.
+pub const STUFEN_PLANS: &[StufenPlan] = &[
+    StufenPlan {
+        id: "raid_free",
+        id_jahr: None,
+        stufe: "free",
+        name: "Netzwerk Free",
+        monatlich_brutto_cents: 0,
+        jaehrlich_brutto_cents: 0,
+        entitlements: &[],
+        // Free bleibt vollwertig und wird nicht kuenstlich beschnitten.
+        // Einzige Ausnahme ist das Wasserzeichen auf Clips.
+        features: &[
+            "Auto-Raid in beide Richtungen",
+            "Kompletter Chat-Schutz",
+            "Alle Chat-Befehle",
+            "Go-Live-Post im Community-Discord",
+            "Overlay-Builder und Sendeplanung",
+            "Tagesform des letzten Streams",
+            "3 Clips im Monat, mit Wasserzeichen",
+        ],
+    },
+    StufenPlan {
+        id: "netzwerk_plus",
+        id_jahr: Some("netzwerk_plus_jahr"),
+        stufe: "plus",
+        name: "Netzwerk Plus",
+        monatlich_brutto_cents: 499,
+        jaehrlich_brutto_cents: 3999,
+        entitlements: &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        ],
+        features: &[
+            "Voller Verlauf statt nur letzter Stream",
+            "Zeitraumvergleiche und Wachstum",
+            "KI-Analyse, KI-Chat, Coaching, KI-Wochenreport",
+            "Werbefreier Chat, Raid-Vorrang, Lurker-Erinnerung",
+            "Eigener Bot-Name",
+            "10 Clips im Monat, ohne Wasserzeichen",
+        ],
+    },
+    StufenPlan {
+        id: "creator_pro",
+        id_jahr: Some("creator_pro_jahr"),
+        stufe: "pro",
+        name: "Creator Pro",
+        monatlich_brutto_cents: 999,
+        jaehrlich_brutto_cents: 7999,
+        entitlements: &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "clips.autopost",
+            "clips.unlimited",
+            "raid.priority",
+        ],
+        features: &[
+            "Alles aus Plus",
+            "Clips ohne Mengenbegrenzung",
+            "Automatisches Posten auf TikTok, Instagram und YouTube",
+            "Untertitel und mehrere Formate",
+            "Vorrang bei Support und neuen Funktionen",
+        ],
+    },
+];
+
+/// Sucht eine Stufe ueber die Monats- oder Jahres-Plan-ID.
+pub fn stufen_plan_fuer(plan_id: &str) -> Option<&'static StufenPlan> {
+    let gesucht = plan_id.trim();
+    STUFEN_PLANS
+        .iter()
+        .find(|p| p.id == gesucht || p.id_jahr == Some(gesucht))
+}
+
 /// In Source eingecheckte Stripe-Price-IDs (keine Secrets). `(plan_id, &[(cycle, price_id)])`.
 /// Spiegelt `STRIPE_PRICE_ID_DEFAULTS`. `raid_free` fehlt (kostenlos, kein Stripe-Price).
 pub const PRICE_ID_DEFAULTS: &[(&str, &[(u32, &str)])] = &[
@@ -650,6 +772,123 @@ pub fn product_id_map_from_env() -> ProductMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Drei-Stufen-Katalog (SPEC M2) ──────────────────────────────────────
+
+    /// Die bestaetigten Betraege, bestaetigt am 2026-08-23.
+    #[test]
+    fn stufen_preise_sind_die_bestaetigten() {
+        let plus = stufen_plan_fuer("netzwerk_plus").unwrap();
+        assert_eq!(plus.monatlich_brutto_cents, 499);
+        assert_eq!(plus.jaehrlich_brutto_cents, 3999);
+
+        let pro = stufen_plan_fuer("creator_pro").unwrap();
+        assert_eq!(pro.monatlich_brutto_cents, 999);
+        assert_eq!(pro.jaehrlich_brutto_cents, 7999);
+
+        let free = stufen_plan_fuer("raid_free").unwrap();
+        assert_eq!(free.monatlich_brutto_cents, 0);
+        assert_eq!(free.jaehrlich_brutto_cents, 0);
+    }
+
+    /// Der Satz "vier Monate geschenkt" muss rechnerisch stimmen, sonst hakt
+    /// beim Leser genau dieser Satz. Ein Jahresabo kostet acht Monatspreise.
+    ///
+    /// Genau dieser Test fehlte vorher: die Landingpage stand auf 39,99 mit
+    /// "zwei Monate geschenkt", und das war rechnerisch falsch.
+    #[test]
+    fn jahrespreis_ist_acht_monatspreise() {
+        assert_eq!(JAHR_MONATE_GESCHENKT, 4, "der Text sagt vier Monate");
+        for plan in STUFEN_PLANS {
+            if plan.jaehrlich_brutto_cents == 0 {
+                continue;
+            }
+            assert_eq!(
+                plan.jaehrlich_brutto_cents,
+                plan.monatlich_brutto_cents * JAHR_MONATE_BEZAHLT,
+                "{}: Jahrespreis muss {} Monatspreise sein, sonst stimmt \
+                 \"{} Monate geschenkt\" nicht",
+                plan.id,
+                JAHR_MONATE_BEZAHLT,
+                JAHR_MONATE_GESCHENKT
+            );
+        }
+    }
+
+    /// Die Entitlements im Verkaufskatalog und im Plan-Modul muessen
+    /// uebereinstimmen, sonst verkauft die Seite etwas, das das Gate nicht
+    /// aufschliesst.
+    #[test]
+    fn stufen_entitlements_matchen_das_plan_modul() {
+        for plan in STUFEN_PLANS {
+            assert_eq!(
+                crate::plan::plan_entitlements(plan.id),
+                plan.entitlements,
+                "Entitlement-Drift bei {}",
+                plan.id
+            );
+            // Das Jahresabo schaltet exakt dasselbe frei wie das Monatsabo.
+            if let Some(id_jahr) = plan.id_jahr {
+                assert_eq!(
+                    crate::plan::plan_entitlements(id_jahr),
+                    plan.entitlements,
+                    "Jahres- und Monatsabo von {} muessen gleich viel koennen",
+                    plan.id
+                );
+            }
+        }
+    }
+
+    /// Pro deckt Plus vollstaendig ab ("Alles aus Plus").
+    #[test]
+    fn pro_enthaelt_alles_aus_plus() {
+        let plus = stufen_plan_fuer("netzwerk_plus").unwrap();
+        let pro = stufen_plan_fuer("creator_pro").unwrap();
+        for ent in plus.entitlements {
+            assert!(
+                pro.entitlements.contains(ent),
+                "Pro fehlt das Plus-Recht {ent}"
+            );
+        }
+        // Die zwei Rechte, die Pro ausmachen.
+        assert!(pro.entitlements.contains(&"clips.unlimited"));
+        assert!(pro.entitlements.contains(&"clips.autopost"));
+    }
+
+    /// Ausdruecklich nicht im Katalog: White-Label und API.
+    #[test]
+    fn kein_white_label_und_keine_api() {
+        for plan in STUFEN_PLANS {
+            for ent in plan.entitlements {
+                assert!(
+                    !ent.contains("white_label") && !ent.contains("api"),
+                    "{} traegt {ent}, das gehoert nicht in den Katalog",
+                    plan.id
+                );
+            }
+        }
+    }
+
+    /// Die Stufen des Katalogs und die des Plan-Moduls muessen dasselbe sagen.
+    #[test]
+    fn stufen_schluessel_matchen_plan_stufe() {
+        for plan in STUFEN_PLANS {
+            assert_eq!(crate::plan::plan_stufe(plan.id).as_str(), plan.stufe);
+            if let Some(id_jahr) = plan.id_jahr {
+                assert_eq!(crate::plan::plan_stufe(id_jahr).as_str(), plan.stufe);
+            }
+        }
+    }
+
+    #[test]
+    fn stufen_plan_fuer_findet_monat_und_jahr() {
+        assert_eq!(stufen_plan_fuer("netzwerk_plus_jahr").unwrap().stufe, "plus");
+        assert_eq!(stufen_plan_fuer("creator_pro_jahr").unwrap().stufe, "pro");
+        assert_eq!(stufen_plan_fuer("  creator_pro  ").unwrap().stufe, "pro");
+        assert!(stufen_plan_fuer("garbage").is_none());
+        // Die alten Plaene sind bewusst nicht im Verkaufskatalog.
+        assert!(stufen_plan_fuer("bundle_komplett").is_none());
+    }
 
     /// Erwartete Monatspreise je Plan — Orakel aus `billing_plans.py`.
     /// `(id, monthly_net_cents, tier, recommended)`.

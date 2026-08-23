@@ -45,7 +45,9 @@ export interface ValuePillar {
   icon: "Swords" | "ShieldCheck" | "Sparkles" | "Clapperboard";
   kicker: string;
   title: string;
+  /** Ein Satz Nutzen, mehr nicht. Den Rest erzaehlt das Bild der Karte. */
   body: string;
+  /** Kurze Merkmale, die als Chips nebeneinander stehen, keine Saetze. */
   points: string[];
   tone: "primary" | "accent";
 }
@@ -57,11 +59,11 @@ export const valuePillars: ValuePillar[] = [
     icon: "Swords",
     kicker: "Der Kern",
     title: "Auto-Raid-Netzwerk",
-    body: "Wenn dein Stream endet, geht deine Community nicht offline, sondern zum nächsten deutschen Deadlock-Streamer, der gerade live ist. Umgekehrt bekommst du Zuschauer, wenn andere aufhören.",
+    body: "Endet dein Stream, geht deine Community nicht offline, sondern zum nächsten deutschen Deadlock-Streamer, der gerade live ist.",
     points: [
-      "Passende Partner statt Zufall: Sprache, Spiel und Größe entscheiden",
-      "Manueller Raid bleibt jederzeit möglich",
-      "Ausschalten geht mit einem Klick im Dashboard",
+      "Partner nach Sprache und Größe",
+      "Manueller Raid bleibt",
+      "Abschalten mit einem Klick",
     ],
     tone: "primary",
   },
@@ -70,11 +72,11 @@ export const valuePillars: ValuePillar[] = [
     icon: "ShieldCheck",
     kicker: "Die Grundlage",
     title: "Schutz im Chat",
-    body: "Follow-Bots, Viewbot-Werbung und Selbstpromo laufen bei uns gegen eine gemeinsame Liste. Was in einem Partner-Chat auffällt, ist in allen anderen schon bekannt.",
+    body: "Was in einem Partner-Chat als Spam auffällt, ist in allen anderen schon bekannt, bevor es dort ankommt.",
     points: [
-      "Gemeinsame Spam-Erkennung über alle Partner-Kanäle",
-      "Wortfilter und Timeouts nach deinen Regeln",
-      "Bleibt kostenlos, in jeder Stufe",
+      "Gemeinsame Spam-Liste",
+      "Wortfilter nach deinen Regeln",
+      "In jeder Stufe kostenlos",
     ],
     tone: "accent",
   },
@@ -83,11 +85,11 @@ export const valuePillars: ValuePillar[] = [
     icon: "Sparkles",
     kicker: "Nach dem Stream",
     title: "Auswertung und Coaching",
-    body: "Das Dashboard zeigt, wann Zuschauer gekommen und gegangen sind, wie der Chat lief und was deine besten Momente waren. Dazu ein Wochenreport, der die Zahlen einordnet statt sie nur zu zeigen.",
+    body: "Nach dem Stream siehst du, wann Zuschauer gekommen und gegangen sind, und was daraus für den nächsten Stream folgt.",
     points: [
-      "Zuschauerverlauf, Chat-Aktivität und Wachstum in einer Ansicht",
-      "Wochenreport mit konkreten nächsten Schritten",
-      "Vergleich mit deinen eigenen Vorwochen, nicht mit fremden Kanälen",
+      "Verlauf und Chat in einer Ansicht",
+      "Wochenreport mit nächsten Schritten",
+      "Vergleich nur mit dir selbst",
     ],
     tone: "primary",
   },
@@ -96,11 +98,11 @@ export const valuePillars: ValuePillar[] = [
     icon: "Clapperboard",
     kicker: "Zwischen den Streams",
     title: "Clips, die von allein entstehen",
-    body: "Der Bot merkt sich die Stellen, an denen im Chat etwas los war, und schneidet daraus Hochkant-Clips. Du siehst sie nach dem Stream im Dashboard und lädst sie herunter oder postest sie direkt.",
+    body: "Der Bot merkt sich die Stellen, an denen im Chat etwas los war, und schneidet daraus fertige Hochkant-Clips.",
     points: [
-      "Erkennung über Chat-Ausschläge und !clip im Chat",
-      "Hochkant-Format für TikTok, Shorts und Reels",
-      "Automatisches Posten ist in Arbeit und Teil von Creator Pro",
+      "Erkennung über Chat-Ausschläge",
+      "Hochkant für TikTok und Shorts",
+      "Auto-Posten in Arbeit, Teil von Creator Pro",
     ],
     tone: "accent",
   },
@@ -130,10 +132,11 @@ export const plans: Plan[] = [
     id: "free",
     name: "Netzwerk Free",
     price: "0 €",
-    period: "dauerhaft",
+    period: "für immer",
     yearly: null,
     anchor: "Vollwertig, ohne Ablaufdatum",
-    featured: false,
+    // Der hervorgehobene Plan ist bewusst der kostenlose, nicht der teuerste.
+    featured: true,
     cta: "Kostenlos verbinden",
     ctaHref: "AUTH",
     features: [
@@ -151,9 +154,9 @@ export const plans: Plan[] = [
     name: "Netzwerk Plus",
     price: "4,99 €",
     period: "pro Monat",
-    yearly: "39,99 € im Jahr, zwei Monate geschenkt",
+    yearly: "39,99 € im Jahr, vier Monate geschenkt",
     anchor: "Der Preis eines Twitch-Subs",
-    featured: true,
+    featured: false,
     cta: "Plus ansehen",
     ctaHref: "ABBO",
     features: [
@@ -172,7 +175,7 @@ export const plans: Plan[] = [
     name: "Creator Pro",
     price: "9,99 €",
     period: "pro Monat",
-    yearly: "79,99 € im Jahr, zwei Monate geschenkt",
+    yearly: "79,99 € im Jahr, vier Monate geschenkt",
     anchor: "Clip-Werkzeuge kosten am Markt 15 bis 25 $ im Monat",
     featured: false,
     cta: "Pro ansehen",

@@ -22,10 +22,16 @@ import { useNetworkMetrics } from "@/hooks/useNetworkMetrics";
 /**
  * Streamer-Landing V2 unter /streamer/v2/.
  *
- * Aufbau folgt dem Wireframe aus docs/strategie/31: Hero mit Beweiszeile,
- * das Problem, der Plan, die Leistungen, offene Zahlen, Lead-Magnet, Preise,
- * Einwaende, Abschluss. Die Metriken werden einmal oben geladen und nach
- * unten gereicht, damit Hero und Zahlen-Block denselben Stand zeigen.
+ * Aufbau folgt dem Wireframe aus docs/strategie/31, in dieser Ordnung: Hero
+ * mit Beweiszeile, das Problem, der Plan, die Leistungen, die Kontrolle ueber
+ * den Bot, der Preis, danach erst der Beweis (Partner, offene Zahlen,
+ * Lead-Magnet), zuletzt Einwaende und Abschluss.
+ *
+ * Der Beweis steht bewusst hinter dem Preis und nicht direkt unter dem Hero:
+ * die Partnerkacheln zeigen laufende Twitch-Einbettungen und wuerden gleich
+ * nach der Raid-Buehne ein zweites bewegtes Stream-Bild setzen, das dem Hero
+ * die Wirkung nimmt. Die Metriken werden einmal oben geladen und nach unten
+ * gereicht, damit Hero und Zahlen-Block denselben Stand zeigen.
  */
 export function StreamerNetworkPage() {
   const metrics = useNetworkMetrics();
@@ -37,6 +43,11 @@ export function StreamerNetworkPage() {
           Textkante hinaus und duerfen dabei keine Seitenscrollleiste erzeugen. */}
       <main className="relative overflow-x-clip">
         <NetworkHero metrics={metrics} />
+        <VoidSection />
+        <PlanSection />
+        <PillarsSection />
+        <NetworkSecuritySection />
+        <PricingSection />
         <PartnersSection
           partners={metrics.partnerList}
           liveNow={metrics.liveNow}
@@ -44,13 +55,8 @@ export function StreamerNetworkPage() {
           settled={metrics.settled}
           categoryKnown={metrics.categoryKnown}
         />
-        <VoidSection />
-        <PlanSection />
-        <PillarsSection />
-        <NetworkSecuritySection />
         <OpenMetricsSection metrics={metrics} />
         <ChannelReportSection />
-        <PricingSection />
         <ObjectionsSection />
         <NetworkCta partners={metrics.partnerList} />
       </main>

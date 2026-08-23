@@ -505,14 +505,6 @@
 
 
 
-.v2-rd-head-live {
-  color:var(--color-text-secondary);
-  align-items:center;
-  gap:.5rem;
-  font-size:.78rem;
-  display:inline-flex;
-}
-
 .v2-rd-stage {
   position:relative;
 }
@@ -525,19 +517,26 @@
   transition:opacity .52s cubic-bezier(.4,0,.2,1),transform .52s cubic-bezier(.4,0,.2,1),border-color .52s,box-shadow .52s;
   position:relative;
   overflow:hidden;
-  box-shadow:0 22px 60px #0000008c;
+  box-shadow:0 34px 90px -20px rgba(0,0,0,.95);
 }
 
+/* Die wartende Karte tritt deutlich weiter zurueck als vorher (0.42/0.965):
+   der Sprung auf "gefunden" ist erst dann ein Ereignis und kein Aufhellen. */
 .v2-rd-card-dim {
-  opacity:.42;
-  transform:scale(.965);
+  opacity:.24;
+  transform:scale(.93);
+  filter:saturate(.35);
 }
 
 .v2-rd-card-found {
   opacity:1;
-  border-color:#55978f8c;
-  transform:scale(1);
-  box-shadow:0 0 0 1px #55978f2e,0 0 60px -18px #55978fcc,0 22px 60px #0000008c;
+  border-color:#55978fd9;
+  transform:scale(1.015);
+  filter:saturate(1.08);
+  box-shadow:
+    0 0 0 1px #55978f5c,
+    0 0 110px -14px #55978f,
+    0 34px 90px -20px rgba(0,0,0,.95);
 }
 
 .v2-rd-screen {
@@ -554,6 +553,27 @@
   position:absolute;
   inset:-12%;
   transform:scale(1.12);
+}
+
+/* Der Clip fuellt den Bildschirm der Karte und liegt ueber `.v2-rd-art`.
+   Faellt er aus, bleibt die unscharfe Flaeche darunter stehen. */
+.v2-rd-clip {
+  position:absolute;
+  inset:0;
+  z-index:1;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  pointer-events:none;
+}
+
+/* Vignette und Lichtwisch muessen ueber dem Clip liegen, nicht darunter.
+   Ohne diese Zeile schiebt sich das Video davor, weil es eine eigene
+   Stapelebene bekommt und beide sonst auf `auto` stehen. Die Bedienleiste
+   (z-index 2) und das Offline-Feld (z-index 3) bleiben darueber. */
+.v2-rd-screen::after,
+.v2-rd-screen .v2-screen-sheen {
+  z-index:1;
 }
 
 .v2-rd-screen:after {
@@ -652,12 +672,13 @@
   -webkit-backdrop-filter:blur(3px);
   backdrop-filter:blur(3px);
   opacity:0;
-  background:#000000db;
+  background:#000000f2;
   flex-direction:column;
   justify-content:center;
   align-items:center;
   gap:.3rem;
-  transition:opacity .62s;
+  /* Ein Stream geht nicht weich aus, er ist weg. Vorher .62s Blende. */
+  transition:opacity .14s linear;
   display:flex;
   position:absolute;
   inset:0;
@@ -769,21 +790,6 @@
 
 
 
-.v2-rd-beam-fill {
-  opacity:0;
-  background:linear-gradient(90deg, var(--color-primary), var(--color-accent));
-  border-radius:999px;
-  width:0;
-  height:100%;
-  box-shadow:0 0 12px #c9a86a99;
-}
-
-.v2-rd-beam-back {
-  background:linear-gradient(270deg, var(--color-accent), var(--color-primary));
-  margin-left:auto;
-  box-shadow:0 0 12px #55978f99;
-}
-
 .v2-rd-particle {
   background:var(--color-primary-hover);
   opacity:0;
@@ -830,41 +836,19 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Hero-Buehne — die beiden Stream-Karten als EIN Objekt
+   Hero-Buehne — zwei laufende Streams, sonst nichts
    ───────────────────────────────────────────────────────────────────────
-   Vorher standen drei lose Teile nebeneinander: zwei weit auseinander
-   gezogene Karten, ein Textkasten, der mitten darueber lag, und darunter
-   eine abgesetzte Zeitleiste. Jetzt umschliesst ein Rahmen alles, die
-   Zeitachse laeuft als Leitung links IN der Buehne mit, und der Status
-   sitzt als Konsolenzeile im Fuss statt als Deckel ueber den Karten.
+   Die Buehne trug vorher einen eigenen Rahmen mit Kopfzeile, Padding und
+   Milchglas. Das las sich wie ein Widget in einem Fenster und damit wie
+   SaaS, nicht wie ein Stream. Jetzt steht das Bild frei: kein Rahmen, kein
+   Backdrop-Blur, kein Innenabstand. Was traegt, sind die Karten selbst,
+   ihr Schatten und der goldene Schein dahinter. Die Zeitachse liegt
+   ausserhalb des Bildes, die Statuszeile darunter.
    ═══════════════════════════════════════════════════════════════════════ */
 
 .v2-stage {
   position: relative;
   isolation: isolate;
-  border-radius: 1.4rem;
-  padding: 1.05rem 1.15rem 0.95rem;
-  border: 1px solid rgba(239, 212, 157, 0.2);
-  background:
-    linear-gradient(180deg, rgba(201, 168, 106, 0.08), rgba(201, 168, 106, 0.02) 34%, rgba(255, 255, 255, 0) 72%),
-    rgba(19, 19, 19, 0.92);
-  box-shadow:
-    0 44px 120px -34px rgba(0, 0, 0, 0.95),
-    0 0 140px -56px rgba(201, 168, 106, 0.7),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
-}
-
-/* Goldene Lichtkante oben: gibt dem Objekt eine Oberkante statt nur Rahmen. */
-.v2-stage::before {
-  content: "";
-  position: absolute;
-  inset-inline: 12%;
-  top: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(239, 212, 157, 0.75), transparent);
-  pointer-events: none;
 }
 
 .v2-rd {
@@ -872,44 +856,33 @@
   width: 100%;
 }
 
-.v2-rd-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0 0.15rem 0.85rem;
-  border-bottom: 1px solid rgba(239, 212, 157, 0.1);
-}
-
-/* Zeitachse links, Karten rechts — beides im selben Rahmen. */
 .v2-stage-body {
   display: grid;
-  grid-template-columns: 8rem minmax(0, 1fr);
-  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   align-items: start;
-  padding-top: 1.05rem;
 }
 
-/* ── Zeitachse: dieselbe Leitungs-Sprache wie die Sektionen der Seite ──── */
+/* ── Zeitachse: waagerechte Leiste unterhalb der ganzen Buehne ─────────── */
 .v2-rd-steps {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 0.95rem;
-  margin: 0;
-  padding: 0.2rem 0 0.2rem 1.15rem;
+  flex-direction: row;
+  gap: 0.9rem;
+  margin: 1.9rem 0 0;
+  padding: 1.35rem 0 0.1rem;
   list-style: none;
 }
 
 .v2-rd-steps::before {
   content: "";
   position: absolute;
-  left: 3px;
-  top: 0.5rem;
-  bottom: 0.5rem;
-  width: 1px;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
   background: linear-gradient(
-    180deg,
+    90deg,
     rgba(201, 168, 106, 0.6),
     rgba(201, 168, 106, 0.2) 55%,
     rgba(85, 151, 143, 0.55)
@@ -918,6 +891,7 @@
 
 .v2-rd-step {
   position: relative;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
@@ -927,8 +901,8 @@
 .v2-rd-step::before {
   content: "";
   position: absolute;
-  left: -1.15rem;
-  top: 0.42rem;
+  left: 0;
+  top: -1.35rem;
   width: 7px;
   height: 7px;
   border-radius: 999px;
@@ -969,12 +943,13 @@
   transition: color 380ms ease;
 }
 
-/* ── Die Karten: dicht beieinander, dazwischen nur die Uebergabe ───────── */
+/* ── Die Karten: gross, mittig, dazwischen nur die Uebergabe ───────────── */
 .v2-rd-cards {
   position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.4rem;
+  --v2-fuse-w: clamp(1.6rem, 4vw, 3.4rem);
+  gap: var(--v2-fuse-w);
   align-items: start;
 }
 
@@ -983,7 +958,7 @@
   position: absolute;
   top: 28%;
   left: 50%;
-  width: 1.4rem;
+  width: var(--v2-fuse-w, 1.4rem);
   height: 1px;
   transform: translateX(-50%);
   background: linear-gradient(90deg, rgba(201, 168, 106, 0.85), rgba(85, 151, 143, 0.85));
@@ -1005,10 +980,10 @@
 }
 
 @keyframes v2-fuse-run {
-  0%        { transform: translateX(0);      opacity: 0; }
+  0%        { transform: translateX(0); opacity: 0; }
   16%       { opacity: 1; }
   84%       { opacity: 1; }
-  100%      { transform: translateX(1.4rem); opacity: 0; }
+  100%      { transform: translateX(var(--v2-fuse-w, 1.4rem)); opacity: 0; }
 }
 
 /* Partikelflaeche: liegt ueber der Buehne, hat selbst kein Aussehen mehr. */
@@ -1063,26 +1038,15 @@
   color: var(--color-text-secondary);
 }
 
-/* Fortschrittsbalken ganz unten: die Uebergabe als Zeitverlauf. */
-.v2-stage-beam {
-  position: relative;
-  height: 2px;
-  margin-top: 0.75rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-}
-
 @media (width <= 900px) {
   .v2-stage-body {
     grid-template-columns: 1fr;
     gap: 1.05rem;
   }
-  /* Auf schmalen Schirmen liegt die Zeitachse unter den Karten und waagerecht. */
   .v2-rd-steps {
-    order: 2;
     flex-direction: row;
     gap: 0.75rem;
+    margin-top: 1.35rem;
     padding: 1.1rem 0 0;
   }
   .v2-rd-steps::before {

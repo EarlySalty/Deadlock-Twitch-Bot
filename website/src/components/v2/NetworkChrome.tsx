@@ -3,13 +3,15 @@ import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
+// Reihenfolge wie die Abschnitte auf der Seite, sonst springt der erste
+// Menuepunkt ans Seitenende.
 const NAV_ITEMS = [
-  { href: "#partner", label: "Partner" },
   { href: "#leere", label: "Das Problem" },
   { href: "#ablauf", label: "Ablauf" },
   { href: "#leistungen", label: "Leistungen" },
-  { href: "#zahlen", label: "Zahlen" },
   { href: "#preise", label: "Preise" },
+  { href: "#partner", label: "Partner" },
+  { href: "#zahlen", label: "Zahlen" },
   { href: "#einwaende", label: "Fragen" },
 ];
 

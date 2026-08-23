@@ -22,8 +22,87 @@ pub fn plan_tier(plan_id: &str) -> &'static str {
         | "bundle_analysis_raid_boost"
         | "bundle_werbefrei_analyse"
         | "bundle_komplett"
-        | "analytics_trial" => "extended",
+        | "analytics_trial"
+        | "netzwerk_plus"
+        | "netzwerk_plus_jahr"
+        | "creator_pro"
+        | "creator_pro_jahr" => "extended",
         _ => "free",
+    }
+}
+
+// ── Stufen: Free / Plus / Pro ───────────────────────────────────────────────
+
+/// Die drei Verkaufsstufen aus `.tasks/2026-08-23-pricing-drei-stufen/SPEC.md`.
+///
+/// Die Trennlinie in einem Satz: Free zeigt dir deinen letzten Stream, Plus
+/// zeigt dir deine Entwicklung, Pro nimmt dir die Clip-Arbeit ab.
+///
+/// Bewusst `Ord`, damit ein Handler `stufe >= PlanStufe::Plus` schreiben kann
+/// statt jede Stufe einzeln aufzuzaehlen. Die Reihenfolge der Varianten ist
+/// deshalb Teil des Vertrags: Free < Plus < Pro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlanStufe {
+    Free,
+    Plus,
+    Pro,
+}
+
+impl PlanStufe {
+    /// Stabiler Schluessel fuer JSON-Antworten und Log-Zeilen.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlanStufe::Free => "free",
+            PlanStufe::Plus => "plus",
+            PlanStufe::Pro => "pro",
+        }
+    }
+
+    /// Anzeigename fuer nutzersichtbare Texte.
+    pub fn anzeigename(self) -> &'static str {
+        match self {
+            PlanStufe::Free => "Netzwerk Free",
+            PlanStufe::Plus => "Netzwerk Plus",
+            PlanStufe::Pro => "Creator Pro",
+        }
+    }
+
+    /// `true`, wenn diese Stufe die verlangte mit abdeckt (Pro deckt Plus).
+    pub fn deckt(self, benoetigt: PlanStufe) -> bool {
+        self >= benoetigt
+    }
+}
+
+/// Stufe aus einer Plan-ID ableiten.
+///
+/// Die alten IDs bleiben lesbar, sie stehen so in der DB (SPEC M2). Zugeordnet
+/// wird nach dem Feature-Schnitt, nicht nach dem alten Preis:
+///
+/// - `raid_free` ist die einzige ID auf Free.
+/// - Alle Chat- und Raid-Zusatzpaene tragen Werbefreiheit, Raid-Vorrang oder
+///   Lurker-Erinnerung. Die stehen im neuen Schnitt in Plus, also sind ihre
+///   Kaeufer Plus und verlieren nichts.
+/// - Die Analyse-Plaene und der Trial sind ebenfalls Plus: voller Verlauf und
+///   KI-Analyse sind Plus-Merkmale.
+/// - Pro traegt heute noch niemand. Die ID steht hier trotzdem schon, damit das
+///   Gate baubar ist, bevor der Katalog (M2) und Stripe nachziehen.
+pub fn plan_stufe(plan_id: &str) -> PlanStufe {
+    match plan_id.trim() {
+        "raid_free" => PlanStufe::Free,
+        "chat_quiet"
+        | "raid_boost"
+        | "bundle_chat_quiet_raid_boost"
+        | "analysis_dashboard"
+        | "bundle_analysis_raid_boost"
+        | "bundle_werbefrei_analyse"
+        | "bundle_komplett"
+        | "analytics_trial"
+        | "netzwerk_plus"
+        | "netzwerk_plus_jahr" => PlanStufe::Plus,
+        "creator_pro" | "creator_pro_jahr" => PlanStufe::Pro,
+        // Unbekanntes faellt auf Free, gleiche Richtung wie `normalize_plan_id`:
+        // ein Tippfehler darf keine bezahlte Stufe aufschliessen.
+        _ => PlanStufe::Free,
     }
 }
 
@@ -39,6 +118,8 @@ pub fn plan_display_name(plan_id: &str) -> &'static str {
         "bundle_werbefrei_analyse" => "Werbefrei + Analyse",
         "bundle_komplett" => "Alles drin",
         "analytics_trial" => "Trial",
+        "netzwerk_plus" | "netzwerk_plus_jahr" => "Netzwerk Plus",
+        "creator_pro" | "creator_pro_jahr" => "Creator Pro",
         _ => "Free",
     }
 }
@@ -75,6 +156,24 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
             "raid.priority",
         ],
         "analytics_trial" => &["analytics", "chat.lurker_tax"],
+        // ── Drei-Stufen-Umbau (SPEC M2), alphabetisch wie der Rest ──────────
+        // Plus buendelt, was vorher auf vier Einzelplaene verteilt war.
+        "netzwerk_plus" | "netzwerk_plus_jahr" => &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        ],
+        // Pro ist Plus plus die zwei Clip-Rechte. Mehr nicht: White-Label und
+        // API stehen ausdruecklich nicht im Katalog.
+        "creator_pro" | "creator_pro_jahr" => &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "clips.autopost",
+            "clips.unlimited",
+            "raid.priority",
+        ],
         _ => &[],
     }
 }
@@ -108,12 +207,19 @@ fn normalize_plan_id(raw: &str) -> &'static str {
         "bundle_werbefrei_analyse" => "bundle_werbefrei_analyse",
         "bundle_komplett" => "bundle_komplett",
         "analytics_trial" => "analytics_trial",
+        // Drei-Stufen-Umbau (SPEC M2).
+        "netzwerk_plus" => "netzwerk_plus",
+        "netzwerk_plus_jahr" => "netzwerk_plus_jahr",
+        "creator_pro" => "creator_pro",
+        "creator_pro_jahr" => "creator_pro_jahr",
         _ => "raid_free",
     }
 }
 
-/// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
-const KNOWN_PLAN_IDS: [&str; 9] = [
+/// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`) plus die vier IDs des
+/// Drei-Stufen-Umbaus. Die alten neun bleiben drin, weil sie so in der DB
+/// stehen und weiter aufloesbar sein muessen (SPEC M2).
+pub const KNOWN_PLAN_IDS: [&str; 13] = [
     "raid_free",
     "chat_quiet",
     "raid_boost",
@@ -123,6 +229,10 @@ const KNOWN_PLAN_IDS: [&str; 9] = [
     "bundle_werbefrei_analyse",
     "bundle_komplett",
     "analytics_trial",
+    "netzwerk_plus",
+    "netzwerk_plus_jahr",
+    "creator_pro",
+    "creator_pro_jahr",
 ];
 
 /// `true`, wenn `raw` (nur whitespace-getrimmt) ein bekannter kanonischer Plan
@@ -146,6 +256,10 @@ pub struct PlanSnapshot {
     pub plan_id: &'static str,
     pub plan_name: &'static str,
     pub tier: &'static str,
+    /// Verkaufsstufe nach dem Drei-Stufen-Schnitt (Free/Plus/Pro). Steht neben
+    /// `tier`, weil `tier` die alte Dreiteilung free/basic/extended aus der
+    /// Python-Zeit ist und in Antworten weiterhin so ausgeliefert wird.
+    pub stufe: PlanStufe,
     pub is_extended: bool,
     pub entitlements: Vec<&'static str>,
     /// Abo-/Plan-Status: "active" (Default + Manual-Override), sonst der Stripe-
@@ -196,6 +310,7 @@ impl PlanSnapshot {
             plan_id,
             plan_name: plan_display_name(plan_id),
             tier: plan_tier(plan_id),
+            stufe: plan_stufe(plan_id),
             is_extended: plan_is_extended(plan_id),
             entitlements: plan_entitlements(plan_id).to_vec(),
             status,
@@ -437,6 +552,21 @@ pub async fn resolve_plan_snapshot(
     Ok(PlanSnapshot::default_basic(&fallback_ref))
 }
 
+/// Loest die Verkaufsstufe fuer einen Streamer auf — das Praedikat aus SPEC M1.
+///
+/// Nutzt denselben Resolver wie alles andere, damit Manual-Override, Stripe-Abo
+/// und Ablaufdatum genau einmal ausgewertet werden.
+///
+/// Bei DB-Fehler `Free` (fail-closed): eine kaputte Datenbank darf keine
+/// bezahlte Stufe aufschliessen. Das ist dieselbe Richtung wie
+/// `has_analytics_entitlement` in `tb-dashboard-api`.
+pub async fn resolve_plan_stufe(pool: &PgPool, login: &str, user_id: &str) -> PlanStufe {
+    match resolve_plan_snapshot(pool, login, user_id).await {
+        Ok(snapshot) => snapshot.stufe,
+        Err(_) => PlanStufe::Free,
+    }
+}
+
 /// Erster getrimmt-nichtleerer Wert aus der Kandidatenliste (sonst `""`).
 /// Spiegelt Pythons `str(a or b or c or "").strip()`-Idiom.
 fn first_non_empty(candidates: &[&str]) -> String {
@@ -523,6 +653,86 @@ fn is_expired_timestamp(raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Stufen: Free / Plus / Pro (SPEC M1) ────────────────────────────────
+
+    #[test]
+    fn stufen_ordnung_ist_free_plus_pro() {
+        assert!(PlanStufe::Free < PlanStufe::Plus);
+        assert!(PlanStufe::Plus < PlanStufe::Pro);
+    }
+
+    #[test]
+    fn deckt_ist_aufwaerts_durchlaessig() {
+        // Pro darf alles, was Plus darf. Free deckt nur Free.
+        assert!(PlanStufe::Pro.deckt(PlanStufe::Plus));
+        assert!(PlanStufe::Pro.deckt(PlanStufe::Pro));
+        assert!(PlanStufe::Plus.deckt(PlanStufe::Plus));
+        assert!(PlanStufe::Plus.deckt(PlanStufe::Free));
+        assert!(!PlanStufe::Plus.deckt(PlanStufe::Pro));
+        assert!(!PlanStufe::Free.deckt(PlanStufe::Plus));
+    }
+
+    #[test]
+    fn nur_raid_free_ist_free() {
+        assert_eq!(plan_stufe("raid_free"), PlanStufe::Free);
+        // Jeder andere bekannte Plan hat mindestens Plus: die Kaeufer der alten
+        // Chat- und Raid-Zusatzplaene duerfen durch den Umbau nichts verlieren.
+        for id in KNOWN_PLAN_IDS {
+            if id == "raid_free" {
+                continue;
+            }
+            assert!(
+                plan_stufe(id).deckt(PlanStufe::Plus),
+                "{id} darf nach dem Umbau nicht unter Plus fallen"
+            );
+        }
+    }
+
+    #[test]
+    fn unbekanntes_faellt_auf_free() {
+        // Ein Tippfehler darf keine bezahlte Stufe aufschliessen.
+        assert_eq!(plan_stufe(""), PlanStufe::Free);
+        assert_eq!(plan_stufe("garbage"), PlanStufe::Free);
+        assert_eq!(plan_stufe("Creator_Pro"), PlanStufe::Free);
+        assert_eq!(plan_stufe("premium_max"), PlanStufe::Free);
+    }
+
+    #[test]
+    fn neue_plan_ids_tragen_ihre_stufe() {
+        assert_eq!(plan_stufe("netzwerk_plus"), PlanStufe::Plus);
+        assert_eq!(plan_stufe("netzwerk_plus_jahr"), PlanStufe::Plus);
+        assert_eq!(plan_stufe("creator_pro"), PlanStufe::Pro);
+        assert_eq!(plan_stufe("creator_pro_jahr"), PlanStufe::Pro);
+    }
+
+    #[test]
+    fn stufe_trimmt_wie_der_rest_des_moduls() {
+        assert_eq!(plan_stufe("  creator_pro  "), PlanStufe::Pro);
+        assert_eq!(plan_stufe("\traid_free\n"), PlanStufe::Free);
+    }
+
+    /// Drift-Gate: wer heute Analytics hat, hat mindestens Plus. Sonst wuerde
+    /// der Umbau einem zahlenden Kunden den Analyse-Zugang wegnehmen.
+    #[test]
+    fn analytics_impliziert_mindestens_plus() {
+        for id in KNOWN_PLAN_IDS {
+            if plan_has_analytics(id) {
+                assert!(
+                    plan_stufe(id).deckt(PlanStufe::Plus),
+                    "{id} traegt analytics, muss also mindestens Plus sein"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_traegt_die_stufe() {
+        let snap = PlanSnapshot::default_basic("Nani");
+        assert_eq!(snap.stufe, PlanStufe::Free);
+        assert_eq!(snap.stufe.as_str(), "free");
+        assert_eq!(snap.stufe.anzeigename(), "Netzwerk Free");
+    }
 
     // ── normalize_plan_id: strikt-kanonisch (Python catalog.py:138-140) ─────
 

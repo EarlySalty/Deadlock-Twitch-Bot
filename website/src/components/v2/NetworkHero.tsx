@@ -41,10 +41,11 @@ function ProofItem({
 /**
  * Hero der Landing V2.
  *
- * Die rechte Seite beherrscht den Raum: eine einzige Buehne, in der beide
- * Stream-Karten, die Zeitachse und die Statuszeile zusammen sitzen. Der Text
- * links ist bewusst auf Zeile, Satz und zwei Knoepfe eingedampft, damit die
- * Bewegung rechts der Blickfang bleibt.
+ * Die Buehne beherrscht den Raum: sie steht ueber die volle Breite unter dem
+ * Text, nicht als Widget in einer zweiten Spalte. Der Text darueber ist
+ * zentriert und auf Zeile, Satz und zwei Knoepfe eingedampft, damit der Blick
+ * ohne Umweg auf der Bewegung landet. Reihenfolge und Wortlaut bleiben, nur
+ * die Komposition traegt jetzt die Buehne statt der Textspalte.
  *
  * Die Lichtinseln (`v2-ambient`) sind Teil der Komposition, nicht Deko: die
  * goldene liegt hinter der Buehne, die tuerkise hinter der Beweiszeile, sodass
@@ -76,8 +77,8 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
         aria-hidden="true"
       />
 
-      <div className="relative mx-auto grid max-w-[84rem] items-center gap-12 px-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)] lg:gap-12">
-        <div>
+      <div className="relative mx-auto flex max-w-[96rem] flex-col items-center gap-10 px-6">
+        <div className="text-center">
           <motion.span
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -92,7 +93,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.08 }}
-            className="mt-7 text-[clamp(2.7rem,5.5vw,4.2rem)] font-extrabold leading-[0.95] tracking-[-0.02em] text-[var(--color-text-primary)]"
+            className="mt-7 text-[clamp(2.9rem,6.4vw,5rem)] font-extrabold leading-[0.95] tracking-[-0.02em] text-[var(--color-text-primary)]"
           >
             Kein Stream
             <br />
@@ -109,7 +110,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.16 }}
-            className="mt-6 max-w-lg text-lg leading-relaxed text-[var(--color-text-secondary)]"
+            className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-[var(--color-text-secondary)]"
           >
             Gehst du offline, übergibt das Netzwerk deine Zuschauer an einen
             anderen deutschen Deadlock-Stream. Und wenn woanders Schluss ist,
@@ -120,7 +121,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.24 }}
-            className="mt-8 flex flex-wrap items-center gap-4"
+            className="mt-8 flex flex-wrap items-center justify-center gap-4"
           >
             <a
               href={buildTwitchBotAuthUrl()}
@@ -143,7 +144,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.3 }}
-          className="relative lg:-mr-6 xl:-mr-14"
+          className="relative mx-auto w-full max-w-[1400px]"
         >
           <NetworkRaidDemo partners={metrics.partnerList} />
         </motion.div>
@@ -154,7 +155,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6, delay: 0.45 }}
-          className="flex flex-wrap items-center gap-x-10 gap-y-5 border-t border-[rgba(239,212,157,0.14)] pt-6 lg:col-span-2 lg:mt-4"
+          className="flex w-full flex-wrap items-center gap-x-10 gap-y-5 border-t border-[rgba(239,212,157,0.14)] pt-6"
         >
           <ProofItem
             icon={<Users size={17} />}

@@ -12,9 +12,9 @@ import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
  *    `useNetworkMetrics`, sobald die API beides liefert. Solange sie das
  *    nicht tut (Stand heute: kein `avatar_url`), laeuft die Buehne mit
  *    erkennbar ausgedachten Kanaelen ohne Zuschauerzahl und ohne Link.
- * 2. Statt Video-Clips (die auf Produktion nicht ausgeliefert werden) tragen
- *    die Karten eine stilisierte Fläche aus dem unscharf gezogenen Profilbild.
- *    Nichts kann hier ins Leere laufen.
+ * 2. In den Karten läuft echtes Deadlock-Material aus `public/clips`, so wie
+ *    auf der Landing V1. Das unscharf gezogene Profilbild liegt darunter und
+ *    bleibt sichtbar, falls der Clip nicht lädt. Nichts kann ins Leere laufen.
  * 3. Der Beispielablauf steht mit Zeitstempeln direkt in der Animation, nicht
  *    als Textliste daneben. Vier Schritte, der vierte ist die Gegenleistung.
  *
@@ -51,6 +51,40 @@ const FALLBACK_CHANNELS: DemoChannel[] = [
   { login: "", displayName: "ein_anderer_stream", viewers: 0, sample: true },
   { login: "", displayName: "naechster_partner", viewers: 0, sample: true },
 ];
+
+/**
+ * Die Vorführclips aus `public/clips/<login>.mp4`, dieselbe Quelle wie auf der
+ * Landing V1. Sie sind der Grund, warum die Bühne wie ein laufender Stream
+ * wirkt statt wie ein Standbild.
+ *
+ * Zugeordnet wird in zwei Stufen:
+ *
+ * 1. Passt der Login genau zu einem Clip, läuft das Material dieses Kanals.
+ * 2. Sonst läuft ein Clip aus derselben Liste, ausgewählt über den Namen.
+ *    Das ist Deadlock-Material aus der Community und behauptet nichts über
+ *    die Person auf der Karte: die Beispielkarten tragen einen erfundenen
+ *    Namen, keine Zuschauerzahl und keinen Link.
+ */
+const CLIP_LOGINS = [
+  "miracleghost9",
+  "whysolowkey",
+  "kdenos",
+  "johnnyblazedx",
+  "coolysdl",
+  "duzzel",
+] as const;
+
+const CLIP_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+function clipFor(ch: DemoChannel): string {
+  const own = CLIP_LOGINS.find((login) => login === ch.login.toLowerCase());
+  if (own) return `${CLIP_BASE}/clips/${own}.mp4`;
+  // Feste Wahl statt Zufall: dieselbe Karte zeigt in jedem Durchgang denselben
+  // Clip, sonst springt das Bild bei jedem Wechsel auf eine andere Szene.
+  let sum = 0;
+  for (const c of ch.displayName) sum += c.charCodeAt(0);
+  return `${CLIP_BASE}/clips/${CLIP_LOGINS[sum % CLIP_LOGINS.length]}.mp4`;
+}
 
 /** Die vier Schritte des Ablaufs, so wie sie unter der Bühne stehen. */
 const STEPS: { time: string; label: string }[] = [
@@ -163,6 +197,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const srcCardRef = useRef<HTMLDivElement>(null);
   const tgtCardRef = useRef<HTMLDivElement>(null);
 
+  const srcVideoRef = useRef<HTMLVideoElement>(null);
+  const tgtVideoRef = useRef<HTMLVideoElement>(null);
+
   const srcArtRef = useRef<HTMLDivElement>(null);
   const srcNameRef = useRef<HTMLSpanElement>(null);
   const srcBarNameRef = useRef<HTMLAnchorElement>(null);
@@ -184,7 +221,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const subRef = useRef<HTMLDivElement>(null);
   const counterRef = useRef<HTMLDivElement>(null);
   const counterNumRef = useRef<HTMLDivElement>(null);
-  const beamRef = useRef<HTMLDivElement>(null);
 
   const stepRefs = [
     useRef<HTMLLIElement>(null),
@@ -210,6 +246,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       durationSecs: number,
     ) {
       const art = side === "src" ? srcArtRef : tgtArtRef;
+      const video = side === "src" ? srcVideoRef : tgtVideoRef;
       const name = side === "src" ? srcNameRef : tgtNameRef;
       const barName = side === "src" ? srcBarNameRef : tgtBarNameRef;
       const avatar = side === "src" ? srcAvatarRef : tgtAvatarRef;
@@ -220,6 +257,22 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       // kaputten Bild-URL.
       const art_bg = ch.avatarUrl ? `url("${ch.avatarUrl}")` : "none";
       if (art.current) art.current.style.backgroundImage = art_bg;
+
+      // Der Clip liegt ueber der unscharfen Flaeche. Laedt er nicht (fehlende
+      // Datei, Codec, gesparte Daten), bleibt das Profilbild darunter stehen
+      // und die Karte sieht trotzdem nach Stream aus.
+      if (video.current) {
+        const next = clipFor(ch);
+        if (video.current.getAttribute("src") !== next) {
+          video.current.setAttribute("src", next);
+          video.current.load();
+        }
+        // Bei reduzierter Bewegung steht das Bild still: ein laufender Clip
+        // waere genau die Bewegung, die hier abgeschaltet gehoert.
+        if (reduced) video.current.pause();
+        else void video.current.play().catch(() => {});
+      }
+
       if (avatar.current) avatar.current.style.backgroundImage = art_bg;
       if (name.current) name.current.textContent = ch.displayName;
       if (barName.current) {
@@ -371,25 +424,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       }
     }
 
-    function setBeam(state: "off" | "forward" | "back") {
-      const el = beamRef.current;
-      if (!el) return;
-      if (state === "off") {
-        el.style.transition = "none";
-        el.style.opacity = "0";
-        el.style.width = "0";
-        return;
-      }
-      el.className = `v2-rd-beam-fill${state === "back" ? " v2-rd-beam-back" : ""}`;
-      el.style.transition = "none";
-      el.style.width = "0";
-      el.style.opacity = "1";
-      // Erzwingt einen Layout-Schritt, damit der Übergang wirklich läuft.
-      void el.offsetWidth;
-      el.style.transition = "width 1.4s cubic-bezier(0.4,0,0.2,1)";
-      el.style.width = "100%";
-    }
-
     // ── Ausgangslage eines Durchgangs ─────────────────────────────────────
     function pickPair(): [DemoChannel, DemoChannel] {
       const list = poolRef.current;
@@ -419,7 +453,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       if (srcLiveRef.current) srcLiveRef.current.style.opacity = "1";
       if (counterRef.current) counterRef.current.style.opacity = "0";
       if (counterNumRef.current) counterNumRef.current.textContent = "0";
-      setBeam("off");
       clearLines();
       resetSteps();
 
@@ -515,11 +548,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         if (counterNumRef.current)
           animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
       }
-      setBeam("forward");
       spawnParticles(34, 1400);
       await sleep(1650);
       if (!running) return;
-      setBeam("off");
       if (tgtViewersRef.current) {
         tgtViewersRef.current.textContent = tgt.sample
           ? "–"
@@ -549,11 +580,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         lineRef.current.style.opacity = "1";
         lineRef.current.textContent = "Ein anderer Stream endet, du bekommst Zuschauer zurück";
       }
-      setBeam("back");
       spawnParticles(24, 1400, true);
       await sleep(1700);
       if (!running) return;
-      setBeam("off");
       setStep(3, "done");
       await sleep(1900);
       if (!running) return;
@@ -574,31 +603,25 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   return (
     <div className="v2-stage">
       <div className="v2-rd">
-        <div className="v2-rd-head">
-          <span className="v2-stamp">Übergabe im Netzwerk · Beispielablauf</span>
-          <span className="v2-rd-head-live">
-            <span className="v2-pulse h-2 w-2 rounded-full bg-[var(--color-success)]" />
-            Netzwerk aktiv
-          </span>
-        </div>
-
         <div className="v2-stage-body">
-          {/* Zeitachse: laeuft als Leitung neben der Buehne mit, nicht darunter. */}
-          <ol className="v2-rd-steps">
-            {STEPS.map((step, i) => (
-              <li key={step.time} className="v2-rd-step v2-rd-step-idle" ref={stepRefs[i]}>
-                <span className="v2-rd-step-time">{step.time}</span>
-                <span className="v2-rd-step-label">{step.label}</span>
-              </li>
-            ))}
-          </ol>
-
           <div className="v2-rd-stage">
             <div className="v2-rd-cards">
               {/* Quelle: der Kanal, der gleich offline geht */}
               <div className="v2-rd-card v2-rd-card-src" ref={srcCardRef}>
                 <div className="v2-rd-screen">
                   <div className="v2-rd-art" ref={srcArtRef} aria-hidden="true" />
+                  {/* Der Clip liegt ueber der unscharfen Flaeche, die als
+                      Rueckfallebene sichtbar bleibt, wenn er nicht laedt. */}
+                  <video
+                    ref={srcVideoRef}
+                    className="v2-rd-clip"
+                    muted
+                    autoPlay
+                    loop
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                  />
                   <div className="v2-screen-sheen" aria-hidden="true" />
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
@@ -646,6 +669,16 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
               <div className="v2-rd-card v2-rd-card-tgt v2-rd-card-dim" ref={tgtCardRef}>
                 <div className="v2-rd-screen">
                   <div className="v2-rd-art" ref={tgtArtRef} aria-hidden="true" />
+                  <video
+                    ref={tgtVideoRef}
+                    className="v2-rd-clip"
+                    muted
+                    autoPlay
+                    loop
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                  />
                   <div className="v2-screen-sheen" aria-hidden="true" />
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
@@ -708,11 +741,18 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
             <div className="v2-rd-counter-label">Zuschauer unterwegs</div>
           </div>
         </div>
-
-        <div className="v2-stage-beam" aria-hidden="true">
-          <div className="v2-rd-beam-fill" ref={beamRef} />
-        </div>
       </div>
+
+      {/* Zeitachse steht unter der Buehne, ausserhalb des Bildes: im Bild
+          selbst soll nichts liegen ausser den beiden Streams. */}
+      <ol className="v2-rd-steps">
+        {STEPS.map((step, i) => (
+          <li key={step.time} className="v2-rd-step v2-rd-step-idle" ref={stepRefs[i]}>
+            <span className="v2-rd-step-time">{step.time}</span>
+            <span className="v2-rd-step-label">{step.label}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

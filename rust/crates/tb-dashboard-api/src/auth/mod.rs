@@ -49,6 +49,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 use sqlx::PgPool;
+use tb_analytics::plan::PlanStufe;
 use tb_http_core::{ApiError, AuthLevel};
 
 use crate::auth::level::DashboardAuthLevel;
@@ -186,6 +187,61 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
     }
 }
 
+/// Stufen-Gate fuer die DashboardAuthLevel-Handler (SPEC M1).
+///
+/// Gibt `Some(response)` zurueck, wenn der Request blockiert ist, sonst `None`.
+/// Admin geht durch, `None` bekommt 401, ein Partner braucht mindestens
+/// `benoetigt`.
+///
+/// `extended_gate` bleibt daneben bestehen und fragt weiter das
+/// `analytics`-Entitlement. Beide Wege sind heute deckungsgleich, weil jeder
+/// Plan mit `analytics` mindestens Plus ist (testgesichert in
+/// `tb_analytics::plan`). Neue Sperren sollen dieses Gate nehmen, weil es
+/// Plus von Pro unterscheiden kann.
+pub async fn stufen_gate(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    benoetigt: PlanStufe,
+) -> Option<Response> {
+    match auth {
+        DashboardAuthLevel::Admin { .. } => None,
+        DashboardAuthLevel::None => Some(unauthorized_v2_response()),
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
+            let stufe =
+                tb_analytics::plan::resolve_plan_stufe(pool, twitch_login, twitch_user_id).await;
+            if stufe.deckt(benoetigt) {
+                None
+            } else {
+                Some(stufe_required_response(benoetigt, stufe))
+            }
+        }
+    }
+}
+
+/// 403 fuer eine zu niedrige Stufe.
+///
+/// Traegt neben dem Fehler die verlangte und die vorhandene Stufe, damit das
+/// Dashboard das Sheet mit dem richtigen Preis oeffnen kann, ohne den Plan ein
+/// zweites Mal abzufragen. `required_entitlements` und `required_plans` bleiben
+/// im Body, damit bestehende Frontend-Pfade weiter greifen.
+pub fn stufe_required_response(benoetigt: PlanStufe, vorhanden: PlanStufe) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "plan_required",
+            "required_stufe": benoetigt.as_str(),
+            "current_stufe": vorhanden.as_str(),
+            "required_entitlements": ["analytics"],
+            "required_plans": extended_required_plans(),
+        })),
+    )
+        .into_response()
+}
+
 /// 401-Body wie Python `_require_v2_auth` (api_v2.py:1258-1262).
 pub fn unauthorized_v2_response() -> Response {
     unauthorized_v2_json().into_response()
@@ -285,6 +341,23 @@ mod tests {
                 "bundle_werbefrei_analyse",
             ])
         );
+    }
+
+    /// SPEC M1: der 403 sagt, welche Stufe fehlt und welche der Anfragende hat.
+    /// Ohne diese zwei Felder muesste das Dashboard den Plan ein zweites Mal
+    /// abfragen, um das richtige Sheet zu oeffnen.
+    #[tokio::test]
+    async fn stufe_required_response_nennt_beide_stufen() {
+        let resp = stufe_required_response(PlanStufe::Pro, PlanStufe::Plus);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "plan_required");
+        assert_eq!(body["required_stufe"], "pro");
+        assert_eq!(body["current_stufe"], "plus");
+        // Die alten Felder bleiben, damit bestehende Frontend-Pfade greifen.
+        assert_eq!(body["required_entitlements"], json!(["analytics"]));
+        assert!(body["required_plans"].is_array());
     }
 
     /// Drift-Gate: jeder gelistete required_plan trägt tatsächlich das

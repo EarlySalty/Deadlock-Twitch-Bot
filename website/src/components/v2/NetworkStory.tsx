@@ -1,11 +1,5 @@
 import { motion } from "framer-motion";
-import {
-  Clapperboard,
-  Check,
-  ShieldCheck,
-  Sparkles,
-  Swords,
-} from "lucide-react";
+import { Clapperboard, ShieldCheck, Sparkles, Swords } from "lucide-react";
 import { ProtocolSection } from "@/components/v2/NetworkChrome";
 import { PillarVisual } from "@/components/v2/NetworkPillarVisuals";
 import { planSteps, valuePillars } from "@/data/networkPage";
@@ -29,7 +23,7 @@ export function VoidSection() {
       id="leere"
       ambient="teal"
       ambientSide="left"
-      stamp="02 · Der Moment, um den es geht"
+      stamp="01 · Der Moment, um den es geht"
       headline={
         <>
           Du klickst auf „Stream beenden“.{" "}
@@ -118,7 +112,7 @@ export function PlanSection() {
   return (
     <ProtocolSection
       id="ablauf"
-      stamp="03 · So kommst du rein"
+      stamp="02 · So kommst du rein"
       headline="Drei Schritte, dann läuft es ohne dich."
       intro="Kein Setup-Wochenende, keine Konfigurationsdatei. Du verbindest deinen Kanal und entscheidest, was an sein soll."
     >
@@ -192,18 +186,12 @@ function PillarCard({ pillar, index }: { pillar: ValuePillar; index: number }) {
           {pillar.body}
         </p>
 
-        <ul className="mt-6 space-y-2.5">
+        {/* Die Merkmale stehen als Chips nebeneinander statt als Liste
+            untereinander: die Karte soll vom Bild leben, nicht vom Text. */}
+        <ul className="mt-6 flex flex-wrap gap-2">
           {pillar.points.map((point) => (
-            <li
-              key={point}
-              className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
-            >
-              <Check
-                size={16}
-                className="mt-0.5 shrink-0"
-                style={{ color: accent }}
-              />
-              <span>{point}</span>
+            <li key={point} className="v2-chip v2-chip-plain">
+              {point}
             </li>
           ))}
         </ul>
@@ -218,7 +206,7 @@ export function PillarsSection() {
     <ProtocolSection
       id="leistungen"
       ambientSide="left"
-      stamp="04 · Was du bekommst"
+      stamp="03 · Was du bekommst"
       headline="Vier Dinge, die du sonst selbst machen müsstest."
       intro="Der Bot ist der Liefermechanismus. Der eigentliche Wert liegt darin, dass hinter deinem Kanal andere Kanäle stehen."
     >
