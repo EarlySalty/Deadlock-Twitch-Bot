@@ -165,7 +165,9 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
           <ProofItem
             icon={<Radio size={17} />}
             value={metrics.liveNow}
-            label="gerade live"
+            label={
+              metrics.categoryKnown ? "gerade live in Deadlock" : "gerade live"
+            }
             settled={metrics.settled}
           />
           <ProofItem

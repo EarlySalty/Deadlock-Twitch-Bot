@@ -143,11 +143,12 @@ function ChannelBar({ channel }: { channel: PartnerChannel }) {
           <span className="truncate font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
             {channel.displayName}
           </span>
-          {channel.liveDeadlock ? <LiveBadge /> : null}
+          {channel.isLive ? <LiveBadge /> : null}
         </span>
         <span className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
           <Users size={12} />
-          {channel.viewers} {channel.liveDeadlock ? "gerade" : "zuletzt"}
+          {channel.viewers} {channel.isLive ? "gerade" : "zuletzt"}
+          {channel.game ? <span>· {channel.game}</span> : null}
         </span>
       </span>
       <ArrowUpRight
@@ -224,8 +225,13 @@ export function PartnersSection({
   /** Siehe useNetworkMetrics: ohne Kategorie keine Deadlock-Aussage. */
   categoryKnown: boolean;
 }) {
-  const live = partners.filter((p) => p.liveDeadlock);
-  const featured = live.slice(0, 3);
+  // Deadlock hat Vorrang. Streamt gerade niemand Deadlock, zeigt die Vorschau
+  // die Partner, die sonst live sind, statt leer zu bleiben — dann aber
+  // ausdruecklich als "anderes Spiel" beschriftet und nicht als Deadlock.
+  const deadlockLive = partners.filter((p) => p.liveDeadlock);
+  const anyLive = partners.filter((p) => p.isLive);
+  const zeigtDeadlock = deadlockLive.length > 0;
+  const featured = (zeigtDeadlock ? deadlockLive : anyLive).slice(0, 3);
 
   return (
     <ProtocolSection
@@ -233,12 +239,20 @@ export function PartnersSection({
       ambientSide="right"
       stamp="01 · Entdecke unsere Partner"
       headline={
-        categoryKnown ? "Hier läuft gerade Deadlock." : "Hier ist gerade jemand live."
+        !categoryKnown
+          ? "Hier ist gerade jemand live."
+          : zeigtDeadlock
+            ? "Hier läuft gerade Deadlock."
+            : featured.length > 0
+              ? "Gerade läuft kein Deadlock."
+              : "Gerade ist niemand live."
       }
       intro={
-        categoryKnown
-          ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
-          : "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+        !categoryKnown
+          ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+          : zeigtDeadlock
+            ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+            : "Gerade streamt kein Partner Deadlock. Damit du trotzdem siehst, wer hier unterwegs ist, laufen unten die Kanäle, die sonst live sind."
       }
     >
       {featured.length > 0 ? (
@@ -246,7 +260,11 @@ export function PartnersSection({
           <div className="mb-4 flex items-center gap-2">
             <span className="v2-pulse h-2 w-2 rounded-full bg-[var(--color-success)]" />
             <span className="v2-stamp">
-              {categoryKnown ? "Gerade live in Deadlock" : "Gerade live"}
+              {!categoryKnown
+                ? "Gerade live"
+                : zeigtDeadlock
+                  ? "Gerade live in Deadlock"
+                  : "Gerade live, anderes Spiel"}
             </span>
           </div>
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -268,7 +286,7 @@ export function PartnersSection({
       ) : (
         <div className="mb-6 rounded-2xl border border-[var(--color-border)] bg-black/25 px-6 py-5 text-sm text-[var(--color-text-secondary)]">
           {settled
-            ? "Gerade streamt kein Partner Deadlock. Schau später wieder rein, oder entdecke unten alle Partner."
+            ? "Gerade ist kein Partner live. Schau später wieder rein, oder entdecke unten alle Partner."
             : "Live-Kanäle werden geladen …"}
         </div>
       )}
