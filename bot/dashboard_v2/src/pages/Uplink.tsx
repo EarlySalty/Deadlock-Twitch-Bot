@@ -35,6 +35,8 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
+import { obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
 function SidebarLink({
   href,
@@ -203,34 +205,64 @@ function ObsSchritt({
 }
 
 /**
+ * Warum diese Bitrate. Ein Satz je Zustand, danach fuer alle derselbe
+ * Hinweis auf den Upload.
+ *
+ * Der Fall `unbekannt` ist der Grund, warum das hier drei Zweige sind und
+ * nicht zwei: der Abruf der Ziele laeuft ohne Wiederholung, und faellt er
+ * aus, stand hier vorher "solange kein Ziel eingerichtet ist" bei jemandem
+ * mit vier eingerichteten Zielen.
+ */
+function bitrateBegruendung(bitrate: ObsBitrateEmpfehlung): string {
+  const anfang =
+    bitrate.herkunft === 'unbekannt'
+      ? 'Deine Ziele konnten wir gerade nicht laden, deshalb steht hier der Standardwert. Ob er zu dem passt, was du eingerichtet hast, können wir im Moment nicht sagen. '
+      : bitrate.herkunft === 'start'
+        ? 'Startwert, solange kein Ziel eingerichtet ist. Sobald deine Ziele stehen, passt sich die Zahl an. '
+        : bitrate.hoehe !== null && bitrate.hoehe > 1080
+          ? `Du schickst 2K weiter, dein höchstes Ziel steht auf ${bitrate.hoehe}p. `
+          : `Passt zu deinen Zielen: dein höchstes geht mit ${bitrate.hoehe}p raus. `;
+  return (
+    anfang +
+    'Die Grenze ist dein Upload, und den kennen wir nicht: miss ihn und nimm 80 Prozent davon, falls das weniger ist. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.'
+  );
+}
+
+/**
  * Die Ausgabe-Einstellungen, jede mit dem Grund dahinter.
  *
  * Ohne den Grund stellt niemand etwas um, was schon laeuft. HEVC ist der
  * Punkt, an dem Uplink sich lohnt, und VBR ist genau die Einstellung, die man
  * bei Twitch direkt nicht setzen darf und hier setzen soll.
+ *
+ * Die Bitrate ist keine feste Zahl mehr, sondern die Stufe aus der
+ * eingebetteten Hilfeseite, die zu den eingestellten Zielen passt: siehe
+ * `obsBitrateEmpfehlung`.
  */
-const OBS_AUSGABE = [
-  {
-    feld: 'Videoencoder',
-    wert: 'HEVC (H.265), Hardware',
-    warum: 'NVIDIA NVENC HEVC, AMD HEVC oder Apple VT HEVC. Darum geht es hier: HEVC packt dasselbe Bild in weniger Bits.',
-  },
-  {
-    feld: 'Ratensteuerung',
-    wert: 'VBR',
-    warum: 'Zu uns darf die Bitrate schwanken. Was zu den Plattformen rausgeht, machen wir selbst konstant.',
-  },
-  {
-    feld: 'Bitrate',
-    wert: '15000 bis 25000 kbps',
-    warum: 'So viel, wie dein Upload sicher trägt. Das ist die Qualität, aus der wir rechnen, nicht die, die rausgeht.',
-  },
-  {
-    feld: 'Keyframe-Intervall',
-    wert: '2 s',
-    warum: 'Feste 2 Sekunden. Bei „automatisch“ setzen manche Encoder gar keine, und dann startet kein Zuschauer sauber ein.',
-  },
-] as const;
+function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
+  return [
+    {
+      feld: 'Videoencoder',
+      wert: 'HEVC (H.265), Hardware',
+      warum: 'NVIDIA NVENC HEVC, AMD HEVC oder Apple VT HEVC. Darum geht es hier: HEVC packt dasselbe Bild in weniger Bits.',
+    },
+    {
+      feld: 'Ratensteuerung',
+      wert: 'VBR',
+      warum: 'Zu uns darf die Bitrate schwanken. Was zu den Plattformen rausgeht, machen wir selbst konstant.',
+    },
+    {
+      feld: 'Bitrate',
+      wert: `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`,
+      warum: bitrateBegruendung(bitrate),
+    },
+    {
+      feld: 'Keyframe-Intervall',
+      wert: '2 s',
+      warum: 'Feste 2 Sekunden. Bei „automatisch“ setzen manche Encoder gar keine, und dann startet kein Zuschauer sauber ein.',
+    },
+  ];
+}
 
 function CopyField({
   label,
@@ -345,13 +377,24 @@ export function UplinkPage() {
   // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
+  // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
+  // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
+  // Leitung und ohne Bezug zu dem, was hier tatsaechlich rausgeht.
+  //
+  // `zieleFehler` muss mit: ohne das Flag ist ein fehlgeschlagener Abruf von
+  // einem leeren Konto nicht zu unterscheiden, und der Text behauptet dann
+  // "kein Ziel eingerichtet" bei jemandem, der Ziele hat.
+  const obsBitrate = obsBitrateEmpfehlung(gespeicherteZiele, zieleFehler);
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
   });
-  // Die Grenzen kommen vom Server, damit die Oberflaeche sie nicht doppelt
-  // pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen Repo.
-  // Faellt der Abruf aus, faellt die Karte auf den Ingest-Deckel zurueck.
+  // Die Empfehlungen kommen vom Server, damit die Oberflaeche sie nicht
+  // doppelt pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen
+  // Repo. Faellt der Abruf aus, bleibt `caps` undefiniert, und die Zielkarte
+  // schreibt an die Felder gar keine Empfehlung plus einen Satz, warum. Ein
+  // Ersatzwert stuende hier falsch: es sind Empfehlungen und keine Grenzen,
+  // und eine erfundene Empfehlung ist schlechter als keine.
   const { data: caps } = useQuery({
     queryKey: ['uplink-caps'],
     queryFn: fetchUplinkCaps,
@@ -538,7 +581,7 @@ export function UplinkPage() {
                       Diese vier Werte:
                     </p>
                     <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
-                      {OBS_AUSGABE.map((zeile) => (
+                      {obsAusgabe(obsBitrate).map((zeile) => (
                         <div key={zeile.feld} className="flex items-baseline gap-3 px-3 py-2">
                           <dt className="w-32 shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
                             {zeile.feld}
@@ -621,7 +664,6 @@ export function UplinkPage() {
                           rtmpVorgabe={plattform.rtmp}
                           ziel={ziel}
                           caps={capsFuer(plattform.id)}
-                          ingest={caps?.ingest}
                           // Twitch offen, der Rest zu: fuer fast alle ist
                           // Twitch das einzige Ziel, und vier aufgeklappte
                           // Karten fuellen mehrere Bildschirmhoehen.
@@ -641,15 +683,18 @@ export function UplinkPage() {
                   {/* Die haeufigste Rueckfrage, und sie hat eine gute Antwort:
                       was reinkommt und was rausgeht sind zwei verschiedene
                       Dinge. Ohne diesen Absatz stellen Leute ihr OBS auf die
-                      Zielbitrate herunter und verschenken Qualitaet. */}
+                      Zielbitrate herunter und verschenken Qualitaet. Das
+                      Beispiel nennt dieselbe Zahl wie Schritt 4, sonst stehen
+                      zwei Empfehlungen auf einer Seite. */}
                   <p className="rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
                     <strong className="font-semibold text-white">
                       Was du sendest, ist nicht das, was rausgeht.
                     </strong>{' '}
-                    Schick uns ruhig HEVC in 1440p mit VBR und hoher Bitrate. Wir rechnen daraus für
-                    jedes Ziel neu, in H.264 und mit der Bitrate, die du oben eingestellt hast: also
-                    zum Beispiel 1440p bei 20000 kbps rein und 1080p H.264 mit 6000 kbps zu Twitch
-                    raus. Je mehr du uns schickst, desto besser wird das Ergebnis.
+                    Schick uns HEVC in 1440p mit VBR und den Werten aus Schritt 4. Wir rechnen
+                    daraus für jedes Ziel neu, in H.264 und mit den Werten, die du hier eingestellt
+                    hast: also zum Beispiel 1440p HEVC mit {obsBitrate.kbps} kbps rein und H.264 zu
+                    Twitch raus. Höher stellen musst du dafür nicht: HEVC braucht für dasselbe Bild
+                    weniger als das H.264, das wir rausschicken.
                   </p>
                 </Rise>
                 )}

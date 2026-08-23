@@ -493,44 +493,55 @@ pub async fn overview_handler(
         }));
     }
 
-    let metrics = overview_metrics(&pool, &since, login_ref, None)
-        .await
+    // Die folgenden Kennzahlen haengen nur am aufgeloesten Fenster und nicht
+    // voneinander. Frueher lief jede einzeln nacheinander, also gut ein Dutzend
+    // Runden zur Datenbank hintereinander; jetzt laufen sie in zwei Gruppen
+    // gleichzeitig und die Antwortzeit richtet sich nach der langsamsten
+    // Abfrage einer Gruppe statt nach der Summe aller Abfragen.
+    //
+    // Bewusst hoechstens vier Abfragen auf einmal: der
+    // Verbindungs-Pool hat in der Voreinstellung zehn Plaetze
+    // (`TWITCH_ANALYTICS_POOL_MAXSIZE`, tb-config). Bei acht gleichzeitigen
+    // Abfragen belegt ein einziger Seitenaufruf fast den ganzen Pool, ein
+    // zweiter Nutzer liefe in die Wartezeit beim Verbindungholen und bekaeme
+    // einen Fehler statt Daten. Mit vier passen zwei Seitenaufrufe zeitgleich
+    // in den Pool, und der Gewinn bleibt nahezu gleich.
+    //
+    // Erste Gruppe: die Abfragen, die intern selbst mehrere Runden brauchen.
+    let (metrics_res, prev_res, net_res, mon_res) = tokio::join!(
+        // Aktuelles Fenster.
+        overview_metrics(&pool, &since, login_ref, None),
+        // Vorperiode [prev_since, since) für Trend-Pfeile (Python _get_overview_data_sync).
+        // Bei last_stream ist prev_since == since → leeres Fenster → keine Trends.
+        overview_metrics(&pool, &prev_since, login_ref, Some(&since)),
+        // Raid-Netzwerk-Kachel (zwei Abfragen).
+        overview_network_stats(&pool, &since, login_ref),
+        // Monetarisierungs-Events, drei Abfragen; fehlende Tabellen → 0.
+        overview_monetization_counts(&pool, &since, login_ref),
+    );
+
+    // Zweite Gruppe: je eine Abfrage.
+    let (chatter_res, category_res, chat_per_100_res, sessions_res) = tokio::join!(
+        // Chatter-abgeleitete Metriken (Bot-gefiltert).
+        overview_chatter_metrics(&pool, &since, login_ref),
+        // Kategorie-Perzentil/Rang (speist Reach-Score + categoryRank/Total).
+        overview_category_rank(&pool, &since, login_ref),
+        // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
+        overview_chat_per_100(&pool, &since, login_ref),
+        // Sessions-Liste (jüngste 50).
+        overview_sessions(&pool, &since, login_ref, 50),
+    );
+
+    let metrics = metrics_res
         .map_err(|_| ApiError::internal())?
         .ok_or_else(ApiError::internal)?;
-
-    // Vorperiode [prev_since, since) für Trend-Pfeile (Python _get_overview_data_sync).
-    // Bei last_stream ist prev_since == since → leeres Fenster → keine Trends.
-    let prev = overview_metrics(&pool, &prev_since, login_ref, Some(&since))
-        .await
-        .map_err(|_| ApiError::internal())?;
-
-    // Chatter-abgeleitete Metriken (Bot-gefiltert).
-    let chatter = overview_chatter_metrics(&pool, &since, login_ref)
-        .await
-        .map_err(|_| ApiError::internal())?;
-
-    // Raid-Netzwerk-Kachel.
-    let net = overview_network_stats(&pool, &since, login_ref)
-        .await
-        .map_err(|_| ApiError::internal())?;
-
-    // Monetarisierungs-Events (fehlende Tabellen → 0).
-    let mon = overview_monetization_counts(&pool, &since, login_ref).await;
-
-    // Kategorie-Perzentil/Rang (speist Reach-Score + categoryRank/Total).
-    let category = overview_category_rank(&pool, &since, login_ref)
-        .await
-        .map_err(|_| ApiError::internal())?;
-
-    // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
-    let chat_per_100 = overview_chat_per_100(&pool, &since, login_ref)
-        .await
-        .map_err(|_| ApiError::internal())?;
-
-    // Sessions-Liste (jüngste 50).
-    let sessions = overview_sessions(&pool, &since, login_ref, 50)
-        .await
-        .map_err(|_| ApiError::internal())?;
+    let prev = prev_res.map_err(|_| ApiError::internal())?;
+    let net = net_res.map_err(|_| ApiError::internal())?;
+    let mon = mon_res.map_err(|_| ApiError::internal())?;
+    let chatter = chatter_res.map_err(|_| ApiError::internal())?;
+    let category = category_res.map_err(|_| ApiError::internal())?;
+    let chat_per_100 = chat_per_100_res.map_err(|_| ApiError::internal())?;
+    let sessions = sessions_res.map_err(|_| ApiError::internal())?;
     let correlations = calculate_correlations(&sessions);
 
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);

@@ -1,4 +1,6 @@
 import { fetchJson, withCookieCredentials } from './core';
+import { normalisiereCaps } from '../uplinkEmpfehlung';
+import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 
 /**
  * `live_status` kommt nicht vom Relay, sondern aus der Twitch-Beobachtung des
@@ -53,6 +55,18 @@ export interface UplinkProfilAnsicht {
  * `warnung` ist gesetzt, wo die Stufe zwar waehlbar, aber nicht unbedenklich
  * ist. Getrennt vom `hinweis`, damit die Oberflaeche sie anders faerben kann:
  * ein Nachteil, den man ueberliest, ist keiner.
+ *
+ * Die 1440p-Warnung steht auf den Angaben aus dem Twitch-Hilfeartikel "2k
+ * Streaming auf Twitch": 2K braucht dort Enhanced Broadcasting, das gibt es nur
+ * fuer Partner und Affiliates, und es geht an Twitchs eigenen Ingest. Ueber
+ * Uplink laeuft klassisches RTMP, damit ist 1440p bei Twitch offiziell nicht
+ * unterstuetzt und es gibt keine Qualitaetsstufen fuer die Zuschauer.
+ *
+ * Die Bitrate aus demselben Artikel steht bewusst NICHT in der Warnung. Sie
+ * gilt fuer jemanden, der 2K direkt an Twitch schickt. Ueber Uplink geht
+ * `PROFIL_WERTE['1440p60']` an Twitch, also 12000 kbps, und was der Streamer
+ * zu uns hochlaedt, ist davon wieder unabhaengig. Eine Zahl, die auf keinen
+ * dieser drei Wege passt, gehoert nicht in eine Warnung.
  */
 export const UPLINK_PROFILE = [
   {
@@ -60,7 +74,7 @@ export const UPLINK_PROFILE = [
     label: '1440p60 (2K), 12000 kbps',
     hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
     warnung:
-      'Twitch unterstützt 2K über diesen Weg offiziell nicht. Ob deine 12000 kbps ankommen oder Twitch drosselt, siehst du erst im Stream. Probier es einen Abend lang aus, bevor du dabei bleibst. Wer aus OBS nur 1080p sendet, gewinnt hier gar nichts: wir müssten hochrechnen, und das kostet Bitrate ohne Gegenwert.',
+      'Twitch nimmt 2K offiziell nur über Enhanced Broadcasting an, und das läuft über Twitchs eigenen Ingest, nicht über uns. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, puffert, statt auf 720p zu wechseln. Probier es einen Abend aus und schick uns dafür auch 1440p aus OBS.',
   },
   {
     name: '1080p60-hoch',
@@ -164,30 +178,27 @@ export function saveUplinkDestination(body: {
 }
 
 /**
- * Eine Obergrenze aus dem Relay. `null` heisst: an dieser Stelle klemmt diese
- * Plattform nicht, dann gilt nur noch der Ingest-Deckel.
+ * Was eine Plattform an Video empfiehlt. Liegt in `uplinkEmpfehlung.ts`, damit
+ * die Umschrift der Serverantwort ohne den Fetch-Unterbau pruefbar bleibt, und
+ * steht hier weiter zur Verfuegung, wo die uebrigen Uplink-Typen liegen.
  */
-export interface UplinkCaps {
-  platform: string;
-  max_width: number | null;
-  max_height: number | null;
-  max_fps: number | null;
-  max_bitrate_kbps: number | null;
-  force_cbr: boolean;
-}
+export type { UplinkCaps } from '../uplinkEmpfehlung';
 
 export interface UplinkCapsAntwort {
-  ingest: UplinkCaps;
   platforms: UplinkCaps[];
 }
 
 /**
- * Der Grenzenkatalog. Kommt vom Server, damit die Oberflaeche ihn nicht
+ * Der Empfehlungskatalog. Kommt vom Server, damit die Oberflaeche ihn nicht
  * doppelt pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen
  * Repo und kann sich per Migration bewegen, ohne dass hier jemand etwas tut.
  */
-export function fetchUplinkCaps(): Promise<UplinkCapsAntwort> {
-  return fetchJson<UplinkCapsAntwort>('/twitch/api/v2/uplink/caps', withCookieCredentials());
+export async function fetchUplinkCaps(): Promise<UplinkCapsAntwort> {
+  const antwort = await fetchJson<{ platforms?: UplinkCapsRoh[] }>(
+    '/twitch/api/v2/uplink/caps',
+    withCookieCredentials()
+  );
+  return { platforms: (antwort.platforms ?? []).map(normalisiereCaps) };
 }
 
 /**
@@ -200,9 +211,14 @@ export interface UplinkDestination {
   platform: string;
   rtmp_url: string;
   enabled: boolean;
-  /** Was der Streamer bestellt hat. */
+  /** Was der Streamer eingestellt hat, und damit auch das, was rausgeht. */
   requested?: UplinkProfilAnsicht;
-  /** Was nach der Klemmung gegen die Plattform-Caps wirklich rausgeht. */
+  /**
+   * Frueher das Ergebnis der Klemmung gegen die Plattform-Grenzen, heute immer
+   * identisch mit `requested`. Steht nur noch im JSON, damit aeltere Clients
+   * nicht brechen. Die Oberflaeche liest ausschliesslich `requested`: sonst
+   * zeigt sie wieder einen anderen Wert an, als im Eingabefeld steht.
+   */
   effective?: UplinkProfilAnsicht;
 }
 

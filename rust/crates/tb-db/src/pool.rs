@@ -11,8 +11,26 @@ pub async fn connect(cfg: &DbConfig) -> Result<PgPool, DbError> {
     // sqlx 0.8 hat keinen separaten PgConnectOptions-Connect-Timeout; der
     // Pool nutzt `acquire_timeout` auch als Deadline für neue Verbindungen.
     let connection_deadline = cfg.acquire_timeout.min(cfg.connect_timeout);
+    // Zwei Verbindungen bleiben offen stehen, statt nach zehn Minuten Ruhe
+    // abgeraeumt zu werden. Eine wiederverwendete Verbindung behaelt ihre
+    // vorbereiteten Abfragen, eine neue faengt bei null an und laesst Postgres
+    // jede Abfrage neu planen; ueber den Zeitreihen-Tabellen ist allein das
+    // Planen teuer. Eine Zusicherung, dass die offenen Verbindungen immer warm
+    // sind, ist das nicht: nach `max_lifetime` ersetzt der Pool eine Verbindung
+    // durch eine frische.
+    //
+    // Zwei und nicht mehr, weil `connect` diese Verbindungen beim Start
+    // nacheinander innerhalb von `acquire_timeout` aufbauen muss.
+    //
+    // Die Ruhezeit, nach der ueberzaehlige Verbindungen abgeraeumt werden,
+    // bleibt bewusst beim Vorgabewert von zehn Minuten: der Server ist beim
+    // Arbeitsspeicher knapp bemessen, und jede offene Verbindung kostet auf
+    // der Datenbankseite einen eigenen Prozess. Nur die zwei Grundverbindungen
+    // stehen dauerhaft, alles darueber verschwindet wie bisher.
+    let dauerhaft_offen = cfg.pool_max.min(2);
     let pool = PgPoolOptions::new()
         .max_connections(cfg.pool_max)
+        .min_connections(dauerhaft_offen)
         .acquire_timeout(connection_deadline)
         .connect(&cfg.dsn)
         .await?;

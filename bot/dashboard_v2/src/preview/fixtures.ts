@@ -408,9 +408,10 @@ export function getPreviewApiFixture(
  * Zielverwaltung lokal gar nicht ansehen, und genau daran haengt jede
  * optische Pruefung.
  *
- * Der Zustand ist absichtlich gemischt: Twitch mit einer Stufe aus dem
- * Katalog, YouTube mit einem manuellen Wert, der Rest leer. So sieht man in
- * einem Blick alle drei Zustaende einer Zielkarte.
+ * Der Zustand ist absichtlich gemischt: Twitch mit einem manuellen Wert ueber
+ * der Empfehlung der Plattform, YouTube mit einem manuellen Wert darunter, der
+ * Rest leer. So sieht man in einem Blick alle Zustaende einer Zielkarte, auch
+ * den Empfehlungshinweis am Feld.
  */
 const UPLINK_ME_FIXTURE = {
   enabled: true,
@@ -423,39 +424,35 @@ const UPLINK_ME_FIXTURE = {
   twitch_login: 'earlysalty',
 };
 
+// `effective` ist ueberall identisch mit `requested`: das Relay rechnet nichts
+// mehr herunter, das Feld steht nur noch fuer aeltere Clients im JSON.
 const UPLINK_DESTINATIONS_FIXTURE = {
   destinations: [
     {
       platform: 'twitch',
       rtmp_url: 'rtmp://live.twitch.tv/app',
       enabled: true,
-      requested: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 },
-      effective: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 },
+      requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 16000 },
+      effective: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 16000 },
     },
     {
       platform: 'youtube',
       rtmp_url: 'rtmp://a.rtmp.youtube.com/live2',
       enabled: true,
       requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
-      effective: { width: 1920, height: 1080, fps: 60, bitrate_kbps: 18000 },
+      effective: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
     },
   ],
 };
 
+// Empfehlungen, keine Grenzen. Der `ingest`-Eintrag ist weg, es gibt keinen
+// Deckel mehr, gegen den die Oberflaeche pruefen koennte.
 const UPLINK_CAPS_FIXTURE = {
-  ingest: {
-    platform: 'ingest',
-    max_width: 2560,
-    max_height: 1440,
-    max_fps: 60,
-    max_bitrate_kbps: 30000,
-    force_cbr: false,
-  },
   platforms: [
-    { platform: 'twitch', max_width: 2560, max_height: 1440, max_fps: 60, max_bitrate_kbps: 12000, force_cbr: true },
-    { platform: 'kick', max_width: 1920, max_height: 1080, max_fps: 60, max_bitrate_kbps: 8000, force_cbr: true },
-    { platform: 'youtube', max_width: 2560, max_height: 1440, max_fps: 60, max_bitrate_kbps: 24000, force_cbr: false },
-    { platform: 'tiktok', max_width: 1920, max_height: 1080, max_fps: 60, max_bitrate_kbps: 8000, force_cbr: false },
+    { platform: 'twitch', recommended_width: 2560, recommended_height: 1440, recommended_fps: 60, recommended_bitrate_kbps: 12000, force_cbr: true },
+    { platform: 'kick', recommended_width: 1920, recommended_height: 1080, recommended_fps: 60, recommended_bitrate_kbps: 8000, force_cbr: true },
+    { platform: 'youtube', recommended_width: 2560, recommended_height: 1440, recommended_fps: 60, recommended_bitrate_kbps: 24000, force_cbr: false },
+    { platform: 'tiktok', recommended_width: 1920, recommended_height: 1080, recommended_fps: 60, recommended_bitrate_kbps: 8000, force_cbr: false },
   ],
 };
 
