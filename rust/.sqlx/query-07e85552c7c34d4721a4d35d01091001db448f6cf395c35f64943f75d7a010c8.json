@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT platform AS \"platform!\", streamer_login, refresh_token_enc AS \"refresh_token_enc!\", client_id, client_secret_enc, token_expires_at, enc_version FROM social_media_platform_auth WHERE enabled = 1 AND refresh_token_enc IS NOT NULL AND token_expires_at IS NOT NULL AND token_expires_at < $1 ORDER BY token_expires_at ASC",
+  "query": "SELECT platform AS \"platform!\", streamer_login, access_token_enc AS \"access_token_enc!\", refresh_token_enc, client_id, client_secret_enc, token_expires_at, enc_version FROM social_media_platform_auth WHERE enabled = 1 AND token_expires_at IS NOT NULL AND ( (platform = 'instagram' AND token_expires_at < $2) OR (platform <> 'instagram' AND refresh_token_enc IS NOT NULL AND token_expires_at < $1) ) ORDER BY token_expires_at ASC",
   "describe": {
     "columns": [
       {
@@ -15,38 +15,45 @@
       },
       {
         "ordinal": 2,
-        "name": "refresh_token_enc!",
+        "name": "access_token_enc!",
         "type_info": "Bytea"
       },
       {
         "ordinal": 3,
+        "name": "refresh_token_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
         "name": "client_id",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "client_secret_enc",
         "type_info": "Bytea"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "token_expires_at",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "enc_version",
         "type_info": "Int4"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
     "nullable": [
       false,
       true,
+      false,
       true,
       true,
       true,
@@ -54,5 +61,5 @@
       true
     ]
   },
-  "hash": "2e39ad77d289d289f8444708de14a38489cebd0f24fb8c1fae130ef2590972b8"
+  "hash": "07e85552c7c34d4721a4d35d01091001db448f6cf395c35f64943f75d7a010c8"
 }

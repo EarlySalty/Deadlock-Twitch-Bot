@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_upload_queue SET status = 'pending', attempts = attempts + 1, last_error = $1, last_attempt_at = $2::text::timestamptz, scheduled_at = $3::text::timestamptz WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "453e7460bc6084905d6d5e79d2fbc455655108bc80d1270f4abb571865278580"
+}

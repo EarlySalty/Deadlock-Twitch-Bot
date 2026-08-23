@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_platform_auth SET token_expires_at = $1 WHERE platform = $2 AND (streamer_login = $3 OR (streamer_login IS NULL AND $3 IS NULL))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "74e808258a8bef0698c406073417cdafc13a4faed424be829fe6fa5e5d83469a"
+}

@@ -83,7 +83,15 @@ Die Plattformfreigabe ist explizit pro Clip und pro Zielnetzwerk. Ein Clip kann 
 Der Modus steht in `social_media_streamer_settings.approval_mode`:
 
 - `manual`: jeder Clip braucht eine ausdrueckliche Freigabe (Default)
-- `veto_window`: Clip wird eingeplant und geht raus, wenn bis zum Termin niemand widerspricht
+- `veto_window`: Clip wird eingeplant und geht raus, wenn bis zum Termin niemand
+  widerspricht. Der Widerspruch laeuft ueber
+  `POST /social-media/api/approval/:clip_db_id/cancel`: die Route raeumt die noch
+  nicht angefassten Queue-Zeilen ab und setzt den Clip zurueck auf
+  `awaiting_approval`. Zeilen, die schon in `processing` oder `completed` stehen,
+  bleiben unangetastet und werden in der Antwort als `already_running` gemeldet,
+  damit die Oberflaeche ehrlich sagen kann, dass eine Plattform schon durch war.
+  Der geplante Termin je Plattform steht am Clip in `scheduled_at`, der letzte
+  Fehlgrund in `upload_errors`.
 - `full_auto`: Clip wird ohne Sichtung eingeplant
 
 Unbekannte Werte fallen auf `manual` zurueck.
@@ -184,6 +192,94 @@ Auf Clip-Ebene tauchen spaeter im UI typischerweise diese Status auf:
 - `published_all`
 - `discarded`
 - `failed`
+
+### Plattform-Anbindungen: was gilt, wo es klemmt
+
+**TikTok.** Direct Post ueber die Content Posting API v2. Ablauf: Creator-Info
+abfragen (Pflicht, liefert die erlaubten Sichtbarkeiten und die Kommentar-,
+Duett- und Stitch-Sperren des Kanals), dann `/post/publish/video/init/` mit
+`post_info` und `source_info`, dann die Chunks per `PUT` gegen die von init
+gelieferte `upload_url`. Einen eigenen Publish-Aufruf gibt es nicht, TikTok
+startet nach dem letzten Chunk selbst.
+
+Solange die TikTok-App nicht auditiert ist, laesst TikTok nur `SELF_ONLY` zu und
+blockt jeden oeffentlichen Post schon beim init mit
+`unaudited_client_can_only_post_to_private_accounts`. Der Default im Uploader ist
+deshalb `SELF_ONLY`. Nach dem Audit umstellen, nicht vorher.
+
+Der Upload liefert nur eine `publish_id`, also "zur Verarbeitung angenommen".
+Der Upload-Worker fragt danach bis zu drei Minuten lang
+`/post/publish/status/fetch/` ab: `PUBLISH_COMPLETE` liefert die echte Post-ID,
+`FAILED` den Grund. Bleibt die Antwort im Zeitfenster unentschieden, bleibt es
+bei der `publish_id` und es wird nichts erneut hochgeladen; ein doppelter Post
+waere schlimmer als eine fehlende Bestaetigung.
+
+TikTok-Analytics sind nicht angebunden. `/v2/video/query/` gehoert zur Display
+API, braucht den Scope `video.list` und eine echte Video-ID. Der Uploader meldet
+deshalb `NotImplemented`, statt Nullen als Messung in die Datenbank zu schreiben.
+
+**Instagram.** Weg ist Instagram Login gegen `graph.instagram.com`, nicht
+Facebook Login gegen `graph.facebook.com`. Damit braucht der Streamer keine
+Facebook-Seite. Die Scopes heissen entsprechend `instagram_business_basic` und
+`instagram_business_content_publish`; die Facebook-Namen `instagram_basic` und
+`instagram_content_publish` werden am Instagram-Authorize-Endpunkt mit "Invalid
+scope" abgewiesen.
+
+Das Video geht per resumable Upload direkt an `rupload.facebook.com`, es braucht
+also keinen oeffentlichen Media-Host. Reels werden dreistufig veroeffentlicht:
+Container anlegen, auf `status_code = FINISHED` warten, erst dann
+`media_publish`. Wer den Wartepunkt ueberspringt, bekommt bei laengeren Clips
+verlaesslich einen 400er.
+
+Der Code-Tausch liefert ein Token mit EINER Stunde Laufzeit. Es wird sofort per
+`ig_exchange_token` gegen ein 60-Tage-Token getauscht. Instagram hat keinen
+Refresh-Token: das Langzeit-Token verlaengert sich per `ig_refresh_token` selbst,
+solange es noch gueltig ist. Der Refresh-Worker holt Instagram deshalb sieben
+Tage vor Ablauf, nicht wie die Stundentoken der anderen Plattformen eine Stunde
+vorher.
+
+**YouTube.** Uploads laufen ueber das resumable Protokoll mit Wiederaufnahme
+nach Abbruch. `snippet.tags` ist ein Zeichenlimit von 500, keine Anzahl. Der
+Scope `yt-analytics.readonly` wird bewusst nicht angefragt, damit das
+Google-Audit nicht ueber einen Bereich stolpert, der im Demo-Video nicht in
+Benutzung zu sehen ist. Folge: `watch_time_seconds` und `ctr_percent` bleiben fuer
+YouTube leer, und `shares` gibt es in der Data API gar nicht.
+
+Die Google-Zugangsdaten liest der Code in der Reihenfolge `GOOGLE_OAUTH_ID`,
+`GOOGLE_CLIENT_ID`, `YOUTUBE_CLIENT_ID`. Unter dem letzten Namen liegt teils noch
+ein alter Client, der sonst den aktuellen ueberstimmt.
+
+### Fehler sind nicht gleich Fehler
+
+Ein fehlgeschlagener Upload landete frueher immer auf `status = failed`, und
+`failed` holt die Warteschlange nie wieder ab. Ein einzelnes 502 oder ein volles
+Tageskontingent hat den Clip damit endgueltig verbrannt.
+`upload_worker::verzoegerung_fuer` trennt das jetzt:
+
+| Fehler | Verhalten |
+|---|---|
+| `QuotaExceeded` | neuer Termin in 24 Stunden, zaehlt nicht gegen die Versuchsgrenze |
+| `Request` (Netz, 5xx) | neuer Termin in 15 Minuten |
+| `NotAuthenticated` | neuer Termin in 30 Minuten, der Refresh-Worker laeuft alle 5 Minuten |
+| `Validation`, `Api`, `NotImplemented`, `Io` | `failed`, das bleibt beim naechsten Mal kaputt |
+
+Nach fuenf Anlaeufen gilt ein Job als kaputt. Ein erschoepftes Kontingent zaehlt
+dabei nicht mit, denn der Clip ist in Ordnung.
+
+### Tote Zugaenge werden sichtbar
+
+Scheitert ein Token-Refresh mit `invalid_grant` (Zugriff entzogen, Token zu lange
+ungenutzt, Passwortwechsel), setzt der Refresh-Worker `token_expires_at` auf
+jetzt. Das Dashboard zeigt den Zugang dadurch als abgelaufen an, statt weiter
+gruen zu melden, waehrend jeder Upload ins Leere laeuft. Der Eintrag bleibt
+`enabled = 1`, damit ein erneutes Verbinden dieselbe Zeile aktualisiert.
+
+Der Insights-Worker faellt nicht mehr auf die Sammelverbindung zurueck. Ohne
+eigene Plattform-Verbindung wird ein Kanal uebersprungen, statt sein privates
+oder ungelistetes Video mit dem Betreiber-Token abzufragen und die leere
+Trefferliste als "0 Views" zu speichern. Aus demselben Grund schreibt ein
+gescheiterter Abruf nur noch den naechsten Termin, nicht mehr Nullen ueber
+bestehende Messwerte.
 
 ## 5. Retention
 

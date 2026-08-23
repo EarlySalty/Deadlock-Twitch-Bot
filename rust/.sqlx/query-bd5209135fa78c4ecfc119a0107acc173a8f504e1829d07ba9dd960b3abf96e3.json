@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_analytics SET provider = COALESCE($1, provider), next_pull_at = $2::text::timestamptz WHERE clip_id = $3 AND platform = $4 AND bucket = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd5209135fa78c4ecfc119a0107acc173a8f504e1829d07ba9dd960b3abf96e3"
+}
