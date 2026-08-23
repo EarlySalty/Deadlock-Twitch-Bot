@@ -27,6 +27,13 @@ pub struct NetworkStreamerRow {
 }
 
 /// Lädt alle aktiven Partner, sortiert nach Live-Status und Viewer-Anzahl.
+///
+/// Das 30-Tage-Aggregat läuft bei jedem Aufruf des unauthentifizierten
+/// Endpoints mit, den offene Tabs alle 45 s pollen. Es stützt sich auf
+/// vorhandene Indizes: `idx_twitch_sessions_login (streamer_login, started_at)`
+/// aus dem Baseline-Schema und `(LOWER(streamer_login), started_at, ended_at)`
+/// aus `20260719120000_public_streamer_comparison_indexes.sql`. Wenn das
+/// Netzwerk deutlich wächst, ist hier der Punkt für einen Cache.
 pub async fn network_streamers(pool: &PgPool) -> Result<Vec<NetworkStreamerRow>, sqlx::Error> {
     sqlx::query_as!(
         NetworkStreamerRow,
@@ -76,7 +83,14 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        // Erst droppen, dann anlegen: ein Schema aus einem frueheren Lauf
+        // behaelt sonst die alte twitch_live_state ohne last_game (CREATE
+        // TABLE IF NOT EXISTS greift dann nicht) und der Query faellt in 42703.
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");

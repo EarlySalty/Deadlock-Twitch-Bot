@@ -226,7 +226,7 @@ export function PartnersSection({
   categoryKnown: boolean;
 }) {
   // Deadlock hat Vorrang. Streamt gerade niemand Deadlock, zeigt die Vorschau
-  // die Partner, die sonst live sind, statt leer zu bleiben — dann aber
+  // die Partner, die sonst live sind, statt leer zu bleiben. Sie sind dann
   // ausdruecklich als "anderes Spiel" beschriftet und nicht als Deadlock.
   const deadlockLive = partners.filter((p) => p.liveDeadlock);
   const anyLive = partners.filter((p) => p.isLive);
@@ -239,27 +239,39 @@ export function PartnersSection({
       ambientSide="right"
       stamp="01 · Entdecke unsere Partner"
       headline={
-        featured.length === 0
-          ? "Gerade ist niemand live."
-          : !categoryKnown
-            ? "Hier ist gerade jemand live."
-            : zeigtDeadlock
-              ? "Hier läuft gerade Deadlock."
-              : "Gerade läuft kein Deadlock."
+        !settled
+          ? "Wer ist gerade live?"
+          : partners.length === 0
+            ? "Die Partnerliste ist gerade nicht abrufbar."
+            : featured.length === 0
+              ? "Gerade ist niemand live."
+              : !categoryKnown
+                ? "Hier ist gerade jemand live."
+                : zeigtDeadlock
+                  ? "Hier läuft gerade Deadlock."
+                  : "Gerade läuft kein Deadlock."
       }
-      // Die Intro haengt zuerst an featured.length, nicht an categoryKnown.
-      // Sonst verspricht sie laufende Kanäle, während der Block darunter
-      // "Gerade ist kein Partner live" meldet — nachts der Regelfall, weil
-      // last_game nach dem Offlinegehen stehen bleibt und categoryKnown
-      // deshalb auch ohne einen einzigen Live-Kanal true ist.
+      // Reihenfolge der Bedingungen: erst "noch nichts geladen", dann "gar
+      // keine Daten", erst danach eine Aussage ueber Live-Status. Sonst steht
+      // hier eine Tatsachenbehauptung, waehrend der Block darunter noch
+      // laedt oder meldet, dass die Liste nicht abrufbar ist.
+      //
+      // Warum das nicht an categoryKnown haengen darf: telemetry.rs schreibt
+      // last_game per COALESCE und nur bei is_live = 1, der Wert wird also
+      // nie geleert. categoryKnown ist deshalb auch nachts true, wenn kein
+      // einziger Partner sendet.
       intro={
-        featured.length === 0
-          ? "Gerade sendet kein Partner. Unten stehen trotzdem alle Kanäle des Netzwerks, damit du siehst, in welche Szene du reinstreamst."
-          : !categoryKnown
-            ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
-            : zeigtDeadlock
-              ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
-              : "Gerade streamt kein Partner Deadlock. Damit du trotzdem siehst, wer hier unterwegs ist, laufen unten die Kanäle, die sonst live sind."
+        !settled
+          ? "Die Live-Kanäle werden gerade geladen."
+          : partners.length === 0
+            ? "Die Liste kommt aus dem laufenden Betrieb und ist im Moment nicht erreichbar. Solange erfinden wir hier nichts."
+            : featured.length === 0
+              ? "Gerade sendet kein Partner. Unten stehen trotzdem alle Kanäle des Netzwerks, damit du siehst, in welche Szene du reinstreamst."
+              : !categoryKnown
+                ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment senden. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+                : zeigtDeadlock
+                  ? "Kein Renderbild, kein Mockup: Das sind echte Partnerkanäle, die in diesem Moment Deadlock streamen. Klick dich rein, dann siehst du, in welche Szene du reinstreamst."
+                  : "Gerade streamt kein Partner Deadlock. Damit du trotzdem siehst, wer hier unterwegs ist, laufen unten die Kanäle, die sonst live sind."
       }
     >
       {featured.length > 0 ? (
@@ -347,6 +359,11 @@ export function PartnerGrid({
   const impact = computeImpact(partners);
   const sorted = [...partners].sort((a, b) => {
     if (a.liveDeadlock !== b.liveDeadlock) return a.liveDeadlock ? -1 : 1;
+    // Zweite Stufe: wer ueberhaupt sendet, steht vor den offline stehenden.
+    // Ohne sie verschwindet ein live laufender Partner ohne Deadlock-Sessions
+    // hinter "Alle Partner anzeigen", waehrend sein Embed oben in derselben
+    // Sektion laeuft.
+    if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
     return impact(b) - impact(a);
   });
 

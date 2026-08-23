@@ -270,23 +270,17 @@ mod tests {
              live nicht von live-in-Deadlock unterscheiden"
         );
 
-        let offline_json = json["streamers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["login"] == "offuser")
-            .unwrap();
-        assert!(
-            offline_json.get("game").is_none(),
-            "ohne Kategorie darf kein game-Feld erscheinen, war: {offline_json}"
-        );
-
         let offline = json["streamers"]
             .as_array()
             .unwrap()
             .iter()
             .find(|s| s["login"] == "offuser")
             .unwrap();
+        assert!(
+            offline.get("game").is_none(),
+            "ohne Kategorie darf kein game-Feld erscheinen, war: {offline}"
+        );
+
         assert_eq!(offline["is_live"], false, "is_live muss bool false sein");
     }
 
