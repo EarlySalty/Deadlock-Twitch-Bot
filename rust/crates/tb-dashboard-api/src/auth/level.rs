@@ -749,6 +749,7 @@ mod tests {
                 cookie_domain: Some("example.com".into()),
                 owner_user_id: None,
                 moderator_role_id: 1,
+                admin_role_ids: Vec::new(),
                 admin_guild_ids: Vec::new(),
                 client: std::sync::Arc::new(CentralSessionClient),
             });
