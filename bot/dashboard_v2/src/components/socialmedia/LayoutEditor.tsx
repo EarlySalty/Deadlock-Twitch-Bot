@@ -20,12 +20,18 @@ import {
 
 type BoxId = 'game_crop' | 'cam_crop' | 'cam_position';
 
-type BoxColor = 'gold' | 'teal';
+type BoxColor = 'gold' | 'messing';
 
-const BOX_COLORS: Record<BoxColor, { border: string; fill: string }> = {
-  gold: { border: 'rgba(197, 160, 89, 0.95)', fill: 'rgba(197, 160, 89, 0.18)' },
-  teal: { border: 'rgba(0, 217, 255, 0.95)', fill: 'rgba(0, 217, 255, 0.18)' },
+// Zwei Metalle statt Gold gegen Neonblau: das Blau war ein Farbbruch im
+// Industrial-Gold-Theme. Weil Antik-Gold und helles Messing farblich nah
+// beieinander liegen, traegt die Linienart die Unterscheidung, nicht der Ton.
+const BOX_COLORS: Record<BoxColor, { border: string; fill: string; dashed: boolean }> = {
+  gold: { border: 'rgba(197, 160, 89, 0.95)', fill: 'rgba(197, 160, 89, 0.16)', dashed: false },
+  messing: { border: 'rgba(241, 210, 153, 0.95)', fill: 'rgba(241, 210, 153, 0.14)', dashed: true },
 };
+
+/** Tinte auf Metallflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist unlesbar. */
+const AUF_METALL = '#241A12';
 
 const CORNER_HANDLES: DragMode[] = ['resize-tl', 'resize-tr', 'resize-bl', 'resize-br'];
 
@@ -140,7 +146,7 @@ function EditableFrame({
       </div>
 
       {boxes.map((spec) => {
-        const { border, fill } = BOX_COLORS[spec.color];
+        const { border, fill, dashed } = BOX_COLORS[spec.color];
         const isSelected = selectedBox === spec.id;
         const isBand = spec.interaction === 'band';
         return (
@@ -155,7 +161,7 @@ function EditableFrame({
               top: `${(spec.box.y / frameHeight) * 100}%`,
               width: `${(spec.box.w / frameWidth) * 100}%`,
               height: `${(spec.box.h / frameHeight) * 100}%`,
-              border: `2px solid ${border}`,
+              border: `2px ${dashed ? 'dashed' : 'solid'} ${border}`,
               background: fill,
               boxShadow: isSelected
                 ? `0 0 0 3px ${border}, 0 8px 24px rgba(0,0,0,0.45)`
@@ -164,8 +170,8 @@ function EditableFrame({
             }}
           >
             <div
-              className="absolute top-1 left-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white px-1.5 py-0.5 rounded"
-              style={{ background: border }}
+              className="absolute top-1 left-1 text-[9px] font-bold uppercase tracking-[0.12em] px-1.5 py-0.5 rounded"
+              style={{ background: border, color: AUF_METALL }}
             >
               {spec.label}
             </div>
@@ -247,7 +253,7 @@ function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChan
       id: 'cam_crop',
       box: layout.cam_crop,
       label: t('Cam-Ausschnitt'),
-      color: 'teal',
+      color: 'messing',
       interaction: 'free',
     });
   }
@@ -285,7 +291,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
         ? { x: 0, y: 0, w: TARGET_WIDTH, h: bandHeight }
         : layout.cam_position,
       label: isStacked ? t('Cam-Streifen') : t('Cam-Kachel'),
-      color: 'teal',
+      color: 'messing',
       interaction: isStacked ? 'band' : 'free',
     });
   }
@@ -435,7 +441,7 @@ export function LayoutEditor({
             onClick={() => setCamEnabled(!camEnabled)}
             className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition ${
               camEnabled
-                ? 'bg-teal/15 text-teal border-teal/40'
+                ? 'bg-accent/15 text-accent border-accent/40'
                 : 'bg-bg/60 text-text-secondary border-border hover:text-white'
             }`}
           >
@@ -483,7 +489,7 @@ export function LayoutEditor({
               onClick={() => setSelectedBox('cam_crop')}
               className={`px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] ${
                 selectedBox === 'cam_crop'
-                  ? 'border-teal/70 text-teal bg-teal/10'
+                  ? 'border-accent/70 text-accent bg-accent/10'
                   : 'border-border text-text-secondary hover:text-white'
               } ${!camEnabled ? 'opacity-40 cursor-not-allowed' : ''}`}
             >

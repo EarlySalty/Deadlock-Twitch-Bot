@@ -424,7 +424,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
               onClick={() => setActiveView(id)}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
                 active
-                  ? 'bg-gradient-to-r from-orange/85 to-teal/70 text-white shadow-[0_6px_24px_-10px_rgba(201, 168, 106, 0.45)]'
+                  ? 'bg-gradient-to-r from-primary to-accent text-on-gold shadow-[0_6px_24px_-10px_rgba(197,160,89,0.55)]'
                   : 'text-text-secondary hover:text-white'
               }`}
             >
@@ -589,7 +589,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 type="button"
                 onClick={() => clipsHolenMutation.mutate()}
                 disabled={clipsHolenMutation.isPending || !streamer}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-teal/35 bg-teal/12 px-3 py-1.5 text-xs font-bold text-teal hover:bg-teal/20 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-accent/35 bg-accent/12 px-3 py-1.5 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
               >
                 {clipsHolenMutation.isPending ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -718,7 +718,7 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
       className="panel-card rounded-2xl p-6 md:p-8 relative overflow-hidden"
     >
       <div className="absolute -top-20 -right-20 h-72 w-72 rounded-full bg-orange/15 blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-24 -left-12 h-72 w-72 rounded-full bg-teal/12 blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-24 -left-12 h-72 w-72 rounded-full bg-accent/12 blur-3xl pointer-events-none" />
       <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-5">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-bold text-orange/90 px-2.5 py-1 rounded-full bg-orange/12 border border-orange/30">
@@ -726,7 +726,7 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
           </div>
           <h1 className="display-font font-extrabold text-white mt-3 text-3xl md:text-4xl tracking-tight">
             {t('Social Media für')}{' '}
-            <span className="bg-gradient-to-r from-orange to-teal bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               {streamer}
             </span>
           </h1>
@@ -740,7 +740,7 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
           <HeroBadge tone="orange" icon={Film}>
             {isDefaultLayout ? t('Layout: Repo-Default aktiv') : t('Layout: Streamer-Default')}
           </HeroBadge>
-          <HeroBadge tone="teal" icon={Calendar}>
+          <HeroBadge tone="accent" icon={Calendar}>
             {t('Phase 3 · Analytics + LLM-Reports')}
           </HeroBadge>
         </div>
@@ -754,11 +754,11 @@ function HeroBadge({
   icon: Icon,
   children,
 }: {
-  tone: 'orange' | 'teal';
+  tone: 'orange' | 'accent';
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
 }) {
-  const cls = tone === 'orange' ? 'bg-orange/12 text-orange border-orange/30' : 'bg-teal/12 text-teal border-teal/35';
+  const cls = tone === 'orange' ? 'bg-orange/12 text-orange border-orange/30' : 'bg-accent/12 text-accent border-accent/35';
   return (
     <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border font-semibold ${cls}`}>
       <Icon className="w-3.5 h-3.5" />
@@ -786,7 +786,7 @@ function StatusFilter({
             onClick={() => onChange(id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
               active
-                ? 'bg-gradient-to-r from-orange/80 to-teal/70 text-white shadow-[0_4px_18px_-6px_rgba(201, 168, 106, 0.45)]'
+                ? 'bg-gradient-to-r from-primary to-accent text-on-gold shadow-[0_4px_18px_-6px_rgba(197,160,89,0.55)]'
                 : 'text-text-secondary hover:text-white'
             }`}
           >
@@ -832,7 +832,7 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
-        <Upload className="w-4 h-4 text-teal" />
+        <Upload className="w-4 h-4 text-accent" />
         <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
           {t('MP4 hochladen')}
         </h3>
@@ -855,8 +855,8 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
         onClick={() => inputRef.current?.click()}
         className={`relative cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition ${
           dragActive
-            ? 'border-teal bg-teal/10'
-            : 'border-border hover:border-teal/50 hover:bg-bg/40'
+            ? 'border-accent bg-accent/10'
+            : 'border-border hover:border-accent/50 hover:bg-bg/40'
         }`}
       >
         <input
@@ -866,7 +866,7 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
-        <Film className="w-8 h-8 text-teal mx-auto mb-2" />
+        <Film className="w-8 h-8 text-accent mx-auto mb-2" />
         <p className="text-sm font-bold text-white">{t('MP4 hier ablegen')}</p>
         <p className="text-xs text-text-secondary mt-1">
           {t('oder klicken zum Auswählen · max 200 MB')}
@@ -879,7 +879,7 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
       </div>
 
       {isUploading && (
-        <div className="flex items-center gap-2 text-xs text-teal">
+        <div className="flex items-center gap-2 text-xs text-accent">
           <Loader2 className="w-4 h-4 animate-spin" /> {t('Upload läuft…')}
         </div>
       )}
@@ -1955,7 +1955,7 @@ function ClipCard({
             {enrichmentTopHashtags.slice(0, 4).map((tag) => (
               <span
                 key={tag}
-                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-teal/10 text-teal border border-teal/30"
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-accent/10 text-accent border border-accent/30"
               >
                 #{tag}
               </span>
@@ -2097,8 +2097,8 @@ function ClipCard({
             onClick={() => onOpenEditor('enrichment')}
             className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition ${
               editingMode === 'enrichment'
-                ? 'bg-teal/25 text-teal border-teal/50'
-                : 'bg-teal/10 text-teal border-teal/30 hover:bg-teal/20'
+                ? 'bg-accent/25 text-accent border-accent/50'
+                : 'bg-accent/10 text-accent border-accent/30 hover:bg-accent/20'
             }`}
           >
             <Wand2 className="w-3.5 h-3.5" /> {t('Metadaten')}

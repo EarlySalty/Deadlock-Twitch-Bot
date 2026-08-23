@@ -233,13 +233,13 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       {enrichment.detected_terms.length > 0 && (
         <div className="space-y-2">
           <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-teal" /> {t('Erkannte Begriffe')}
+            <Sparkles className="w-3 h-3 text-accent" /> {t('Erkannte Begriffe')}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {enrichment.detected_terms.map((term) => (
               <span
                 key={term}
-                className="text-[11px] font-semibold px-2 py-1 rounded-md bg-teal/10 text-teal border border-teal/30"
+                className="text-[11px] font-semibold px-2 py-1 rounded-md bg-accent/10 text-accent border border-accent/30"
               >
                 {term}
               </span>

@@ -48,7 +48,7 @@ interface AnalyticsTabProps {
 
 function toneClass(kind: SocialMediaReportKind): string {
   if (kind === 'streamer') return 'bg-orange/15 text-orange border-orange/35';
-  if (kind === 'cross') return 'bg-teal/15 text-teal border-teal/35';
+  if (kind === 'cross') return 'bg-accent/15 text-accent border-accent/35';
   return 'bg-bg/70 text-white border-border';
 }
 
@@ -271,7 +271,7 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
         {isAdmin && (
         <aside className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-teal" />
+            <Sparkles className="w-4 h-4 text-accent" />
             <h3 className="text-lg font-bold text-white">{t('LLM-Reports')}</h3>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -288,9 +288,9 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
               type="button"
               onClick={() => crossReportMutation.mutate()}
               disabled={crossReportMutation.isPending}
-              className="rounded-xl border border-teal/30 bg-teal/12 px-4 py-3 text-left hover:bg-teal/18 transition disabled:opacity-50"
+              className="rounded-xl border border-accent/30 bg-accent/12 px-4 py-3 text-left hover:bg-accent/18 transition disabled:opacity-50"
             >
-              <div className="text-xs font-bold uppercase tracking-[0.14em] text-teal">{t('Cross')}</div>
+              <div className="text-xs font-bold uppercase tracking-[0.14em] text-accent">{t('Cross')}</div>
               <div className="text-sm text-white mt-1">{t('Monatsreport ueber alle Streamer')}</div>
             </button>
           </div>

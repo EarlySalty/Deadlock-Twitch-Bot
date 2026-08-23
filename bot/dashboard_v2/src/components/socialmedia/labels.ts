@@ -19,11 +19,11 @@ import type {
   SocialMediaReportKind,
 } from '@/types/socialMedia';
 
-export type LabelTone = 'orange' | 'teal' | 'success' | 'warning' | 'danger' | 'muted';
+export type LabelTone = 'orange' | 'messing' | 'success' | 'warning' | 'danger' | 'muted';
 
 export const TONE_BADGE: Record<LabelTone, string> = {
   orange: 'bg-orange/15 text-orange border-orange/35',
-  teal: 'bg-teal/15 text-teal border-teal/35',
+  messing: 'bg-accent/15 text-accent border-accent/35',
   success: 'bg-success/15 text-success border-success/35',
   warning: 'bg-warning/15 text-warning border-warning/35',
   danger: 'bg-danger/15 text-danger border-danger/35',
@@ -33,7 +33,7 @@ export const TONE_BADGE: Record<LabelTone, string> = {
 /** Status eines Clips in der Pipeline. */
 export const STATUS_LABELS: Record<ClipStatus, { label: string; tone: LabelTone }> = {
   pending: { label: 'Wartend', tone: 'muted' },
-  enriched: { label: 'Aufbereitet', tone: 'teal' },
+  enriched: { label: 'Aufbereitet', tone: 'messing' },
   awaiting_approval: { label: 'Freigabe', tone: 'orange' },
   // Bewusst nicht 'Freigegeben': das ist der Admin-Knopf fuer den Zugang zum
   // Dashboard und hat eine andere Uebersetzung.
@@ -93,7 +93,7 @@ export const STATUS_META: Record<EnrichmentStatus, { label: string; tone: LabelT
   pending: { label: 'Wartet', tone: 'muted' },
   transcribing: { label: 'Transkribiert', tone: 'orange' },
   correcting: { label: 'Wörterbuch-Korrektur', tone: 'orange' },
-  llm: { label: 'LLM-Hashtags', tone: 'teal' },
+  llm: { label: 'LLM-Hashtags', tone: 'messing' },
   done: { label: 'Fertig', tone: 'success' },
   failed: { label: 'Fehler', tone: 'danger' },
   skipped_no_key: { label: 'API-Key fehlt', tone: 'muted' },
