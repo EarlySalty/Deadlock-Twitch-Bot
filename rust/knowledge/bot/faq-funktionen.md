@@ -48,7 +48,7 @@ Der Bot meldet sich per Twitch-Login an und braucht ein paar Standard-Rechte: Ch
 
 Streamst du zwei Monate lang kein Deadlock, gibt der Bot seine Moderator-Rechte in deinem Kanal von allein ab. Deine Partnerschaft und deine Einstellungen bleiben dabei bestehen. Streamst du wieder Deadlock, moddet er sich automatisch zurück, ohne dass du etwas tun musst.
 
-- Du bekommst eine Discord-Nachricht, wenn der Bot sich entmoddet, und eine, wenn er zurück ist.
+- Du bekommst eine Discord-Nachricht, wenn der Bot sich entmoddet. Kommt er später zurück, läuft das still im Hintergrund.
 - Voraussetzung fürs Zurückkommen ist eine gültige Twitch-Verbindung; ist die abgelaufen, verbinde deinen Kanal einmal neu.
 - Willst du dauerhaft aufhören, trenn den Bot lieber ganz: das geht im Dashboard unter Bot-Einstellungen.
 
