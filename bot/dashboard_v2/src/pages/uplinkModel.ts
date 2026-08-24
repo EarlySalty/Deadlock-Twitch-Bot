@@ -24,6 +24,26 @@ export const UPLINK_WAITLIST_FEHLER =
 export const UPLINK_SCHEDULE_TEXT =
   'Trag deine geplanten Zeiten ein. Der Zeitplan hilft dir, Erwartungen zu verteilen und Konflikte sichtbar zu machen. Ob dein Stream starten kann, hängt von der aktuellen Auslastung ab.';
 
+/** Der Wert gilt nur fuer einen unerwarteten Abriss, nicht fuer OBS-Stop. */
+export const UPLINK_RECONNECT_WAIT_TEXT =
+  'Diese Zeit gilt nur nach einem unerwarteten Internetabriss. Wenn du den Stream in OBS beendest, räumt Uplink sofort auf.';
+
+/** Macht einen Serverwert sicher zu einem kontrollierten Eingabewert. */
+export function reconnectWaitEingabe(wert: number | null | undefined): string {
+  return typeof wert === 'number' && Number.isFinite(wert) && wert >= 0 ? String(wert) : '';
+}
+
+/**
+ * Liest Sekunden als ganze Zahl, ohne die Server-Obergrenze zu duplizieren.
+ * Das Relay klemmt den Wert und liefert danach den tatsächlich gesetzten Wert.
+ */
+export function reconnectWaitPayload(wert: string): number | null {
+  const getrimmt = wert.trim();
+  if (!getrimmt || !/^\d+$/.test(getrimmt)) return null;
+  const sekunden = Number(getrimmt);
+  return Number.isSafeInteger(sekunden) && sekunden >= 0 ? sekunden : null;
+}
+
 /** Hinweis, wenn Twitch den Schlüssel nicht herausgibt. */
 export const UPLINK_TWITCH_SCOPE_HINT =
   'Twitch gibt den Schlüssel für dieses Konto noch nicht heraus. Verbinde deinen Twitch-Zugang neu, dann holen wir ihn automatisch. Bis dahin kannst du den Schlüssel unten selbst eintragen.';

@@ -38,6 +38,10 @@ export interface UplinkMe {
   session?: UplinkSession | null;
   /** Wie stark der Server die Ausgabe gerade heruntergefahren hat. */
   degraded_level?: number | null;
+  /** Wartezeit nur nach einem unerwarteten Internetabriss. */
+  reconnect_wait_s: number;
+  /** Vom Relay gelieferte Obergrenze, nicht im Frontend duplizieren. */
+  reconnect_wait_max_s: number;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
@@ -46,6 +50,20 @@ export function fetchUplinkMe(): Promise<UplinkMe> {
 
 export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
   return fetchJson<{ waitlisted: boolean }>(`${BASE}/waitlist`, jsonRequest('POST', {}));
+}
+
+export interface UplinkReconnectWaitSettings {
+  reconnect_wait_s: number;
+  reconnect_wait_max_s: number;
+}
+
+export function saveUplinkReconnectWait(
+  reconnectWaitS: number
+): Promise<UplinkReconnectWaitSettings> {
+  return fetchJson<UplinkReconnectWaitSettings>(
+    `${BASE}/reconnect-wait`,
+    jsonRequest('PUT', { reconnect_wait_s: reconnectWaitS })
+  );
 }
 
 export interface UplinkProfileView {

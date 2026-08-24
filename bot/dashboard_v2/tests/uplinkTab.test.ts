@@ -15,6 +15,7 @@ import {
   UPLINK_SPEED_MITHALTEN,
   UPLINK_KILL_LAEUFT_NOCH,
   UPLINK_LAST_LABEL,
+  UPLINK_RECONNECT_WAIT_TEXT,
   UPLINK_TWITCH_ALLGEMEINER_FEHLER,
   UPLINK_TWITCH_LOGIN_HINT,
   UPLINK_TWITCH_SCOPE_HINT,
@@ -35,6 +36,8 @@ import {
   uplinkAnsicht,
   uplinkStreamerBloeckeSichtbar,
   zielRumpf,
+  reconnectWaitEingabe,
+  reconnectWaitPayload,
 } from '../src/pages/uplinkModel';
 import * as uplinkModel from '../src/pages/uplinkModel';
 
@@ -523,6 +526,48 @@ test('max_points = 0 wird als 0 an das Relay geschickt', async () => {
   try {
     await saveUplinkAdminSettings({ max_points: uplinkModel.zahlOderUndefined('0', true) });
     assert.deepEqual(gesendeterRumpf, { max_points: 0 });
+  } finally {
+    globalThis.fetch = vorher;
+    globalState.window = vorherigesFenster;
+  }
+});
+
+test('Wartezeit gilt nur fuer unerwartete Abrisse und wird nicht lokal geklemmt', () => {
+  assert.equal(reconnectWaitEingabe(90), '90');
+  assert.equal(reconnectWaitEingabe(0), '0');
+  assert.equal(reconnectWaitEingabe(undefined), '');
+  assert.equal(reconnectWaitPayload('0'), 0);
+  assert.equal(reconnectWaitPayload('300'), 300);
+  assert.equal(reconnectWaitPayload('301'), 301);
+  assert.equal(reconnectWaitPayload('30.5'), null);
+  assert.equal(reconnectWaitPayload('-1'), null);
+  assert.equal(reconnectWaitPayload(''), null);
+  assert.match(UPLINK_RECONNECT_WAIT_TEXT, /unerwarteten Internetabriss/);
+  assert.match(UPLINK_RECONNECT_WAIT_TEXT, /OBS/);
+  assert.match(UPLINK_PAGE_SRC, /saveUplinkReconnectWait/);
+});
+
+test('die Wartezeit wird mit dem Serverwert an den bestehenden Proxy geschickt', async () => {
+  const globalState = globalThis as typeof globalThis & {
+    window?: { __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown> };
+  };
+  const vorherigesFenster = globalState.window;
+  globalState.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
+  const { saveUplinkReconnectWait } = await import('../src/api/uplink');
+  const vorher = globalThis.fetch;
+  let gesendeterRumpf: unknown;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), '/twitch/api/v2/uplink/reconnect-wait');
+    gesendeterRumpf = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ reconnect_wait_s: 0, reconnect_wait_max_s: 300 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    const antwort = await saveUplinkReconnectWait(0);
+    assert.deepEqual(gesendeterRumpf, { reconnect_wait_s: 0 });
+    assert.deepEqual(antwort, { reconnect_wait_s: 0, reconnect_wait_max_s: 300 });
   } finally {
     globalThis.fetch = vorher;
     globalState.window = vorherigesFenster;

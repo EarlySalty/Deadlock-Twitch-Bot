@@ -29,6 +29,7 @@ import {
   killUplinkSession,
   saveUplinkAdminSettings,
   saveUplinkDestination,
+  saveUplinkReconnectWait,
   saveUplinkSchedule,
   type UplinkDestination,
   type UplinkScheduleEntry,
@@ -38,6 +39,7 @@ import {
   UPLINK_LAST_LABEL,
   UPLINK_PLATFORMS,
   UPLINK_REAUTH_HREF,
+  UPLINK_RECONNECT_WAIT_TEXT,
   UPLINK_SCHEDULE_TEXT,
   UPLINK_TWITCH_LOGIN_HINT,
   UPLINK_TWITCH_SCOPE_HINT,
@@ -52,6 +54,8 @@ import {
   formularAusEinstellungen,
   killErfolgreich,
   lastProzent,
+  reconnectWaitEingabe,
+  reconnectWaitPayload,
   speedLage,
   scheduleSavePlan,
   toEingabeZeit,
@@ -540,6 +544,73 @@ function StatusKarte({ sessionId }: { sessionId: number | null | undefined }) {
   );
 }
 
+function ReconnectWaitKarte({
+  wert,
+  max,
+  onSaved,
+}: {
+  wert: number;
+  max: number;
+  onSaved: () => void;
+}) {
+  const [entwurf, setEntwurf] = useState<string | null>(null);
+  const eingabe = entwurf ?? reconnectWaitEingabe(wert);
+  const payload = reconnectWaitPayload(eingabe);
+  const speichern = useMutation({
+    mutationFn: () => {
+      if (payload === null) {
+        throw new Error('Gib eine ganze Zahl ab 0 Sekunden ein.');
+      }
+      return saveUplinkReconnectWait(payload);
+    },
+    onSuccess: (antwort) => {
+      setEntwurf(reconnectWaitEingabe(antwort.reconnect_wait_s));
+      onSaved();
+    },
+  });
+
+  return (
+    <Rise className="panel-card space-y-4 rounded-2xl p-6">
+      <div>
+        <h2 className="text-lg font-bold text-white">Verhalten bei Internetabriss</h2>
+        <p className="mt-1 text-sm text-text-secondary">{UPLINK_RECONNECT_WAIT_TEXT}</p>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="min-w-[14rem] flex-1 space-y-1">
+          <span className={LABEL_KLASSE}>Wartezeit in Sekunden</span>
+          <input
+            type="number"
+            min={0}
+            max={max}
+            step={1}
+            value={eingabe}
+            onChange={(e) => setEntwurf(e.target.value)}
+            inputMode="numeric"
+            className={FELD_KLASSE}
+            aria-label="Wartezeit nach Internetabriss in Sekunden"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={speichern.isPending || payload === null}
+          onClick={() => speichern.mutate()}
+          className={KNOPF_KLASSE}
+        >
+          {speichern.isSuccess ? 'Gespeichert' : 'Wartezeit speichern'}
+        </button>
+      </div>
+      <p className="text-xs text-text-secondary">
+        Servergrenze: {max} Sekunden. 0 bedeutet: Nach einem Abriss wird sofort beendet.
+      </p>
+      {speichern.isError && (
+        <p className="text-xs text-warning">
+          {fehlertext(speichern.error, 'Die Wartezeit ließ sich gerade nicht speichern.')}
+        </p>
+      )}
+    </Rise>
+  );
+}
+
 function VerwaltungsKarte() {
   const queryClient = useQueryClient();
   const uebersicht = useQuery({
@@ -909,6 +980,12 @@ export function UplinkPage() {
                     Keyframe alle 2 Sekunden. Danach Stream starten.
                   </p>
                 </Rise>
+
+                <ReconnectWaitKarte
+                  wert={data.reconnect_wait_s}
+                  max={data.reconnect_wait_max_s}
+                  onSaved={() => queryClient.invalidateQueries({ queryKey: ['uplink-me'] })}
+                />
 
                 <div className="grid gap-4 lg:grid-cols-2">
                   {UPLINK_PLATFORMS.map((platform) => (

@@ -390,6 +390,28 @@ pub async fn get_destinations_handler(auth: DashboardAuthLevel) -> Result<Json<V
     Ok(Json(wert))
 }
 
+/// Einstellung fuer die Wartezeit nach einem unerwarteten Ingest-Abriss.
+/// Ein normales OBS-Stoppen wird im Relay davon getrennt und sofort abgeraeumt.
+#[derive(Deserialize)]
+pub struct ReconnectWaitBody {
+    pub reconnect_wait_s: i32,
+}
+
+pub async fn put_reconnect_wait_handler(
+    auth: DashboardAuthLevel,
+    Json(body): Json<ReconnectWaitBody>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&auth)?;
+    let wert = relay_client()?
+        .call(
+            reqwest::Method::PUT,
+            &format!("/v1/me/reconnect-wait?streamer_id={id}"),
+            Some(json!({ "reconnect_wait_s": body.reconnect_wait_s })),
+        )
+        .await?;
+    Ok(Json(wert))
+}
+
 /// Ein Ziel aus dem Dashboard. Adresse und Schluessel kommen zusammen oder gar
 /// nicht; ohne beides aendert der Aufruf nur die Profilwerte.
 #[derive(Deserialize, Default)]
@@ -985,6 +1007,37 @@ mod tests {
             .as_str()
             .expect("srt")
             .contains("relay.example.org"));
+    }
+
+    #[tokio::test]
+    async fn reconnect_wait_reicht_wert_und_streamer_id_an_das_relay() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/me/reconnect-wait"))
+            .and(query_param("streamer_id", "123"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .and(body_string_contains("\"reconnect_wait_s\":0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "reconnect_wait_s": 0,
+                "reconnect_wait_max_s": 300,
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = ENV.lock().await;
+        std::env::set_var("RS_RELAY_API_SECRET", "geheim");
+        std::env::set_var("RS_RELAY_BASE_URL", server.uri());
+        let Json(antwort) = put_reconnect_wait_handler(
+            partner(),
+            Json(ReconnectWaitBody {
+                reconnect_wait_s: 0,
+            }),
+        )
+        .await
+        .expect("Wartezeit muss das Relay erreichen");
+        assert_eq!(antwort["reconnect_wait_s"], json!(0));
+        assert_eq!(antwort["reconnect_wait_max_s"], json!(300));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
