@@ -8,6 +8,7 @@ const PAGES_ROOT = import.meta.dirname;
 const UPLINK = readFileSync(join(PAGES_ROOT, 'Uplink.tsx'), 'utf8');
 const ZIEL = readFileSync(join(PAGES_ROOT, 'UplinkZiel.tsx'), 'utf8');
 const FIXTURES = readFileSync(join(PAGES_ROOT, '../preview/fixtures.ts'), 'utf8');
+const UPLINK_API = readFileSync(join(PAGES_ROOT, '../api/uplink.ts'), 'utf8');
 
 test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzustände', () => {
   assert.doesNotMatch(UPLINK, /data-section="uplink-status"/);
@@ -21,6 +22,27 @@ test('OBS ist eine geordnete Liste aus vier nativen Disclosures', () => {
   assert.equal((UPLINK.match(/data-obs-step=/g) ?? []).length, 1);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<details/);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<summary/);
+});
+
+test('der private OBS-Schlüsselhinweis steht in einer eigenen Warnbox', () => {
+  assert.match(
+    UPLINK,
+    /data-uplink-private-warning[\s\S]{0,180}rounded-xl[\s\S]{0,180}border-warning[\s\S]{0,180}bg-warning/,
+  );
+});
+
+test('die Warteliste erscheint ausschließlich im aktiven Admin-Modus rechts', () => {
+  assert.match(UPLINK, /useAuthStatus/);
+  assert.match(UPLINK, /authStatus\?\.adminMode/);
+  assert.match(UPLINK, /authStatus\?\.adminMode[\s\S]{0,300}<AdminUplinkWarteliste/);
+  assert.match(UPLINK, /data-section="uplink-admin-waitlist"/);
+  assert.match(UPLINK, /data-section="uplink-right-column"/);
+});
+
+test('Admin-Wartelistenaufrufe senden das Session-CSRF-Token', () => {
+  assert.match(UPLINK_API, /\/twitch\/api\/v2\/uplink\/admin\/waitlist/);
+  assert.match(UPLINK_API, /\/twitch\/api\/v2\/uplink\/admin\/users/);
+  assert.match(UPLINK_API, /'X-CSRF-Token': csrfToken/);
 });
 
 test('Disclosure-Zustände werden mit geschlossenen Startwerten gespeichert', () => {

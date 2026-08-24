@@ -42,6 +42,38 @@ export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
   );
 }
 
+export interface UplinkAdminWaitlistEntry {
+  streamer_id: number;
+  requested_at: string;
+  note?: string | null;
+  enabled: boolean;
+}
+
+export function fetchUplinkAdminWaitlist(): Promise<{ entries: UplinkAdminWaitlistEntry[] }> {
+  return fetchJson<{ entries: UplinkAdminWaitlistEntry[] }>(
+    '/twitch/api/v2/uplink/admin/waitlist',
+    withCookieCredentials(),
+  );
+}
+
+export function acceptUplinkAdminWaitlistEntry(
+  streamerId: number,
+  csrfToken: string,
+): Promise<{ streamer_id: number; enabled: boolean }> {
+  return fetchJson<{ streamer_id: number; enabled: boolean }>(
+    '/twitch/api/v2/uplink/admin/users',
+    withCookieCredentials({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({ streamer_id: streamerId }),
+    }),
+  );
+}
+
 export interface UplinkReconnectWaitSettings {
   reconnect_wait_s: number;
   reconnect_wait_max_s: number;
