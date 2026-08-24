@@ -19,6 +19,7 @@ import type {
   UplinkProfilAnsicht,
   UplinkProfilName,
 } from '@/api/uplink';
+import { useUplinkDisclosure } from '@/uplinkDisclosure';
 
 type Modus = 'stufe' | 'manuell';
 
@@ -110,7 +111,7 @@ export function ZielKarte({
   const queryClient = useQueryClient();
   const basisId = useId();
   const eingerichtet = Boolean(ziel);
-  const [offen, setOffen] = useState(offenStart);
+  const [offen, setOffen] = useUplinkDisclosure(`plattform-${platform}`, offenStart);
 
   const [rtmpUrl, setRtmpUrl] = useState(ziel?.rtmp_url || rtmpVorgabe);
   const [streamKey, setStreamKey] = useState('');
@@ -329,7 +330,7 @@ export function ZielKarte({
             <img
               src={PLATTFORM_LOGOS[platform]}
               alt=""
-              className={`h-5 w-5 brightness-0 invert ${ziel?.enabled ? 'opacity-100' : 'opacity-70'}`}
+              className={`h-5 w-5 ${ziel?.enabled ? 'opacity-100' : 'opacity-80'}`}
             />
           </span>
           <span className="min-w-0">
@@ -377,8 +378,6 @@ export function ZielKarte({
               setRtmpUrl(e.target.value);
               angefasst();
             }}
-            aria-invalid={Boolean(fehlertext)}
-            aria-describedby={fehlertext ? fehlerId : undefined}
             placeholder={rtmpVorgabe || 'rtmp://…'}
             className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
           />
@@ -400,8 +399,6 @@ export function ZielKarte({
               angefasst();
             }}
             type="password"
-            aria-invalid={Boolean(fehlertext)}
-            aria-describedby={fehlertext ? fehlerId : undefined}
             placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
             className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
           />

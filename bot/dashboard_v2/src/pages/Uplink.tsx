@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   BarChart3,
-  CheckCircle2,
   ChevronDown,
-  Circle,
   Copy,
   Eye,
   EyeOff,
@@ -43,6 +41,7 @@ import {
 } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
 function SidebarLink({
@@ -123,6 +122,7 @@ const OBS_DOCKS = [
 
 function DockZeile({ titel, url }: { titel: string; url: string }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
+  const feldRef = useRef<HTMLInputElement>(null);
 
   async function kopieren() {
     try {
@@ -131,27 +131,35 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
       window.setTimeout(() => setStand('ruhe'), 1600);
     } catch {
       setStand('fehler');
+      feldRef.current?.focus();
+      feldRef.current?.select();
     }
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <input
+          ref={feldRef}
+          readOnly
+          value={url}
+          aria-label={`${titel}-Dock-Adresse`}
+          className="min-h-11 min-w-0 flex-1 truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-[11px] text-text-secondary"
+        />
       <button
         type="button"
         onClick={kopieren}
         title={url}
         aria-label={`${titel}-Dock-Adresse kopieren`}
-        className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-left text-xs text-white transition-colors hover:border-primary/50"
+        className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
       >
-        <span className="shrink-0 font-semibold">{titel}</span>
-        <span className="truncate font-mono text-[11px] text-text-secondary">{url}</span>
+        <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+        {stand === 'ok' ? 'Kopiert' : 'Kopieren'}
       </button>
-      <span
-        aria-live="polite"
-        className={`w-20 shrink-0 text-[11px] ${stand === 'fehler' ? 'text-warning' : 'text-success'}`}
-      >
-        {stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Bitte manuell' : ''}
-      </span>
+      </div>
+      <p aria-live="polite" className={`text-[11px] ${stand === 'fehler' ? 'text-warning' : 'text-success'}`}>
+        {stand === 'fehler' ? 'Automatisches Kopieren blockiert. Feld ist markiert; Strg+C drücken.' : ''}
+      </p>
     </div>
   );
 }
@@ -200,7 +208,7 @@ function ObsSchritt({
   offenStart?: boolean;
   children: React.ReactNode;
 }) {
-  const [offen, setOffen] = useState(offenStart);
+  const [offen, setOffen] = useUplinkDisclosure(`obs-${nummer}`, offenStart);
 
   return (
     <li>
@@ -227,6 +235,24 @@ function ObsSchritt({
         <div className="space-y-2 border-t border-border/60 px-4 py-3 pl-13">{children}</div>
       </details>
     </li>
+  );
+}
+
+function HilfeKapitel({ datei, label, html }: { datei: string; label: string; html: string }) {
+  const [offen, setOffen] = useUplinkDisclosure(`hilfe-${datei}`, false);
+
+  return (
+    <details
+      open={offen}
+      onToggle={(ereignis) => setOffen(ereignis.currentTarget.open)}
+      className="uplink-help-shell group/chapter overflow-hidden rounded-xl border border-border bg-background/70"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
+        <span>{label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open/chapter:rotate-180" />
+      </summary>
+      <div dangerouslySetInnerHTML={{ __html: html }} />
+    </details>
   );
 }
 
@@ -306,30 +332,6 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
   ];
 }
 
-type StatusTon = 'success' | 'warning' | 'danger' | 'neutral';
-
-function StatusPunkt({ label, wert, ton }: { label: string; wert: string; ton: StatusTon }) {
-  const farben: Record<StatusTon, string> = {
-    success: 'border-success/40 bg-success/12 text-success shadow-[0_8px_24px_rgba(67,181,129,0.12)]',
-    warning: 'border-warning/30 bg-warning/10 text-warning',
-    danger: 'border-danger/30 bg-danger/10 text-danger',
-    neutral: 'border-border bg-background/60 text-text-secondary',
-  };
-  const Icon = ton === 'success' ? CheckCircle2 : ton === 'warning' || ton === 'danger' ? AlertTriangle : Circle;
-
-  return (
-    <li className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 ${farben[ton]}`}>
-      <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0">
-        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] opacity-75">
-          {label}
-        </span>
-        <span className="block truncate text-xs font-bold text-current">{wert}</span>
-      </span>
-    </li>
-  );
-}
-
 function CopyField({
   label,
   value,
@@ -343,6 +345,7 @@ function CopyField({
 }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const [offen, setOffen] = useState(false);
+  const feldRef = useRef<HTMLInputElement>(null);
 
   // Sobald das Aufdecken nicht mehr erlaubt ist, faellt ein offener Wert zu.
   useEffect(() => {
@@ -357,27 +360,27 @@ function CopyField({
       setStand('ok');
     } catch {
       setStand('fehler');
+      feldRef.current?.focus();
+      feldRef.current?.select();
     }
     window.setTimeout(() => setStand('ruhe'), 2000);
   };
 
   const knopfText = stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Ging nicht' : 'Kopieren';
-  const anzeige = offen ? value : '•'.repeat(Math.min(value.length, 48));
-
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
         {label}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div
-          role="textbox"
-          aria-readonly="true"
+        <input
+          ref={feldRef}
+          readOnly
+          type={offen ? 'text' : 'password'}
+          value={value}
           aria-label={`${label}: ${offen ? value : 'verdeckt'}`}
           className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"
-        >
-          <span aria-hidden="true">{anzeige}</span>
-        </div>
+        />
         <div className="flex gap-2">
           <button
             type="button"
@@ -409,7 +412,7 @@ function CopyField({
       </p>
       {stand === 'fehler' && (
         <p className="text-xs text-warning">
-          Dein Browser hat das Kopieren nicht erlaubt. Markier die Adresse und kopier sie von Hand.
+          Dein Browser hat das automatische Kopieren nicht erlaubt. Das Feld ist markiert; kopier es mit Strg+C.
         </p>
       )}
       {!darfAufdecken && <p className="text-xs text-text-secondary">{grundVerdeckt}</p>}
@@ -495,6 +498,9 @@ function ReconnectWaitKarte({
 
 export function UplinkPage() {
   const queryClient = useQueryClient();
+  const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
+  const [docksOffen, setDocksOffen] = useUplinkDisclosure('obs-docks', false);
+  const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
@@ -548,30 +554,12 @@ export function UplinkPage() {
     retry: false,
   });
   const capsFuer = (platform: string) => caps?.platforms.find((c) => c.platform === platform);
-  const uplinkStatus: { wert: string; ton: StatusTon } = isLoading
-    ? { wert: 'wird geladen', ton: 'neutral' }
-    : isError
-      ? { wert: 'nicht erreichbar', ton: 'danger' }
-      : data?.enabled
-        ? { wert: 'bereit', ton: 'success' }
-        : { wert: 'nicht freigeschaltet', ton: 'neutral' };
-  const streamStatus: { wert: string; ton: StatusTon } =
+  const streamStatus =
     data?.live_status === 'live'
-      ? { wert: 'live', ton: 'success' }
+      ? { text: 'Stream live', klasse: 'border-success/35 bg-success/10 text-success' }
       : data?.live_status === 'aus'
-        ? { wert: 'offline', ton: 'neutral' }
-        : { wert: isLoading ? 'wird geladen' : 'unbekannt', ton: isLoading ? 'neutral' : 'warning' };
-
-  function zielStatus(platform: string): { wert: string; ton: StatusTon } {
-    if (zieleLaden) return { wert: 'wird geladen', ton: 'neutral' };
-    if (zieleFehler) return { wert: 'unbekannt', ton: 'warning' };
-    if (!data?.enabled) return { wert: 'nicht verfügbar', ton: 'neutral' };
-    const ziel = gespeicherteZiele.find((eintrag) => eintrag.platform === platform);
-    if (!ziel) return { wert: 'nicht eingerichtet', ton: 'neutral' };
-    return ziel.enabled
-      ? { wert: 'aktiv', ton: 'success' }
-      : { wert: 'pausiert', ton: 'warning' };
-  }
+        ? { text: 'Stream offline', klasse: 'border-border bg-background/60 text-text-secondary' }
+        : { text: isLoading ? 'Streamstatus lädt' : 'Streamstatus unbekannt', klasse: 'border-warning/30 bg-warning/10 text-warning' };
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
@@ -611,29 +599,22 @@ export function UplinkPage() {
                     Ein Stream zu uns, passend verteilt an deine Plattformen. Start und Stop bleiben in OBS.
                   </p>
                 </div>
-                {data?.enabled ? (
-                  <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                    Zugang aktiv
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    role="status"
+                    aria-live="polite"
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${streamStatus.klasse}`}
+                  >
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                    {streamStatus.text}
                   </span>
-                ) : null}
+                  {data?.enabled ? (
+                    <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                      Zugang aktiv
+                    </span>
+                  ) : null}
+                </div>
               </div>
-            </Rise>
-
-            <Rise
-              data-section="uplink-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className="panel-card rounded-2xl p-3 md:p-4"
-            >
-              <h2 className="sr-only">Aktueller Uplink-Status</h2>
-              <ul aria-label="Aktueller Uplink-Status" className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-                <StatusPunkt label="Uplink" {...uplinkStatus} />
-                <StatusPunkt label="Twitch-Live" {...streamStatus} />
-                {UPLINK_PLATTFORMEN.map((plattform) => (
-                  <StatusPunkt key={plattform.id} label={plattform.label} {...zielStatus(plattform.id)} />
-                ))}
-              </ul>
             </Rise>
 
             {isLoading && (
@@ -778,10 +759,20 @@ export function UplinkPage() {
                         Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.
                       </p>
                     </div>
-                    <span className="rounded-full border border-success/30 bg-success/10 px-3 py-1 text-xs font-semibold text-success">
-                      {gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-success/30 bg-success/10 text-success'}`}>
+                      {zieleLaden
+                        ? 'Ziele werden geladen'
+                        : zieleFehler
+                          ? 'Status unbekannt'
+                          : `${gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv`}
                     </span>
                   </div>
+
+                  {zieleLaden ? (
+                    <p role="status" className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary">
+                      Plattformziele werden geladen …
+                    </p>
+                  ) : null}
 
                   {zieleFehler ? (
                     <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
@@ -790,7 +781,7 @@ export function UplinkPage() {
                     </p>
                   ) : null}
 
-                  <div className={zieleFehler ? 'hidden' : 'space-y-3'}>
+                  <div className={zieleFehler || zieleLaden ? 'hidden' : 'space-y-3'}>
                     {UPLINK_PLATTFORMEN.map((plattform) => {
                       const ziel = gespeicherteZiele.find((eintrag) => eintrag.platform === plattform.id);
                       return (
@@ -807,13 +798,17 @@ export function UplinkPage() {
                     })}
                   </div>
 
-                  {gespeicherteZiele.length === 0 && !zieleFehler ? (
+                  {gespeicherteZiele.length === 0 && !zieleFehler && !zieleLaden ? (
                     <p className="text-xs text-text-secondary">
                       Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht weitergesendet.
                     </p>
                   ) : null}
 
-                  <details className="group rounded-xl border border-border bg-background/40">
+                  <details
+                    open={qualitaetOffen}
+                    onToggle={(ereignis) => setQualitaetOffen(ereignis.currentTarget.open)}
+                    className="group rounded-xl border border-border bg-background/40"
+                  >
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-semibold text-white [&::-webkit-details-marker]:hidden">
                       Warum Eingangs- und Zielqualität verschieden sind
                       <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
@@ -839,6 +834,8 @@ export function UplinkPage() {
               {data?.enabled && (
                 <details
                   data-section="obs-docks"
+                  open={docksOffen}
+                  onToggle={(ereignis) => setDocksOffen(ereignis.currentTarget.open)}
                   className="panel-card group self-start rounded-2xl"
                 >
                   <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
@@ -873,6 +870,8 @@ export function UplinkPage() {
 
               <details
                 data-section="uplink-help"
+                open={hilfeOffen}
+                onToggle={(ereignis) => setHilfeOffen(ereignis.currentTarget.open)}
                 className="panel-card group self-start rounded-2xl"
               >
                 <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
@@ -894,16 +893,12 @@ export function UplinkPage() {
                   <div className="space-y-2">
                     {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) =>
                       page.html ? (
-                        <details
+                        <HilfeKapitel
                           key={page.file}
-                          className="uplink-help-shell group/chapter overflow-hidden rounded-xl border border-border bg-background/70"
-                        >
-                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
-                            <span>{page.label}</span>
-                            <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open/chapter:rotate-180" />
-                          </summary>
-                          <div dangerouslySetInnerHTML={{ __html: page.html }} />
-                        </details>
+                          datei={page.file}
+                          label={page.label}
+                          html={page.html}
+                        />
                       ) : (
                         <div key={page.file} className="rounded-xl border border-border bg-background/70 p-4 text-sm text-text-secondary">
                           Hilfe wird geladen: {page.label}

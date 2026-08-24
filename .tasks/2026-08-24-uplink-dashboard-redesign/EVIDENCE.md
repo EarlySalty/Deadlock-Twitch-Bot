@@ -1,6 +1,6 @@
 # Evidence: Uplink-Dashboard neu ordnen
 
-status: aktiv
+status: erledigt
 datum: 2026-08-24
 contract: CONTRACT.md
 
@@ -41,3 +41,11 @@ contract: CONTRACT.md
 
 - keine
 
+## Abschlussnachweise
+
+- Browser: 320 px Viewport bei 320 px Dokumentbreite; keine horizontale Überbreite.
+- Browser: Plattformkarte und OBS-Docks bleiben nach Aufklappen und Reload offen; gespeichert werden nur `ddl:uplink:disclosure:* = 0|1`.
+- Browser: vier lokale SVG-Logos laden mit Markenfarben; doppelte Statusleiste ist nicht vorhanden.
+- Tests: `npm test` mit 144 bestanden, 0 fehlgeschlagen.
+- Qualität: `npm run lint` mit 0 Fehlern; 16 unveränderte Bestandswarnungen außerhalb des Uplink-Diffs.
+- Build: `npm run build` erfolgreich, Produktionsbundle erzeugt.

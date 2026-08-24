@@ -389,6 +389,8 @@ const UPLINK_ME_FIXTURE = {
     'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',
   live_status: 'aus',
   twitch_login: 'earlysalty',
+  reconnect_wait_s: 90,
+  reconnect_wait_max_s: 300,
 };
 
 // `effective` ist ueberall identisch mit `requested`: das Relay rechnet nichts

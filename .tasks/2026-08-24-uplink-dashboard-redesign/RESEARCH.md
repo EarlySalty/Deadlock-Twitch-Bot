@@ -39,4 +39,3 @@ Die Uplink-Seite zeigt belegbare Zustände sofort, führt kompakt durch OBS und 
 ## Offene Fragen
 
 - Keine.
-

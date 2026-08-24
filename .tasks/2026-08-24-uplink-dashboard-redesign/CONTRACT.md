@@ -1,5 +1,6 @@
-status: aktiv
+status: erledigt
 datum: 2026-08-24
+klasse: hoch
 
 # Contract: Uplink-Dashboard neu ordnen
 
@@ -39,9 +40,14 @@ Die bestehende Seite `/twitch/uplink` soll beim ersten Blick zeigen, ob OBS und 
 - `bot/dashboard_v2/src/**/__tests__/*uplink*`
 - `bot/dashboard_v2/src/**/*.test.tsx`
 - `bot/dashboard_v2/src/uplink*.css`
+- `bot/dashboard_v2/src/uplinkDisclosure.ts`
+- `bot/dashboard_v2/src/preview/fixtures.ts`
+- `bot/dashboard_v2/src/assets/platforms/*.svg`
+- `bot/dashboard_v2/tests/uplinkDisclosure.test.ts`
+- `bot/dashboard_v2/package.json`
 - `.tasks/2026-08-24-uplink-dashboard-redesign/*`
 
-## Verbotener Änderungsbereich
+## Verbotene Änderungen
 
 - `rust/**`
 - Datenbankmigrationen und Deployment-Konfiguration
@@ -55,3 +61,8 @@ Die bestehende Seite `/twitch/uplink` soll beim ersten Blick zeigen, ob OBS und 
 
 - Der Änderungsbereich umfasst zusätzlich `bot/dashboard_v2/package.json`, ausschließlich um den neuen Strukturvertrag in den bestehenden `npm test`-Lauf aufzunehmen — entschieden vom Orchestrator am 2026-08-24; ein unverdrahteter Test wäre kein dauerhafter Regressionsschutz.
 - Der Änderungsbereich umfasst zusätzlich `bot/dashboard_v2/src/assets/platforms/*.svg`; Twitch, YouTube, Kick und TikTok erhalten auf ausdrücklichen Wunsch des Users echte lokale Logos statt Buchstabenkacheln — entschieden vom User am 2026-08-24.
+- Der Änderungsbereich umfasst zusätzlich `bot/dashboard_v2/src/uplinkDisclosure.ts` und `bot/dashboard_v2/tests/uplinkDisclosure.test.ts`; Auf-/Zu-Zustände sollen auf ausdrücklichen Wunsch des Users einen Reload überleben — entschieden vom User am 2026-08-24.
+- Die inzwischen parallel auf `main` gelandete Reconnect-Wartezeit bleibt vollständig erhalten und wird in das neue Layout integriert. Im Browser-Speicher landen ausschließlich boolesche UI-Zustände, keine Schlüssel, Adressen oder Formulardaten.
+- Der Änderungsbereich umfasst zusätzlich `bot/dashboard_v2/src/preview/fixtures.ts`, weil der parallel gelieferte Reconnect-Vertrag dort nicht ergänzt war und die visuelle Prüfung sonst einen leeren Wert sowie eine leere Servergrenze zeigt.
+- REQ-01 wird auf ausdrücklichen Wunsch des Users geändert: Die doppelte Statusleiste entfällt. Der Streamstatus bleibt einmal kompakt im Kopf; Plattformzustände stehen ausschließlich an den Plattformkarten.
+- Plattformlogos verwenden auf ausdrücklichen Wunsch des Users ihre Markenfarben; diese Ausnahme gilt nur für die Logos, nicht für Dashboard-Chrome oder Aktionsfarben.
