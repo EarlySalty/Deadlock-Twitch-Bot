@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   BarChart3,
   ChevronDown,
   Copy,
@@ -40,6 +41,7 @@ import {
 } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
 function SidebarLink({
@@ -60,6 +62,7 @@ function SidebarLink({
   return (
     <a
       href={href}
+      aria-current={active ? 'page' : undefined}
       className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap ${
         active ? activeClasses : inactiveClasses
       }`}
@@ -118,37 +121,45 @@ const OBS_DOCKS = [
 ] as const;
 
 function DockZeile({ titel, url }: { titel: string; url: string }) {
-  const [kopiert, setKopiert] = useState(false);
+  const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
+  const feldRef = useRef<HTMLInputElement>(null);
 
   async function kopieren() {
     try {
       await navigator.clipboard.writeText(url);
-      setKopiert(true);
-      window.setTimeout(() => setKopiert(false), 1600);
+      setStand('ok');
+      window.setTimeout(() => setStand('ruhe'), 1600);
     } catch {
-      // Ohne Zwischenablage bleibt die Adresse lesbar im Feld stehen, dann
-      // markiert man sie von Hand. Eine Fehlermeldung hilft hier nicht.
-      setKopiert(false);
+      setStand('fehler');
+      feldRef.current?.focus();
+      feldRef.current?.select();
     }
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <input
+          ref={feldRef}
+          readOnly
+          value={url}
+          aria-label={`${titel}-Dock-Adresse`}
+          className="min-h-11 min-w-0 flex-1 truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-[11px] text-text-secondary"
+        />
       <button
         type="button"
         onClick={kopieren}
         title={url}
-        className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-left text-xs text-white hover:border-primary/50"
+        aria-label={`${titel}-Dock-Adresse kopieren`}
+        className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
       >
-        <span className="shrink-0 font-semibold">{titel}</span>
-        <span className="truncate font-mono text-[11px] text-text-secondary">{url}</span>
+        <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+        {stand === 'ok' ? 'Kopiert' : 'Kopieren'}
       </button>
-      <span
-        aria-live="polite"
-        className="w-16 shrink-0 text-[11px] text-success"
-      >
-        {kopiert ? 'Kopiert' : ''}
-      </span>
+      </div>
+      <p aria-live="polite" className={`text-[11px] ${stand === 'fehler' ? 'text-warning' : 'text-success'}`}>
+        {stand === 'fehler' ? 'Automatisches Kopieren blockiert. Feld ist markiert; Strg+C drücken.' : ''}
+      </p>
     </div>
   );
 }
@@ -189,22 +200,59 @@ function Weg({ children }: { children: React.ReactNode }) {
 function ObsSchritt({
   nummer,
   titel,
+  offenStart = false,
   children,
 }: {
   nummer: number;
   titel: string;
+  offenStart?: boolean;
   children: React.ReactNode;
 }) {
+  const [offen, setOffen] = useUplinkDisclosure(`obs-${nummer}`, offenStart);
+
   return (
-    <div className="flex gap-3">
-      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-xs font-bold text-primary">
-        {nummer}
-      </span>
-      <div className="min-w-0 flex-1 space-y-2">
-        <h3 className="text-sm font-bold text-white">{titel}</h3>
-        {children}
-      </div>
-    </div>
+    <li>
+      <details
+        data-obs-step={nummer}
+        open={offen}
+        onToggle={(ereignis) => setOffen(ereignis.currentTarget.open)}
+        className="group overflow-hidden rounded-xl border border-border/70 bg-background/45 transition-colors open:border-primary/35 open:bg-primary/5"
+      >
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-left [&::-webkit-details-marker]:hidden">
+          <span className="flex min-w-0 items-center gap-3">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-xs font-bold text-primary">
+              {nummer}
+            </span>
+            <span>
+              <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
+                Schritt {nummer} von 4
+              </span>
+              <span className="block text-sm font-bold text-white">{titel}</span>
+            </span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="space-y-2 border-t border-border/60 px-4 py-3 pl-13">{children}</div>
+      </details>
+    </li>
+  );
+}
+
+function HilfeKapitel({ datei, label, html }: { datei: string; label: string; html: string }) {
+  const [offen, setOffen] = useUplinkDisclosure(`hilfe-${datei}`, false);
+
+  return (
+    <details
+      open={offen}
+      onToggle={(ereignis) => setOffen(ereignis.currentTarget.open)}
+      className="uplink-help-shell group/chapter overflow-hidden rounded-xl border border-border bg-background/70"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
+        <span>{label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open/chapter:rotate-180" />
+      </summary>
+      <div dangerouslySetInnerHTML={{ __html: html }} />
+    </details>
   );
 }
 
@@ -297,6 +345,7 @@ function CopyField({
 }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const [offen, setOffen] = useState(false);
+  const feldRef = useRef<HTMLInputElement>(null);
 
   // Sobald das Aufdecken nicht mehr erlaubt ist, faellt ein offener Wert zu.
   useEffect(() => {
@@ -311,45 +360,49 @@ function CopyField({
       setStand('ok');
     } catch {
       setStand('fehler');
+      feldRef.current?.focus();
+      feldRef.current?.select();
     }
     window.setTimeout(() => setStand('ruhe'), 2000);
   };
 
   const knopfText = stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Ging nicht' : 'Kopieren';
-  const anzeige = offen ? value : '•'.repeat(Math.min(value.length, 48));
-
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
         {label}
       </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={kopieren}
-          title="Klicken zum Kopieren"
-          className="min-w-0 flex-1 cursor-pointer truncate rounded-xl border border-border bg-background/70 px-3 py-2 text-left font-mono text-xs text-white transition-colors hover:border-primary/40 hover:bg-background"
-        >
-          {anzeige}
-        </button>
-        <button
-          type="button"
-          onClick={() => setOffen((vorher) => !vorher)}
-          disabled={!darfAufdecken}
-          title={darfAufdecken ? undefined : grundVerdeckt}
-          className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-secondary"
-        >
-          {offen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          {offen ? 'Verdecken' : 'Zeigen'}
-        </button>
-        <button
-          type="button"
-          className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white"
-          onClick={kopieren}
-        >
-          <Copy className="h-3.5 w-3.5" />
-          {knopfText}
-        </button>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <input
+          ref={feldRef}
+          readOnly
+          type={offen ? 'text' : 'password'}
+          value={value}
+          aria-label={`${label}: ${offen ? value : 'verdeckt'}`}
+          className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"
+        />
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setOffen((vorher) => !vorher)}
+            disabled={!darfAufdecken}
+            aria-expanded={offen}
+            title={darfAufdecken ? undefined : grundVerdeckt}
+            className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-secondary"
+          >
+            {offen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            {offen ? 'Verdecken' : 'Zeigen'}
+          </button>
+          <button
+            type="button"
+            aria-label={`${label} kopieren`}
+            className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-white"
+            onClick={kopieren}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {knopfText}
+          </button>
+        </div>
       </div>
       {/* aria-live, weil die Rueckmeldung sonst nur im Knopftext steht und von
           einem Screenreader nicht angesagt wird. */}
@@ -359,7 +412,7 @@ function CopyField({
       </p>
       {stand === 'fehler' && (
         <p className="text-xs text-warning">
-          Dein Browser hat das Kopieren nicht erlaubt. Markier die Adresse und kopier sie von Hand.
+          Dein Browser hat das automatische Kopieren nicht erlaubt. Das Feld ist markiert; kopier es mit Strg+C.
         </p>
       )}
       {!darfAufdecken && <p className="text-xs text-text-secondary">{grundVerdeckt}</p>}
@@ -393,13 +446,20 @@ function ReconnectWaitKarte({
   });
 
   return (
-    <Rise className="panel-card space-y-4 rounded-2xl p-6">
-      <div>
-        <h2 className="text-lg font-bold text-white">Verhalten bei Internetabriss</h2>
+    <Rise className="panel-card grid gap-4 rounded-2xl p-5 md:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)] md:items-end">
+      <div className="min-w-0">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+          Verbindung
+        </div>
+        <h2 className="mt-1 text-base font-bold text-white">Verhalten bei Internetabriss</h2>
         <p className="mt-1 text-sm text-text-secondary">{UPLINK_RECONNECT_WAIT_TEXT}</p>
+        <p className="mt-2 text-xs text-text-secondary">
+          0 bis {max} Sekunden. Die Änderung gilt für die nächste Session.
+        </p>
       </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="min-w-[14rem] flex-1 space-y-1">
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[11rem] flex-1 space-y-1">
           <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
             Wartezeit in Sekunden
           </span>
@@ -411,35 +471,36 @@ function ReconnectWaitKarte({
             value={eingabe}
             onChange={(e) => setEntwurf(e.target.value)}
             inputMode="numeric"
-            className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
+            className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
             aria-label="Wartezeit nach Internetabriss in Sekunden"
           />
-        </label>
-        <button
-          type="button"
-          disabled={speichern.isPending || payload === null}
-          onClick={() => speichern.mutate()}
-          className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {speichern.isSuccess ? 'Gespeichert' : 'Wartezeit speichern'}
-        </button>
-      </div>
-      <p className="text-xs text-text-secondary">
-        Servergrenze: {max} Sekunden. 0 bedeutet: Nach einem Abriss wird sofort beendet. Die Änderung gilt für die nächste Session.
-      </p>
-      {speichern.isError && (
-        <p className="text-xs text-warning">
+          </label>
+          <button
+            type="button"
+            disabled={speichern.isPending || payload === null}
+            onClick={() => speichern.mutate()}
+            className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {speichern.isPending ? 'Speichert …' : speichern.isSuccess ? 'Gespeichert' : 'Speichern'}
+          </button>
+        </div>
+        {speichern.isError && (
+          <p role="alert" className="text-xs text-warning">
           {speichern.error instanceof Error
             ? speichern.error.message
             : 'Die Wartezeit ließ sich gerade nicht speichern.'}
-        </p>
-      )}
+          </p>
+        )}
+      </div>
     </Rise>
   );
 }
 
 export function UplinkPage() {
   const queryClient = useQueryClient();
+  const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
+  const [docksOffen, setDocksOffen] = useUplinkDisclosure('obs-docks', false);
+  const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-me'],
     queryFn: fetchUplinkMe,
@@ -458,7 +519,7 @@ export function UplinkPage() {
   });
   // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
   // leeres Formular, weil der Stream-Key nie zurueckkommt.
-  const { data: ziele, isError: zieleFehler } = useQuery({
+  const { data: ziele, isError: zieleFehler, isLoading: zieleLaden } = useQuery({
     queryKey: ['uplink-destinations'],
     queryFn: fetchUplinkDestinations,
     retry: false,
@@ -493,6 +554,12 @@ export function UplinkPage() {
     retry: false,
   });
   const capsFuer = (platform: string) => caps?.platforms.find((c) => c.platform === platform);
+  const streamStatus =
+    data?.live_status === 'live'
+      ? { text: 'Stream live', klasse: 'border-success/35 bg-success/10 text-success' }
+      : data?.live_status === 'aus'
+        ? { text: 'Stream offline', klasse: 'border-border bg-background/60 text-text-secondary' }
+        : { text: isLoading ? 'Streamstatus lädt' : 'Streamstatus unbekannt', klasse: 'border-warning/30 bg-warning/10 text-warning' };
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
@@ -503,7 +570,7 @@ export function UplinkPage() {
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
                 Main
               </div>
-              <nav className="lg:space-y-1">
+              <nav aria-label="Dashboard" className="lg:space-y-1">
                 <SidebarLink href={PREVIEW_HOME_ROUTE} icon={Home} label="Home" />
                 <SidebarLink href={analyticsTabHref('overview')} icon={BarChart3} label="Analyse" />
                 <SidebarLink href="/social-media-admin" icon={Film} label="Social Media Dashboard" />
@@ -520,29 +587,46 @@ export function UplinkPage() {
             </div>
           </Rise>
 
-          <div className="space-y-4">
-            <Rise className="panel-card rounded-2xl p-6">
+          <main id="uplink-main" className="space-y-4">
+            <Rise className="panel-card rounded-2xl p-5 md:p-6">
               <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
                 Eigenes Modul
               </div>
-              <h1 className="display-font text-2xl font-extrabold text-white">Uplink</h1>
-              <p className="mt-2 max-w-2xl text-sm text-text-secondary">
-                Du sendest zu uns, wir legen die Plattform-Streams an. Start und Stop machst du in OBS.
-              </p>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h1 className="display-font text-2xl font-extrabold text-white">Uplink</h1>
+                  <p className="mt-2 max-w-2xl text-sm text-text-secondary">
+                    Ein Stream zu uns, passend verteilt an deine Plattformen. Start und Stop bleiben in OBS.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    role="status"
+                    aria-live="polite"
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${streamStatus.klasse}`}
+                  >
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                    {streamStatus.text}
+                  </span>
+                  {data?.enabled ? (
+                    <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                      Zugang aktiv
+                    </span>
+                  ) : null}
+                </div>
+              </div>
             </Rise>
 
             {isLoading && (
-              <div className="panel-card flex items-center gap-2 rounded-2xl p-6 text-text-secondary">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Status wird geladen
+              <div className="panel-card flex items-center gap-2 rounded-2xl p-5 text-sm text-text-secondary">
+                <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                Zugang wird geladen
               </div>
             )}
 
             {isError && (
-              <div className="panel-card rounded-2xl p-6 text-sm text-warning">
-                {error instanceof Error
-                  ? error.message
-                  : 'Uplink ist gerade nicht erreichbar.'}
+              <div role="alert" className="panel-card rounded-2xl p-5 text-sm text-warning">
+                {error instanceof Error ? error.message : 'Uplink ist gerade nicht erreichbar.'}
               </div>
             )}
 
@@ -558,11 +642,9 @@ export function UplinkPage() {
                     Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {/* Was es kostet, steht vor dem Klick auf die Warteliste,
-                        nicht erst in der Rechnung. */}
                     <a
                       href={PREVIEW_PRICING_ROUTE}
-                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
+                      className="inline-flex min-h-11 items-center rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
                     >
                       Preise ansehen
                     </a>
@@ -570,7 +652,7 @@ export function UplinkPage() {
                       type="button"
                       disabled={waitlist.isPending || data.waitlisted}
                       onClick={() => waitlist.mutate()}
-                      className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
+                      className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
                     >
                       {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
                     </button>
@@ -579,180 +661,129 @@ export function UplinkPage() {
               </div>
             )}
 
-            {/* Zwei Spalten erst ab xl: darunter ist eine Spalte schmaler als
-                die Serveradresse, und ein umbrechender SRT-Link ist unlesbar.
-                `items-start` verhindert, dass die kuerzere Spalte auf die
-                Hoehe der laengeren gestreckt wird und unten leer dasteht. */}
-            <div
-              className={
-                data?.enabled
-                  ? 'grid gap-4 md:gap-5 xl:grid-cols-2 xl:items-start'
-                  : // Ohne freigeschalteten Zugang gibt es nur die Hilfe. Im
-                    // Zweispalter bliebe die linke Haelfte leer und die Hilfe
-                    // klebte rechts am Rand.
-                    'space-y-4 md:space-y-5'
-              }
-            >
-              {data?.enabled && (
-              <div className="space-y-4 md:space-y-5">
-                <Rise className="panel-card space-y-4 rounded-2xl p-6">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      Vier Schritte, einmal. Danach startest du wie immer über „Stream starten“.
-                    </p>
+            {data?.enabled && (
+              <div className="grid items-start gap-4 md:gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+                <Rise className="panel-card space-y-4 rounded-2xl p-4 md:p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+                        Einmalig
+                      </div>
+                      <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
+                      <p className="mt-1 text-sm text-text-secondary">
+                        Vier kurze Schritte. Die Serveradresse ist direkt in Schritt 2.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary">
+                      4 Schritte
+                    </span>
                   </div>
 
-                  {/* Die Felder heissen wie in OBS, nicht wie bei uns. Wer
-                      "SRT-Adresse" liest und in OBS "Server" und
-                      "Streamschluessel" vor sich hat, raet sonst, und der Key
-                      landet im falschen Feld. Deshalb steht jeder Schritt
-                      neben dem Wert, den er braucht, statt in einer Liste
-                      darunter, die man beim Kopieren aus dem Blick verliert. */}
-                  <ObsSchritt
-                    nummer={1}
-                    titel="Einstellungen, Stream, Dienst auf „Benutzerdefiniert“"
-                  >
-                    <p className="text-xs text-text-secondary">
-                      In OBS oben rechts <Weg>Einstellungen</Weg> <Weg>Stream</Weg>. Beim Feld{' '}
-                      <Feld>Dienst</Feld> von „Twitch“ auf <Feld>Benutzerdefiniert…</Feld> wechseln.
-                      Erst danach tauchen die beiden Felder aus Schritt 2 und 3 auf.
-                    </p>
-                  </ObsSchritt>
-
-                  <ObsSchritt nummer={2} titel="Serveradresse einfügen">
-                    {/* srt_hint liefert das Relay immer als String (rs-relay,
-                        srt_hint_fuer in src/api/user.rs). Leer ist es genau
-                        dann, wenn kein ingest_key existiert. Dieser Block
-                        haengt an data.enabled, trotzdem faengt der Guard den
-                        Leerfall ab: ein leeres Kopierfeld waere die
-                        schlechteste Antwort. */}
-                    {data.srt_hint ? (
-                      <>
-                        <CopyField
-                          label="gehört in das OBS-Feld „Server“"
-                          value={data.srt_hint}
-                          darfAufdecken={data.live_status === 'aus'}
-                          grundVerdeckt={
-                            data.live_status === 'live'
-                              ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
-                              : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
-                          }
-                        />
-                        {/* Die Adresse traegt den Ingest-Key als streamid. Wer
-                            sie abliest, sendet auf denselben Kanal wie der
-                            Streamer. Auf einem geteilten Bildschirm passiert
-                            genau das, deshalb steht die Warnung direkt am Feld
-                            und nicht in der Hilfe. */}
-                        <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                          <strong className="font-semibold">Zeig diese Adresse nicht im Stream.</strong>{' '}
-                          Sie enthält deinen persönlichen Schlüssel. Wer sie sieht, kann auf deinem Kanal
-                          senden. Blende das Dashboard aus, bevor du es teilst.
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-warning">
-                        Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es
-                        dabei, meld dich beim Support.
+                  <ol aria-label="OBS einrichten" className="space-y-2">
+                    <ObsSchritt nummer={1} titel="„Benutzerdefiniert“ wählen">
+                      <p className="text-xs text-text-secondary">
+                        In OBS <Weg>Einstellungen</Weg> <Weg>Stream</Weg>. Beim Feld <Feld>Dienst</Feld>{' '}
+                        von „Twitch“ auf <Feld>Benutzerdefiniert…</Feld> wechseln.
                       </p>
-                    )}
-                  </ObsSchritt>
+                    </ObsSchritt>
 
-                  <ObsSchritt nummer={3} titel="Streamschlüssel leer lassen">
-                    <div className="rounded-xl border border-dashed border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
-                      Das OBS-Feld <Feld>Streamschlüssel</Feld> bleibt leer. Falls dort noch dein alter
-                      Twitch-Schlüssel steht: markieren und löschen. Dein Schlüssel steckt schon in der
-                      Adresse aus Schritt 2.
-                    </div>
-                  </ObsSchritt>
+                    <ObsSchritt nummer={2} titel="Serveradresse einfügen" offenStart>
+                      {data.srt_hint ? (
+                        <>
+                          <CopyField
+                            label="Serveradresse für OBS"
+                            value={data.srt_hint}
+                            darfAufdecken={data.live_status === 'aus'}
+                            grundVerdeckt={
+                              data.live_status === 'live'
+                                ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
+                                : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
+                            }
+                          />
+                          <div role="note" className="flex items-start gap-2 px-1 py-1 text-xs text-warning">
+                            <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            <p>
+                              <strong className="font-semibold">Privat:</strong> Diese Adresse enthält deinen
+                              Schlüssel. Nicht im Stream zeigen.
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <p role="alert" className="text-sm text-warning">
+                          Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei,
+                          meld dich beim Support.
+                        </p>
+                      )}
+                    </ObsSchritt>
 
-                  <ObsSchritt nummer={4} titel="Ausgabe einstellen">
-                    <p className="text-xs text-text-secondary">
-                      <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
-                      Diese vier Werte:
-                    </p>
-                    <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
-                      {obsAusgabe(obsBitrate).map((zeile) => (
-                        <div key={zeile.feld} className="flex items-baseline gap-3 px-3 py-2">
-                          <dt className="w-32 shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
-                            {zeile.feld}
-                          </dt>
-                          <dd className="min-w-0 text-xs text-white">
-                            <span className="font-semibold">{zeile.wert}</span>
-                            <span className="block text-text-secondary">{zeile.warum}</span>
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </ObsSchritt>
+                    <ObsSchritt nummer={3} titel="Streamschlüssel leer lassen">
+                      <p className="text-xs text-text-secondary">
+                        Das OBS-Feld <Feld>Streamschlüssel</Feld> bleibt leer. Einen alten Twitch-Schlüssel dort
+                        löschen; dein Schlüssel steckt bereits in der Serveradresse.
+                      </p>
+                    </ObsSchritt>
+
+                    <ObsSchritt nummer={4} titel="Ausgabe einstellen">
+                      <p className="text-xs text-text-secondary">
+                        <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
+                      </p>
+                      <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
+                        {obsAusgabe(obsBitrate).map((zeile) => (
+                          <div key={zeile.feld} className="grid gap-1 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
+                            <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
+                              {zeile.feld}
+                            </dt>
+                            <dd className="min-w-0 text-xs text-white">
+                              <span className="font-semibold">{zeile.wert}</span>
+                              <span className="block text-text-secondary">{zeile.warum}</span>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </ObsSchritt>
+                  </ol>
 
                   <p className="rounded-xl border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-white">
-                    Fertig. Ab jetzt drückst du in OBS <Feld>Stream starten</Feld> wie immer. Wir legen
-                    die Plattform-Streams an, du musst nirgends sonst etwas starten.
+                    Danach startest du in OBS wie immer über <Feld>Stream starten</Feld>. Den Rest übernimmt Uplink.
                   </p>
                 </Rise>
 
-                <ReconnectWaitKarte
-                  wert={data.reconnect_wait_s}
-                  max={data.reconnect_wait_max_s}
-                  onSaved={() => queryClient.invalidateQueries({ queryKey: ['uplink-me'] })}
-                />
-
-                <Rise className="panel-card space-y-3 rounded-2xl p-6">
-                  <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>
-                  <p className="text-sm text-text-secondary">
-                    Bei Dienst „Benutzerdefiniert“ blendet OBS die Twitch-Fenster aus. Dein Chat läuft
-                    normal weiter, nur die Fenster fehlen. Es sind dieselben Seiten, die OBS auch in
-                    seine eigenen Fenster lädt, du legst sie einmal selbst an. In OBS unter{' '}
-                    <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>: Name
-                    eintragen, Adresse hier kopieren, einfügen.
-                  </p>
-                  <div className="space-y-1.5">
-                    {OBS_DOCKS.map((dock) => {
-                      const url = dock.pfad(data.twitch_login ?? '');
-                      if (!url) return null;
-                      return <DockZeile key={dock.titel} titel={dock.titel} url={url} />;
-                    })}
-                  </div>
-                  {data.twitch_login ? null : (
-                    <p className="text-xs text-text-secondary">
-                      Für den Chat brauchen wir deinen Kanalnamen, den kennen wir gerade nicht. Melde
-                      dich neu an, dann steht auch diese Adresse hier.
-                    </p>
-                  )}
-                  <p className="text-xs text-text-secondary">
-                    Im Dock musst du bei Twitch angemeldet sein, danach bleibt die Anmeldung stehen.
-                    Einmal einrichten, Fenster anordnen, unter <strong>Docks</strong> das Layout
-                    speichern. Das übersteht jeden OBS-Neustart.
-                  </p>
-                </Rise>
-              </div>
-              )}
-
-              <div className="space-y-4 md:space-y-5">
-                {data?.enabled && (
-                <Rise className="panel-card space-y-3 rounded-2xl p-6">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">Wohin wir senden</h2>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      Für jede Plattform hinterlegst du Adresse, Stream-Schlüssel und die Qualität,
-                      die wir dorthin schicken. Die Schlüssel liegen verschlüsselt bei uns.
-                    </p>
+                <Rise className="panel-card card-glow space-y-5 rounded-2xl p-4 md:p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+                        Hauptbereich
+                      </div>
+                      <h2 className="text-lg font-bold text-white">Plattformen</h2>
+                      <p className="mt-1 text-sm text-text-secondary">
+                        Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.
+                      </p>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-success/30 bg-success/10 text-success'}`}>
+                      {zieleLaden
+                        ? 'Ziele werden geladen'
+                        : zieleFehler
+                          ? 'Status unbekannt'
+                          : `${gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv`}
+                    </span>
                   </div>
 
-                  {zieleFehler ? (
-                    <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                      Wir können deine gespeicherten Ziele gerade nicht abrufen. Das heißt nicht, dass sie
-                      weg sind. Speichere nichts doppelt, lade die Seite in einer Minute neu.
+                  {zieleLaden ? (
+                    <p role="status" className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary">
+                      Plattformziele werden geladen …
                     </p>
                   ) : null}
 
-                  {/* Bei einem Abrufausfall keine Karten: vier Stueck, die
-                      alle "nicht eingerichtet" behaupten und einen Schluessel
-                      verlangen, sind das Gegenteil der Warnung darueber. */}
-                  <div className={zieleFehler ? 'hidden' : 'space-y-2'}>
+                  {zieleFehler ? (
+                    <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                      Deine gespeicherten Ziele sind gerade nicht abrufbar. Sie sind nicht weg; bitte nichts
+                      doppelt speichern und die Seite später neu laden.
+                    </p>
+                  ) : null}
+
+                  <div className={zieleFehler || zieleLaden ? 'hidden' : 'space-y-3'}>
                     {UPLINK_PLATTFORMEN.map((plattform) => {
-                      const ziel = gespeicherteZiele.find((z) => z.platform === plattform.id);
+                      const ziel = gespeicherteZiele.find((eintrag) => eintrag.platform === plattform.id);
                       return (
                         <ZielKarte
                           key={plattform.id}
@@ -761,100 +792,127 @@ export function UplinkPage() {
                           rtmpVorgabe={plattform.rtmp}
                           ziel={ziel}
                           caps={capsFuer(plattform.id)}
-                          // Twitch offen, der Rest zu: fuer fast alle ist
-                          // Twitch das einzige Ziel, und vier aufgeklappte
-                          // Karten fuellen mehrere Bildschirmhoehen.
-                          offenStart={plattform.id === 'twitch' || Boolean(ziel)}
+                          offenStart={false}
                         />
                       );
                     })}
                   </div>
 
-                  {gespeicherteZiele.length === 0 && !zieleFehler ? (
+                  {gespeicherteZiele.length === 0 && !zieleFehler && !zieleLaden ? (
                     <p className="text-xs text-text-secondary">
-                      Noch kein Ziel gespeichert. Ohne Ziel kommt dein Stream bei uns an, geht aber
-                      nirgends hin.
+                      Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht weitergesendet.
                     </p>
                   ) : null}
 
-                  {/* Die haeufigste Rueckfrage, und sie hat eine gute Antwort:
-                      was reinkommt und was rausgeht sind zwei verschiedene
-                      Dinge. Ohne diesen Absatz stellen Leute ihr OBS auf die
-                      Zielbitrate herunter und verschenken Qualitaet. Das
-                      Beispiel nennt dieselbe Zahl wie Schritt 4, sonst stehen
-                      zwei Empfehlungen auf einer Seite. */}
-                  <p className="rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-text-secondary">
-                    <strong className="font-semibold text-white">
-                      Was du sendest, ist nicht das, was rausgeht.
-                    </strong>{' '}
-                    Schick uns HEVC in 1440p mit VBR und den Werten aus Schritt 4. Wir rechnen
-                    daraus für jedes Ziel neu, in H.264 und mit den Werten, die du hier eingestellt
-                    hast: also zum Beispiel 1440p HEVC mit {obsBitrate.kbps} kbps rein und H.264 zu
-                    Twitch raus. Höher stellen musst du dafür nicht: HEVC braucht für dasselbe Bild
-                    weniger als das H.264, das wir rausschicken.
-                  </p>
+                  <details
+                    open={qualitaetOffen}
+                    onToggle={(ereignis) => setQualitaetOffen(ereignis.currentTarget.open)}
+                    className="group rounded-xl border border-border bg-background/40"
+                  >
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-semibold text-white [&::-webkit-details-marker]:hidden">
+                      Warum Eingangs- und Zielqualität verschieden sind
+                      <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+                    </summary>
+                    <p className="border-t border-border/60 px-3 py-3 text-xs text-text-secondary">
+                      Schick uns HEVC mit den Werten aus Schritt 4. Uplink rechnet daraus für jedes Ziel
+                      H.264 mit genau den Werten, die du in der Plattformkarte speicherst.
+                    </p>
+                  </details>
                 </Rise>
-                )}
-
-            <Rise className="panel-card space-y-4 rounded-2xl p-6">
-              <div>
-                <h2 className="text-lg font-bold text-white">Uplink-Hilfe</h2>
-                <p className="mt-1 text-sm text-text-secondary">
-                  Die Streamer-Hilfe erklärt Uplink, die OBS-Einrichtung und häufige Störungen.
-                </p>
               </div>
-              {isHelpError && (
-                <p className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
-              )}
-              {/* Teilausfall sichtbar machen: sonst haelt der Streamer zwei
-                  Kacheln fuer die vollstaendige Hilfe. */}
-              {helpPages && helpPages.length < UPLINK_HELP_PAGES.length && (
-                <p className="text-sm text-warning">
-                  {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
-                </p>
-              )}
-              {/* Jedes Kapitel klappt einzeln auf und startet zu. Aufgeklappt
-                  fuellte die Hilfe mehrere Bildschirmhoehen und schob alles
-                  darueber aus dem Blick; wer sie braucht, sucht ohnehin ein
-                  bestimmtes Kapitel.
+            )}
 
-                  `details` statt eigenem Zustand: das Auf und Zu, die
-                  Tastaturbedienung und die Ansage fuer Screenreader bringt der
-                  Browser mit, und die Seitensuche des Browsers findet auch
-                  zugeklappten Text. */}
-              <div className="space-y-2">
-                {/* Bei einem Fehler keine Platzhalter mehr: drei Kacheln
-                    "Hilfe wird geladen" neben der Fehlerzeile behaupten einen
-                    Fortschritt, der nicht mehr kommt. */}
-                {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) =>
-                  page.html ? (
-                    <details
-                      key={page.file}
-                      className="uplink-help-shell group overflow-hidden rounded-xl border border-border bg-background/70"
-                    >
-                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
-                        <span>{page.label}</span>
-                        <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
-                      </summary>
-                      <div dangerouslySetInnerHTML={{ __html: page.html }} />
-                    </details>
-                  ) : (
-                    <div
-                      key={page.file}
-                      className="rounded-xl border border-border bg-background/70 p-4 text-sm text-text-secondary"
-                    >
-                      Hilfe wird geladen: {page.label}
+            {data?.enabled && (
+              <ReconnectWaitKarte
+                wert={data.reconnect_wait_s}
+                max={data.reconnect_wait_max_s}
+                onSaved={() => queryClient.invalidateQueries({ queryKey: ['uplink-me'] })}
+              />
+            )}
+
+            <div className={`grid gap-4 md:gap-5 ${data?.enabled ? 'xl:grid-cols-2' : ''}`}>
+              {data?.enabled && (
+                <details
+                  data-section="obs-docks"
+                  open={docksOffen}
+                  onToggle={(ereignis) => setDocksOffen(ereignis.currentTarget.open)}
+                  className="panel-card group self-start rounded-2xl"
+                >
+                  <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+                    <span>
+                      <span className="block text-base font-bold text-white">Chat und OBS-Fenster</span>
+                      <span className="mt-0.5 block text-xs text-text-secondary">Vier fertige Dock-Adressen</span>
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="space-y-3 border-t border-border/60 px-5 py-4">
+                    <p className="text-sm text-text-secondary">
+                      In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>{' '}
+                      den Namen und die jeweilige Adresse eintragen.
+                    </p>
+                    <div className="space-y-2">
+                      {OBS_DOCKS.map((dock) => {
+                        const url = dock.pfad(data.twitch_login ?? '');
+                        return url ? <DockZeile key={dock.titel} titel={dock.titel} url={url} /> : null;
+                      })}
                     </div>
-                  ),
-                )}
-              </div>
-              <a className="text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
-                Uplink-Hilfe als eigene Seite öffnen
-              </a>
-            </Rise>
-              </div>
+                    {!data.twitch_login ? (
+                      <p className="text-xs text-text-secondary">
+                        Für den Chat fehlt gerade dein Kanalname. Nach einer neuen Anmeldung erscheint auch diese Adresse.
+                      </p>
+                    ) : null}
+                    <p className="text-xs text-text-secondary">
+                      Einmal bei Twitch anmelden, Fenster anordnen und das Layout in OBS speichern.
+                    </p>
+                  </div>
+                </details>
+              )}
+
+              <details
+                data-section="uplink-help"
+                open={hilfeOffen}
+                onToggle={(ereignis) => setHilfeOffen(ereignis.currentTarget.open)}
+                className="panel-card group self-start rounded-2xl"
+              >
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+                  <span>
+                    <span className="block text-base font-bold text-white">Uplink-Hilfe</span>
+                    <span className="mt-0.5 block text-xs text-text-secondary">Einrichtung, Grundlagen und Störungen</span>
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="space-y-3 border-t border-border/60 px-5 py-4">
+                  {isHelpError && (
+                    <p role="alert" className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
+                  )}
+                  {helpPages && helpPages.length < UPLINK_HELP_PAGES.length && (
+                    <p role="alert" className="text-sm text-warning">
+                      {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {(helpPages ?? (isHelpError ? [] : UPLINK_HELP_PAGES.map((page) => ({ ...page, html: '' })))).map((page) =>
+                      page.html ? (
+                        <HilfeKapitel
+                          key={page.file}
+                          datei={page.file}
+                          label={page.label}
+                          html={page.html}
+                        />
+                      ) : (
+                        <div key={page.file} className="rounded-xl border border-border bg-background/70 p-4 text-sm text-text-secondary">
+                          Hilfe wird geladen: {page.label}
+                        </div>
+                      ),
+                    )}
+                  </div>
+                  <a className="inline-flex min-h-11 items-center text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
+                    Uplink-Hilfe als eigene Seite öffnen
+                  </a>
+                </div>
+              </details>
             </div>
-          </div>
+          </main>
         </div>
       </div>
     </div>
