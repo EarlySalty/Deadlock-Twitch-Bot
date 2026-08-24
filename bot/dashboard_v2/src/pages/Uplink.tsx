@@ -15,11 +15,15 @@ import {
   Settings,
   MonitorPlay,
   FileText,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 import { Rise } from '../motion/Rise';
 import '../uplinkHelp.css';
 import {
+  acceptUplinkAdminWaitlistEntry,
   UPLINK_PLATTFORMEN,
+  fetchUplinkAdminWaitlist,
   fetchUplinkCaps,
   fetchUplinkDestinations,
   fetchUplinkMe,
@@ -29,6 +33,8 @@ import {
   saveUplinkReconnectWait,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
+import type { UplinkAdminWaitlistEntry } from '@/api/uplink';
+import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import {
   PREVIEW_CHANGELOG_ROUTE,
@@ -496,8 +502,137 @@ function ReconnectWaitKarte({
   );
 }
 
+function wartelistenZeit(roh: string): string {
+  const datum = new Date(roh);
+  if (Number.isNaN(datum.getTime())) return roh;
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(datum);
+}
+
+function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
+  const queryClient = useQueryClient();
+  const warteliste = useQuery({
+    queryKey: ['uplink-admin-waitlist'],
+    queryFn: fetchUplinkAdminWaitlist,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+  const freischalten = useMutation({
+    mutationFn: (streamerId: number) => {
+      if (!csrfToken) {
+        throw new Error('Der Sitzungsschutz fehlt. Lade die Seite neu.');
+      }
+      return acceptUplinkAdminWaitlistEntry(streamerId, csrfToken);
+    },
+    onSuccess: (_antwort, streamerId) => {
+      queryClient.setQueryData<{ entries: UplinkAdminWaitlistEntry[] }>(
+        ['uplink-admin-waitlist'],
+        (alt) => ({
+          entries: (alt?.entries ?? []).filter((eintrag) => eintrag.streamer_id !== streamerId),
+        }),
+      );
+      queryClient.invalidateQueries({ queryKey: ['uplink-admin-waitlist'] });
+    },
+  });
+  const eintraege = warteliste.data?.entries ?? [];
+
+  return (
+    <Rise
+      data-section="uplink-admin-waitlist"
+      className="panel-card card-glow card-glow-warning space-y-4 rounded-2xl border-warning/25 p-4 md:p-5"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-warning/35 bg-warning/10 text-warning">
+            <Users aria-hidden="true" className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-warning">
+              Admin-Modus
+            </div>
+            <h2 className="text-base font-bold text-white">Uplink-Warteliste</h2>
+            <p className="mt-1 text-xs text-text-secondary">
+              Freischalten gibt dem Streamer einen Uplink-Zugang und entfernt den Eintrag aus der Liste.
+            </p>
+          </div>
+        </div>
+        <span className="rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning">
+          {warteliste.isLoading ? '…' : eintraege.length}
+        </span>
+      </div>
+
+      {warteliste.isLoading ? (
+        <p role="status" className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary">
+          Warteliste wird geladen …
+        </p>
+      ) : null}
+
+      {warteliste.isError ? (
+        <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Die Warteliste ist gerade nicht erreichbar.
+        </p>
+      ) : null}
+
+      {!csrfToken ? (
+        <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Der Sitzungsschutz fehlt. Lade die Seite neu, bevor du jemanden freischaltest.
+        </p>
+      ) : null}
+
+      {!warteliste.isLoading && !warteliste.isError && eintraege.length === 0 ? (
+        <p className="rounded-xl border border-border bg-background/45 px-3 py-3 text-xs text-text-secondary">
+          Gerade wartet niemand auf eine Freischaltung.
+        </p>
+      ) : null}
+
+      {eintraege.length > 0 ? (
+        <ul className="max-h-72 space-y-2 overflow-y-auto pr-1" aria-label="Uplink-Warteliste">
+          {eintraege.map((eintrag) => {
+            const wirdFreigeschaltet =
+              freischalten.isPending && freischalten.variables === eintrag.streamer_id;
+            return (
+              <li
+                key={eintrag.streamer_id}
+                className="flex flex-col gap-3 rounded-xl border border-border bg-background/55 p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">Twitch-ID {eintrag.streamer_id}</p>
+                  <p className="mt-0.5 text-[11px] text-text-secondary">
+                    Anfrage {wartelistenZeit(eintrag.requested_at)}
+                  </p>
+                  {eintrag.note ? <p className="mt-1 text-xs text-text-secondary">{eintrag.note}</p> : null}
+                </div>
+                <button
+                  type="button"
+                  disabled={freischalten.isPending || !csrfToken}
+                  onClick={() => freischalten.mutate(eintrag.streamer_id)}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <UserPlus aria-hidden="true" className="h-3.5 w-3.5" />
+                  {wirdFreigeschaltet ? 'Wird freigeschaltet …' : 'Freischalten'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      {freischalten.isError ? (
+        <p role="alert" className="text-xs text-warning">
+          {freischalten.error instanceof Error
+            ? freischalten.error.message
+            : 'Die Freischaltung hat nicht geklappt.'}
+        </p>
+      ) : null}
+    </Rise>
+  );
+}
+
 export function UplinkPage() {
   const queryClient = useQueryClient();
+  const { data: authStatus } = useAuthStatus();
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
   const [docksOffen, setDocksOffen] = useUplinkDisclosure('obs-docks', false);
   const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
@@ -700,12 +835,20 @@ export function UplinkPage() {
                                 : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
                             }
                           />
-                          <div role="note" className="flex items-start gap-2 px-1 py-1 text-xs text-warning">
-                            <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <p>
-                              <strong className="font-semibold">Privat:</strong> Diese Adresse enthält deinen
-                              Schlüssel. Nicht im Stream zeigen.
-                            </p>
+                          <div
+                            data-uplink-private-warning
+                            role="note"
+                            className="rounded-xl border border-warning/45 bg-warning/10 px-3 py-2.5 text-xs text-warning shadow-[inset_3px_0_0_var(--color-warning)]"
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-warning/35 bg-warning/15">
+                                <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+                              </span>
+                              <p className="pt-0.5 leading-relaxed">
+                                <strong className="font-semibold text-white">Privat:</strong> Diese Adresse enthält
+                                deinen Schlüssel. Nicht im Stream zeigen.
+                              </p>
+                            </div>
                           </div>
                         </>
                       ) : (
@@ -748,77 +891,96 @@ export function UplinkPage() {
                   </p>
                 </Rise>
 
-                <Rise className="panel-card card-glow space-y-5 rounded-2xl p-4 md:p-6">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-                        Hauptbereich
+                <div data-section="uplink-right-column" className="space-y-4 md:space-y-5">
+                  <Rise className="panel-card card-glow space-y-5 rounded-2xl p-4 md:p-6">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+                          Hauptbereich
+                        </div>
+                        <h2 className="text-lg font-bold text-white">Plattformen</h2>
+                        <p className="mt-1 text-sm text-text-secondary">
+                          Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.
+                        </p>
                       </div>
-                      <h2 className="text-lg font-bold text-white">Plattformen</h2>
-                      <p className="mt-1 text-sm text-text-secondary">
-                        Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.
-                      </p>
+                      <span
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-success/30 bg-success/10 text-success'}`}
+                      >
+                        {zieleLaden
+                          ? 'Ziele werden geladen'
+                          : zieleFehler
+                            ? 'Status unbekannt'
+                            : `${gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv`}
+                      </span>
                     </div>
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-success/30 bg-success/10 text-success'}`}>
-                      {zieleLaden
-                        ? 'Ziele werden geladen'
-                        : zieleFehler
-                          ? 'Status unbekannt'
-                          : `${gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv`}
-                    </span>
-                  </div>
 
-                  {zieleLaden ? (
-                    <p role="status" className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary">
-                      Plattformziele werden geladen …
-                    </p>
+                    {zieleLaden ? (
+                      <p
+                        role="status"
+                        className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary"
+                      >
+                        Plattformziele werden geladen …
+                      </p>
+                    ) : null}
+
+                    {zieleFehler ? (
+                      <p
+                        role="alert"
+                        className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+                      >
+                        Deine gespeicherten Ziele sind gerade nicht abrufbar. Sie sind nicht weg; bitte nichts
+                        doppelt speichern und die Seite später neu laden.
+                      </p>
+                    ) : null}
+
+                    <div className={zieleFehler || zieleLaden ? 'hidden' : 'space-y-3'}>
+                      {UPLINK_PLATTFORMEN.map((plattform) => {
+                        const ziel = gespeicherteZiele.find(
+                          (eintrag) => eintrag.platform === plattform.id,
+                        );
+                        return (
+                          <ZielKarte
+                            key={plattform.id}
+                            platform={plattform.id}
+                            label={plattform.label}
+                            rtmpVorgabe={plattform.rtmp}
+                            ziel={ziel}
+                            caps={capsFuer(plattform.id)}
+                            offenStart={false}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    {gespeicherteZiele.length === 0 && !zieleFehler && !zieleLaden ? (
+                      <p className="text-xs text-text-secondary">
+                        Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht
+                        weitergesendet.
+                      </p>
+                    ) : null}
+
+                    <details
+                      open={qualitaetOffen}
+                      onToggle={(ereignis) => setQualitaetOffen(ereignis.currentTarget.open)}
+                      className="group rounded-xl border border-border bg-background/40"
+                    >
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-semibold text-white [&::-webkit-details-marker]:hidden">
+                        Warum Eingangs- und Zielqualität verschieden sind
+                        <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
+                      </summary>
+                      <p className="border-t border-border/60 px-3 py-3 text-xs text-text-secondary">
+                        Schick uns HEVC mit den Werten aus Schritt 4. Uplink rechnet daraus für jedes Ziel H.264
+                        mit genau den Werten, die du in der Plattformkarte speicherst.
+                      </p>
+                    </details>
+                  </Rise>
+
+                  {authStatus?.adminMode ? (
+                    <AdminUplinkWarteliste
+                      csrfToken={authStatus.csrfToken ?? authStatus.csrf_token ?? null}
+                    />
                   ) : null}
-
-                  {zieleFehler ? (
-                    <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                      Deine gespeicherten Ziele sind gerade nicht abrufbar. Sie sind nicht weg; bitte nichts
-                      doppelt speichern und die Seite später neu laden.
-                    </p>
-                  ) : null}
-
-                  <div className={zieleFehler || zieleLaden ? 'hidden' : 'space-y-3'}>
-                    {UPLINK_PLATTFORMEN.map((plattform) => {
-                      const ziel = gespeicherteZiele.find((eintrag) => eintrag.platform === plattform.id);
-                      return (
-                        <ZielKarte
-                          key={plattform.id}
-                          platform={plattform.id}
-                          label={plattform.label}
-                          rtmpVorgabe={plattform.rtmp}
-                          ziel={ziel}
-                          caps={capsFuer(plattform.id)}
-                          offenStart={false}
-                        />
-                      );
-                    })}
-                  </div>
-
-                  {gespeicherteZiele.length === 0 && !zieleFehler && !zieleLaden ? (
-                    <p className="text-xs text-text-secondary">
-                      Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht weitergesendet.
-                    </p>
-                  ) : null}
-
-                  <details
-                    open={qualitaetOffen}
-                    onToggle={(ereignis) => setQualitaetOffen(ereignis.currentTarget.open)}
-                    className="group rounded-xl border border-border bg-background/40"
-                  >
-                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-semibold text-white [&::-webkit-details-marker]:hidden">
-                      Warum Eingangs- und Zielqualität verschieden sind
-                      <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
-                    </summary>
-                    <p className="border-t border-border/60 px-3 py-3 text-xs text-text-secondary">
-                      Schick uns HEVC mit den Werten aus Schritt 4. Uplink rechnet daraus für jedes Ziel
-                      H.264 mit genau den Werten, die du in der Plattformkarte speicherst.
-                    </p>
-                  </details>
-                </Rise>
+                </div>
               </div>
             )}
 

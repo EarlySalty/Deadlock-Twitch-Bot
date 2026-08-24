@@ -493,6 +493,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(uplink::waitlist_handler),
         )
         .route(
+            "/twitch/api/v2/uplink/admin/waitlist",
+            get(uplink::admin_waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/users",
+            post(uplink::admin_freischalten_handler),
+        )
+        .route(
             "/twitch/api/v2/uplink/destinations",
             get(uplink::destinations_handler).put(uplink::put_destination_handler),
         )

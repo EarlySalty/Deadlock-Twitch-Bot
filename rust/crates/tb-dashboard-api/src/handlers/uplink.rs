@@ -14,7 +14,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::{level::DashboardAuthLevel, require_admin};
+
+const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
+const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
 
 fn relay_base() -> String {
     std::env::var("RS_RELAY_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8891".into())
@@ -95,6 +98,7 @@ async fn relay_json(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, Response> {
+    let methode_fuer_log = method.clone();
     let secret = relay_secret().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -111,7 +115,13 @@ async fn relay_json(
     if let Some(body) = body {
         req = req.json(&body);
     }
-    let antwort = req.send().await.map_err(|_| {
+    let antwort = req.send().await.map_err(|fehler| {
+        tracing::warn!(
+            method = %methode_fuer_log,
+            path,
+            error = %fehler,
+            "Uplink-Relay-Aufruf fehlgeschlagen"
+        );
         (
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": "Uplink antwortet nicht." })),
@@ -121,6 +131,12 @@ async fn relay_json(
     let status = antwort.status();
     let wert = antwort.json::<Value>().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
+        tracing::warn!(
+            method = %methode_fuer_log,
+            path,
+            status = status.as_u16(),
+            "Uplink-Relay hat den Aufruf abgelehnt"
+        );
         return Err((
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             Json(wert),
@@ -243,6 +259,86 @@ pub async fn waitlist_handler(
     )
     .await?;
     Ok(Json(wert))
+}
+
+fn admin_pruefen(auth: &DashboardAuthLevel) -> Result<(), Response> {
+    match require_admin(auth) {
+        Some(fehler) => Err(fehler.into_response()),
+        None => Ok(()),
+    }
+}
+
+fn admin_actor_fuer_log(auth: &DashboardAuthLevel) -> (&str, Option<&str>) {
+    match auth {
+        DashboardAuthLevel::Admin { actor: Some(actor) } => (
+            actor.twitch_login.as_str(),
+            Some(actor.twitch_user_id.as_str()),
+        ),
+        DashboardAuthLevel::Admin { actor: None } => ("discord-admin", None),
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => (twitch_login.as_str(), Some(twitch_user_id.as_str())),
+        DashboardAuthLevel::None => ("unauthenticated", None),
+    }
+}
+
+/// Wartende Uplink-Konten für die Admin-Box.
+///
+/// Der effektive `DashboardAuthLevel` ist hier das Gate. Ein Owner-Login ohne
+/// aktivierten Admin-Modus kommt als Partner an und erhält deshalb 403.
+pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
+    admin_pruefen(&auth)?;
+    let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct AdminFreischaltenBody {
+    pub streamer_id: i64,
+}
+
+fn freischaltung_antwort(streamer_id: i64) -> Value {
+    json!({
+        "streamer_id": streamer_id,
+        "enabled": true,
+    })
+}
+
+/// Schaltet einen Wartelisteneintrag über den bestehenden Relay-Adminpfad frei.
+///
+/// Das Relay liefert dabei auch den neuen Ingest-Schlüssel. Diese Antwort wird
+/// bewusst verworfen, damit der Schlüssel nicht im Browser landet.
+pub async fn admin_freischalten_handler(
+    auth: DashboardAuthLevel,
+    Json(body): Json<AdminFreischaltenBody>,
+) -> Result<Json<Value>, Response> {
+    admin_pruefen(&auth)?;
+    if body.streamer_id <= 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "ungültige Twitch-ID" })),
+        )
+            .into_response());
+    }
+
+    relay_json(
+        reqwest::Method::POST,
+        RELAY_ADMIN_USERS_PFAD,
+        Some(json!({ "streamer_id": body.streamer_id })),
+    )
+    .await?;
+
+    let (actor, actor_id) = admin_actor_fuer_log(&auth);
+    tracing::info!(
+        actor,
+        actor_twitch_user_id = actor_id.unwrap_or("-"),
+        target_streamer_id = body.streamer_id,
+        "Uplink-Wartelisteneintrag freigeschaltet"
+    );
+
+    Ok(Json(freischaltung_antwort(body.streamer_id)))
 }
 
 /// Die gespeicherten Ziele, ohne Stream-Key.
@@ -843,6 +939,45 @@ mod tests {
     #[test]
     fn ohne_session_gibt_es_keine_identitaet() {
         assert!(twitch_identitaet(&DashboardAuthLevel::None).is_err());
+    }
+
+    #[test]
+    fn wartelistenverwaltung_braucht_den_aktiven_admin_modus() {
+        let admin = DashboardAuthLevel::Admin { actor: None };
+        let partner = DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Early".into(),
+        };
+
+        assert!(admin_pruefen(&admin).is_ok());
+        assert_eq!(
+            admin_pruefen(&partner).unwrap_err().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            admin_pruefen(&DashboardAuthLevel::None)
+                .unwrap_err()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn freischaltantwort_enthaelt_keinen_ingest_schluessel() {
+        let antwort = freischaltung_antwort(42);
+        assert_eq!(antwort["streamer_id"], 42);
+        assert_eq!(antwort["enabled"], true);
+        assert!(antwort.get("ingest_key").is_none());
+        assert!(antwort.get("srt_hint").is_none());
+    }
+
+    #[test]
+    fn admin_audit_label_ist_auch_ohne_twitch_actor_eindeutig() {
+        assert_eq!(
+            admin_actor_fuer_log(&DashboardAuthLevel::Admin { actor: None }),
+            ("discord-admin", None)
+        );
     }
 
     #[test]
