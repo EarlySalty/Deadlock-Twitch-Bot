@@ -21,6 +21,10 @@ export interface UplinkMe {
   live_status?: UplinkLiveStatus;
   /** Fuer die fertigen OBS-Dock-Adressen. Fehlt bei aelteren Servern. */
   twitch_login?: string;
+  /** Wartezeit nur nach einem unerwarteten Internetabriss. */
+  reconnect_wait_s: number;
+  /** Vom Relay gelieferte Obergrenze, nicht im Frontend duplizieren. */
+  reconnect_wait_max_s: number;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
@@ -36,6 +40,40 @@ export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {
       body: '{}',
     })
   );
+}
+
+export interface UplinkReconnectWaitSettings {
+  reconnect_wait_s: number;
+  reconnect_wait_max_s: number;
+}
+
+export function saveUplinkReconnectWait(
+  reconnectWaitS: number
+): Promise<UplinkReconnectWaitSettings> {
+  return fetchJson<UplinkReconnectWaitSettings>(
+    '/twitch/api/v2/uplink/reconnect-wait',
+    withCookieCredentials({
+      method: 'PUT',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reconnect_wait_s: reconnectWaitS }),
+    })
+  );
+}
+
+/** Der Wert gilt nur fuer einen unerwarteten Abriss, nicht fuer OBS-Stop. */
+export const UPLINK_RECONNECT_WAIT_TEXT =
+  'Diese Zeit gilt nur nach einem unerwarteten Internetabriss. Wenn du den Stream in OBS beendest, räumt Uplink sofort auf.';
+
+export function reconnectWaitEingabe(wert: number | null | undefined): string {
+  return typeof wert === 'number' && Number.isFinite(wert) && wert >= 0 ? String(wert) : '';
+}
+
+/** Liest nur ganze, nichtnegative Sekunden; die Obergrenze bleibt beim Relay. */
+export function reconnectWaitPayload(wert: string): number | null {
+  const getrimmt = wert.trim();
+  if (!getrimmt || !/^\d+$/.test(getrimmt)) return null;
+  const sekunden = Number(getrimmt);
+  return Number.isSafeInteger(sekunden) && sekunden >= 0 ? sekunden : null;
 }
 
 /**

@@ -23,6 +23,10 @@ import {
   fetchUplinkDestinations,
   fetchUplinkMe,
   joinUplinkWaitlist,
+  reconnectWaitEingabe,
+  reconnectWaitPayload,
+  saveUplinkReconnectWait,
+  UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
 import { ZielKarte } from './UplinkZiel';
 import {
@@ -363,6 +367,77 @@ function CopyField({
   );
 }
 
+function ReconnectWaitKarte({
+  wert,
+  max,
+  onSaved,
+}: {
+  wert: number;
+  max: number;
+  onSaved: () => void;
+}) {
+  const [entwurf, setEntwurf] = useState<string | null>(null);
+  const eingabe = entwurf ?? reconnectWaitEingabe(wert);
+  const payload = reconnectWaitPayload(eingabe);
+  const speichern = useMutation({
+    mutationFn: () => {
+      if (payload === null) {
+        throw new Error('Gib eine ganze Zahl ab 0 Sekunden ein.');
+      }
+      return saveUplinkReconnectWait(payload);
+    },
+    onSuccess: (antwort) => {
+      setEntwurf(reconnectWaitEingabe(antwort.reconnect_wait_s));
+      onSaved();
+    },
+  });
+
+  return (
+    <Rise className="panel-card space-y-4 rounded-2xl p-6">
+      <div>
+        <h2 className="text-lg font-bold text-white">Verhalten bei Internetabriss</h2>
+        <p className="mt-1 text-sm text-text-secondary">{UPLINK_RECONNECT_WAIT_TEXT}</p>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="min-w-[14rem] flex-1 space-y-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
+            Wartezeit in Sekunden
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={max}
+            step={1}
+            value={eingabe}
+            onChange={(e) => setEntwurf(e.target.value)}
+            inputMode="numeric"
+            className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
+            aria-label="Wartezeit nach Internetabriss in Sekunden"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={speichern.isPending || payload === null}
+          onClick={() => speichern.mutate()}
+          className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {speichern.isSuccess ? 'Gespeichert' : 'Wartezeit speichern'}
+        </button>
+      </div>
+      <p className="text-xs text-text-secondary">
+        Servergrenze: {max} Sekunden. 0 bedeutet: Nach einem Abriss wird sofort beendet. Die Änderung gilt für die nächste Session.
+      </p>
+      {speichern.isError && (
+        <p className="text-xs text-warning">
+          {speichern.error instanceof Error
+            ? speichern.error.message
+            : 'Die Wartezeit ließ sich gerade nicht speichern.'}
+        </p>
+      )}
+    </Rise>
+  );
+}
+
 export function UplinkPage() {
   const queryClient = useQueryClient();
   const { data, isLoading, isError, error } = useQuery({
@@ -616,6 +691,12 @@ export function UplinkPage() {
                     die Plattform-Streams an, du musst nirgends sonst etwas starten.
                   </p>
                 </Rise>
+
+                <ReconnectWaitKarte
+                  wert={data.reconnect_wait_s}
+                  max={data.reconnect_wait_max_s}
+                  onSaved={() => queryClient.invalidateQueries({ queryKey: ['uplink-me'] })}
+                />
 
                 <Rise className="panel-card space-y-3 rounded-2xl p-6">
                   <h2 className="text-lg font-bold text-white">Chat und OBS-Fenster</h2>

@@ -1,5 +1,9 @@
 //! Proxy vom Streamer-Dashboard zu rs-relay. Das Relay-Secret bleibt serverseitig.
 
+// Axum-Responses sind hier absichtlich direkt im Result: ein Boxen wuerde
+// jeden Handler und jede Aufrufstelle verkomplizieren, ohne Laufzeitgewinn.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     extract::State,
     http::StatusCode,
@@ -256,6 +260,28 @@ pub async fn destinations_handler(
         reqwest::Method::GET,
         &format!("/v1/me/destinations?streamer_id={id}"),
         None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+/// Einstellung fuer die Wartezeit nach einem unerwarteten Ingest-Abriss.
+/// Ein normales OBS-Stoppen wird im Relay davon getrennt und sofort abgeraeumt.
+#[derive(Deserialize)]
+pub struct ReconnectWaitBody {
+    pub reconnect_wait_s: i32,
+}
+
+pub async fn put_reconnect_wait_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<ReconnectWaitBody>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        &format!("/v1/me/reconnect-wait?streamer_id={id}"),
+        Some(json!({ "reconnect_wait_s": body.reconnect_wait_s })),
     )
     .await?;
     Ok(Json(wert))

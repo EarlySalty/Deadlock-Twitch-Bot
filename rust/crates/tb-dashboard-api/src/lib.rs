@@ -485,6 +485,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route("/twitch/api/v2/uplink/me", get(uplink::me_handler))
         .route(
+            "/twitch/api/v2/uplink/reconnect-wait",
+            put(uplink::put_reconnect_wait_handler),
+        )
+        .route(
             "/twitch/api/v2/uplink/waitlist",
             post(uplink::waitlist_handler),
         )
