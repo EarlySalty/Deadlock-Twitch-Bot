@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Loader2, Power } from 'lucide-react';
+import kickLogo from '@/assets/platforms/kick.svg';
+import tiktokLogo from '@/assets/platforms/tiktok.svg';
+import twitchLogo from '@/assets/platforms/twitch.svg';
+import youtubeLogo from '@/assets/platforms/youtube.svg';
 import {
   PROFIL_WERTE,
   UPLINK_PROFILE,
@@ -17,6 +21,13 @@ import type {
 } from '@/api/uplink';
 
 type Modus = 'stufe' | 'manuell';
+
+const PLATTFORM_LOGOS: Record<UplinkPlattform, string> = {
+  twitch: twitchLogo,
+  youtube: youtubeLogo,
+  kick: kickLogo,
+  tiktok: tiktokLogo,
+};
 
 /** Zahlenfeld im manuellen Modus. Leerer Text ist erlaubt, sonst kann man die
  *  fuehrende Ziffer nicht loeschen, ohne dass eine 0 nachrutscht. */
@@ -97,7 +108,9 @@ export function ZielKarte({
   offenStart: boolean;
 }) {
   const queryClient = useQueryClient();
+  const basisId = useId();
   const eingerichtet = Boolean(ziel);
+  const [offen, setOffen] = useState(offenStart);
 
   const [rtmpUrl, setRtmpUrl] = useState(ziel?.rtmp_url || rtmpVorgabe);
   const [streamKey, setStreamKey] = useState('');
@@ -290,57 +303,84 @@ export function ZielKarte({
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
     eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt);
+  const kartenStatus = !eingerichtet ? 'nicht-eingerichtet' : ziel?.enabled ? 'aktiv' : 'pausiert';
+  const statusText = !eingerichtet ? 'nicht eingerichtet' : ziel?.enabled ? 'aktiv' : 'pausiert';
+  const rtmpId = `${basisId}-rtmp`;
+  const keyId = `${basisId}-key`;
+  const profilId = `${basisId}-profil`;
+  const fehlerId = `${basisId}-fehler`;
+  const kartenKlasse = ziel?.enabled
+    ? 'border-success/55 bg-success/10 shadow-[0_18px_46px_rgba(67,181,129,0.18)] ring-1 ring-success/15'
+    : eingerichtet
+      ? 'border-warning/30 bg-warning/5'
+      : 'border-border bg-background/35';
 
   return (
     <details
-      open={offenStart}
-      className="group overflow-hidden rounded-2xl border border-border bg-background/40"
+      data-platform={platform}
+      data-state={kartenStatus}
+      open={offen}
+      onToggle={(ereignis) => setOffen(ereignis.currentTarget.open)}
+      className={`group overflow-hidden rounded-2xl border transition-colors ${kartenKlasse}`}
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden">
-        <span className="flex items-center gap-2">
-          {label}
-          {eingerichtet ? (
-            <span
-              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                ziel?.enabled
-                  ? 'bg-success/15 text-success'
-                  : 'bg-white/10 text-text-secondary'
-              }`}
-            >
-              {ziel?.enabled ? 'aktiv' : 'aus'}
+      <summary className={`flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden ${ziel?.enabled ? 'px-5 py-5' : 'px-4 py-3.5'}`}>
+        <span className="flex min-w-0 items-center gap-3">
+          <span aria-hidden="true" className={`flex shrink-0 items-center justify-center rounded-xl border text-xs font-black tracking-tight ${ziel?.enabled ? 'h-11 w-11 border-success/50 bg-success/15 text-success shadow-[0_8px_24px_rgba(67,181,129,0.18)]' : 'h-10 w-10 border-primary/25 bg-primary/10 text-primary'}`}>
+            <img
+              src={PLATTFORM_LOGOS[platform]}
+              alt=""
+              className={`h-5 w-5 brightness-0 invert ${ziel?.enabled ? 'opacity-100' : 'opacity-70'}`}
+            />
+          </span>
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className={`${ziel?.enabled ? 'text-base' : 'text-sm'} font-bold text-white`}>{label}</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                  ziel?.enabled
+                    ? 'bg-success/15 text-success'
+                    : eingerichtet
+                      ? 'bg-warning/15 text-warning'
+                      : 'bg-white/5 text-text-secondary'
+                }`}
+              >
+                {statusText}
+              </span>
             </span>
-          ) : (
-            <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-semibold text-text-secondary">
-              nicht eingerichtet
+            <span className="mt-0.5 block text-xs font-normal text-text-secondary">
+              {eingerichtet && kopfWerte
+                ? `${kopfWerte.height}p${kopfWerte.fps} · ${kopfWerte.bitrate_kbps} kbps`
+                : 'Server, Schlüssel und Qualität hinterlegen'}
+              {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
-          )}
+          </span>
         </span>
-        <span className="flex items-center gap-3">
-          {eingerichtet && kopfWerte && (
-            <span className="text-xs font-normal text-text-secondary">
-              {kopfWerte.height}p{kopfWerte.fps} · {kopfWerte.bitrate_kbps} kbps
-              {ungespeichert ? (
-                <span className="ml-1.5 text-primary">nicht gespeichert</span>
-              ) : null}
-            </span>
-          )}
+        <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>
+          {eingerichtet ? 'Einstellungen' : 'Einrichten'}
           <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
         </span>
       </summary>
 
-      <div className="space-y-3 border-t border-border/60 px-4 py-4">
+      <div
+        role="group"
+        aria-label={`${label}-Einstellungen`}
+        className="space-y-4 border-t border-border/60 px-4 py-4"
+      >
         <div className="space-y-1">
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+          <label htmlFor={rtmpId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
             Serveradresse von {label}
           </label>
           <input
+            id={rtmpId}
             value={rtmpUrl}
             onChange={(e) => {
               setRtmpUrl(e.target.value);
               angefasst();
             }}
+            aria-invalid={Boolean(fehlertext)}
+            aria-describedby={fehlertext ? fehlerId : undefined}
             placeholder={rtmpVorgabe || 'rtmp://…'}
-            className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+            className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
           />
           {eingerichtet && (
             <p className="text-[11px] text-text-secondary">
@@ -349,18 +389,21 @@ export function ZielKarte({
           )}
         </div>
         <div className="space-y-1">
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+          <label htmlFor={keyId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
             Stream-Schlüssel von {label}
           </label>
           <input
+            id={keyId}
             value={streamKey}
             onChange={(e) => {
               setStreamKey(e.target.value);
               angefasst();
             }}
             type="password"
+            aria-invalid={Boolean(fehlertext)}
+            aria-describedby={fehlertext ? fehlerId : undefined}
             placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
-            className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+            className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
           />
           <p className="text-[11px] text-text-secondary">
             {eingerichtet
@@ -374,24 +417,26 @@ export function ZielKarte({
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
               Qualität, die wir an {label} senden
             </span>
-            <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
+            <div role="group" aria-label={`Qualitätsmodus für ${label}`} className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
               <button
                 type="button"
+                aria-pressed={modus === 'stufe'}
                 onClick={() => {
                   setModus('stufe');
                   angefasst();
                 }}
-                className={`px-3 py-1 ${modus === 'stufe' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
+                className={`min-h-11 px-3 py-1 ${modus === 'stufe' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
                 Stufe
               </button>
               <button
                 type="button"
+                aria-pressed={modus === 'manuell'}
                 onClick={() => {
                   nachManuell();
                   angefasst();
                 }}
-                className={`px-3 py-1 ${modus === 'manuell' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
+                className={`min-h-11 px-3 py-1 ${modus === 'manuell' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
                 Manuell
               </button>
@@ -400,13 +445,15 @@ export function ZielKarte({
 
           {modus === 'stufe' ? (
             <div className="space-y-1">
+              <label htmlFor={profilId} className="sr-only">Qualitätsstufe für {label}</label>
               <select
+                id={profilId}
                 value={profil}
                 onChange={(e) => {
                   setProfil(e.target.value as UplinkProfilName);
                   angefasst();
                 }}
-                className="w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+                className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
               >
                 {UPLINK_PROFILE.map((eintrag) => (
                   <option key={eintrag.name} value={eintrag.name}>
@@ -483,25 +530,29 @@ export function ZielKarte({
           )}
         </div>
 
-        {fehlertext && <p className="text-xs text-warning">{fehlertext}</p>}
-        {livetext && <p className="text-xs text-text-secondary">{livetext}</p>}
+        {fehlertext && <p id={fehlerId} role="alert" className="text-xs text-warning">{fehlertext}</p>}
+        {livetext && <p role="status" className="text-xs text-text-secondary">{livetext}</p>}
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={speichern.isPending}
             onClick={() => speichern.mutate(undefined)}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
           >
             {speichern.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {gespeichert && !speichern.isPending ? 'Gespeichert' : `${label} speichern`}
+            {speichern.isPending
+              ? `${label} wird gespeichert`
+              : gespeichert
+                ? 'Gespeichert'
+                : `${label} speichern`}
           </button>
           {eingerichtet && (
             <button
               type="button"
               disabled={speichern.isPending}
               onClick={() => speichern.mutate(!ziel?.enabled)}
-              className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white disabled:opacity-60"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white disabled:opacity-60"
             >
               <Power className="h-3.5 w-3.5" />
               {ziel?.enabled ? 'Ziel pausieren' : 'Ziel einschalten'}
@@ -510,7 +561,7 @@ export function ZielKarte({
         </div>
 
         {eingerichtet && (
-          <div className="flex items-start gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
+          <div role="status" className="flex items-start gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
             <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {/* Bewusst `requested` und nicht `effective`: der Satz beschreibt
                 den gespeicherten Stand, und beide Felder sind seit dem Ende der
