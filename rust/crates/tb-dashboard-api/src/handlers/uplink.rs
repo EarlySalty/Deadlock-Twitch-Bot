@@ -23,34 +23,32 @@ fn relay_base() -> String {
     std::env::var("RS_RELAY_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8891".into())
 }
 
-fn relay_secret() -> Option<String> {
-    std::env::var("RS_RELAY_API_SECRET")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-}
-
-/// Das zweite Secret des Relays, nur für `/v1/admin/*`.
+/// Der Name des Secrets, das zu diesem Pfad gehört.
 ///
 /// Das Relay hängt seine Admin-Routen seit dem Ingest-Key-Umbau an ein
 /// eigenes Shared Secret. Der Grund liegt hier: dieses Dashboard hält das
-/// API-Secret, um die Nutzerpfade eines Streamers aufzurufen, und bis dahin
-/// öffnete genau dieser Wert auch Freischalten, Löschen, fremde Ziele und
-/// Session-Kills. Fehlt der Wert, antwortet das Relay auf Admin-Pfade mit
-/// 503; ein Rückfall auf das API-Secret wäre genau die Vermischung, die der
-/// Umbau beendet hat.
-fn relay_admin_secret() -> Option<String> {
-    std::env::var("RS_RELAY_ADMIN_SECRET")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
+/// API-Secret, um die Nutzerpfade eines Streamers zu lesen und seine Ziele zu
+/// setzen, und bis dahin öffnete genau dieser Wert auch Freischalten,
+/// Löschen, fremde Ziele und Session-Kills auf dem Relay. Kein Rückfall auf
+/// das API-Secret, wenn das Admin-Secret fehlt: der wäre unsichtbar und
+/// hätte die Trennung wieder aufgehoben.
+///
+/// Nur der Name, nicht der Wert: so lässt sich die Zuordnung prüfen, ohne im
+/// Test die Prozessumgebung anzufassen. `set_var` in einem Testbinary ist ein
+/// Datenrennen auf `environ` mit jedem anderen Test, der dasselbe tut.
+fn secret_name_fuer(path: &str) -> &'static str {
+    if path.starts_with("/v1/admin/") {
+        "RS_RELAY_ADMIN_SECRET"
+    } else {
+        "RS_RELAY_API_SECRET"
+    }
 }
 
 /// Das Secret, das zu diesem Pfad gehört.
 fn secret_fuer(path: &str) -> Option<String> {
-    if path.starts_with("/v1/admin/") {
-        relay_admin_secret()
-    } else {
-        relay_secret()
-    }
+    std::env::var(secret_name_fuer(path))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// Twitch-Identität der Session: Login und, falls die Session sie mitbringt,
@@ -124,11 +122,15 @@ async fn relay_json(
 ) -> Result<Value, Response> {
     let methode_fuer_log = method.clone();
     let secret = secret_fuer(path).ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "Uplink ist noch nicht verbunden." })),
-        )
-            .into_response()
+        // Zwei verschiedene Lagen, zwei verschiedene Sätze: fehlt das
+        // Admin-Secret, steht die Verbindung zum Relay ja, und "noch nicht
+        // verbunden" schickte die Fehlersuche in die falsche Richtung.
+        let text = if secret_name_fuer(path) == "RS_RELAY_ADMIN_SECRET" {
+            "Uplink-Adminzugang ist nicht eingerichtet."
+        } else {
+            "Uplink ist noch nicht verbunden."
+        };
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": text }))).into_response()
     })?;
     let url = format!("{}{path}", relay_base().trim_end_matches('/'));
     let client = reqwest::Client::new();
@@ -1085,34 +1087,31 @@ mod tests {
 
     /// Admin-Pfade greifen zum Admin-Secret, alles andere zum API-Secret.
     ///
-    /// Der Test setzt beide Werte und prüft die Zuordnung, nicht nur, dass
-    /// überhaupt etwas zurückkommt: bei gleichem Wert wäre er auch dann grün,
-    /// wenn die Trennung wieder verschwindet. Läuft seriell, weil er die
-    /// Prozessumgebung anfasst.
+    /// Geprüft wird die Namenswahl, nicht ein gesetzter Wert. Ein Test, der
+    /// dafür `set_var` benutzt, wäre ein Datenrennen auf `environ` mit jedem
+    /// anderen Test im selben Binary, der die Umgebung anfasst, und davon gibt
+    /// es in dieser Crate mehrere.
     #[test]
     fn admin_pfade_nehmen_das_admin_secret() {
-        std::env::set_var("RS_RELAY_API_SECRET", "api-wert");
-        std::env::set_var("RS_RELAY_ADMIN_SECRET", "admin-wert");
-
-        assert_eq!(secret_fuer("/v1/admin/users").as_deref(), Some("admin-wert"));
-        assert_eq!(
-            secret_fuer(RELAY_ADMIN_WAITLIST_PFAD).as_deref(),
-            Some("admin-wert")
-        );
-        assert_eq!(secret_fuer("/v1/me").as_deref(), Some("api-wert"));
-        assert_eq!(secret_fuer("/v1/caps").as_deref(), Some("api-wert"));
-        assert_eq!(
-            secret_fuer("/v1/me/destinations").as_deref(),
-            Some("api-wert")
-        );
-
-        // Fehlt das Admin-Secret, fällt der Admin-Pfad nicht auf das
-        // API-Secret zurück, sondern hat gar keins.
-        std::env::remove_var("RS_RELAY_ADMIN_SECRET");
-        assert_eq!(secret_fuer("/v1/admin/users"), None);
-        assert_eq!(secret_fuer("/v1/me").as_deref(), Some("api-wert"));
-
-        std::env::remove_var("RS_RELAY_API_SECRET");
+        for pfad in [
+            "/v1/admin/users",
+            RELAY_ADMIN_WAITLIST_PFAD,
+            RELAY_ADMIN_USERS_PFAD,
+            "/v1/admin/sessions/7/kill?confirm=true",
+        ] {
+            assert_eq!(secret_name_fuer(pfad), "RS_RELAY_ADMIN_SECRET", "{pfad}");
+        }
+        for pfad in [
+            "/v1/me",
+            "/v1/caps",
+            "/v1/me/destinations",
+            "/v1/me/key/rotate",
+            // Kein Admin-Pfad, auch wenn "admin" darin vorkommt: das Relay
+            // kennt nur `/v1/admin/...`.
+            "/v1/me/adminwunsch",
+        ] {
+            assert_eq!(secret_name_fuer(pfad), "RS_RELAY_API_SECRET", "{pfad}");
+        }
     }
 
     #[test]
