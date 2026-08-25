@@ -25,6 +25,7 @@ import {
   Swords,
   Terminal,
   Users,
+  UserX,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -74,6 +75,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'Engagement AI', to: '/community/engagement', icon: Sparkles },
       { label: 'Chat Actions', to: '/community/chat', icon: MessageSquare },
       { label: 'Globale Bans', to: '/community/global-bans', icon: ShieldAlert },
+      { label: 'Partneraufnahme', to: '/community/partner-signup-blocks', icon: UserX },
     ],
   },
   {

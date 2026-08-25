@@ -44,6 +44,40 @@ export interface GlobalBanAdminData {
   channels: GlobalBanChannel[];
 }
 
+/** Ein Eintrag der Partneraufnahme-Sperrliste (`twitch_partner_signup_denylist`). */
+export interface PartnerSignupBlockEntry {
+  twitch_user_id: string;
+  login: string;
+  reason: string;
+  public_message?: string | null;
+  added_by: string;
+  added_at: string;
+}
+
+export interface PartnerSignupBlockList {
+  items: PartnerSignupBlockEntry[];
+}
+
+/** Was der Add-Aufruf tatsächlich bewirkt hat (Folgewirkungen belegen). */
+export interface PartnerSignupBlockAddResult {
+  ok: boolean;
+  login: string;
+  twitch_user_id: string;
+  reason: string;
+  inserted: boolean;
+  raid_blacklisted: boolean;
+  credentials_deleted: boolean;
+  active_partner_paused: boolean;
+}
+
+export interface PartnerSignupBlockRemoveResult {
+  ok: boolean;
+  login: string;
+  removed: boolean;
+  raid_entries_removed: number;
+  partner_pause_cleared: boolean;
+}
+
 export interface StreamerRow {
   login: string;
   displayName?: string;
