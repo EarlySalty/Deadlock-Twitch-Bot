@@ -16,6 +16,7 @@ import ChatActionsPage from '@/pages/community/ChatActions';
 import EngagementPage from '@/pages/community/Engagement';
 import GlobalBansPage from '@/pages/community/GlobalBans';
 import MarketSharePage from '@/pages/community/MarketShare';
+import PartnerSignupBlocksPage from '@/pages/community/PartnerSignupBlocks';
 import RaidsActivityPage from '@/pages/community/RaidsActivity';
 import ResearchPage from '@/pages/community/Research';
 import AnnouncementsPage from '@/pages/content/Announcements';
@@ -69,6 +70,7 @@ const router = createBrowserRouter(
         { path: 'community/engagement', element: <EngagementPage /> },
         { path: 'community/chat', element: <ChatActionsPage /> },
         { path: 'community/global-bans', element: <GlobalBansPage /> },
+        { path: 'community/partner-signup-blocks', element: <PartnerSignupBlocksPage /> },
         { path: 'content', element: <Navigate to="/content/announcements" replace /> },
         { path: 'content/announcements', element: <AnnouncementsPage /> },
         { path: 'content/roadmap', element: <RoadmapPage /> },

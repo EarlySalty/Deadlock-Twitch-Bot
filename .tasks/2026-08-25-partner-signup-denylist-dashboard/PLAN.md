@@ -1,6 +1,6 @@
 # Plan: Partneraufnahme im Twitch-Admin-Dashboard
 
-status: geplant
+status: umgesetzt
 datum: 2026-08-25
 klasse: mittel
 research: .tasks/2026-08-25-partner-signup-denylist-dashboard/RESEARCH.md
@@ -123,3 +123,23 @@ Nebenwirkungsantworten belegt, wird die Oberfläche gebaut.
 
 - 2026-08-25: Bestehende Tabelle, CRUD-Logik, Internal-API-Vertrag und
   Admin-SPA-Anschluss untersucht; Plan als eigener Review-Branch angelegt.
+- 2026-08-25: M1 bis M3 umgesetzt. Handler
+  `admin_partner_signup_block.rs` mit GET/POST/POST-remove am Admin-Router,
+  Frontend-Typen, Client-Funktionen, Hooks und die Seite
+  `/community/partner-signup-blocks` samt Sidebar-Eintrag "Partneraufnahme".
+  Rust-Tests 6/6 gruen gegen eine echte Postgres-Test-DB
+  (`TB_TEST_DATABASE_URL`), Frontend `npm run build` und `npm test` gruen.
+
+## Abweichungen vom Plan
+
+- Keine CSRF-Pruefung: das Rust-Dashboard prueft nirgends CSRF
+  (`admin_promo_mode.rs` dokumentiert das ausdruecklich, `auth_status` liefert
+  `csrfToken: null`). Schutz ist die serverseitige Session-Auth
+  `DashboardAuthLevel::Admin`. Ein CSRF-Gate nur fuer diese eine Route waere
+  eine Scheinsicherung.
+- Antwortfelder bleiben snake_case wie bei `GlobalBanEntry`, statt auf
+  camelCase umzustellen. Damit entfaellt auch der geplante Parser und die
+  dazugehoerigen Frontend-Parser-Tests: die Client-Funktionen reichen die
+  Antwort typisiert durch, es gibt nichts zu parsen.
+- `cargo fmt -p tb-dashboard-api` formatiert 380 fremde Dateien um; deshalb nur
+  die neue Datei mit `rustfmt` formatiert, der Rest bleibt unberuehrt.
