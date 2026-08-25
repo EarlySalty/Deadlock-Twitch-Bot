@@ -16,9 +16,13 @@
 //! `get_users`), der Bearbeiter kommt aus der Admin-Session. Ein Login ohne
 //! auflösbare ID wird abgelehnt, sonst hebelt eine Umbenennung den Block aus.
 //!
-//! CSRF wird wie im übrigen Rust-Dashboard nicht geprüft (siehe
-//! `admin_promo_mode.rs`); der Schutz ist die Session-Auth über
-//! [`DashboardAuthLevel`].
+//! Schutzschichten: die drei Routen hängen in `build_admin_config_router`
+//! (`lib.rs`), der `crate::auth::require_admin_before_csrf` und
+//! `crate::auth::csrf::csrf_protect` als Layer trägt. Schreibende Aufrufe
+//! brauchen also zusätzlich zur Session-Auth über [`DashboardAuthLevel`] ein
+//! gültiges CSRF-Token (`csrfToken` aus `auth_status.rs`, Localhost-Bypass für
+//! interne Werkzeuge). Der `require_admin`-Aufruf in jedem Handler ist die
+//! zweite, vom Router unabhängige Sperre und kein Ersatz für die Layer.
 
 use axum::{
     extract::{Extension, State},
@@ -132,9 +136,15 @@ fn helix_client() -> Option<HelixClient> {
     let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
         .ok()
         .filter(|value| !value.is_empty());
+    // Beide Flags einzeln rechnen: ein hart verdrahtetes `false` meldete auch
+    // dann eine fehlende Client-ID, wenn nur das Secret fehlte. Nur die
+    // Presence loggen, NIE die Werte selbst.
+    let client_id_present = client_id.is_some();
+    let client_secret_present = client_secret.is_some();
     let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
         tracing::warn!(
-            client_id_present = false,
+            client_id_present,
+            client_secret_present,
             "Signup-Block: Helix-Auflösung deaktiviert, TWITCH_CLIENT_ID/SECRET fehlen"
         );
         return None;
@@ -150,12 +160,19 @@ fn helix_client() -> Option<HelixClient> {
 
 /// Löst die stabile `twitch_user_id` auf: erst lokaler Bestand, dann Helix.
 /// Ein unbekannter Kanal ergibt 400 und keinen Eintrag (INV-02).
-async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<String, ApiError> {
+///
+/// Der Helix-Client kommt als Parameter statt aus [`helix_client`] direkt,
+/// damit der Auflösungspfad ohne Prozess-Umgebung prüfbar ist.
+async fn resolve_user_id(
+    pool: &PgPool,
+    login: &str,
+    helix: Option<&HelixClient>,
+) -> Result<String, ApiError> {
     if let Some(id) = db::resolve_user_id(pool, login).await.map_err(db_error)? {
         return Ok(id);
     }
 
-    let Some(helix) = helix_client() else {
+    let Some(helix) = helix else {
         return Err(ApiError::bad_request(
             "Kanal ist lokal unbekannt und Twitch-Auflösung ist nicht verfügbar",
         ));
@@ -206,6 +223,18 @@ pub async fn add_handler(
         return Err(error);
     }
 
+    let actor = admin_actor::admin_actor_label(config.as_ref(), &headers).await;
+    let helix = helix_client();
+    add_entry(&pool, body, &actor, helix.as_ref()).await
+}
+
+/// Der Rumpf von [`add_handler`] ohne Axum-Extraktoren und ohne Prozess-Env.
+async fn add_entry(
+    pool: &PgPool,
+    body: AddRequest,
+    actor: &str,
+    helix: Option<&HelixClient>,
+) -> Result<Json<AddResponse>, ApiError> {
     let login = require_login(&body.login)?;
     let reason = body
         .reason
@@ -220,16 +249,15 @@ pub async fn add_handler(
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
-    let twitch_user_id = resolve_user_id(&pool, &login).await?;
-    let actor = admin_actor::admin_actor_label(config.as_ref(), &headers).await;
+    let twitch_user_id = resolve_user_id(pool, &login, helix).await?;
 
     let outcome = db::add(
-        &pool,
+        pool,
         &twitch_user_id,
         &login,
         &reason,
         public_message,
-        &actor,
+        actor,
     )
     .await
     .map_err(db_error)?;
@@ -293,14 +321,31 @@ mod tests {
             .expect("lazy pool")
     }
 
-    /// Eigenes Schema mit der Denylist-Tabelle; `None` ohne Test-DB.
-    async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+    /// Wie `db_dsn_or_skip!` in `tb_analytics::partner_signup_block`: ohne DSN
+    /// wird übersprungen, aber `TB_TEST_REQUIRE_DB=1` macht daraus eine Panik,
+    /// damit ein DB-Test in CI nicht still grün meldet.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match std::env::var("TB_TEST_DATABASE_URL").ok() {
+                Some(dsn) => dsn,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
+    /// Legt das Test-Schema neu an und liefert einen Pool darauf.
+    async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let admin = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&dsn)
+            .connect(dsn)
             .await
-            .ok()?;
+            .expect("connect test-db");
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)
             .await
@@ -310,7 +355,7 @@ mod tests {
             .await
             .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn)
+        let opts = PgConnectOptions::from_str(dsn)
             .unwrap()
             .options([("search_path", schema)]);
         let pool = PgPoolOptions::new()
@@ -334,6 +379,15 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Wie die Migration 20260806060000_partner_signup_denylist.sql: der
+        // Login ist zusätzlich case-insensitiv eindeutig.
+        sqlx::query(
+            "CREATE UNIQUE INDEX idx_partner_signup_denylist_login
+                 ON twitch_partner_signup_denylist (lower(twitch_login))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Leere Quellen für `resolve_user_id`: erst damit prüft der Test den
         // echten Auflösungspfad statt eines DB-Fehlers.
         for ddl in [
@@ -343,7 +397,23 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        Some(pool)
+        pool
+    }
+
+    /// Räumt das Test-Schema wieder ab, damit die geteilte Test-DB nicht
+    /// zwischen Läufen mit Leichen vollläuft.
+    async fn drop_schema(pool: PgPool, dsn: &str, schema: &str) {
+        pool.close().await;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("connect test-db");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
     }
 
     async fn body_json(result: Result<impl IntoResponse, ApiError>) -> (StatusCode, Value) {
@@ -415,24 +485,22 @@ mod tests {
 
     #[tokio::test]
     async fn add_mit_unbekanntem_login_legt_keinen_eintrag_an() {
-        let Some(pool) = make_pool("t_signup_block_unbekannt").await else {
-            return;
-        };
-        // Ohne Twitch-Credentials im Prozess bleibt nur der lokale Bestand;
-        // ein unbekannter Login muss 4xx geben statt login-only zu speichern.
-        if std::env::var("TWITCH_CLIENT_ID").is_ok() {
-            return;
-        }
-        let response = add_handler(
-            DashboardAuthLevel::admin(),
-            None,
-            HeaderMap::new(),
-            State(pool.clone()),
-            Json(AddRequest {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_signup_block_unbekannt";
+        let pool = make_pool(&dsn, schema).await;
+        // Ohne Helix-Client bleibt nur der lokale Bestand; ein unbekannter
+        // Login muss 4xx geben statt login-only zu speichern. Der Client kommt
+        // als Parameter, deshalb hängt der Test nicht mehr an TWITCH_CLIENT_ID
+        // und kann nicht mehr still an der Prüfung vorbeilaufen.
+        let response = add_entry(
+            &pool,
+            AddRequest {
                 login: "gibtesnichtxyz".into(),
                 reason: Some("test".into()),
                 public_message: None,
-            }),
+            },
+            "test",
+            None,
         )
         .await;
         let (status, _) = body_json(response).await;
@@ -443,13 +511,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0, "abgelehnter Add darf keinen Eintrag hinterlassen");
+        drop_schema(pool, &dsn, schema).await;
     }
 
     #[tokio::test]
     async fn liste_gibt_eintraege_als_items_zurueck() {
-        let Some(pool) = make_pool("t_signup_block_liste").await else {
-            return;
-        };
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_signup_block_liste";
+        let pool = make_pool(&dsn, schema).await;
         sqlx::query(
             "INSERT INTO twitch_partner_signup_denylist
                  (twitch_user_id, twitch_login, reason, public_message, added_by)
@@ -459,12 +528,43 @@ mod tests {
         .await
         .unwrap();
 
-        let response = list_handler(DashboardAuthLevel::admin(), State(pool)).await;
+        let response = list_handler(DashboardAuthLevel::admin(), State(pool.clone())).await;
         let (status, body) = body_json(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["items"][0]["login"], "beispiel");
         assert_eq!(body["items"][0]["twitch_user_id"], "4711");
         assert_eq!(body["items"][0]["public_message"], "kein Interesse");
         assert_eq!(body["items"][0]["added_by"], "discord:1");
+        drop_schema(pool, &dsn, schema).await;
+    }
+
+    /// Beweisziel: die Test-DDL trägt den UNIQUE-Index auf `lower(login)` aus
+    /// der Migration wirklich mit; ohne ihn liefe der zweite Insert durch.
+    #[tokio::test]
+    async fn login_ist_case_insensitiv_eindeutig() {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_signup_block_unique";
+        let pool = make_pool(&dsn, schema).await;
+        sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist
+                 (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('4711', 'beispiel', 'owner_decision', 'discord:1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let konflikt = sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist
+                 (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('4712', 'BeIsPiEl', 'owner_decision', 'discord:1')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            konflikt.is_err(),
+            "zweiter Login in anderer Schreibweise muss am UNIQUE-Index scheitern"
+        );
+        drop_schema(pool, &dsn, schema).await;
     }
 }
