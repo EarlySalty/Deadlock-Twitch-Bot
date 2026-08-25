@@ -132,11 +132,13 @@ Nebenwirkungsantworten belegt, wird die Oberfläche gebaut.
 
 ## Abweichungen vom Plan
 
-- Keine CSRF-Pruefung: das Rust-Dashboard prueft nirgends CSRF
-  (`admin_promo_mode.rs` dokumentiert das ausdruecklich, `auth_status` liefert
-  `csrfToken: null`). Schutz ist die serverseitige Session-Auth
-  `DashboardAuthLevel::Admin`. Ein CSRF-Gate nur fuer diese eine Route waere
-  eine Scheinsicherung.
+- CSRF ist geprueft, ohne eigenes Zutun: die drei Routen haengen in
+  `build_admin_config_router` (`lib.rs`), der `require_admin_before_csrf` und
+  `csrf_protect` als Layer traegt, und `auth_status.rs` liefert dazu ein
+  `csrfToken`. Die frueher hier notierte Annahme "das Rust-Dashboard prueft
+  nirgends CSRF" war falsch und ist am 2026-08-25 zurueckgenommen worden;
+  der `require_admin`-Aufruf in jedem Handler bleibt als zweite, vom Router
+  unabhaengige Sperre.
 - Antwortfelder bleiben snake_case wie bei `GlobalBanEntry`, statt auf
   camelCase umzustellen. Damit entfaellt auch der geplante Parser und die
   dazugehoerigen Frontend-Parser-Tests: die Client-Funktionen reichen die
