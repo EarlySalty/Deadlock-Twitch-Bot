@@ -29,6 +29,30 @@ fn relay_secret() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
+/// Das zweite Secret des Relays, nur für `/v1/admin/*`.
+///
+/// Das Relay hängt seine Admin-Routen seit dem Ingest-Key-Umbau an ein
+/// eigenes Shared Secret. Der Grund liegt hier: dieses Dashboard hält das
+/// API-Secret, um die Nutzerpfade eines Streamers aufzurufen, und bis dahin
+/// öffnete genau dieser Wert auch Freischalten, Löschen, fremde Ziele und
+/// Session-Kills. Fehlt der Wert, antwortet das Relay auf Admin-Pfade mit
+/// 503; ein Rückfall auf das API-Secret wäre genau die Vermischung, die der
+/// Umbau beendet hat.
+fn relay_admin_secret() -> Option<String> {
+    std::env::var("RS_RELAY_ADMIN_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Das Secret, das zu diesem Pfad gehört.
+fn secret_fuer(path: &str) -> Option<String> {
+    if path.starts_with("/v1/admin/") {
+        relay_admin_secret()
+    } else {
+        relay_secret()
+    }
+}
+
 /// Twitch-Identität der Session: Login und, falls die Session sie mitbringt,
 /// die numerische User-ID.
 ///
@@ -99,7 +123,7 @@ async fn relay_json(
     body: Option<Value>,
 ) -> Result<Value, Response> {
     let methode_fuer_log = method.clone();
-    let secret = relay_secret().ok_or_else(|| {
+    let secret = secret_fuer(path).ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "Uplink ist noch nicht verbunden." })),
@@ -1057,6 +1081,38 @@ mod tests {
             live_bewerten(Some((0, Some("2026-08-22T11:54:59+00:00"))), jetzt),
             "unbekannt"
         );
+    }
+
+    /// Admin-Pfade greifen zum Admin-Secret, alles andere zum API-Secret.
+    ///
+    /// Der Test setzt beide Werte und prüft die Zuordnung, nicht nur, dass
+    /// überhaupt etwas zurückkommt: bei gleichem Wert wäre er auch dann grün,
+    /// wenn die Trennung wieder verschwindet. Läuft seriell, weil er die
+    /// Prozessumgebung anfasst.
+    #[test]
+    fn admin_pfade_nehmen_das_admin_secret() {
+        std::env::set_var("RS_RELAY_API_SECRET", "api-wert");
+        std::env::set_var("RS_RELAY_ADMIN_SECRET", "admin-wert");
+
+        assert_eq!(secret_fuer("/v1/admin/users").as_deref(), Some("admin-wert"));
+        assert_eq!(
+            secret_fuer(RELAY_ADMIN_WAITLIST_PFAD).as_deref(),
+            Some("admin-wert")
+        );
+        assert_eq!(secret_fuer("/v1/me").as_deref(), Some("api-wert"));
+        assert_eq!(secret_fuer("/v1/caps").as_deref(), Some("api-wert"));
+        assert_eq!(
+            secret_fuer("/v1/me/destinations").as_deref(),
+            Some("api-wert")
+        );
+
+        // Fehlt das Admin-Secret, fällt der Admin-Pfad nicht auf das
+        // API-Secret zurück, sondern hat gar keins.
+        std::env::remove_var("RS_RELAY_ADMIN_SECRET");
+        assert_eq!(secret_fuer("/v1/admin/users"), None);
+        assert_eq!(secret_fuer("/v1/me").as_deref(), Some("api-wert"));
+
+        std::env::remove_var("RS_RELAY_API_SECRET");
     }
 
     #[test]
