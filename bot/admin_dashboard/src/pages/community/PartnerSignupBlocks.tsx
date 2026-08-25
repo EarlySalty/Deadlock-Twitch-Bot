@@ -1,5 +1,6 @@
 import { AlertTriangle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { ApiError } from '@/api/client';
 import type { PartnerSignupBlockEntry } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
@@ -27,6 +28,23 @@ const REMOVE_STEPS = [
   'Die Raid-Sperre aus diesem Ausschluss wird aufgehoben, andere Sperrgründe bleiben.',
   'Gelöschte Zugänge kommen nicht zurück, der Kanal muss neu autorisieren.',
 ];
+
+/**
+ * Fehlertext für einen fehlgeschlagenen Schreibvorgang.
+ *
+ * Bei 401/403 trägt `ApiError.message` die Login-URL statt einer Meldung
+ * (siehe `client.ts`): die würde als Fehlertext im Toast landen. Deshalb dort
+ * ein Hinweis auf die abgelaufene Sitzung statt der durchgereichten Message.
+ */
+function fehlerText(error: unknown, vorgang: string): string {
+  if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+    return `Die Sitzung ist abgelaufen. Bitte neu anmelden und den ${vorgang} erneut versuchen.`;
+  }
+  if (error instanceof Error && error.message) {
+    return `${vorgang} nicht gespeichert: ${error.message}`;
+  }
+  return `${vorgang} konnte nicht gespeichert werden.`;
+}
 
 /**
  * Partneraufnahme-Sperrliste (`twitch_partner_signup_denylist`). Bewusst eine
@@ -87,10 +105,7 @@ export default function PartnerSignupBlocksPage() {
       setToast({
         open: true,
         tone: 'error',
-        message:
-          error instanceof Error && error.message
-            ? `Ausschluss nicht gespeichert: ${error.message}`
-            : 'Ausschluss konnte nicht gespeichert werden.',
+        message: fehlerText(error, 'Ausschluss'),
       });
     } finally {
       setPendingAdd(null);
@@ -114,11 +129,14 @@ export default function PartnerSignupBlocksPage() {
           ? `${entry.login} ist wieder für die Partneraufnahme zugelassen.`
           : `Für ${entry.login} gab es keinen Eintrag mehr.`,
       });
-    } catch {
+    } catch (error) {
       setToast({
         open: true,
         tone: 'error',
-        message: 'Ausschluss konnte nicht aufgehoben werden.',
+        message:
+          error instanceof ApiError && (error.status === 401 || error.status === 403)
+            ? 'Die Sitzung ist abgelaufen. Bitte neu anmelden und die Aufhebung erneut versuchen.'
+            : 'Ausschluss konnte nicht aufgehoben werden.',
       });
     } finally {
       setPendingRemove(null);

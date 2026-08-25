@@ -198,8 +198,9 @@ export function usePartnerSignupBlocks() {
 
 function invalidatePartnerSignupBlocks(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-blocks'] });
-  void queryClient.invalidateQueries({ queryKey: ['admin-streamers'] });
-  void queryClient.invalidateQueries({ queryKey: ['admin-streamer-detail'] });
+  // Ein Signup-Block legt Partner still und löscht Zugänge, zieht also
+  // dieselben Ansichten mit wie jede andere Streamer-Mutation.
+  invalidateStreamerQueries(queryClient);
 }
 
 export function useAddPartnerSignupBlock() {
