@@ -740,7 +740,7 @@ export function UplinkPage() {
   // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
-  // Verbindung je Plattform (Chat und Stream-Key), steht im Kopf der Plattform-Karte.
+  // Chat-Zugang je Plattform (nur Chat, der Stream-Key bleibt im Formular), steht im Kopf der Plattform-Karte.
   const chatVerbindungen = data ? plattformVerbindungen(data) : [];
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
