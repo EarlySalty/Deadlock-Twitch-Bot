@@ -8,8 +8,10 @@
 //!    des Streamers ist, und legt beide Tokens verschluesselt in
 //!    `platform_connections` ab.
 //! 2. Der Refresh: lazy beim Abruf (wenn weniger als zehn Minuten Restlaufzeit)
-//!    und periodisch alle 30 Minuten fuer alles, was bald ablaeuft. Ein
-//!    `invalid_grant` markiert die Verbindung als `needs_reauth`.
+//!    und periodisch alle 5 Minuten fuer alles, was innerhalb des Vorlaufs
+//!    ablaeuft. Der Takt liegt unter dem Vorlauf, damit kein Token zwischen
+//!    zwei Laeufen unbemerkt ablaeuft. Ein `invalid_grant` markiert die
+//!    Verbindung als `needs_reauth`.
 //! 3. Die interne Route `GET /twitch/api/v2/internal/platform-token`, ueber die
 //!    rs-relay einen gueltigen Access-Token holt. Nur Loopback plus
 //!    `X-Internal-Token`. Die Antwort traegt nie den Refresh-Token: das Relay
@@ -21,7 +23,7 @@
 // Axum-Responses direkt im Result, wie in uplink.rs.
 #![allow(clippy::result_large_err)]
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use axum::{
@@ -58,8 +60,10 @@ const UPLINK_SEITE: &str = "/twitch/uplink";
 /// Ab dieser Restlaufzeit wird beim Abruf vorab erneuert.
 pub const REFRESH_VORLAUF: chrono::Duration = chrono::Duration::minutes(10);
 
-/// Takt des periodischen Refresh-Jobs.
-pub const REFRESH_TAKT: Duration = Duration::from_secs(30 * 60);
+/// Takt des periodischen Refresh-Jobs. Muss unter [`REFRESH_VORLAUF`]
+/// liegen: ein Token, das kurz nach einem Lauf in den Vorlauf rutscht, wird
+/// sonst erst angefasst, wenn es schon tot ist.
+pub const REFRESH_TAKT: Duration = Duration::from_secs(5 * 60);
 
 /// Wie viele Verbindungen ein Lauf des periodischen Jobs hoechstens anfasst.
 const REFRESH_LAUF_LIMIT: i64 = 50;
@@ -230,7 +234,12 @@ pub enum StoreFehler {
 pub struct PlatformConnectionStore {
     pool: PgPool,
     cipher: Arc<FieldCipher>,
+    /// Ein Schloss je (Streamer, Plattform) fuer den Refresh innerhalb dieses
+    /// Prozesses; die Begruendung steht an [`erneuern`].
+    refresh_schloesser: RefreshSchloesser,
 }
+
+type RefreshSchloesser = Arc<std::sync::Mutex<HashMap<(i64, String), Arc<tokio::sync::Mutex<()>>>>>;
 
 /// Zeile, wie sie aus der Tabelle kommt (noch verschluesselt).
 #[derive(sqlx::FromRow)]
@@ -252,7 +261,22 @@ const SELECT_ZEILE: &str = "SELECT streamer_id, platform, platform_user_id, plat
 
 impl PlatformConnectionStore {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>) -> Self {
-        Self { pool, cipher }
+        Self {
+            pool,
+            cipher,
+            refresh_schloesser: Arc::default(),
+        }
+    }
+
+    fn refresh_schloss(&self, streamer_id: i64, platform: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut karte = self
+            .refresh_schloesser
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        karte
+            .entry((streamer_id, platform.to_string()))
+            .or_default()
+            .clone()
     }
 
     /// Zusatzdaten der Verschluesselung: bindet den Blob an Streamer und
@@ -361,9 +385,8 @@ impl PlatformConnectionStore {
     }
 
     /// Wie [`Self::update_tokens`], aber auf einem uebergebenen Executor,
-    /// damit der periodische Lauf innerhalb seiner Transaktion schreibt. Die
-    /// Zeile ist dort mit `FOR UPDATE` gesperrt; ein Schreiben ueber eine
-    /// zweite Verbindung wuerde auf die eigene Sperre warten.
+    /// damit [`Self::tokens_ablegen`] in seiner kurzen Schreibtransaktion
+    /// bleibt.
     async fn update_tokens_mit<'e, E>(
         &self,
         exec: E,
@@ -475,23 +498,113 @@ impl PlatformConnectionStore {
     }
 
     /// Alle Verbindungen, die vor `frist` ablaufen und nicht schon auf
-    /// `needs_reauth` stehen. Zeilen werden mit `FOR UPDATE SKIP LOCKED`
-    /// gesperrt, damit zwei Prozesse nicht denselben Refresh-Token zweimal
-    /// einloesen (Twitch macht den alten beim ersten Refresh ungueltig).
-    async fn faellige_sperren(
+    /// `needs_reauth` stehen. Ohne Zeilensperre: der Schutz gegen doppeltes
+    /// Einloesen liegt in [`erneuern`], nicht in einer langen Transaktion.
+    async fn faellige_laden(
         &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         frist: DateTime<Utc>,
     ) -> Result<Vec<PlatformConnection>, StoreFehler> {
         let zeilen: Vec<Zeile> = sqlx::query_as(&format!(
             "{SELECT_ZEILE} WHERE needs_reauth = FALSE AND expires_at < $1 \
-             ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED"
+             ORDER BY expires_at LIMIT $2"
         ))
         .bind(frist)
         .bind(REFRESH_LAUF_LIMIT)
-        .fetch_all(&mut **tx)
+        .fetch_all(&self.pool)
         .await?;
         zeilen.into_iter().map(|z| self.entschluesseln(z)).collect()
+    }
+
+    /// Legt frisch geholte Tokens ab, aber nur, wenn die Zeile noch den
+    /// Refresh-Token traegt, der dafuer eingeloest wurde (`eingeloest`).
+    /// Kurze Transaktion: sperren, vergleichen, schreiben, commit. Traegt die
+    /// Zeile schon einen anderen Refresh-Token, hat ein zweiter Prozess
+    /// zwischenzeitlich erneuert; dann gelten dessen Werte.
+    ///
+    /// Schlaegt das Schreiben fehl, sind die neuen Tokens verloren und der
+    /// alte ist bei Twitch verbraucht. Die Verbindung wird dann, so gut es
+    /// geht, auf `needs_reauth` gesetzt, damit der Streamer es im Dashboard
+    /// sieht statt still ohne Token dazustehen.
+    async fn tokens_ablegen(
+        &self,
+        mut verbindung: PlatformConnection,
+        eingeloest: &str,
+        tokens: &PlatformTokens,
+        jetzt: DateTime<Utc>,
+    ) -> Result<PlatformConnection, TokenFehler> {
+        let (sid, plattform) = (verbindung.streamer_id, verbindung.platform.clone());
+        let schreiben = async {
+            let mut tx = self.pool.begin().await.map_err(StoreFehler::from)?;
+            let zeile = self
+                .load_mit(&mut *tx, sid, &plattform, true)
+                .await?
+                .ok_or(TokenFehler::KeineVerbindung)?;
+            if zeile.refresh_token != eingeloest {
+                tx.commit().await.map_err(StoreFehler::from)?;
+                return Ok(Err(zeile));
+            }
+            let expires_at = self
+                .update_tokens_mit(&mut *tx, sid, &plattform, tokens, jetzt)
+                .await?;
+            tx.commit().await.map_err(StoreFehler::from)?;
+            Ok::<_, TokenFehler>(Ok(expires_at))
+        };
+        match schreiben.await {
+            Ok(Ok(expires_at)) => {
+                verbindung.access_token = tokens.access_token.clone();
+                verbindung.refresh_token = tokens.refresh_token.clone();
+                if !tokens.scopes.is_empty() {
+                    verbindung.scopes = tokens.scopes.clone();
+                }
+                verbindung.expires_at = expires_at;
+                verbindung.needs_reauth = false;
+                Ok(verbindung)
+            }
+            Ok(Err(fremd)) => {
+                tracing::info!(streamer_id = sid, platform = %plattform, "platform_connect: Refresh von anderer Seite uebernommen");
+                if fremd.needs_reauth {
+                    Err(TokenFehler::NeuVerbinden)
+                } else {
+                    Ok(fremd)
+                }
+            }
+            Err(TokenFehler::KeineVerbindung) => Err(TokenFehler::KeineVerbindung),
+            Err(fehler) => {
+                tracing::error!(streamer_id = sid, platform = %plattform, error = %fehler, "platform_connect: frische Tokens nicht speicherbar, Verbindung wird markiert");
+                if let Err(markieren) = self.mark_reauth(sid, &plattform).await {
+                    tracing::error!(streamer_id = sid, platform = %plattform, error = %markieren, "platform_connect: needs_reauth nicht setzbar");
+                }
+                Err(fehler)
+            }
+        }
+    }
+
+    /// Nach einem `invalid_grant`: `needs_reauth` nur setzen, wenn die Zeile
+    /// noch den eingeloesten Refresh-Token traegt. Hat ein zweiter Prozess
+    /// ihn inzwischen erneuert, war unser Aufruf bloss der Verlierer des
+    /// Rennens, und dessen frische Werte gelten.
+    async fn reauth_wenn_unveraendert(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+        eingeloest: &str,
+    ) -> Result<PlatformConnection, TokenFehler> {
+        let mut tx = self.pool.begin().await.map_err(StoreFehler::from)?;
+        let zeile = self
+            .load_mit(&mut *tx, streamer_id, platform, true)
+            .await?
+            .ok_or(TokenFehler::KeineVerbindung)?;
+        let unveraendert = zeile.refresh_token == eingeloest;
+        if unveraendert {
+            self.mark_reauth_mit(&mut *tx, streamer_id, platform)
+                .await?;
+        }
+        tx.commit().await.map_err(StoreFehler::from)?;
+        if unveraendert || zeile.needs_reauth {
+            Err(TokenFehler::NeuVerbinden)
+        } else {
+            Ok(zeile)
+        }
     }
 }
 
@@ -517,18 +630,18 @@ impl From<StoreFehler> for TokenFehler {
     }
 }
 
+fn ist_frisch(verbindung: &PlatformConnection, jetzt: DateTime<Utc>) -> bool {
+    verbindung.expires_at - jetzt >= REFRESH_VORLAUF
+}
+
 /// Liefert die Verbindung mit einem gueltigen Access-Token. Erneuert vorab,
 /// wenn weniger als [`REFRESH_VORLAUF`] Restlaufzeit bleibt. `invalid_grant`
 /// (Twitch 400, Refresh-Token widerrufen oder verbraucht) setzt `needs_reauth`.
 /// Ein `invalid_client` ist unser Fehler, nicht der des Streamers, und wird
 /// nur gemeldet.
 ///
-/// Der Refresh laeuft in einer kurzen Transaktion mit Zeilensperre: Twitch
-/// macht den Refresh-Token beim ersten Einloesen ungueltig. Zwei gleichzeitige
-/// Abrufe (zwei Relay-Adapter beim Session-Start) wuerden ihn sonst doppelt
-/// einloesen, und der Verlierer setzte die Verbindung faelschlich auf
-/// `needs_reauth`. Wer die Sperre erst nach dem anderen bekommt, sieht die
-/// frischen Tokens und tut nichts.
+/// Der Normalfall (gueltiger Token) kommt ohne Sperre aus. Wie der Refresh
+/// gegen doppeltes Einloesen geschuetzt ist, steht an [`erneuern`].
 pub async fn refresh_if_needed(
     store: &PlatformConnectionStore,
     client: &dyn PlatformOAuthClient,
@@ -536,9 +649,6 @@ pub async fn refresh_if_needed(
     platform: &str,
     jetzt: DateTime<Utc>,
 ) -> Result<PlatformConnection, TokenFehler> {
-    let frisch = |v: &PlatformConnection| v.expires_at - jetzt >= REFRESH_VORLAUF;
-
-    // Schneller Weg ohne Sperre: der Normalfall ist ein gueltiger Token.
     let verbindung = store
         .load(streamer_id, platform)
         .await?
@@ -546,68 +656,75 @@ pub async fn refresh_if_needed(
     if verbindung.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
-    if frisch(&verbindung) {
+    if ist_frisch(&verbindung, jetzt) {
         return Ok(verbindung);
     }
-
-    let mut tx = store.pool.begin().await.map_err(StoreFehler::from)?;
-    let gesperrt = store
-        .load_mit(&mut *tx, streamer_id, platform, true)
-        .await?
-        .ok_or(TokenFehler::KeineVerbindung)?;
-    // Nach dem Sperren noch einmal hinsehen: ein anderer Aufruf kann die
-    // Zeile inzwischen erneuert oder auf needs_reauth gesetzt haben.
-    let ergebnis = if gesperrt.needs_reauth {
-        Err(TokenFehler::NeuVerbinden)
-    } else if frisch(&gesperrt) {
-        Ok(gesperrt)
-    } else {
-        erneuern(store, &mut *tx, client, gesperrt, jetzt).await
-    };
-    tx.commit().await.map_err(StoreFehler::from)?;
-    ergebnis
+    erneuern(store, client, streamer_id, platform, jetzt).await
 }
 
-/// Der eigentliche Refresh. Schreibt ueber `exec`, damit der periodische
-/// Lauf in seiner eigenen Transaktion bleibt.
-async fn erneuern<'e, E>(
+/// Der eigentliche Refresh.
+///
+/// Twitch macht den Refresh-Token beim ersten Einloesen ungueltig. Zwei
+/// gleichzeitige Abrufe (zwei Relay-Adapter beim Session-Start, oder Abruf
+/// plus periodischer Lauf) duerfen ihn deshalb nicht beide einloesen, und der
+/// Verlierer darf die Verbindung nicht faelschlich auf `needs_reauth` setzen.
+///
+/// Der Netzaufruf steht bewusst in keiner Datenbank-Transaktion: eine
+/// Zeilensperre ueber den HTTP-Aufruf hinweg haette beim Scheitern des
+/// Commits die frischen Tokens verworfen, waehrend der alte bei Twitch schon
+/// verbraucht ist. Stattdessen zwei Lagen:
+///
+/// 1. Ein Prozess-Schloss je (Streamer, Plattform). Wer es nach einem
+///    anderen bekommt, liest neu und sieht dessen frische Tokens, ohne selbst
+///    zu Twitch zu gehen. Das deckt alle Aufrufer in diesem Prozess ab, also
+///    den Normalfall.
+/// 2. Ein Vergleich beim Schreiben ([`PlatformConnectionStore::tokens_ablegen`]):
+///    geschrieben wird nur, wenn die Zeile noch den eingeloesten Refresh-Token
+///    traegt. Ein zweiter Prozess kann so hoechstens einen Twitch-Aufruf
+///    verschwenden; sein `invalid_grant` setzt kein `needs_reauth`, wenn die
+///    Zeile inzwischen einen anderen Refresh-Token traegt
+///    ([`PlatformConnectionStore::reauth_wenn_unveraendert`]).
+///
+/// Gewaehlt statt einer Markierungsspalte ("Refresh laeuft"), weil es ohne
+/// Migration und ohne haengende Markierungen nach einem Absturz auskommt und
+/// die Zeile nur fuer das Schreiben selbst gesperrt bleibt.
+async fn erneuern(
     store: &PlatformConnectionStore,
-    exec: E,
     client: &dyn PlatformOAuthClient,
-    mut verbindung: PlatformConnection,
+    streamer_id: i64,
+    platform: &str,
     jetzt: DateTime<Utc>,
-) -> Result<PlatformConnection, TokenFehler>
-where
-    E: sqlx::PgExecutor<'e>,
-{
-    match client.refresh(&verbindung.refresh_token).await {
+) -> Result<PlatformConnection, TokenFehler> {
+    let schloss = store.refresh_schloss(streamer_id, platform);
+    let _wache = schloss.lock().await;
+
+    // Unter dem Schloss noch einmal lesen: ein anderer Aufruf kann die Zeile
+    // inzwischen erneuert oder auf needs_reauth gesetzt haben.
+    let aktuell = store
+        .load(streamer_id, platform)
+        .await?
+        .ok_or(TokenFehler::KeineVerbindung)?;
+    if aktuell.needs_reauth {
+        return Err(TokenFehler::NeuVerbinden);
+    }
+    if ist_frisch(&aktuell, jetzt) {
+        return Ok(aktuell);
+    }
+
+    let eingeloest = aktuell.refresh_token.clone();
+    match client.refresh(&eingeloest).await {
         Ok(tokens) => {
             if tokens.access_token.trim().is_empty() || tokens.refresh_token.trim().is_empty() {
                 return Err(TokenFehler::Plattform("Refresh ohne Tokens".into()));
             }
-            let expires_at = store
-                .update_tokens_mit(
-                    exec,
-                    verbindung.streamer_id,
-                    &verbindung.platform,
-                    &tokens,
-                    jetzt,
-                )
-                .await?;
-            verbindung.access_token = tokens.access_token;
-            verbindung.refresh_token = tokens.refresh_token;
-            if !tokens.scopes.is_empty() {
-                verbindung.scopes = tokens.scopes;
-            }
-            verbindung.expires_at = expires_at;
-            verbindung.needs_reauth = false;
-            Ok(verbindung)
+            store
+                .tokens_ablegen(aktuell, &eingeloest, &tokens, jetzt)
+                .await
         }
         Err(UserTokenError::InvalidGrant) => {
             store
-                .mark_reauth_mit(exec, verbindung.streamer_id, &verbindung.platform)
-                .await?;
-            Err(TokenFehler::NeuVerbinden)
+                .reauth_wenn_unveraendert(streamer_id, platform, &eingeloest)
+                .await
         }
         Err(UserTokenError::InvalidClient) => Err(TokenFehler::Plattform(
             "Client-Zugangsdaten abgelehnt".into(),
@@ -617,20 +734,20 @@ where
 }
 
 /// Ein Lauf des periodischen Jobs: alles erneuern, was innerhalb des
-/// Vorlaufs ablaeuft. Gibt die Zahl der erneuerten Verbindungen zurueck.
+/// Vorlaufs ablaeuft. Jede Verbindung bekommt ihren eigenen Refresh mit
+/// eigener kurzer Schreibtransaktion; ein Fehler bei einer Verbindung laesst
+/// die schon erneuerten stehen. Gibt die Zahl der erneuerten Verbindungen
+/// zurueck.
 pub async fn refresh_faellige(
     store: &PlatformConnectionStore,
     client: &dyn PlatformOAuthClient,
     jetzt: DateTime<Utc>,
 ) -> Result<usize, TokenFehler> {
-    let mut tx = store.pool.begin().await.map_err(StoreFehler::from)?;
-    let faellige = store
-        .faellige_sperren(&mut tx, jetzt + REFRESH_VORLAUF)
-        .await?;
+    let faellige = store.faellige_laden(jetzt + REFRESH_VORLAUF).await?;
     let mut erneuert = 0usize;
     for verbindung in faellige {
         let (sid, plattform) = (verbindung.streamer_id, verbindung.platform.clone());
-        match erneuern(store, &mut *tx, client, verbindung, jetzt).await {
+        match erneuern(store, client, sid, &plattform, jetzt).await {
             Ok(_) => erneuert += 1,
             Err(TokenFehler::NeuVerbinden) => {
                 tracing::info!(streamer_id = sid, platform = %plattform, "platform_connect: Verbindung braucht neue Bestaetigung");
@@ -640,7 +757,6 @@ pub async fn refresh_faellige(
             }
         }
     }
-    tx.commit().await.map_err(StoreFehler::from)?;
     Ok(erneuert)
 }
 
@@ -758,7 +874,19 @@ pub enum CallbackErgebnis {
     FremdeSession,
     FremdesKonto,
     TauschFehlgeschlagen,
+    /// Der Grant kam ohne die Chat-Rechte zurueck (Streamer hat sie im
+    /// Twitch-Dialog abgewaehlt). Ohne `user:write:chat` koennte das Dock
+    /// nie senden, also wird der Grant gar nicht erst gespeichert.
+    ScopesFehlen,
     SpeicherFehler,
+}
+
+/// Prueft, ob der Grant alle [`CHAT_SCOPES`] traegt. Eine leere Scope-Liste
+/// ist kein Erfolg: dann ist unbekannt, was Twitch wirklich gewaehrt hat.
+fn chat_scopes_fehlen(scopes: &[String]) -> bool {
+    CHAT_SCOPES
+        .iter()
+        .any(|noetig| !scopes.iter().any(|s| s == noetig))
 }
 
 /// Kern des Callbacks: State verbrauchen, Code tauschen, Inhaber pruefen,
@@ -798,8 +926,17 @@ pub async fn callback_verarbeiten(
         .exchange_code(code, &connect_state.redirect_uri)
         .await
     {
-        Ok(t) if !t.access_token.trim().is_empty() && !t.refresh_token.trim().is_empty() => t,
-        Ok(_) => return CallbackErgebnis::TauschFehlgeschlagen,
+        Ok(t) if t.access_token.trim().is_empty() || t.refresh_token.trim().is_empty() => {
+            return CallbackErgebnis::TauschFehlgeschlagen
+        }
+        // Ohne Scope-Liste ist die Antwort unvollstaendig; wir raten nicht,
+        // was gewaehrt wurde.
+        Ok(t) if t.scopes.is_empty() => {
+            tracing::warn!("platform_connect: Token-Antwort ohne Scopes");
+            return CallbackErgebnis::TauschFehlgeschlagen;
+        }
+        Ok(t) if chat_scopes_fehlen(&t.scopes) => return CallbackErgebnis::ScopesFehlen,
+        Ok(t) => t,
         Err(error) => {
             tracing::warn!(?error, "platform_connect: Code-Tausch fehlgeschlagen");
             return CallbackErgebnis::TauschFehlgeschlagen;
@@ -819,12 +956,6 @@ pub async fn callback_verarbeiten(
         return CallbackErgebnis::FremdesKonto;
     }
 
-    let scopes = if tokens.scopes.is_empty() {
-        CHAT_SCOPES.iter().map(|s| s.to_string()).collect()
-    } else {
-        tokens.scopes.clone()
-    };
-    let tokens = PlatformTokens { scopes, ..tokens };
     match store
         .upsert(
             session_streamer_id,
@@ -867,6 +998,10 @@ fn ergebnis_antwort(ergebnis: CallbackErgebnis) -> Response {
         CallbackErgebnis::TauschFehlgeschlagen => text(
             StatusCode::BAD_GATEWAY,
             "Twitch hat die Verbindung nicht bestätigt. Bitte später noch einmal versuchen.",
+        ),
+        CallbackErgebnis::ScopesFehlen => text(
+            StatusCode::BAD_REQUEST,
+            "Die Verbindung wurde ohne die Chat-Rechte bestätigt. Bitte erneut verbinden und im Twitch-Dialog beide Chat-Rechte (lesen und schreiben) zulassen.",
         ),
         CallbackErgebnis::SpeicherFehler => text(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1055,6 +1190,8 @@ mod tests {
     /// simulieren.
     struct FakePlattform {
         owner_id: String,
+        /// Scopes, die der Code-Tausch zurueckgibt (Standard: CHAT_SCOPES).
+        tausch_scopes: Mutex<Vec<String>>,
         refresh_ergebnis: Mutex<Result<PlatformTokens, UserTokenError>>,
         refreshs: Mutex<Vec<String>>,
         /// Kuenstliche Dauer des Refresh-Aufrufs, damit sich zwei parallele
@@ -1066,10 +1203,15 @@ mod tests {
         fn neu(owner_id: &str) -> Self {
             Self {
                 owner_id: owner_id.to_string(),
+                tausch_scopes: Mutex::new(CHAT_SCOPES.iter().map(|s| s.to_string()).collect()),
                 refresh_ergebnis: Mutex::new(Ok(tokens("acc-neu", "ref-neu", 14000))),
                 refreshs: Mutex::new(Vec::new()),
                 refresh_dauer: Duration::ZERO,
             }
+        }
+        fn mit_tausch_scopes(self, scopes: &[&str]) -> Self {
+            *self.tausch_scopes.lock().unwrap() = scopes.iter().map(|s| s.to_string()).collect();
+            self
         }
         fn mit_dauer(mut self, dauer: Duration) -> Self {
             self.refresh_dauer = dauer;
@@ -1103,7 +1245,10 @@ mod tests {
             if code == "kaputt" {
                 return Err(UserTokenError::Other("fake".into()));
             }
-            Ok(tokens("acc-1", "ref-1", 14000))
+            Ok(PlatformTokens {
+                scopes: self.tausch_scopes.lock().unwrap().clone(),
+                ..tokens("acc-1", "ref-1", 14000)
+            })
         }
         async fn fetch_owner(&self, _access_token: &str) -> Result<TokenOwner, UserTokenError> {
             Ok(TokenOwner {
@@ -1399,6 +1544,36 @@ mod tests {
         assert_eq!(ergebnis, CallbackErgebnis::FremdeSession);
         assert!(store.load(4242, "twitch").await.unwrap().is_none());
         assert!(store.load(1111, "twitch").await.unwrap().is_none());
+    }
+
+    /// Ohne Scope-Liste oder ohne `user:write:chat` wird nichts gespeichert:
+    /// ein Dock, das nie senden kann, waere sonst "verbunden".
+    #[tokio::test]
+    async fn callback_lehnt_grant_ohne_chat_scopes_ab() {
+        let pool = pool_oder_ende!();
+        let state = DashboardAuthState::new(pool.clone(), FERNET_KEY.into());
+        let jetzt = zeit("2026-08-27T10:00:00Z");
+        let faelle: [(&[&str], CallbackErgebnis); 2] = [
+            (&[], CallbackErgebnis::TauschFehlgeschlagen),
+            (&["user:read:chat"], CallbackErgebnis::ScopesFehlen),
+        ];
+        for (scopes, erwartet) in faelle {
+            let config = config_mit(Arc::new(FakePlattform::neu("4343").mit_tausch_scopes(scopes)));
+            let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+            sqlx::query("DELETE FROM platform_connections WHERE streamer_id = 4343")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let token = seed_state(&state, 4343).await;
+            let ergebnis =
+                callback_verarbeiten(&state, &config, &store, 4343, &query("code", &token), jetzt)
+                    .await;
+            assert_eq!(ergebnis, erwartet, "{scopes:?}");
+            assert!(store.load(4343, "twitch").await.unwrap().is_none());
+        }
+        assert!(!chat_scopes_fehlen(
+            &["user:write:chat".to_string(), "user:read:chat".to_string()]
+        ));
     }
 
     async fn verbindung_anlegen(
