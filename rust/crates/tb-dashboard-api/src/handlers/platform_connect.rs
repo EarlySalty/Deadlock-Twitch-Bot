@@ -234,12 +234,60 @@ pub enum StoreFehler {
 pub struct PlatformConnectionStore {
     pool: PgPool,
     cipher: Arc<FieldCipher>,
-    /// Ein Schloss je (Streamer, Plattform) fuer den Refresh innerhalb dieses
-    /// Prozesses; die Begruendung steht an [`erneuern`].
-    refresh_schloesser: RefreshSchloesser,
 }
 
-type RefreshSchloesser = Arc<std::sync::Mutex<HashMap<(i64, String), Arc<tokio::sync::Mutex<()>>>>>;
+type RefreshSchluessel = (i64, String);
+
+/// Ein Schloss je (Streamer, Plattform) fuer den Refresh, prozessweit. Die
+/// Store-Instanzen werden je Request und fuer den periodischen Job getrennt
+/// gebaut (`internal_platform_token_handler`, `uplink.rs`, `lib.rs`), darum
+/// darf die Karte nicht am Store haengen: sonst haette jeder Aufrufer seine
+/// eigene leere Karte und das Schloss schuetzt nichts. Die Begruendung des
+/// Schutzes steht an [`erneuern`].
+static REFRESH_SCHLOESSER: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<RefreshSchluessel, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Haelt das Schloss eines Streamers und raeumt seinen Eintrag beim Loslassen
+/// wieder aus der Karte, wenn niemand sonst darauf wartet.
+struct RefreshWache {
+    schluessel: RefreshSchluessel,
+    schloss: Arc<tokio::sync::Mutex<()>>,
+    _wache: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl RefreshWache {
+    async fn nehmen(streamer_id: i64, platform: &str) -> Self {
+        let schluessel = (streamer_id, platform.to_string());
+        let schloss = REFRESH_SCHLOESSER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(schluessel.clone())
+            .or_default()
+            .clone();
+        let wache = schloss.clone().lock_owned().await;
+        Self {
+            schluessel,
+            schloss,
+            _wache: Some(wache),
+        }
+    }
+}
+
+impl Drop for RefreshWache {
+    fn drop(&mut self) {
+        self._wache = None;
+        let mut karte = REFRESH_SCHLOESSER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Unter der Karten-Sperre: neue Wartende holen sich ihren Klon nur
+        // hier, also ist die Zaehlung eindeutig. Zwei Klone sind die Karte
+        // selbst und wir.
+        if Arc::strong_count(&self.schloss) <= 2 {
+            karte.remove(&self.schluessel);
+        }
+    }
+}
 
 /// Zeile, wie sie aus der Tabelle kommt (noch verschluesselt).
 #[derive(sqlx::FromRow)]
@@ -261,22 +309,7 @@ const SELECT_ZEILE: &str = "SELECT streamer_id, platform, platform_user_id, plat
 
 impl PlatformConnectionStore {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>) -> Self {
-        Self {
-            pool,
-            cipher,
-            refresh_schloesser: Arc::default(),
-        }
-    }
-
-    fn refresh_schloss(&self, streamer_id: i64, platform: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut karte = self
-            .refresh_schloesser
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        karte
-            .entry((streamer_id, platform.to_string()))
-            .or_default()
-            .clone()
+        Self { pool, cipher }
     }
 
     /// Zusatzdaten der Verschluesselung: bindet den Blob an Streamer und
@@ -497,22 +530,23 @@ impl PlatformConnectionStore {
             .collect())
     }
 
-    /// Alle Verbindungen, die vor `frist` ablaufen und nicht schon auf
-    /// `needs_reauth` stehen. Ohne Zeilensperre: der Schutz gegen doppeltes
-    /// Einloesen liegt in [`erneuern`], nicht in einer langen Transaktion.
+    /// Schluessel aller Verbindungen, die vor `frist` ablaufen und nicht
+    /// schon auf `needs_reauth` stehen. Ohne Zeilensperre und ohne
+    /// Entschluesseln: [`erneuern`] liest die Zeile unter dem Schloss ohnehin
+    /// neu, und dort liegt auch der Schutz gegen doppeltes Einloesen.
     async fn faellige_laden(
         &self,
         frist: DateTime<Utc>,
-    ) -> Result<Vec<PlatformConnection>, StoreFehler> {
-        let zeilen: Vec<Zeile> = sqlx::query_as(&format!(
-            "{SELECT_ZEILE} WHERE needs_reauth = FALSE AND expires_at < $1 \
-             ORDER BY expires_at LIMIT $2"
-        ))
+    ) -> Result<Vec<RefreshSchluessel>, StoreFehler> {
+        Ok(sqlx::query_as(
+            "SELECT streamer_id, platform FROM platform_connections \
+             WHERE needs_reauth = FALSE AND expires_at < $1 \
+             ORDER BY expires_at LIMIT $2",
+        )
         .bind(frist)
         .bind(REFRESH_LAUF_LIMIT)
         .fetch_all(&self.pool)
-        .await?;
-        zeilen.into_iter().map(|z| self.entschluesseln(z)).collect()
+        .await?)
     }
 
     /// Legt frisch geholte Tokens ab, aber nur, wenn die Zeile noch den
@@ -674,10 +708,11 @@ pub async fn refresh_if_needed(
 /// Commits die frischen Tokens verworfen, waehrend der alte bei Twitch schon
 /// verbraucht ist. Stattdessen zwei Lagen:
 ///
-/// 1. Ein Prozess-Schloss je (Streamer, Plattform). Wer es nach einem
-///    anderen bekommt, liest neu und sieht dessen frische Tokens, ohne selbst
-///    zu Twitch zu gehen. Das deckt alle Aufrufer in diesem Prozess ab, also
-///    den Normalfall.
+/// 1. Ein prozessweites Schloss je (Streamer, Plattform)
+///    ([`REFRESH_SCHLOESSER`], unabhaengig von der Store-Instanz). Wer es
+///    nach einem anderen bekommt, liest neu und sieht dessen frische Tokens,
+///    ohne selbst zu Twitch zu gehen. Das deckt alle Aufrufer in diesem
+///    Prozess ab (Request-Handler und periodischer Job), also den Normalfall.
 /// 2. Ein Vergleich beim Schreiben ([`PlatformConnectionStore::tokens_ablegen`]):
 ///    geschrieben wird nur, wenn die Zeile noch den eingeloesten Refresh-Token
 ///    traegt. Ein zweiter Prozess kann so hoechstens einen Twitch-Aufruf
@@ -695,8 +730,7 @@ async fn erneuern(
     platform: &str,
     jetzt: DateTime<Utc>,
 ) -> Result<PlatformConnection, TokenFehler> {
-    let schloss = store.refresh_schloss(streamer_id, platform);
-    let _wache = schloss.lock().await;
+    let _wache = RefreshWache::nehmen(streamer_id, platform).await;
 
     // Unter dem Schloss noch einmal lesen: ein anderer Aufruf kann die Zeile
     // inzwischen erneuert oder auf needs_reauth gesetzt haben.
@@ -745,8 +779,7 @@ pub async fn refresh_faellige(
 ) -> Result<usize, TokenFehler> {
     let faellige = store.faellige_laden(jetzt + REFRESH_VORLAUF).await?;
     let mut erneuert = 0usize;
-    for verbindung in faellige {
-        let (sid, plattform) = (verbindung.streamer_id, verbindung.platform.clone());
+    for (sid, plattform) in faellige {
         match erneuern(store, client, sid, &plattform, jetzt).await {
             Ok(_) => erneuert += 1,
             Err(TokenFehler::NeuVerbinden) => {
@@ -1667,9 +1700,13 @@ mod tests {
         let jetzt = zeit("2026-08-27T10:00:00Z");
         verbindung_anlegen(&store, 40, 60, jetzt).await;
 
+        // Jeder Lauf mit eigener Store-Instanz, wie in der Produktion (der
+        // Handler baut den Store je Request): das Schloss muss prozessweit
+        // greifen, nicht nur innerhalb einer Instanz.
         let lauf = |store: Arc<PlatformConnectionStore>, fake: Arc<FakePlattform>| {
+            let eigener = PlatformConnectionStore::new(store.pool.clone(), store.cipher.clone());
             tokio::spawn(async move {
-                refresh_if_needed(&store, fake.as_ref(), 40, "twitch", jetzt).await
+                refresh_if_needed(&eigener, fake.as_ref(), 40, "twitch", jetzt).await
             })
         };
         let a = lauf(store.clone(), fake.clone());
@@ -1687,6 +1724,11 @@ mod tests {
         let geladen = store.load(40, "twitch").await.unwrap().unwrap();
         assert_eq!(geladen.refresh_token, "ref-neu");
         assert!(!geladen.needs_reauth);
+        // Die Schloss-Karte raeumt hinter sich auf.
+        assert!(!REFRESH_SCHLOESSER
+            .lock()
+            .unwrap()
+            .contains_key(&(40, "twitch".to_string())));
     }
 
     #[tokio::test]
