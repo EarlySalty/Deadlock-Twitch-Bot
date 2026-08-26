@@ -483,6 +483,27 @@ mod tests {
         assert_eq!(state.scope_profile, "dashboard_reauth");
     }
 
+    /// `auto` ist der Weg, den der Discord-Knopf und das Onboarding nehmen.
+    /// Er darf nie beim Uplink-Profil landen, auch nicht bei einem Streamer,
+    /// der den Uplink schon verbunden hat: sonst faengt eine Re-Autorisierung
+    /// des Raid-Bots still an, Stream-Key und Chat mit anzufragen.
+    #[tokio::test]
+    async fn resolve_auto_liefert_nie_uplink() {
+        for kontext in [vec![], vec!["altgediente"]] {
+            let resolver = StubResolver::new(&kontext);
+            for roh in ["auto", "", "unbekannt", "AUTO"] {
+                let state =
+                    build_state_info(&resolver, "altgediente", roh, None, None, None).await;
+                assert_ne!(state.scope_profile, "uplink", "Profil {roh}");
+                assert!(
+                    state.scope_profile == "base" || state.scope_profile == "dashboard_reauth",
+                    "Profil {roh} ergab {}",
+                    state.scope_profile
+                );
+            }
+        }
+    }
+
     #[test]
     fn authorize_url_uplink_traegt_alle_scopes() {
         let url = build_authorize_url("cid", "https://x.test/callback/twitch", "uplink", "st");

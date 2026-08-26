@@ -164,6 +164,17 @@ export interface UplinkPlattformVerbindung {
 export const TRENNEN_HINWEIS =
   'Trennen nimmt den Zugang ganz zurück. Damit hören auch die automatischen Raids auf, bis du dich neu verbindest.';
 
+/**
+ * Was der Twitch-Dialog gleich abfragen wird, in Klartext.
+ *
+ * Der Dialog listet Rechte in Twitch-Sprache auf. Wer vorher nicht weiß,
+ * wofür sie gebraucht werden, klickt entweder blind zu oder gar nicht. Diese
+ * fünf Rechte fragt ausschließlich dieser Knopf an; der Raid-Bot allein kommt
+ * ohne sie aus.
+ */
+export const VERBINDEN_HINWEIS =
+  'Twitch fragt dich gleich nach fünf Rechten: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows und Abos sehen, Titel und Kategorie ändern, und Kanalpunkt-Einlösungen abhaken.';
+
 /** Eine Zeile je Plattform fuer den Kopf der Plattform-Karte. */
 export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {
   return UPLINK_PLATTFORMEN.map((p) => {

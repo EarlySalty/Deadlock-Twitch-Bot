@@ -1928,7 +1928,6 @@ mod tests {
         );
     }
 
-
     // ── Attrappen fuer Nachlauf und Trennen ────────────────────────────────
 
     #[derive(Default)]

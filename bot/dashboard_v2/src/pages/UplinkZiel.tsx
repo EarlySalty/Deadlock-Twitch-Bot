@@ -13,6 +13,7 @@ import {
   saveUplinkDestination,
   trenneUplinkPlattform,
   TRENNEN_HINWEIS,
+  VERBINDEN_HINWEIS,
   uplinkConnectUrl,
 } from '@/api/uplink';
 import type {
@@ -176,6 +177,9 @@ function PlattformVerbindung({
           </button>
         ) : null}
       </span>
+      {chat.aktiv && chat.knopfText ? (
+        <span className="text-[11px] text-text-secondary">{VERBINDEN_HINWEIS}</span>
+      ) : null}
       {keyFehlt ? (
         <span className="text-[11px] text-text-secondary">
           Dein Stream-Key liegt noch nicht im Uplink. Hol ihn hier oder trag ihn unten von Hand ein.

@@ -292,6 +292,26 @@ mod tests {
         }
     }
 
+    /// Die Zusatzrechte gehoeren ausschliesslich dem bewussten Klick "Mit
+    /// Twitch verbinden". Wer nur den Raid-Bot autorisiert, soll im
+    /// Twitch-Dialog nichts von Stream-Key, Chat oder Kanalpunkten lesen.
+    #[test]
+    fn auto_und_base_enthalten_keine_uplink_scopes() {
+        for profil in ["base", "auto", "dashboard_reauth", "", "unbekannt"] {
+            let scopes = scopes_for_profile(profil);
+            for zusatz in UPLINK_ONLY_SCOPES {
+                assert!(
+                    !scopes.contains(zusatz),
+                    "Profil {profil} fragt {zusatz} an, das gehoert nur zum Uplink"
+                );
+            }
+        }
+        // Und die Zahlen bleiben, wo sie waren: sieben und zehn.
+        assert_eq!(scopes_for_profile("base").len(), 7);
+        assert_eq!(scopes_for_profile("dashboard_reauth").len(), 10);
+        assert_eq!(scopes_for_profile("auto").len(), 7);
+    }
+
     #[test]
     fn alter_raid_grant_erfuellt_die_uplink_scopes_nicht() {
         let alt: Vec<String> = FULL_STREAMER_SCOPES.iter().map(|s| s.to_string()).collect();

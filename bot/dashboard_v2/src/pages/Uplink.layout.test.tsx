@@ -114,6 +114,17 @@ test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.match(UPLINK_API, /Folgt später/);
 });
 
+test('verbinden_knopf_nennt_wofuer_die_rechte_gebraucht_werden', () => {
+  // Der Twitch-Dialog listet Rechte in Twitch-Sprache. Ohne diesen Satz
+  // klickt der Streamer blind zu oder gar nicht.
+  assert.match(UPLINK_API, /deinen Stream-Key holen/);
+  assert.match(UPLINK_API, /den Chat lesen und darin antworten/);
+  assert.match(UPLINK_API, /Aktivitäten wie Follows und Abos sehen/);
+  assert.match(UPLINK_API, /Titel und Kategorie ändern/);
+  assert.match(UPLINK_API, /Kanalpunkt-Einlösungen abhaken/);
+  assert.match(ZIEL, /VERBINDEN_HINWEIS/);
+});
+
 test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
   // Trennen nimmt den ganzen Zugang zurueck. Ohne den Satz schaltet man
   // Leuten unbemerkt die automatischen Raids ab.
