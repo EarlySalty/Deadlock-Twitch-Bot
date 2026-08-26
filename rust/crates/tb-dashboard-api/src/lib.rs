@@ -1542,6 +1542,13 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
 /// ([`obs::bus::ObsDockBus::gemeinsam`]) und haengt als Extension am Router.
 /// Sein `PgListener` startet erst, wenn das erste Dock verbindet.
 ///
+/// Das Singleton friert den Pool des **ersten** Aufrufers prozessweit ein. In
+/// der Produktion ist das genau ein Aufruf (`build_router_with_helix` aus
+/// `bin/tb-dashboard/src/main.rs`), also unkritisch. Im Testbinary bauen
+/// mehrere Tests Router mit eigenen, teils toten Pools; wer dort den Live-Weg
+/// des Busses pruefen will, baut sich mit [`obs::bus::ObsDockBus::neu`] einen
+/// eigenen Bus, statt sich auf den Singleton zu verlassen.
+///
 /// `ExpectedToken` liegt mit auf der Route, weil der `DashboardAuthLevel`-
 /// Extractor sonst den `X-Internal-Token`-Weg gar nicht sehen kann: ohne die
 /// Extension faellt jeder interne Aufrufer auf `None` und damit auf 401. Es ist

@@ -52,6 +52,13 @@
 //! beim Nachlauf nicht lesbar, oder der Bus selbst hat Zeilen ueberspringen
 //! muessen. Stumm uebersprungen wird nichts.
 //!
+//! `"id": 0` ist dabei der Sonderfall "Wiederaufsetzstelle unbekannt". Er
+//! trifft ein Dock, das ohne `?seit=` verbindet und dessen Vorlauf schon an
+//! der Datenbank scheitert: dann kennt der Server keine einzige `id` dieses
+//! Kanals und kann auch keine nennen. Das Dock behandelt ihn wie jeden
+//! Lueckenrahmen, behaelt aber sein altes Lesezeichen (0 hebt nichts an) und
+//! faengt beim naechsten Versuch wieder von vorn an.
+//!
 //! # Was das Dock sich merken muss
 //!
 //! `obs_dock_events.id` wird **nicht** in Sichtbarkeitsreihenfolge vergeben
@@ -117,6 +124,23 @@ const PONG: &str = r#"{"typ":"pong"}"#;
 /// das Dock bekaeme die aeltesten 200 Zeilen und wuerde danach live
 /// weiterlaufen, alles dazwischen waere weg, ohne dass es jemand merkt.
 const NACHLAUF_RUNDEN: u32 = 5;
+
+/// Zusaetzliche Leserunden, die allein dafuer draufgehen, den Rueckgriff des
+/// Aufholens wieder einzuholen.
+///
+/// Ohne diesen Zuschlag frisst der Rueckgriff das ganze Budget:
+/// [`NACHLAUF_RUNDEN`] mal [`NACHLAUF_DECKEL`] sind 1000 Zeilen, und
+/// [`NACHZUG_RUECKGRIFF`] setzt den Lesezeiger genau 1000 Zeilen unter den
+/// Anker. Netto-Vorwaertsreichweite null, sobald der Kanal die IDs darunter
+/// selbst fuellt, und genau das tut er, wenn ein `Lagged` entsteht. Der Socket
+/// laese dann fuenf Runden lang nur Zeilen, die er schon gesendet hat, und
+/// wuerde die wirklich verpassten hinterher per Lueckenrahmen wegwerfen,
+/// obwohl sie vollstaendig in `obs_dock_events` liegen.
+///
+/// Der Zuschlag ist aus den beiden Zahlen gerechnet und nicht geraten, damit
+/// er nicht falsch wird, wenn jemand an einer davon dreht.
+const RUECKGRIFF_RUNDEN: u32 =
+    ((NACHZUG_RUECKGRIFF + NACHLAUF_DECKEL - 1) / NACHLAUF_DECKEL) as u32;
 
 /// Query-Parameter von `GET /obs/ws`.
 ///
@@ -238,7 +262,7 @@ enum SessionWaechter {
     /// Interner Token (`X-Internal-Token`): daran haengt keine ablaufende
     /// Sitzung, es gibt nichts nachzupruefen.
     Ohne,
-    /// Partner-Cookie, wird nachgeprueft.
+    /// Partner-Cookie, wird gegen den lokalen Sitzungsspeicher nachgeprueft.
     Partner {
         state: DashboardAuthState,
         sitzung: Option<String>,
@@ -253,6 +277,25 @@ enum SessionWaechter {
     /// Partner-Cookie. Genau diese Sockets liefen frueher als [`Self::Ohne`]
     /// und wurden nie nachgeprueft, obwohl der Modulkopf die Nachpruefung im
     /// Minutentakt zusagt.
+    ///
+    /// # Was hier NICHT geprueft wird
+    ///
+    /// Geprueft wird `load_admin_session`, also der lokale Spiegel. Die
+    /// Wahrheit ueber eine Admin-Sitzung liegt aber beim zentralen
+    /// Discord-Dienst; `auth/level.rs` fragt dort mit
+    /// `DiscordAdminLoginConfig::client::validate_session` nach und spiegelt
+    /// nur. Eine dort entzogene Sitzung haelt diesen Socket also bis zum
+    /// lokalen Ablauf offen.
+    ///
+    /// Das ist bewusst so geblieben und kein Versehen: `validate_session`
+    /// liefert bei Entzug **und** bei einem Netzaussetzer denselben
+    /// `DiscordAdminOAuthError`, die beiden Faelle sind am Rueckgabewert nicht
+    /// zu trennen. Fuer eine Seitenanfrage ist das harmlos, dort kostet ein
+    /// Aussetzer eine 401 und einen neuen Versuch. Fuer einen Socket, der acht
+    /// Stunden haengt und im Minutentakt fragt, wuerde derselbe Aussetzer
+    /// jedes Admin-Dock hinauswerfen. Die Trennung gehoert in den Fehlertyp in
+    /// `auth/discord_admin_login.rs` und damit in eine eigene Aenderung am
+    /// Auth-Modul.
     Master {
         state: DashboardAuthState,
         sitzungen: Vec<String>,
@@ -380,6 +423,16 @@ impl SessionWaechter {
 ///
 /// Wer je ein Sitzungs-Cookie auf `SameSite=None` stellt, muss an dieser
 /// Stelle eine Origin-Pruefung nachziehen.
+///
+/// **Ungeprueft bleibt `master_dash_session`.** Dieses Cookie wird nach
+/// `auth/level.rs` auch aus einer zentralen Admin-Instanz gespiegelt, und
+/// deren Code liegt nicht in diesem Repo. Ob es dort ebenfalls mit
+/// `SameSite=Lax` gesetzt wird, konnte ich nicht nachsehen. Fuer die beiden
+/// Cookies aus diesem Repo (`twitch_dash_session` in
+/// `handlers/auth_login.rs`, `twitch_dash_session_partner` in
+/// `handlers/partner_login.rs`) traegt das Argument nachweislich, fuer den
+/// Admin-Weg ist es eine Annahme. Wer die zentrale Instanz einsehen kann,
+/// sollte das nachtragen oder hier eine Origin-Pruefung einziehen.
 pub async fn obs_ws_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -571,6 +624,12 @@ async fn nachlauf_senden(
             }
             Err(db_fehler) => {
                 warn!(%db_fehler, channel_id, "OBS-Dock: Vorlauf nicht lesbar");
+                // `anker()` ist hier 0, das Dock bekommt also
+                // `{"id":0,"luecke":true}`. Eine bessere Zahl gibt es nicht:
+                // die Abfrage, die alle `id` dieses Kanals kennt, ist gerade
+                // die, die fehlgeschlagen ist. 0 heisst deshalb ausdruecklich
+                // "Verlauf unvollstaendig, Wiederaufsetzstelle unbekannt",
+                // siehe Modulkopf.
                 return luecke_melden(schreiber, buch, buch.anker()).await;
             }
         }
@@ -586,7 +645,15 @@ async fn nachlauf_senden(
         NachlaufArt::Aufholen => (buch.anker() - NACHZUG_RUECKGRIFF).max(buch.untergrenze()),
         _ => buch.anker(),
     };
-    for _ in 0..NACHLAUF_RUNDEN {
+    // Runden fuer die Strecke nach vorn plus die Runden, die der Rueckgriff
+    // kostet. Sonst zaehlt das wiederholte Lesen des eigenen Rueckgriffs gegen
+    // das Budget, mit dem der Socket aufholen soll.
+    let runden = if zeiger < buch.anker() {
+        NACHLAUF_RUNDEN + RUECKGRIFF_RUNDEN
+    } else {
+        NACHLAUF_RUNDEN
+    };
+    for _ in 0..runden {
         let zeilen = match nachlauf_lesen(pool, channel_id, Some(zeiger), NACHLAUF_DECKEL).await {
             Ok(zeilen) => zeilen,
             Err(db_fehler) => {
@@ -1447,6 +1514,34 @@ mod socket_tests {
             .ok();
     }
 
+    /// Derselbe Fehler auf dem Vorlauf-Weg, also ohne `?seit=`.
+    ///
+    /// Der Zweig war bisher ungetestet: der Nachbartest verbindet mit
+    /// `?seit=77` und laeuft damit durch den Lesezeichen-Zweig. Hier gibt es
+    /// keine Wiederaufsetzstelle, deshalb `id` 0.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn db_fehler_im_vorlauf_meldet_eine_luecke_ohne_wiederaufsetzstelle() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_dbfehler_vorlauf").await;
+        sqlx::query("DROP TABLE obs_dock_events")
+            .execute(&pool)
+            .await
+            .expect("Tabelle entfernen");
+
+        let adresse = server_starten(pool.clone()).await;
+        let mut socket = verbinden(adresse, None).await;
+        let gelesen = alles_lesen(&mut socket).await;
+
+        assert_eq!(gelesen.len(), 1, "genau ein Lueckenhinweis: {gelesen:?}");
+        assert_eq!(gelesen[0]["luecke"], true);
+        assert_eq!(gelesen[0]["id"].as_i64(), Some(0));
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_dbfehler_vorlauf CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
     /// Ein Datenbankfehler im Nachlauf darf das Dock nicht in dem Glauben
     /// lassen, sein Verlauf sei vollstaendig.
     ///
@@ -1470,6 +1565,120 @@ mod socket_tests {
         assert_eq!(gelesen[0]["id"].as_i64(), Some(77));
         socket.close(None).await.ok();
         sqlx::query("DROP SCHEMA obs_ws_dbfehler CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Nimmt einen aufgebauten Socket entgegen und reicht ihn an den Test
+    /// durch, statt ihn selbst zu bedienen.
+    ///
+    /// Damit laesst sich [`nachlauf_senden`] gegen einen echten WebSocket
+    /// fahren, ohne ein `Lagged` von aussen erzwingen zu muessen. Ein `Lagged`
+    /// entsteht erst, wenn der Schreiber im TCP-Puffer haengt, und das ist von
+    /// einem Test aus nicht verlaesslich zu treffen.
+    async fn socket_abgeben(
+        upgrade: WebSocketUpgrade,
+        Extension(kanal): Extension<
+            Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<WebSocket>>>>,
+        >,
+    ) -> Response {
+        upgrade.on_upgrade(move |socket| async move {
+            if let Some(sender) = kanal.lock().await.take() {
+                let _ = sender.send(socket);
+            }
+        })
+    }
+
+    /// Aufholen nach `Lagged` ueber ein volles Rueckgriff-Fenster hinweg.
+    ///
+    /// Der Rechenfehler aus dem Review: das Lesebudget war
+    /// NACHLAUF_DECKEL * NACHLAUF_RUNDEN = 1000 Zeilen, der Lesezeiger startet
+    /// aber NACHZUG_RUECKGRIFF = 1000 Zeilen unter dem Anker. Fuellt der Kanal
+    /// diese 1000 IDs selbst, und genau dann entsteht ein `Lagged`, kommt der
+    /// Socket keine einzige Zeile vorwaerts. Danach greift der Aufgabe-Pfad und
+    /// wirft die wirklich verpassten Zeilen per Lueckenrahmen weg, obwohl sie
+    /// vollstaendig in `obs_dock_events` liegen.
+    ///
+    /// Aufbau ist die Rechnung selbst: Anker 1400, Untergrenze 1, Tabelle bis
+    /// 1700. Der Socket muss die 300 Zeilen 1401..=1700 bekommen und keinen
+    /// Lueckenrahmen.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn aufholen_kommt_ueber_das_rueckgriff_fenster_hinaus() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_aufholen").await;
+        let anker: i64 = 1400;
+        let gesamt: i64 = 1700;
+        assert!(
+            anker - NACHZUG_RUECKGRIFF > 0,
+            "der Rueckgriff muss echt unter den Anker reichen"
+        );
+        sqlx::query(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             SELECT $1, jsonb_build_object('typ','chat','id',lauf::text,'text','z' || lauf::text)
+               FROM generate_series(1, $2) AS lauf",
+        )
+        .bind(KANAL)
+        .bind(gesamt)
+        .execute(&pool)
+        .await
+        .expect("Massen-Einfuegen");
+
+        // Ein Socket, der mit ?seit=1 verbunden ist und inzwischen live bis
+        // zum Anker mitgelesen hat. Genau die Lage vor einem `Lagged`.
+        let mut buch = Auslieferung::neu(Some(1));
+        for id in 2..=anker {
+            buch.nachlauf(id);
+        }
+        assert_eq!(buch.anker(), anker);
+        assert_eq!(buch.untergrenze(), 1);
+
+        let (sender, empfaenger) = tokio::sync::oneshot::channel::<WebSocket>();
+        let router = Router::new()
+            .route("/roh", get(socket_abgeben))
+            .layer(Extension(Arc::new(tokio::sync::Mutex::new(Some(sender)))));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let (mut dock, _) = tokio_tungstenite::connect_async(format!("ws://{adresse}/roh"))
+            .await
+            .expect("Socket verbunden");
+        let server_socket = empfaenger.await.expect("Socket abgegeben");
+        let (mut schreiber, _leser) = server_socket.split();
+
+        assert!(
+            nachlauf_senden(
+                &pool,
+                KANAL,
+                &mut buch,
+                &mut schreiber,
+                NachlaufArt::Aufholen
+            )
+            .await,
+            "der Socket lebt noch"
+        );
+
+        let gelesen = alles_lesen(&mut dock).await;
+        assert!(
+            gelesen.iter().all(|wert| wert["luecke"].is_null()),
+            "kein Lueckenrahmen, die Zeilen stehen in der Tabelle"
+        );
+        let ids: Vec<i64> = gelesen
+            .iter()
+            .filter_map(|wert| wert["id"].as_i64())
+            .collect();
+        assert_eq!(
+            ids,
+            (anker + 1..=gesamt).collect::<Vec<i64>>(),
+            "genau die verpassten Zeilen, keine doppelt"
+        );
+
+        dock.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_aufholen CASCADE")
             .execute(&pool)
             .await
             .ok();
@@ -1568,8 +1777,23 @@ mod socket_tests {
     ///
     /// Dieser hier oeffnet deshalb einen echten Socket gegen den echten
     /// `build_router`.
+    ///
+    /// # Was er belegt und was nicht
+    ///
+    /// Belegt: der Handshake kommt durch die Layer-Kette, die Auth traegt, und
+    /// der Nachlauf geht ueber die Leitung. Der Nachlauf liest ueber
+    /// `State(pool)` und damit ueber den Pool dieses Tests.
+    ///
+    /// Nicht belegt: der Live-Weg. `build_router` haengt den Prozess-Singleton
+    /// [`ObsDockBus::gemeinsam`] an, und dessen Pool friert der erste Aufrufer
+    /// im Testbinary ein, nicht dieser Test. Je nach Testreihenfolge horcht der
+    /// Bus hier also auf einer fremden Datenbank und schreibt `warn!` in einer
+    /// Reconnect-Schleife. Deshalb steht der Name auf `upgrade_und_nachlauf`
+    /// und nicht auf `socket`; den Live-Weg belegen die Tests mit eigenem Bus
+    /// ([`live_rahmen_traegt_die_id_am_echten_socket`],
+    /// [`verkehrte_reihenfolge_erreicht_das_dock_am_echten_socket`]).
     #[tokio::test(flavor = "multi_thread")]
-    async fn echter_socket_durch_die_volle_layer_kette() {
+    async fn upgrade_und_nachlauf_gehen_durch_die_volle_layer_kette() {
         let dsn = dsn_oder_skip!();
         let pool = schema_pool(&dsn, "obs_ws_volle_kette").await;
         for lauf in 1..=3 {

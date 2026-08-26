@@ -160,7 +160,11 @@ impl BusRahmen {
 pub enum SchliessGrund {
     /// Der Streamer hat mehr Sockets offen als [`MAX_SOCKETS_JE_PARTNER`].
     ZuVieleVerbindungen,
-    /// Die Dashboard-Session ist abgelaufen oder wurde entzogen.
+    /// Die Dashboard-Session traegt nicht mehr.
+    ///
+    /// Was der Socket dabei wirklich sieht, steht in
+    /// [`crate::obs::ws`]: den lokalen Sitzungsspiegel. Ein zentral entzogener
+    /// Admin-Zugang faellt erst mit dem lokalen Ablauf auf, nicht sofort.
     SessionAbgelaufen,
     /// Der Socket hat zu lange kein Lebenszeichen mehr geschickt.
     Leerlauf,
