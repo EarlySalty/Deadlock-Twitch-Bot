@@ -4,7 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-axum         = { workspace = true, features = ["multipart"] }
+# ws: WebSocket-Upgrade fuer das OBS-Dock-Gateway (`GET /obs/ws`). axum bringt
+# den Upgrade selbst mit, tokio-tungstenite braucht es dafuer nicht.
+axum         = { workspace = true, features = ["multipart", "ws"] }
+futures-util = { workspace = true }
 tower        = { workspace = true }
 tower-http   = { workspace = true }
 serde        = { workspace = true }
@@ -19,7 +22,9 @@ pulldown-cmark = { workspace = true }
 sha2         = { workspace = true }
 hex          = { workspace = true }
 reqwest      = { workspace = true }
-tokio        = { workspace = true, features = ["sync"] }
+# time/rt/macros: Heartbeat-Intervalle, der Listener-Task und `select!` im
+# OBS-Dock-Gateway.
+tokio        = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 url          = { workspace = true }
 uuid         = { workspace = true }
 thiserror    = { workspace = true }
@@ -42,7 +47,12 @@ tb-social-media = { workspace = true }
 tb-transport-twitch = { workspace = true }
 
 [dev-dependencies]
-tokio     = { workspace = true }
+# net/rt-multi-thread: die OBS-Dock-Tests fahren einen echten Server auf einem
+# echten TCP-Port, damit der Socket-Weg wirklich durchlaufen wird.
+tokio     = { workspace = true, features = ["net", "rt-multi-thread"] }
+# WebSocket-Client fuer eben diese Tests. Steht ueber `axum/ws` ohnehin schon im
+# Abhaengigkeitsbaum, kostet also keine neue Abhaengigkeit.
+tokio-tungstenite = "0.24"
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }
 tb-db     = { workspace = true }
