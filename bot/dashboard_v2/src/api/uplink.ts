@@ -165,15 +165,18 @@ export const TRENNEN_HINWEIS =
   'Trennen nimmt den Zugang ganz zurück. Damit hören auch die automatischen Raids auf, bis du dich neu verbindest.';
 
 /**
- * Was der Twitch-Dialog gleich abfragen wird, in Klartext.
+ * Wofür die Rechte gebraucht werden, in Klartext.
  *
- * Der Dialog listet Rechte in Twitch-Sprache auf. Wer vorher nicht weiß,
- * wofür sie gebraucht werden, klickt entweder blind zu oder gar nicht. Diese
- * fünf Rechte fragt ausschließlich dieser Knopf an; der Raid-Bot allein kommt
- * ohne sie aus.
+ * Der Twitch-Dialog listet sie einzeln und in seiner eigenen Sprache auf. Wer
+ * vorher nicht weiß, wofür sie da sind, klickt entweder blind zu oder gar
+ * nicht.
+ *
+ * Bewusst ohne Zahl: der Dialog zeigt den vollen Satz inklusive der Rechte,
+ * die der Bot ohnehin schon hat, und eine genannte Zahl wäre dort immer die
+ * falsche. Genannt wird, was neu dazukommt.
  */
 export const VERBINDEN_HINWEIS =
-  'Twitch fragt dich gleich nach fünf Rechten: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows und Abos sehen, Titel und Kategorie ändern, und Kanalpunkt-Einlösungen abhaken.';
+  'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Der Rest steht schon für den Bot dort.';
 
 /** Eine Zeile je Plattform fuer den Kopf der Plattform-Karte. */
 export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {

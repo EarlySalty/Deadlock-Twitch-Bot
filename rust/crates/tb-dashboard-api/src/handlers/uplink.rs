@@ -278,11 +278,17 @@ pub fn verbindungs_status(hat_tokens: bool, needs_reauth: bool, scopes: &[String
     "verbunden"
 }
 
-/// Liest den Verbindungsstand von Twitch aus `twitch_raid_auth`.
+/// Der Verbindungsstand aller Plattformen.
+///
+/// Zwei Quellen, weil es zwei Arten von Plattform gibt. Twitch liegt in
+/// `twitch_raid_auth`, weil der Streamer dort ohnehin autorisiert. Kick,
+/// YouTube und TikTok haben keinen Raid-Bot, an dessen Grant sich etwas
+/// anhaengen liesse; fuer sie bleibt `platform_connections` der Speicher. Was
+/// in keiner der beiden Quellen steht, ergaenzt der Aufrufer als "getrennt".
 ///
 /// Ohne Feldschluessel gibt es keine Aussage: dann faellt alles auf "getrennt",
 /// statt einen Stand zu behaupten, den niemand geprueft hat.
-async fn twitch_verbindung(
+async fn verbindungen_lesen(
     pool: &PgPool,
     config: Option<&PlatformTokenConfig>,
     streamer_id: i64,
@@ -290,6 +296,31 @@ async fn twitch_verbindung(
     let Some(config) = config else {
         return Vec::new();
     };
+    let mut liste = twitch_verbindung(pool, config, streamer_id).await;
+    // Die uebrigen Plattformen. Heute ist die Tabelle leer, also kommt hier
+    // nichts zurueck; sobald die erste gebaut ist, steht ihr Stand ohne
+    // weiteres Zutun in derselben Liste.
+    let store =
+        super::platform_store::PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+    match store.status_liste(streamer_id).await {
+        Ok(weitere) => liste.extend(
+            weitere
+                .into_iter()
+                .filter(|(plattform, _)| plattform != PLATFORM_TWITCH),
+        ),
+        Err(e) => {
+            tracing::warn!("uplink: Verbindungen fuer {streamer_id} nicht lesbar: {e}");
+        }
+    }
+    liste
+}
+
+/// Der Verbindungsstand von Twitch aus `twitch_raid_auth`.
+async fn twitch_verbindung(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+) -> Vec<(String, &'static str)> {
     let uid = streamer_id.to_string();
     let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
     let tokens = match store.load_decrypted_unrestricted(&uid).await {
@@ -332,7 +363,7 @@ pub async fn me_handler(
     let login = twitch_identitaet(&auth)
         .ok()
         .map(|(login, _)| login.trim().to_lowercase());
-    let verbindungen = twitch_verbindung(&pool, config.as_ref(), id).await;
+    let verbindungen = verbindungen_lesen(&pool, config.as_ref(), id).await;
     // Ob je Plattform ein Uplink-Ziel (und damit ein Stream-Key) liegt, weiss
     // nur das Relay. Faellt der Abruf aus, gilt "kein Ziel bekannt": lieber
     // einmal zu viel "Stream-Key fehlt" zeigen als ein Ziel behaupten.
@@ -1078,16 +1109,28 @@ pub async fn stream_key_hinterlegen(
         return StreamKeyStand::KeineVerbindung;
     };
     let uid = streamer_id.to_string();
-    let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
-    let tokens = match store.load_decrypted_unrestricted(&uid).await {
-        Ok(Some(t)) if !t.needs_reauth => t,
-        Ok(_) => return StreamKeyStand::KeineVerbindung,
-        Err(e) => {
-            tracing::warn!(streamer_id, error = %e, "uplink: Token fuer den Stream-Key nicht lesbar");
-            return StreamKeyStand::Fehlgeschlagen;
+    // Ueber den gemeinsamen Token-Weg, nicht direkt aus der Zeile: der
+    // gespeicherte Access-Token haelt vier Stunden, und der Hintergrund-Refresh
+    // im Bot fasst nur raid-aktivierte Streamer an. Wer Raids aus hat, haette
+    // hier sonst nach kurzer Zeit ein totes Token und bekaeme bei jedem Klick
+    // dieselbe Bitte, es noch einmal zu versuchen.
+    let (tokens, scopes) = match super::platform_token::gueltiger_twitch_token(
+        pool,
+        config,
+        streamer_id,
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(super::platform_token::TokenFehler::KeineVerbindung)
+        | Err(super::platform_token::TokenFehler::NeuVerbinden) => {
+            return StreamKeyStand::KeineVerbindung
+        }
+        Err(super::platform_token::TokenFehler::NichtLieferbar) => {
+            return StreamKeyStand::Fehlgeschlagen
         }
     };
-    let scopes = store.get_scopes(&uid).await.unwrap_or_default();
     if !scopes.iter().any(|s| s.trim() == "channel:read:stream_key") {
         return StreamKeyStand::RechtFehlt;
     }
@@ -1150,13 +1193,26 @@ pub async fn trennen(
         return TrennenErgebnis::KeinWeg;
     }
     let uid = streamer_id.to_string();
-    let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
-    // Vor dem Leeren lesen, damit der Widerruf noch ein Token in der Hand hat.
-    // Ist es nicht mehr entschluesselbar, faellt nur der Widerruf aus.
-    let access_token = match store.load_decrypted_unrestricted(&uid).await {
-        Ok(t) => t.map(|t| t.access_token),
-        Err(e) => {
-            tracing::warn!(streamer_id, error = %e, "uplink: Token vor dem Trennen nicht lesbar");
+    // Vor dem Leeren einen gueltigen Token holen, damit der Widerruf einen in
+    // der Hand hat, den Twitch auch annimmt. Ein abgelaufener Token bringt dort
+    // nur ein 400, der Grant bliebe bestehen, und die Oberflaeche haette
+    // trotzdem "nimmt den Zugang ganz zurück" versprochen. Geht es nicht, faellt
+    // nur der Widerruf aus; getrennt wird trotzdem.
+    let access_token = match super::platform_token::gueltiger_twitch_token(
+        pool,
+        config,
+        streamer_id,
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        Ok((tokens, _)) => Some(tokens.access_token),
+        Err(grund) => {
+            tracing::warn!(
+                streamer_id,
+                ?grund,
+                "uplink: kein gueltiges Token vor dem Trennen, Widerruf entfaellt"
+            );
             None
         }
     };
@@ -2256,24 +2312,37 @@ mod tests {
             .await
             .unwrap();
 
-        let zeile: (
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            Option<bool>,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ) = sqlx::query_as(
+        /// Die vier Spalten, an denen sich das Leeren ablesen laesst.
+        #[derive(sqlx::FromRow)]
+        struct GeleerteZeile {
+            access_token_enc: Option<Vec<u8>>,
+            refresh_token_enc: Option<Vec<u8>>,
+            needs_reauth: Option<bool>,
+            reauth_notified_at: Option<chrono::DateTime<chrono::Utc>>,
+        }
+
+        let zeile: GeleerteZeile = sqlx::query_as(
             "SELECT access_token_enc, refresh_token_enc, needs_reauth, reauth_notified_at \
                  FROM twitch_raid_auth WHERE twitch_user_id = '6005'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(zeile.0.is_none(), "access_token_enc muss leer sein");
-        assert!(zeile.1.is_none(), "refresh_token_enc muss leer sein");
-        assert_eq!(zeile.2, Some(true));
+        assert!(
+            zeile.access_token_enc.is_none(),
+            "access_token_enc muss leer sein"
+        );
+        assert!(
+            zeile.refresh_token_enc.is_none(),
+            "refresh_token_enc muss leer sein"
+        );
+        assert_eq!(zeile.needs_reauth, Some(true));
         // Ohne den Stempel mahnt der Watchdog jemanden, der gerade selbst
         // getrennt hat.
-        assert!(zeile.3.is_some(), "reauth_notified_at muss gesetzt sein");
+        assert!(
+            zeile.reauth_notified_at.is_some(),
+            "reauth_notified_at muss gesetzt sein"
+        );
 
         // Die Zeile bleibt: raid_enabled und die Partnerhistorie haengen daran.
         let anzahl: i64 = sqlx::query_scalar(

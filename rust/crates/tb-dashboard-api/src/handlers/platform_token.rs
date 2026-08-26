@@ -186,14 +186,32 @@ pub enum TokenFehler {
     NichtLieferbar,
 }
 
-/// Ob ein gespeicherter Token noch lange genug haelt.
+/// Ob ein gespeicherter Token erneuert werden soll.
 ///
 /// Eigene Funktion, damit die Frist ohne Datenbank und ohne Uhr pruefbar ist.
-/// Eine fehlende Ablaufzeit gilt als abgelaufen: unbekannt ist keine Zusage.
+/// Eine fehlende Ablaufzeit gilt als faellig: unbekannt ist keine Zusage.
 pub fn refresh_faellig(expires_at: Option<DateTime<Utc>>, jetzt: DateTime<Utc>) -> bool {
     match expires_at {
         None => true,
         Some(exp) => jetzt + REFRESH_VORLAUF >= exp,
+    }
+}
+
+/// Ob ein Token wirklich tot ist.
+///
+/// Die Trennung von [`refresh_faellig`] ist kein Feinschliff, sondern der
+/// Unterschied zwischen einem gelieferten Token und einer 502. Der Vorlauf
+/// hier betraegt zehn Minuten, der Refresher haelt einen Token unter seinem
+/// eigenen Lock aber schon ab fuenf Minuten Restlaufzeit fuer frisch genug und
+/// gibt ihn unveraendert zurueck (`token_refresher.rs`, Puffer 300 s). Wer
+/// nach dem Refresh erneut auf `refresh_faellig` prueft, lehnt in genau diesem
+/// Fenster einen voellig brauchbaren Token ab, und zwar bei jedem Versuch, bis
+/// die Restlaufzeit unter fuenf Minuten faellt. Nach dem Refresh zaehlt
+/// deshalb nur noch, ob der Token abgelaufen ist.
+fn abgelaufen(expires_at: Option<DateTime<Utc>>, jetzt: DateTime<Utc>) -> bool {
+    match expires_at {
+        None => true,
+        Some(exp) => jetzt >= exp,
     }
 }
 
@@ -206,22 +224,24 @@ pub fn taugt_fuer_chat(scopes: &[String]) -> bool {
 // Kern
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Der Kern der Route: Auth ist schon geprueft.
+/// Ein gueltiger Twitch-Token des Streamers, bei Bedarf frisch geholt.
 ///
-/// Reihenfolge: erst lesen, dann die drei Ausschlussgruende (keine Zeile,
-/// `needs_reauth`, fehlendes Chat-Recht), dann erst der Refresh. Ein Refresh
-/// fuer einen Grant, den das Relay ohnehin nicht nutzen kann, waere ein
-/// Twitch-Aufruf ohne Zweck.
-pub async fn platform_token_antwort(
+/// Der eine Weg zu einem brauchbaren Token, den jeder Aufrufer nimmt: die
+/// interne Route fuer rs-relay genauso wie der Stream-Key-Nachlauf und der
+/// Widerruf beim Trennen. Wer stattdessen die Zeile direkt liest, arbeitet
+/// frueher oder spaeter mit einem abgelaufenen Token: `refresh_all_due` im Bot
+/// fasst nur Zeilen mit `raid_enabled IS TRUE` an, ein Streamer ohne Raids
+/// haette also nach wenigen Stunden nichts Gueltiges mehr, und die Aufrufer
+/// haetten keinen Weg, es zu merken.
+///
+/// `scopes` kommt mit zurueck, weil jeder Aufrufer eine andere Frage daran
+/// hat und ein zweiter Lesezugriff dieselbe Zeile noch einmal anfassen wuerde.
+pub async fn gueltiger_twitch_token(
     pool: &PgPool,
     config: &PlatformTokenConfig,
     streamer_id: i64,
-    platform: &str,
     jetzt: DateTime<Utc>,
-) -> Result<PlatformTokenAntwort, TokenFehler> {
-    if platform != PLATFORM_TWITCH {
-        return Err(TokenFehler::KeineVerbindung);
-    }
+) -> Result<(tb_raid::token_store::RaidTokens, Vec<String>), TokenFehler> {
     let uid = streamer_id.to_string();
     let store = RaidAuthStore::new(pool.clone(), config.cipher.clone());
 
@@ -246,18 +266,8 @@ pub async fn platform_token_antwort(
             return Err(TokenFehler::NichtLieferbar);
         }
     };
-    if !taugt_fuer_chat(&scopes) {
-        return Err(TokenFehler::KeineVerbindung);
-    }
-
     if !refresh_faellig(tokens.token_expires_at, jetzt) {
-        return Ok(PlatformTokenAntwort {
-            access_token: tokens.access_token,
-            expires_at: tokens.token_expires_at.unwrap_or(jetzt),
-            platform_user_id: uid,
-            platform_login: tokens.twitch_login,
-            scopes,
-        });
+        return Ok((tokens, scopes));
     }
 
     // Derselbe Schreibpfad wie beim Raid-Bot: Advisory-Lock, Re-Read unterm
@@ -299,17 +309,88 @@ pub async fn platform_token_antwort(
     if frisch.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
+    // Scopes nach dem Refresh neu lesen: haette er den Satz veraendert, bekaeme
+    // das Relay sonst den alten und legte Subscriptions an, fuer die kein
+    // Recht mehr vorliegt.
+    let scopes = store.get_scopes(&uid).await.unwrap_or(scopes);
     // Ein Token, das auch nach dem Refresh abgelaufen ist, ist keiner. Lieber
-    // eine ehrliche Absage als ein Token, mit dem das Relay ins Leere laeuft.
-    if refresh_faellig(frisch.token_expires_at, jetzt) {
+    // eine ehrliche Absage als ein Token, mit dem der Aufrufer ins Leere laeuft.
+    if abgelaufen(frisch.token_expires_at, jetzt) {
         return Err(TokenFehler::NichtLieferbar);
     }
+    Ok((frisch, scopes))
+}
+
+/// Der Kern der Route: Auth ist schon geprueft.
+///
+/// Verzweigt nach Plattform. Twitch liegt in `twitch_raid_auth`, weil der
+/// Streamer dort ohnehin autorisiert. Kick, YouTube und TikTok haben keinen
+/// Raid-Bot, an dessen Grant sich etwas anhaengen liesse; fuer sie bleibt
+/// `platform_connections` der Speicher. Solange dort niemand verbunden ist,
+/// antwortet dieser Zweig mit 404, und genau das ist die richtige Antwort.
+pub async fn platform_token_antwort(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+    platform: &str,
+    jetzt: DateTime<Utc>,
+) -> Result<PlatformTokenAntwort, TokenFehler> {
+    if platform != PLATFORM_TWITCH {
+        return fremde_plattform_antwort(pool, config, streamer_id, platform, jetzt).await;
+    }
+    let (tokens, scopes) = gueltiger_twitch_token(pool, config, streamer_id, jetzt).await?;
+    // Ohne Chat-Lese-Recht kann das Relay den Chat gar nicht abonnieren. Der
+    // Grant ist fuer diese Route wertlos, also gibt es ihn auch nicht heraus.
+    // Bewusst NACH dem Token-Weg: ein Streamer mit altem Raid-Grant soll
+    // dieselbe 404 bekommen wie einer ohne Zeile, und der Refresh haelt seine
+    // Raid-Tokens dabei nebenbei frisch.
+    if !taugt_fuer_chat(&scopes) {
+        return Err(TokenFehler::KeineVerbindung);
+    }
     Ok(PlatformTokenAntwort {
-        access_token: frisch.access_token,
-        expires_at: frisch.token_expires_at.unwrap_or(jetzt),
-        platform_user_id: uid,
-        platform_login: frisch.twitch_login,
+        access_token: tokens.access_token,
+        expires_at: tokens.token_expires_at.unwrap_or(jetzt),
+        platform_user_id: streamer_id.to_string(),
+        platform_login: tokens.twitch_login,
         scopes,
+    })
+}
+
+/// Kick, YouTube, TikTok: der plattformneutrale Speicher.
+///
+/// Heute leer, also immer 404. Kein Refresh: der gehoert zu dem Verbinden-Weg,
+/// den es fuer diese Plattformen noch nicht gibt, und ein Refresh-Job fuer
+/// eine leere Tabelle waere ein Job, der nie etwas tut und beim ersten echten
+/// Eintrag ungeprueft losliefe.
+async fn fremde_plattform_antwort(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+    platform: &str,
+    jetzt: DateTime<Utc>,
+) -> Result<PlatformTokenAntwort, TokenFehler> {
+    let store =
+        super::platform_store::PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+    let verbindung = match store.load(streamer_id, platform).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return Err(TokenFehler::KeineVerbindung),
+        Err(e) => {
+            tracing::warn!(streamer_id, platform, error = %e, "platform_token: Verbindung nicht lesbar");
+            return Err(TokenFehler::NichtLieferbar);
+        }
+    };
+    if verbindung.needs_reauth {
+        return Err(TokenFehler::NeuVerbinden);
+    }
+    if abgelaufen(Some(verbindung.expires_at), jetzt) {
+        return Err(TokenFehler::NeuVerbinden);
+    }
+    Ok(PlatformTokenAntwort {
+        access_token: verbindung.access_token,
+        expires_at: verbindung.expires_at,
+        platform_user_id: verbindung.platform_user_id,
+        platform_login: verbindung.platform_login,
+        scopes: verbindung.scopes,
     })
 }
 
@@ -551,6 +632,27 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Die plattformneutrale Tabelle: Spalten wie in der Migration.
+        sqlx::query(
+            "CREATE TABLE platform_connections (
+                streamer_id BIGINT NOT NULL,
+                platform TEXT NOT NULL,
+                platform_user_id TEXT NOT NULL,
+                platform_login TEXT NOT NULL,
+                access_token_enc BYTEA NOT NULL,
+                refresh_token_enc BYTEA NOT NULL,
+                enc_kid TEXT NOT NULL DEFAULT 'v1',
+                scopes TEXT[] NOT NULL DEFAULT '{}',
+                expires_at TIMESTAMPTZ NOT NULL,
+                needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (streamer_id, platform)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_token_blacklist (
                 twitch_user_id TEXT NOT NULL,
@@ -772,6 +874,9 @@ mod tests {
         assert_eq!(client.aufrufe.lock().unwrap().as_slice(), &["ref-alt"]);
     }
 
+    /// Ein Twitch-Grant gilt nur fuer Twitch. Wuerde der Zweig fehlen, bekaeme
+    /// rs-relay fuer `platform=kick` ein Twitch-Token und redete damit im
+    /// falschen Chat.
     #[tokio::test]
     async fn fremde_plattform_bekommt_kein_twitch_token() {
         let pool = pool_oder_ende!();
@@ -794,6 +899,91 @@ mod tests {
                 "{fremd}"
             );
         }
+    }
+
+    /// Der Fall, den die frueheren zehn Minuten Vorlauf gefressen haben: ein
+    /// Token mit sieben Minuten Restlaufzeit galt als faellig, der Refresher
+    /// hielt ihn unter seinem Lock fuer frisch genug und gab ihn unveraendert
+    /// zurueck, und die Nachpruefung lehnte denselben Token wieder ab. Ergebnis
+    /// war eine 502 bei jedem Versuch, bis die Restlaufzeit unter fuenf
+    /// Minuten fiel.
+    #[tokio::test]
+    async fn token_im_fenster_zwischen_den_vorlaeufen_kommt_trotzdem() {
+        let pool = pool_oder_ende!();
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "5108",
+            "dazwischen",
+            UPLINK,
+            Some(jetzt + Duration::minutes(7)),
+            false,
+        )
+        .await;
+        let antwort = platform_token_antwort(&pool, &config, 5108, "twitch", jetzt)
+            .await
+            .expect("Token muss kommen, nicht 502");
+        assert!(!antwort.access_token.is_empty());
+    }
+
+    #[test]
+    fn abgelaufen_ist_strenger_als_faellig() {
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        // Sieben Minuten Rest: erneuern ja, tot nein.
+        assert!(refresh_faellig(Some(jetzt + Duration::minutes(7)), jetzt));
+        assert!(!abgelaufen(Some(jetzt + Duration::minutes(7)), jetzt));
+        // Genau abgelaufen zaehlt als abgelaufen.
+        assert!(abgelaufen(Some(jetzt), jetzt));
+        assert!(abgelaufen(Some(jetzt - Duration::seconds(1)), jetzt));
+        assert!(abgelaufen(None, jetzt));
+    }
+
+    /// Der Zweig fuer Kick, YouTube und TikTok. Die Tabelle ist heute leer,
+    /// also ist 404 die richtige Antwort und nicht ein Fehler.
+    #[tokio::test]
+    async fn ohne_eintrag_ist_die_fremde_plattform_404() {
+        let pool = pool_oder_ende!();
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        assert_eq!(
+            platform_token_antwort(&pool, &config, 5109, "kick", jetzt).await,
+            Err(TokenFehler::KeineVerbindung)
+        );
+    }
+
+    /// Und wenn dort etwas liegt, kommt es auch heraus, ohne Refresh-Token.
+    #[tokio::test]
+    async fn eintrag_im_plattform_speicher_wird_geliefert() {
+        let pool = pool_oder_ende!();
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        let aad = super::super::platform_store::PlatformConnectionStore::aad(5110, "kick");
+        let access = config.cipher.encrypt_field("kick-acc", &aad).unwrap();
+        let refresh = config.cipher.encrypt_field("kick-ref", &aad).unwrap();
+        sqlx::query(
+            "INSERT INTO platform_connections \
+             (streamer_id, platform, platform_user_id, platform_login, \
+              access_token_enc, refresh_token_enc, scopes, expires_at) \
+             VALUES (5110, 'kick', 'k-1', 'streamerin', $1, $2, $3, $4)",
+        )
+        .bind(&access)
+        .bind(&refresh)
+        .bind(vec!["chat:read".to_string()])
+        .bind(jetzt + Duration::hours(2))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let antwort = platform_token_antwort(&pool, &config, 5110, "kick", jetzt)
+            .await
+            .expect("Token muss kommen");
+        assert_eq!(antwort.access_token, "kick-acc");
+        assert_eq!(antwort.platform_login, "streamerin");
+        let json = serde_json::to_value(&antwort).unwrap();
+        assert!(json.get("refresh_token").is_none());
+        assert!(!json.to_string().contains("kick-ref"));
     }
 
     #[tokio::test]

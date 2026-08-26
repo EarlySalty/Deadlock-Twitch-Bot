@@ -119,10 +119,12 @@ test('verbinden_knopf_nennt_wofuer_die_rechte_gebraucht_werden', () => {
   // klickt der Streamer blind zu oder gar nicht.
   assert.match(UPLINK_API, /deinen Stream-Key holen/);
   assert.match(UPLINK_API, /den Chat lesen und darin antworten/);
-  assert.match(UPLINK_API, /Aktivitäten wie Follows und Abos sehen/);
-  assert.match(UPLINK_API, /Titel und Kategorie ändern/);
+  assert.match(UPLINK_API, /Aktivitäten wie Follows sehen/);
   assert.match(UPLINK_API, /Kanalpunkt-Einlösungen abhaken/);
   assert.match(ZIEL, /VERBINDEN_HINWEIS/);
+  // Keine Zahl im Text: der Dialog zeigt den vollen Satz inklusive der
+  // Rechte, die der Bot schon hat, jede genannte Zahl wäre dort die falsche.
+  assert.doesNotMatch(UPLINK_API, /nach (drei|vier|fünf|sechs|sieben) Rechten/);
 });
 
 test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
