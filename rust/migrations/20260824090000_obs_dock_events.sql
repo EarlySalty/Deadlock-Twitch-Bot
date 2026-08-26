@@ -47,6 +47,6 @@ COMMENT ON TABLE obs_dock_events IS
 COMMENT ON COLUMN obs_dock_events.channel_id IS
     'Kanal, an den das Ereignis gehoert, bei Twitch die numerische Broadcaster-ID. Der Leser bindet daran seine Berechtigungspruefung.';
 COMMENT ON COLUMN obs_dock_events.payload IS
-    'Ein PlatformEvent (tb-platform-core) als JSON, intern getaggt mit dem Feld "typ". Das ist zugleich das WebSocket-Drahtformat und eingefroren.';
+    'Ein PlatformEvent (tb-platform-core) als JSON, intern getaggt mit dem Feld "typ". Eingefroren. Das WebSocket-Drahtformat ist nicht diese Spalte selbst, sondern eine Huelle {"id":<zeilen-id>,"ereignis":<payload>}: das Dock braucht die id, um nach einem Neuverbinden mit ?seit= dort weiterzulesen, wo es aufgehoert hat.';
 COMMENT ON COLUMN obs_dock_events.dedupe_key IS
     'Vorkommnis-stabiler Schluessel aus dem Ereignis selbst (PlatformEvent::dedupe_key). Eindeutig ueber den Teilindex, damit zwei Twitch-Signale fuer dasselbe Vorkommnis genau eine Zeile ergeben. NULL nur bei Ereignissen ohne Schluessel.';
