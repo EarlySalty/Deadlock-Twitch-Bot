@@ -47,7 +47,28 @@
 //! ```
 //!
 //! Das Dock uebernimmt die `id` genauso und weiss, dass sein Verlauf davor
-//! unvollstaendig ist.
+//! unvollstaendig ist. Einen solchen Rahmen gibt es in drei Faellen: der
+//! Nachlauf reicht ueber [`NACHLAUF_RUNDEN`] Runden hinaus, die Datenbank ist
+//! beim Nachlauf nicht lesbar, oder der Bus selbst hat Zeilen ueberspringen
+//! muessen. Stumm uebersprungen wird nichts.
+//!
+//! # Was das Dock sich merken muss
+//!
+//! `obs_dock_events.id` wird **nicht** in Sichtbarkeitsreihenfolge vergeben
+//! (Begruendung in [`crate::obs::bus`]). Der Socket liefert deshalb bewusst
+//! auch einen Rahmen aus, dessen `id` kleiner ist als eine schon gesendete:
+//! ihn wegzuwerfen waere die stille Luecke, die dieses Modul ausschliesst.
+//!
+//! Daraus folgen zwei Punkte fuer das Dock:
+//!
+//! - Das Lesezeichen fuer `?seit=` ist **nicht** blind die zuletzt empfangene
+//!   `id`. Kommt eine kleinere `id` nach einer groesseren, ist die groessere
+//!   als Lesezeichen zu hoch: `WHERE id > seit` beim naechsten Verbindungs-
+//!   aufbau wuerde die kleinere nie liefern. Das Dock nimmt in dem Fall die
+//!   kleinere minus eins.
+//! - Innerhalb einer Verbindung ist die Auslieferung dublettenfrei; ueber einen
+//!   Verbindungswechsel hinweg gilt "mindestens einmal". Das Dock kennt zu
+//!   jedem Rahmen die `id` und wirft eine Wiederholung selbst weg.
 //!
 //! Der Client darf ausschliesslich `{"typ":"ping"}` senden und bekommt darauf
 //! `{"typ":"pong"}`. Jeder andere Rahmen wird verworfen.
@@ -74,7 +95,7 @@ use crate::auth::session::{
     DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_ACCESS_COOKIE_NAME, PARTNER_COOKIE_NAME,
 };
 use crate::obs::bus::{
-    Auslieferung, ObsDockBus, SchliessGrund, NACHLAUF_DECKEL, VORLAUF_OHNE_SEIT,
+    Auslieferung, ObsDockBus, SchliessGrund, NACHLAUF_DECKEL, NACHZUG_RUECKGRIFF, VORLAUF_OHNE_SEIT,
 };
 
 /// Abstand der Server-Pings.
@@ -391,11 +412,18 @@ pub async fn obs_ws_handler(
     // Der Listener startet beim ersten Dock des Prozesses, nicht beim
     // Router-Bau: ohne offenes Dock soll keine Postgres-Verbindung liegen.
     bus.listener_sicherstellen();
-    // Abonnieren vor dem Nachlauf, sonst reisst genau im Uebergang eine Luecke.
-    let anmeldung = bus.anmelden(&channel_id);
 
     upgrade.on_upgrade(move |socket| async move {
-        let anmeldung = anmeldung;
+        // Anmelden erst hier, nicht schon bei den Upgrade-Kopfzeilen: die
+        // Anmeldung verdraengt ueber `MAX_SOCKETS_JE_PARTNER` den aeltesten
+        // Socket desselben Streamers. Haenge das an die Kopfzeilen, koennte
+        // eine Reihe abgebrochener Upgrade-Anfragen die echten Docks
+        // reihum hinauswerfen, ohne je einen Socket zu bedienen.
+        //
+        // Die Reihenfolge, auf die es ankommt, bleibt gewahrt: abonniert wird
+        // vor dem Nachlauf in `socket_bedienen`, dazwischen sammeln sich die
+        // Live-Rahmen im Puffer.
+        let anmeldung = bus.anmelden(&channel_id);
         socket_bedienen(socket, pool, channel_id, seit, anmeldung, waechter).await;
     })
 }
@@ -474,30 +502,48 @@ async fn hoechste_id(pool: &PgPool, channel_id: &str) -> Result<i64, sqlx::Error
     Ok(wert.unwrap_or(0))
 }
 
+/// Wofuer der Nachlauf gerade gelesen wird.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NachlaufArt {
+    /// Das Dock kennt keine `id` und bekommt die letzten
+    /// [`VORLAUF_OHNE_SEIT`] Zeilen. Eine Runde, hier gibt es nichts aufzuholen.
+    Vorlauf,
+    /// Verbindungsaufbau mit `?seit=<id>`: gelesen wird ab dem Lesezeichen des
+    /// Docks. Ein Rueckgriff waere hier falsch, das Dock hat alles darunter
+    /// laut eigener Angabe schon.
+    Lesezeichen,
+    /// Aufholen nach einem `Lagged`. Hier wird
+    /// [`NACHZUG_RUECKGRIFF`] Zeilen **unter** den Anker zurueckgelesen: der
+    /// Anker ist die hoechste gesendete `id`, und darunter kann eine Zeile
+    /// nachtraeglich sichtbar geworden sein (siehe [`crate::obs::bus`]). Was
+    /// dieser Socket davon schon gesendet hat, filtert [`Auslieferung`] weg.
+    Aufholen,
+}
+
 /// Sendet den Nachlauf und laesst dabei nichts liegen.
 ///
-/// Zwei Betriebsarten:
-/// - `vorlauf`: das Dock kennt keine `id` und bekommt die letzten
-///   [`VORLAUF_OHNE_SEIT`] Zeilen. Eine Runde, kein Nachziehen; hier gibt es
-///   nichts aufzuholen.
-/// - sonst: ab `buch.letzte_id()` in Runden zu [`NACHLAUF_DECKEL`] Zeilen, bis
-///   der Socket wirklich aufgeschlossen hat. Reichen [`NACHLAUF_RUNDEN`] Runden
-///   nicht, bekommt das Dock einen Lueckenhinweis und faengt beim aktuellen
-///   Stand an, statt dass die Zeilen dazwischen stumm verschwinden.
+/// Ab dem Startpunkt der jeweiligen [`NachlaufArt`] in Runden zu
+/// [`NACHLAUF_DECKEL`] Zeilen, bis der Socket wirklich aufgeschlossen hat.
+/// Reichen [`NACHLAUF_RUNDEN`] Runden nicht, bekommt das Dock einen
+/// Lueckenhinweis und faengt beim aktuellen Stand an, statt dass die Zeilen
+/// dazwischen stumm verschwinden.
 ///
-/// Derselbe Weg dient beim Verbinden mit `?seit=` und beim Aufholen nach einem
-/// `Lagged`; beides ist dieselbe Frage ("was fehlt mir ab id X").
+/// Gelesen wird streng ueber den lokalen Lesezeiger, nicht ueber
+/// `buch.anker()`: der Anker ist ein Sendestand und kein Lesestand, und der
+/// Rueckgriff beim Aufholen wuerde sich sonst nach der ersten Runde selbst
+/// wieder aufheben.
 ///
 /// `false` heisst: der Socket ist weg. Ein Datenbankfehler heisst das
-/// ausdruecklich nicht, live weiterzumachen ist besser als gar nichts.
+/// ausdruecklich nicht; er endet aber in einem Lueckenhinweis ans Dock, denn
+/// der Modulkopf sagt zu, dass uebersprungene Zeilen immer angekuendigt werden.
 async fn nachlauf_senden(
     pool: &PgPool,
     channel_id: &str,
     buch: &mut Auslieferung,
     schreiber: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    vorlauf: bool,
+    art: NachlaufArt,
 ) -> bool {
-    if vorlauf {
+    if art == NachlaufArt::Vorlauf {
         match nachlauf_lesen(pool, channel_id, None, VORLAUF_OHNE_SEIT).await {
             Ok(zeilen) => {
                 for (id, json) in zeilen {
@@ -513,22 +559,27 @@ async fn nachlauf_senden(
             }
             Err(db_fehler) => {
                 warn!(%db_fehler, channel_id, "OBS-Dock: Vorlauf nicht lesbar");
+                return luecke_melden(schreiber, buch, buch.anker()).await;
             }
         }
         return true;
     }
 
+    let mut zeiger = match art {
+        NachlaufArt::Aufholen => (buch.anker() - NACHZUG_RUECKGRIFF).max(0),
+        _ => buch.anker(),
+    };
     for _ in 0..NACHLAUF_RUNDEN {
-        let zeilen =
-            match nachlauf_lesen(pool, channel_id, Some(buch.letzte_id()), NACHLAUF_DECKEL).await {
-                Ok(zeilen) => zeilen,
-                Err(db_fehler) => {
-                    warn!(%db_fehler, channel_id, "OBS-Dock: Nachlauf nicht lesbar");
-                    return true;
-                }
-            };
+        let zeilen = match nachlauf_lesen(pool, channel_id, Some(zeiger), NACHLAUF_DECKEL).await {
+            Ok(zeilen) => zeilen,
+            Err(db_fehler) => {
+                warn!(%db_fehler, channel_id, "OBS-Dock: Nachlauf nicht lesbar");
+                return luecke_melden(schreiber, buch, buch.anker()).await;
+            }
+        };
         let anzahl = zeilen.len() as i64;
         for (id, json) in zeilen {
+            zeiger = zeiger.max(id);
             if !buch.live(id) {
                 continue;
             }
@@ -551,25 +602,36 @@ async fn nachlauf_senden(
         Ok(ziel) => ziel,
         Err(db_fehler) => {
             warn!(%db_fehler, channel_id, "OBS-Dock: Lueckenhinweis nicht bestimmbar");
-            return true;
+            return luecke_melden(schreiber, buch, buch.anker()).await;
         }
     };
-    if ziel <= buch.letzte_id() {
+    if ziel <= buch.anker() {
         return true;
     }
     warn!(
         channel_id,
-        uebersprungen = ziel - buch.letzte_id(),
+        uebersprungen = ziel - buch.anker(),
         "OBS-Dock: Nachlauf zu gross, Rest wird uebersprungen"
     );
+    luecke_melden(schreiber, buch, ziel).await
+}
+
+/// Schickt dem Dock einen Lueckenhinweis bis `bis` und bucht ihn.
+///
+/// `false` heisst wie ueberall: der Socket ist weg.
+async fn luecke_melden(
+    schreiber: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    buch: &mut Auslieferung,
+    bis: i64,
+) -> bool {
     if schreiber
-        .send(Message::Text(luecken_rahmen(ziel)))
+        .send(Message::Text(luecken_rahmen(bis)))
         .await
         .is_err()
     {
         return false;
     }
-    buch.nachlauf(ziel);
+    buch.luecke_bis(bis);
     true
 }
 
@@ -592,15 +654,11 @@ async fn socket_bedienen(
     let mut buch = Auslieferung::neu(seit);
 
     // 1. Nachlauf. Die Live-Rahmen warten solange im Puffer.
-    if !nachlauf_senden(
-        &pool,
-        &channel_id,
-        &mut buch,
-        &mut schreiber,
-        seit.is_none(),
-    )
-    .await
-    {
+    let art = match seit {
+        Some(_) => NachlaufArt::Lesezeichen,
+        None => NachlaufArt::Vorlauf,
+    };
+    if !nachlauf_senden(&pool, &channel_id, &mut buch, &mut schreiber, art).await {
         return;
     }
 
@@ -665,20 +723,34 @@ async fn socket_bedienen(
 
             eingang = rahmen.recv() => {
                 match eingang {
-                    Ok(rahmen) => {
-                        if !buch.live(rahmen.id) {
-                            continue;
+                    Ok(rahmen) => match rahmen.json {
+                        // Lueckenhinweis vom Bus: der hat Zeilen ueberspringen
+                        // muessen und weiss nicht mehr, zu welchem Kanal sie
+                        // gehoerten. Das Dock erfaehrt es trotzdem.
+                        None => {
+                            if !luecke_melden(&mut schreiber, &mut buch, rahmen.id).await {
+                                break None;
+                            }
                         }
-                        if schreiber.send(Message::Text(drahtrahmen(rahmen.id, &rahmen.json))).await.is_err() {
-                            break None;
+                        Some(json) => {
+                            // `live` fragt nicht "ist die id hoeher", sondern
+                            // "habe ich genau die schon gesendet". Ein Rahmen,
+                            // der hinter einer groesseren id eintrifft, geht
+                            // deshalb trotzdem raus.
+                            if !buch.live(rahmen.id) {
+                                continue;
+                            }
+                            if schreiber.send(Message::Text(drahtrahmen(rahmen.id, &json))).await.is_err() {
+                                break None;
+                            }
                         }
-                    }
+                    },
                     Err(RecvError::Lagged(verloren)) => {
                         // Der Socket kam nicht hinterher. Die Luecke steht in
                         // der Tabelle, also von dort nachziehen statt sie
                         // stillschweigend zu verlieren.
                         warn!(channel_id, verloren, "OBS-Dock: Socket hinkte nach, Luecke wird nachgezogen");
-                        if !nachlauf_senden(&pool, &channel_id, &mut buch, &mut schreiber, false).await {
+                        if !nachlauf_senden(&pool, &channel_id, &mut buch, &mut schreiber, NachlaufArt::Aufholen).await {
                             break None;
                         }
                     }
@@ -1259,6 +1331,165 @@ mod socket_tests {
         assert_eq!(gelesen[0]["id"].as_i64(), Some(id));
         socket.close(None).await.ok();
         sqlx::query("DROP SCHEMA obs_ws_live CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Der Fund dieser Runde, am echten Socket: der Bus meldet erst 101 und
+    /// danach 100, weil `INSERT` und `pg_notify` beim Schreiber nicht atomar
+    /// sind. Beide muessen beim Dock ankommen, keines doppelt.
+    ///
+    /// Mit dem alten Wasserstand-Filter (`id > letzte_id`) fiel 100 hier stumm
+    /// heraus: kein Log, kein Lueckenrahmen, kein Nachholpfad.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verkehrte_reihenfolge_erreicht_das_dock_am_echten_socket() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_reihenfolge").await;
+        let bus = ObsDockBus::ohne_datenbank();
+        let router = Router::new()
+            .route("/obs/ws", get(obs_ws_handler))
+            .layer(Extension(Arc::clone(&bus)))
+            .layer(Extension(tb_http_core::ExpectedToken(TOKEN.to_string())))
+            .with_state(pool.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let mut socket = verbinden(adresse, None).await;
+        assert!(alles_lesen(&mut socket).await.is_empty(), "Kanal ist leer");
+
+        // Zwei nebenlaeufige Schreiber: 100 wird zuerst geschrieben, 101
+        // meldet sich zuerst.
+        let klein = ereignis_schreiben(&pool, "klein").await;
+        let gross = ereignis_schreiben(&pool, "gross").await;
+        assert!(gross > klein);
+        bus.veroeffentlichen(
+            KANAL,
+            crate::obs::bus::BusRahmen::neu(gross, r#"{"typ":"chat","id":"gross","text":"gross"}"#),
+        );
+        bus.veroeffentlichen(
+            KANAL,
+            crate::obs::bus::BusRahmen::neu(klein, r#"{"typ":"chat","id":"klein","text":"klein"}"#),
+        );
+        // Und noch einmal dieselben beiden, wie sie ein Nachzug mit Rueckgriff
+        // liefern wuerde: die duerfen nicht durchkommen.
+        bus.veroeffentlichen(
+            KANAL,
+            crate::obs::bus::BusRahmen::neu(klein, r#"{"typ":"chat","id":"klein","text":"klein"}"#),
+        );
+
+        let gelesen = alles_lesen(&mut socket).await;
+        assert_eq!(
+            texte(&gelesen),
+            vec!["gross", "klein"],
+            "beide Rahmen, jeder genau einmal"
+        );
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_reihenfolge CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Ein Lueckenhinweis des Busses geht bis ans Dock durch.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bus_luecke_erreicht_das_dock() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_busluecke").await;
+        let bus = ObsDockBus::ohne_datenbank();
+        let router = Router::new()
+            .route("/obs/ws", get(obs_ws_handler))
+            .layer(Extension(Arc::clone(&bus)))
+            .layer(Extension(tb_http_core::ExpectedToken(TOKEN.to_string())))
+            .with_state(pool.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let mut socket = verbinden(adresse, None).await;
+        assert!(alles_lesen(&mut socket).await.is_empty());
+
+        bus.an_alle_veroeffentlichen(crate::obs::bus::BusRahmen::luecke(4242));
+        let gelesen = alles_lesen(&mut socket).await;
+        assert_eq!(gelesen.len(), 1);
+        assert_eq!(gelesen[0]["id"].as_i64(), Some(4242));
+        assert_eq!(gelesen[0]["luecke"], true);
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_busluecke CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Ein Datenbankfehler im Nachlauf darf das Dock nicht in dem Glauben
+    /// lassen, sein Verlauf sei vollstaendig.
+    ///
+    /// Aufbau: `twitch_partners` steht, `obs_dock_events` ist weg. Damit
+    /// traegt die Kanalaufloesung, und genau die Nachlauf-Abfrage bricht.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn db_fehler_im_nachlauf_meldet_eine_luecke() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_dbfehler").await;
+        sqlx::query("DROP TABLE obs_dock_events")
+            .execute(&pool)
+            .await
+            .expect("Tabelle entfernen");
+
+        let adresse = server_starten(pool.clone()).await;
+        let mut socket = verbinden(adresse, Some(77)).await;
+        let gelesen = alles_lesen(&mut socket).await;
+
+        assert_eq!(gelesen.len(), 1, "genau ein Lueckenhinweis: {gelesen:?}");
+        assert_eq!(gelesen[0]["luecke"], true);
+        assert_eq!(gelesen[0]["id"].as_i64(), Some(77));
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_dbfehler CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Der Fund, der ueber Leben und Tod des Features entscheidet: in der
+    /// Produktion haengt `/obs/ws` unter `CompressionLayer`, `TraceLayer`, dem
+    /// Audit-Middleware und den Security-Headern aus [`crate::build_router`].
+    /// Ein 101-Upgrade hat keine `Content-Length`, und ob es durch diese Kette
+    /// sauber durchgeht, sagt kein Test am nackten Router.
+    ///
+    /// Dieser hier oeffnet deshalb einen echten Socket gegen den echten
+    /// `build_router`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn echter_socket_durch_die_volle_layer_kette() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_volle_kette").await;
+        for lauf in 1..=3 {
+            ereignis_schreiben(&pool, &format!("k{lauf}")).await;
+        }
+
+        let router = crate::build_router(pool.clone(), TOKEN.to_string());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        // Schon `connect_async` wuerde scheitern, wenn die Layer-Kette das
+        // Upgrade verschluckt oder komprimiert.
+        let mut socket = verbinden(adresse, None).await;
+        let gelesen = alles_lesen(&mut socket).await;
+        assert_eq!(texte(&gelesen), vec!["k1", "k2", "k3"]);
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_volle_kette CASCADE")
             .execute(&pool)
             .await
             .ok();

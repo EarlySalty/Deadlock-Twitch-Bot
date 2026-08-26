@@ -18,8 +18,24 @@
 //!
 //! Der Schreibpfad (Tabelle, Migration und `pg_notify`) gehoert zu Auftrag B.
 //! Hier wird ausschliesslich gelesen.
+//!
+//! # `id`-Reihenfolge ist nicht Sichtbarkeitsreihenfolge
+//!
+//! `obs_dock_events.id` ist ein `BIGSERIAL`. Die Nummer wird beim `INSERT`
+//! gezogen, sichtbar wird die Zeile aber erst beim `COMMIT`, und der Schreiber
+//! (`PgObsDockSink::write` in `bin/tb-bot/src/obs_dock.rs`) setzt `INSERT` und
+//! `pg_notify` als zwei Anweisungen auf zwei Poolverbindungen ab. Zwei
+//! nebenlaeufige EventSub-Notifications koennen deshalb als 101 vor 100
+//! ankommen und auch in dieser Reihenfolge sichtbar werden.
+//!
+//! Daraus folgt die Bauregel dieses Moduls: **kein monotoner Wasserstand als
+//! Filter.** Der Bus liefert bewusst *mindestens einmal* (siehe
+//! [`NACHZUG_RUECKGRIFF`]), und die Entdopplung sitzt allein in
+//! [`Auslieferung`], die sich die zuletzt gesendeten `id` merkt statt nur die
+//! hoechste. Ein Wasserstand darf nur noch bestimmen, wo ein Nachzug *anfaengt*
+//! zu lesen, nie was er wegwirft.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -78,6 +94,22 @@ const STABIL_AB: Duration = Duration::from_secs(60);
 /// Sentinelwert fuer "Wasserstand noch nicht bestimmt".
 const WASSERSTAND_UNBEKANNT: i64 = -1;
 
+/// Wie weit **unter** den Wasserstand ein Nachzug zurueckgreift.
+///
+/// Der Wasserstand ist die hoechste schon verteilte `id`, und weil `id` nicht
+/// in Sichtbarkeitsreihenfolge vergeben wird (siehe Modulkopf), kann darunter
+/// noch eine Zeile auftauchen, die nie verteilt wurde. Ein `WHERE id > stand`
+/// wuerde sie fuer immer ueberspringen. Der Nachzug liest deshalb ein Stueck
+/// unter den Stand zurueck und verteilt bewusst Dubletten; jeder Socket wirft
+/// sie ueber [`Auslieferung`] wieder weg.
+///
+/// Der Wert deckt zwei Groessen ab: die Zeilen, die waehrend eines
+/// Verbindungsabrisses geschrieben wurden, und die Spanne, ueber die zwei
+/// nebenlaeufige Schreiber ihre `id` verkehrt herum sichtbar machen koennen.
+/// Letztere ist eine Handvoll, 1000 ist grosszuegig und kostet einen
+/// Index-Scan.
+pub const NACHZUG_RUECKGRIFF: i64 = 1000;
+
 /// Ein Ereignis auf dem Bus.
 ///
 /// `json` ist die Spalte `payload` als Text, genau so wie Auftrag B sie
@@ -89,18 +121,31 @@ const WASSERSTAND_UNBEKANNT: i64 = -1;
 /// Dock nach einem Neustart nicht, wo es stand. Siehe [`crate::obs::ws`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BusRahmen {
-    /// `obs_dock_events.id`, monoton steigend.
+    /// `obs_dock_events.id`. Steigend vergeben, aber **nicht** in dieser
+    /// Reihenfolge sichtbar; siehe Modulkopf.
     pub id: i64,
     /// `obs_dock_events.payload` als JSON-Text.
-    pub json: Arc<str>,
+    ///
+    /// `None` heisst Lueckenhinweis: der Bus hat bis einschliesslich `id`
+    /// Zeilen uebersprungen und kann sie nicht mehr nachliefern. Der Socket
+    /// macht daraus den `{"id":..,"luecke":true}`-Rahmen ans Dock.
+    pub json: Option<Arc<str>>,
 }
 
 impl BusRahmen {
-    /// Baut einen Rahmen.
+    /// Baut einen Rahmen mit Nutzlast.
     pub fn neu(id: i64, json: impl Into<Arc<str>>) -> Self {
         Self {
             id,
-            json: json.into(),
+            json: Some(json.into()),
+        }
+    }
+
+    /// Baut einen Lueckenhinweis bis einschliesslich `bis`.
+    pub fn luecke(bis: i64) -> Self {
+        Self {
+            id: bis,
+            json: None,
         }
     }
 }
@@ -307,6 +352,20 @@ impl ObsDockBus {
         }
     }
 
+    /// Verteilt einen Rahmen an **jeden** gefuehrten Kanal.
+    ///
+    /// Nur fuer den Lueckenhinweis aus [`ObsDockBus::luecke_nachziehen`]: wenn
+    /// der Bus Zeilen ueberspringt, weiss er nicht, zu welchen Kanaelen sie
+    /// gehoerten, also muss es jedes offene Dock erfahren. Gibt die Zahl der
+    /// erreichten Empfaenger zurueck.
+    pub fn an_alle_veroeffentlichen(&self, rahmen: BusRahmen) -> usize {
+        let kanaele = self.kanaele.lock().expect("obs-bus-sperre vergiftet");
+        kanaele
+            .values()
+            .map(|zustand| zustand.sender.send(rahmen.clone()).unwrap_or(0))
+            .sum()
+    }
+
     /// Zahl der gerade gefuehrten Kanaele (fuer Tests und Diagnose).
     pub fn kanal_anzahl(&self) -> usize {
         self.kanaele.lock().expect("obs-bus-sperre vergiftet").len()
@@ -424,6 +483,10 @@ impl ObsDockBus {
             // Ohne Empfaenger ist nichts zu holen und nichts zu verlieren, also
             // darf der Wasserstand sofort mit: sonst zieht ein spaeterer
             // Wiederaufbau eine Luecke nach, die niemanden interessiert.
+            //
+            // Dass der Stand damit ueber eine kleinere, noch nicht gemeldete
+            // `id` springt, ist verkraftet: der Nachzug liest
+            // [`NACHZUG_RUECKGRIFF`] Zeilen unter den Stand zurueck.
             self.wasserstand.fetch_max(hinweis.id, Ordering::SeqCst);
             return Ok(());
         }
@@ -455,11 +518,20 @@ impl ObsDockBus {
     /// dauerhaft weg, ohne dass es irgendwo auffaellt.
     ///
     /// Nur wenn selbst [`LUECKE_RUNDEN_DECKEL`] Runden nicht reichen, wird der
-    /// Rest uebersprungen; dann steht ein `warn!` im Log, statt dass die Zeilen
-    /// stumm verschwinden.
+    /// Rest uebersprungen; dann geht ein Lueckenhinweis an **alle** offenen
+    /// Docks, statt dass die Zeilen nur im Serverlog verschwinden.
+    ///
+    /// Angefangen wird [`NACHZUG_RUECKGRIFF`] Zeilen **unter** dem
+    /// Wasserstand, nicht darueber: der Stand kann ueber eine kleinere `id`
+    /// gesprungen sein, die noch nie verteilt wurde (siehe Modulkopf). Der
+    /// Rueckgriff verteilt dadurch Dubletten; die wirft [`Auslieferung`] im
+    /// Socket wieder weg.
     async fn luecke_nachziehen(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+        // Der Lesezeiger ist bewusst lokal und nicht der Wasserstand: der Stand
+        // darf nur sagen, wo angefangen wird, nicht was durchgelassen wird.
+        let mut zeiger =
+            (self.wasserstand.load(Ordering::SeqCst).max(0) - NACHZUG_RUECKGRIFF).max(0);
         for runde in 1..=LUECKE_RUNDEN_DECKEL {
-            let seit = self.wasserstand.load(Ordering::SeqCst).max(0);
             let zeilen: Vec<(i64, String, String)> = sqlx::query_as(
                 "SELECT id, channel_id, payload::text
                    FROM obs_dock_events
@@ -467,13 +539,14 @@ impl ObsDockBus {
                   ORDER BY id
                   LIMIT $2",
             )
-            .bind(seit)
+            .bind(zeiger)
             .bind(LUECKE_DECKEL)
             .fetch_all(pool)
             .await?;
 
             let anzahl = zeilen.len() as i64;
             for (id, channel_id, json) in zeilen {
+                zeiger = zeiger.max(id);
                 self.veroeffentlichen(&channel_id, BusRahmen::neu(id, json));
                 self.wasserstand.fetch_max(id, Ordering::SeqCst);
             }
@@ -490,13 +563,17 @@ impl ObsDockBus {
                 .fetch_optional(pool)
                 .await?
                 .flatten();
-        let vorher = self.wasserstand.load(Ordering::SeqCst).max(0);
         let ziel = hoechste.unwrap_or(0);
         warn!(
-            uebersprungen = ziel.saturating_sub(vorher),
+            uebersprungen = ziel.saturating_sub(zeiger),
             runden = LUECKE_RUNDEN_DECKEL,
             "OBS-Dock: Luecke groesser als der Nachzugsdeckel, Rest wird uebersprungen"
         );
+        // Welche Kanaele betroffen sind, weiss hier niemand mehr, also erfaehrt
+        // es jedes offene Dock. Ein Dock, dessen Kanal gar nichts verloren hat,
+        // sieht dadurch einen ueberfluessigen Hinweis; das ist die guenstigere
+        // Seite des Irrtums.
+        self.an_alle_veroeffentlichen(BusRahmen::luecke(ziel));
         self.wasserstand.fetch_max(ziel, Ordering::SeqCst);
         Ok(())
     }
@@ -533,45 +610,107 @@ impl NotifyHinweis {
     }
 }
 
+/// Wie viele schon gesendete `id` ein Socket vorhaelt.
+///
+/// Das ist das Fenster, in dem eine Dublette noch erkannt wird. Es muss alles
+/// abdecken, was der Bus doppelt liefern kann: den Broadcast-Puffer
+/// ([`BROADCAST_TIEFE`], 256), den Rueckgriff des Nachzugs
+/// ([`NACHZUG_RUECKGRIFF`], 1000) und den Nachlauf eines Sockets. 4096 liegt
+/// deutlich darueber und kostet je Socket rund 100 KB.
+pub const GESENDET_FENSTER: usize = 4096;
+
+// Das Fenster muss ueber allem liegen, was der Bus doppelt liefern kann; sonst
+// faellt eine Dublette heraus, bevor sie erkannt wird. Zur Uebersetzungszeit
+// festgenagelt, damit niemand eine der drei Zahlen ohne die andere anhebt.
+const _: () = assert!(GESENDET_FENSTER as i64 > NACHZUG_RUECKGRIFF);
+const _: () = assert!(GESENDET_FENSTER > BROADCAST_TIEFE);
+const _: () = assert!(GESENDET_FENSTER as i64 > NACHLAUF_DECKEL);
+
 /// Buchfuehrung eines einzelnen Sockets ueber das, was er schon gesendet hat.
 ///
-/// Der Uebergang von Nachlauf auf Live ist die einzige Stelle, an der eine
-/// Dublette oder eine Luecke entstehen kann. Deshalb abonniert der Socket den
-/// Kanal **vor** dem Lesen des Nachlaufs (Live-Rahmen sammeln sich solange im
-/// Puffer) und verwirft danach jeden Live-Rahmen, dessen `id` der Nachlauf
-/// schon abgedeckt hat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// # Warum kein Wasserstand
+///
+/// Naheliegend waere ein `id > letzte_id`. Das war die erste Fassung und es war
+/// falsch: `id` wird nicht in Sichtbarkeitsreihenfolge vergeben (siehe
+/// Modulkopf). Trifft 101 vor 100 ein, haette ein Wasserstand 101 gesendet und
+/// 100 danach stumm verworfen, ohne Log und ohne Lueckenhinweis. Bei laufendem
+/// Chat waere das der Normalfall, nicht der Sonderfall.
+///
+/// Stattdessen merkt sich die Buchfuehrung die zuletzt gesendeten `id` selbst
+/// ([`GESENDET_FENSTER`] Stueck, aeltere fallen hinten heraus). Der Filter
+/// deckt damit genau das ab, wofuer er da ist: die Ueberschneidung von Nachlauf
+/// und Live und die Dubletten aus dem Rueckgriff des Nachzugs. Ein Live-Rahmen
+/// wird nur noch verworfen, wenn dieser Socket ihn wirklich schon gesendet hat.
+///
+/// `vor_verbindung` ist der `?seit=<id>`-Wert: was das Dock selbst als gesehen
+/// meldet, wird nicht noch einmal geschickt. Dasselbe Feld traegt nach einem
+/// Lueckenhinweis den Sprung, denn ab da ist alles darunter erledigt.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Auslieferung {
-    letzte_id: i64,
+    vor_verbindung: i64,
+    hoechste: i64,
+    gesendet: HashSet<i64>,
+    reihenfolge: VecDeque<i64>,
 }
 
 impl Auslieferung {
     /// Startet die Buchfuehrung. `seit` ist der `?seit=<id>`-Wert des Docks:
     /// alles bis einschliesslich dieser `id` hat das Dock schon gesehen.
     pub fn neu(seit: Option<i64>) -> Self {
+        let seit = seit.unwrap_or(0).max(0);
         Self {
-            letzte_id: seit.unwrap_or(0).max(0),
+            vor_verbindung: seit,
+            hoechste: seit,
+            gesendet: HashSet::new(),
+            reihenfolge: VecDeque::new(),
         }
     }
 
-    /// Hoechste bereits ausgelieferte `id`.
-    pub fn letzte_id(self) -> i64 {
-        self.letzte_id
+    /// Hoechste schon ausgelieferte `id`. Ankerpunkt fuer die naechste
+    /// Nachlauf-Abfrage, **kein** Filter.
+    pub fn anker(&self) -> i64 {
+        self.hoechste
     }
 
-    /// Bucht eine Zeile aus dem Nachlauf. Die Reihenfolge kommt aus der
-    /// `ORDER BY id`-Abfrage, deshalb wird hier nur der Stand mitgezogen.
+    /// Bucht eine Zeile aus dem Nachlauf als gesendet.
     pub fn nachlauf(&mut self, id: i64) {
-        self.letzte_id = self.letzte_id.max(id);
+        self.merken(id);
     }
 
-    /// Entscheidet ueber einen Live-Rahmen: `true` heisst senden.
+    /// Entscheidet ueber einen Rahmen: `true` heisst senden.
     pub fn live(&mut self, id: i64) -> bool {
-        if id <= self.letzte_id {
+        if id <= self.vor_verbindung || self.gesendet.contains(&id) {
             return false;
         }
-        self.letzte_id = id;
+        self.merken(id);
         true
+    }
+
+    /// Bucht einen Lueckenhinweis bis einschliesslich `bis`: alles darunter
+    /// gilt als erledigt, egal ob gesendet oder uebersprungen.
+    pub fn luecke_bis(&mut self, bis: i64) {
+        self.vor_verbindung = self.vor_verbindung.max(bis);
+        self.hoechste = self.hoechste.max(bis);
+        // Was jetzt unter der Grenze liegt, muss nicht mehr einzeln gemerkt
+        // werden; das haelt das Fenster fuer die wirklich strittigen `id` frei.
+        let grenze = self.vor_verbindung;
+        self.reihenfolge.retain(|id| *id > grenze);
+        self.gesendet.retain(|id| *id > grenze);
+    }
+
+    fn merken(&mut self, id: i64) {
+        self.hoechste = self.hoechste.max(id);
+        if id <= self.vor_verbindung {
+            return;
+        }
+        if self.gesendet.insert(id) {
+            self.reihenfolge.push_back(id);
+            while self.reihenfolge.len() > GESENDET_FENSTER {
+                if let Some(alt) = self.reihenfolge.pop_front() {
+                    self.gesendet.remove(&alt);
+                }
+            }
+        }
     }
 }
 
@@ -690,7 +829,7 @@ mod tests {
         let mut buch = Auslieferung::neu(None);
         assert!(buch.live(1));
         assert!(buch.live(2));
-        assert_eq!(buch.letzte_id(), 2);
+        assert_eq!(buch.anker(), 2);
     }
 
     /// Beweisziel 2: ein Reconnect mit `seit=<letzte id>` erzeugt weder eine
@@ -729,7 +868,7 @@ mod tests {
         }
 
         assert_eq!(gesendet, vec![6, 7, 8, 9, 10]);
-        assert_eq!(buch.letzte_id(), 10);
+        assert_eq!(buch.anker(), 10);
     }
 
     #[tokio::test]
@@ -757,13 +896,76 @@ mod tests {
         assert!(!buch.live(9));
         assert!(!buch.live(10));
         assert!(buch.live(11));
-        assert_eq!(buch.letzte_id(), 11);
+        assert_eq!(buch.anker(), 11);
     }
 
     #[test]
     fn negatives_seit_wird_auf_null_geklemmt() {
         let buch = Auslieferung::neu(Some(-5));
-        assert_eq!(buch.letzte_id(), 0);
+        assert_eq!(buch.anker(), 0);
+    }
+
+    /// Der Kern des Review-Funds: `pg_notify` kommt nicht in `id`-Reihenfolge
+    /// an. Meldet der Bus erst 101 und dann 100, muessen **beide** hinaus, und
+    /// keines von beiden ein zweites Mal.
+    ///
+    /// Ein Wasserstand-Filter (`id > letzte_id`) haette 100 hier stumm
+    /// verworfen.
+    #[test]
+    fn verkehrte_id_reihenfolge_verliert_keinen_rahmen() {
+        let mut buch = Auslieferung::neu(None);
+        assert!(buch.live(101), "101 kommt zuerst und geht raus");
+        assert!(buch.live(100), "100 kommt danach und muss trotzdem raus");
+        assert!(!buch.live(101), "keine Dublette");
+        assert!(!buch.live(100), "keine Dublette");
+        assert_eq!(buch.anker(), 101);
+    }
+
+    /// Dasselbe im Uebergang von Nachlauf auf Live: was der Nachlauf schon
+    /// hatte, wird verworfen, alles andere geht raus, auch wenn es unter dem
+    /// hoechsten schon gesendeten Wert liegt.
+    #[test]
+    fn nachlauf_entdoppelt_ohne_kleinere_ids_zu_fressen() {
+        let mut buch = Auslieferung::neu(Some(5));
+        for id in [6, 7, 9] {
+            buch.nachlauf(id);
+        }
+        assert!(!buch.live(6), "stand schon im Nachlauf");
+        assert!(!buch.live(9), "stand schon im Nachlauf");
+        assert!(buch.live(8), "wurde erst nach der Abfrage sichtbar");
+        assert!(!buch.live(5), "unter dem Lesezeichen des Docks");
+        assert!(buch.live(10));
+        assert!(!buch.live(8), "keine Dublette");
+    }
+
+    /// Nach einem Lueckenhinweis ist alles darunter erledigt, und das Fenster
+    /// der gemerkten `id` wird dabei frei.
+    #[test]
+    fn luecke_bis_setzt_die_untergrenze() {
+        let mut buch = Auslieferung::neu(None);
+        assert!(buch.live(3));
+        buch.luecke_bis(900);
+        assert!(!buch.live(3), "unter der Luecke");
+        assert!(!buch.live(900), "die Luecke selbst gilt als erledigt");
+        assert!(buch.live(901));
+        assert_eq!(buch.anker(), 901);
+    }
+
+    /// Kann der Bus eine Luecke nicht mehr nachziehen, erfaehrt es jedes
+    /// offene Dock, nicht nur der Serverlog.
+    #[tokio::test]
+    async fn lueckenhinweis_erreicht_jeden_kanal() {
+        let bus = ObsDockBus::ohne_datenbank();
+        let mut a = bus.anmelden("kanal-a");
+        let mut b = bus.anmelden("kanal-b");
+
+        assert_eq!(bus.an_alle_veroeffentlichen(BusRahmen::luecke(900)), 2);
+
+        let von_a = a.rahmen.recv().await.unwrap();
+        let von_b = b.rahmen.recv().await.unwrap();
+        assert_eq!(von_a.id, 900);
+        assert!(von_a.json.is_none(), "Lueckenhinweis traegt keine Nutzlast");
+        assert_eq!(von_b, von_a);
     }
 
     /// Der Nachzug nach einem Listener-Abriss darf nicht am Abfragedeckel
@@ -835,6 +1037,90 @@ mod tests {
         // Eine einzelne gekappte Abfrage waere bei LUECKE_DECKEL stehen
         // geblieben und haette den Rest verschluckt.
         assert_eq!(bus.wasserstand.load(Ordering::SeqCst), anzahl);
+
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Der Nachzug darf nicht auf dem Wasserstand aufsetzen.
+    ///
+    /// Aufbau ist genau der Fall aus dem Review: der Stand steht schon auf der
+    /// hoeheren `id`, weil deren NOTIFY zuerst kam, waehrend die kleinere `id`
+    /// nie verteilt wurde. Ein `WHERE id > stand` haette sie fuer immer
+    /// uebersprungen; der Rueckgriff holt sie.
+    ///
+    /// Ohne `TB_TEST_DATABASE_URL` ueberspringt sich der Test selbst.
+    #[tokio::test]
+    async fn nachzug_greift_unter_den_wasserstand_zurueck() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let schema = "obs_bus_rueckgriff";
+        let aufbau = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("Test-DB erreichbar");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&aufbau)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&aufbau)
+            .await
+            .unwrap();
+        aufbau.close().await;
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(move |conn, _| {
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {schema}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&dsn)
+            .await
+            .expect("Testpool");
+        sqlx::query(
+            "CREATE TABLE obs_dock_events (
+                 id BIGSERIAL PRIMARY KEY,
+                 channel_id TEXT NOT NULL,
+                 payload JSONB NOT NULL
+             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO obs_dock_events (id, channel_id, payload)
+             VALUES (100, 'kanal-a', '{\"typ\":\"chat\",\"id\":\"100\"}'::jsonb),
+                    (101, 'kanal-a', '{\"typ\":\"chat\",\"id\":\"101\"}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bus = ObsDockBus::neu(pool.clone());
+        let mut dock = bus.anmelden("kanal-a");
+        // 101 kam per NOTIFY zuerst durch und hat den Stand hochgezogen; 100
+        // wurde nie verteilt.
+        bus.wasserstand.store(101, Ordering::SeqCst);
+        bus.luecke_nachziehen(&pool).await.unwrap();
+
+        let mut geholt: Vec<i64> = Vec::new();
+        while let Ok(rahmen) = dock.rahmen.try_recv() {
+            geholt.push(rahmen.id);
+        }
+        assert!(
+            geholt.contains(&100),
+            "die uebersprungene id muss nachkommen, geholt: {geholt:?}"
+        );
 
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
             .execute(&pool)
