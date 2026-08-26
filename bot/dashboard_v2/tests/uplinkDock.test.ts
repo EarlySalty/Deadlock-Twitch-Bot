@@ -127,7 +127,9 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
     ...BASIS,
     verbindungen: [{ platform: 'twitch', status: 'neu_verbinden' }],
   });
-  assert.equal(neu[0].statusText, 'Neu verbinden');
+  assert.equal(neu[0].statusText, 'Zugang abgelaufen');
+  // Status und Knopf sagen Verschiedenes: Zustand und Handlung.
+  assert.notEqual(neu[0].statusText, neu[0].knopfText);
   assert.equal(neu[0].knopfText, 'Neu verbinden');
   // Ein abgelaufener Zugang laesst sich trennen: die Tokens liegen noch da.
   assert.equal(neu[0].trennenMoeglich, true);

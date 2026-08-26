@@ -360,6 +360,16 @@ export function ZielKarte({
     setVorbelegt(true);
   }, [bestellt, vorbelegt, ziel?.rtmp_url, rtmpVorgabe]);
 
+  // Sobald der automatische Weg greift, faellt weg, was jemand vorher ins
+  // Formular getippt hat. Der Riegel in `speichern` haelt auch ohne das; ein
+  // eingetippter Schluessel soll trotzdem nicht im Speicher der Seite liegen
+  // bleiben, und nach einem Trennen soll das Feld leer starten.
+  useEffect(() => {
+    if (!automatisch) return;
+    setStreamKey('');
+    setRtmpUrl(ziel?.rtmp_url || rtmpVorgabe);
+  }, [automatisch, ziel?.rtmp_url, rtmpVorgabe]);
+
   // Beim Wechsel in den manuellen Modus die Zahlen der gewaehlten Stufe
   // uebernehmen. Ein leeres Formular waere hier der schlechteste Start: es
   // sieht aus, als muesste man von vorn anfangen.
@@ -417,11 +427,23 @@ export function ZielKarte({
 
   const speichern = useMutation({
     mutationFn: async (enabled?: boolean) => {
-      const url = rtmpUrl.trim();
-      const key = streamKey.trim();
-      if (key && !url) throw new Error('Ohne Serveradresse können wir den Schlüssel nicht zuordnen.');
-      if (!key && !eingerichtet) {
-        throw new Error(`Für ${label} fehlt uns noch der Stream-Schlüssel.`);
+      // Im automatischen Weg gibt es kein Formular mehr: Adresse und
+      // Schluessel kommen von der Verbindung. Was noch im State liegt, darf
+      // nicht mitgehen. Der Fall ist real: wer bei "Verbunden, Schlüssel
+      // fehlt" erst einen alten Schluessel eintippt und dann oben "Stream-
+      // Schlüssel holen" klickt, haette beim naechsten Speichern der Qualitaet
+      // den frisch geholten Schluessel wieder ueberschrieben, waehrend die
+      // Karte daneben behauptet, er komme von Twitch. Auffallen wuerde das
+      // erst am Sendetag.
+      const url = automatisch ? '' : rtmpUrl.trim();
+      const key = automatisch ? '' : streamKey.trim();
+      if (!automatisch) {
+        if (key && !url) {
+          throw new Error('Ohne Serveradresse können wir den Schlüssel nicht zuordnen.');
+        }
+        if (!key && !eingerichtet) {
+          throw new Error(`Für ${label} fehlt uns noch der Stream-Schlüssel.`);
+        }
       }
       // Adresse und Schluessel gehoeren zusammen: das Relay nimmt sie nur
       // gemeinsam an, weil beide gleich wieder als Argument an ffmpeg gehen
@@ -429,7 +451,7 @@ export function ZielKarte({
       // wuerde also stillschweigend unter den Tisch fallen, waehrend der
       // Knopf "Gespeichert" meldet und das Feld die neue Adresse behaelt.
       // Deshalb hier ein Halt mit Grund statt eines verworfenen Feldes.
-      if (!key && eingerichtet && url !== (ziel?.rtmp_url ?? '')) {
+      if (!automatisch && !key && eingerichtet && url !== (ziel?.rtmp_url ?? '')) {
         throw new Error(
           'Die Serveradresse können wir nur zusammen mit dem Stream-Schlüssel ändern. Trag beides ein.',
         );

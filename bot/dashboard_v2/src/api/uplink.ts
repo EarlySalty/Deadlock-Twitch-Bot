@@ -212,7 +212,10 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
       if (status === 'verbunden') {
         statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
       } else if (status === 'neu_verbinden') {
-        statusText = 'Neu verbinden';
+        // Nicht wortgleich mit dem Knopf daneben: der Status sagt den Zustand,
+        // der Knopf die Handlung. Zweimal "Neu verbinden" nebeneinander liest
+        // sich wie zwei Knoepfe.
+        statusText = 'Zugang abgelaufen';
       } else {
         statusText = 'Nicht verbunden';
       }

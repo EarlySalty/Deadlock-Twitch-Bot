@@ -132,14 +132,18 @@ test('verbundene_karte_zeigt_keine_zugangsfelder', () => {
   // nur noch eine Fehlerquelle: was dort steht, ueberschreibt der naechste
   // Nachlauf ohnehin.
   assert.match(ZIEL, /const automatisch = chat\?\.status === 'verbunden' && chat\.streamKeyVorhanden/);
-  assert.match(ZIEL, /\{automatisch \? \(/);
-  assert.match(ZIEL, /data-zugang="automatisch"/);
-  assert.match(ZIEL, /Schlüssel erneut holen/);
+  // Die Reihenfolge im Ternaer, nicht nur das Vorkommen: sonst bliebe der
+  // Test gruen, wenn die Bedingung invertiert waere.
+  assert.match(
+    ZIEL,
+    /\{automatisch \? \([\s\S]*?data-zugang="automatisch"[\s\S]*?Schlüssel erneut holen[\s\S]*?\) : \([\s\S]*?Serveradresse von \{label\}[\s\S]*?Stream-Schlüssel von \{label\}/,
+  );
   // Die Herkunft steht in der Statuszeile, nicht doppelt daneben.
   assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \$\{label\}-Verbindung/);
-  // Und ohne Verbindung bleiben die Felder als Handweg stehen.
-  assert.match(ZIEL, /Serveradresse von \{label\}/);
-  assert.match(ZIEL, /Stream-Schlüssel von \{label\}/);
+  // Und im automatischen Weg geht nichts aus dem Formular mit: ein vorher
+  // getippter alter Schluessel wuerde sonst den frisch geholten ersetzen.
+  assert.match(ZIEL, /const url = automatisch \? '' : rtmpUrl\.trim\(\);/);
+  assert.match(ZIEL, /const key = automatisch \? '' : streamKey\.trim\(\);/);
 });
 
 test('kartenkopf_bleibt_kurz_und_erklaert_nur_bei_getrennt', () => {
