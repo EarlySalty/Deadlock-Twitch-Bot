@@ -49,14 +49,3 @@ updates:
       - "javascript"
     commit-message:
       prefix: "deps"
-
-  - package-ecosystem: "npm"
-    directory: "/.github/eslint-security"
-    schedule:
-      interval: "daily"
-    labels:
-      - "dependencies"
-      - "github-actions"
-      - "javascript"
-    commit-message:
-      prefix: "deps"

@@ -27,7 +27,6 @@ bot/dashboard_v2/node_modules
 website/node_modules/
 website/dist/
 website/.vite/
-.github/eslint-security/node_modules/
 
 # Datenbanken
 *.sqlite3
