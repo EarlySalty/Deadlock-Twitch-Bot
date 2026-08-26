@@ -1522,16 +1522,61 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         }
 
         tracing::info!(login = %twitch_login, "Raid auth successful");
+        let uplink = tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile)
+            == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
+        let (title, body_html) = if uplink {
+            (
+                "Verbindung steht",
+                "<p>Twitch ist jetzt mit dem Uplink verbunden.</p>\
+                 <p>Du kannst dieses Fenster jetzt schließen.</p>",
+            )
+        } else {
+            (
+                "Autorisierung erfolgreich",
+                "<p>Der Raid-Bot wurde erfolgreich autorisiert.</p>\
+                 <p>Du kannst dieses Fenster jetzt schließen.</p>",
+            )
+        };
         Ok(OAuthCallbackResult {
             status: 200,
-            title: "Autorisierung erfolgreich".to_string(),
-            body_html: "<p>Der Raid-Bot wurde erfolgreich autorisiert.</p>\
-                        <p>Du kannst dieses Fenster jetzt schließen.</p>"
-                .to_string(),
-            redirect_url: Some(self.success_redirect_url.clone()),
+            title: title.to_string(),
+            body_html: body_html.to_string(),
+            redirect_url: Some(erfolgsziel(
+                &self.success_redirect_url,
+                &state_info.scope_profile,
+            )),
         })
     }
 }
+
+/// Wohin der Streamer nach einem erfolgreichen Grant zurückkommt.
+///
+/// Der Raid-Weg landet unverändert auf [`RaidOAuthAdapter::success_redirect_url`].
+/// Der Uplink-Weg gehört auf die Uplink-Seite: wer dort auf "Mit Twitch
+/// verbinden" geklickt hat, will die Plattform-Karte wiedersehen und nicht die
+/// Dashboard-Startseite. Übernommen wird nur der Ursprung der eingestellten
+/// Adresse, damit eine falsch gesetzte Umgebungsvariable keinen fremden Host
+/// in die Weiterleitung bringt.
+fn erfolgsziel(success_redirect_url: &str, scope_profile: &str) -> String {
+    if tb_raid::scope_profiles::normalize_scope_profile(scope_profile)
+        != tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE
+    {
+        return success_redirect_url.to_string();
+    }
+    match url::Url::parse(success_redirect_url.trim()) {
+        Ok(url) if url.host_str().is_some() => {
+            format!("{}{UPLINK_ERFOLGS_PFAD}", url.origin().ascii_serialization())
+        }
+        // Ohne lesbaren Ursprung bleibt es beim eingestellten Ziel: eine
+        // Weiterleitung auf einen relativen Pfad würde der Dashboard-Seite
+        // ohnehin als ungültig durchfallen.
+        _ => success_redirect_url.to_string(),
+    }
+}
+
+/// Pfad der Uplink-Seite samt Rückkehr-Merker. Das Dashboard liest
+/// `verbunden=twitch` und holt danach den Stream-Key nach.
+const UPLINK_ERFOLGS_PFAD: &str = "/twitch/uplink?verbunden=twitch";
 
 /// Synthetischer Onboarding-Login (Python `PUBLIC_STREAMER_ONBOARDING_LOGIN`).
 const PUBLIC_ONBOARDING_LOGIN: &str = "public:website_onboarding";
@@ -1687,6 +1732,38 @@ mod tests {
     #[test]
     fn parse_allowlist_nicht_gesetzt_gibt_none() {
         assert!(parse_allowlist(None).is_none());
+    }
+
+    // ── erfolgsziel ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn callback_mit_uplink_profil_leitet_auf_uplink_seite() {
+        let eingestellt = "https://deutsche-deadlock-community.de/twitch/dashboard";
+        assert_eq!(
+            erfolgsziel(eingestellt, "uplink"),
+            "https://deutsche-deadlock-community.de/twitch/uplink?verbunden=twitch"
+        );
+        // Gross/klein und Leerraum wie ueberall im Profilnamen.
+        assert_eq!(
+            erfolgsziel(eingestellt, "  UPLINK "),
+            "https://deutsche-deadlock-community.de/twitch/uplink?verbunden=twitch"
+        );
+    }
+
+    #[test]
+    fn callback_ohne_uplink_profil_leitet_wie_bisher() {
+        let eingestellt = "https://deutsche-deadlock-community.de/twitch/dashboard";
+        for profil in ["base", "dashboard_reauth", "auto", "", "unbekannt"] {
+            assert_eq!(erfolgsziel(eingestellt, profil), eingestellt, "{profil}");
+        }
+    }
+
+    #[test]
+    fn erfolgsziel_ohne_lesbaren_ursprung_bleibt_beim_eingestellten_ziel() {
+        // Ein kaputter Wert darf keinen Pfad an einen leeren Ursprung haengen.
+        for kaputt in ["/twitch/dashboard", "", "nicht mal eine adresse"] {
+            assert_eq!(erfolgsziel(kaputt, "uplink"), kaputt, "{kaputt}");
+        }
     }
 
     // Python policy.py: gesetzte-aber-leere Variable → leeres Set = deny-all

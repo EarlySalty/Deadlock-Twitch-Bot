@@ -104,10 +104,37 @@ test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.match(ZIEL, /chat\.knopfText/);
   assert.match(ZIEL, /chat\.statusText/);
   assert.match(ZIEL, /uplinkConnectUrl\(chat\.id\)/);
-  assert.doesNotMatch(ZIEL, /Trennen ist gerade nicht möglich/);
-  assert.match(UPLINK_API, /Chat von \$\{p\.label\} verbinden/);
-  assert.match(UPLINK_API, /Chat neu verbinden/);
-  assert.match(UPLINK_API, /Chat folgt/);
-  assert.match(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
-  assert.doesNotMatch(UPLINK_API, /uplinkDisconnect|disconnectUplinkPlatform/);
+  // Verbinden laeuft ueber den bestehenden Streamer-OAuth, nicht ueber einen
+  // eigenen Pfad: ein zweiter Grant fuer dasselbe Konto hiess zwei Zugaenge,
+  // von denen einer irgendwann der falsche war.
+  assert.match(UPLINK_API, /\/twitch\/raid\/auth\?scope_profile=uplink/);
+  assert.doesNotMatch(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
+  assert.match(UPLINK_API, /Mit \$\{p\.label\} verbinden/);
+  assert.match(UPLINK_API, /'Neu verbinden'/);
+  assert.match(UPLINK_API, /Folgt später/);
+});
+
+test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
+  // Trennen nimmt den ganzen Zugang zurueck. Ohne den Satz schaltet man
+  // Leuten unbemerkt die automatischen Raids ab.
+  assert.match(UPLINK_API, /automatischen Raids auf, bis du dich neu verbindest/);
+  assert.match(ZIEL, /TRENNEN_HINWEIS/);
+  assert.match(ZIEL, /trenneUplinkPlattform\(chat\.id, csrfToken/);
+  assert.match(ZIEL, /^\s+Trennen$/m);
+  assert.match(ZIEL, /Ja, trennen/);
+  assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
+});
+
+test('vier_dock_adressen_mit_namen_beim_erzeugen', () => {
+  // Vier Fenster hinter einem Token; die Namen sind die, die in OBS
+  // eingetragen werden.
+  assert.match(UPLINK_API, /titel: 'Chat', feld: 'chat'/);
+  assert.match(UPLINK_API, /titel: 'Aktivität', feld: 'activity'/);
+  assert.match(UPLINK_API, /titel: 'Stream-Infos', feld: 'stream_info'/);
+  assert.match(UPLINK_API, /titel: 'Kanalpunkte', feld: 'points'/);
+  // Der Name steht sichtbar vor der Adresse, sonst sind es vier gleich
+  // aussehende Zeilen.
+  assert.match(UPLINK, /<span className="w-28 shrink-0 text-\[11px\] font-semibold text-white">\{titel\}<\/span>/);
+  assert.match(UPLINK, /eigene\.map\(\(dock\) => \(/);
+  assert.match(UPLINK, /Diese Adressen werden nur jetzt einmal angezeigt/);
 });

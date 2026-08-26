@@ -215,4 +215,39 @@ impl AuthWriter {
         tx.commit().await?;
         Ok(())
     }
+
+    /// Nimmt die gespeicherten Tokens zurück, ohne die Zeile zu löschen.
+    ///
+    /// Das ist "Trennen": die Blobs werden geleert und `needs_reauth` gesetzt,
+    /// damit jeder Lesepfad sofort erkennt, dass hier nichts mehr zu holen ist.
+    /// Ein DELETE der Zeile wäre falsch: sie trägt auch `raid_enabled`,
+    /// `authorized_at` und die Verknüpfung zur Partnerhistorie, und die
+    /// gehören nicht dem Uplink.
+    ///
+    /// `reauth_notified_at` wird bewusst mitgesetzt. Die Erinnerungs-DM prüft
+    /// dieses Feld; ohne den Stempel bekäme der Streamer eine Mahnung, seinen
+    /// Zugang zu erneuern, direkt nachdem er ihn selbst getrennt hat.
+    ///
+    /// Kein Fehler, wenn es die Zeile nicht gibt: Trennen soll wiederholbar
+    /// sein.
+    pub async fn clear_tokens(
+        &self,
+        twitch_user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), AuthWriteError> {
+        sqlx::query!(
+            "UPDATE twitch_raid_auth
+                SET access_token_enc = NULL,
+                    refresh_token_enc = NULL,
+                    needs_reauth = TRUE,
+                    reauth_notified_at = $2,
+                    last_refreshed_at = $2
+              WHERE twitch_user_id = $1",
+            twitch_user_id,
+            now
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

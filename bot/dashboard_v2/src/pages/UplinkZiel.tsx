@@ -10,6 +10,8 @@ import {
   UPLINK_PROFILE,
   profilNameFuer,
   saveUplinkDestination,
+  trenneUplinkPlattform,
+  TRENNEN_HINWEIS,
   uplinkConnectUrl,
 } from '@/api/uplink';
 import type {
@@ -90,29 +92,100 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
 /**
  * Verbindungsstand im Kopf der Plattform-Karte.
  *
- * Verbinden holt nur den Chat-Zugang (Lesen und Schreiben); der Stream-Key
- * bleibt im Formular. Der Knopf ist ein Link, keine fetch-Aktion: der Server
- * leitet direkt zur Anmeldeseite der Plattform weiter. Ein Link in der
- * Summary folgt beim Klick dem Ziel, statt die Karte auf- oder zuzuklappen.
- * Statustext und Knopfbeschriftung kommen fertig aus plattformVerbindungen;
- * bei einem verbundenen Chat steht daneben "Chat neu verbinden" auf
- * demselben Weg.
+ * Verbinden holt alles auf einmal: Chat lesen und schreiben, den Stream-Key
+ * fuer das Uplink-Ziel und die Rechte fuer Aktivitaet und Kanalpunkte. Der
+ * Knopf ist ein Link, keine fetch-Aktion: der Server leitet direkt zur
+ * Anmeldeseite der Plattform weiter. Ein Link in der Summary folgt beim Klick
+ * dem Ziel, statt die Karte auf- oder zuzuklappen.
+ *
+ * Trennen sitzt hier und nicht in der Chat-Karte, weil es hier auch etwas
+ * ueber das Ziel dieser Plattform entscheidet. Es ist ein Knopf, kein Link:
+ * ein Klick, der einen Zugang zurueckgibt, gehoert nicht in eine
+ * Browser-Navigation. Der Hinweis darunter sagt, was noch daran haengt.
  */
-function PlattformVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
+function PlattformVerbindung({
+  chat,
+  csrfToken,
+}: {
+  chat: UplinkPlattformVerbindung;
+  csrfToken: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const [nachfrage, setNachfrage] = useState(false);
+  const trennen = useMutation({
+    mutationFn: () => trenneUplinkPlattform(chat.id, csrfToken ?? ''),
+    onSuccess: () => {
+      setNachfrage(false);
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+    },
+  });
   const knopfKlasse =
     'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
+  const stillKlasse =
+    'inline-flex items-center rounded-md border border-border px-2 py-0.5 text-[11px] font-semibold text-text-secondary transition-colors hover:border-warning/60 hover:text-warning disabled:opacity-60';
   const statusKlasse = !chat.aktiv
     ? 'text-text-secondary/80'
     : chat.status === 'verbunden'
       ? 'text-success'
       : 'text-text-secondary';
   return (
-    <span data-chat={chat.status} className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal">
-      <span className={statusKlasse}>{chat.statusText}</span>
-      {chat.aktiv && chat.knopfText ? (
-        <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
-          {chat.knopfText}
-        </a>
+    <span data-chat={chat.status} className="mt-1 flex flex-col gap-1 text-xs font-normal">
+      <span className="flex flex-wrap items-center gap-2">
+        <span className={statusKlasse}>{chat.statusText}</span>
+        {chat.aktiv && chat.knopfText ? (
+          <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
+            {chat.knopfText}
+          </a>
+        ) : null}
+        {chat.trennenMoeglich ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              setNachfrage(true);
+            }}
+            className={stillKlasse}
+          >
+            Trennen
+          </button>
+        ) : null}
+      </span>
+      {chat.trennenMoeglich && !nachfrage ? (
+        <span className="text-[11px] text-text-secondary">{TRENNEN_HINWEIS}</span>
+      ) : null}
+      {nachfrage ? (
+        <span className="flex flex-col gap-1 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2">
+          <span className="text-[11px] text-warning">{TRENNEN_HINWEIS}</span>
+          <span className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={trennen.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                trennen.mutate();
+              }}
+              className={stillKlasse}
+            >
+              {trennen.isPending ? 'Wird getrennt' : 'Ja, trennen'}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                setNachfrage(false);
+              }}
+              className={stillKlasse}
+            >
+              Abbrechen
+            </button>
+          </span>
+        </span>
+      ) : null}
+      {trennen.isError ? (
+        <span role="alert" className="text-[11px] text-warning">
+          Das Trennen hat gerade nicht geklappt. Bitte gleich noch einmal versuchen.
+        </span>
       ) : null}
     </span>
   );
@@ -133,6 +206,7 @@ export function ZielKarte({
   ziel,
   caps,
   chat,
+  csrfToken,
   offenStart,
 }: {
   platform: UplinkPlattform;
@@ -140,8 +214,10 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
-  /** Stand des Chat-Zugangs dieser Plattform; der Stream-Key bleibt im Formular. */
+  /** Stand des Zugangs dieser Plattform: verbunden, neu verbinden, getrennt. */
   chat?: UplinkPlattformVerbindung;
+  /** Fuer das Trennen; ohne Token bleibt der Knopf nur eine Anzeige. */
+  csrfToken?: string | null;
   offenStart: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -390,7 +466,7 @@ export function ZielKarte({
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
-            {chat ? <PlattformVerbindung chat={chat} /> : null}
+            {chat ? <PlattformVerbindung chat={chat} csrfToken={csrfToken ?? null} /> : null}
           </span>
         </span>
         <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>

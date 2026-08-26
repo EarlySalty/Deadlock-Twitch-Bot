@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT streamer_login, pkce_verifier AS \"pkce_verifier?\"\n            FROM oauth_state_tokens\n            WHERE state_token = $1\n              AND platform = $2\n              AND expires_at > $3\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "streamer_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "pkce_verifier?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "088424abdc92ba8c210b4d20627b639a872f6f1b85a165867890c05face7f40d"
+}

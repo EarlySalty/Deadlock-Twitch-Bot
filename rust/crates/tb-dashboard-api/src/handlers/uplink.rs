@@ -4,10 +4,8 @@
 // jeden Handler und jede Aufrufstelle verkomplizieren, ohne Laufzeitgewinn.
 #![allow(clippy::result_large_err)]
 
-use std::sync::Arc;
-
 use axum::{
-    extract::{Extension, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -16,13 +14,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use super::platform_connect::PlatformConnectionStore;
+use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
 use crate::auth::{level::DashboardAuthLevel, require_admin};
-
-/// Feldschluessel fuer `platform_connections`, als Extension. Fehlt er, meldet
-/// `/uplink/me` alle Plattformen als getrennt statt zu scheitern.
-#[derive(Clone)]
-pub struct UplinkCipher(pub Arc<tb_crypto::FieldCipher>);
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -123,23 +116,11 @@ async fn partner_id(pool: &PgPool, auth: &DashboardAuthLevel) -> Result<i64, Res
         })
 }
 
-/// Login (klein geschrieben) und numerische Streamer-ID der Session, fuer
-/// Nachbarmodule, die beides brauchen (Chat verbinden).
-pub(crate) async fn partner_identitaet(
-    pool: &PgPool,
-    auth: &DashboardAuthLevel,
-) -> Result<(String, i64), Response> {
-    let id = partner_id(pool, auth).await?;
-    let (login, _) = twitch_identitaet(auth)?;
-    Ok((login.trim().to_lowercase(), id))
-}
-
-async fn relay_json(
+pub(crate) async fn relay_json(
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, Response> {
-    let methode_fuer_log = method.clone();
     let secret = secret_fuer(path).ok_or_else(|| {
         // Zwei verschiedene Lagen, zwei verschiedene Sätze: fehlt das
         // Admin-Secret, steht die Verbindung zum Relay ja, und "noch nicht
@@ -149,9 +130,28 @@ async fn relay_json(
         } else {
             "Uplink ist noch nicht verbunden."
         };
-        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": text }))).into_response()
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": text })),
+        )
+            .into_response()
     })?;
-    let url = format!("{}{path}", relay_base().trim_end_matches('/'));
+    relay_json_mit(&relay_base(), &secret, method, path, body).await
+}
+
+/// Der Relay-Aufruf mit ausdruecklicher Basis-URL und Secret, damit der Weg im
+/// Test gegen einen Wiremock laufen kann, ohne die Prozessumgebung anzufassen.
+/// `set_var` in einem Testbinary ist ein Datenrennen mit jedem anderen Test,
+/// der dasselbe tut.
+pub(crate) async fn relay_json_mit(
+    base: &str,
+    secret: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, Response> {
+    let methode_fuer_log = method.clone();
+    let url = format!("{}{path}", base.trim_end_matches('/'));
     let client = reqwest::Client::new();
     let mut req = client
         .request(method, url)
@@ -259,12 +259,69 @@ async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
     )
 }
 
+/// Der Verbindungsstand einer Plattform, wie ihn `/uplink/me` meldet.
+///
+/// Drei Antworten, nicht zwei. `neu_verbinden` ist kein Zierrat: ein alter
+/// Raid-Grant traegt gueltige Tokens, aber weder Chat- noch Stream-Key-Recht.
+/// Ihn als "verbunden" zu zeigen hiesse, dem Streamer ein Dock zu versprechen,
+/// das leer bleibt. Ihn als "getrennt" zu zeigen hiesse, seinen laufenden
+/// Raid-Bot zu verschweigen.
+///
+/// Reine Funktion, damit die Zuordnung ohne Datenbank pruefbar ist.
+pub fn verbindungs_status(
+    hat_tokens: bool,
+    needs_reauth: bool,
+    scopes: &[String],
+) -> &'static str {
+    if !hat_tokens {
+        return "getrennt";
+    }
+    if needs_reauth || !tb_raid::scope_profiles::hat_alle_uplink_scopes(scopes) {
+        return "neu_verbinden";
+    }
+    "verbunden"
+}
+
+/// Liest den Verbindungsstand von Twitch aus `twitch_raid_auth`.
+///
+/// Ohne Feldschluessel gibt es keine Aussage: dann faellt alles auf "getrennt",
+/// statt einen Stand zu behaupten, den niemand geprueft hat.
+async fn twitch_verbindung(
+    pool: &PgPool,
+    config: Option<&PlatformTokenConfig>,
+    streamer_id: i64,
+) -> Vec<(String, &'static str)> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+    let uid = streamer_id.to_string();
+    let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+    let tokens = match store.load_decrypted_unrestricted(&uid).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("uplink: Verbindungsstand fuer {streamer_id} nicht lesbar: {e}");
+            return Vec::new();
+        }
+    };
+    let Some(tokens) = tokens else {
+        return vec![(PLATFORM_TWITCH.to_string(), "getrennt")];
+    };
+    let scopes = store.get_scopes(&uid).await.unwrap_or_else(|e| {
+        tracing::warn!("uplink: Scopes fuer {streamer_id} nicht lesbar: {e}");
+        Vec::new()
+    });
+    vec![(
+        PLATFORM_TWITCH.to_string(),
+        verbindungs_status(true, tokens.needs_reauth, &scopes),
+    )]
+}
+
 pub async fn me_handler(
     State(pool): State<PgPool>,
-    cipher: Option<Extension<UplinkCipher>>,
+    config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
 ) -> Result<Json<Value>, Response> {
-    let cipher = cipher.map(|Extension(c)| c.0);
+    let config = config.map(|Extension(c)| c);
     let id = partner_id(&pool, &auth).await?;
     let mut wert = relay_json(
         reqwest::Method::GET,
@@ -274,23 +331,41 @@ pub async fn me_handler(
     .await?;
     // Der Live-Status ist Wissen des Bots, nicht des Relays: er kommt aus der
     // Twitch-Beobachtung. Deshalb wird er hier angehaengt und nicht im Relay
-    // nachgebaut. Gleiches gilt fuer die verbundenen Chat-Plattformen.
+    // nachgebaut. Gleiches gilt fuer die verbundenen Plattformen.
     let live = live_status(&pool, id).await;
     let login = twitch_identitaet(&auth)
         .ok()
         .map(|(login, _)| login.trim().to_lowercase());
-    let verbindungen = match cipher.as_ref() {
-        Some(cipher) => PlatformConnectionStore::new(pool.clone(), cipher.clone())
-            .status_liste(id)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!("uplink: Chat-Verbindungen fuer {id} nicht lesbar: {e}");
-                Vec::new()
-            }),
-        None => Vec::new(),
+    let verbindungen = twitch_verbindung(&pool, config.as_ref(), id).await;
+    // Ob je Plattform ein Uplink-Ziel (und damit ein Stream-Key) liegt, weiss
+    // nur das Relay. Faellt der Abruf aus, gilt "kein Ziel bekannt": lieber
+    // einmal zu viel "Stream-Key fehlt" zeigen als ein Ziel behaupten.
+    let ziele = match relay_json(
+        reqwest::Method::GET,
+        &format!("{RELAY_ZIEL_PFAD}?streamer_id={id}"),
+        None,
+    )
+    .await
+    {
+        Ok(wert) => ziel_plattformen(&wert),
+        Err(_) => Vec::new(),
     };
-    me_anreichern(&mut wert, live, login.as_deref(), &verbindungen);
+    me_anreichern(&mut wert, live, login.as_deref(), &verbindungen, &ziele);
     Ok(Json(wert))
+}
+
+/// Plattformen, fuer die das Relay ein Ziel fuehrt (`GET /v1/me/destinations`).
+fn ziel_plattformen(wert: &Value) -> Vec<String> {
+    wert.get("destinations")
+        .and_then(Value::as_array)
+        .map(|liste| {
+            liste
+                .iter()
+                .filter_map(|z| z.get("platform").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Haengt an die Relay-Antwort an, was nur der Bot weiss: Live-Status, Login,
@@ -302,6 +377,7 @@ fn me_anreichern(
     live: &str,
     login: Option<&str>,
     verbindungen: &[(String, &'static str)],
+    ziele: &[String],
 ) {
     let Some(objekt) = wert.as_object_mut() else {
         return;
@@ -336,7 +412,12 @@ fn me_anreichern(
                 .find(|(p, _)| p == plattform)
                 .map(|(_, s)| *s)
                 .unwrap_or("getrennt");
-            json!({ "platform": plattform, "status": status })
+            let stream_key_vorhanden = ziele.iter().any(|z| z == plattform);
+            json!({
+                "platform": plattform,
+                "status": status,
+                "stream_key_vorhanden": stream_key_vorhanden,
+            })
         })
         .collect();
     objekt.insert("verbindungen".to_string(), Value::Array(liste));
@@ -753,7 +834,7 @@ pub async fn caps_handler(
 /// `/v1/me/destinations` und nicht `/v1/admin/destinations`: nur dieser
 /// Endpunkt nimmt eine Aenderung ohne Stream-Key an, und genau daran scheiterte
 /// vorher jede Qualitaetsaenderung an einem eingerichteten Ziel.
-const RELAY_ZIEL_PFAD: &str = "/v1/me/destinations";
+pub(crate) const RELAY_ZIEL_PFAD: &str = "/v1/me/destinations";
 
 /// Die Huelle, die `PutDestinations` in rs-relay erwartet
 /// (`rs-relay/src/api/user.rs`): Streamer-ID und eine Liste von Zielen.
@@ -782,6 +863,399 @@ pub async fn put_destination_handler(
     )
     .await?;
     Ok(Json(wert))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Stream-Key hinterlegen und Trennen
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Ingest-Adresse, unter der Twitch den Stream-Key erwartet. Twitch loest
+/// `live.twitch.tv` selbst auf den naechsten Ingest auf.
+pub const TWITCH_RTMP_URL: &str = "rtmp://live.twitch.tv/app";
+
+/// Die Ingest-Adresse je Plattform. `None` heisst: fuer diese Plattform gibt
+/// es noch keinen Stream-Key-Weg, das Ziel bleibt ein Eintrag von Hand.
+fn rtmp_url_fuer(platform: &str) -> Option<&'static str> {
+    (platform == PLATFORM_TWITCH).then_some(TWITCH_RTMP_URL)
+}
+
+/// Der Relay-Pfad zum Loeschen eines Ziels.
+fn ziel_loesch_pfad(streamer_id: i64, platform: &str) -> String {
+    format!("{RELAY_ZIEL_PFAD}/{platform}?streamer_id={streamer_id}")
+}
+
+/// Antworten des Relays in einen Fehlertext ohne Nutzlast verwandeln: die
+/// Nutzlast koennte Feldnamen des Ziels tragen, der Text landet im Log.
+fn relay_fehler(r: Response) -> String {
+    format!("relay HTTP {}", r.status().as_u16())
+}
+
+/// Der Weg zu den Uplink-Zielen im Relay, als Trait, damit Nachlauf und
+/// Trennen ohne laufendes Relay pruefbar sind.
+#[async_trait::async_trait]
+pub trait RelayZiele: Send + Sync {
+    /// Legt das Ziel der Plattform an oder ersetzt Adresse und Key. Andere
+    /// Ziele und die Qualitaetsstufe des Ziels bleiben stehen.
+    async fn ziel_setzen(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+        rtmp_url: &str,
+        stream_key: &str,
+    ) -> Result<(), String>;
+    /// Entfernt das Ziel der Plattform.
+    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String>;
+}
+
+/// Echte Anbindung ueber [`relay_json`] (`X-Relay-Auth`, Basis-URL aus der
+/// Umgebung wie bei jedem anderen Relay-Aufruf des Dashboards).
+#[derive(Default)]
+pub struct HttpRelayZiele {
+    /// Nur fuer Tests: (Basis-URL, Secret) fest statt aus der Umgebung.
+    verbindung: Option<(String, String)>,
+}
+
+impl HttpRelayZiele {
+    async fn aufruf(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<(), String> {
+        match &self.verbindung {
+            Some((base, secret)) => relay_json_mit(base, secret, method, path, body).await,
+            None => relay_json(method, path, body).await,
+        }
+        .map(|_| ())
+        .map_err(relay_fehler)
+    }
+}
+
+#[async_trait::async_trait]
+impl RelayZiele for HttpRelayZiele {
+    async fn ziel_setzen(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+        rtmp_url: &str,
+        stream_key: &str,
+    ) -> Result<(), String> {
+        self.aufruf(
+            reqwest::Method::PUT,
+            RELAY_ZIEL_PFAD,
+            Some(json!({
+                "streamer_id": streamer_id,
+                "destinations": [{
+                    "platform": platform,
+                    "rtmp_url": rtmp_url,
+                    "stream_key": stream_key,
+                }],
+            })),
+        )
+        .await
+    }
+
+    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String> {
+        self.aufruf(
+            reqwest::Method::DELETE,
+            &ziel_loesch_pfad(streamer_id, platform),
+            None,
+        )
+        .await
+    }
+}
+
+/// Der Weg zum Stream-Key und zum Widerruf bei Twitch, als Trait fuer die Tests.
+#[async_trait::async_trait]
+pub trait PlattformKonto: Send + Sync {
+    /// Stream-Key des Broadcasters. Der Rueckgabewert ist ein Geheimnis und
+    /// darf nie in ein Log.
+    async fn stream_key(&self, access_token: &str, broadcaster_id: &str) -> Result<String, String>;
+    /// Token bei der Plattform zuruecknehmen.
+    async fn widerrufen(&self, access_token: &str) -> Result<(), String>;
+}
+
+/// Echte Twitch-Anbindung ueber den vorhandenen Helix-Client.
+pub struct HelixKonto {
+    helix: tb_transport_twitch::HelixClient,
+}
+
+impl HelixKonto {
+    /// `None`, wenn Client-ID oder Secret fehlen: dann bleibt der Nachlauf aus,
+    /// statt gegen einen halb gebauten Client zu laufen.
+    pub fn aus_umgebung() -> Option<Self> {
+        let id = std::env::var("TWITCH_CLIENT_ID").ok()?;
+        let secret = std::env::var("TWITCH_CLIENT_SECRET").ok()?;
+        if id.trim().is_empty() || secret.trim().is_empty() {
+            return None;
+        }
+        tb_transport_twitch::HelixClient::new(tb_transport_twitch::HelixConfig::new(
+            id.trim(),
+            secret.trim(),
+        ))
+        .ok()
+        .map(|helix| Self { helix })
+    }
+}
+
+/// Ein Twitch-Fehler als Logtext. Bewusst ohne Antwortkoerper: bei einem
+/// erfolgreichen Stream-Key-Abruf staende der Key darin, und ein Fehlerkoerper
+/// von Twitch traegt keine Information, die der Statuscode nicht schon hat.
+fn fehlertext(error: tb_transport_twitch::user_token::UserTokenError) -> String {
+    use tb_transport_twitch::user_token::UserTokenError as E;
+    match error {
+        E::InvalidClient => "invalid_client".into(),
+        E::InvalidGrant => "invalid_grant".into(),
+        E::Other(text) => text,
+    }
+}
+
+#[async_trait::async_trait]
+impl PlattformKonto for HelixKonto {
+    async fn stream_key(&self, access_token: &str, broadcaster_id: &str) -> Result<String, String> {
+        self.helix
+            .fetch_stream_key(access_token, broadcaster_id)
+            .await
+            .map_err(fehlertext)
+    }
+    async fn widerrufen(&self, access_token: &str) -> Result<(), String> {
+        self.helix
+            .revoke_user_token(access_token)
+            .await
+            .map_err(fehlertext)
+    }
+}
+
+/// Ergebnis des Stream-Key-Nachlaufs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StreamKeyStand {
+    /// Key geholt und als Uplink-Ziel hinterlegt.
+    Hinterlegt,
+    /// Es gibt keine nutzbare Verbindung: der Streamer muss erst verbinden.
+    KeineVerbindung,
+    /// Der Grant traegt das Stream-Key-Recht nicht (alter Raid-Grant).
+    RechtFehlt,
+    /// Twitch oder das Relay haben nicht mitgespielt. Die Verbindung bleibt
+    /// stehen; der Streamer kann es erneut versuchen oder den Key eintragen.
+    Fehlgeschlagen,
+}
+
+/// Holt den Stream-Key bei Twitch und legt ihn als Uplink-Ziel im Relay ab.
+///
+/// Der Key wandert von Twitch direkt ins Relay und wird nirgends geloggt, auch
+/// nicht im Fehlerfall: ein Fehlertext von Twitch traegt keine Information, die
+/// der Statuscode nicht schon hat, und bei Erfolg staende der Key im Rumpf.
+pub async fn stream_key_hinterlegen(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    konto: &dyn PlattformKonto,
+    relay: &dyn RelayZiele,
+    streamer_id: i64,
+    platform: &str,
+) -> StreamKeyStand {
+    let Some(rtmp_url) = rtmp_url_fuer(platform) else {
+        return StreamKeyStand::KeineVerbindung;
+    };
+    let uid = streamer_id.to_string();
+    let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+    let tokens = match store.load_decrypted_unrestricted(&uid).await {
+        Ok(Some(t)) if !t.needs_reauth => t,
+        Ok(_) => return StreamKeyStand::KeineVerbindung,
+        Err(e) => {
+            tracing::warn!(streamer_id, error = %e, "uplink: Token fuer den Stream-Key nicht lesbar");
+            return StreamKeyStand::Fehlgeschlagen;
+        }
+    };
+    let scopes = store.get_scopes(&uid).await.unwrap_or_default();
+    if !scopes.iter().any(|s| s.trim() == "channel:read:stream_key") {
+        return StreamKeyStand::RechtFehlt;
+    }
+    let key = match konto.stream_key(&tokens.access_token, &uid).await {
+        Ok(k) => k,
+        Err(error) => {
+            tracing::warn!(streamer_id, platform, %error, "uplink: Stream-Key nicht abrufbar");
+            return StreamKeyStand::Fehlgeschlagen;
+        }
+    };
+    match relay.ziel_setzen(streamer_id, platform, rtmp_url, &key).await {
+        Ok(()) => StreamKeyStand::Hinterlegt,
+        Err(error) => {
+            tracing::warn!(streamer_id, platform, %error, "uplink: Uplink-Ziel nicht gespeichert");
+            StreamKeyStand::Fehlgeschlagen
+        }
+    }
+}
+
+/// Ergebnis des Trennens.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TrennenErgebnis {
+    /// Ziel im Relay weg, Tokens geleert, Widerruf abgeschickt (oder geloggt).
+    Getrennt,
+    /// Das Relay hat das Ziel nicht entfernt; sonst wurde nichts angefasst.
+    RelayFehler,
+    /// Die Tokens liessen sich nicht leeren.
+    SpeicherFehler,
+}
+
+/// Kern von "Trennen": erst das Ziel im Relay, dann die Tokens, zuletzt der
+/// Widerruf bei Twitch.
+///
+/// Diese Reihenfolge, weil nur der erste Schritt einen Abbruch verdient:
+/// bleibt das Ziel stehen, sendet der Uplink weiter an einen Kanal, den der
+/// Streamer gerade abgeklemmt hat. Die Tokens gehen vor dem Widerruf weg,
+/// damit nie ein totes Token als "verbunden" stehen bleibt. Ein
+/// fehlgeschlagener Widerruf ist nur ein Logeintrag; das Token laeuft ohnehin
+/// aus.
+///
+/// Die Zeile in `twitch_raid_auth` bleibt stehen und wird nur geleert. Sie
+/// traegt auch `raid_enabled` und die Partnerhistorie; ein DELETE wuerde beim
+/// naechsten Verbinden mehr wegwerfen als den Uplink.
+pub async fn trennen(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    konto: &dyn PlattformKonto,
+    relay: &dyn RelayZiele,
+    streamer_id: i64,
+    platform: &str,
+) -> TrennenErgebnis {
+    if rtmp_url_fuer(platform).is_none() {
+        return TrennenErgebnis::Getrennt;
+    }
+    let uid = streamer_id.to_string();
+    let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+    // Vor dem Leeren lesen, damit der Widerruf noch ein Token in der Hand hat.
+    // Ist es nicht mehr entschluesselbar, faellt nur der Widerruf aus.
+    let access_token = match store.load_decrypted_unrestricted(&uid).await {
+        Ok(t) => t.map(|t| t.access_token),
+        Err(e) => {
+            tracing::warn!(streamer_id, error = %e, "uplink: Token vor dem Trennen nicht lesbar");
+            None
+        }
+    };
+    if let Err(error) = relay.ziel_loeschen(streamer_id, platform).await {
+        tracing::warn!(streamer_id, platform, %error, "uplink: Uplink-Ziel nicht entfernt");
+        return TrennenErgebnis::RelayFehler;
+    }
+    let writer = tb_raid::auth_writer::AuthWriter::new(pool.clone(), config.cipher.clone());
+    if let Err(error) = writer.clear_tokens(&uid, chrono::Utc::now()).await {
+        tracing::error!(streamer_id, %error, "uplink: Tokens nicht leerbar");
+        return TrennenErgebnis::SpeicherFehler;
+    }
+    if let Some(token) = access_token {
+        if let Err(error) = konto.widerrufen(&token).await {
+            tracing::warn!(streamer_id, platform, %error, "uplink: Widerruf fehlgeschlagen");
+        }
+    }
+    TrennenErgebnis::Getrennt
+}
+
+/// Prueft den Plattformnamen aus dem Pfad.
+fn plattform_pruefen(roh: &str) -> Result<String, Response> {
+    let platform = roh.trim().to_lowercase();
+    if !PLATTFORMEN.contains(&platform.as_str()) {
+        return Err(fehler(StatusCode::BAD_REQUEST, "unbekannte Plattform"));
+    }
+    Ok(platform)
+}
+
+fn nicht_eingerichtet() -> Response {
+    fehler(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Der Uplink ist auf diesem Server noch nicht eingerichtet.",
+    )
+}
+
+/// `POST /twitch/api/v2/uplink/connect/{platform}/disconnect`: Cookie-Session
+/// plus CSRF wie jede Schreibroute des Dashboards.
+pub async fn disconnect_handler(
+    State(pool): State<PgPool>,
+    config: Option<Extension<PlatformTokenConfig>>,
+    auth: DashboardAuthLevel,
+    Path(platform): Path<String>,
+) -> Response {
+    let platform = match plattform_pruefen(&platform) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let Some(Extension(config)) = config else {
+        return nicht_eingerichtet();
+    };
+    let Some(konto) = HelixKonto::aus_umgebung() else {
+        return nicht_eingerichtet();
+    };
+    let id = match partner_id(&pool, &auth).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match trennen(
+        &pool,
+        &config,
+        &konto,
+        &HttpRelayZiele::default(),
+        id,
+        &platform,
+    )
+    .await
+    {
+        TrennenErgebnis::Getrennt => Json(json!({ "ok": true })).into_response(),
+        TrennenErgebnis::RelayFehler => fehler(
+            StatusCode::BAD_GATEWAY,
+            "Der Uplink hat das Ziel nicht entfernt. Bitte noch einmal versuchen.",
+        ),
+        TrennenErgebnis::SpeicherFehler => fehler(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die Verbindung konnte nicht getrennt werden. Bitte später noch einmal versuchen.",
+        ),
+    }
+}
+
+/// `POST /twitch/api/v2/uplink/connect/{platform}/streamkey`: holt den
+/// Stream-Key nach und legt ihn als Uplink-Ziel ab. Die Oberflaeche ruft das
+/// nach der Rueckkehr aus dem Twitch-Dialog und ueber "Stream-Key erneut holen".
+pub async fn streamkey_handler(
+    State(pool): State<PgPool>,
+    config: Option<Extension<PlatformTokenConfig>>,
+    auth: DashboardAuthLevel,
+    Path(platform): Path<String>,
+) -> Response {
+    let platform = match plattform_pruefen(&platform) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let Some(Extension(config)) = config else {
+        return nicht_eingerichtet();
+    };
+    let Some(konto) = HelixKonto::aus_umgebung() else {
+        return nicht_eingerichtet();
+    };
+    let id = match partner_id(&pool, &auth).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match stream_key_hinterlegen(
+        &pool,
+        &config,
+        &konto,
+        &HttpRelayZiele::default(),
+        id,
+        &platform,
+    )
+    .await
+    {
+        StreamKeyStand::Hinterlegt => Json(json!({ "ok": true })).into_response(),
+        StreamKeyStand::KeineVerbindung => fehler(
+            StatusCode::CONFLICT,
+            "Für diese Plattform gibt es noch keine Verbindung. Erst verbinden, dann klappt auch der Stream-Key.",
+        ),
+        StreamKeyStand::RechtFehlt => fehler(
+            StatusCode::CONFLICT,
+            "Deine Verbindung ist älter und darf den Stream-Key noch nicht lesen. Einmal neu verbinden, dann geht es.",
+        ),
+        StreamKeyStand::Fehlgeschlagen => fehler(
+            StatusCode::BAD_GATEWAY,
+            "Der Stream-Key kam gerade nicht durch. Bitte noch einmal versuchen; du kannst ihn auch von Hand eintragen.",
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1188,6 +1662,7 @@ mod tests {
             "live",
             Some("streamerin"),
             &[("twitch".to_string(), "verbunden")],
+            &["twitch".to_string()],
         );
         assert_eq!(wert["live_status"], "live");
         assert_eq!(wert["twitch_login"], "streamerin");
@@ -1197,15 +1672,28 @@ mod tests {
         assert_eq!(liste.len(), PLATTFORMEN.len());
         assert_eq!(
             liste[0],
-            json!({ "platform": "twitch", "status": "verbunden" })
+            json!({ "platform": "twitch", "status": "verbunden", "stream_key_vorhanden": true })
         );
         assert!(liste[1..].iter().all(|e| e["status"] == "getrennt"));
+        assert!(liste[1..]
+            .iter()
+            .all(|e| e["stream_key_vorhanden"] == false));
+    }
+
+    #[test]
+    fn ziel_plattformen_kommen_aus_der_relay_liste() {
+        let wert = json!({ "destinations": [
+            { "platform": "twitch", "rtmp_url": "rtmp://live.twitch.tv/app" },
+            { "platform": "kick" }
+        ]});
+        assert_eq!(ziel_plattformen(&wert), vec!["twitch", "kick"]);
+        assert!(ziel_plattformen(&json!({})).is_empty());
     }
 
     #[test]
     fn me_ohne_dock_url_meldet_keine_adresse() {
         let mut wert = json!({ "freigeschaltet": false });
-        me_anreichern(&mut wert, "unbekannt", None, &[]);
+        me_anreichern(&mut wert, "unbekannt", None, &[], &[]);
         assert_eq!(wert["dock_url_vorhanden"], false);
         assert!(wert.get("twitch_login").is_none());
         assert!(wert["verbindungen"]
@@ -1215,7 +1703,7 @@ mod tests {
             .all(|e| e["status"] == "getrennt"));
 
         let mut nein = json!({ "dock_url_vorhanden": false });
-        me_anreichern(&mut nein, "aus", None, &[]);
+        me_anreichern(&mut nein, "aus", None, &[], &[]);
         assert_eq!(nein["dock_url_vorhanden"], false);
     }
 
@@ -1258,5 +1746,560 @@ mod tests {
             }),
         };
         assert_eq!(twitch_identitaet(&auth).unwrap(), ("earlysalty", "42"));
+    }
+
+    // ── Verbindungsstand ───────────────────────────────────────────────────
+
+    fn scopes(liste: &[&str]) -> Vec<String> {
+        liste.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn status_verbunden_mit_allen_uplink_scopes() {
+        let voll = scopes(tb_raid::scope_profiles::UPLINK_SCOPES);
+        assert_eq!(verbindungs_status(true, false, &voll), "verbunden");
+    }
+
+    /// Der Fall aus dem Betrieb: ein Streamer hat den Raid-Bot laengst
+    /// autorisiert. Seine Tokens sind gueltig, aber sie duerfen weder den Chat
+    /// lesen noch den Stream-Key holen. "Verbunden" waere hier eine
+    /// Falschaussage: das Dock bliebe leer.
+    #[test]
+    fn status_neu_verbinden_bei_altem_raid_grant() {
+        let alt = scopes(tb_raid::scope_profiles::FULL_STREAMER_SCOPES);
+        assert_eq!(verbindungs_status(true, false, &alt), "neu_verbinden");
+        let basis = scopes(tb_raid::scope_profiles::BASE_STREAMER_SCOPES);
+        assert_eq!(verbindungs_status(true, false, &basis), "neu_verbinden");
+    }
+
+    #[test]
+    fn status_getrennt_ohne_zeile() {
+        // Ohne Tokens gibt es nichts zu erneuern; "neu verbinden" waere hier
+        // der falsche Knopf, weil noch nie etwas verbunden war.
+        assert_eq!(verbindungs_status(false, false, &[]), "getrennt");
+        let voll = scopes(tb_raid::scope_profiles::UPLINK_SCOPES);
+        assert_eq!(verbindungs_status(false, true, &voll), "getrennt");
+    }
+
+    #[test]
+    fn status_neu_verbinden_bei_needs_reauth() {
+        let voll = scopes(tb_raid::scope_profiles::UPLINK_SCOPES);
+        assert_eq!(verbindungs_status(true, true, &voll), "neu_verbinden");
+    }
+
+    // ── Relay-Pfade ────────────────────────────────────────────────────────
+
+    #[test]
+    fn der_loesch_pfad_traegt_plattform_und_streamer() {
+        assert_eq!(
+            ziel_loesch_pfad(4242, "twitch"),
+            "/v1/me/destinations/twitch?streamer_id=4242"
+        );
+        // Und er greift zum API-Secret, nicht zum Admin-Secret.
+        assert_eq!(
+            secret_name_fuer(&ziel_loesch_pfad(4242, "twitch")),
+            "RS_RELAY_API_SECRET"
+        );
+    }
+
+    #[test]
+    fn nur_twitch_hat_einen_stream_key_weg() {
+        assert_eq!(rtmp_url_fuer("twitch"), Some(TWITCH_RTMP_URL));
+        for fremd in ["kick", "youtube", "tiktok", ""] {
+            assert_eq!(rtmp_url_fuer(fremd), None, "{fremd}");
+        }
+    }
+
+    #[test]
+    fn unbekannte_plattformen_kommen_gar_nicht_erst_durch() {
+        assert_eq!(plattform_pruefen("  TWITCH ").unwrap(), "twitch");
+        for fremd in ["rumble", "", "twitch2"] {
+            let antwort = plattform_pruefen(fremd).expect_err("darf nicht durchgehen");
+            assert_eq!(antwort.status(), StatusCode::BAD_REQUEST, "{fremd}");
+        }
+    }
+
+    /// Der einzige Weg mit Aussenwirkung: Methode, Pfad, Header und Rumpf, die
+    /// wirklich beim Relay ankommen. Die Attrappen darueber pruefen nur die
+    /// Trait-Ebene.
+    #[tokio::test]
+    async fn http_relay_setzt_und_loescht_das_ziel_auf_den_richtigen_pfaden() {
+        use wiremock::matchers::{body_partial_json, header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/me/destinations"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .and(body_partial_json(json!({
+                "streamer_id": 4242,
+                "destinations": [{
+                    "platform": "twitch",
+                    "rtmp_url": TWITCH_RTMP_URL,
+                    "stream_key": "sk-1"
+                }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "destinations": [] })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/me/destinations/twitch"))
+            .and(query_param("streamer_id", "4242"))
+            .and(header("X-Relay-Auth", "geheim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "deleted": true })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let relay = HttpRelayZiele {
+            verbindung: Some((server.uri(), "geheim".into())),
+        };
+        relay
+            .ziel_setzen(4242, "twitch", TWITCH_RTMP_URL, "sk-1")
+            .await
+            .unwrap();
+        relay.ziel_loeschen(4242, "twitch").await.unwrap();
+        // Ein 404 (Relay ohne die Route) ist ein Fehler, kein stiller Erfolg.
+        let fehler = relay.ziel_loeschen(4242, "kick").await.unwrap_err();
+        assert_eq!(fehler, "relay HTTP 404");
+    }
+
+    // ── Attrappen fuer Nachlauf und Trennen ────────────────────────────────
+
+    #[derive(Default)]
+    struct FakeRelay {
+        gesetzt: std::sync::Mutex<Vec<(i64, String, String, String)>>,
+        geloescht: std::sync::Mutex<Vec<(i64, String)>>,
+        kaputt: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl RelayZiele for FakeRelay {
+        async fn ziel_setzen(
+            &self,
+            streamer_id: i64,
+            platform: &str,
+            rtmp_url: &str,
+            stream_key: &str,
+        ) -> Result<(), String> {
+            if self.kaputt {
+                return Err("relay HTTP 503".into());
+            }
+            self.gesetzt.lock().unwrap().push((
+                streamer_id,
+                platform.into(),
+                rtmp_url.into(),
+                stream_key.into(),
+            ));
+            Ok(())
+        }
+        async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String> {
+            if self.kaputt {
+                return Err("relay HTTP 503".into());
+            }
+            self.geloescht
+                .lock()
+                .unwrap()
+                .push((streamer_id, platform.into()));
+            Ok(())
+        }
+    }
+
+    struct FakeKonto {
+        key: std::sync::Mutex<Result<String, String>>,
+        widerrufen: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeKonto {
+        fn neu() -> Self {
+            Self {
+                key: std::sync::Mutex::new(Ok("sk-geheim".into())),
+                widerrufen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn ohne_key(self) -> Self {
+            *self.key.lock().unwrap() = Err("stream key HTTP 401".into());
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PlattformKonto for FakeKonto {
+        async fn stream_key(&self, _t: &str, _b: &str) -> Result<String, String> {
+            self.key.lock().unwrap().clone()
+        }
+        async fn widerrufen(&self, access_token: &str) -> Result<(), String> {
+            self.widerrufen
+                .lock()
+                .unwrap()
+                .push(access_token.to_string());
+            Ok(())
+        }
+    }
+
+    // ── mit DB ─────────────────────────────────────────────────────────────
+
+    const TEST_KEY_HEX: &str =
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+    fn config() -> super::PlatformTokenConfig {
+        super::PlatformTokenConfig {
+            cipher: std::sync::Arc::new(
+                tb_crypto::FieldCipher::from_hex_key(TEST_KEY_HEX, "v1").unwrap(),
+            ),
+            token_client: std::sync::Arc::new(StummerRefresh),
+        }
+    }
+
+    /// Kein Refresh in diesen Tests: die Zeilen sind absichtlich frisch.
+    struct StummerRefresh;
+
+    #[async_trait::async_trait]
+    impl tb_raid::token_refresher::TwitchTokenClient for StummerRefresh {
+        async fn refresh(
+            &self,
+            _t: &str,
+        ) -> Result<
+            tb_raid::token_refresher::TokenResponse,
+            tb_raid::token_refresher::RefreshError,
+        > {
+            unreachable!("kein Refresh in diesem Test")
+        }
+        async fn exchange_code(
+            &self,
+            _c: &str,
+        ) -> Result<
+            tb_raid::token_refresher::TokenResponse,
+            tb_raid::token_refresher::RefreshError,
+        > {
+            unreachable!()
+        }
+        async fn token_owner(
+            &self,
+            _t: &str,
+        ) -> Result<
+            tb_raid::token_refresher::TokenOwnerInfo,
+            tb_raid::token_refresher::RefreshError,
+        > {
+            unreachable!()
+        }
+    }
+
+    async fn maybe_pool() -> Option<PgPool> {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return None;
+        }
+        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let schema = crate::auth::session::test_schema_name("uplink_trennen");
+        let admin = PgPool::connect(&url).await.ok()?;
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .ok()?;
+        admin.close().await;
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts = opts.options([("search_path", schema.as_str())]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .ok()?;
+        // Spaltentypen wie in `fresh_schema_snapshot.txt`.
+        sqlx::query(
+            "CREATE TABLE twitch_raid_auth (
+                twitch_user_id TEXT NOT NULL PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                access_token TEXT DEFAULT 'ENC',
+                refresh_token TEXT DEFAULT 'ENC',
+                token_expires_at TIMESTAMPTZ NOT NULL,
+                scopes TEXT NOT NULL,
+                authorized_at TIMESTAMPTZ DEFAULT NOW(),
+                last_refreshed_at TIMESTAMPTZ,
+                raid_enabled BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                needs_reauth BOOLEAN DEFAULT FALSE,
+                reauth_notified_at TIMESTAMPTZ,
+                access_token_enc BYTEA,
+                refresh_token_enc BYTEA,
+                enc_version INTEGER DEFAULT 1,
+                enc_kid TEXT DEFAULT 'v1',
+                enc_migrated_at TIMESTAMPTZ
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    macro_rules! pool_oder_ende {
+        () => {
+            match maybe_pool().await {
+                Some(p) => p,
+                None => {
+                    assert!(
+                        std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
+                        "TB_TEST_REQUIRE_DB=1, aber keine Test-DB erreichbar"
+                    );
+                    return;
+                }
+            }
+        };
+    }
+
+    async fn zeile_anlegen(
+        pool: &PgPool,
+        cipher: &tb_crypto::FieldCipher,
+        uid: &str,
+        satz: &[&str],
+    ) {
+        let access = cipher
+            .encrypt_field("acc-alt", &tb_crypto::aad::raid_auth("access_token", uid, 1))
+            .unwrap();
+        let refresh = cipher
+            .encrypt_field(
+                "ref-alt",
+                &tb_crypto::aad::raid_auth("refresh_token", uid, 1),
+            )
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth \
+             (twitch_user_id, twitch_login, access_token, refresh_token, \
+              access_token_enc, refresh_token_enc, enc_version, enc_kid, \
+              token_expires_at, scopes, authorized_at, raid_enabled, needs_reauth) \
+             VALUES ($1, 'streamerin', 'ENC', 'ENC', $2, $3, 1, 'v1', \
+                     NOW() + INTERVAL '3 hours', $4, NOW(), TRUE, FALSE)",
+        )
+        .bind(uid)
+        .bind(&access)
+        .bind(&refresh)
+        .bind(satz.join(" "))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn callback_holt_stream_key_und_setzt_uplink_ziel() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6001",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay::default();
+        let konto = FakeKonto::neu();
+        assert_eq!(
+            stream_key_hinterlegen(&pool, &config, &konto, &relay, 6001, "twitch").await,
+            StreamKeyStand::Hinterlegt
+        );
+        assert_eq!(
+            relay.gesetzt.lock().unwrap().as_slice(),
+            &[(
+                6001,
+                "twitch".to_string(),
+                TWITCH_RTMP_URL.to_string(),
+                "sk-geheim".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_ohne_stream_key_recht_verlangt_neu_verbinden() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        // Alter Raid-Grant: Tokens gueltig, aber kein channel:read:stream_key.
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6002",
+            tb_raid::scope_profiles::FULL_STREAMER_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay::default();
+        assert_eq!(
+            stream_key_hinterlegen(&pool, &config, &FakeKonto::neu(), &relay, 6002, "twitch").await,
+            StreamKeyStand::RechtFehlt
+        );
+        assert!(relay.gesetzt.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn callback_bei_kaputtem_relay_meldet_fehler_und_setzt_kein_ziel() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6003",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay {
+            kaputt: true,
+            ..FakeRelay::default()
+        };
+        assert_eq!(
+            stream_key_hinterlegen(&pool, &config, &FakeKonto::neu(), &relay, 6003, "twitch").await,
+            StreamKeyStand::Fehlgeschlagen
+        );
+        // Und die Verbindung selbst bleibt unangetastet.
+        let store =
+            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        let t = store.load_decrypted_unrestricted("6003").await.unwrap();
+        assert!(!t.unwrap().needs_reauth);
+    }
+
+    #[tokio::test]
+    async fn callback_ohne_twitch_antwort_behaelt_die_verbindung() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6004",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay::default();
+        assert_eq!(
+            stream_key_hinterlegen(
+                &pool,
+                &config,
+                &FakeKonto::neu().ohne_key(),
+                &relay,
+                6004,
+                "twitch"
+            )
+            .await,
+            StreamKeyStand::Fehlgeschlagen
+        );
+        assert!(relay.gesetzt.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_tokens_setzt_needs_reauth_und_leert_blobs() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6005",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let writer =
+            tb_raid::auth_writer::AuthWriter::new(pool.clone(), config.cipher.clone());
+        writer.clear_tokens("6005", chrono::Utc::now()).await.unwrap();
+
+        let zeile: (Option<Vec<u8>>, Option<Vec<u8>>, Option<bool>, Option<chrono::DateTime<chrono::Utc>>) =
+            sqlx::query_as(
+                "SELECT access_token_enc, refresh_token_enc, needs_reauth, reauth_notified_at \
+                 FROM twitch_raid_auth WHERE twitch_user_id = '6005'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(zeile.0.is_none(), "access_token_enc muss leer sein");
+        assert!(zeile.1.is_none(), "refresh_token_enc muss leer sein");
+        assert_eq!(zeile.2, Some(true));
+        // Ohne den Stempel mahnt der Watchdog jemanden, der gerade selbst
+        // getrennt hat.
+        assert!(zeile.3.is_some(), "reauth_notified_at muss gesetzt sein");
+
+        // Die Zeile bleibt: raid_enabled und die Partnerhistorie haengen daran.
+        let anzahl: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_raid_auth WHERE twitch_user_id = '6005'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(anzahl, 1);
+
+        // Und der Lesepfad meldet den Streamer jetzt als getrennt.
+        let store =
+            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        assert!(store
+            .load_decrypted_unrestricted("6005")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn trennen_leert_tokens_widerruft_und_entfernt_das_ziel() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6006",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay::default();
+        let konto = FakeKonto::neu();
+        assert_eq!(
+            trennen(&pool, &config, &konto, &relay, 6006, "twitch").await,
+            TrennenErgebnis::Getrennt
+        );
+        assert_eq!(
+            relay.geloescht.lock().unwrap().as_slice(),
+            &[(6006, "twitch".to_string())]
+        );
+        // Der Widerruf bekam das echte Token, nicht den Platzhalter aus der
+        // Klartextspalte.
+        assert_eq!(
+            konto.widerrufen.lock().unwrap().as_slice(),
+            &["acc-alt".to_string()]
+        );
+        let store =
+            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        assert!(store
+            .load_decrypted_unrestricted("6006")
+            .await
+            .unwrap()
+            .is_none());
+
+        // Noch einmal: wiederholbar, nichts bricht.
+        assert_eq!(
+            trennen(&pool, &config, &konto, &relay, 6006, "twitch").await,
+            TrennenErgebnis::Getrennt
+        );
+    }
+
+    /// Bleibt das Ziel im Relay stehen, sendet der Uplink weiter an einen
+    /// Kanal, den der Streamer gerade abgeklemmt hat. Also bricht das Trennen
+    /// hier ab, statt die Tokens schon wegzuwerfen.
+    #[tokio::test]
+    async fn trennen_bei_kaputtem_relay_laesst_alles_stehen() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "6007",
+            tb_raid::scope_profiles::UPLINK_SCOPES,
+        )
+        .await;
+        let relay = FakeRelay {
+            kaputt: true,
+            ..FakeRelay::default()
+        };
+        let konto = FakeKonto::neu();
+        assert_eq!(
+            trennen(&pool, &config, &konto, &relay, 6007, "twitch").await,
+            TrennenErgebnis::RelayFehler
+        );
+        assert!(konto.widerrufen.lock().unwrap().is_empty());
+        let store =
+            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        assert!(store
+            .load_decrypted_unrestricted("6007")
+            .await
+            .unwrap()
+            .is_some());
     }
 }

@@ -34,9 +34,10 @@ import {
   reconnectWaitPayload,
   rotateUplinkDockToken,
   saveUplinkReconnectWait,
+  holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
-import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
+import type { DockUrls, UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import {
@@ -116,6 +117,10 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2">
+        {/* Der Name steht sichtbar davor: vier Adressen ohne Beschriftung sind
+            vier gleich aussehende Zeilen, und in OBS braucht jedes Fenster
+            genau diesen Namen. */}
+        <span className="w-28 shrink-0 text-[11px] font-semibold text-white">{titel}</span>
         <input
           ref={feldRef}
           readOnly
@@ -157,19 +162,28 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
  * "erzeugen" anbietet.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
-  const [neueAdresse, setNeueAdresse] = useState<string | null>(null);
+  const [neueAdressen, setNeueAdressen] = useState<DockUrls | null>(null);
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
     onSuccess: (antwort) => {
-      setNeueAdresse(antwort.dock_url);
+      // Aeltere Server kennen nur die eine Adresse. Dann gilt sie als
+      // Chat-Fenster; die drei anderen fehlen, statt ins Leere zu zeigen.
+      setNeueAdressen(
+        antwort.dock_urls ?? {
+          chat: antwort.dock_url,
+          activity: '',
+          stream_info: '',
+          points: '',
+        }
+      );
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
   });
-  const adressen = dockAdressen(neueAdresse ? { ...me, dock_url: neueAdresse } : me);
-  const eigene = adressen.find((d) => d.eigene);
+  const adressen = dockAdressen(me, neueAdressen);
+  const eigene = adressen.filter((d) => d.eigene);
   const twitchFenster = adressen.filter((d) => !d.eigene);
-  const vorhanden = Boolean(me.dock_url_vorhanden) || Boolean(eigene);
+  const vorhanden = Boolean(me.dock_url_vorhanden) || eigene.length > 0;
 
   return (
     <div className="space-y-4 border-t border-border/60 px-5 py-4">
@@ -179,23 +193,26 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
       </p>
 
       <div data-section="eigenes-dock" className="space-y-2">
-        <p className="text-xs font-semibold text-white">Multi-Chat von Uplink</p>
+        <p className="text-xs font-semibold text-white">Fenster von Uplink</p>
         <p className="text-xs text-text-secondary">
-          Ein Fenster für den Chat aller verbundenen Plattformen, die gerade über Uplink laufen. Antworten
-          gehen von dort an alle zugleich. Verbinden geht in der jeweiligen Plattform-Karte oben.
+          Vier Fenster für alle verbundenen Plattformen zugleich: Chat mit Antwortfeld, Aktivität mit
+          Follows, Abos und Bits, Stream-Infos zum Ändern von Titel und Kategorie, und die Kanalpunkte.
+          Verbinden geht in der jeweiligen Plattform-Karte oben.
         </p>
-        {eigene ? (
+        {eigene.length > 0 ? (
           <>
-            <DockZeile titel={eigene.titel} url={eigene.url} />
-            {neueAdresse ? (
+            {eigene.map((dock) => (
+              <DockZeile key={dock.titel} titel={dock.titel} url={dock.url} />
+            ))}
+            {neueAdressen ? (
               <div className="flex flex-wrap items-center gap-3">
                 <p className="text-xs text-warning">
-                  Die Adresse wird nur jetzt einmal angezeigt. Kopiere sie gleich in OBS. Wer sie kennt, kann in
-                  deinem Namen im Chat schreiben.
+                  Diese Adressen werden nur jetzt einmal angezeigt. Kopiere sie gleich alle in OBS. Wer eine
+                  davon kennt, kann in deinem Namen im Chat schreiben.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setNeueAdresse(null)}
+                  onClick={() => setNeueAdressen(null)}
                   className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
                 >
                   In OBS eingetragen
@@ -212,18 +229,18 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
             className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
           >
             {erzeugen.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
-            {vorhanden ? 'Dock-Adresse neu erzeugen' : 'Dock-Adresse erzeugen'}
+            {vorhanden ? 'Dock-Adressen neu erzeugen' : 'Dock-Adressen erzeugen'}
           </button>
-          {vorhanden && !eigene ? (
+          {vorhanden && eigene.length === 0 ? (
             <span className="text-xs text-text-secondary">
-              Es gibt schon eine Dock-Adresse. Sie wird aus Sicherheitsgründen nicht noch einmal angezeigt; beim
-              Neuerzeugen gilt die alte nicht mehr.
+              Es gibt schon Dock-Adressen. Sie werden aus Sicherheitsgründen nicht noch einmal angezeigt; beim
+              Neuerzeugen gelten die alten nicht mehr.
             </span>
           ) : null}
         </div>
         {erzeugen.isError ? (
           <p role="alert" className="text-xs text-warning">
-            Die Dock-Adresse konnte gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
+            Die Dock-Adressen konnten gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
           </p>
         ) : null}
       </div>
@@ -706,6 +723,51 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
   );
 }
 
+/**
+ * Nach der Rueckkehr aus dem Twitch-Dialog (`?verbunden=twitch`) den Stream-Key
+ * holen und die Seite auffrischen.
+ *
+ * Der Server versucht dasselbe schon im Hintergrund, sobald der Callback
+ * durch ist. Dieser zweite Anlauf ist der sichtbare: er laeuft mit der Session
+ * des Streamers, und wenn er scheitert, sieht der Streamer den Grund statt
+ * eines leeren Ziels. Der Merker wird sofort aus der Adresse genommen, damit
+ * ein Neuladen nicht noch einmal losrennt.
+ */
+function useRueckkehrVomVerbinden(
+  queryClient: ReturnType<typeof useQueryClient>,
+  csrfToken: string | null
+) {
+  const [meldung, setMeldung] = useState<string | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('verbunden') !== 'twitch') return;
+    params.delete('verbunden');
+    const rest = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      window.location.pathname + (rest ? `?${rest}` : '')
+    );
+    let abgebrochen = false;
+    void holeUplinkStreamKey('twitch', csrfToken ?? '')
+      .then(() => {
+        if (abgebrochen) return;
+        queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+        queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+      })
+      .catch(() => {
+        if (abgebrochen) return;
+        setMeldung(
+          'Die Verbindung steht. Nur dein Stream-Key kam noch nicht durch: du kannst ihn unten von Hand eintragen oder es gleich noch einmal versuchen.'
+        );
+      });
+    return () => {
+      abgebrochen = true;
+    };
+  }, [queryClient, csrfToken]);
+  return meldung;
+}
+
 export function UplinkPage() {
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
@@ -740,8 +802,12 @@ export function UplinkPage() {
   // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
-  // Chat-Zugang je Plattform (nur Chat, der Stream-Key bleibt im Formular), steht im Kopf der Plattform-Karte.
+  // Zugangsstand je Plattform, steht im Kopf der Plattform-Karte.
   const chatVerbindungen = data ? plattformVerbindungen(data) : [];
+  const streamKeyMeldung = useRueckkehrVomVerbinden(
+    queryClient,
+    authStatus?.csrfToken ?? authStatus?.csrf_token ?? null
+  );
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
   // Leitung und ohne Bezug zu dem, was hier tatsaechlich rausgeht.
@@ -1011,6 +1077,12 @@ export function UplinkPage() {
                       </p>
                     ) : null}
 
+                    {streamKeyMeldung ? (
+                      <p role="alert" className="text-xs text-warning">
+                        {streamKeyMeldung}
+                      </p>
+                    ) : null}
+
                     <div className={zieleFehler || zieleLaden ? 'hidden' : 'space-y-3'}>
                       {UPLINK_PLATTFORMEN.map((plattform) => {
                         const ziel = gespeicherteZiele.find(
@@ -1025,6 +1097,7 @@ export function UplinkPage() {
                             ziel={ziel}
                             caps={capsFuer(plattform.id)}
                             chat={chatVerbindungen.find((v) => v.id === plattform.id)}
+                            csrfToken={authStatus?.csrfToken ?? authStatus?.csrf_token ?? null}
                             offenStart={false}
                           />
                         );

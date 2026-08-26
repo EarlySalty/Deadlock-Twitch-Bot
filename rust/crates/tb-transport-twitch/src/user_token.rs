@@ -267,11 +267,10 @@ impl HelixClient {
             .json()
             .await
             .map_err(|error| UserTokenError::Other(format!("invalid users response: {error}")))?;
-        let owner = body
-            .data
-            .into_iter()
-            .next()
-            .ok_or_else(|| UserTokenError::Other("missing user data in response".to_string()))?;
+        let owner =
+            body.data.into_iter().next().ok_or_else(|| {
+                UserTokenError::Other("missing user data in response".to_string())
+            })?;
         if owner.id.trim().is_empty() || owner.login.trim().is_empty() {
             return Err(UserTokenError::Other(
                 "invalid user payload in response".to_string(),
@@ -289,6 +288,95 @@ impl HelixClient {
             display_name,
             email,
         })
+    }
+}
+
+#[derive(Deserialize)]
+struct StreamKeyEintrag {
+    #[serde(default)]
+    stream_key: String,
+}
+
+#[derive(Deserialize)]
+struct StreamKeyResponse {
+    #[serde(default)]
+    data: Vec<StreamKeyEintrag>,
+}
+
+impl HelixClient {
+    /// Stream-Key des Broadcasters (`GET /streams/key?broadcaster_id=`).
+    /// Braucht ein Nutzer-Token mit `channel:read:stream_key`. Der Key wird
+    /// nie geloggt, auch nicht im Fehlerfall.
+    pub async fn fetch_stream_key(
+        &self,
+        access_token: &str,
+        broadcaster_id: &str,
+    ) -> Result<String, UserTokenError> {
+        let config = self.helix_config();
+        let url = format!("{}/streams/key", config.helix_base.trim_end_matches('/'));
+        let response = self
+            .http_client()
+            .get(&url)
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .header("Client-ID", config.client_id.as_str())
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            // Kein Body-Auszug: bei 200 staende der Key darin, und ein
+            // Fehler-Body von Twitch traegt keine Information, die der
+            // Statuscode nicht schon hat.
+            return Err(UserTokenError::Other(format!("stream key HTTP {status}")));
+        }
+        let body: StreamKeyResponse = response
+            .json()
+            .await
+            .map_err(|_| UserTokenError::Other("stream key: Antwort nicht lesbar".into()))?;
+        let key = body
+            .data
+            .into_iter()
+            .next()
+            .map(|e| e.stream_key.trim().to_string())
+            .unwrap_or_default();
+        if key.is_empty() {
+            return Err(UserTokenError::Other("stream key: Antwort ohne Key".into()));
+        }
+        Ok(key)
+    }
+
+    /// Nimmt ein Nutzer-Token bei Twitch zurueck (`POST /oauth2/revoke`).
+    /// Ein unbekanntes Token quittiert Twitch mit 400; der Aufrufer loggt
+    /// das nur, das Token ist dann ohnehin nicht mehr brauchbar.
+    pub async fn revoke_user_token(&self, access_token: &str) -> Result<(), UserTokenError> {
+        let config = self.helix_config();
+        let url = config
+            .token_url
+            .replacen("/oauth2/token", "/oauth2/revoke", 1);
+        // Ohne den erwarteten Teilstring ginge der POST samt Token an den
+        // Token-Endpunkt statt an Revoke. Lieber gar nicht senden.
+        if url == config.token_url {
+            return Err(UserTokenError::Other(
+                "revoke: Token-URL ohne /oauth2/token, Revoke-Adresse unbekannt".into(),
+            ));
+        }
+        let params = [
+            ("client_id", config.client_id.as_str()),
+            ("token", access_token),
+        ];
+        let response = self
+            .http_client()
+            .post(&url)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(UserTokenError::Other(format!("revoke HTTP {status}")));
+        }
+        Ok(())
     }
 }
 
@@ -328,6 +416,61 @@ mod tests {
         assert_eq!(result.refresh_token, "neu-ref");
         assert_eq!(result.expires_in, 14000);
         assert_eq!(result.scope, vec!["channel:manage:raids".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn stream_key_kommt_aus_helix_mit_nutzer_token() {
+        use wiremock::matchers::{header, query_param};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams/key"))
+            .and(query_param("broadcaster_id", "4242"))
+            .and(header("Authorization", "Bearer acc-1"))
+            .and(header("Client-ID", "cid"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{ "stream_key": "live_4242_geheim" }]
+            })))
+            .mount(&server)
+            .await;
+        let key = client_for(&server)
+            .fetch_stream_key("acc-1", "4242")
+            .await
+            .unwrap();
+        assert_eq!(key, "live_4242_geheim");
+    }
+
+    #[tokio::test]
+    async fn stream_key_fehler_traegt_keinen_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams/key"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({ "message": "Missing scope" })),
+            )
+            .mount(&server)
+            .await;
+        let fehler = client_for(&server)
+            .fetch_stream_key("acc-1", "4242")
+            .await
+            .unwrap_err();
+        assert_eq!(fehler, UserTokenError::Other("stream key HTTP 401".into()));
+    }
+
+    #[tokio::test]
+    async fn revoke_geht_an_den_revoke_endpunkt() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/revoke"))
+            .and(body_string_contains("client_id=cid"))
+            .and(body_string_contains("token=acc-1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .revoke_user_token("acc-1")
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -434,9 +577,10 @@ mod tests {
 
         let client = client_for(&server);
         // Abgelaufene Cooldown-Deadline setzen (Vergangenheit) → nicht mehr aktiv.
-        client
-            .user_auth_blocked_until
-            .store(crate::token::unix_now() - 1, std::sync::atomic::Ordering::Release);
+        client.user_auth_blocked_until.store(
+            crate::token::unix_now() - 1,
+            std::sync::atomic::Ordering::Release,
+        );
         assert!(!client.is_client_auth_blocked());
 
         client.refresh_user_token("alt").await.unwrap();
@@ -506,7 +650,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let owner = client_for(&server).fetch_token_owner("frisch").await.unwrap();
+        let owner = client_for(&server)
+            .fetch_token_owner("frisch")
+            .await
+            .unwrap();
         assert_eq!(owner.id, "993954638");
         // Login wird lowercase-normalisiert (Python: .strip().lower()).
         assert_eq!(owner.login, "denoshock");
@@ -517,9 +664,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/helix/users"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
 

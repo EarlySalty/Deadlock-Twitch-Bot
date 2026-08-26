@@ -18,6 +18,8 @@ serde_json         = { workspace = true }
 chrono              = { workspace = true }
 chrono-tz           = { workspace = true }
 reqwest             = { workspace = true }
+# Ursprung der Erfolgs-Weiterleitung nach dem OAuth-Callback ausschneiden.
+url                 = { workspace = true }
 sqlx                = { workspace = true }
 tb-config           = { workspace = true }
 tb-crypto           = { workspace = true }

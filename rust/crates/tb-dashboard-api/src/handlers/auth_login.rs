@@ -177,7 +177,7 @@ pub async fn callback_handler(
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    callback_handler_inner(state, config, &headers, query, false).await
+    callback_handler_inner(state, config, None, &headers, query, false).await
 }
 
 /// `GET /callback/twitch` — geteilter Twitch-OAuth-Callback.
@@ -188,15 +188,17 @@ pub async fn callback_handler(
 pub async fn shared_callback_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    uplink: Option<Extension<crate::handlers::platform_token::PlatformTokenConfig>>,
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    callback_handler_inner(state, config, &headers, query, true).await
+    callback_handler_inner(state, config, uplink, &headers, query, true).await
 }
 
 async fn callback_handler_inner(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    uplink: Option<Extension<crate::handlers::platform_token::PlatformTokenConfig>>,
     headers: &HeaderMap,
     query: CallbackQuery,
     allow_raid_delegate: bool,
@@ -233,9 +235,15 @@ async fn callback_handler_inner(
                 return response;
             }
             if allow_raid_delegate {
-                if let Some(response) =
-                    maybe_delegate_raid_oauth_callback(&state, &config, code, state_token, error)
-                        .await
+                if let Some(response) = maybe_delegate_raid_oauth_callback(
+                    &state,
+                    &config,
+                    uplink.as_ref().map(|Extension(c)| c),
+                    code,
+                    state_token,
+                    error,
+                )
+                .await
                 {
                     return response;
                 }
@@ -255,9 +263,15 @@ async fn callback_handler_inner(
         Err(db_error) => {
             warn!(%db_error, "OAuth-State-Lookup fehlgeschlagen");
             if allow_raid_delegate {
-                if let Some(response) =
-                    maybe_delegate_raid_oauth_callback(&state, &config, code, state_token, error)
-                        .await
+                if let Some(response) = maybe_delegate_raid_oauth_callback(
+                    &state,
+                    &config,
+                    uplink.as_ref().map(|Extension(c)| c),
+                    code,
+                    state_token,
+                    error,
+                )
+                .await
                 {
                     return response;
                 }
@@ -406,24 +420,86 @@ async fn callback_handler_inner(
 async fn maybe_delegate_raid_oauth_callback(
     state: &DashboardAuthState,
     config: &OAuthLoginConfig,
+    uplink: Option<&crate::handlers::platform_token::PlatformTokenConfig>,
     code: &str,
     state_token: &str,
     error: &str,
 ) -> Option<Response> {
-    match state.has_raid_oauth_state(state_token).await {
-        Ok(false) => None,
-        Ok(true) => {
-            let Some(raid_config) = config.raid_callback.as_ref() else {
-                warn!("Raid-OAuth-State erkannt, aber interner Raid-Callback ist nicht konfiguriert");
-                return Some(raid_oauth_unavailable_response());
-            };
-            Some(call_raid_oauth_callback(raid_config, code, state_token, error).await)
-        }
+    // Erst lesen, dann weiterreichen: der Bot verbraucht den State, danach ist
+    // das Scope-Profil nicht mehr zu haben.
+    let info = match state.raid_oauth_state_info(state_token).await {
+        Ok(Some(info)) => info,
+        Ok(None) => return None,
         Err(error) => {
             warn!(%error, "Raid-OAuth-State-Lookup fehlgeschlagen");
-            None
+            return None;
+        }
+    };
+    let Some(raid_config) = config.raid_callback.as_ref() else {
+        warn!("Raid-OAuth-State erkannt, aber interner Raid-Callback ist nicht konfiguriert");
+        return Some(raid_oauth_unavailable_response());
+    };
+    let antwort = call_raid_oauth_callback(raid_config, code, state_token, error).await;
+    if antwort.status().as_u16() < 400 && ist_uplink_profil(&info.scope_profile) {
+        if let Some(uplink) = uplink {
+            stream_key_nachlauf_starten(state.pool().clone(), uplink.clone(), info.streamer_login);
         }
     }
+    Some(antwort)
+}
+
+/// Ob dieser State aus dem Uplink-Weg kommt.
+fn ist_uplink_profil(scope_profile: &str) -> bool {
+    tb_raid::scope_profiles::normalize_scope_profile(scope_profile)
+        == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE
+}
+
+/// Startet den Stream-Key-Nachlauf, ohne die Weiterleitung aufzuhalten.
+///
+/// Der Streamer soll nach dem Twitch-Dialog sofort wieder auf seiner Seite
+/// landen. Der Key kommt Sekunden später von allein; klappt es nicht, holt die
+/// Oberfläche ihn über `POST .../streamkey` nach, und der Streamer sieht dort
+/// einen Grund statt einer hängenden Weiterleitung.
+fn stream_key_nachlauf_starten(
+    pool: sqlx::PgPool,
+    config: crate::handlers::platform_token::PlatformTokenConfig,
+    login: String,
+) {
+    tokio::spawn(async move {
+        let Some(konto) = crate::handlers::uplink::HelixKonto::aus_umgebung() else {
+            warn!("Uplink-Nachlauf: Twitch-Zugangsdaten fehlen, Stream-Key bleibt aus");
+            return;
+        };
+        // Der State kennt nur den Login; die numerische ID ist der Schlüssel
+        // des Relays und kommt aus derselben Quelle wie im übrigen Dashboard.
+        let id: Option<String> = match sqlx::query_scalar("SELECT tb_twitch_user_id($1)")
+            .bind(&login)
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(error) => {
+                warn!(%error, "Uplink-Nachlauf: Twitch-User-ID nicht auflösbar");
+                return;
+            }
+        };
+        let Some(id) = id.as_deref().and_then(|v| v.trim().parse::<i64>().ok()) else {
+            warn!("Uplink-Nachlauf: kein numerischer Twitch-Nutzer zum Login gefunden");
+            return;
+        };
+        let stand = crate::handlers::uplink::stream_key_hinterlegen(
+            &pool,
+            &config,
+            &konto,
+            &crate::handlers::uplink::HttpRelayZiele::default(),
+            id,
+            "twitch",
+        )
+        .await;
+        if stand != crate::handlers::uplink::StreamKeyStand::Hinterlegt {
+            warn!(?stand, streamer_id = id, "Uplink-Nachlauf: Stream-Key nicht hinterlegt");
+        }
+    });
 }
 
 async fn call_raid_oauth_callback(
@@ -991,6 +1067,20 @@ mod tests {
         );
     }
 
+    /// Der Uplink-Weg kommt mit Pfad UND Query zurueck. Die Haertung prueft
+    /// Schema, Host und Zugangsdaten; Pfad und Query muessen unangetastet
+    /// durchgehen, sonst landet der Streamer nach dem Verbinden wieder auf der
+    /// Dashboard-Startseite und der Stream-Key-Nachlauf faellt aus.
+    #[test]
+    fn raid_success_redirect_laesst_uplink_pfad_durch() {
+        assert_eq!(
+            normalize_raid_success_redirect_url(
+                "https://deutsche-deadlock-community.de/twitch/uplink?verbunden=twitch"
+            ),
+            "https://deutsche-deadlock-community.de/twitch/uplink?verbunden=twitch"
+        );
+    }
+
     #[tokio::test]
     async fn raid_payload_redirectet_bei_erfolg_und_rendert_fehlerseite() {
         let redirect = raid_oauth_payload_response(RaidOAuthCallbackPayload {
@@ -1349,6 +1439,7 @@ mod tests {
         let resp = shared_callback_handler(
             Some(Extension(state.clone())),
             Some(Extension(cfg)),
+            None,
             HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("good-code".to_string()),
@@ -1399,6 +1490,7 @@ mod tests {
         let resp = shared_callback_handler(
             Some(Extension(state.clone())),
             Some(Extension(cfg)),
+            None,
             HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("good-code".to_string()),
@@ -1451,6 +1543,7 @@ mod tests {
         let resp = shared_callback_handler(
             Some(Extension(state)),
             Some(Extension(cfg)),
+            None,
             HeaderMap::new(),
             Query(CallbackQuery {
                 code: Some("good-code".to_string()),

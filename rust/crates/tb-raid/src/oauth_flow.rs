@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use url::Url;
 
 use crate::scope_profiles::{
-    scopes_for_profile, BASE_SCOPE_PROFILE, DASHBOARD_REAUTH_SCOPE_PROFILE,
+    scopes_for_profile, BASE_SCOPE_PROFILE, DASHBOARD_REAUTH_SCOPE_PROFILE, UPLINK_SCOPE_PROFILE,
 };
 use crate::state_store::RaidOAuthState;
 
@@ -87,9 +87,14 @@ pub(crate) fn normalize_state_discord_user_id(value: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Löst das endgültige Scope-Profil auf: explizite Profile (`base` /
-/// `dashboard_reauth`) bleiben unverändert. Bei `auto` oder unbekanntem Wert
-/// entscheidet der Resolver: existierender Streamer-Kontext → `dashboard_reauth`,
-/// neuer Streamer → `base`.
+/// `dashboard_reauth` / `uplink`) bleiben unverändert. Bei `auto` oder
+/// unbekanntem Wert entscheidet der Resolver: existierender Streamer-Kontext →
+/// `dashboard_reauth`, neuer Streamer → `base`.
+///
+/// `uplink` bekommt bewusst keinen Auto-Rückfall: wer den Uplink verbindet,
+/// hat den Weg ausdrücklich gewählt, und ein stiller Rückfall auf `base`
+/// hieße, dass der Twitch-Dialog die Chat- und Stream-Key-Rechte gar nicht
+/// erst anfragt und "Verbinden" ohne sichtbaren Grund nichts bewirkt.
 ///
 /// Python: `_resolve_scope_profile`.
 async fn resolve_scope_profile(
@@ -103,6 +108,9 @@ async fn resolve_scope_profile(
     }
     if normalized == BASE_SCOPE_PROFILE {
         return BASE_SCOPE_PROFILE;
+    }
+    if normalized == UPLINK_SCOPE_PROFILE {
+        return UPLINK_SCOPE_PROFILE;
     }
     // auto oder unbekannt → Kontext prüfen.
     if resolver.has_existing_streamer_context(twitch_login).await {
@@ -454,5 +462,39 @@ mod tests {
         let state = build_state_info(&resolver, "  DragScope  ", "base", None, None, None).await;
         assert_eq!(state.requested_login, "dragscope");
         assert_eq!(state.expected_twitch_login, Some("dragscope".to_string()));
+    }
+
+    #[tokio::test]
+    async fn resolve_uplink_ohne_kontext_bleibt_uplink() {
+        // Kein Streamer-Kontext: `auto` faellt hier auf `base` zurueck. Das
+        // Uplink-Profil darf das nicht tun, sonst fragt der Twitch-Dialog die
+        // Chat- und Stream-Key-Rechte gar nicht erst an.
+        let resolver = StubResolver::new(&[]);
+        let state = build_state_info(&resolver, "neulingin", "uplink", None, None, None).await;
+        assert_eq!(state.scope_profile, "uplink");
+
+        // Und mit Kontext ebenso: kein stilles Hochstufen auf dashboard_reauth.
+        let resolver = StubResolver::new(&["altgediente"]);
+        let state = build_state_info(&resolver, "altgediente", "uplink", None, None, None).await;
+        assert_eq!(state.scope_profile, "uplink");
+
+        // Gegenprobe: `auto` verhaelt sich unveraendert.
+        let state = build_state_info(&resolver, "altgediente", "auto", None, None, None).await;
+        assert_eq!(state.scope_profile, "dashboard_reauth");
+    }
+
+    #[test]
+    fn authorize_url_uplink_traegt_alle_scopes() {
+        let url = build_authorize_url("cid", "https://x.test/callback/twitch", "uplink", "st");
+        assert!(url.starts_with(TWITCH_AUTHORIZE_URL));
+        for scope in crate::scope_profiles::UPLINK_SCOPES {
+            let kodiert = scope.replace(':', "%3A");
+            assert!(url.contains(&kodiert), "{scope} fehlt in {url}");
+        }
+        assert!(url.contains("force_verify=true"));
+        // Der Raid-Reauth-Weg bleibt bei zehn Rechten.
+        let raid = build_authorize_url("cid", "https://x.test/callback/twitch", "dashboard_reauth", "st");
+        assert!(!raid.contains("stream_key"));
+        assert!(!raid.contains("user%3Aread%3Achat"));
     }
 }

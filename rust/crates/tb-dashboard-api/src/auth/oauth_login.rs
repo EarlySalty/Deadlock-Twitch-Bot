@@ -80,35 +80,6 @@ pub fn build_login_authorize_url(client_id: &str, redirect_uri: &str, state: &st
     url.to_string()
 }
 
-/// Scopes, die der Uplink-Multi-Chat auf dem Streamer-Token braucht: Chat
-/// lesen (EventSub `channel.chat.message`) und im eigenen Namen senden
-/// (`POST helix/chat/messages`).
-pub const CHAT_SCOPES: [&str; 2] = ["user:read:chat", "user:write:chat"];
-
-/// Wie [`build_login_authorize_url`], aber mit `scope` (leerzeichengetrennt)
-/// und `force_verify=true`: der Streamer soll den Grant bewusst sehen, weil
-/// hier ein Token mit Schreibrecht auf seinen Chat entsteht. Fuer den
-/// Verbinden-Flow der Chat-Plattformen (platform_connect).
-pub fn build_scoped_authorize_url(
-    client_id: &str,
-    redirect_uri: &str,
-    state: &str,
-    scopes: &[&str],
-) -> String {
-    let mut url = Url::parse(TWITCH_AUTHORIZE_URL)
-        .expect("TWITCH_AUTHORIZE_URL ist eine valide statische URL");
-    {
-        let mut q = url.query_pairs_mut();
-        q.append_pair("client_id", client_id);
-        q.append_pair("redirect_uri", redirect_uri);
-        q.append_pair("response_type", "code");
-        q.append_pair("scope", &scopes.join(" "));
-        q.append_pair("state", state);
-        q.append_pair("force_verify", "true");
-    }
-    url.to_string()
-}
-
 /// Identität des eingeloggten Twitch-Users nach dem Code-Tausch
 /// (Python `_exchange_code_for_user`-Rückgabe, auth_mixin.py:903-907).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,22 +159,6 @@ mod tests {
         // KEINE Scopes, KEIN force_verify (reiner Identitäts-Login).
         assert!(!url.contains("scope="));
         assert!(!url.contains("force_verify"));
-    }
-
-    #[test]
-    fn authorize_url_traegt_chat_scopes() {
-        let url = build_scoped_authorize_url("cid", "https://x.test/cb", "st", &CHAT_SCOPES);
-        assert!(url.starts_with(TWITCH_AUTHORIZE_URL));
-        assert!(
-            url.contains("scope=user%3Aread%3Achat+user%3Awrite%3Achat"),
-            "{url}"
-        );
-        assert!(url.contains("force_verify=true"));
-        assert!(url.contains("state=st"));
-        assert!(url.contains("client_id=cid"));
-        // Der Login-Flow bleibt scopefrei: derselbe Bau ohne Scopes darf
-        // nicht heimlich Rechte anfordern.
-        assert!(!build_login_authorize_url("cid", "https://x.test/cb", "st").contains("scope="));
     }
 
     #[test]

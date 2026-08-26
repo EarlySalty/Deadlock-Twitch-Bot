@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_raid_auth\n                SET access_token_enc = NULL,\n                    refresh_token_enc = NULL,\n                    needs_reauth = TRUE,\n                    reauth_notified_at = $2,\n                    last_refreshed_at = $2\n              WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6d111902b602d20582755185e01d88898803653e039d106662781680e6731981"
+}

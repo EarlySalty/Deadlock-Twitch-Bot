@@ -74,7 +74,7 @@ pub mod overlay;
 pub mod overview;
 pub mod partner_login;
 pub mod pause_loop;
-pub mod platform_connect;
+pub mod platform_token;
 pub mod performance;
 pub mod raid_analytics;
 pub mod raid_history;

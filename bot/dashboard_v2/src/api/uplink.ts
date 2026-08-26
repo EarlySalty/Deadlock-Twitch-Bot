@@ -41,14 +41,31 @@ export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'getrennt';
 export interface UplinkVerbindung {
   platform: string;
   status: UplinkVerbindungStatus;
+  /** Ob im Uplink schon ein Ziel fuer diese Plattform liegt. */
+  stream_key_vorhanden?: boolean;
+}
+
+/**
+ * Die vier Fenster hinter einer Dock-Adresse. Ein Token fuer alle vier; ein
+ * Neuerzeugen macht alle vier alten Adressen ungueltig.
+ *
+ * Optional, weil aeltere Server nur `dock_url` liefern. Dann gilt die eine
+ * Adresse als Chat-Fenster und die drei anderen fehlen einfach, statt dass die
+ * Karte auf einen Platzhalter zeigt.
+ */
+export interface DockUrls {
+  chat: string;
+  activity: string;
+  stream_info: string;
+  points: string;
 }
 
 /**
  * Laesst das Relay eine neue Dock-Adresse ausstellen. Die alte gilt danach
  * nicht mehr, die neue kommt genau einmal in dieser Antwort zurueck.
  */
-export function rotateUplinkDockToken(): Promise<{ dock_url: string }> {
-  return fetchJson<{ dock_url: string }>(
+export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?: DockUrls }> {
+  return fetchJson<{ dock_url: string; dock_urls?: DockUrls }>(
     '/twitch/api/v2/uplink/dock-token/rotate',
     withCookieCredentials({
       method: 'POST',
@@ -61,9 +78,59 @@ export function rotateUplinkDockToken(): Promise<{ dock_url: string }> {
 /**
  * Startet das Verbinden einer Plattform. Das ist eine Browser-Navigation,
  * kein fetch: der Server leitet direkt zur Anmeldeseite der Plattform weiter.
+ *
+ * Es ist derselbe Weg, ueber den der Streamer den Bot autorisiert, nur mit
+ * mehr Rechten. Deshalb gibt es hier keinen eigenen Pfad mehr: ein zweiter
+ * Grant fuer dasselbe Konto hiess zwei Zugaenge, von denen einer irgendwann
+ * der falsche war.
  */
 export function uplinkConnectUrl(platform: UplinkPlattform): string {
-  return `/twitch/api/v2/uplink/connect/${platform}`;
+  if (platform !== 'twitch') return '';
+  return '/twitch/raid/auth?scope_profile=uplink';
+}
+
+/**
+ * Trennt eine Plattform: Zugang zurueckgenommen, Ziel im Uplink entfernt.
+ * Das stoppt auch den Raid-Bot, weil beides an demselben Zugang haengt.
+ */
+export function trenneUplinkPlattform(
+  platform: UplinkPlattform,
+  csrfToken: string
+): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(
+    `/twitch/api/v2/uplink/connect/${platform}/disconnect`,
+    withCookieCredentials({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: '{}',
+    })
+  );
+}
+
+/**
+ * Holt den Stream-Key nach und legt ihn als Uplink-Ziel ab. Die Seite ruft das
+ * nach der Rueckkehr aus dem Twitch-Dialog und ueber "Stream-Key erneut holen".
+ */
+export function holeUplinkStreamKey(
+  platform: UplinkPlattform,
+  csrfToken: string
+): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(
+    `/twitch/api/v2/uplink/connect/${platform}/streamkey`,
+    withCookieCredentials({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: '{}',
+    })
+  );
 }
 
 /** Bis jetzt kann nur Twitch verbunden werden; die anderen folgen. */
@@ -81,27 +148,52 @@ export interface UplinkPlattformVerbindung {
   statusText: string;
   /** Beschriftung des Verbinden-Links; null, wenn die Plattform noch nicht verbunden werden kann. */
   knopfText: string | null;
+  /** Ob im Uplink schon ein Ziel fuer diese Plattform liegt. */
+  streamKeyVorhanden: boolean;
+  /** Ob der Trennen-Knopf etwas zu trennen hat. */
+  trennenMoeglich: boolean;
 }
 
-/** Eine Zeile je Plattform fuer den Block "Plattformen verbinden". */
+/**
+ * Hinweis unter dem Trennen-Knopf.
+ *
+ * Trennen nimmt den ganzen Zugang zurueck, nicht nur den Uplink-Teil. Wer das
+ * nicht dazuschreibt, schaltet Leuten unbemerkt ihre Auto-Raids ab.
+ */
+export const TRENNEN_HINWEIS =
+  'Trennen nimmt den Zugang ganz zurück. Damit hören auch die automatischen Raids auf, bis du dich neu verbindest.';
+
+/** Eine Zeile je Plattform fuer den Kopf der Plattform-Karte. */
 export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {
   return UPLINK_PLATTFORMEN.map((p) => {
-    const status = me.verbindungen?.find((v) => v.platform === p.id)?.status ?? 'getrennt';
+    const eintrag = me.verbindungen?.find((v) => v.platform === p.id);
+    const status = eintrag?.status ?? 'getrennt';
     const aktiv = verbindenAktiv(p.id);
-    // Verbinden holt nur den Chat-Zugang (Lesen und Schreiben); der Stream-Key
-    // bleibt im Formular. Darum steht in jedem Text das Wort Chat.
-    let statusText = 'Chat folgt';
+    // Verbinden holt jetzt alles auf einmal: Chat lesen und schreiben, den
+    // Stream-Key und die Rechte fuer Aktivitaet und Kanalpunkte. Deshalb steht
+    // in den Texten nicht mehr nur "Chat".
+    let statusText = 'Folgt später';
     let knopfText: string | null = null;
     if (aktiv) {
       statusText =
         status === 'verbunden'
-          ? 'Chat verbunden'
+          ? 'Verbunden'
           : status === 'neu_verbinden'
-            ? 'Chat abgelaufen'
-            : 'Chat nicht verbunden';
-      knopfText = status === 'getrennt' ? `Chat von ${p.label} verbinden` : 'Chat neu verbinden';
+            ? 'Neu verbinden nötig'
+            : 'Nicht verbunden';
+      knopfText =
+        status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
     }
-    return { id: p.id, label: p.label, status, aktiv, statusText, knopfText };
+    return {
+      id: p.id,
+      label: p.label,
+      status,
+      aktiv,
+      statusText,
+      knopfText,
+      streamKeyVorhanden: eintrag?.stream_key_vorhanden ?? false,
+      trennenMoeglich: aktiv && status !== 'getrennt',
+    };
   });
 }
 
@@ -137,24 +229,48 @@ export const OBS_DOCKS = [
   },
 ] as const;
 
-export const EIGENES_DOCK_TITEL = 'Multi-Chat';
+export const EIGENES_DOCK_TITEL = 'Chat';
+
+/**
+ * Die vier eigenen Fenster in Anzeigereihenfolge, mit den Namen, die auch in
+ * OBS eingetragen werden. Feste Reihenfolge, damit die Karte nicht bei jedem
+ * Erzeugen anders aussieht.
+ */
+export const EIGENE_DOCKS = [
+  { titel: 'Chat', feld: 'chat' },
+  { titel: 'Aktivität', feld: 'activity' },
+  { titel: 'Stream-Infos', feld: 'stream_info' },
+  { titel: 'Kanalpunkte', feld: 'points' },
+] as const satisfies ReadonlyArray<{ titel: string; feld: keyof DockUrls }>;
 
 export interface DockAdresse {
   titel: string;
   url: string;
-  /** true fuer unsere eigene Adresse, false fuer die Twitch-Fenster. */
+  /** true fuer unsere eigenen Adressen, false fuer die Twitch-Fenster. */
   eigene: boolean;
 }
 
 /**
- * Alle Dock-Adressen in Anzeigereihenfolge: unsere eigene zuerst, wenn das
- * Relay sie mitliefert, danach die Twitch-Fenster. Ohne Kanalname faellt der
- * Twitch-Chat weg, die drei uebrigen Fenster brauchen ihn nicht.
+ * Alle Dock-Adressen in Anzeigereihenfolge: unsere vier zuerst, danach die
+ * Twitch-Fenster. Ohne Kanalname faellt der Twitch-Chat weg, die drei uebrigen
+ * Twitch-Fenster brauchen ihn nicht.
+ *
+ * `dockUrls` kommt einmalig aus dem Erzeugen. Fehlt es, weil der Server die
+ * vier Adressen noch nicht kennt, bleibt die eine bekannte Adresse als
+ * Chat-Fenster stehen. Lieber ein Fenster weniger als drei Adressen, die ins
+ * Leere zeigen.
  */
-export function dockAdressen(me: UplinkMe): DockAdresse[] {
+export function dockAdressen(me: UplinkMe, dockUrls?: DockUrls | null): DockAdresse[] {
   const liste: DockAdresse[] = [];
-  const eigene = me.dock_url?.trim() ?? '';
-  if (eigene) liste.push({ titel: EIGENES_DOCK_TITEL, url: eigene, eigene: true });
+  if (dockUrls) {
+    for (const dock of EIGENE_DOCKS) {
+      const url = dockUrls[dock.feld]?.trim() ?? '';
+      if (url) liste.push({ titel: dock.titel, url, eigene: true });
+    }
+  } else {
+    const eigene = me.dock_url?.trim() ?? '';
+    if (eigene) liste.push({ titel: EIGENES_DOCK_TITEL, url: eigene, eigene: true });
+  }
   for (const dock of OBS_DOCKS) {
     const url = dock.pfad(me.twitch_login ?? '');
     if (url) liste.push({ titel: dock.titel, url, eigene: false });
