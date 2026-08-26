@@ -350,13 +350,14 @@ pub async fn dock_token_rotate_handler(
     auth: DashboardAuthLevel,
 ) -> Result<Json<Value>, Response> {
     let id = partner_id(&pool, &auth).await?;
-    let wert = relay_json(
-        reqwest::Method::POST,
-        "/v1/me/dock-token/rotate",
-        Some(json!({ "streamer_id": id })),
-    )
-    .await?;
+    let wert = relay_json(reqwest::Method::POST, &dock_token_rotate_pfad(id), None).await?;
     Ok(Json(wert))
+}
+
+/// Das Relay liest den Streamer wie bei `/v1/me/waitlist` aus der Query
+/// (`Query<MeQuery>` in rs-relay `src/api/chat.rs`), nicht aus einem Body.
+fn dock_token_rotate_pfad(streamer_id: i64) -> String {
+    format!("/v1/me/dock-token/rotate?streamer_id={streamer_id}")
 }
 
 pub async fn waitlist_handler(
@@ -1216,6 +1217,13 @@ mod tests {
         let mut nein = json!({ "dock_url_vorhanden": false });
         me_anreichern(&mut nein, "aus", None, &[]);
         assert_eq!(nein["dock_url_vorhanden"], false);
+    }
+
+    #[test]
+    fn dock_token_rotate_traegt_streamer_in_der_query() {
+        let pfad = dock_token_rotate_pfad(4242);
+        assert_eq!(pfad, "/v1/me/dock-token/rotate?streamer_id=4242");
+        assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
     }
 
     #[test]

@@ -1578,6 +1578,19 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Interne Token-Route fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`.
+/// Loopback plus `X-Internal-Token` (derselbe Token wie auf den Admin-Routen),
+/// kein Cookie, kein CSRF.
+pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
+    Router::new()
+        .route(
+            "/twitch/api/v2/internal/platform-token",
+            get(handlers::platform_connect::internal_platform_token_handler),
+        )
+        .layer(Extension(ExpectedToken(token)))
+        .with_state(pool)
+}
+
 /// Baut die WebSocket-Route der eigenen OBS-Docks (Plan Abschnitt 2.3).
 ///
 /// `GET /obs/ws` traegt den Chat-, Activity- und Stream-Info-Strom eines
@@ -1600,19 +1613,6 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
 /// Extractor sonst den `X-Internal-Token`-Weg gar nicht sehen kann: ohne die
 /// Extension faellt jeder interne Aufrufer auf `None` und damit auf 401. Es ist
 /// derselbe Token wie auf den anderen Admin-Routen.
-/// Interne Token-Route fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`.
-/// Loopback plus `X-Internal-Token` (derselbe Token wie auf den Admin-Routen),
-/// kein Cookie, kein CSRF.
-pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
-    Router::new()
-        .route(
-            "/twitch/api/v2/internal/platform-token",
-            get(handlers::platform_connect::internal_platform_token_handler),
-        )
-        .layer(Extension(ExpectedToken(token)))
-        .with_state(pool)
-}
-
 pub fn build_obs_ws_router(pool: PgPool, token: String) -> Router {
     let bus = obs::bus::ObsDockBus::gemeinsam(pool.clone());
 
