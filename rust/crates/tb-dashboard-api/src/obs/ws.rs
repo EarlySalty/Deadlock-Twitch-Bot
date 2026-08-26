@@ -22,9 +22,35 @@
 //! Minutentakt. Ein Dock laeuft acht Stunden, deshalb schliesst der Server nie
 //! stumm, sondern immer mit Code und Grund aus [`SchliessGrund`].
 //!
+//! # Drahtformat zum Dock
+//!
+//! Jeder Serverrahmen ist ein Huellobjekt mit der `obs_dock_events.id`:
+//!
+//! ```json
+//! {"id": 123, "ereignis": {"typ": "chat", ...}}
+//! ```
+//!
+//! Ohne diese `id` koennte ein Dock den Punkt 4 oben gar nicht bedienen: es
+//! wuesste nach einem Neustart nicht, wo es stand, muesste jedes Mal ohne
+//! `?seit=` verbinden und bekaeme die letzten [`VORLAUF_OHNE_SEIT`] Zeilen
+//! erneut. Genau das sind die Dubletten und Luecken, die der Nachlauf
+//! ausschliessen soll. Das Ereignis selbst steht unveraendert unter
+//! `ereignis`; sein Format ist `tb_platform_core::PlatformEvent` und dort
+//! eingefroren, deshalb die Huelle darum statt eines Feldes darin (ein `id`
+//! auf oberster Ebene wuerde ausserdem mit `chat.id` kollidieren).
+//!
+//! Musste der Server Zeilen ueberspringen, weil das Dock zu weit zurueckliegt,
+//! kommt statt eines Ereignisses ein Lueckenhinweis mit derselben `id`-Stelle:
+//!
+//! ```json
+//! {"id": 900, "luecke": true}
+//! ```
+//!
+//! Das Dock uebernimmt die `id` genauso und weiss, dass sein Verlauf davor
+//! unvollstaendig ist.
+//!
 //! Der Client darf ausschliesslich `{"typ":"ping"}` senden und bekommt darauf
-//! `{"typ":"pong"}`. Jeder andere Rahmen wird verworfen; die Gegenrichtung
-//! traegt nur `tb_platform_core::PlatformEvent`.
+//! `{"typ":"pong"}`. Jeder andere Rahmen wird verworfen.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,7 +70,9 @@ use tracing::{debug, warn};
 
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::resolve_streamer_scope;
-use crate::auth::session::{DashboardAuthState, PARTNER_ACCESS_COOKIE_NAME, PARTNER_COOKIE_NAME};
+use crate::auth::session::{
+    DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_ACCESS_COOKIE_NAME, PARTNER_COOKIE_NAME,
+};
 use crate::obs::bus::{
     Auslieferung, ObsDockBus, SchliessGrund, NACHLAUF_DECKEL, VORLAUF_OHNE_SEIT,
 };
@@ -60,6 +88,14 @@ const SESSION_PRUEFUNG: Duration = Duration::from_secs(60);
 
 /// Antwort auf `{"typ":"ping"}`.
 const PONG: &str = r#"{"typ":"pong"}"#;
+
+/// Wie viele Nachlauf-Runden zu je [`NACHLAUF_DECKEL`] Zeilen ein Socket faehrt,
+/// bevor er aufgibt und dem Dock stattdessen einen Lueckenhinweis schickt.
+///
+/// Eine einzelne gekappte Abfrage waere die stille Variante desselben Fehlers:
+/// das Dock bekaeme die aeltesten 200 Zeilen und wuerde danach live
+/// weiterlaufen, alles dazwischen waere weg, ohne dass es jemand merkt.
+const NACHLAUF_RUNDEN: u32 = 5;
 
 /// Query-Parameter von `GET /obs/ws`.
 ///
@@ -178,7 +214,8 @@ async fn kanal_kennung(
 /// darf der Socket nicht stumm sterben, sondern muss dem Dock den Grund
 /// nennen, damit es "Bitte neu anmelden" anzeigen kann.
 enum SessionWaechter {
-    /// Admin oder interner Token: laeuft im Sinne dieses Sockets nicht ab.
+    /// Interner Token (`X-Internal-Token`): daran haengt keine ablaufende
+    /// Sitzung, es gibt nichts nachzupruefen.
     Ohne,
     /// Partner-Cookie, wird nachgeprueft.
     Partner {
@@ -186,6 +223,18 @@ enum SessionWaechter {
         sitzung: Option<String>,
         dauersitzung: Option<String>,
         user_agent: String,
+    },
+    /// Master-Session (`master_dash_session`), wird nachgeprueft.
+    ///
+    /// Die traegt nicht nur das Admin-Level: `master_session_auth` in
+    /// `auth/level.rs` macht aus derselben Sitzung im oeffentlichen Kontext ein
+    /// [`DashboardAuthLevel::Partner`] auf den Admin-Login, ganz ohne
+    /// Partner-Cookie. Genau diese Sockets liefen frueher als [`Self::Ohne`]
+    /// und wurden nie nachgeprueft, obwohl der Modulkopf die Nachpruefung im
+    /// Minutentakt zusagt.
+    Master {
+        state: DashboardAuthState,
+        sitzungen: Vec<String>,
     },
 }
 
@@ -195,9 +244,9 @@ impl SessionWaechter {
         state: Option<DashboardAuthState>,
         headers: &HeaderMap,
     ) -> Self {
-        let DashboardAuthLevel::Partner { .. } = auth else {
+        if matches!(auth, DashboardAuthLevel::None) {
             return Self::Ohne;
-        };
+        }
         let Some(state) = state else {
             return Self::Ohne;
         };
@@ -209,57 +258,82 @@ impl SessionWaechter {
         };
         let sitzung = cookie(PARTNER_COOKIE_NAME);
         let dauersitzung = cookie(PARTNER_ACCESS_COOKIE_NAME);
-        if sitzung.is_none() && dauersitzung.is_none() {
-            // Partner-Level ohne Partner-Cookie gibt es nur ueber den
-            // Loopback-Pfad; dort ist nichts nachzupruefen.
-            return Self::Ohne;
+        if sitzung.is_some() || dauersitzung.is_some() {
+            return Self::Partner {
+                state,
+                sitzung,
+                dauersitzung,
+                user_agent: headers
+                    .get(axum::http::header::USER_AGENT)
+                    .and_then(|wert| wert.to_str().ok())
+                    .unwrap_or("")
+                    .to_string(),
+            };
         }
-        Self::Partner {
-            state,
-            sitzung,
-            dauersitzung,
-            user_agent: headers
-                .get(axum::http::header::USER_AGENT)
-                .and_then(|wert| wert.to_str().ok())
-                .unwrap_or("")
-                .to_string(),
+
+        let sitzungen: Vec<String> = crate::auth::level::cookie_values(headers, ADMIN_COOKIE_NAME)
+            .into_iter()
+            .filter(|wert| !wert.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !sitzungen.is_empty() {
+            return Self::Master { state, sitzungen };
         }
+
+        // Weder Partner- noch Master-Cookie: dann kam das Auth-Level aus dem
+        // internen Token (`tb_http_core::AuthLevel::Admin`, Header
+        // `X-Internal-Token`). Der laeuft nicht ab, also ist nichts
+        // nachzupruefen.
+        Self::Ohne
     }
 
     /// `true`, solange die Sitzung traegt. Ein Datenbankfehler zaehlt bewusst
     /// als "traegt": ein kurzer Aussetzer soll kein Dock aus dem Stream werfen.
     async fn gueltig(&self) -> bool {
-        let Self::Partner {
-            state,
-            sitzung,
-            dauersitzung,
-            user_agent,
-        } = self
-        else {
-            return true;
-        };
-
-        if let Some(id) = sitzung {
-            match state.load_partner_session(id).await {
-                Ok(Some(_)) => return true,
-                Err(db_fehler) => {
-                    warn!(%db_fehler, "OBS-Dock: Session-Nachpruefung fehlgeschlagen");
-                    return true;
+        match self {
+            Self::Ohne => true,
+            Self::Partner {
+                state,
+                sitzung,
+                dauersitzung,
+                user_agent,
+            } => {
+                if let Some(id) = sitzung {
+                    match state.load_partner_session(id).await {
+                        Ok(Some(_)) => return true,
+                        Err(db_fehler) => {
+                            warn!(%db_fehler, "OBS-Dock: Session-Nachpruefung fehlgeschlagen");
+                            return true;
+                        }
+                        Ok(None) => {}
+                    }
                 }
-                Ok(None) => {}
+                if let Some(id) = dauersitzung {
+                    match state.load_partner_access_session(id, user_agent).await {
+                        Ok(Some(_)) => return true,
+                        Err(db_fehler) => {
+                            warn!(%db_fehler, "OBS-Dock: Session-Nachpruefung fehlgeschlagen");
+                            return true;
+                        }
+                        Ok(None) => {}
+                    }
+                }
+                false
+            }
+            Self::Master { state, sitzungen } => {
+                for id in sitzungen {
+                    match state.load_admin_session(id).await {
+                        Ok(Some(_)) => return true,
+                        Err(db_fehler) => {
+                            warn!(%db_fehler, "OBS-Dock: Session-Nachpruefung fehlgeschlagen");
+                            return true;
+                        }
+                        Ok(None) => {}
+                    }
+                }
+                false
             }
         }
-        if let Some(id) = dauersitzung {
-            match state.load_partner_access_session(id, user_agent).await {
-                Ok(Some(_)) => return true,
-                Err(db_fehler) => {
-                    warn!(%db_fehler, "OBS-Dock: Session-Nachpruefung fehlgeschlagen");
-                    return true;
-                }
-                Ok(None) => {}
-            }
-        }
-        false
     }
 }
 
@@ -269,6 +343,22 @@ impl SessionWaechter {
 /// Upgrade-Header soll die Auth-Antwort sehen (401/403) und nicht die
 /// Upgrade-Abweisung des Extractors. Erst wenn die Auth traegt, wird der
 /// fehlende Upgrade-Header zum Fehler.
+///
+/// # Kein Origin-Check, und warum das hier traegt
+///
+/// Ein WebSocket-Upgrade unterliegt nicht der Same-Origin-Policy, ein
+/// Origin-Check waere also die uebliche Bremse gegen Cross-Site-Hijacking.
+/// Hier haelt stattdessen das Cookie selbst: alle Sitzungs-Cookies dieses
+/// Dashboards werden mit `SameSite=Lax` gesetzt
+/// (`handlers/auth_login.rs:396` fuer `twitch_dash_session`,
+/// `handlers/partner_login.rs:311` fuer `twitch_dash_session_partner`), und
+/// `auth::session::SameSite` kennt ueberhaupt nur `Lax` und `Strict`, ein
+/// `None` gibt es im Typ nicht. Ein Upgrade ist keine Top-Level-Navigation,
+/// also schickt der Browser ein Lax-Cookie dabei nicht mit, und ein fremder
+/// Ursprung landet hier ohne Sitzung auf 401.
+///
+/// Wer je ein Sitzungs-Cookie auf `SameSite=None` stellt, muss an dieser
+/// Stelle eine Origin-Pruefung nachziehen.
 pub async fn obs_ws_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -356,6 +446,133 @@ async fn nachlauf_lesen(
     }
 }
 
+/// Der Rahmen, der wirklich ueber die Leitung geht: das Ereignis in einer
+/// Huelle mit seiner `obs_dock_events.id`.
+///
+/// `ereignis_json` ist die Spalte `payload` als Text und damit garantiert
+/// gueltiges JSON (die Spalte ist `JSONB`), deshalb wird sie hier nur
+/// eingesetzt und nicht neu geparst.
+fn drahtrahmen(id: i64, ereignis_json: &str) -> String {
+    format!(r#"{{"id":{id},"ereignis":{ereignis_json}}}"#)
+}
+
+/// Hinweis an das Dock, dass der Server bis `bis` Zeilen uebersprungen hat.
+fn luecken_rahmen(bis: i64) -> String {
+    format!(r#"{{"id":{bis},"luecke":true}}"#)
+}
+
+/// Hoechste `id`, die der Kanal gerade hat. Fuer den Fall, dass der Nachlauf
+/// aufgibt und dem Dock stattdessen sagen muss, wo es weitergeht.
+async fn hoechste_id(pool: &PgPool, channel_id: &str) -> Result<i64, sqlx::Error> {
+    let wert: Option<i64> = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(id), 0) FROM obs_dock_events WHERE channel_id = $1",
+    )
+    .bind(channel_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(wert.unwrap_or(0))
+}
+
+/// Sendet den Nachlauf und laesst dabei nichts liegen.
+///
+/// Zwei Betriebsarten:
+/// - `vorlauf`: das Dock kennt keine `id` und bekommt die letzten
+///   [`VORLAUF_OHNE_SEIT`] Zeilen. Eine Runde, kein Nachziehen; hier gibt es
+///   nichts aufzuholen.
+/// - sonst: ab `buch.letzte_id()` in Runden zu [`NACHLAUF_DECKEL`] Zeilen, bis
+///   der Socket wirklich aufgeschlossen hat. Reichen [`NACHLAUF_RUNDEN`] Runden
+///   nicht, bekommt das Dock einen Lueckenhinweis und faengt beim aktuellen
+///   Stand an, statt dass die Zeilen dazwischen stumm verschwinden.
+///
+/// Derselbe Weg dient beim Verbinden mit `?seit=` und beim Aufholen nach einem
+/// `Lagged`; beides ist dieselbe Frage ("was fehlt mir ab id X").
+///
+/// `false` heisst: der Socket ist weg. Ein Datenbankfehler heisst das
+/// ausdruecklich nicht, live weiterzumachen ist besser als gar nichts.
+async fn nachlauf_senden(
+    pool: &PgPool,
+    channel_id: &str,
+    buch: &mut Auslieferung,
+    schreiber: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    vorlauf: bool,
+) -> bool {
+    if vorlauf {
+        match nachlauf_lesen(pool, channel_id, None, VORLAUF_OHNE_SEIT).await {
+            Ok(zeilen) => {
+                for (id, json) in zeilen {
+                    if schreiber
+                        .send(Message::Text(drahtrahmen(id, &json)))
+                        .await
+                        .is_err()
+                    {
+                        return false;
+                    }
+                    buch.nachlauf(id);
+                }
+            }
+            Err(db_fehler) => {
+                warn!(%db_fehler, channel_id, "OBS-Dock: Vorlauf nicht lesbar");
+            }
+        }
+        return true;
+    }
+
+    for _ in 0..NACHLAUF_RUNDEN {
+        let zeilen =
+            match nachlauf_lesen(pool, channel_id, Some(buch.letzte_id()), NACHLAUF_DECKEL).await {
+                Ok(zeilen) => zeilen,
+                Err(db_fehler) => {
+                    warn!(%db_fehler, channel_id, "OBS-Dock: Nachlauf nicht lesbar");
+                    return true;
+                }
+            };
+        let anzahl = zeilen.len() as i64;
+        for (id, json) in zeilen {
+            if !buch.live(id) {
+                continue;
+            }
+            if schreiber
+                .send(Message::Text(drahtrahmen(id, &json)))
+                .await
+                .is_err()
+            {
+                return false;
+            }
+        }
+        if anzahl < NACHLAUF_DECKEL {
+            return true;
+        }
+    }
+
+    // Immer noch hinterher. Dem Dock sagen, dass hier etwas fehlt, und beim
+    // aktuellen Stand weitermachen.
+    let ziel = match hoechste_id(pool, channel_id).await {
+        Ok(ziel) => ziel,
+        Err(db_fehler) => {
+            warn!(%db_fehler, channel_id, "OBS-Dock: Lueckenhinweis nicht bestimmbar");
+            return true;
+        }
+    };
+    if ziel <= buch.letzte_id() {
+        return true;
+    }
+    warn!(
+        channel_id,
+        uebersprungen = ziel - buch.letzte_id(),
+        "OBS-Dock: Nachlauf zu gross, Rest wird uebersprungen"
+    );
+    if schreiber
+        .send(Message::Text(luecken_rahmen(ziel)))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    buch.nachlauf(ziel);
+    true
+}
+
 /// Der Lebenslauf eines offenen Docks.
 async fn socket_bedienen(
     socket: WebSocket,
@@ -375,24 +592,16 @@ async fn socket_bedienen(
     let mut buch = Auslieferung::neu(seit);
 
     // 1. Nachlauf. Die Live-Rahmen warten solange im Puffer.
-    let deckel = if seit.is_some() {
-        NACHLAUF_DECKEL
-    } else {
-        VORLAUF_OHNE_SEIT
-    };
-    match nachlauf_lesen(&pool, &channel_id, seit, deckel).await {
-        Ok(zeilen) => {
-            for (id, json) in zeilen {
-                if schreiber.send(Message::Text(json)).await.is_err() {
-                    return;
-                }
-                buch.nachlauf(id);
-            }
-        }
-        Err(db_fehler) => {
-            // Kein Abbruch: live weiterzumachen ist besser als gar nichts.
-            warn!(%db_fehler, channel_id, "OBS-Dock: Nachlauf nicht lesbar");
-        }
+    if !nachlauf_senden(
+        &pool,
+        &channel_id,
+        &mut buch,
+        &mut schreiber,
+        seit.is_none(),
+    )
+    .await
+    {
+        return;
     }
 
     // 2. Live.
@@ -405,6 +614,11 @@ async fn socket_bedienen(
     sitzungstakt.tick().await;
     let mut letztes_lebenszeichen = Instant::now();
 
+    // Reihenfolge von `biased`: erst alles, was selten dran ist und trotzdem
+    // drankommen muss, zuletzt der Ereignisstrom. Stuende `rahmen.recv()` vorn,
+    // kaemen bei einem dauerhaft vollen Kanal weder Ping noch
+    // Session-Nachpruefung noch die Rahmen des Clients je an die Reihe, weil
+    // `select!` bei jedem Durchlauf wieder oben anfaengt.
     let schliessen: Option<SchliessGrund> = loop {
         tokio::select! {
             biased;
@@ -414,29 +628,6 @@ async fn socket_bedienen(
                     Ok(grund) => break Some(grund),
                     // Der Bus hat den Sender fallen lassen; nichts zu melden.
                     Err(_) => break None,
-                }
-            }
-
-            eingang = rahmen.recv() => {
-                match eingang {
-                    Ok(rahmen) => {
-                        if !buch.live(rahmen.id) {
-                            continue;
-                        }
-                        if schreiber.send(Message::Text(rahmen.json.to_string())).await.is_err() {
-                            break None;
-                        }
-                    }
-                    Err(RecvError::Lagged(verloren)) => {
-                        // Der Socket kam nicht hinterher. Die Luecke steht in
-                        // der Tabelle, also von dort nachziehen statt sie
-                        // stillschweigend zu verlieren.
-                        warn!(channel_id, verloren, "OBS-Dock: Socket hinkte nach, Luecke wird nachgezogen");
-                        if !luecke_nachreichen(&pool, &channel_id, &mut buch, &mut schreiber).await {
-                            break None;
-                        }
-                    }
-                    Err(RecvError::Closed) => break None,
                 }
             }
 
@@ -471,6 +662,29 @@ async fn socket_bedienen(
                     Some(Err(_)) | None => break None,
                 }
             }
+
+            eingang = rahmen.recv() => {
+                match eingang {
+                    Ok(rahmen) => {
+                        if !buch.live(rahmen.id) {
+                            continue;
+                        }
+                        if schreiber.send(Message::Text(drahtrahmen(rahmen.id, &rahmen.json))).await.is_err() {
+                            break None;
+                        }
+                    }
+                    Err(RecvError::Lagged(verloren)) => {
+                        // Der Socket kam nicht hinterher. Die Luecke steht in
+                        // der Tabelle, also von dort nachziehen statt sie
+                        // stillschweigend zu verlieren.
+                        warn!(channel_id, verloren, "OBS-Dock: Socket hinkte nach, Luecke wird nachgezogen");
+                        if !nachlauf_senden(&pool, &channel_id, &mut buch, &mut schreiber, false).await {
+                            break None;
+                        }
+                    }
+                    Err(RecvError::Closed) => break None,
+                }
+            }
         }
     };
 
@@ -488,33 +702,6 @@ async fn socket_bedienen(
             .await;
     }
     let _ = schreiber.close().await;
-}
-
-/// Zieht nach einem `Lagged` die verpassten Zeilen aus der Tabelle nach.
-/// `false` heisst: der Socket ist weg.
-async fn luecke_nachreichen(
-    pool: &PgPool,
-    channel_id: &str,
-    buch: &mut Auslieferung,
-    schreiber: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-) -> bool {
-    let zeilen =
-        match nachlauf_lesen(pool, channel_id, Some(buch.letzte_id()), NACHLAUF_DECKEL).await {
-            Ok(zeilen) => zeilen,
-            Err(db_fehler) => {
-                warn!(%db_fehler, channel_id, "OBS-Dock: Luecke nicht nachreichbar");
-                return true;
-            }
-        };
-    for (id, json) in zeilen {
-        if !buch.live(id) {
-            continue;
-        }
-        if schreiber.send(Message::Text(json)).await.is_err() {
-            return false;
-        }
-    }
-    true
 }
 
 /// Der einzige Rahmen, den der Client senden darf.
@@ -709,5 +896,452 @@ mod tests {
     #[tokio::test]
     async fn session_waechter_ohne_pruefung_bleibt_gueltig() {
         assert!(SessionWaechter::Ohne.gueltig().await);
+    }
+
+    fn kopfzeilen(paare: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, wert) in paare {
+            headers.insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                wert.parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    /// Wie [`traeger_pool`], aber mit kurzer Wartezeit: die Waechter-Tests
+    /// wollen den Datenbankfehler sehen und nicht 30 Sekunden darauf warten.
+    fn auth_state() -> DashboardAuthState {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(250))
+            .connect_lazy("postgres://obs-dock-test@127.0.0.1:1/obs")
+            .expect("lazy pool");
+        DashboardAuthState::new(pool, "erfundener-key".to_string())
+    }
+
+    /// Der Fall aus dem Review: `master_dash_session` erzeugt im oeffentlichen
+    /// Kontext ein Partner-Level ohne Partner-Cookie. Dieser Socket muss
+    /// nachgeprueft werden und darf nicht als [`SessionWaechter::Ohne`]
+    /// durchrutschen.
+    #[tokio::test]
+    async fn master_session_ohne_partner_cookie_wird_nachgeprueft() {
+        let waechter = SessionWaechter::bauen(
+            &partner("earlysalty", "9062301"),
+            Some(auth_state()),
+            &kopfzeilen(&[("cookie", "master_dash_session=abc")]),
+        );
+        assert!(matches!(waechter, SessionWaechter::Master { .. }));
+    }
+
+    /// Auch ein echtes Admin-Level aus derselben Sitzung wird nachgeprueft.
+    #[tokio::test]
+    async fn admin_mit_master_cookie_wird_nachgeprueft() {
+        let waechter = SessionWaechter::bauen(
+            &DashboardAuthLevel::admin(),
+            Some(auth_state()),
+            &kopfzeilen(&[("cookie", "master_dash_session=abc")]),
+        );
+        assert!(matches!(waechter, SessionWaechter::Master { .. }));
+    }
+
+    /// Ohne jedes Cookie bleibt nur der interne Token, und der laeuft nicht ab.
+    #[tokio::test]
+    async fn interner_token_ohne_cookie_bleibt_ohne_pruefung() {
+        let waechter = SessionWaechter::bauen(
+            &DashboardAuthLevel::admin(),
+            Some(auth_state()),
+            &kopfzeilen(&[("x-internal-token", "geheim")]),
+        );
+        assert!(matches!(waechter, SessionWaechter::Ohne));
+    }
+
+    #[tokio::test]
+    async fn partner_cookie_schlaegt_master_cookie() {
+        let waechter = SessionWaechter::bauen(
+            &partner("earlysalty", "9062301"),
+            Some(auth_state()),
+            &kopfzeilen(&[("cookie", "twitch_dash_session=abc; master_dash_session=def")]),
+        );
+        assert!(matches!(waechter, SessionWaechter::Partner { .. }));
+    }
+
+    /// Beide Zweige von [`SessionWaechter::gueltig`] gegen eine unerreichbare
+    /// Datenbank: ein Aussetzer wirft kein Dock aus dem Stream.
+    #[tokio::test]
+    async fn db_aussetzer_wirft_kein_dock_raus() {
+        let partner_waechter = SessionWaechter::Partner {
+            state: auth_state(),
+            sitzung: Some("abc".to_string()),
+            dauersitzung: Some("def".to_string()),
+            user_agent: "OBS".to_string(),
+        };
+        assert!(partner_waechter.gueltig().await);
+
+        let master_waechter = SessionWaechter::Master {
+            state: auth_state(),
+            sitzungen: vec!["abc".to_string()],
+        };
+        assert!(master_waechter.gueltig().await);
+    }
+
+    #[test]
+    fn drahtrahmen_traegt_die_id_neben_dem_ereignis() {
+        let text = drahtrahmen(42, r#"{"typ":"chat","id":"abc"}"#);
+        let wert: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(wert["id"], 42);
+        assert_eq!(wert["ereignis"]["typ"], "chat");
+        // Die eigene `id` des Ereignisses bleibt unangetastet; genau deshalb
+        // die Huelle statt eines Feldes im Ereignis.
+        assert_eq!(wert["ereignis"]["id"], "abc");
+
+        let luecke: serde_json::Value = serde_json::from_str(&luecken_rahmen(900)).unwrap();
+        assert_eq!(luecke["id"], 900);
+        assert_eq!(luecke["luecke"], true);
+    }
+}
+
+/// Tests am echten Socket: eigener Server auf einem echten Port, echter
+/// WebSocket-Client, echte Tabelle.
+///
+/// Diese Tests belegen den Weg, den kein Baustein-Test belegen kann:
+/// [`socket_bedienen`], [`nachlauf_lesen`], [`nachlauf_senden`] und das
+/// Drahtformat mit der `obs_dock_events.id`.
+///
+/// Ohne `TB_TEST_DATABASE_URL` ueberspringen sie sich selbst.
+#[cfg(test)]
+mod socket_tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    const TOKEN: &str = "obs-dock-testtoken";
+    const KANAL: &str = "9062301";
+
+    macro_rules! dsn_oder_skip {
+        () => {
+            match std::env::var("TB_TEST_DATABASE_URL") {
+                Ok(dsn) => dsn,
+                Err(_) => {
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
+    /// Eigenes Schema je Test, damit parallele Tests sich nicht in die Quere
+    /// kommen. Das DDL ist dasselbe wie in der Migration des Schreibpfads.
+    async fn schema_pool(dsn: &str, schema: &str) -> PgPool {
+        let aufbau = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("Test-DB erreichbar");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&aufbau)
+            .await
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&aufbau)
+            .await
+            .expect("Schema anlegen");
+        aufbau.close().await;
+
+        let name = schema.to_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |conn, _| {
+                let name = name.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {name}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(dsn)
+            .await
+            .expect("Testpool");
+
+        sqlx::query(
+            "CREATE TABLE obs_dock_events (
+                 id BIGSERIAL PRIMARY KEY,
+                 channel_id TEXT NOT NULL,
+                 payload JSONB NOT NULL,
+                 dedupe_key TEXT,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("obs_dock_events anlegen");
+        sqlx::query(
+            "CREATE TABLE twitch_partners (
+                 id BIGSERIAL PRIMARY KEY,
+                 twitch_login TEXT NOT NULL,
+                 twitch_user_id TEXT
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("twitch_partners anlegen");
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("earlysalty")
+            .bind(KANAL)
+            .execute(&pool)
+            .await
+            .expect("Partner anlegen");
+        pool
+    }
+
+    async fn ereignis_schreiben(pool: &PgPool, text: &str) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             VALUES ($1, $2::jsonb)
+             RETURNING id",
+        )
+        .bind(KANAL)
+        .bind(format!(r#"{{"typ":"chat","id":"{text}","text":"{text}"}}"#))
+        .fetch_one(pool)
+        .await
+        .expect("Ereignis schreiben")
+    }
+
+    /// Startet den echten Router auf einem echten Port.
+    async fn server_starten(pool: PgPool) -> std::net::SocketAddr {
+        let router = Router::new()
+            .route("/obs/ws", get(obs_ws_handler))
+            .layer(Extension(ObsDockBus::ohne_datenbank()))
+            .layer(Extension(tb_http_core::ExpectedToken(TOKEN.to_string())))
+            .with_state(pool);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        adresse
+    }
+
+    type Socket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    async fn verbinden(adresse: std::net::SocketAddr, seit: Option<i64>) -> Socket {
+        let anhang = match seit {
+            Some(id) => format!("&seit={id}"),
+            None => String::new(),
+        };
+        let mut anfrage = format!("ws://{adresse}/obs/ws?streamer=earlysalty{anhang}")
+            .into_client_request()
+            .expect("Anfrage");
+        anfrage
+            .headers_mut()
+            .insert(tb_http_core::INTERNAL_TOKEN_HEADER, TOKEN.parse().unwrap());
+        let (socket, _) = tokio_tungstenite::connect_async(anfrage)
+            .await
+            .expect("Socket verbunden");
+        socket
+    }
+
+    /// Liest, bis der Server eine Weile still ist. Genau so merkt auch ein Dock,
+    /// dass der Nachlauf durch ist.
+    async fn alles_lesen(socket: &mut Socket) -> Vec<serde_json::Value> {
+        let mut gelesen = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(750), socket.next()).await {
+                Ok(Some(Ok(ClientMessage::Text(text)))) => {
+                    gelesen.push(serde_json::from_str(&text).expect("JSON-Rahmen"));
+                }
+                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Err(_))) | Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        gelesen
+    }
+
+    fn texte(rahmen: &[serde_json::Value]) -> Vec<String> {
+        rahmen
+            .iter()
+            .filter_map(|wert| wert["ereignis"]["text"].as_str())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Beweis fuer den Review-Fund: die `id` steht im Drahtformat, das Dock kann
+    /// sie auslesen, mit `?seit=<id>` neu verbinden und bekommt dann genau die
+    /// Zeilen dazwischen: keine fehlt, keine kommt doppelt.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconnect_mit_gesehener_id_am_echten_socket() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_reconnect").await;
+        for lauf in 1..=5 {
+            ereignis_schreiben(&pool, &format!("e{lauf}")).await;
+        }
+        let adresse = server_starten(pool.clone()).await;
+
+        // 1. Verbinden ohne `?seit=`: der Vorlauf kommt.
+        let mut erster = verbinden(adresse, None).await;
+        let erste_runde = alles_lesen(&mut erster).await;
+        assert_eq!(texte(&erste_runde), vec!["e1", "e2", "e3", "e4", "e5"]);
+
+        // 2. Die gesehene `id` aus dem Drahtformat auslesen. Genau das war
+        //    vorher unmoeglich.
+        let gesehen = erste_runde
+            .last()
+            .and_then(|wert| wert["id"].as_i64())
+            .expect("id im Rahmen");
+
+        // 3. Socket weg, waehrenddessen laeuft der Kanal weiter.
+        erster.close(None).await.ok();
+        drop(erster);
+        for lauf in 6..=8 {
+            ereignis_schreiben(&pool, &format!("e{lauf}")).await;
+        }
+
+        // 4. Neu verbinden mit der gesehenen id.
+        let mut zweiter = verbinden(adresse, Some(gesehen)).await;
+        let zweite_runde = alles_lesen(&mut zweiter).await;
+
+        // Weder Luecke (e6..e8 sind da) noch Dublette (e5 nicht noch einmal).
+        assert_eq!(texte(&zweite_runde), vec!["e6", "e7", "e8"]);
+        let ids: Vec<i64> = zweite_runde
+            .iter()
+            .filter_map(|wert| wert["id"].as_i64())
+            .collect();
+        assert!(ids.iter().all(|id| *id > gesehen), "ids: {ids:?}");
+        zweiter.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_reconnect CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Live-Weg am echten Socket: was nach dem Nachlauf hereinkommt, geht mit
+    /// derselben Huelle und derselben `id` hinaus, und die naechste Verbindung
+    /// kann daran anschliessen.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn live_rahmen_traegt_die_id_am_echten_socket() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_live").await;
+        let bus = ObsDockBus::ohne_datenbank();
+        let router = Router::new()
+            .route("/obs/ws", get(obs_ws_handler))
+            .layer(Extension(Arc::clone(&bus)))
+            .layer(Extension(tb_http_core::ExpectedToken(TOKEN.to_string())))
+            .with_state(pool.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let mut socket = verbinden(adresse, None).await;
+        // Nachlauf leerlaufen lassen, damit der Socket nachweislich live ist.
+        assert!(alles_lesen(&mut socket).await.is_empty());
+
+        let id = ereignis_schreiben(&pool, "live").await;
+        bus.veroeffentlichen(
+            KANAL,
+            crate::obs::bus::BusRahmen::neu(id, r#"{"typ":"chat","id":"live","text":"live"}"#),
+        );
+
+        let gelesen = alles_lesen(&mut socket).await;
+        assert_eq!(texte(&gelesen), vec!["live"]);
+        assert_eq!(gelesen[0]["id"].as_i64(), Some(id));
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_live CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Ein Dock, das weiter zurueckliegt als eine einzelne Abfrage hergibt,
+    /// bekommt den Rest nachgezogen statt ihn stumm zu verlieren.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn nachlauf_zieht_ueber_den_abfragedeckel_hinaus_nach() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_deckel").await;
+        // Mehr als eine Abfrage traegt, aber weniger als alle Runden zusammen.
+        let anzahl = NACHLAUF_DECKEL * 2 + 7;
+        sqlx::query(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             SELECT $1, jsonb_build_object('typ','chat','id',lauf::text,'text',lauf::text)
+               FROM generate_series(1, $2) AS lauf",
+        )
+        .bind(KANAL)
+        .bind(anzahl)
+        .execute(&pool)
+        .await
+        .expect("Massen-Einfuegen");
+
+        let adresse = server_starten(pool.clone()).await;
+        let mut socket = verbinden(adresse, Some(1)).await;
+        let gelesen = alles_lesen(&mut socket).await;
+
+        // Alles ab id 2, in einem Rutsch, ohne Lueckenhinweis.
+        assert_eq!(gelesen.len() as i64, anzahl - 1);
+        assert!(gelesen.iter().all(|wert| wert["luecke"].is_null()));
+        let ids: Vec<i64> = gelesen
+            .iter()
+            .filter_map(|wert| wert["id"].as_i64())
+            .collect();
+        assert_eq!(ids.first(), Some(&2));
+        assert_eq!(ids.last(), Some(&anzahl));
+        // Streng aufsteigend, also keine Dublette.
+        assert!(ids.windows(2).all(|paar| paar[0] < paar[1]));
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_deckel CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Reicht selbst das Nachziehen nicht, sagt der Server es dem Dock, statt
+    /// die Zeilen stillschweigend fallen zu lassen.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zu_grosser_nachlauf_meldet_die_luecke() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_luecke").await;
+        let anzahl = NACHLAUF_DECKEL * i64::from(NACHLAUF_RUNDEN) + 25;
+        sqlx::query(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             SELECT $1, jsonb_build_object('typ','chat','id',lauf::text,'text',lauf::text)
+               FROM generate_series(1, $2) AS lauf",
+        )
+        .bind(KANAL)
+        .bind(anzahl)
+        .execute(&pool)
+        .await
+        .expect("Massen-Einfuegen");
+
+        let adresse = server_starten(pool.clone()).await;
+        let mut socket = verbinden(adresse, Some(1)).await;
+        let gelesen = alles_lesen(&mut socket).await;
+
+        let luecken: Vec<&serde_json::Value> = gelesen
+            .iter()
+            .filter(|wert| wert["luecke"] == serde_json::Value::Bool(true))
+            .collect();
+        assert_eq!(luecken.len(), 1, "genau ein Lueckenhinweis");
+        assert_eq!(luecken[0]["id"].as_i64(), Some(anzahl));
+        // Davor die Zeilen, die noch in die Runden gepasst haben.
+        assert_eq!(
+            gelesen.len() as i64,
+            NACHLAUF_DECKEL * i64::from(NACHLAUF_RUNDEN) + 1
+        );
+        socket.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_luecke CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

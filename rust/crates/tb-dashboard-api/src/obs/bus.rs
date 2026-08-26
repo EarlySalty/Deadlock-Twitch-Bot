@@ -48,12 +48,32 @@ pub const MAX_SOCKETS_JE_PARTNER: usize = 6;
 /// Socket sofort `Lagged` sieht.
 const BROADCAST_TIEFE: usize = 256;
 
-/// Deckel beim Nachziehen einer Luecke nach einem Listener-Neuaufbau.
+/// Zeilen je Runde beim Nachziehen einer Luecke nach einem Listener-Neuaufbau.
+///
+/// Das ist die Groesse eines einzelnen `SELECT`, **nicht** die Obergrenze der
+/// Luecke: [`ObsDockBus::luecke_nachziehen`] faehrt so viele Runden, bis die
+/// Tabelle leergelesen ist, hoechstens aber [`LUECKE_RUNDEN_DECKEL`] Stueck.
 const LUECKE_DECKEL: i64 = 500;
+
+/// Wie viele Runden das Nachziehen hoechstens faehrt. Wer danach immer noch
+/// hinterherhaengt, hat mehr verpasst, als der Nachlaufpuffer ueberhaupt
+/// vorhaelt (die Tabelle behaelt 15 Minuten); dann wird der Rest bewusst
+/// uebersprungen, aber mit einem `warn!` und nicht stumm.
+const LUECKE_RUNDEN_DECKEL: u32 = 20;
 
 /// Kleinster und groesster Wiederholungsabstand des Listeners.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_DECKEL: Duration = Duration::from_secs(30);
+
+/// Ab dieser Laufzeit gilt ein Listener-Durchlauf als geglueckt, und der
+/// Backoff faengt beim naechsten Abriss wieder von vorn an.
+///
+/// [`ObsDockBus::horchen`] kehrt ausschliesslich mit einem Fehler zurueck, ein
+/// "Ok heisst geglueckt" gibt es dort also nicht. Massstab ist deshalb die
+/// Standzeit: wer eine Minute lang gehorcht hat, hatte eine gesunde
+/// Verbindung, und ein spaeterer Abriss darf nicht mit dem Backoff der letzten
+/// Stoerung bestraft werden.
+const STABIL_AB: Duration = Duration::from_secs(60);
 
 /// Sentinelwert fuer "Wasserstand noch nicht bestimmt".
 const WASSERSTAND_UNBEKANNT: i64 = -1;
@@ -61,9 +81,12 @@ const WASSERSTAND_UNBEKANNT: i64 = -1;
 /// Ein Ereignis auf dem Bus.
 ///
 /// `json` ist die Spalte `payload` als Text, genau so wie Auftrag B sie
-/// geschrieben hat. Das Gateway formt daran nichts um; das Drahtformat ist
-/// `tb_platform_core::PlatformEvent` und in dessen `tests/drahtformat.rs`
-/// eingefroren.
+/// geschrieben hat: ein `tb_platform_core::PlatformEvent`, eingefroren in
+/// dessen `tests/drahtformat.rs`. Am Ereignis selbst formt niemand etwas um.
+///
+/// Die `id` bleibt nicht serverintern: der Socket legt sie beim Senden in eine
+/// Huelle um das Ereignis (`{"id":123,"ereignis":{...}}`), sonst wuesste ein
+/// Dock nach einem Neustart nicht, wo es stand. Siehe [`crate::obs::ws`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BusRahmen {
     /// `obs_dock_events.id`, monoton steigend.
@@ -320,14 +343,26 @@ impl ObsDockBus {
     }
 
     /// Horcht auf `obs_dock`, mit Wiederaufbau und Backoff.
+    ///
+    /// [`ObsDockBus::horchen`] kann nur mit einem Fehler zurueckkommen, sein
+    /// Erfolgsfall ist unbewohnt. Zurueckgesetzt wird der Backoff deshalb an
+    /// der Standzeit ([`STABIL_AB`]) und nicht an einem `Ok`, das es nie gibt:
+    /// sonst waechst er ueber die Prozesslaufzeit monoton bis
+    /// [`BACKOFF_DECKEL`] und ein Abriss nach acht ruhigen Stunden kostet
+    /// 30 Sekunden Stille.
     async fn listener_schleife(self: Arc<Self>, pool: PgPool) {
         let mut backoff = BACKOFF_START;
         loop {
-            match self.horchen(&pool).await {
-                Ok(()) => backoff = BACKOFF_START,
-                Err(fehler) => {
-                    warn!(%fehler, "OBS-Dock-Listener abgebrochen, neuer Versuch folgt");
-                }
+            let start = tokio::time::Instant::now();
+            let Err(fehler) = self.horchen(&pool).await;
+            let stand = start.elapsed();
+            warn!(
+                %fehler,
+                stand_s = stand.as_secs(),
+                "OBS-Dock-Listener abgebrochen, neuer Versuch folgt"
+            );
+            if stand >= STABIL_AB {
+                backoff = BACKOFF_START;
             }
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(BACKOFF_DECKEL);
@@ -336,7 +371,10 @@ impl ObsDockBus {
 
     /// Ein Durchlauf: verbinden, Wasserstand setzen, Luecke schliessen,
     /// horchen bis die Verbindung abreisst.
-    async fn horchen(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+    ///
+    /// Der Rueckgabetyp sagt es ausdruecklich: hier kommt nur ein Fehler
+    /// heraus, nie ein regulaeres Ende.
+    async fn horchen(&self, pool: &PgPool) -> Result<std::convert::Infallible, sqlx::Error> {
         let mut listener = PgListener::connect_with(pool).await?;
         listener.listen(NOTIFY_KANAL).await?;
 
@@ -382,11 +420,11 @@ impl ObsDockBus {
             return Ok(());
         };
 
-        // Auch ohne Empfaenger den Wasserstand mitziehen, sonst zieht ein
-        // spaeterer Wiederaufbau eine Luecke nach, die niemanden interessiert.
-        self.wasserstand.fetch_max(hinweis.id, Ordering::SeqCst);
-
         if !self.hat_empfaenger(&hinweis.channel_id) {
+            // Ohne Empfaenger ist nichts zu holen und nichts zu verlieren, also
+            // darf der Wasserstand sofort mit: sonst zieht ein spaeterer
+            // Wiederaufbau eine Luecke nach, die niemanden interessiert.
+            self.wasserstand.fetch_max(hinweis.id, Ordering::SeqCst);
             return Ok(());
         }
 
@@ -395,6 +433,11 @@ impl ObsDockBus {
                 .bind(hinweis.id)
                 .fetch_optional(pool)
                 .await?;
+        // Erst ab hier den Wasserstand mitziehen. Schlaegt der SELECT oben
+        // fehl, kehrt die Funktion ueber `?` zurueck, der Listener baut neu auf
+        // und zieht genau diese Zeile ueber `luecke_nachziehen` nach. Wuerde
+        // der Wasserstand schon vor dem SELECT stehen, waere sie uebersprungen.
+        self.wasserstand.fetch_max(hinweis.id, Ordering::SeqCst);
         let Some(json) = json else {
             // Retention hat die Zeile schon geloescht. Nicht dramatisch.
             debug!(id = hinweis.id, "OBS-Dock: Zeile zur NOTIFY nicht gefunden");
@@ -405,24 +448,56 @@ impl ObsDockBus {
     }
 
     /// Zieht alles nach, was seit dem Wasserstand geschrieben wurde.
+    ///
+    /// In Haeppchen zu [`LUECKE_DECKEL`] Zeilen, aber so lange, bis die Tabelle
+    /// leergelesen ist. Ein einzelner gekappter `SELECT` waere auf einer
+    /// Instanz mit vielen Partnern in Sekunden voll, und alles darueber waere
+    /// dauerhaft weg, ohne dass es irgendwo auffaellt.
+    ///
+    /// Nur wenn selbst [`LUECKE_RUNDEN_DECKEL`] Runden nicht reichen, wird der
+    /// Rest uebersprungen; dann steht ein `warn!` im Log, statt dass die Zeilen
+    /// stumm verschwinden.
     async fn luecke_nachziehen(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
-        let seit = self.wasserstand.load(Ordering::SeqCst).max(0);
-        let zeilen: Vec<(i64, String, String)> = sqlx::query_as(
-            "SELECT id, channel_id, payload::text
-               FROM obs_dock_events
-              WHERE id > $1
-              ORDER BY id
-              LIMIT $2",
-        )
-        .bind(seit)
-        .bind(LUECKE_DECKEL)
-        .fetch_all(pool)
-        .await?;
+        for runde in 1..=LUECKE_RUNDEN_DECKEL {
+            let seit = self.wasserstand.load(Ordering::SeqCst).max(0);
+            let zeilen: Vec<(i64, String, String)> = sqlx::query_as(
+                "SELECT id, channel_id, payload::text
+                   FROM obs_dock_events
+                  WHERE id > $1
+                  ORDER BY id
+                  LIMIT $2",
+            )
+            .bind(seit)
+            .bind(LUECKE_DECKEL)
+            .fetch_all(pool)
+            .await?;
 
-        for (id, channel_id, json) in zeilen {
-            self.wasserstand.fetch_max(id, Ordering::SeqCst);
-            self.veroeffentlichen(&channel_id, BusRahmen::neu(id, json));
+            let anzahl = zeilen.len() as i64;
+            for (id, channel_id, json) in zeilen {
+                self.veroeffentlichen(&channel_id, BusRahmen::neu(id, json));
+                self.wasserstand.fetch_max(id, Ordering::SeqCst);
+            }
+            if anzahl < LUECKE_DECKEL {
+                return Ok(());
+            }
+            debug!(runde, "OBS-Dock: Luecke noch nicht leer, naechste Runde");
         }
+
+        // Mehr, als der Nachlaufpuffer ueberhaupt vorhaelt. Den Rest bewusst
+        // ueberspringen, sonst laeuft der Listener hier fest, aber laut.
+        let hoechste: Option<i64> =
+            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM obs_dock_events")
+                .fetch_optional(pool)
+                .await?
+                .flatten();
+        let vorher = self.wasserstand.load(Ordering::SeqCst).max(0);
+        let ziel = hoechste.unwrap_or(0);
+        warn!(
+            uebersprungen = ziel.saturating_sub(vorher),
+            runden = LUECKE_RUNDEN_DECKEL,
+            "OBS-Dock: Luecke groesser als der Nachzugsdeckel, Rest wird uebersprungen"
+        );
+        self.wasserstand.fetch_max(ziel, Ordering::SeqCst);
         Ok(())
     }
 
@@ -689,5 +764,81 @@ mod tests {
     fn negatives_seit_wird_auf_null_geklemmt() {
         let buch = Auslieferung::neu(Some(-5));
         assert_eq!(buch.letzte_id(), 0);
+    }
+
+    /// Der Nachzug nach einem Listener-Abriss darf nicht am Abfragedeckel
+    /// haengen bleiben: was darueber liegt, waere sonst dauerhaft weg, ohne Log
+    /// und ohne Hinweis ans Dock.
+    ///
+    /// Ohne `TB_TEST_DATABASE_URL` ueberspringt sich der Test selbst.
+    #[tokio::test]
+    async fn luecke_wird_ueber_den_abfragedeckel_hinaus_nachgezogen() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let schema = "obs_bus_luecke";
+        let aufbau = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("Test-DB erreichbar");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&aufbau)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&aufbau)
+            .await
+            .unwrap();
+        aufbau.close().await;
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(move |conn, _| {
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {schema}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&dsn)
+            .await
+            .expect("Testpool");
+        sqlx::query(
+            "CREATE TABLE obs_dock_events (
+                 id BIGSERIAL PRIMARY KEY,
+                 channel_id TEXT NOT NULL,
+                 payload JSONB NOT NULL
+             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let anzahl = LUECKE_DECKEL * 2 + 13;
+        sqlx::query(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             SELECT 'kanal-a', jsonb_build_object('typ','chat','id',lauf::text)
+               FROM generate_series(1, $1) AS lauf",
+        )
+        .bind(anzahl)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bus = ObsDockBus::neu(pool.clone());
+        bus.wasserstand.store(0, Ordering::SeqCst);
+        bus.luecke_nachziehen(&pool).await.unwrap();
+
+        // Eine einzelne gekappte Abfrage waere bei LUECKE_DECKEL stehen
+        // geblieben und haette den Rest verschluckt.
+        assert_eq!(bus.wasserstand.load(Ordering::SeqCst), anzahl);
+
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

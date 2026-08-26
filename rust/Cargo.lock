@@ -2932,6 +2932,7 @@ dependencies = [
  "tb-transport-twitch",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-http",
  "tracing",

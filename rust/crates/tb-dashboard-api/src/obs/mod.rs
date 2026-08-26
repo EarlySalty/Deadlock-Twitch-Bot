@@ -8,8 +8,13 @@
 //!
 //! Der Schreibpfad (Migration `obs_dock_events`, Hooks-Wrapper und
 //! `pg_notify`) gehoert zu Auftrag B und liegt nicht in diesem Crate. Hier
-//! wird nur gelesen; das Drahtformat ist `tb_platform_core::PlatformEvent` und
-//! wird unveraendert durchgereicht.
+//! wird nur gelesen.
+//!
+//! Das Ereignisformat `tb_platform_core::PlatformEvent` wird unveraendert
+//! durchgereicht, aber nicht nackt: der Socket legt eine Huelle mit der
+//! `obs_dock_events.id` darum (`{"id":123,"ereignis":{...}}`), sonst koennte
+//! ein Dock nach einem Neustart sein `?seit=` gar nicht setzen. Einzelheiten
+//! im Kopf von [`ws`].
 
 pub mod bus;
 pub mod ws;
