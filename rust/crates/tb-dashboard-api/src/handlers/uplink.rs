@@ -314,13 +314,13 @@ fn me_anreichern(
     if let Some(login) = login {
         objekt.insert("twitch_login".to_string(), Value::String(login.to_string()));
     }
-    // Die Dock-Adresse selbst kommt vom Relay (`dock_url`), sobald es sie
-    // kennt. Hier nur das Ja/Nein, damit die Oberflaeche den Knopf
-    // "Adresse erzeugen" von "Adresse neu erzeugen" unterscheiden kann.
+    // Das Relay sagt in /v1/me nur, OB es eine Dock-Adresse gibt
+    // (`dock_url_vorhanden`); die Adresse selbst kommt einmalig beim Rotate.
+    // Das Ja/Nein wird unveraendert durchgereicht und fehlt es, gilt Nein,
+    // damit die Oberflaeche "Adresse erzeugen" von "neu erzeugen" trennen kann.
     let dock_url_vorhanden = objekt
-        .get("dock_url")
-        .and_then(Value::as_str)
-        .map(|s| !s.trim().is_empty())
+        .get("dock_url_vorhanden")
+        .and_then(Value::as_bool)
         .unwrap_or(false);
     objekt.insert(
         "dock_url_vorhanden".to_string(),
@@ -1179,8 +1179,9 @@ mod tests {
     /// es in dieser Crate mehrere.
     #[test]
     fn me_traegt_dock_url_und_verbindungen() {
-        let mut wert =
-            json!({ "freigeschaltet": true, "dock_url": "https://relay.test/dock/chat?t=abc" });
+        // Der Relay-Vertrag (GET /v1/me) liefert nur das Ja/Nein, nie die
+        // Adresse selbst; die kommt einmalig beim Rotate.
+        let mut wert = json!({ "freigeschaltet": true, "dock_url_vorhanden": true });
         me_anreichern(
             &mut wert,
             "live",
@@ -1190,8 +1191,7 @@ mod tests {
         assert_eq!(wert["live_status"], "live");
         assert_eq!(wert["twitch_login"], "streamerin");
         assert_eq!(wert["dock_url_vorhanden"], true);
-        // Die Adresse selbst bleibt unveraendert durchgereicht.
-        assert_eq!(wert["dock_url"], "https://relay.test/dock/chat?t=abc");
+        assert!(wert.get("dock_url").is_none());
         let liste = wert["verbindungen"].as_array().unwrap();
         assert_eq!(liste.len(), PLATTFORMEN.len());
         assert_eq!(
@@ -1213,9 +1213,9 @@ mod tests {
             .iter()
             .all(|e| e["status"] == "getrennt"));
 
-        let mut leer = json!({ "dock_url": "  " });
-        me_anreichern(&mut leer, "aus", None, &[]);
-        assert_eq!(leer["dock_url_vorhanden"], false);
+        let mut nein = json!({ "dock_url_vorhanden": false });
+        me_anreichern(&mut nein, "aus", None, &[]);
+        assert_eq!(nein["dock_url_vorhanden"], false);
     }
 
     #[test]
