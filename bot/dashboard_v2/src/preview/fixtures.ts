@@ -393,6 +393,13 @@ const UPLINK_ME_FIXTURE = {
   twitch_login: 'earlysalty',
   reconnect_wait_s: 90,
   reconnect_wait_max_s: 300,
+  dock_url_vorhanden: false,
+  verbindungen: [
+    { platform: 'twitch', status: 'verbunden' },
+    { platform: 'kick', status: 'getrennt' },
+    { platform: 'youtube', status: 'getrennt' },
+    { platform: 'tiktok', status: 'getrennt' },
+  ],
 };
 
 // `effective` ist ueberall identisch mit `requested`: das Relay rechnet nichts

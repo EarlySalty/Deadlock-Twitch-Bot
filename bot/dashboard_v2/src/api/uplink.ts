@@ -25,6 +25,131 @@ export interface UplinkMe {
   reconnect_wait_s: number;
   /** Vom Relay gelieferte Obergrenze, nicht im Frontend duplizieren. */
   reconnect_wait_max_s: number;
+  /**
+   * Unsere eigene Dock-Adresse fuer den Multi-Chat, sobald das Relay sie
+   * kennt. Fehlt bei aelteren Servern und solange keine erzeugt wurde.
+   */
+  dock_url?: string;
+  /** Ob es schon eine Dock-Adresse gibt, auch wenn sie hier nicht mitkommt. */
+  dock_url_vorhanden?: boolean;
+  /** Je Plattform ein Eintrag; was nicht gespeichert ist, ist getrennt. */
+  verbindungen?: UplinkVerbindung[];
+}
+
+export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'getrennt';
+
+export interface UplinkVerbindung {
+  platform: string;
+  status: UplinkVerbindungStatus;
+}
+
+/**
+ * Laesst das Relay eine neue Dock-Adresse ausstellen. Die alte gilt danach
+ * nicht mehr, die neue kommt genau einmal in dieser Antwort zurueck.
+ */
+export function rotateUplinkDockToken(): Promise<{ dock_url: string }> {
+  return fetchJson<{ dock_url: string }>(
+    '/twitch/api/v2/uplink/dock-token/rotate',
+    withCookieCredentials({
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+  );
+}
+
+/**
+ * Startet das Verbinden einer Plattform. Das ist eine Browser-Navigation,
+ * kein fetch: der Server leitet direkt zur Anmeldeseite der Plattform weiter.
+ */
+export function uplinkConnectUrl(platform: UplinkPlattform): string {
+  return `/twitch/api/v2/uplink/connect/${platform}`;
+}
+
+/** Bis jetzt kann nur Twitch verbunden werden; die anderen folgen. */
+export function verbindenAktiv(platform: UplinkPlattform): boolean {
+  return platform === 'twitch';
+}
+
+export interface UplinkPlattformVerbindung {
+  id: UplinkPlattform;
+  label: string;
+  status: UplinkVerbindungStatus;
+  /** Ob der Knopf "Verbinden" etwas tut. */
+  aktiv: boolean;
+  /** Fertiger Text fuer die Oberflaeche. */
+  statusText: string;
+}
+
+/** Eine Zeile je Plattform fuer den Block "Plattformen verbinden". */
+export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {
+  return UPLINK_PLATTFORMEN.map((p) => {
+    const status = me.verbindungen?.find((v) => v.platform === p.id)?.status ?? 'getrennt';
+    const aktiv = verbindenAktiv(p.id);
+    let statusText = 'Folgt';
+    if (aktiv) {
+      statusText =
+        status === 'verbunden' ? 'Verbunden' : status === 'neu_verbinden' ? 'Neu verbinden' : 'Nicht verbunden';
+    }
+    return { id: p.id, label: p.label, status, aktiv, statusText };
+  });
+}
+
+/**
+ * Die vier fertigen Twitch-Fenster fuer OBS.
+ *
+ * Es sind dieselben Adressen, die OBS in seine eigenen Docks laedt: siehe
+ * `frontend/oauth/TwitchAuth.cpp` im OBS-Quellcode. Die eingebauten Docks sind
+ * selbst nur Browser-Fenster, sie werden nur automatisch angelegt, sobald ein
+ * Twitch-Konto verbunden ist. Inhaltlich ist ein eigenes Dock dasselbe Fenster.
+ *
+ * Drei der vier Adressen kommen ohne Kanalnamen aus: Twitch leitet einen
+ * angemeldeten Nutzer auf seinen eigenen Kanal weiter. Das ist robuster als
+ * der Namensweg, weil es auch nach einer Namensaenderung noch stimmt. Nur der
+ * Chat braucht den Kanal in der Adresse.
+ */
+export const OBS_DOCKS = [
+  {
+    titel: 'Chat',
+    pfad: (k: string) => (k ? `https://www.twitch.tv/popout/${k}/chat?darkpopout` : ''),
+  },
+  {
+    titel: 'Aktivitätsfeed',
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/activity-feed',
+  },
+  {
+    titel: 'Stream-Informationen',
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info',
+  },
+  {
+    titel: 'Kanalpunkte',
+    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/community-points',
+  },
+] as const;
+
+export const EIGENES_DOCK_TITEL = 'Multi-Chat';
+
+export interface DockAdresse {
+  titel: string;
+  url: string;
+  /** true fuer unsere eigene Adresse, false fuer die Twitch-Fenster. */
+  eigene: boolean;
+}
+
+/**
+ * Alle Dock-Adressen in Anzeigereihenfolge: unsere eigene zuerst, wenn das
+ * Relay sie mitliefert, danach die Twitch-Fenster. Ohne Kanalname faellt der
+ * Twitch-Chat weg, die drei uebrigen Fenster brauchen ihn nicht.
+ */
+export function dockAdressen(me: UplinkMe): DockAdresse[] {
+  const liste: DockAdresse[] = [];
+  const eigene = me.dock_url?.trim() ?? '';
+  if (eigene) liste.push({ titel: EIGENES_DOCK_TITEL, url: eigene, eigene: true });
+  for (const dock of OBS_DOCKS) {
+    const url = dock.pfad(me.twitch_login ?? '');
+    if (url) liste.push({ titel: dock.titel, url, eigene: false });
+  }
+  return liste;
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {

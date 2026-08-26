@@ -189,6 +189,23 @@ oauth_state_tokens|redirect_uri|text|YES|
 oauth_state_tokens|state_token|text|NO|
 oauth_state_tokens|streamer_login|text|YES|
 oauth_state_tokens|twitch_user_id|text|YES|
+obs_dock_events|channel_id|text|NO|
+obs_dock_events|created_at|timestamp with time zone|NO|now()
+obs_dock_events|dedupe_key|text|YES|
+obs_dock_events|id|bigint|NO|nextval('obs_dock_events_id_seq'::regclass)
+obs_dock_events|payload|jsonb|NO|
+platform_connections|access_token_enc|bytea|NO|
+platform_connections|created_at|timestamp with time zone|NO|now()
+platform_connections|enc_kid|text|NO|'v1'::text
+platform_connections|expires_at|timestamp with time zone|NO|
+platform_connections|needs_reauth|boolean|NO|false
+platform_connections|platform_login|text|NO|
+platform_connections|platform_user_id|text|NO|
+platform_connections|platform|text|NO|
+platform_connections|refresh_token_enc|bytea|NO|
+platform_connections|scopes|ARRAY|NO|'{}'::text[]
+platform_connections|streamer_id|bigint|NO|
+platform_connections|updated_at|timestamp with time zone|NO|now()
 schema_version|component|text|NO|
 schema_version|updated_at|timestamp with time zone|NO|now()
 schema_version|version|integer|NO|

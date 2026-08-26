@@ -163,7 +163,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         leaderboard,
         loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings, monetization,
         onboarding, overview,
-        performance, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        performance, platform_connect, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings, session_detail, silent_settings, social_media, spa, stream_report,
         streamer_disconnect, streamers, tag_analysis, tip_settings, title, title_performance,
         uplink,
@@ -174,6 +174,9 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
     // Changelog-POST). Bucket "internal_home", 60 Requests/60 s pro Client-IP.
     let internal_home_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "internal_home", 60, 60);
+    // Verbinden-Flow wie der Login: 30 Aufrufe pro Minute und Client-IP.
+    let platform_connect_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "platform_connect", 30, 60);
 
     Router::new()
         .route(
@@ -506,6 +509,28 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(uplink::destinations_handler).put(uplink::put_destination_handler),
         )
         .route("/twitch/api/v2/uplink/caps", get(uplink::caps_handler))
+        // Uplink Multi-Chat: Chat-Plattform verbinden (OAuth mit Chat-Scopes)
+        // und Dock-Adresse neu ausstellen. Eigener Callback-Pfad, damit der
+        // geteilte Login-Callback ihn nie sieht.
+        .route(
+            "/twitch/api/v2/uplink/connect/:platform",
+            get(platform_connect::connect_start_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    platform_connect_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
+        )
+        .route(
+            "/twitch/api/v2/uplink/connect/:platform/callback",
+            get(platform_connect::connect_callback_handler).layer(
+                axum::middleware::from_fn_with_state(platform_connect_rl, rate_limit_middleware),
+            ),
+        )
+        .route(
+            "/twitch/api/v2/uplink/dock-token/rotate",
+            post(uplink::dock_token_rotate_handler),
+        )
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
         .route(
@@ -1553,6 +1578,19 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Interne Token-Route fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`.
+/// Loopback plus `X-Internal-Token` (derselbe Token wie auf den Admin-Routen),
+/// kein Cookie, kein CSRF.
+pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
+    Router::new()
+        .route(
+            "/twitch/api/v2/internal/platform-token",
+            get(handlers::platform_connect::internal_platform_token_handler),
+        )
+        .layer(Extension(ExpectedToken(token)))
+        .with_state(pool)
+}
+
 /// Baut die WebSocket-Route der eigenen OBS-Docks (Plan Abschnitt 2.3).
 ///
 /// `GET /obs/ws` traegt den Chat-, Activity- und Stream-Info-Strom eines
@@ -1634,6 +1672,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
     };
 
+    let pool_fuer_chat = pool.clone();
     let mut app = build_public_router(pool.clone())
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
@@ -1649,6 +1688,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         .merge(build_social_media_admin_router(pool.clone()))
         .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
+        .merge(build_platform_token_router(pool.clone(), token.clone()))
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
@@ -1695,6 +1735,23 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
                 ),
         )
         .layer(CompressionLayer::new());
+
+    // Uplink Multi-Chat: Verbinden-Flow, Token-Speicher und Refresh-Job. Ohne
+    // Config (Client-ID/Secret, Redirect-URI, Feldschluessel) bleiben die
+    // Routen mit 503 zu und /uplink/me meldet alle Plattformen als getrennt.
+    if let Some(config) = handlers::platform_connect::platform_connect_config_from_env() {
+        let store = handlers::platform_connect::PlatformConnectionStore::new(
+            pool_fuer_chat.clone(),
+            config.cipher.clone(),
+        );
+        handlers::platform_connect::spawn_refresh_job(store, config.client.clone());
+        app = app
+            .layer(Extension(handlers::uplink::UplinkCipher(
+                config.cipher.clone(),
+            )))
+            .layer(Extension(config));
+        tracing::info!("Uplink Multi-Chat: Chat verbinden aktiv");
+    }
 
     // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten
     // (if_not_present überschreibt keine handler-eigenen Header).
