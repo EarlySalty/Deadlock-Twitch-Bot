@@ -10,12 +10,14 @@ import {
   UPLINK_PROFILE,
   profilNameFuer,
   saveUplinkDestination,
+  uplinkConnectUrl,
 } from '@/api/uplink';
 import type {
   UplinkCaps,
   UplinkDestination,
   UplinkManuellesProfil,
   UplinkPlattform,
+  UplinkPlattformVerbindung,
   UplinkProfilAnsicht,
   UplinkProfilName,
 } from '@/api/uplink';
@@ -86,6 +88,38 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
 }
 
 /**
+ * Chat-Stand im Kopf der Plattform-Karte.
+ *
+ * Der Knopf ist ein Link, keine fetch-Aktion: der Server leitet direkt zur
+ * Anmeldeseite der Plattform weiter. Ein Link in der Summary folgt beim Klick
+ * dem Ziel, statt die Karte auf- oder zuzuklappen.
+ */
+function ChatVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
+  const knopfKlasse =
+    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
+  return (
+    <span data-chat={chat.status} className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal">
+      {!chat.aktiv ? (
+        <span className="text-text-secondary/80">Chat folgt</span>
+      ) : chat.status === 'verbunden' ? (
+        <span className="text-success">Chat verbunden</span>
+      ) : chat.status === 'neu_verbinden' ? (
+        <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
+          Chat neu verbinden
+        </a>
+      ) : (
+        <>
+          <span className="text-text-secondary">Chat nicht verbunden</span>
+          <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
+            Chat verbinden
+          </a>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
  * Eine Zielkarte je Plattform: Zugangsdaten, Qualitaet, Status.
  *
  * Die Qualitaet laesst sich hier ohne den Stream-Key speichern. Das war der
@@ -99,6 +133,7 @@ export function ZielKarte({
   rtmpVorgabe,
   ziel,
   caps,
+  chat,
   offenStart,
 }: {
   platform: UplinkPlattform;
@@ -106,6 +141,8 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
+  /** Stand der Chat-Verbindung dieser Plattform fuer den Multi-Chat. */
+  chat?: UplinkPlattformVerbindung;
   offenStart: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -354,6 +391,7 @@ export function ZielKarte({
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
+            {chat ? <ChatVerbindung chat={chat} /> : null}
           </span>
         </span>
         <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>
