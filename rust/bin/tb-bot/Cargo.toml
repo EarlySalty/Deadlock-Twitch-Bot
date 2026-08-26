@@ -27,6 +27,7 @@ tb-chat            = { workspace = true }
 tb-knowledge        = { workspace = true }
 tb-tips             = { workspace = true }
 tb-monitoring       = { workspace = true }
+tb-platform-core    = { workspace = true }
 tb-raid             = { workspace = true }
 tb-observability    = { workspace = true }
 tb-transport-discord = { workspace = true }
@@ -41,6 +42,7 @@ tb-llm                   = { workspace = true }
 tb-vod-archive           = { workspace = true }
 strsim                   = { workspace = true }
 unicode-normalization    = { workspace = true }
+thiserror                = { workspace = true }
 
 [features]
 integration = []

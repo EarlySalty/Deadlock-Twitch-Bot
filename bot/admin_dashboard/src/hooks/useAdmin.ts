@@ -25,6 +25,9 @@ import {
   fetchErrorLogs,
   fetchEventSubStatus,
   fetchGlobalBans,
+  fetchPartnerSignupBlocks,
+  addPartnerSignupBlock,
+  removePartnerSignupBlock,
   fetchLegalPage,
   fetchPartnerAccess,
   fetchRoadmap,
@@ -177,6 +180,42 @@ export function useRemoveGlobalBan() {
   return useMutation({
     mutationFn: removeGlobalBan,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-global-bans'] }),
+  });
+}
+
+/**
+ * Partneraufnahme-Sperrliste. Nach jeder Mutation werden auch Streamer-Liste
+ * und Detaildaten neu geholt, weil `add` einen aktiven Partner stilllegt und
+ * die Raid-Credentials löscht.
+ */
+export function usePartnerSignupBlocks() {
+  return useQuery({
+    queryKey: ['admin-partner-signup-blocks'],
+    queryFn: fetchPartnerSignupBlocks,
+    staleTime: 30_000,
+  });
+}
+
+function invalidatePartnerSignupBlocks(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-blocks'] });
+  // Ein Signup-Block legt Partner still und löscht Zugänge, zieht also
+  // dieselben Ansichten mit wie jede andere Streamer-Mutation.
+  invalidateStreamerQueries(queryClient);
+}
+
+export function useAddPartnerSignupBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: addPartnerSignupBlock,
+    onSuccess: () => invalidatePartnerSignupBlocks(queryClient),
+  });
+}
+
+export function useRemovePartnerSignupBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: removePartnerSignupBlock,
+    onSuccess: () => invalidatePartnerSignupBlocks(queryClient),
   });
 }
 

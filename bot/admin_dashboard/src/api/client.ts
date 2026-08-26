@@ -24,6 +24,9 @@ import type {
   EventSubStatusResponse,
   GutschriftDocument,
   GlobalBanAdminData,
+  PartnerSignupBlockAddResult,
+  PartnerSignupBlockList,
+  PartnerSignupBlockRemoveResult,
   InternalHomeOverview,
   LegalPageDocument,
   LegalPageSlug,
@@ -816,6 +819,37 @@ export function addGlobalBan(body: { login: string; reason?: string }): Promise<
 
 export function removeGlobalBan(login: string): Promise<{ ok: boolean; removed: boolean }> {
   return postAdminJson('/global-bans/remove', { login });
+}
+
+/**
+ * Partneraufnahme-Sperrliste. Der Server löst die stabile Twitch-ID selbst auf
+ * und setzt den Bearbeiter aus der Admin-Session; beides gehört nicht in den
+ * Request-Body.
+ */
+export function fetchPartnerSignupBlocks(): Promise<PartnerSignupBlockList> {
+  return admin<PartnerSignupBlockList>('/partner-signup-blocks');
+}
+
+export function addPartnerSignupBlock(body: {
+  login: string;
+  reason?: string;
+  publicMessage?: string;
+}): Promise<PartnerSignupBlockAddResult> {
+  return postAdminJson('/partner-signup-blocks', {
+    login: body.login,
+    reason: body.reason,
+    public_message: body.publicMessage,
+  });
+}
+
+export function removePartnerSignupBlock(body: {
+  login: string;
+  twitchUserId?: string;
+}): Promise<PartnerSignupBlockRemoveResult> {
+  return postAdminJson('/partner-signup-blocks/remove', {
+    login: body.login,
+    twitch_user_id: body.twitchUserId,
+  });
 }
 
 export function setGlobalBanChannelEnforcement(

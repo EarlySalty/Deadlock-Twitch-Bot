@@ -14,6 +14,8 @@ const AUTH_STATUS_FIXTURE: AuthStatus = {
   demoMode: true,
   isAdmin: true,
   isLocalhost: true,
+  adminEligible: true,
+  adminMode: true,
   canViewAllStreamers: true,
   twitchLogin: 'midcore_live',
   displayName: 'Local Preview Creator',
@@ -389,6 +391,8 @@ const UPLINK_ME_FIXTURE = {
     'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',
   live_status: 'aus',
   twitch_login: 'earlysalty',
+  reconnect_wait_s: 90,
+  reconnect_wait_max_s: 300,
 };
 
 // `effective` ist ueberall identisch mit `requested`: das Relay rechnet nichts
@@ -423,6 +427,23 @@ const UPLINK_CAPS_FIXTURE = {
   ],
 };
 
+const UPLINK_ADMIN_WAITLIST_FIXTURE = {
+  entries: [
+    {
+      streamer_id: 987654321,
+      requested_at: '2026-08-24T19:42:00Z',
+      note: null,
+      enabled: false,
+    },
+    {
+      streamer_id: 123456789,
+      requested_at: '2026-08-25T08:15:00Z',
+      note: 'Testlauf für den nächsten Community-Stream',
+      enabled: false,
+    },
+  ],
+};
+
 /**
  * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
  * Aufruf geht wie sonst ins Netz.
@@ -436,6 +457,7 @@ export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;
+  if (pathname === '/twitch/api/v2/uplink/admin/waitlist') return UPLINK_ADMIN_WAITLIST_FIXTURE;
   return undefined;
 }
 

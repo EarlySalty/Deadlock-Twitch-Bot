@@ -35,6 +35,28 @@ Vor Aenderungen an Dashboard, OAuth, Billing oder EventSub immer mitpruefen:
 
 Bei Fehlerbildern zuerst die Trennung pruefen: viele "Dashboard kaputt"-Symptome sind in Wahrheit Bot-Runtime-, Internal-API- oder Callback-Probleme.
 
+## Betriebsschalter in der Config-Datei
+
+Betriebswerte des Bots stehen in einer normalen Config-Datei, nicht in Umgebungsvariablen. Nur Secrets kommen aus Infisical.
+
+**Pfad:** `~/.config/deadlock-twitch-bot/bot.json` (Home des Nutzers, unter dem der Bot-Service laeuft)
+
+Die Datei ist JSON, in Abschnitte gegliedert. Unbekannte Abschnitte werden ignoriert, ein Abschnitt darf also fehlen. Fehlt die Datei, ist sie unlesbar oder kaputt, gilt ueberall der Vorgabewert.
+
+| Abschnitt | Feld | Typ | Vorgabe | Wirkung |
+|---|---|---|---|---|
+| `obs_docks` | `enabled` | bool | `false` | Schaltet den Schreibpfad des OBS-Dock-Event-Busses ein. Bei `true` schreibt der Bot jedes dock-taugliche Twitch-Ereignis (Chat, Raid, Abo/Geschenk, Go-Live/Offline) in die Tabelle `obs_dock_events`, meldet die Zeile per `pg_notify('obs_dock', ...)` und laesst einen Aufraeum-Loop mitlaufen. Bei `false` passiert nichts davon; der Bot verhaelt sich wie ohne das Modul. Gelesen wird der Wert einmal beim Start, eine Aenderung wirkt erst nach `systemctl --user restart`. |
+
+Beispiel:
+
+```json
+{
+  "obs_docks": { "enabled": true }
+}
+```
+
+Wer den Bus einschaltet, braucht die Migration `20260824090000_obs_dock_events.sql` angewendet (Migrator-Lauf, nicht beim Service-Start) und ein Gateway, das auf `LISTEN obs_dock` haengt. Code: `rust/bin/tb-bot/src/obs_dock.rs`.
+
 ## DSN-Rotation
 
 Die DSN-Rotation betrifft nur das Twitch-Analytics-Postgres-Passwort. Nicht Teil dieser Rotation sind andere Secret-Arten wie allgemeine App-Schluessel oder Datenverschluesselung.

@@ -44,7 +44,7 @@ Environment=STREAM_AUDIT_RCLONE_BIN=/usr/local/bin/rclone
 Environment=STREAM_AUDIT_DRIVE_ARCHIVE=1
 # Kanaele, die widersprochen haben, kommen hier rein (kommagetrennt). Fuer sie
 # startet kein Recorder und es geht nichts hoch.
-Environment=STREAM_AUDIT_DRIVE_EXCLUDE=
+Environment=STREAM_AUDIT_DRIVE_EXCLUDE=niuque
 
 Environment=RUST_LOG=info
 

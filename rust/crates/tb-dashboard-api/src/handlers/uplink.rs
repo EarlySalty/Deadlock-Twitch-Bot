@@ -1,5 +1,9 @@
 //! Proxy vom Streamer-Dashboard zu rs-relay. Das Relay-Secret bleibt serverseitig.
 
+// Axum-Responses sind hier absichtlich direkt im Result: ein Boxen wuerde
+// jeden Handler und jede Aufrufstelle verkomplizieren, ohne Laufzeitgewinn.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     extract::State,
     http::StatusCode,
@@ -10,14 +14,39 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use crate::auth::level::DashboardAuthLevel;
+use crate::auth::{level::DashboardAuthLevel, require_admin};
+
+const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
+const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
 
 fn relay_base() -> String {
     std::env::var("RS_RELAY_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8891".into())
 }
 
-fn relay_secret() -> Option<String> {
-    std::env::var("RS_RELAY_API_SECRET")
+/// Der Name des Secrets, das zu diesem Pfad gehört.
+///
+/// Das Relay hängt seine Admin-Routen seit dem Ingest-Key-Umbau an ein
+/// eigenes Shared Secret. Der Grund liegt hier: dieses Dashboard hält das
+/// API-Secret, um die Nutzerpfade eines Streamers zu lesen und seine Ziele zu
+/// setzen, und bis dahin öffnete genau dieser Wert auch Freischalten,
+/// Löschen, fremde Ziele und Session-Kills auf dem Relay. Kein Rückfall auf
+/// das API-Secret, wenn das Admin-Secret fehlt: der wäre unsichtbar und
+/// hätte die Trennung wieder aufgehoben.
+///
+/// Nur der Name, nicht der Wert: so lässt sich die Zuordnung prüfen, ohne im
+/// Test die Prozessumgebung anzufassen. `set_var` in einem Testbinary ist ein
+/// Datenrennen auf `environ` mit jedem anderen Test, der dasselbe tut.
+fn secret_name_fuer(path: &str) -> &'static str {
+    if path.starts_with("/v1/admin/") {
+        "RS_RELAY_ADMIN_SECRET"
+    } else {
+        "RS_RELAY_API_SECRET"
+    }
+}
+
+/// Das Secret, das zu diesem Pfad gehört.
+fn secret_fuer(path: &str) -> Option<String> {
+    std::env::var(secret_name_fuer(path))
         .ok()
         .filter(|s| !s.trim().is_empty())
 }
@@ -91,12 +120,17 @@ async fn relay_json(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, Response> {
-    let secret = relay_secret().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "Uplink ist noch nicht verbunden." })),
-        )
-            .into_response()
+    let methode_fuer_log = method.clone();
+    let secret = secret_fuer(path).ok_or_else(|| {
+        // Zwei verschiedene Lagen, zwei verschiedene Sätze: fehlt das
+        // Admin-Secret, steht die Verbindung zum Relay ja, und "noch nicht
+        // verbunden" schickte die Fehlersuche in die falsche Richtung.
+        let text = if secret_name_fuer(path) == "RS_RELAY_ADMIN_SECRET" {
+            "Uplink-Adminzugang ist nicht eingerichtet."
+        } else {
+            "Uplink ist noch nicht verbunden."
+        };
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": text }))).into_response()
     })?;
     let url = format!("{}{path}", relay_base().trim_end_matches('/'));
     let client = reqwest::Client::new();
@@ -107,7 +141,13 @@ async fn relay_json(
     if let Some(body) = body {
         req = req.json(&body);
     }
-    let antwort = req.send().await.map_err(|_| {
+    let antwort = req.send().await.map_err(|fehler| {
+        tracing::warn!(
+            method = %methode_fuer_log,
+            path,
+            error = %fehler,
+            "Uplink-Relay-Aufruf fehlgeschlagen"
+        );
         (
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": "Uplink antwortet nicht." })),
@@ -117,6 +157,12 @@ async fn relay_json(
     let status = antwort.status();
     let wert = antwort.json::<Value>().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
+        tracing::warn!(
+            method = %methode_fuer_log,
+            path,
+            status = status.as_u16(),
+            "Uplink-Relay hat den Aufruf abgelehnt"
+        );
         return Err((
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             Json(wert),
@@ -241,6 +287,86 @@ pub async fn waitlist_handler(
     Ok(Json(wert))
 }
 
+fn admin_pruefen(auth: &DashboardAuthLevel) -> Result<(), Response> {
+    match require_admin(auth) {
+        Some(fehler) => Err(fehler.into_response()),
+        None => Ok(()),
+    }
+}
+
+fn admin_actor_fuer_log(auth: &DashboardAuthLevel) -> (&str, Option<&str>) {
+    match auth {
+        DashboardAuthLevel::Admin { actor: Some(actor) } => (
+            actor.twitch_login.as_str(),
+            Some(actor.twitch_user_id.as_str()),
+        ),
+        DashboardAuthLevel::Admin { actor: None } => ("discord-admin", None),
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => (twitch_login.as_str(), Some(twitch_user_id.as_str())),
+        DashboardAuthLevel::None => ("unauthenticated", None),
+    }
+}
+
+/// Wartende Uplink-Konten für die Admin-Box.
+///
+/// Der effektive `DashboardAuthLevel` ist hier das Gate. Ein Owner-Login ohne
+/// aktivierten Admin-Modus kommt als Partner an und erhält deshalb 403.
+pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
+    admin_pruefen(&auth)?;
+    let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct AdminFreischaltenBody {
+    pub streamer_id: i64,
+}
+
+fn freischaltung_antwort(streamer_id: i64) -> Value {
+    json!({
+        "streamer_id": streamer_id,
+        "enabled": true,
+    })
+}
+
+/// Schaltet einen Wartelisteneintrag über den bestehenden Relay-Adminpfad frei.
+///
+/// Das Relay liefert dabei auch den neuen Ingest-Schlüssel. Diese Antwort wird
+/// bewusst verworfen, damit der Schlüssel nicht im Browser landet.
+pub async fn admin_freischalten_handler(
+    auth: DashboardAuthLevel,
+    Json(body): Json<AdminFreischaltenBody>,
+) -> Result<Json<Value>, Response> {
+    admin_pruefen(&auth)?;
+    if body.streamer_id <= 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "ungültige Twitch-ID" })),
+        )
+            .into_response());
+    }
+
+    relay_json(
+        reqwest::Method::POST,
+        RELAY_ADMIN_USERS_PFAD,
+        Some(json!({ "streamer_id": body.streamer_id })),
+    )
+    .await?;
+
+    let (actor, actor_id) = admin_actor_fuer_log(&auth);
+    tracing::info!(
+        actor,
+        actor_twitch_user_id = actor_id.unwrap_or("-"),
+        target_streamer_id = body.streamer_id,
+        "Uplink-Wartelisteneintrag freigeschaltet"
+    );
+
+    Ok(Json(freischaltung_antwort(body.streamer_id)))
+}
+
 /// Die gespeicherten Ziele, ohne Stream-Key.
 ///
 /// Das Relay liefert den Key nicht mit, und das ist richtig so: er ist
@@ -256,6 +382,28 @@ pub async fn destinations_handler(
         reqwest::Method::GET,
         &format!("/v1/me/destinations?streamer_id={id}"),
         None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+/// Einstellung fuer die Wartezeit nach einem unerwarteten Ingest-Abriss.
+/// Ein normales OBS-Stoppen wird im Relay davon getrennt und sofort abgeraeumt.
+#[derive(Deserialize)]
+pub struct ReconnectWaitBody {
+    pub reconnect_wait_s: i32,
+}
+
+pub async fn put_reconnect_wait_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<ReconnectWaitBody>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        &format!("/v1/me/reconnect-wait?streamer_id={id}"),
+        Some(json!({ "reconnect_wait_s": body.reconnect_wait_s })),
     )
     .await?;
     Ok(Json(wert))
@@ -820,6 +968,45 @@ mod tests {
     }
 
     #[test]
+    fn wartelistenverwaltung_braucht_den_aktiven_admin_modus() {
+        let admin = DashboardAuthLevel::Admin { actor: None };
+        let partner = DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Early".into(),
+        };
+
+        assert!(admin_pruefen(&admin).is_ok());
+        assert_eq!(
+            admin_pruefen(&partner).unwrap_err().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            admin_pruefen(&DashboardAuthLevel::None)
+                .unwrap_err()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn freischaltantwort_enthaelt_keinen_ingest_schluessel() {
+        let antwort = freischaltung_antwort(42);
+        assert_eq!(antwort["streamer_id"], 42);
+        assert_eq!(antwort["enabled"], true);
+        assert!(antwort.get("ingest_key").is_none());
+        assert!(antwort.get("srt_hint").is_none());
+    }
+
+    #[test]
+    fn admin_audit_label_ist_auch_ohne_twitch_actor_eindeutig() {
+        assert_eq!(
+            admin_actor_fuer_log(&DashboardAuthLevel::Admin { actor: None }),
+            ("discord-admin", None)
+        );
+    }
+
+    #[test]
     fn partner_id_wird_gelesen() {
         let auth = DashboardAuthLevel::Partner {
             twitch_login: "earlysalty".into(),
@@ -896,6 +1083,35 @@ mod tests {
             live_bewerten(Some((0, Some("2026-08-22T11:54:59+00:00"))), jetzt),
             "unbekannt"
         );
+    }
+
+    /// Admin-Pfade greifen zum Admin-Secret, alles andere zum API-Secret.
+    ///
+    /// Geprüft wird die Namenswahl, nicht ein gesetzter Wert. Ein Test, der
+    /// dafür `set_var` benutzt, wäre ein Datenrennen auf `environ` mit jedem
+    /// anderen Test im selben Binary, der die Umgebung anfasst, und davon gibt
+    /// es in dieser Crate mehrere.
+    #[test]
+    fn admin_pfade_nehmen_das_admin_secret() {
+        for pfad in [
+            "/v1/admin/users",
+            RELAY_ADMIN_WAITLIST_PFAD,
+            RELAY_ADMIN_USERS_PFAD,
+            "/v1/admin/sessions/7/kill?confirm=true",
+        ] {
+            assert_eq!(secret_name_fuer(pfad), "RS_RELAY_ADMIN_SECRET", "{pfad}");
+        }
+        for pfad in [
+            "/v1/me",
+            "/v1/caps",
+            "/v1/me/destinations",
+            "/v1/me/key/rotate",
+            // Kein Admin-Pfad, auch wenn "admin" darin vorkommt: das Relay
+            // kennt nur `/v1/admin/...`.
+            "/v1/me/adminwunsch",
+        ] {
+            assert_eq!(secret_name_fuer(pfad), "RS_RELAY_API_SECRET", "{pfad}");
+        }
     }
 
     #[test]

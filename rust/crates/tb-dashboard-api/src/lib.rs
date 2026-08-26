@@ -486,8 +486,20 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route("/twitch/api/v2/uplink/me", get(uplink::me_handler))
         .route(
+            "/twitch/api/v2/uplink/reconnect-wait",
+            put(uplink::put_reconnect_wait_handler),
+        )
+        .route(
             "/twitch/api/v2/uplink/waitlist",
             post(uplink::waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/waitlist",
+            get(uplink::admin_waitlist_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/admin/users",
+            post(uplink::admin_freischalten_handler),
         )
         .route(
             "/twitch/api/v2/uplink/destinations",
@@ -847,7 +859,8 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     use handlers::{
         admin_affiliate, admin_announcements, admin_audit_log, admin_billing, admin_config,
-        admin_global_ban, admin_legal, admin_promo_mode, admin_roadmap,
+        admin_global_ban, admin_legal, admin_partner_signup_block, admin_promo_mode,
+        admin_roadmap,
     };
 
     Router::new()
@@ -919,6 +932,15 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/global-bans/channels/:login",
             post(admin_global_ban::set_channel_handler),
+        )
+        .route(
+            "/twitch/api/admin/partner-signup-blocks",
+            get(admin_partner_signup_block::list_handler)
+                .post(admin_partner_signup_block::add_handler),
+        )
+        .route(
+            "/twitch/api/admin/partner-signup-blocks/remove",
+            post(admin_partner_signup_block::remove_handler),
         )
         .route(
             "/twitch/api/admin/roadmap",
