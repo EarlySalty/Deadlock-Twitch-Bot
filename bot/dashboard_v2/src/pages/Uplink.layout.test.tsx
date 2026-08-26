@@ -169,16 +169,29 @@ test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => 
   assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
 });
 
-test('vier_dock_adressen_mit_namen_beim_erzeugen', () => {
-  // Vier Fenster hinter einem Token; die Namen sind die, die in OBS
+test('die Dock-Karte zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
+  // Vier Fenster hinter einem Zugang; die Namen sind die, die in OBS
   // eingetragen werden.
   assert.match(UPLINK_API, /titel: 'Chat', feld: 'chat'/);
   assert.match(UPLINK_API, /titel: 'Aktivität', feld: 'activity'/);
   assert.match(UPLINK_API, /titel: 'Stream-Infos', feld: 'stream_info'/);
   assert.match(UPLINK_API, /titel: 'Kanalpunkte', feld: 'points'/);
-  // Der Name steht sichtbar vor der Adresse, sonst sind es vier gleich
-  // aussehende Zeilen.
-  assert.match(UPLINK, /<span className="w-28 shrink-0 text-\[11px\] font-semibold text-white">\{titel\}<\/span>/);
-  assert.match(UPLINK, /eigene\.map\(\(dock\) => \(/);
-  assert.match(UPLINK, /Diese Adressen werden nur jetzt einmal angezeigt/);
+
+  // Jede Zeile ist dieselbe Komponente wie die Serveradresse in Schritt 2:
+  // verdeckt, mit "Zeigen" und "Kopieren". Ein eigenes Kopierfeld daneben
+  // waere ein zweiter Ort, an dem die Maskierung gepflegt werden muesste.
+  assert.match(UPLINK, /adressen\.map\(\(dock\) => \(/);
+  assert.match(UPLINK, /adressen\.map\([\s\S]{0,400}<CopyField/);
+  assert.match(UPLINK, /\{offen \? 'Verdecken' : 'Zeigen'\}/);
+  assert.equal((UPLINK.match(/\{offen \? 'Verdecken' : 'Zeigen'\}/g) ?? []).length, 1);
+
+  // Neu erzeugen fragt nach: die alten Adressen stehen schon in OBS.
+  assert.match(UPLINK, /Ja, neu erzeugen/);
+  assert.match(UPLINK, /gelten danach nicht mehr/);
+  assert.match(UPLINK, /setNachfrage\(true\)/);
+
+  // Kein internes Vokabular in der Karte und keine Twitch-Popouts mehr.
+  assert.doesNotMatch(UPLINK, /twitch\.tv\/popout/);
+  assert.doesNotMatch(UPLINK, /Einmal bei Twitch anmelden/);
+  assert.match(UPLINK, /Vier Fenster für alle Plattformen/);
 });

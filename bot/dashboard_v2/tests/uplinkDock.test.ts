@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // `uplink.ts` zieht die Laufzeitkonfiguration nach, die `window` erwartet.
 // Wie in uplinkReconnectWait.test.ts: Fenster stubben, dann erst laden.
@@ -13,13 +15,17 @@ const { dockAdressen, plattformVerbindungen, uplinkConnectUrl, verbindenAktiv } 
 type DockUrls = import('../src/api/uplink').DockUrls;
 type UplinkMe = import('../src/api/uplink').UplinkMe;
 
+const WURZEL = join(import.meta.dirname, '..');
+const UPLINK_API = readFileSync(join(WURZEL, 'src/api/uplink.ts'), 'utf8');
+const UPLINK_SEITE = readFileSync(join(WURZEL, 'src/pages/Uplink.tsx'), 'utf8');
+const OBS_HILFE = readFileSync(join(WURZEL, 'public/uplink/obs.html'), 'utf8');
+
 const BASIS: UplinkMe = {
   enabled: true,
   waitlisted: false,
   ingest_key: 'rsr_test',
   rtmp_url: '',
   srt_hint: '',
-  twitch_login: 'earlysalty',
   reconnect_wait_s: 90,
   reconnect_wait_max_s: 300,
 };
@@ -31,57 +37,65 @@ const VIER: DockUrls = {
   points: 'https://relay.test/dock/points?t=abc',
 };
 
-test('dockAdressen_liefert_vier_eigene_in_fester_reihenfolge', () => {
-  const liste = dockAdressen({ ...BASIS, dock_url_vorhanden: true }, VIER);
+test('dockAdressen_liefert_genau_vier_eigene', () => {
+  // Vier Fenster, feste Reihenfolge, die Namen wie sie in OBS eingetragen
+  // werden. Nichts anderes steht in der Liste.
+  const liste = dockAdressen({ ...BASIS, dock_url_vorhanden: true, dock_urls: VIER });
+  assert.equal(liste.length, 4);
   assert.deepEqual(
-    liste.slice(0, 4).map((d) => [d.titel, d.url, d.eigene]),
+    liste.map((d) => [d.titel, d.url]),
     [
-      ['Chat', VIER.chat, true],
-      ['Aktivität', VIER.activity, true],
-      ['Stream-Infos', VIER.stream_info, true],
-      ['Kanalpunkte', VIER.points, true],
+      ['Chat', VIER.chat],
+      ['Aktivität', VIER.activity],
+      ['Stream-Infos', VIER.stream_info],
+      ['Kanalpunkte', VIER.points],
     ],
   );
-  // Danach die vier Twitch-Fenster, unveraendert als Zusatz.
-  assert.equal(liste.length, 8);
-  assert.ok(liste.slice(4).every((d) => !d.eigene));
-  assert.equal(liste[4].url, 'https://www.twitch.tv/popout/earlysalty/chat?darkpopout');
-});
 
-test('ohne_dock_urls_faellt_auf_dock_url_zurueck', () => {
-  // Aeltere Server liefern nur die eine Adresse. Dann gilt sie als
-  // Chat-Fenster; die drei anderen fehlen, statt ins Leere zu zeigen.
-  const liste = dockAdressen({
-    ...BASIS,
-    dock_url: 'https://relay.test/dock/chat?t=abc',
-    dock_url_vorhanden: true,
-  });
-  assert.equal(liste[0].eigene, true);
-  assert.equal(liste[0].titel, 'Chat');
-  assert.equal(liste[0].url, 'https://relay.test/dock/chat?t=abc');
-  assert.equal(liste.length, 5);
-  assert.ok(liste.slice(1).every((d) => !d.eigene));
-});
+  // Die Adressen kommen jetzt dauerhaft aus `me`, nicht mehr nur einmalig aus
+  // der Antwort des Erzeugens. Genau das war der Fehler vorher: nach einem
+  // Neuladen der Seite war die Karte leer.
+  const nurAusMe = dockAdressen({ ...BASIS, dock_urls: VIER });
+  assert.equal(nurAusMe.length, 4);
+  assert.equal(nurAusMe[0].url, VIER.chat);
 
-test('dockAdressen_ohne_dock_url_liefert_nur_twitch_popouts', () => {
-  const liste = dockAdressen({ ...BASIS, dock_url_vorhanden: false });
-  assert.equal(liste.length, 4);
-  assert.ok(liste.every((d) => !d.eigene));
-  assert.ok(liste.every((d) => d.url.includes('twitch.tv')));
+  // Frisch erzeugte Adressen gehen vor, solange `me` noch den alten Stand hat.
+  const frisch: DockUrls = { ...VIER, chat: 'https://relay.test/dock/chat?t=neu' };
+  assert.equal(dockAdressen({ ...BASIS, dock_urls: VIER }, frisch)[0].url, frisch.chat);
 
-  const leer = dockAdressen({ ...BASIS, dock_url: '   ' });
-  assert.ok(leer.every((d) => !d.eigene));
+  // Ohne Adressen bleibt die Liste leer, statt auf Platzhalter zu zeigen.
+  assert.deepEqual(dockAdressen(BASIS), []);
+  assert.deepEqual(dockAdressen({ ...BASIS, dock_urls: null, dock_url_vorhanden: true }), []);
 
-  const ohneLogin = dockAdressen({ ...BASIS, twitch_login: undefined });
-  assert.equal(ohneLogin.length, 3);
-  assert.ok(ohneLogin.every((d) => d.titel !== 'Chat'));
-
-  // Eine leere Adresse im Viererpaket faellt weg, statt eine Kopierzeile
-  // ohne Ziel anzubieten.
-  const halb = dockAdressen({ ...BASIS }, { ...VIER, activity: '', points: '  ' });
+  // Eine leere Adresse faellt weg, statt eine Kopierzeile ohne Ziel anzubieten.
+  const halb = dockAdressen({ ...BASIS, dock_urls: { ...VIER, activity: '', points: '  ' } });
   assert.deepEqual(
-    halb.filter((d) => d.eigene).map((d) => d.titel),
+    halb.map((d) => d.titel),
     ['Chat', 'Stream-Infos'],
+  );
+});
+
+test('keine_twitch_popouts_mehr', () => {
+  // Die fertigen Twitch-Fenster sind ersatzlos weg: sie zeigten nur Twitch und
+  // brauchten eine eigene Anmeldung im OBS-Browser.
+  const liste = dockAdressen({ ...BASIS, dock_urls: VIER });
+  assert.ok(liste.every((d) => !d.url.includes('twitch.tv')));
+
+  for (const [name, quelle] of [
+    ['src/api/uplink.ts', UPLINK_API],
+    ['src/pages/Uplink.tsx', UPLINK_SEITE],
+    ['public/uplink/obs.html', OBS_HILFE],
+  ] as const) {
+    assert.ok(!quelle.includes('twitch.tv/popout'), `${name} nennt noch ein Twitch-Popout`);
+    assert.ok(
+      !quelle.includes('popout/stream-manager'),
+      `${name} nennt noch ein Twitch-Popout`,
+    );
+  }
+  assert.ok(!UPLINK_API.includes('OBS_DOCKS'), 'OBS_DOCKS lebt noch');
+  assert.ok(
+    !UPLINK_SEITE.includes('Einmal bei Twitch anmelden'),
+    'der Anmelde-Satz steht noch in der Karte',
   );
 });
 

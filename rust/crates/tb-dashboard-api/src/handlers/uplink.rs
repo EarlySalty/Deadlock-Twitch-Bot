@@ -360,9 +360,6 @@ pub async fn me_handler(
     // Twitch-Beobachtung. Deshalb wird er hier angehaengt und nicht im Relay
     // nachgebaut. Gleiches gilt fuer die verbundenen Plattformen.
     let live = live_status(&pool, id).await;
-    let login = twitch_identitaet(&auth)
-        .ok()
-        .map(|(login, _)| login.trim().to_lowercase());
     let verbindungen = verbindungen_lesen(&pool, config.as_ref(), id).await;
     // Ob je Plattform ein Uplink-Ziel (und damit ein Stream-Key) liegt, weiss
     // nur das Relay. Faellt der Abruf aus, gilt "kein Ziel bekannt": lieber
@@ -377,7 +374,7 @@ pub async fn me_handler(
         Ok(wert) => ziel_plattformen(&wert),
         Err(_) => Vec::new(),
     };
-    me_anreichern(&mut wert, live, login.as_deref(), &verbindungen, &ziele);
+    me_anreichern(&mut wert, live, &verbindungen, &ziele);
     Ok(Json(wert))
 }
 
@@ -395,14 +392,17 @@ fn ziel_plattformen(wert: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Haengt an die Relay-Antwort an, was nur der Bot weiss: Live-Status, Login,
-/// ob das Relay eine Dock-Adresse mitgegeben hat, und den Stand der
-/// Chat-Verbindungen je Plattform. Reine Funktion, damit sie ohne Relay
-/// pruefbar ist.
+/// Haengt an die Relay-Antwort an, was nur der Bot weiss: Live-Status und den
+/// Stand der Chat-Verbindungen je Plattform. Reine Funktion, damit sie ohne
+/// Relay pruefbar ist.
+///
+/// Der Twitch-Login stand hier frueher mit, weil die Oberflaeche daraus die
+/// Adresse des Twitch-Chat-Fensters baute. Diese Fenster gibt es nicht mehr;
+/// der Login hatte danach keinen Abnehmer und ging trotzdem bei jedem Abruf
+/// mit.
 fn me_anreichern(
     wert: &mut Value,
     live: &str,
-    login: Option<&str>,
     verbindungen: &[(String, &'static str)],
     ziele: &[String],
 ) {
@@ -410,17 +410,16 @@ fn me_anreichern(
         return;
     };
     objekt.insert("live_status".to_string(), Value::String(live.to_string()));
-    // Der Login geht mit, damit die Oberflaeche die OBS-Dock-Adressen
-    // fertig hinschreiben kann. Wer auf "Benutzerdefiniert" umstellt,
-    // verliert in OBS Chat und Aktivitaet, und ein Platzhalter zum
-    // Selbstersetzen ist genau die Stelle, an der Leute steckenbleiben.
-    if let Some(login) = login {
-        objekt.insert("twitch_login".to_string(), Value::String(login.to_string()));
-    }
-    // Das Relay sagt in /v1/me nur, OB es eine Dock-Adresse gibt
-    // (`dock_url_vorhanden`); die Adresse selbst kommt einmalig beim Rotate.
-    // Das Ja/Nein wird unveraendert durchgereicht und fehlt es, gilt Nein,
-    // damit die Oberflaeche "Adresse erzeugen" von "neu erzeugen" trennen kann.
+    // Beide Dock-Felder kommen vom Relay und werden unveraendert
+    // durchgereicht, nur auf eine feste Form gebracht.
+    //
+    // `dock_url_vorhanden` fehlt: dann gilt Nein, damit die Oberflaeche
+    // "erzeugen" von "neu erzeugen" trennen kann. `dock_urls` fehlt: dann
+    // steht dort `null` statt gar nichts, damit die Oberflaeche einen fehlenden
+    // Schluessel nicht von einer leeren Antwort unterscheiden muss.
+    //
+    // Beides kann auseinanderfallen: ein Zugang, den das Relay nur als
+    // Fingerabdruck kennt, ist vorhanden und trotzdem nicht anzeigbar.
     let dock_url_vorhanden = objekt
         .get("dock_url_vorhanden")
         .and_then(Value::as_bool)
@@ -429,6 +428,8 @@ fn me_anreichern(
         "dock_url_vorhanden".to_string(),
         Value::Bool(dock_url_vorhanden),
     );
+    let dock_urls = objekt.get("dock_urls").cloned().unwrap_or(Value::Null);
+    objekt.insert("dock_urls".to_string(), dock_urls);
     // Jede bekannte Plattform bekommt einen Eintrag; was nicht gespeichert
     // ist, ist getrennt. So muss die Oberflaeche keine Luecken deuten.
     let liste: Vec<Value> = PLATTFORMEN
@@ -1753,20 +1754,36 @@ mod tests {
     /// es in dieser Crate mehrere.
     #[test]
     fn me_traegt_dock_url_und_verbindungen() {
-        // Der Relay-Vertrag (GET /v1/me) liefert nur das Ja/Nein, nie die
-        // Adresse selbst; die kommt einmalig beim Rotate.
-        let mut wert = json!({ "freigeschaltet": true, "dock_url_vorhanden": true });
+        // Die vier Adressen kommen vom Relay und gehen unveraendert weiter.
+        // Der Bot baut hier nichts nach; er weiss den Zugang gar nicht.
+        let mut wert = json!({
+            "freigeschaltet": true,
+            "dock_url_vorhanden": true,
+            "dock_urls": {
+                "chat": "https://relay.test/dock/chat?t=abc",
+                "activity": "https://relay.test/dock/activity?t=abc",
+                "stream_info": "https://relay.test/dock/stream-info?t=abc",
+                "points": "https://relay.test/dock/points?t=abc"
+            }
+        });
         me_anreichern(
             &mut wert,
             "live",
-            Some("streamerin"),
             &[("twitch".to_string(), "verbunden")],
             &["twitch".to_string()],
         );
         assert_eq!(wert["live_status"], "live");
-        assert_eq!(wert["twitch_login"], "streamerin");
         assert_eq!(wert["dock_url_vorhanden"], true);
-        assert!(wert.get("dock_url").is_none());
+        assert_eq!(
+            wert["dock_urls"]["chat"],
+            "https://relay.test/dock/chat?t=abc"
+        );
+        assert_eq!(
+            wert["dock_urls"]["points"],
+            "https://relay.test/dock/points?t=abc"
+        );
+        // Der Login hing nur an den Twitch-Fenstern und geht nicht mehr mit.
+        assert!(wert.get("twitch_login").is_none());
         let liste = wert["verbindungen"].as_array().unwrap();
         assert_eq!(liste.len(), PLATTFORMEN.len());
         assert_eq!(
@@ -1792,8 +1809,12 @@ mod tests {
     #[test]
     fn me_ohne_dock_url_meldet_keine_adresse() {
         let mut wert = json!({ "freigeschaltet": false });
-        me_anreichern(&mut wert, "unbekannt", None, &[], &[]);
+        me_anreichern(&mut wert, "unbekannt", &[], &[]);
         assert_eq!(wert["dock_url_vorhanden"], false);
+        // `null`, nicht "Feld fehlt": die Oberflaeche soll einen aelteren
+        // Relay nicht von einem Streamer ohne Adressen unterscheiden muessen.
+        assert_eq!(wert["dock_urls"], Value::Null);
+        assert!(wert.as_object().unwrap().contains_key("dock_urls"));
         assert!(wert.get("twitch_login").is_none());
         assert!(wert["verbindungen"]
             .as_array()
@@ -1802,8 +1823,15 @@ mod tests {
             .all(|e| e["status"] == "getrennt"));
 
         let mut nein = json!({ "dock_url_vorhanden": false });
-        me_anreichern(&mut nein, "aus", None, &[], &[]);
+        me_anreichern(&mut nein, "aus", &[], &[]);
         assert_eq!(nein["dock_url_vorhanden"], false);
+
+        // Ein Zugang, den das Relay nur als Fingerabdruck kennt: vorhanden,
+        // aber nicht anzeigbar. Beides muss nebeneinander stehen bleiben.
+        let mut ohne_enc = json!({ "dock_url_vorhanden": true, "dock_urls": Value::Null });
+        me_anreichern(&mut ohne_enc, "aus", &[], &[]);
+        assert_eq!(ohne_enc["dock_url_vorhanden"], true);
+        assert_eq!(ohne_enc["dock_urls"], Value::Null);
     }
 
     #[test]
