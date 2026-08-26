@@ -23,17 +23,21 @@ import '../uplinkHelp.css';
 import {
   acceptUplinkAdminWaitlistEntry,
   UPLINK_PLATTFORMEN,
+  dockAdressen,
   fetchUplinkAdminWaitlist,
   fetchUplinkCaps,
   fetchUplinkDestinations,
   fetchUplinkMe,
   joinUplinkWaitlist,
   reconnectWaitEingabe,
+  plattformVerbindungen,
   reconnectWaitPayload,
+  rotateUplinkDockToken,
   saveUplinkReconnectWait,
+  uplinkConnectUrl,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
-import type { UplinkAdminWaitlistEntry } from '@/api/uplink';
+import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import {
@@ -94,38 +98,6 @@ function SidebarLink({
  * den Fehlerzweig meldete das Feld "Kopiert", waehrend die Zwischenablage leer
  * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
  */
-/**
- * Die Twitch-Fenster, die OBS bei Dienst „Benutzerdefiniert“ ausblendet.
- *
- * Es sind dieselben Adressen, die OBS in seine eigenen Docks laedt: siehe
- * `frontend/oauth/TwitchAuth.cpp` im OBS-Quellcode. Die eingebauten Docks sind
- * selbst nur Browser-Fenster, sie werden nur automatisch angelegt, sobald ein
- * Twitch-Konto verbunden ist. Inhaltlich ist ein eigenes Dock dasselbe Fenster.
- *
- * Drei der vier Adressen kommen ohne Kanalnamen aus: Twitch leitet einen
- * angemeldeten Nutzer auf seinen eigenen Kanal weiter. Das ist robuster als
- * der Namensweg, weil es auch nach einer Namensaenderung noch stimmt. Nur der
- * Chat braucht den Kanal in der Adresse.
- */
-const OBS_DOCKS = [
-  {
-    titel: 'Chat',
-    pfad: (k: string) => (k ? `https://www.twitch.tv/popout/${k}/chat?darkpopout` : ''),
-  },
-  {
-    titel: 'Aktivitätsfeed',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/activity-feed',
-  },
-  {
-    titel: 'Stream-Informationen',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info',
-  },
-  {
-    titel: 'Kanalpunkte',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/community-points',
-  },
-] as const;
-
 function DockZeile({ titel, url }: { titel: string; url: string }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const feldRef = useRef<HTMLInputElement>(null);
@@ -166,6 +138,133 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
       <p aria-live="polite" className={`text-[11px] ${stand === 'fehler' ? 'text-warning' : 'text-success'}`}>
         {stand === 'fehler' ? 'Automatisches Kopieren blockiert. Feld ist markiert; Strg+C drücken.' : ''}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Inhalt der Karte "Chat und OBS-Fenster".
+ *
+ * Unsere eigene Dock-Adresse steht zuerst: ein Fenster fuer den Chat aller
+ * Plattformen, die gerade ueber Uplink laufen, mit Antwortfeld. Die vier
+ * Twitch-Fenster bleiben als Zusatz darunter.
+ *
+ * Die Adresse kommt nach dem Erzeugen genau einmal vom Server. Sie bleibt hier
+ * nur im Speicher der Seite, bis neu geladen wird; danach zeigt die Karte
+ * "neu erzeugen", weil die alte Adresse nicht noch einmal ausgeliefert wird.
+ */
+function DockKarteInhalt({ me }: { me: UplinkMe }) {
+  const [neueAdresse, setNeueAdresse] = useState<string | null>(null);
+  const erzeugen = useMutation({
+    mutationFn: rotateUplinkDockToken,
+    onSuccess: (antwort) => setNeueAdresse(antwort.dock_url),
+  });
+  const adressen = dockAdressen(neueAdresse ? { ...me, dock_url: neueAdresse } : me);
+  const eigene = adressen.find((d) => d.eigene);
+  const twitchFenster = adressen.filter((d) => !d.eigene);
+  const vorhanden = Boolean(me.dock_url_vorhanden) || Boolean(eigene);
+  const verbindungen = plattformVerbindungen(me);
+
+  return (
+    <div className="space-y-4 border-t border-border/60 px-5 py-4">
+      <p className="text-sm text-text-secondary">
+        In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>{' '}
+        den Namen und die jeweilige Adresse eintragen.
+      </p>
+
+      <div data-section="eigenes-dock" className="space-y-2">
+        <p className="text-xs font-semibold text-white">Multi-Chat von Uplink</p>
+        <p className="text-xs text-text-secondary">
+          Ein Fenster für den Chat aller verbundenen Plattformen, die gerade über Uplink laufen. Antworten
+          gehen von dort an alle zugleich.
+        </p>
+        {eigene ? (
+          <>
+            <DockZeile titel={eigene.titel} url={eigene.url} />
+            {neueAdresse ? (
+              <p className="text-xs text-warning">
+                Die Adresse wird nur jetzt einmal angezeigt. Kopiere sie gleich in OBS. Wer sie kennt, kann in
+                deinem Namen im Chat schreiben.
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => erzeugen.mutate()}
+            disabled={erzeugen.isPending}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
+          >
+            {erzeugen.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+            {vorhanden ? 'Dock-Adresse neu erzeugen' : 'Dock-Adresse erzeugen'}
+          </button>
+          {vorhanden && !eigene ? (
+            <span className="text-xs text-text-secondary">
+              Es gibt schon eine Dock-Adresse. Sie wird aus Sicherheitsgründen nicht noch einmal angezeigt; beim
+              Neuerzeugen gilt die alte nicht mehr.
+            </span>
+          ) : null}
+        </div>
+        {erzeugen.isError ? (
+          <p role="alert" className="text-xs text-warning">
+            Die Dock-Adresse konnte gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
+          </p>
+        ) : null}
+      </div>
+
+      <div data-section="plattformen-verbinden" className="space-y-2">
+        <p className="text-xs font-semibold text-white">Plattformen verbinden</p>
+        <p className="text-xs text-text-secondary">
+          Damit der Multi-Chat mitlesen und antworten kann, muss jede Plattform einmal verbunden werden.
+        </p>
+        <ul className="space-y-2">
+          {verbindungen.map((v) => (
+            <li
+              key={v.id}
+              data-platform={v.id}
+              data-state={v.status}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/40 px-3 py-2"
+            >
+              <span className="text-sm text-white">
+                {v.label}
+                <span className="ml-2 text-xs text-text-secondary">{v.statusText}</span>
+              </span>
+              {v.aktiv ? (
+                <a
+                  href={uplinkConnectUrl(v.id)}
+                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
+                >
+                  {v.status === 'verbunden' ? 'Neu verbinden' : 'Verbinden'}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary opacity-60"
+                >
+                  Folgt
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-white">Twitch-Fenster</p>
+        {twitchFenster.map((dock) => (
+          <DockZeile key={dock.titel} titel={dock.titel} url={dock.url} />
+        ))}
+        {!me.twitch_login ? (
+          <p className="text-xs text-text-secondary">
+            Für den Chat fehlt gerade dein Kanalname. Nach einer neuen Anmeldung erscheint auch diese Adresse.
+          </p>
+        ) : null}
+        <p className="text-xs text-text-secondary">
+          Einmal bei Twitch anmelden, Fenster anordnen und das Layout in OBS speichern.
+        </p>
+      </div>
     </div>
   );
 }
@@ -1003,30 +1102,11 @@ export function UplinkPage() {
                   <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
                     <span>
                       <span className="block text-base font-bold text-white">Chat und OBS-Fenster</span>
-                      <span className="mt-0.5 block text-xs text-text-secondary">Vier fertige Dock-Adressen</span>
+                      <span className="mt-0.5 block text-xs text-text-secondary">Unser Multi-Chat plus vier Twitch-Fenster</span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
                   </summary>
-                  <div className="space-y-3 border-t border-border/60 px-5 py-4">
-                    <p className="text-sm text-text-secondary">
-                      In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>{' '}
-                      den Namen und die jeweilige Adresse eintragen.
-                    </p>
-                    <div className="space-y-2">
-                      {OBS_DOCKS.map((dock) => {
-                        const url = dock.pfad(data.twitch_login ?? '');
-                        return url ? <DockZeile key={dock.titel} titel={dock.titel} url={url} /> : null;
-                      })}
-                    </div>
-                    {!data.twitch_login ? (
-                      <p className="text-xs text-text-secondary">
-                        Für den Chat fehlt gerade dein Kanalname. Nach einer neuen Anmeldung erscheint auch diese Adresse.
-                      </p>
-                    ) : null}
-                    <p className="text-xs text-text-secondary">
-                      Einmal bei Twitch anmelden, Fenster anordnen und das Layout in OBS speichern.
-                    </p>
-                  </div>
+                  <DockKarteInhalt me={data} />
                 </details>
               )}
 
