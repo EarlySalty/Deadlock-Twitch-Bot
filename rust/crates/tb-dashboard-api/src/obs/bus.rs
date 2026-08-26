@@ -578,6 +578,20 @@ impl ObsDockBus {
         Ok(())
     }
 
+    /// Testhaken: der Nachzug ist im Betrieb nur ueber den Listener erreichbar,
+    /// und ein Test soll ihn fahren koennen, ohne einen Verbindungsabriss
+    /// nachzustellen. Setzt den Wasserstand und zieht danach nach, also genau
+    /// die Reihenfolge des echten Wiederaufbaus in [`ObsDockBus::horchen`].
+    #[cfg(test)]
+    pub(crate) async fn nachzug_ab_stand_fuer_tests(
+        &self,
+        pool: &PgPool,
+        stand: i64,
+    ) -> Result<(), sqlx::Error> {
+        self.wasserstand.store(stand, Ordering::SeqCst);
+        self.luecke_nachziehen(pool).await
+    }
+
     fn hat_empfaenger(&self, channel_id: &str) -> bool {
         self.kanaele
             .lock()
@@ -689,13 +703,36 @@ impl Auslieferung {
     /// Bucht einen Lueckenhinweis bis einschliesslich `bis`: alles darunter
     /// gilt als erledigt, egal ob gesendet oder uebersprungen.
     pub fn luecke_bis(&mut self, bis: i64) {
-        self.vor_verbindung = self.vor_verbindung.max(bis);
+        self.untergrenze_setzen(bis);
+    }
+
+    /// Kleinste `id`, die dieser Socket ueberhaupt noch senden darf.
+    ///
+    /// Ein Rueckgriff darf darunter gar nicht erst lesen.
+    pub fn untergrenze(&self) -> i64 {
+        self.vor_verbindung
+    }
+
+    /// Zieht die Untergrenze auf `bis` hoch: alles bis einschliesslich `bis`
+    /// gilt als erledigt und geht nie mehr hinaus.
+    ///
+    /// Das braucht vor allem der Vorlauf. Ein Dock ohne `?seit=` bestellt
+    /// ausdruecklich nur die letzten [`VORLAUF_OHNE_SEIT`] Zeilen und sonst
+    /// nichts. Ohne diese Grenze stuende `vor_verbindung` auf 0, im Merkfenster
+    /// staenden nur eben diese Zeilen, und der naechste Rueckgriff (Aufholen
+    /// nach `Lagged` oder ein Nachzug des Busses) wuerde jede aeltere Zeile als
+    /// neuen Rahmen ins Overlay spuelen: bis zu [`NACHZUG_RUECKGRIFF`] alte
+    /// Chatnachrichten auf einen Schlag.
+    pub fn untergrenze_setzen(&mut self, bis: i64) {
         self.hoechste = self.hoechste.max(bis);
+        if bis <= self.vor_verbindung {
+            return;
+        }
+        self.vor_verbindung = bis;
         // Was jetzt unter der Grenze liegt, muss nicht mehr einzeln gemerkt
         // werden; das haelt das Fenster fuer die wirklich strittigen `id` frei.
-        let grenze = self.vor_verbindung;
-        self.reihenfolge.retain(|id| *id > grenze);
-        self.gesendet.retain(|id| *id > grenze);
+        self.reihenfolge.retain(|id| *id > bis);
+        self.gesendet.retain(|id| *id > bis);
     }
 
     fn merken(&mut self, id: i64) {
@@ -936,6 +973,31 @@ mod tests {
         assert!(!buch.live(5), "unter dem Lesezeichen des Docks");
         assert!(buch.live(10));
         assert!(!buch.live(8), "keine Dublette");
+    }
+
+    /// Ein Dock ohne `?seit=` hat nur seinen Vorlauf bestellt. Wird die
+    /// Untergrenze nicht gesetzt, laesst `live()` danach jede aeltere `id`
+    /// durch, die nicht mehr im Merkfenster steht, und der naechste Rueckgriff
+    /// spuelt bis zu [`NACHZUG_RUECKGRIFF`] alte Zeilen ins Overlay.
+    #[test]
+    fn vorlauf_setzt_die_untergrenze_unter_seine_aelteste_zeile() {
+        let mut buch = Auslieferung::neu(None);
+        // Vorlauf: die Zeilen 51..=60, alles davor hat das Dock nie bestellt.
+        buch.untergrenze_setzen(50);
+        for id in 51..=60 {
+            buch.nachlauf(id);
+        }
+        assert_eq!(buch.untergrenze(), 50);
+
+        // Genau der Rueckgriff aus dem Aufholen bzw. dem Bus-Nachzug.
+        for alt in 1..=50 {
+            assert!(!buch.live(alt), "alte Zeile {alt} darf nicht ins Overlay");
+        }
+        // Der eigene Vorlauf kommt auch nicht doppelt.
+        assert!(!buch.live(55));
+        // Neues geht weiter raus, auch verkehrt herum.
+        assert!(buch.live(62));
+        assert!(buch.live(61));
     }
 
     /// Nach einem Lueckenhinweis ist alles darunter erledigt, und das Fenster

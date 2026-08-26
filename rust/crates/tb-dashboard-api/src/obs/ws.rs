@@ -517,6 +517,11 @@ enum NachlaufArt {
     /// Anker ist die hoechste gesendete `id`, und darunter kann eine Zeile
     /// nachtraeglich sichtbar geworden sein (siehe [`crate::obs::bus`]). Was
     /// dieser Socket davon schon gesendet hat, filtert [`Auslieferung`] weg.
+    ///
+    /// Der Rueckgriff endet an [`Auslieferung::untergrenze`]. Sonst bekaeme
+    /// ausgerechnet ein Dock ohne `?seit=`, das nur die letzten
+    /// [`VORLAUF_OHNE_SEIT`] Zeilen bestellt hat, beim ersten `Lagged` bis zu
+    /// [`NACHZUG_RUECKGRIFF`] alte Zeilen als frische Rahmen.
     Aufholen,
 }
 
@@ -546,6 +551,13 @@ async fn nachlauf_senden(
     if art == NachlaufArt::Vorlauf {
         match nachlauf_lesen(pool, channel_id, None, VORLAUF_OHNE_SEIT).await {
             Ok(zeilen) => {
+                // Die Untergrenze VOR dem Senden ziehen, nicht danach: dieses
+                // Dock hat nur diesen Ausschnitt bestellt, und ein spaeterer
+                // Rueckgriff darf ihm nicht die Stunde davor ins Overlay
+                // kippen. Ohne die Grenze stuende sie bei 0.
+                if let Some((erste, _)) = zeilen.first() {
+                    buch.untergrenze_setzen(erste - 1);
+                }
                 for (id, json) in zeilen {
                     if schreiber
                         .send(Message::Text(drahtrahmen(id, &json)))
@@ -566,7 +578,12 @@ async fn nachlauf_senden(
     }
 
     let mut zeiger = match art {
-        NachlaufArt::Aufholen => (buch.anker() - NACHZUG_RUECKGRIFF).max(0),
+        // Nur bis zur Untergrenze zurueck, nicht bis 0. Das ist reine
+        // Sparsamkeit und kein Schutz: was darunter liegt, wirft `buch.live`
+        // ohnehin weg, hier wird es nur gar nicht erst gelesen. Deshalb gibt
+        // es dazu auch keinen eigenen Test, ein Ausbau waere von aussen nicht
+        // zu sehen.
+        NachlaufArt::Aufholen => (buch.anker() - NACHZUG_RUECKGRIFF).max(buch.untergrenze()),
         _ => buch.anker(),
     };
     for _ in 0..NACHLAUF_RUNDEN {
@@ -1453,6 +1470,91 @@ mod socket_tests {
         assert_eq!(gelesen[0]["id"].as_i64(), Some(77));
         socket.close(None).await.ok();
         sqlx::query("DROP SCHEMA obs_ws_dbfehler CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Ein Dock ohne `?seit=` bekommt seinen Vorlauf und danach nichts, was
+    /// aelter ist. Auch dann nicht, wenn der Bus mit dem vollen Rueckgriff
+    /// nachzieht.
+    ///
+    /// Das ist der Folgefehler des Rueckgriffs: `Auslieferung::neu(None)` setzt
+    /// die Untergrenze auf 0, im Merkfenster stehen nur die
+    /// [`VORLAUF_OHNE_SEIT`] Zeilen des Vorlaufs, und ein Nachzug ab
+    /// `wasserstand - NACHZUG_RUECKGRIFF` haette dem Overlay den ganzen
+    /// Verlauf davor als frische Rahmen eingespielt.
+    ///
+    /// Gefahren wird der echte Weg: derselbe Bus wie der Socket, echter
+    /// `luecke_nachziehen` gegen die echte Tabelle, echter WebSocket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vorlauf_dock_bekommt_beim_nachzug_nichts_altes() {
+        let dsn = dsn_oder_skip!();
+        let pool = schema_pool(&dsn, "obs_ws_vorlauf_grenze").await;
+        // Deutlich mehr Zeilen als der Vorlauf traegt, damit unterhalb des
+        // Vorlauf-Fensters wirklich etwas zum Wiederausspielen liegt.
+        let gesamt = VORLAUF_OHNE_SEIT + 40;
+        sqlx::query(
+            "INSERT INTO obs_dock_events (channel_id, payload)
+             SELECT $1, jsonb_build_object('typ','chat','id',lauf::text,'text','alt' || lauf::text)
+               FROM generate_series(1, $2) AS lauf",
+        )
+        .bind(KANAL)
+        .bind(gesamt)
+        .execute(&pool)
+        .await
+        .expect("Massen-Einfuegen");
+
+        let bus = ObsDockBus::neu(pool.clone());
+        let router = Router::new()
+            .route("/obs/ws", get(obs_ws_handler))
+            .layer(Extension(Arc::clone(&bus)))
+            .layer(Extension(tb_http_core::ExpectedToken(TOKEN.to_string())))
+            .with_state(pool.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Port");
+        let adresse = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let mut dock = verbinden(adresse, None).await;
+        let vorlauf = alles_lesen(&mut dock).await;
+        assert_eq!(vorlauf.len() as i64, VORLAUF_OHNE_SEIT);
+        let aelteste_im_vorlauf = vorlauf[0]["id"].as_i64().expect("id im Rahmen");
+        assert!(
+            aelteste_im_vorlauf > 1,
+            "unter dem Vorlauf muss Verlauf liegen"
+        );
+
+        // Der Bus zieht nach, als waere die Verbindung abgerissen. Sein
+        // Rueckgriff reicht hier bis unter Zeile 1 zurueck.
+        bus.nachzug_ab_stand_fuer_tests(&pool, gesamt)
+            .await
+            .expect("Nachzug");
+
+        let danach = alles_lesen(&mut dock).await;
+        assert!(
+            danach.is_empty(),
+            "kein alter Rahmen darf nachkommen, bekommen: {:?}",
+            danach
+                .iter()
+                .filter_map(|wert| wert["id"].as_i64())
+                .collect::<Vec<_>>()
+        );
+
+        // Und der Socket ist dabei nicht taub geworden: was wirklich neu ist,
+        // geht weiter hinaus.
+        let neu = ereignis_schreiben(&pool, "neu").await;
+        bus.veroeffentlichen(
+            KANAL,
+            crate::obs::bus::BusRahmen::neu(neu, r#"{"typ":"chat","id":"neu","text":"neu"}"#),
+        );
+        assert_eq!(texte(&alles_lesen(&mut dock).await), vec!["neu"]);
+
+        dock.close(None).await.ok();
+        sqlx::query("DROP SCHEMA obs_ws_vorlauf_grenze CASCADE")
             .execute(&pool)
             .await
             .ok();
