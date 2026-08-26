@@ -212,6 +212,17 @@ pub struct AffiliateConnectState {
     pub twitch_login: String,
 }
 
+/// Persistierter Zustand des Chat-Plattform-Verbinden-Flows (Uplink Multi-Chat).
+/// Bindet den Rueckweg an die Partner-Session, die ihn gestartet hat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformConnectState {
+    pub redirect_uri: String,
+    /// Numerische Twitch-User-ID des Streamers, der den Flow gestartet hat.
+    pub streamer_id: i64,
+    pub twitch_login: String,
+    pub platform: String,
+}
+
 /// `SameSite`-Politik eines Session-Cookies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SameSite {
@@ -375,6 +386,9 @@ pub const AFFILIATE_SESSION_TYPE: &str = "affiliate";
 pub const AFFILIATE_OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:affiliate";
 /// Persistierter State-Typ des Affiliate-Stripe-Connect-Flows.
 pub const AFFILIATE_CONNECT_STATE_SESSION_TYPE: &str = "oauth_state:affiliate_connect";
+/// Persistierter State-Typ des Chat-Plattform-Verbinden-Flows (Uplink
+/// Multi-Chat, `handlers::platform_connect`).
+pub const PLATFORM_CONNECT_STATE_SESSION_TYPE: &str = "oauth_state:platform_connect";
 
 /// Plattform-Discriminator des geteilten Raid-OAuth-State-Stores
 /// (`oauth_state_tokens`), Python `_OAUTH_STATE_PLATFORM_RAID`.
@@ -1048,6 +1062,74 @@ impl DashboardAuthState {
         Ok(Some(AffiliateConnectState {
             redirect_uri,
             twitch_login,
+        }))
+    }
+
+    /// Persistiert einen Chat-Plattform-Verbinden-State (Uplink Multi-Chat).
+    /// Gleiche Ablage und TTL wie die uebrigen OAuth-States.
+    pub async fn save_platform_connect_state(
+        &self,
+        state_token: &str,
+        state: &PlatformConnectState,
+    ) -> Result<(), sqlx::Error> {
+        let now = unix_now();
+        let expires_at = now as f64 + OAUTH_STATE_TTL_SECS as f64;
+        let payload = serde_json::json!({
+            "redirect_uri": state.redirect_uri,
+            "streamer_id": state.streamer_id,
+            "twitch_login": state.twitch_login,
+            "platform": state.platform,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            state_token,
+            PLATFORM_CONNECT_STATE_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Verbraucht einen Chat-Plattform-Verbinden-State atomar und einmalig.
+    pub async fn consume_platform_connect_state(
+        &self,
+        state_token: &str,
+    ) -> Result<Option<PlatformConnectState>, sqlx::Error> {
+        let Some(payload) = self
+            .consume_affiliate_state_payload(state_token, PLATFORM_CONNECT_STATE_SESSION_TYPE)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let text = |key: &str| {
+            payload
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let redirect_uri = text("redirect_uri");
+        let twitch_login = text("twitch_login").to_lowercase();
+        let platform = text("platform").to_lowercase();
+        let streamer_id = payload
+            .get("streamer_id")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if redirect_uri.is_empty()
+            || twitch_login.is_empty()
+            || platform.is_empty()
+            || streamer_id <= 0
+        {
+            return Ok(None);
+        }
+        Ok(Some(PlatformConnectState {
+            redirect_uri,
+            streamer_id,
+            twitch_login,
+            platform,
         }))
     }
 
