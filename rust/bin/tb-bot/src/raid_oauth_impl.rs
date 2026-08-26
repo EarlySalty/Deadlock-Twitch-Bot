@@ -1565,7 +1565,10 @@ fn erfolgsziel(success_redirect_url: &str, scope_profile: &str) -> String {
     }
     match url::Url::parse(success_redirect_url.trim()) {
         Ok(url) if url.host_str().is_some() => {
-            format!("{}{UPLINK_ERFOLGS_PFAD}", url.origin().ascii_serialization())
+            format!(
+                "{}{UPLINK_ERFOLGS_PFAD}",
+                url.origin().ascii_serialization()
+            )
         }
         // Ohne lesbaren Ursprung bleibt es beim eingestellten Ziel: eine
         // Weiterleitung auf einen relativen Pfad würde der Dashboard-Seite

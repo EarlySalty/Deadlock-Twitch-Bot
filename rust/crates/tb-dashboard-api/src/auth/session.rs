@@ -1165,7 +1165,6 @@ impl DashboardAuthState {
         }))
     }
 
-
     /// Persistiert einen Partner-Einmal-Login-State (B3-8). `state_id` = `sid` aus
     /// dem HMAC-Token; Payload trägt `next_path` + den Ziel-`login` (welcher
     /// Partner sich anmeldet). TTL via `ttl_secs`.

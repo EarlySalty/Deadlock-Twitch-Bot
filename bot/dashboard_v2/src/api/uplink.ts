@@ -112,8 +112,9 @@ export function trenneUplinkPlattform(
 }
 
 /**
- * Holt den Stream-Key nach und legt ihn als Uplink-Ziel ab. Die Seite ruft das
- * nach der Rueckkehr aus dem Twitch-Dialog und ueber "Stream-Key erneut holen".
+ * Holt den Stream-Key nach und legt ihn als Uplink-Ziel ab. Zwei Aufrufer: die
+ * Rueckkehr aus dem Twitch-Dialog und der Knopf "Stream-Key erneut holen" in
+ * der Plattform-Karte, der erscheint, solange kein Ziel im Uplink liegt.
  */
 export function holeUplinkStreamKey(
   platform: UplinkPlattform,

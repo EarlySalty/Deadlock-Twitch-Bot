@@ -65,9 +65,9 @@ fn twitch_identitaet(auth: &DashboardAuthLevel) -> Result<(&str, &str), Response
             twitch_user_id,
             ..
         } => Ok((twitch_login.as_str(), twitch_user_id.as_str())),
-        DashboardAuthLevel::Admin {
-            actor: Some(actor),
-        } => Ok((actor.twitch_login.as_str(), actor.twitch_user_id.as_str())),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            Ok((actor.twitch_login.as_str(), actor.twitch_user_id.as_str()))
+        }
         DashboardAuthLevel::Admin { actor: None } => Err((
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "admin ohne twitch-identitaet" })),
@@ -268,11 +268,7 @@ async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
 /// Raid-Bot zu verschweigen.
 ///
 /// Reine Funktion, damit die Zuordnung ohne Datenbank pruefbar ist.
-pub fn verbindungs_status(
-    hat_tokens: bool,
-    needs_reauth: bool,
-    scopes: &[String],
-) -> &'static str {
+pub fn verbindungs_status(hat_tokens: bool, needs_reauth: bool, scopes: &[String]) -> &'static str {
     if !hat_tokens {
         return "getrennt";
     }
@@ -765,7 +761,11 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
     let felder = eintrag.as_object_mut().expect("json! baut hier ein Objekt");
 
     let url = body.rtmp_url.as_deref().map(str::trim).unwrap_or_default();
-    let key = body.stream_key.as_deref().map(str::trim).unwrap_or_default();
+    let key = body
+        .stream_key
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
     match (url.is_empty(), key.is_empty()) {
         // Beides da: Ziel anlegen oder ersetzen.
         (false, false) => {
@@ -789,9 +789,10 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
     }
 
     let werte = match (&body.profil, body.manuell) {
-        (Some(name), _) => Some(profil_aufloesen(name).ok_or_else(|| {
-            fehler(StatusCode::BAD_REQUEST, "unbekanntes Profil")
-        })?),
+        (Some(name), _) => Some(
+            profil_aufloesen(name)
+                .ok_or_else(|| fehler(StatusCode::BAD_REQUEST, "unbekanntes Profil"))?,
+        ),
         (None, Some(manuell)) => Some(
             manuell_pruefen(manuell).map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?,
         ),
@@ -903,8 +904,8 @@ pub trait RelayZiele: Send + Sync {
         rtmp_url: &str,
         stream_key: &str,
     ) -> Result<(), String>;
-    /// Entfernt das Ziel der Plattform.
-    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String>;
+    /// Entfernt das Ziel der Plattform. `false` heisst: es gab keins.
+    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<bool, String>;
 }
 
 /// Echte Anbindung ueber [`relay_json`] (`X-Relay-Auth`, Basis-URL aus der
@@ -921,14 +922,27 @@ impl HttpRelayZiele {
         method: reqwest::Method,
         path: &str,
         body: Option<Value>,
-    ) -> Result<(), String> {
+    ) -> Result<Value, String> {
         match &self.verbindung {
             Some((base, secret)) => relay_json_mit(base, secret, method, path, body).await,
             None => relay_json(method, path, body).await,
         }
-        .map(|_| ())
         .map_err(relay_fehler)
     }
+}
+
+/// Ob diese Relay-Antwort "da war nichts" bedeutet statt "es ging schief".
+///
+/// Beim Loeschen ist das der Unterschied zwischen einem Abbruch und einem
+/// Weitermachen. Das Relay antwortet mit 400, wenn es den Streamer gar nicht
+/// kennt, und mit 404, wenn es die Route nicht kennt. In beiden Faellen liegt
+/// dort kein Ziel, das noch senden koennte, und das Trennen darf nicht daran
+/// haengen bleiben: sonst kaeme ein Streamer, der nie ein Uplink-Ziel hatte,
+/// nie wieder aus seiner Verbindung heraus. Alles andere (5xx, kein Netz,
+/// fehlendes Secret) bleibt ein Fehler, denn dann ist unbekannt, ob das Ziel
+/// noch steht.
+fn nichts_zu_loeschen(fehler: &str) -> bool {
+    fehler == "relay HTTP 400" || fehler == "relay HTTP 404"
 }
 
 #[async_trait::async_trait]
@@ -953,15 +967,22 @@ impl RelayZiele for HttpRelayZiele {
             })),
         )
         .await
+        .map(|_| ())
     }
 
-    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String> {
-        self.aufruf(
-            reqwest::Method::DELETE,
-            &ziel_loesch_pfad(streamer_id, platform),
-            None,
-        )
-        .await
+    async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<bool, String> {
+        match self
+            .aufruf(
+                reqwest::Method::DELETE,
+                &ziel_loesch_pfad(streamer_id, platform),
+                None,
+            )
+            .await
+        {
+            Ok(wert) => Ok(wert.get("deleted").and_then(Value::as_bool).unwrap_or(true)),
+            Err(fehler) if nichts_zu_loeschen(&fehler) => Ok(false),
+            Err(fehler) => Err(fehler),
+        }
     }
 }
 
@@ -1077,7 +1098,10 @@ pub async fn stream_key_hinterlegen(
             return StreamKeyStand::Fehlgeschlagen;
         }
     };
-    match relay.ziel_setzen(streamer_id, platform, rtmp_url, &key).await {
+    match relay
+        .ziel_setzen(streamer_id, platform, rtmp_url, &key)
+        .await
+    {
         Ok(()) => StreamKeyStand::Hinterlegt,
         Err(error) => {
             tracing::warn!(streamer_id, platform, %error, "uplink: Uplink-Ziel nicht gespeichert");
@@ -1091,6 +1115,10 @@ pub async fn stream_key_hinterlegen(
 pub enum TrennenErgebnis {
     /// Ziel im Relay weg, Tokens geleert, Widerruf abgeschickt (oder geloggt).
     Getrennt,
+    /// Fuer diese Plattform gibt es noch keinen Verbinden-Weg, also auch
+    /// nichts zu trennen. Ein `ok` waere hier eine Falschaussage: es hat
+    /// niemand etwas getan.
+    KeinWeg,
     /// Das Relay hat das Ziel nicht entfernt; sonst wurde nichts angefasst.
     RelayFehler,
     /// Die Tokens liessen sich nicht leeren.
@@ -1119,7 +1147,7 @@ pub async fn trennen(
     platform: &str,
 ) -> TrennenErgebnis {
     if rtmp_url_fuer(platform).is_none() {
-        return TrennenErgebnis::Getrennt;
+        return TrennenErgebnis::KeinWeg;
     }
     let uid = streamer_id.to_string();
     let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
@@ -1198,6 +1226,10 @@ pub async fn disconnect_handler(
     .await
     {
         TrennenErgebnis::Getrennt => Json(json!({ "ok": true })).into_response(),
+        TrennenErgebnis::KeinWeg => fehler(
+            StatusCode::CONFLICT,
+            "Diese Plattform lässt sich noch nicht verbinden, also gibt es auch nichts zu trennen.",
+        ),
         TrennenErgebnis::RelayFehler => fehler(
             StatusCode::BAD_GATEWAY,
             "Der Uplink hat das Ziel nicht entfernt. Bitte noch einmal versuchen.",
@@ -1373,15 +1405,12 @@ mod tests {
     /// einem Grund statt mit einem Formularfehler.
     #[test]
     fn hohe_werte_werden_nicht_mehr_abgelehnt() {
-        assert!(manuell_pruefen(manuell(3840, 2160, 60, 6000))
-        .is_ok());
-        assert!(manuell_pruefen(manuell(1920, 1080, 60, 60000))
-        .is_ok());
+        assert!(manuell_pruefen(manuell(3840, 2160, 60, 6000)).is_ok());
+        assert!(manuell_pruefen(manuell(1920, 1080, 60, 60000)).is_ok());
         // Und der Fall aus dem Betrieb: 16000 kbps an Twitch. Genau diese Zahl
         // hat der Streamer eingetragen und "liegt über unserem Maximum"
         // gelesen, ohne zu erfahren, wessen Maximum gemeint war.
-        assert!(manuell_pruefen(manuell(2560, 1440, 60, 16000))
-        .is_ok());
+        assert!(manuell_pruefen(manuell(2560, 1440, 60, 16000)).is_ok());
     }
 
     /// Der Weg, auf dem der Fehler entstanden ist: nicht der Aufruf von
@@ -1402,7 +1431,12 @@ mod tests {
 
     #[test]
     fn ein_vertipper_sprengt_das_deserialisieren_nicht_mehr() {
-        for zahl in ["9999999999", "99999999999999999999999", "6000.5", "-9999999999"] {
+        for zahl in [
+            "9999999999",
+            "99999999999999999999999",
+            "6000.5",
+            "-9999999999",
+        ] {
             let b = aus_json(zahl).expect("darf nicht schon am Typ scheitern");
             let antwort = ziel_nutzlast(&b).expect_err("und wird danach abgelehnt");
             assert_eq!(antwort.status(), StatusCode::BAD_REQUEST, "{zahl}");
@@ -1442,15 +1476,18 @@ mod tests {
     /// beim Start sterben, nicht beim Speichern, und dann steht der Stream.
     #[test]
     fn ungerade_kanten_werden_abgelehnt() {
-        assert!(manuell_pruefen(manuell(1921, 1080, 60, 6000))
-        .is_err());
+        assert!(manuell_pruefen(manuell(1921, 1080, 60, 6000)).is_err());
     }
 
     #[test]
     fn null_und_negativ_sind_keine_werte() {
-        for (w, h, f, b) in [(0, 1080, 60, 6000), (1920, 0, 60, 6000), (1920, 1080, 0, 6000), (1920, 1080, 60, -1)] {
-            assert!(manuell_pruefen(manuell(w, h, f, b))
-            .is_err());
+        for (w, h, f, b) in [
+            (0, 1080, 60, 6000),
+            (1920, 0, 60, 6000),
+            (1920, 1080, 0, 6000),
+            (1920, 1080, 60, -1),
+        ] {
+            assert!(manuell_pruefen(manuell(w, h, f, b)).is_err());
         }
     }
 
@@ -1623,7 +1660,10 @@ mod tests {
         let jetzt = zeit("2026-08-22T12:00:00+00:00");
         assert_eq!(live_bewerten(None, jetzt), "unbekannt");
         assert_eq!(live_bewerten(Some((1, None)), jetzt), "unbekannt");
-        assert_eq!(live_bewerten(Some((1, Some("gestern"))), jetzt), "unbekannt");
+        assert_eq!(
+            live_bewerten(Some((1, Some("gestern"))), jetzt),
+            "unbekannt"
+        );
     }
 
     /// Eine schiefe Uhr auf der schreibenden Seite darf keine Frische
@@ -1639,7 +1679,10 @@ mod tests {
     #[test]
     fn die_frist_gilt_genau() {
         let jetzt = zeit("2026-08-22T12:00:00+00:00");
-        assert_eq!(live_bewerten(Some((0, Some("2026-08-22T11:55:00+00:00"))), jetzt), "aus");
+        assert_eq!(
+            live_bewerten(Some((0, Some("2026-08-22T11:55:00+00:00"))), jetzt),
+            "aus"
+        );
         assert_eq!(
             live_bewerten(Some((0, Some("2026-08-22T11:54:59+00:00"))), jetzt),
             "unbekannt"
@@ -1857,11 +1900,34 @@ mod tests {
             .ziel_setzen(4242, "twitch", TWITCH_RTMP_URL, "sk-1")
             .await
             .unwrap();
-        relay.ziel_loeschen(4242, "twitch").await.unwrap();
-        // Ein 404 (Relay ohne die Route) ist ein Fehler, kein stiller Erfolg.
-        let fehler = relay.ziel_loeschen(4242, "kick").await.unwrap_err();
-        assert_eq!(fehler, "relay HTTP 404");
+        assert!(relay.ziel_loeschen(4242, "twitch").await.unwrap());
+        // Ein 404 heisst "da war nichts", kein Abbruch: sonst kaeme ein
+        // Streamer ohne Uplink-Ziel nie aus seiner Verbindung heraus.
+        assert!(!relay.ziel_loeschen(4242, "kick").await.unwrap());
     }
+
+    /// Die Gegenprobe zum 404: ein echter Ausfall bleibt ein Fehler. Sonst
+    /// wuerde das Trennen die Tokens wegwerfen, waehrend das Ziel im Relay
+    /// weitersendet.
+    #[tokio::test]
+    async fn ein_relay_ausfall_beim_loeschen_bleibt_ein_fehler() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/me/destinations/twitch"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let relay = HttpRelayZiele {
+            verbindung: Some((server.uri(), "geheim".into())),
+        };
+        assert_eq!(
+            relay.ziel_loeschen(4242, "twitch").await.unwrap_err(),
+            "relay HTTP 503"
+        );
+    }
+
 
     // ── Attrappen fuer Nachlauf und Trennen ────────────────────────────────
 
@@ -1892,7 +1958,7 @@ mod tests {
             ));
             Ok(())
         }
-        async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<(), String> {
+        async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<bool, String> {
             if self.kaputt {
                 return Err("relay HTTP 503".into());
             }
@@ -1900,7 +1966,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((streamer_id, platform.into()));
-            Ok(())
+            Ok(true)
         }
     }
 
@@ -1938,8 +2004,7 @@ mod tests {
 
     // ── mit DB ─────────────────────────────────────────────────────────────
 
-    const TEST_KEY_HEX: &str =
-        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    const TEST_KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
     fn config() -> super::PlatformTokenConfig {
         super::PlatformTokenConfig {
@@ -1958,28 +2023,22 @@ mod tests {
         async fn refresh(
             &self,
             _t: &str,
-        ) -> Result<
-            tb_raid::token_refresher::TokenResponse,
-            tb_raid::token_refresher::RefreshError,
-        > {
+        ) -> Result<tb_raid::token_refresher::TokenResponse, tb_raid::token_refresher::RefreshError>
+        {
             unreachable!("kein Refresh in diesem Test")
         }
         async fn exchange_code(
             &self,
             _c: &str,
-        ) -> Result<
-            tb_raid::token_refresher::TokenResponse,
-            tb_raid::token_refresher::RefreshError,
-        > {
+        ) -> Result<tb_raid::token_refresher::TokenResponse, tb_raid::token_refresher::RefreshError>
+        {
             unreachable!()
         }
         async fn token_owner(
             &self,
             _t: &str,
-        ) -> Result<
-            tb_raid::token_refresher::TokenOwnerInfo,
-            tb_raid::token_refresher::RefreshError,
-        > {
+        ) -> Result<tb_raid::token_refresher::TokenOwnerInfo, tb_raid::token_refresher::RefreshError>
+        {
             unreachable!()
         }
     }
@@ -2053,7 +2112,10 @@ mod tests {
         satz: &[&str],
     ) {
         let access = cipher
-            .encrypt_field("acc-alt", &tb_crypto::aad::raid_auth("access_token", uid, 1))
+            .encrypt_field(
+                "acc-alt",
+                &tb_crypto::aad::raid_auth("access_token", uid, 1),
+            )
             .unwrap();
         let refresh = cipher
             .encrypt_field(
@@ -2146,8 +2208,7 @@ mod tests {
             StreamKeyStand::Fehlgeschlagen
         );
         // Und die Verbindung selbst bleibt unangetastet.
-        let store =
-            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
         let t = store.load_decrypted_unrestricted("6003").await.unwrap();
         assert!(!t.unwrap().needs_reauth);
     }
@@ -2190,18 +2251,24 @@ mod tests {
             tb_raid::scope_profiles::UPLINK_SCOPES,
         )
         .await;
-        let writer =
-            tb_raid::auth_writer::AuthWriter::new(pool.clone(), config.cipher.clone());
-        writer.clear_tokens("6005", chrono::Utc::now()).await.unwrap();
-
-        let zeile: (Option<Vec<u8>>, Option<Vec<u8>>, Option<bool>, Option<chrono::DateTime<chrono::Utc>>) =
-            sqlx::query_as(
-                "SELECT access_token_enc, refresh_token_enc, needs_reauth, reauth_notified_at \
-                 FROM twitch_raid_auth WHERE twitch_user_id = '6005'",
-            )
-            .fetch_one(&pool)
+        let writer = tb_raid::auth_writer::AuthWriter::new(pool.clone(), config.cipher.clone());
+        writer
+            .clear_tokens("6005", chrono::Utc::now())
             .await
             .unwrap();
+
+        let zeile: (
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<bool>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ) = sqlx::query_as(
+            "SELECT access_token_enc, refresh_token_enc, needs_reauth, reauth_notified_at \
+                 FROM twitch_raid_auth WHERE twitch_user_id = '6005'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(zeile.0.is_none(), "access_token_enc muss leer sein");
         assert!(zeile.1.is_none(), "refresh_token_enc muss leer sein");
         assert_eq!(zeile.2, Some(true));
@@ -2219,8 +2286,7 @@ mod tests {
         assert_eq!(anzahl, 1);
 
         // Und der Lesepfad meldet den Streamer jetzt als getrennt.
-        let store =
-            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
         assert!(store
             .load_decrypted_unrestricted("6005")
             .await
@@ -2255,8 +2321,7 @@ mod tests {
             konto.widerrufen.lock().unwrap().as_slice(),
             &["acc-alt".to_string()]
         );
-        let store =
-            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
         assert!(store
             .load_decrypted_unrestricted("6006")
             .await
@@ -2294,12 +2359,31 @@ mod tests {
             TrennenErgebnis::RelayFehler
         );
         assert!(konto.widerrufen.lock().unwrap().is_empty());
-        let store =
-            tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
+        let store = tb_raid::token_store::RaidAuthStore::new(pool.clone(), config.cipher.clone());
         assert!(store
             .load_decrypted_unrestricted("6007")
             .await
             .unwrap()
             .is_some());
+    }
+
+    /// Kick hat noch keinen Verbinden-Weg. Ein `ok` waere die Behauptung,
+    /// etwas getrennt zu haben, das nie verbunden war.
+    #[tokio::test]
+    async fn trennen_ohne_verbinden_weg_meldet_keinen_erfolg() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        assert_eq!(
+            trennen(
+                &pool,
+                &config,
+                &FakeKonto::neu(),
+                &FakeRelay::default(),
+                6008,
+                "kick"
+            )
+            .await,
+            TrennenErgebnis::KeinWeg
+        );
     }
 }

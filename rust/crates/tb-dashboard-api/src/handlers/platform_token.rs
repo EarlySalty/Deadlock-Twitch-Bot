@@ -36,7 +36,7 @@ use tb_crypto::FieldCipher;
 use tb_http_core::{ExpectedToken, INTERNAL_TOKEN_HEADER};
 use tb_raid::{
     token_refresher::{
-        RefreshError, RaidTokenRefresher, TokenOwnerInfo, TokenResponse, TwitchTokenClient,
+        RaidTokenRefresher, RefreshError, TokenOwnerInfo, TokenResponse, TwitchTokenClient,
     },
     token_store::RaidAuthStore,
     TokenBlacklistStore,
@@ -454,10 +454,7 @@ mod tests {
         // Genau auf der Frist: faellig, nicht knapp daneben.
         assert!(refresh_faellig(Some(jetzt + Duration::minutes(10)), jetzt));
         assert!(refresh_faellig(Some(jetzt + Duration::minutes(9)), jetzt));
-        assert!(!refresh_faellig(
-            Some(jetzt + Duration::minutes(11)),
-            jetzt
-        ));
+        assert!(!refresh_faellig(Some(jetzt + Duration::minutes(11)), jetzt));
     }
 
     #[test]

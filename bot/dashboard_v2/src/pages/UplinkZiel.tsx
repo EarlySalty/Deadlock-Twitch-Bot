@@ -9,6 +9,7 @@ import {
   PROFIL_WERTE,
   UPLINK_PROFILE,
   profilNameFuer,
+  holeUplinkStreamKey,
   saveUplinkDestination,
   trenneUplinkPlattform,
   TRENNEN_HINWEIS,
@@ -120,6 +121,17 @@ function PlattformVerbindung({
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     },
   });
+  const keyHolen = useMutation({
+    mutationFn: () => holeUplinkStreamKey(chat.id, csrfToken ?? ''),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+    },
+  });
+  // Verbunden, aber im Uplink liegt kein Ziel: dann ist beim automatischen
+  // Nachlauf etwas schiefgegangen. Ohne diesen Knopf bliebe nur der
+  // Handeintrag, und der Streamer weiss nicht einmal, dass etwas fehlt.
+  const keyFehlt = chat.status === 'verbunden' && !chat.streamKeyVorhanden;
   const knopfKlasse =
     'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
   const stillKlasse =
@@ -138,6 +150,19 @@ function PlattformVerbindung({
             {chat.knopfText}
           </a>
         ) : null}
+        {keyFehlt ? (
+          <button
+            type="button"
+            disabled={keyHolen.isPending}
+            onClick={(e) => {
+              e.preventDefault();
+              keyHolen.mutate();
+            }}
+            className={knopfKlasse}
+          >
+            {keyHolen.isPending ? 'Wird geholt' : 'Stream-Key erneut holen'}
+          </button>
+        ) : null}
         {chat.trennenMoeglich ? (
           <button
             type="button"
@@ -151,6 +176,19 @@ function PlattformVerbindung({
           </button>
         ) : null}
       </span>
+      {keyFehlt ? (
+        <span className="text-[11px] text-text-secondary">
+          Dein Stream-Key liegt noch nicht im Uplink. Hol ihn hier oder trag ihn unten von Hand ein.
+        </span>
+      ) : null}
+      {keyHolen.isError ? (
+        <span role="alert" className="text-[11px] text-warning">
+          Der Stream-Key kam gerade nicht durch. Bitte gleich noch einmal versuchen.
+        </span>
+      ) : null}
+      {keyHolen.isSuccess ? (
+        <span className="text-[11px] text-success">Stream-Key ist im Uplink hinterlegt.</span>
+      ) : null}
       {chat.trennenMoeglich && !nachfrage ? (
         <span className="text-[11px] text-text-secondary">{TRENNEN_HINWEIS}</span>
       ) : null}

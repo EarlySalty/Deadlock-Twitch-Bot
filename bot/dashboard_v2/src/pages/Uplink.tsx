@@ -727,17 +727,34 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
  * Nach der Rueckkehr aus dem Twitch-Dialog (`?verbunden=twitch`) den Stream-Key
  * holen und die Seite auffrischen.
  *
- * Der Server versucht dasselbe schon im Hintergrund, sobald der Callback
- * durch ist. Dieser zweite Anlauf ist der sichtbare: er laeuft mit der Session
- * des Streamers, und wenn er scheitert, sieht der Streamer den Grund statt
- * eines leeren Ziels. Der Merker wird sofort aus der Adresse genommen, damit
- * ein Neuladen nicht noch einmal losrennt.
+ * Der Server versucht dasselbe schon im Hintergrund, sobald der Callback durch
+ * ist, damit es auch bei geschlossenem Tab passiert. Dieser zweite Anlauf ist
+ * der sichtbare: er laeuft mit der Session des Streamers, und wenn er
+ * scheitert, sieht der Streamer den Grund statt eines leeren Ziels. Beide
+ * schreiben denselben Wert, ein doppelter Lauf richtet also nichts an.
+ *
+ * Zwei getrennte Effekte, und das ist der Kern:
+ *
+ * 1. Der Merker wird sofort und genau einmal aus der Adresse genommen, damit
+ *    ein Neuladen nicht noch einmal losrennt.
+ * 2. Der Abruf wartet, bis der Anmeldestand geladen ist, und laeuft dann genau
+ *    einmal.
+ *
+ * Zusammengelegt in einem Effekt mit `csrfToken` in den Abhaengigkeiten hat
+ * genau das nicht funktioniert: der erste Durchlauf feuerte ohne Token, der
+ * nachladende Token liess den Effekt erneut laufen, das Aufraeumen brach die
+ * Rueckmeldung des ersten Laufs ab, und der Merker war aus der Adresse schon
+ * verschwunden. Erfolg wie Fehlschlag blieben unsichtbar.
  */
 function useRueckkehrVomVerbinden(
   queryClient: ReturnType<typeof useQueryClient>,
-  csrfToken: string | null
+  csrfToken: string | null,
+  authGeladen: boolean
 ) {
   const [meldung, setMeldung] = useState<string | null>(null);
+  const [ausstehend, setAusstehend] = useState(false);
+  const gestartet = useRef(false);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('verbunden') !== 'twitch') return;
@@ -748,29 +765,32 @@ function useRueckkehrVomVerbinden(
       '',
       window.location.pathname + (rest ? `?${rest}` : '')
     );
-    let abgebrochen = false;
+    setAusstehend(true);
+  }, []);
+
+  useEffect(() => {
+    if (!ausstehend || !authGeladen || gestartet.current) return;
+    gestartet.current = true;
     void holeUplinkStreamKey('twitch', csrfToken ?? '')
       .then(() => {
-        if (abgebrochen) return;
+        setAusstehend(false);
         queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
         queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
       })
       .catch(() => {
-        if (abgebrochen) return;
+        setAusstehend(false);
         setMeldung(
-          'Die Verbindung steht. Nur dein Stream-Key kam noch nicht durch: du kannst ihn unten von Hand eintragen oder es gleich noch einmal versuchen.'
+          'Die Verbindung steht. Nur dein Stream-Key kam noch nicht durch: hol ihn unten in der Twitch-Karte noch einmal oder trag ihn von Hand ein.'
         );
       });
-    return () => {
-      abgebrochen = true;
-    };
-  }, [queryClient, csrfToken]);
+  }, [ausstehend, authGeladen, csrfToken, queryClient]);
+
   return meldung;
 }
 
 export function UplinkPage() {
   const queryClient = useQueryClient();
-  const { data: authStatus } = useAuthStatus();
+  const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
   const [docksOffen, setDocksOffen] = useUplinkDisclosure('obs-docks', false);
   const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
@@ -806,7 +826,8 @@ export function UplinkPage() {
   const chatVerbindungen = data ? plattformVerbindungen(data) : [];
   const streamKeyMeldung = useRueckkehrVomVerbinden(
     queryClient,
-    authStatus?.csrfToken ?? authStatus?.csrf_token ?? null
+    authStatus?.csrfToken ?? authStatus?.csrf_token ?? null,
+    !authLaedt
   );
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale

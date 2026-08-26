@@ -493,7 +493,12 @@ mod tests {
         }
         assert!(url.contains("force_verify=true"));
         // Der Raid-Reauth-Weg bleibt bei zehn Rechten.
-        let raid = build_authorize_url("cid", "https://x.test/callback/twitch", "dashboard_reauth", "st");
+        let raid = build_authorize_url(
+            "cid",
+            "https://x.test/callback/twitch",
+            "dashboard_reauth",
+            "st",
+        );
         assert!(!raid.contains("stream_key"));
         assert!(!raid.contains("user%3Aread%3Achat"));
     }
