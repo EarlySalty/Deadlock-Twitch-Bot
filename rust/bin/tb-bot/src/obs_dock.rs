@@ -21,7 +21,9 @@
 //! Der Schalter liegt in der Config-DATEI `~/.config/deadlock-twitch-bot/bot.json`
 //! unter `obs_docks.enabled` und steht standardmaessig auf aus. Bewusst keine
 //! Umgebungsvariable: Betriebswerte gehoeren in eine Config-Datei, nur Secrets
-//! kommen aus Infisical.
+//! kommen aus Infisical. Dokumentiert ist der Schalter in
+//! `docs/internal/ops-runbooks.md`, Abschnitt "Betriebsschalter in der
+//! Config-Datei".
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -56,6 +58,19 @@ pub const OBS_DOCK_RETENTION_MINUTES: i64 = 15;
 /// Takt waeren aus 15 Minuten Aufbewahrung faktisch bis zu 75 Minuten
 /// geworden, und dann waere die Zusage in der Migration falsch.
 const RETENTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Zeitlimit fuer einen einzelnen Schreibversuch in den Bus.
+///
+/// Der Modulkopf sagt zu, dass ein kaputter Bus weder Moderation noch Raids
+/// noch Telemetrie anhaelt. Ohne Limit gilt das nur fuer den Fehlerfall: bei
+/// erschoepftem oder haengendem Pool wartet der Wrapper bis zum
+/// sqlx-Acquire-Timeout (Vorgabe 30 s), und solange laeuft der innere Hook
+/// nicht an. Deshalb wird jeder Schreibversuch hart gedeckelt.
+///
+/// Bewusst ein Limit und kein `tokio::spawn`: der Bus traegt den Chat, und
+/// nebenlaeufig abgesetzte Schreibvorgaenge koennten die Reihenfolge der
+/// Nachrichten im Dock vertauschen.
+const SCHREIB_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// URL-Muster der Twitch-Emote-CDN.
 ///
@@ -153,8 +168,13 @@ pub enum ObsDockError {
 /// nicht "kann Postgres INSERT".
 #[async_trait]
 pub trait ObsDockSink: Send + Sync {
-    /// Schreibt ein Ereignis und meldet es. Liefert die vergebene Lauf-ID.
-    async fn write(&self, event: &PlatformEvent) -> Result<i64, ObsDockError>;
+    /// Schreibt ein Ereignis und meldet es.
+    ///
+    /// `Ok(Some(id))` ist die vergebene Lauf-ID. `Ok(None)` heisst, dass genau
+    /// dieses Vorkommnis schon im Bus steht (gleicher Dedupe-Schluessel) und
+    /// deshalb keine zweite Zeile bekommen hat; das ist der Normalfall, wenn
+    /// Twitch dasselbe Vorkommnis ueber zwei Wege meldet.
+    async fn write(&self, event: &PlatformEvent) -> Result<Option<i64>, ObsDockError>;
 }
 
 /// Postgres-Ziel: eine Zeile in `obs_dock_events`, dann `pg_notify`.
@@ -170,17 +190,38 @@ impl PgObsDockSink {
 
 #[async_trait]
 impl ObsDockSink for PgObsDockSink {
-    async fn write(&self, event: &PlatformEvent) -> Result<i64, ObsDockError> {
+    async fn write(&self, event: &PlatformEvent) -> Result<Option<i64>, ObsDockError> {
         let payload = serde_json::to_value(event)?;
         let channel_id = event.channel_id().to_string();
+        let dedupe_key = event.dedupe_key();
 
-        let (id,): (i64,) = sqlx::query_as(
-            "INSERT INTO obs_dock_events (channel_id, payload) VALUES ($1, $2) RETURNING id",
+        // `ON CONFLICT ... DO NOTHING` gegen den Teilindex
+        // `obs_dock_events_dedupe_key_idx`: meldet Twitch dasselbe Vorkommnis
+        // ueber zwei Wege (Raid als `channel.raid` UND als
+        // `channel.chat.notification`, Community-Geschenk als Sammel- UND als
+        // Einzelmeldung), laeuft die zweite Meldung hier auf und das Dock zeigt
+        // das Vorkommnis genau einmal. Ohne Treffer liefert `RETURNING` keine
+        // Zeile, deshalb `fetch_optional`.
+        let zeile: Option<(i64,)> = sqlx::query_as(
+            "INSERT INTO obs_dock_events (channel_id, payload, dedupe_key) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING \
+             RETURNING id",
         )
         .bind(&channel_id)
         .bind(&payload)
-        .fetch_one(&self.pool)
+        .bind(&dedupe_key)
+        .fetch_optional(&self.pool)
         .await?;
+
+        let Some((id,)) = zeile else {
+            tracing::debug!(
+                channel_id = %channel_id,
+                dedupe_key = dedupe_key.as_deref().unwrap_or("n/a"),
+                "obs_docks: Vorkommnis stand schon im Bus, zweite Meldung verworfen"
+            );
+            return Ok(None);
+        };
 
         // Bewusst als zweite Anweisung und nicht als CTE am INSERT: ob ein
         // Planer eine unbenutzte Spalte einer Unterabfrage auswertet, ist nicht
@@ -192,7 +233,7 @@ impl ObsDockSink for PgObsDockSink {
             .execute(&self.pool)
             .await?;
 
-        Ok(id)
+        Ok(Some(id))
     }
 }
 
@@ -320,6 +361,56 @@ fn kennzeichen(message_id: Option<&str>, jetzt: DateTime<Utc>) -> String {
         .unwrap_or_else(|| jetzt.to_rfc3339())
 }
 
+/// Kennzeichen eines eingehenden Raids: die Quell-ID, nicht die Message-ID.
+///
+/// **Warum beide Quellen schreiben duerfen.** Twitch meldet EIN Raid-Arrival
+/// ueber zwei Wege, und beide haben Luecken, also darf keiner wegfallen:
+///
+/// * `channel.raid` abonniert der Bot nur fuer Partner-Kanaele
+///   (`bin/tb-bot/src/main.rs`, `row.is_partner && ensure_raid_subscription`,
+///   Condition `to_broadcaster_user_id`, `tb-monitoring/src/subscriptions.rs`).
+///   In einem freigeschalteten, aber nicht partnerten Kanal mit laufendem Dock
+///   kommt dieses Ereignis nie an.
+/// * `channel.chat.notification` mit `notice_type=raid` haengt umgekehrt am
+///   Chat-Lesen des Kanals und faellt weg, sobald der Bot dort nicht im Chat
+///   sitzt.
+///
+/// Dass es zwei Signale fuer EIN Vorkommnis sind, modelliert das Repo an
+/// anderer Stelle bereits (`tb-raid/src/signal_correlation.rs`,
+/// `plan_raid_arrival` vs. `plan_chat_notification`). Der Bus loest es nicht
+/// ueber Fachlogik, sondern ueber den Schluessel: Zielkanal und Art stecken
+/// schon im Dedupe-Schluessel, das Kennzeichen liefert die Quell-ID. Beide
+/// Wege ergeben damit denselben Schluessel, und der Teilindex
+/// `obs_dock_events_dedupe_key_idx` laesst genau eine Zeile entstehen.
+///
+/// Preis der Entscheidung: raidet dieselbe Quelle denselben Kanal binnen der
+/// Aufbewahrungszeit ein zweites Mal, sieht das Dock nur den ersten Raid. Das
+/// ist gewollt; eine Wiederholung innerhalb weniger Minuten ist bei Twitch
+/// praktisch immer eine Doppelmeldung und kein zweiter Raid.
+fn raid_kennzeichen(from_id: &str) -> &str {
+    from_id
+}
+
+/// Kennzeichen eines Geschenk-Abos.
+///
+/// Ein Community-Geschenk meldet Twitch doppelt: einmal als
+/// `community_sub_gift` mit `total` und einer `id`, und zusaetzlich je
+/// Empfaenger als `sub_gift`, dessen `community_gift_id` genau diese `id`
+/// traegt (EventSub-Referenz zu `channel.chat.notification`). Beide Meldungen
+/// bekommen deshalb dasselbe Kennzeichen und laufen im Teilindex zusammen: die
+/// erste gewinnt, die weiteren fallen weg. Ohne das Feld (Einzelgeschenk oder
+/// aeltere Nutzlast) bleibt es beim Message-Kennzeichen und damit beim
+/// bisherigen Verhalten.
+///
+/// **Ungeprueft** bleibt, ob Twitch die Sammelmeldung wirklich immer und immer
+/// zuerst schickt; das ist nur an einer echten Live-Nutzlast zu messen. Kommt
+/// sie nicht, schreibt das erste Einzelgeschenk eine Zeile mit `count: 1`. Das
+/// zaehlt zu niedrig, ist aber sichtbar und nicht mehr eine Zeile je
+/// Empfaenger.
+fn gift_kennzeichen(gift: &Value, ruecktritt: &str) -> String {
+    str_field(gift, &["community_gift_id", "id"]).unwrap_or_else(|| ruecktritt.to_string())
+}
+
 /// Uebersetzt ein `channel.chat.message`-Event.
 ///
 /// `sent_at` kommt vom Aufrufer: die EventSub-Nutzlast von
@@ -415,10 +506,17 @@ fn fragment_lesen(roh: &Value) -> Option<Fragment> {
         .and_then(Value::as_str)
         .unwrap_or("text")
         .trim();
+    // Fehlt das Unterobjekt oder seine Pflichtangabe, bleibt der sichtbare Text
+    // als schlichtes Textfragment stehen. Ein `None` waere hier der teurere
+    // Fehler: `filter_map` im Aufrufer wuerde das Fragment ganz wegwerfen und
+    // die Nachricht erschiene im Dock verstuemmelt. Verloren geht so nur die
+    // Auszeichnung, nicht der Text.
     match art {
         "emote" => {
-            let emote = roh.get("emote")?;
-            let emote_id = str_field(emote, &["id"])?;
+            let Some(emote_id) = roh.get("emote").and_then(|emote| str_field(emote, &["id"]))
+            else {
+                return Some(Fragment::text(text));
+            };
             Some(Fragment::Emote {
                 url_template: TWITCH_EMOTE_URL_TEMPLATE.replace("{id}", &emote_id),
                 text,
@@ -426,9 +524,16 @@ fn fragment_lesen(roh: &Value) -> Option<Fragment> {
             })
         }
         "mention" => {
-            let mention = roh.get("mention")?;
-            let user_id = str_field(mention, &["user_id"])?;
-            let user_login = str_field(mention, &["user_login"]).unwrap_or_else(|| user_id.clone());
+            let Some(user_id) = roh
+                .get("mention")
+                .and_then(|mention| str_field(mention, &["user_id"]))
+            else {
+                return Some(Fragment::text(text));
+            };
+            let user_login = roh
+                .get("mention")
+                .and_then(|mention| str_field(mention, &["user_login"]))
+                .unwrap_or_else(|| user_id.clone());
             Some(Fragment::Mention {
                 text,
                 user_id,
@@ -436,8 +541,12 @@ fn fragment_lesen(roh: &Value) -> Option<Fragment> {
             })
         }
         "cheermote" => {
-            let cheermote = roh.get("cheermote")?;
-            let prefix = str_field(cheermote, &["prefix"])?;
+            let Some(cheermote) = roh.get("cheermote") else {
+                return Some(Fragment::text(text));
+            };
+            let Some(prefix) = str_field(cheermote, &["prefix"]) else {
+                return Some(Fragment::text(text));
+            };
             let bits = u32_field(cheermote, &["bits"]).unwrap_or(0) as u64;
             let tier = u32_field(cheermote, &["tier"]).unwrap_or(1);
             Some(Fragment::Cheermote {
@@ -482,13 +591,13 @@ pub fn chat_subscription_zu_event(
     let kennzeichen = kennzeichen(message_id, jetzt);
     let actor = chatter_actor(event);
 
-    let bauen = |art: &str| -> ActivityMeta {
+    let bauen = |art: &str, kennzeichen: &str| -> ActivityMeta {
         let meta = ActivityMeta::derived(
             Platform::Twitch,
             channel_id.clone(),
             jetzt,
             art,
-            &kennzeichen,
+            kennzeichen,
         );
         match actor.clone() {
             Some(actor) => meta.with_actor(actor),
@@ -500,7 +609,7 @@ pub fn chat_subscription_zu_event(
         ChatNotificationKind::Sub => {
             let sub = event.get("sub")?;
             ActivityEvent::Subscribe {
-                meta: bauen("subscribe"),
+                meta: bauen("subscribe", &kennzeichen),
                 tier: tier_of(sub),
                 is_gift: false,
             }
@@ -508,7 +617,7 @@ pub fn chat_subscription_zu_event(
         ChatNotificationKind::Resub => {
             let resub = event.get("resub")?;
             ActivityEvent::Resub {
-                meta: bauen("resub"),
+                meta: bauen("resub", &kennzeichen),
                 months: u32_field(resub, &["cumulative_months"]).unwrap_or(1),
                 streak: u32_field(resub, &["streak_months"]),
                 message: notification_text(event),
@@ -517,7 +626,7 @@ pub fn chat_subscription_zu_event(
         ChatNotificationKind::SubGift => {
             let gift = event.get("sub_gift")?;
             ActivityEvent::SubGift {
-                meta: bauen("sub_gift"),
+                meta: bauen("sub_gift", &gift_kennzeichen(gift, &kennzeichen)),
                 count: 1,
                 tier: tier_of(gift),
             }
@@ -525,7 +634,7 @@ pub fn chat_subscription_zu_event(
         ChatNotificationKind::CommunitySubGift => {
             let gift = event.get("community_sub_gift")?;
             ActivityEvent::SubGift {
-                meta: bauen("sub_gift"),
+                meta: bauen("sub_gift", &gift_kennzeichen(gift, &kennzeichen)),
                 count: u32_field(gift, &["total"]).unwrap_or(1),
                 tier: tier_of(gift),
             }
@@ -537,9 +646,12 @@ pub fn chat_subscription_zu_event(
 }
 
 /// Uebersetzt eine `channel.chat.notification` mit `notice_type=raid`.
+///
+/// Schreibt bewusst dieselbe Bus-Zeile wie [`channel_raid_zu_event`]; siehe
+/// [`raid_kennzeichen`] fuer die Begruendung.
 pub fn chat_raid_zu_event(
     event: &Value,
-    message_id: Option<&str>,
+    _message_id: Option<&str>,
     jetzt: DateTime<Utc>,
 ) -> Option<PlatformEvent> {
     let channel_id = str_field(event, &["broadcaster_user_id"])?;
@@ -552,9 +664,13 @@ pub fn chat_raid_zu_event(
         channel_id,
         jetzt,
         "raid",
-        &kennzeichen(message_id, jetzt),
+        raid_kennzeichen(&from_id),
     )
-    .with_actor(Actor::new(from_id, from_login.clone(), from_display));
+    .with_actor(Actor::new(
+        from_id.clone(),
+        from_login.clone(),
+        from_display,
+    ));
     Some(PlatformEvent::Activity(ActivityEvent::Raid {
         meta,
         from: from_login,
@@ -564,11 +680,21 @@ pub fn chat_raid_zu_event(
 
 /// Uebersetzt ein `channel.raid`-Event.
 ///
-/// Nur der eingehende Raid ist ein Dock-Ereignis. Ein ausgehender Raid gehoert
-/// dem Zielkanal, nicht uns; er wuerde sonst im falschen Dock auftauchen.
+/// Eine Richtungspruefung braucht es hier nicht, und frueher stand an dieser
+/// Stelle eine Zusage ohne Deckung. Der Grund: die Zuordnung ergibt sich aus
+/// dem Feld selbst. `channel.raid` wird ausschliesslich mit der Condition
+/// `to_broadcaster_user_id` abonniert (`tb-monitoring/src/subscriptions.rs`,
+/// `ensure_raid_subscription`), das Ereignis ist also immer an den Zielkanal
+/// adressiert. Genau dieser Kanal wird unten als `channel_id` gesetzt, damit
+/// landet die Zeile im Dock des Geraidten. Raidet ein Partner einen anderen
+/// Partner, ist das fuer den einen ein ausgehender und fuer den anderen ein
+/// eingehender Raid, und die Zeile gehoert dem Empfaenger.
+///
+/// Schreibt dieselbe Bus-Zeile wie [`chat_raid_zu_event`]; siehe
+/// [`raid_kennzeichen`].
 pub fn channel_raid_zu_event(
     event: &Value,
-    message_id: Option<&str>,
+    _message_id: Option<&str>,
     jetzt: DateTime<Utc>,
 ) -> Option<PlatformEvent> {
     let channel_id = str_field(event, &["to_broadcaster_user_id"])?;
@@ -582,9 +708,13 @@ pub fn channel_raid_zu_event(
         channel_id,
         jetzt,
         "raid",
-        &kennzeichen(message_id, jetzt),
+        raid_kennzeichen(&from_id),
     )
-    .with_actor(Actor::new(from_id, from_login.clone(), from_display));
+    .with_actor(Actor::new(
+        from_id.clone(),
+        from_login.clone(),
+        from_display,
+    ));
     Some(PlatformEvent::Activity(ActivityEvent::Raid {
         meta,
         from: from_login,
@@ -659,13 +789,20 @@ impl ObsDockHooks {
         let Some(ereignis) = ereignis else {
             return;
         };
-        if let Err(error) = self.sink.write(&ereignis).await {
-            tracing::warn!(
+        match tokio::time::timeout(SCHREIB_TIMEOUT, self.sink.write(&ereignis)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::warn!(
                 %error,
                 typ = ereignis.typ(),
                 channel_id = ereignis.channel_id(),
                 "obs_docks: Ereignis nicht in den Bus geschrieben"
-            );
+            ),
+            Err(_) => tracing::warn!(
+                typ = ereignis.typ(),
+                channel_id = ereignis.channel_id(),
+                zeitlimit_s = SCHREIB_TIMEOUT.as_secs(),
+                "obs_docks: Schreibversuch abgebrochen, der innere Hook laeuft weiter"
+            ),
         }
     }
 }
@@ -796,12 +933,12 @@ mod tests {
 
     #[async_trait]
     impl ObsDockSink for MerkendeSink {
-        async fn write(&self, event: &PlatformEvent) -> Result<i64, ObsDockError> {
+        async fn write(&self, event: &PlatformEvent) -> Result<Option<i64>, ObsDockError> {
             self.geschrieben.lock().unwrap().push(event.clone());
             if self.faellt_aus {
                 return Err(ObsDockError::Db(sqlx::Error::PoolClosed));
             }
-            Ok(self.geschrieben.lock().unwrap().len() as i64)
+            Ok(Some(self.geschrieben.lock().unwrap().len() as i64))
         }
     }
 
@@ -1061,7 +1198,10 @@ mod tests {
         assert_eq!(payload["from"], "raider");
         assert_eq!(payload["viewers"], 42);
         assert_eq!(payload["actor"]["login"], "raider");
-        assert_eq!(payload["dedupe_key"], "twitch:12345:raid:m-9");
+        assert_eq!(
+            payload["dedupe_key"], "twitch:12345:raid:999",
+            "Kennzeichen ist die Quell-ID, nicht die Message-ID"
+        );
     }
 
     #[test]
@@ -1194,30 +1334,216 @@ mod tests {
         assert_eq!(gelesen, ObsDocksConfig { enabled: false });
     }
 
+    /// `channel.raid`-Nutzlast eines eingehenden Raids.
+    fn channel_raid_nutzlast() -> Value {
+        json!({
+            "from_broadcaster_user_id": "999",
+            "from_broadcaster_user_login": "raider",
+            "from_broadcaster_user_name": "Raider",
+            "to_broadcaster_user_id": "12345",
+            "to_broadcaster_user_login": "earlysalty",
+            "viewers": 42
+        })
+    }
+
+    /// Die `channel.chat.notification` DESSELBEN Arrivals, andere Message-ID.
+    fn chat_raid_nutzlast() -> Value {
+        json!({
+            "broadcaster_user_id": "12345",
+            "broadcaster_user_login": "earlysalty",
+            "chatter_user_id": "999",
+            "chatter_user_login": "raider",
+            "notice_type": "raid",
+            "raid": {
+                "user_id": "999",
+                "user_login": "raider",
+                "user_name": "Raider",
+                "viewer_count": 42
+            }
+        })
+    }
+
+    fn community_gift_nutzlast() -> Value {
+        json!({
+            "broadcaster_user_id": "12345",
+            "chatter_user_id": "777",
+            "chatter_user_login": "spender",
+            "notice_type": "community_sub_gift",
+            "community_sub_gift": { "id": "gift-77", "total": 3, "sub_tier": "1000" }
+        })
+    }
+
+    fn einzel_gift_nutzlast(empfaenger: &str, community_gift_id: Option<&str>) -> Value {
+        json!({
+            "broadcaster_user_id": "12345",
+            "chatter_user_id": "777",
+            "chatter_user_login": "spender",
+            "notice_type": "sub_gift",
+            "sub_gift": {
+                "duration_months": 1,
+                "recipient_user_id": empfaenger,
+                "recipient_user_login": empfaenger,
+                "sub_tier": "1000",
+                "community_gift_id": community_gift_id
+            }
+        })
+    }
+
+    /// Befund 1: beide Twitch-Signale eines Arrivals bilden denselben
+    /// Dedupe-Schluessel, obwohl ihre Message-IDs verschieden sind.
+    #[test]
+    fn beide_raid_signale_ergeben_denselben_schluessel() {
+        let ueber_channel_raid =
+            channel_raid_zu_event(&channel_raid_nutzlast(), Some("msg-a"), zeitpunkt()).unwrap();
+        let ueber_notification =
+            chat_raid_zu_event(&chat_raid_nutzlast(), Some("msg-b"), zeitpunkt()).unwrap();
+
+        assert_eq!(
+            ueber_channel_raid.dedupe_key(),
+            ueber_notification.dedupe_key(),
+            "zwei Signale, ein Arrival, ein Schluessel"
+        );
+        assert_eq!(
+            ueber_channel_raid.dedupe_key().as_deref(),
+            Some("twitch:12345:raid:999")
+        );
+    }
+
+    /// Befund 3: Sammelmeldung und Einzelgeschenk teilen den Schluessel.
+    #[test]
+    fn community_gift_und_einzelgeschenk_teilen_den_schluessel() {
+        let sammel = chat_subscription_zu_event(
+            ChatNotificationKind::CommunitySubGift,
+            &community_gift_nutzlast(),
+            Some("msg-a"),
+            zeitpunkt(),
+        )
+        .unwrap();
+        let einzel = chat_subscription_zu_event(
+            ChatNotificationKind::SubGift,
+            &einzel_gift_nutzlast("e1", Some("gift-77")),
+            Some("msg-b"),
+            zeitpunkt(),
+        )
+        .unwrap();
+        assert_eq!(sammel.dedupe_key(), einzel.dedupe_key());
+        assert_eq!(
+            sammel.dedupe_key().as_deref(),
+            Some("twitch:12345:sub_gift:gift-77")
+        );
+
+        // Ohne Sammelbezug bleibt es beim Message-Kennzeichen.
+        let allein = chat_subscription_zu_event(
+            ChatNotificationKind::SubGift,
+            &einzel_gift_nutzlast("e9", None),
+            Some("msg-c"),
+            zeitpunkt(),
+        )
+        .unwrap();
+        assert_eq!(
+            allein.dedupe_key().as_deref(),
+            Some("twitch:12345:sub_gift:msg-c")
+        );
+    }
+
+    /// Befund 7: ein Fragment ohne Unterobjekt verliert die Auszeichnung, aber
+    /// nicht den sichtbaren Text.
+    #[test]
+    fn fragment_ohne_unterobjekt_behaelt_seinen_text() {
+        let event = json!({
+            "broadcaster_user_id": "12345",
+            "broadcaster_user_login": "earlysalty",
+            "chatter_user_id": "777",
+            "chatter_user_login": "zuschauer",
+            "message_id": "abc-3",
+            "message": {
+                "text": "hi @wer Kappa cheer100",
+                "fragments": [
+                    { "type": "text", "text": "hi " },
+                    { "type": "mention", "text": "@wer" },
+                    { "type": "text", "text": " " },
+                    { "type": "emote", "text": "Kappa" },
+                    { "type": "text", "text": " " },
+                    { "type": "cheermote", "text": "cheer100" }
+                ]
+            }
+        });
+        let ereignis = chat_message_zu_event(&event, zeitpunkt()).unwrap();
+        let payload = serde_json::to_value(&ereignis).unwrap();
+        let fragmente = payload["fragments"].as_array().unwrap();
+        assert_eq!(fragmente.len(), 6, "kein Fragment darf verschwinden");
+        let text: String = fragmente
+            .iter()
+            .map(|fragment| fragment["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, "hi @wer Kappa cheer100");
+        assert_eq!(fragmente[1]["art"], "text");
+        assert_eq!(fragmente[3]["art"], "text");
+        assert_eq!(fragmente[5]["art"], "text");
+    }
+
     // -----------------------------------------------------------------------
     // Datenbankgestuetzt: laeuft nur mit TB_TEST_DATABASE_URL, sonst SKIP.
-    // Beweist das SQL selbst (Migration, genau eine Zeile, NOTIFY, Retention).
+    // Beweist das SQL selbst: Migration, genau eine Zeile, das NOTIFY (per
+    // LISTEN wirklich abgeholt), das Zusammenlegen zweier Signale zu einem
+    // Vorkommnis und die Retention.
+    //
+    // Jeder Test bekommt ein eigenes Schema (Muster aus
+    // `tb-monitoring/src/poller/hooks.rs`, `pool_in_schema`) und raeumt es am
+    // Ende wieder ab. Das schemafreie DDL der Migration ist genau dafuer da;
+    // ein `DROP TABLE` im Default-Schema der DSN wuerde dagegen eine echte
+    // Tabelle treffen, wenn jemand die DSN der Produktion einsetzt.
     // -----------------------------------------------------------------------
 
     /// DDL genau aus der Migration, damit Test und Produktion nicht auseinander
     /// laufen koennen.
     const MIGRATION: &str = include_str!("../../../migrations/20260824090000_obs_dock_events.sql");
 
-    async fn test_pool() -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
+    /// Legt ein frisches Schema an, spielt die Migration hinein und liefert
+    /// einen Pool, dessen `search_path` darauf zeigt.
+    async fn test_pool(schema: &str) -> Option<(PgPool, String)> {
+        use std::str::FromStr;
+
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return None;
+        };
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
             .connect(&dsn)
             .await
             .expect("Verbindung zur Test-Datenbank");
-        sqlx::query("DROP TABLE IF EXISTS obs_dock_events")
-            .execute(&pool)
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+
+        let opts = sqlx::postgres::PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
             .await
             .unwrap();
         for anweisung in migration_anweisungen(MIGRATION) {
             sqlx::query(&anweisung).execute(&pool).await.unwrap();
         }
-        Some(pool)
+        Some((pool, dsn))
+    }
+
+    /// Raeumt das Testschema wieder ab.
+    async fn schema_abraeumen(pool: PgPool, schema: &str) {
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     /// Zerlegt die Migration in ausfuehrbare Anweisungen.
@@ -1248,22 +1574,30 @@ mod tests {
         let anweisungen = migration_anweisungen(MIGRATION);
         assert_eq!(
             anweisungen.len(),
-            5,
-            "Tabelle, Index und drei COMMENT-Anweisungen: {anweisungen:#?}"
+            7,
+            "Tabelle, zwei Indizes und vier COMMENT-Anweisungen: {anweisungen:#?}"
         );
         assert!(anweisungen[0].starts_with("CREATE TABLE IF NOT EXISTS obs_dock_events"));
         assert!(anweisungen[1].contains("obs_dock_events_channel_id_id_idx"));
+        assert!(anweisungen[2].contains("obs_dock_events_dedupe_key_idx"));
+        assert!(anweisungen[2].contains("UNIQUE"));
     }
 
     #[tokio::test]
-    async fn db_schreibpfad_legt_genau_eine_zeile_an() {
-        let Some(pool) = test_pool().await else {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+    async fn db_schreibpfad_legt_genau_eine_zeile_an_und_meldet_sie() {
+        let Some((pool, dsn)) = test_pool("obs_dock_schreibpfad").await else {
             return;
         };
+
+        // Erst lauschen, dann schreiben: sonst waere das NOTIFY schon durch,
+        // bevor der Listener haengt, und der Test wuerde das Fehlen einer
+        // Benachrichtigung nicht von einem Wettlauf unterscheiden koennen.
+        let mut listener = sqlx::postgres::PgListener::connect(&dsn).await.unwrap();
+        listener.listen(NOTIFY_KANAL).await.unwrap();
+
         let sink = PgObsDockSink::new(pool.clone());
         let ereignis = chat_message_zu_event(&chat_nutzlast(), zeitpunkt()).unwrap();
-        let id = sink.write(&ereignis).await.unwrap();
+        let id = sink.write(&ereignis).await.unwrap().expect("erste Zeile");
 
         let (anzahl,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM obs_dock_events WHERE channel_id = $1")
@@ -1281,10 +1615,138 @@ mod tests {
                 .unwrap();
         assert_eq!(payload["typ"], "chat");
 
+        // NOTIFY wirklich abholen. Der Kanal ist datenbankweit, deshalb wird
+        // auf die eigene Lauf-ID gewartet und alles Fremde uebersprungen.
+        let gemeldet = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let notification = listener.recv().await.unwrap();
+                let nutzlast: Value = serde_json::from_str(notification.payload()).unwrap();
+                if nutzlast["id"].as_i64() == Some(id) {
+                    return nutzlast;
+                }
+            }
+        })
+        .await
+        .expect("NOTIFY auf obs_dock kam nicht an");
+        assert_eq!(gemeldet["channel_id"], "12345");
+        assert_eq!(gemeldet["id"], id);
+
         let geloescht =
             cleanup_obs_dock_events_before(&pool, Utc::now() + chrono::Duration::minutes(1))
                 .await
                 .unwrap();
         assert_eq!(geloescht, 1);
+
+        schema_abraeumen(pool, "obs_dock_schreibpfad").await;
+    }
+
+    /// Befund 1, Beweis in der Datenbank: `channel.raid` und die
+    /// `channel.chat.notification` desselben Arrivals kommen mit zwei
+    /// verschiedenen EventSub-Message-IDs an und ergeben trotzdem genau eine
+    /// Zeile.
+    #[tokio::test]
+    async fn db_zwei_signale_fuer_einen_raid_ergeben_eine_zeile() {
+        let Some((pool, _dsn)) = test_pool("obs_dock_raid_merge").await else {
+            return;
+        };
+        let sink = PgObsDockSink::new(pool.clone());
+
+        let erste = sink
+            .write(
+                &channel_raid_zu_event(&channel_raid_nutzlast(), Some("msg-a"), zeitpunkt())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let zweite = sink
+            .write(&chat_raid_zu_event(&chat_raid_nutzlast(), Some("msg-b"), zeitpunkt()).unwrap())
+            .await
+            .unwrap();
+
+        assert!(erste.is_some(), "das erste Signal legt die Zeile an");
+        assert_eq!(
+            zweite, None,
+            "das zweite Signal desselben Arrivals bekommt keine eigene Zeile"
+        );
+
+        let (anzahl,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM obs_dock_events WHERE channel_id = $1")
+                .bind("12345")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(anzahl, 1, "ein Arrival, eine Bus-Zeile");
+
+        // Gegenprobe: ein Raid einer anderen Quelle ist ein eigenes Vorkommnis.
+        let mut andere = channel_raid_nutzlast();
+        andere["from_broadcaster_user_id"] = json!("888");
+        andere["from_broadcaster_user_login"] = json!("zweiter");
+        assert!(sink
+            .write(&channel_raid_zu_event(&andere, Some("msg-c"), zeitpunkt()).unwrap())
+            .await
+            .unwrap()
+            .is_some());
+        let (anzahl,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM obs_dock_events WHERE channel_id = $1")
+                .bind("12345")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(anzahl, 2);
+
+        schema_abraeumen(pool, "obs_dock_raid_merge").await;
+    }
+
+    /// Befund 3, Beweis in der Datenbank: Sammelmeldung und Einzelgeschenke
+    /// eines Community-Gifts teilen sich `community_gift_id` und damit die
+    /// Zeile.
+    #[tokio::test]
+    async fn db_community_gift_und_einzelgeschenke_ergeben_eine_zeile() {
+        let Some((pool, _dsn)) = test_pool("obs_dock_gift_merge").await else {
+            return;
+        };
+        let sink = PgObsDockSink::new(pool.clone());
+
+        let sammel = chat_subscription_zu_event(
+            ChatNotificationKind::CommunitySubGift,
+            &community_gift_nutzlast(),
+            Some("msg-a"),
+            zeitpunkt(),
+        )
+        .unwrap();
+        assert!(sink.write(&sammel).await.unwrap().is_some());
+
+        for (nummer, empfaenger) in ["e1", "e2", "e3"].iter().enumerate() {
+            let einzel = chat_subscription_zu_event(
+                ChatNotificationKind::SubGift,
+                &einzel_gift_nutzlast(empfaenger, Some("gift-77")),
+                Some(&format!("msg-{nummer}")),
+                zeitpunkt(),
+            )
+            .unwrap();
+            assert_eq!(
+                sink.write(&einzel).await.unwrap(),
+                None,
+                "Einzelgeschenk {empfaenger} gehoert zur schon gemeldeten Sammelmeldung"
+            );
+        }
+
+        let (anzahl,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM obs_dock_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(anzahl, 1, "ein Community-Gift, eine Bus-Zeile");
+
+        // Ein Einzelgeschenk ohne Sammelbezug bleibt ein eigenes Vorkommnis.
+        let allein = chat_subscription_zu_event(
+            ChatNotificationKind::SubGift,
+            &einzel_gift_nutzlast("e9", None),
+            Some("msg-allein"),
+            zeitpunkt(),
+        )
+        .unwrap();
+        assert!(sink.write(&allein).await.unwrap().is_some());
+
+        schema_abraeumen(pool, "obs_dock_gift_merge").await;
     }
 }

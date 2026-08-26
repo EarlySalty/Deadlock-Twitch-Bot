@@ -10,10 +10,11 @@
 --
 -- Die Tabelle ist kein Archiv, sondern ein kurzer Nachlaufpuffer: ein Dock, das
 -- nach einem OBS-Neustart neu verbindet, will die letzten Minuten sehen und
--- sonst nichts. Die Aufbewahrung liegt bei 15 Minuten und wird vom Bot
--- regelmaessig weggeraeumt (`cleanup_obs_dock_events`, bin/tb-bot/src/obs_dock.rs).
--- Wer laengere Zeitreihen braucht, nimmt die vorhandenen Telemetrie-Tabellen,
--- nicht diese hier.
+-- sonst nichts. Aufbewahrt wird alles, was juenger als 15 Minuten ist; der Bot
+-- raeumt im Abstand von 5 Minuten auf (`cleanup_obs_dock_events`,
+-- bin/tb-bot/src/obs_dock.rs), eine Zeile kann also im schlechtesten Fall bis
+-- zu 20 Minuten liegen bleiben. Wer laengere Zeitreihen braucht, nimmt die
+-- vorhandenen Telemetrie-Tabellen, nicht diese hier.
 --
 -- Bewusst ohne Schema-Praefix, damit derselbe Text in einem Testschema
 -- (`search_path`) ausgefuehrt werden kann und Test und Produktion garantiert
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS obs_dock_events (
     id BIGSERIAL PRIMARY KEY,
     channel_id TEXT NOT NULL,
     payload JSONB NOT NULL,
+    dedupe_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -29,9 +31,22 @@ CREATE TABLE IF NOT EXISTS obs_dock_events (
 CREATE INDEX IF NOT EXISTS obs_dock_events_channel_id_id_idx
     ON obs_dock_events (channel_id, id);
 
+-- Ein Vorkommnis, eine Zeile. Twitch meldet dasselbe Vorkommnis teilweise ueber
+-- zwei Wege (ein eingehender Raid kommt als `channel.raid` UND als
+-- `channel.chat.notification` mit notice_type=raid), und beide Wege haben
+-- Luecken, also darf keiner der beiden wegfallen. Zusammengelegt werden sie
+-- hier: der Schreiber bildet einen vorkommnis-stabilen Schluessel und laesst
+-- die zweite Meldung an diesem Index auflaufen (ON CONFLICT DO NOTHING).
+-- Teilindex, weil `PlatformEvent::Info` bewusst keinen Schluessel hat.
+CREATE UNIQUE INDEX IF NOT EXISTS obs_dock_events_dedupe_key_idx
+    ON obs_dock_events (dedupe_key)
+    WHERE dedupe_key IS NOT NULL;
+
 COMMENT ON TABLE obs_dock_events IS
-    'Kurzer Nachlaufpuffer des OBS-Dock-Busses (Aufbewahrung 15 Minuten). Schreiber: tb-bot, Leser: tb-dashboard-api ueber LISTEN obs_dock.';
+    'Kurzer Nachlaufpuffer des OBS-Dock-Busses (Aufbewahrung 15 Minuten, Aufraeumtakt 5 Minuten, im schlechtesten Fall also bis zu 20 Minuten). Schreiber: tb-bot, Leser: tb-dashboard-api ueber LISTEN obs_dock.';
 COMMENT ON COLUMN obs_dock_events.channel_id IS
     'Kanal, an den das Ereignis gehoert, bei Twitch die numerische Broadcaster-ID. Der Leser bindet daran seine Berechtigungspruefung.';
 COMMENT ON COLUMN obs_dock_events.payload IS
     'Ein PlatformEvent (tb-platform-core) als JSON, intern getaggt mit dem Feld "typ". Das ist zugleich das WebSocket-Drahtformat und eingefroren.';
+COMMENT ON COLUMN obs_dock_events.dedupe_key IS
+    'Vorkommnis-stabiler Schluessel aus dem Ereignis selbst (PlatformEvent::dedupe_key). Eindeutig ueber den Teilindex, damit zwei Twitch-Signale fuer dasselbe Vorkommnis genau eine Zeile ergeben. NULL nur bei Ereignissen ohne Schluessel.';
