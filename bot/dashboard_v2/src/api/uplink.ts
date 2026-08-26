@@ -171,12 +171,14 @@ export const TRENNEN_HINWEIS =
  * vorher nicht weiß, wofür sie da sind, klickt entweder blind zu oder gar
  * nicht.
  *
- * Bewusst ohne Zahl: der Dialog zeigt den vollen Satz inklusive der Rechte,
- * die der Bot ohnehin schon hat, und eine genannte Zahl wäre dort immer die
- * falsche. Genannt wird, was neu dazukommt.
+ * Bewusst ohne Zahl: der Dialog zeigt den vollen Satz, und der ist je nach
+ * bisherigem Grant unterschiedlich lang. Eine genannte Zahl wäre dort für
+ * einen Teil der Streamer immer die falsche. Genannt wird nur, was neu
+ * dazukommt; der Rest wird als das benannt, was er ist, ohne zu behaupten,
+ * jeder habe ihn schon.
  */
 export const VERBINDEN_HINWEIS =
-  'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Der Rest steht schon für den Bot dort.';
+  'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Die übrigen Punkte in der Liste gehören zum Bot und zum Dashboard.';
 
 /** Eine Zeile je Plattform fuer den Kopf der Plattform-Karte. */
 export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {
