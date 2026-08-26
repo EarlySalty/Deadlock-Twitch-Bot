@@ -14,6 +14,7 @@ import {
   trenneUplinkPlattform,
   TRENNEN_HINWEIS,
   VERBINDEN_HINWEIS,
+  VERBINDEN_KURZ,
   uplinkConnectUrl,
 } from '@/api/uplink';
 import type {
@@ -105,6 +106,58 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
  * ein Klick, der einen Zugang zurueckgibt, gehoert nicht in eine
  * Browser-Navigation. Der Hinweis darunter sagt, was noch daran haengt.
  */
+/**
+ * Holt den Stream-Key nach und legt ihn als Uplink-Ziel ab.
+ *
+ * Zwei Stellen brauchen denselben Klick: der Kopf der Karte, wenn verbunden
+ * ist und trotzdem kein Ziel liegt, und der Feldbereich, wenn alles steht und
+ * der Streamer seinen Schluessel bei Twitch neu erzeugt hat. Eine Komponente
+ * statt zweier Kopien, damit die Rueckmeldung an beiden Orten dieselbe ist.
+ */
+function StreamKeyKnopf({
+  platform,
+  csrfToken,
+  beschriftung,
+  klasse,
+}: {
+  platform: UplinkPlattform;
+  csrfToken: string | null;
+  beschriftung: string;
+  klasse: string;
+}) {
+  const queryClient = useQueryClient();
+  const holen = useMutation({
+    mutationFn: () => holeUplinkStreamKey(platform, csrfToken ?? ''),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+    },
+  });
+  return (
+    <>
+      <button
+        type="button"
+        disabled={holen.isPending}
+        onClick={(e) => {
+          e.preventDefault();
+          holen.mutate();
+        }}
+        className={klasse}
+      >
+        {holen.isPending ? 'Wird geholt' : beschriftung}
+      </button>
+      {holen.isError ? (
+        <span role="alert" className="text-[11px] text-warning">
+          Der Stream-Schlüssel kam gerade nicht durch. Bitte gleich noch einmal versuchen.
+        </span>
+      ) : null}
+      {holen.isSuccess ? (
+        <span className="text-[11px] text-success">Stream-Schlüssel ist im Uplink hinterlegt.</span>
+      ) : null}
+    </>
+  );
+}
+
 function PlattformVerbindung({
   chat,
   csrfToken,
@@ -118,13 +171,6 @@ function PlattformVerbindung({
     mutationFn: () => trenneUplinkPlattform(chat.id, csrfToken ?? ''),
     onSuccess: () => {
       setNachfrage(false);
-      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
-      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
-    },
-  });
-  const keyHolen = useMutation({
-    mutationFn: () => holeUplinkStreamKey(chat.id, csrfToken ?? ''),
-    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     },
@@ -152,17 +198,12 @@ function PlattformVerbindung({
           </a>
         ) : null}
         {keyFehlt ? (
-          <button
-            type="button"
-            disabled={keyHolen.isPending}
-            onClick={(e) => {
-              e.preventDefault();
-              keyHolen.mutate();
-            }}
-            className={knopfKlasse}
-          >
-            {keyHolen.isPending ? 'Wird geholt' : 'Stream-Key erneut holen'}
-          </button>
+          <StreamKeyKnopf
+            platform={chat.id}
+            csrfToken={csrfToken}
+            beschriftung="Stream-Schlüssel holen"
+            klasse={knopfKlasse}
+          />
         ) : null}
         {chat.trennenMoeglich ? (
           <button
@@ -177,24 +218,20 @@ function PlattformVerbindung({
           </button>
         ) : null}
       </span>
-      {chat.aktiv && chat.knopfText ? (
-        <span className="text-[11px] text-text-secondary">{VERBINDEN_HINWEIS}</span>
-      ) : null}
-      {keyFehlt ? (
-        <span className="text-[11px] text-text-secondary">
-          Dein Stream-Key liegt noch nicht im Uplink. Hol ihn hier oder trag ihn unten von Hand ein.
+      {/* Nur solange nichts verbunden ist: ein Satz, was der Klick bringt.
+          Wer verbunden ist, sieht hier nichts ausser den Knoepfen. Das Lange
+          steckt in der Hilfe daneben, und der Trennen-Hinweis erscheint erst
+          in der Rueckfrage, wo er auch etwas entscheidet. */}
+      {chat.status === 'getrennt' ? (
+        <span className="flex flex-wrap items-baseline gap-1.5 text-[11px] text-text-secondary">
+          <span>{VERBINDEN_KURZ}</span>
+          <details className="inline">
+            <summary className="cursor-pointer list-none text-primary underline decoration-dotted underline-offset-2">
+              Welche Rechte?
+            </summary>
+            <span className="mt-1 block max-w-prose">{VERBINDEN_HINWEIS}</span>
+          </details>
         </span>
-      ) : null}
-      {keyHolen.isError ? (
-        <span role="alert" className="text-[11px] text-warning">
-          Der Stream-Key kam gerade nicht durch. Bitte gleich noch einmal versuchen.
-        </span>
-      ) : null}
-      {keyHolen.isSuccess ? (
-        <span className="text-[11px] text-success">Stream-Key ist im Uplink hinterlegt.</span>
-      ) : null}
-      {chat.trennenMoeglich && !nachfrage ? (
-        <span className="text-[11px] text-text-secondary">{TRENNEN_HINWEIS}</span>
       ) : null}
       {nachfrage ? (
         <span className="flex flex-col gap-1 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2">
@@ -265,6 +302,11 @@ export function ZielKarte({
   const queryClient = useQueryClient();
   const basisId = useId();
   const eingerichtet = Boolean(ziel);
+  // Adresse und Schluessel kommen von der Plattform-Verbindung, nicht aus dem
+  // Formular. Beide Bedingungen zaehlen: ein Grant ohne hinterlegtes Ziel ist
+  // noch kein automatischer Weg, und ein Ziel ohne Grant ist ein Handeintrag,
+  // den niemand ueberschreiben darf.
+  const automatisch = chat?.status === 'verbunden' && chat.streamKeyVorhanden;
   const [offen, setOffen] = useUplinkDisclosure(`plattform-${platform}`, offenStart);
 
   const [rtmpUrl, setRtmpUrl] = useState(ziel?.rtmp_url || rtmpVorgabe);
@@ -522,47 +564,68 @@ export function ZielKarte({
         aria-label={`${label}-Einstellungen`}
         className="space-y-4 border-t border-border/60 px-4 py-4"
       >
-        <div className="space-y-1">
-          <label htmlFor={rtmpId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-            Serveradresse von {label}
-          </label>
-          <input
-            id={rtmpId}
-            value={rtmpUrl}
-            onChange={(e) => {
-              setRtmpUrl(e.target.value);
-              angefasst();
-            }}
-            placeholder={rtmpVorgabe || 'rtmp://…'}
-            className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
-          />
-          {eingerichtet && (
-            <p className="text-[11px] text-text-secondary">
-              Adresse ändern geht nur zusammen mit dem Stream-Schlüssel: wir prüfen beide gemeinsam.
-            </p>
-          )}
-        </div>
-        <div className="space-y-1">
-          <label htmlFor={keyId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-            Stream-Schlüssel von {label}
-          </label>
-          <input
-            id={keyId}
-            value={streamKey}
-            onChange={(e) => {
-              setStreamKey(e.target.value);
-              angefasst();
-            }}
-            type="password"
-            placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
-            className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
-          />
-          <p className="text-[11px] text-text-secondary">
-            {eingerichtet
-              ? 'Leer lassen, wenn du nur die Qualität ändern willst. Dein Schlüssel bleibt liegen.'
-              : 'Wird verschlüsselt gespeichert und nie wieder ausgegeben.'}
-          </p>
-        </div>
+        {/* Kommen Adresse und Schluessel von der Plattform-Verbindung, sind die
+            beiden Felder nur noch eine Fehlerquelle: was dort steht, wird beim
+            naechsten Nachlauf ohnehin ueberschrieben, und ein von Hand
+            eingetragener alter Schluessel sieht aus wie eine Aenderung, die
+            nichts bewirkt. Ohne Verbindung bleibt der Handweg unveraendert. */}
+        {automatisch ? (
+          <div data-zugang="automatisch" className="flex flex-wrap items-center gap-2">
+            <StreamKeyKnopf
+              platform={platform}
+              csrfToken={csrfToken ?? null}
+              beschriftung="Schlüssel erneut holen"
+              klasse="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
+            />
+            <span className="text-[11px] text-text-secondary">
+              Nötig nur, wenn du deinen Schlüssel bei {label} neu erzeugt hast.
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <label htmlFor={rtmpId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                Serveradresse von {label}
+              </label>
+              <input
+                id={rtmpId}
+                value={rtmpUrl}
+                onChange={(e) => {
+                  setRtmpUrl(e.target.value);
+                  angefasst();
+                }}
+                placeholder={rtmpVorgabe || 'rtmp://…'}
+                className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+              />
+              {eingerichtet && (
+                <p className="text-[11px] text-text-secondary">
+                  Adresse ändern geht nur zusammen mit dem Stream-Schlüssel: wir prüfen beide gemeinsam.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={keyId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                Stream-Schlüssel von {label}
+              </label>
+              <input
+                id={keyId}
+                value={streamKey}
+                onChange={(e) => {
+                  setStreamKey(e.target.value);
+                  angefasst();
+                }}
+                type="password"
+                placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
+                className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
+              />
+              <p className="text-[11px] text-text-secondary">
+                {eingerichtet
+                  ? 'Leer lassen, wenn du nur die Qualität ändern willst. Dein Schlüssel bleibt liegen.'
+                  : 'Wird verschlüsselt gespeichert und nie wieder ausgegeben.'}
+              </p>
+            </div>
+          </>
+        )}
 
         <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <div className="flex items-center justify-between gap-3">
@@ -720,7 +783,9 @@ export function ZielKarte({
                 Klemmung ohnehin gleich. `effective` bleibt nur fuer aeltere
                 Clients im JSON stehen. */}
             <span>
-              Schlüssel liegt verschlüsselt bei uns.
+              {automatisch
+                ? `Adresse und Stream-Schlüssel kommen von deiner ${label}-Verbindung.`
+                : 'Schlüssel liegt verschlüsselt bei uns.'}
               {bestellt ? (
                 <>
                   {' '}Wir senden {bestellt.width}x{bestellt.height} mit {bestellt.fps} Bildern und{' '}

@@ -177,6 +177,17 @@ export const TRENNEN_HINWEIS =
  * dazukommt; der Rest wird als das benannt, was er ist, ohne zu behaupten,
  * jeder habe ihn schon.
  */
+/**
+ * Der eine Satz, der neben dem Status steht, solange nichts verbunden ist.
+ *
+ * Drei Zeilen Erklaertext im Kartenkopf haben die Karte erschlagen: wer schon
+ * verbunden ist, liest sie jedes Mal mit und braucht sie nie. Das Lange steht
+ * jetzt in der aufklappbaren Hilfe daneben, dieser Satz sagt nur, was der
+ * Klick bringt.
+ */
+export const VERBINDEN_KURZ =
+  'Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt.';
+
 export const VERBINDEN_HINWEIS =
   'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Die übrigen Punkte in der Liste gehören zum Bot und zum Dashboard.';
 
@@ -189,15 +200,22 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
     // Verbinden holt jetzt alles auf einmal: Chat lesen und schreiben, den
     // Stream-Key und die Rechte fuer Aktivitaet und Kanalpunkte. Deshalb steht
     // in den Texten nicht mehr nur "Chat".
+    const streamKeyVorhanden = eintrag?.stream_key_vorhanden ?? false;
+    // Drei Stufen, nicht zwei. "Verbunden" heisst: der Grant traegt alle
+    // noetigen Rechte UND der Stream-Schluessel liegt im Uplink. Fehlt der
+    // Schluessel, ist der Zugang zwar da, aber es geht noch kein Bild raus,
+    // und ein blankes "Verbunden" waere genau die Falschaussage, die den
+    // Streamer am Sendetag suchen laesst.
     let statusText = 'Folgt später';
     let knopfText: string | null = null;
     if (aktiv) {
-      statusText =
-        status === 'verbunden'
-          ? 'Verbunden'
-          : status === 'neu_verbinden'
-            ? 'Neu verbinden nötig'
-            : 'Nicht verbunden';
+      if (status === 'verbunden') {
+        statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
+      } else if (status === 'neu_verbinden') {
+        statusText = 'Neu verbinden';
+      } else {
+        statusText = 'Nicht verbunden';
+      }
       knopfText =
         status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
     }
@@ -208,7 +226,7 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
       aktiv,
       statusText,
       knopfText,
-      streamKeyVorhanden: eintrag?.stream_key_vorhanden ?? false,
+      streamKeyVorhanden,
       trennenMoeglich: aktiv && status !== 'getrennt',
     };
   });

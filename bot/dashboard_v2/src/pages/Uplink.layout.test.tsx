@@ -127,6 +127,33 @@ test('verbinden_knopf_nennt_wofuer_die_rechte_gebraucht_werden', () => {
   assert.doesNotMatch(UPLINK_API, /nach (drei|vier|fünf|sechs|sieben) Rechten/);
 });
 
+test('verbundene_karte_zeigt_keine_zugangsfelder', () => {
+  // Kommen Adresse und Schluessel von der Verbindung, sind die beiden Felder
+  // nur noch eine Fehlerquelle: was dort steht, ueberschreibt der naechste
+  // Nachlauf ohnehin.
+  assert.match(ZIEL, /const automatisch = chat\?\.status === 'verbunden' && chat\.streamKeyVorhanden/);
+  assert.match(ZIEL, /\{automatisch \? \(/);
+  assert.match(ZIEL, /data-zugang="automatisch"/);
+  assert.match(ZIEL, /Schlüssel erneut holen/);
+  // Die Herkunft steht in der Statuszeile, nicht doppelt daneben.
+  assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \$\{label\}-Verbindung/);
+  // Und ohne Verbindung bleiben die Felder als Handweg stehen.
+  assert.match(ZIEL, /Serveradresse von \{label\}/);
+  assert.match(ZIEL, /Stream-Schlüssel von \{label\}/);
+});
+
+test('kartenkopf_bleibt_kurz_und_erklaert_nur_bei_getrennt', () => {
+  // Drei Zeilen Erklaertext ueber jeder Karte haben die Seite erschlagen.
+  // Der lange Text steckt jetzt in der aufklappbaren Hilfe.
+  assert.match(UPLINK_API, /VERBINDEN_KURZ/);
+  assert.match(UPLINK_API, /Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt\./);
+  assert.match(ZIEL, /chat\.status === 'getrennt' \? \(/);
+  assert.match(ZIEL, /Welche Rechte\?/);
+  // Der Trennen-Hinweis steht nur in der Rueckfrage, nicht als Dauertext.
+  assert.equal((ZIEL.match(/TRENNEN_HINWEIS/g) ?? []).length, 2);
+  assert.doesNotMatch(ZIEL, /trennenMoeglich && !nachfrage/);
+});
+
 test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
   // Trennen nimmt den ganzen Zugang zurueck. Ohne den Satz schaltet man
   // Leuten unbemerkt die automatischen Raids ab.

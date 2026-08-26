@@ -106,6 +106,17 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(zeilen[0].knopfText, 'Neu verbinden');
   assert.equal(zeilen[0].streamKeyVorhanden, true);
   assert.equal(zeilen[0].trennenMoeglich, true);
+
+  // Der Grant steht, aber im Uplink liegt kein Schluessel: es geht noch kein
+  // Bild raus. Ein blankes "Verbunden" waere hier die Falschaussage, die den
+  // Streamer am Sendetag suchen laesst.
+  const ohneKey = plattformVerbindungen({
+    ...BASIS,
+    verbindungen: [{ platform: 'twitch', status: 'verbunden', stream_key_vorhanden: false }],
+  });
+  assert.equal(ohneKey[0].statusText, 'Verbunden, Schlüssel fehlt');
+  assert.equal(ohneKey[0].streamKeyVorhanden, false);
+  assert.equal(ohneKey[0].trennenMoeglich, true);
   assert.ok(zeilen.slice(1).every((z) => !z.aktiv));
   assert.ok(zeilen.slice(1).every((z) => z.status === 'getrennt'));
   assert.ok(zeilen.slice(1).every((z) => z.statusText === 'Folgt später'));
@@ -116,7 +127,7 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
     ...BASIS,
     verbindungen: [{ platform: 'twitch', status: 'neu_verbinden' }],
   });
-  assert.equal(neu[0].statusText, 'Neu verbinden nötig');
+  assert.equal(neu[0].statusText, 'Neu verbinden');
   assert.equal(neu[0].knopfText, 'Neu verbinden');
   // Ein abgelaufener Zugang laesst sich trennen: die Tokens liegen noch da.
   assert.equal(neu[0].trennenMoeglich, true);
