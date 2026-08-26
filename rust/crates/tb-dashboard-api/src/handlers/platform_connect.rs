@@ -402,12 +402,29 @@ impl PlatformConnectionStore {
         streamer_id: i64,
         platform: &str,
     ) -> Result<Option<PlatformConnection>, StoreFehler> {
+        self.load_mit(&self.pool, streamer_id, platform, false)
+            .await
+    }
+
+    /// Wie [`Self::load`], auf einem Executor; mit `sperren` haelt die
+    /// umgebende Transaktion die Zeile per `FOR UPDATE`, bis sie endet.
+    async fn load_mit<'e, E>(
+        &self,
+        exec: E,
+        streamer_id: i64,
+        platform: &str,
+        sperren: bool,
+    ) -> Result<Option<PlatformConnection>, StoreFehler>
+    where
+        E: sqlx::PgExecutor<'e>,
+    {
+        let sperre = if sperren { " FOR UPDATE" } else { "" };
         let zeile: Option<Zeile> = sqlx::query_as(&format!(
-            "{SELECT_ZEILE} WHERE streamer_id = $1 AND platform = $2"
+            "{SELECT_ZEILE} WHERE streamer_id = $1 AND platform = $2{sperre}"
         ))
         .bind(streamer_id)
         .bind(platform)
-        .fetch_optional(&self.pool)
+        .fetch_optional(exec)
         .await?;
         zeile.map(|z| self.entschluesseln(z)).transpose()
     }
@@ -505,6 +522,13 @@ impl From<StoreFehler> for TokenFehler {
 /// (Twitch 400, Refresh-Token widerrufen oder verbraucht) setzt `needs_reauth`.
 /// Ein `invalid_client` ist unser Fehler, nicht der des Streamers, und wird
 /// nur gemeldet.
+///
+/// Der Refresh laeuft in einer kurzen Transaktion mit Zeilensperre: Twitch
+/// macht den Refresh-Token beim ersten Einloesen ungueltig. Zwei gleichzeitige
+/// Abrufe (zwei Relay-Adapter beim Session-Start) wuerden ihn sonst doppelt
+/// einloesen, und der Verlierer setzte die Verbindung faelschlich auf
+/// `needs_reauth`. Wer die Sperre erst nach dem anderen bekommt, sieht die
+/// frischen Tokens und tut nichts.
 pub async fn refresh_if_needed(
     store: &PlatformConnectionStore,
     client: &dyn PlatformOAuthClient,
@@ -512,6 +536,9 @@ pub async fn refresh_if_needed(
     platform: &str,
     jetzt: DateTime<Utc>,
 ) -> Result<PlatformConnection, TokenFehler> {
+    let frisch = |v: &PlatformConnection| v.expires_at - jetzt >= REFRESH_VORLAUF;
+
+    // Schneller Weg ohne Sperre: der Normalfall ist ein gueltiger Token.
     let verbindung = store
         .load(streamer_id, platform)
         .await?
@@ -519,10 +546,26 @@ pub async fn refresh_if_needed(
     if verbindung.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
-    if verbindung.expires_at - jetzt >= REFRESH_VORLAUF {
+    if frisch(&verbindung) {
         return Ok(verbindung);
     }
-    erneuern(store, &store.pool, client, verbindung, jetzt).await
+
+    let mut tx = store.pool.begin().await.map_err(StoreFehler::from)?;
+    let gesperrt = store
+        .load_mit(&mut *tx, streamer_id, platform, true)
+        .await?
+        .ok_or(TokenFehler::KeineVerbindung)?;
+    // Nach dem Sperren noch einmal hinsehen: ein anderer Aufruf kann die
+    // Zeile inzwischen erneuert oder auf needs_reauth gesetzt haben.
+    let ergebnis = if gesperrt.needs_reauth {
+        Err(TokenFehler::NeuVerbinden)
+    } else if frisch(&gesperrt) {
+        Ok(gesperrt)
+    } else {
+        erneuern(store, &mut *tx, client, gesperrt, jetzt).await
+    };
+    tx.commit().await.map_err(StoreFehler::from)?;
+    ergebnis
 }
 
 /// Der eigentliche Refresh. Schreibt ueber `exec`, damit der periodische
@@ -1014,6 +1057,9 @@ mod tests {
         owner_id: String,
         refresh_ergebnis: Mutex<Result<PlatformTokens, UserTokenError>>,
         refreshs: Mutex<Vec<String>>,
+        /// Kuenstliche Dauer des Refresh-Aufrufs, damit sich zwei parallele
+        /// Abrufe ueberlappen koennen.
+        refresh_dauer: Duration,
     }
 
     impl FakePlattform {
@@ -1022,7 +1068,12 @@ mod tests {
                 owner_id: owner_id.to_string(),
                 refresh_ergebnis: Mutex::new(Ok(tokens("acc-neu", "ref-neu", 14000))),
                 refreshs: Mutex::new(Vec::new()),
+                refresh_dauer: Duration::ZERO,
             }
+        }
+        fn mit_dauer(mut self, dauer: Duration) -> Self {
+            self.refresh_dauer = dauer;
+            self
         }
         fn mit_refresh(self, ergebnis: Result<PlatformTokens, UserTokenError>) -> Self {
             *self.refresh_ergebnis.lock().unwrap() = ergebnis;
@@ -1067,6 +1118,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(refresh_token.to_string());
+            if !self.refresh_dauer.is_zero() {
+                tokio::time::sleep(self.refresh_dauer).await;
+            }
             self.refresh_ergebnis.lock().unwrap().clone()
         }
     }
@@ -1423,6 +1477,41 @@ mod tests {
             store.status_liste(3).await.unwrap(),
             vec![("twitch".to_string(), "neu_verbinden")]
         );
+    }
+
+    /// Zwei Abrufe der internen Route zur selben Zeit (etwa zwei Relay-Adapter
+    /// beim Session-Start) duerfen den Refresh-Token nur einmal einloesen:
+    /// Twitch macht ihn beim ersten Refresh ungueltig, der zweite Einloeser
+    /// bekaeme invalid_grant und wuerde die Verbindung faelschlich auf
+    /// needs_reauth setzen.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paralleler_abruf_loest_den_refresh_nur_einmal_ein() {
+        let pool = pool_oder_ende!();
+        let store = Arc::new(PlatformConnectionStore::new(pool, cipher()));
+        let fake = Arc::new(FakePlattform::neu("40").mit_dauer(Duration::from_millis(300)));
+        let jetzt = zeit("2026-08-27T10:00:00Z");
+        verbindung_anlegen(&store, 40, 60, jetzt).await;
+
+        let lauf = |store: Arc<PlatformConnectionStore>, fake: Arc<FakePlattform>| {
+            tokio::spawn(async move {
+                refresh_if_needed(&store, fake.as_ref(), 40, "twitch", jetzt).await
+            })
+        };
+        let a = lauf(store.clone(), fake.clone());
+        let b = lauf(store.clone(), fake.clone());
+        let (ra, rb) = (a.await.unwrap(), b.await.unwrap());
+        assert!(ra.is_ok(), "{ra:?}");
+        assert!(rb.is_ok(), "{rb:?}");
+        assert_eq!(ra.unwrap().access_token, "acc-neu");
+        assert_eq!(rb.unwrap().access_token, "acc-neu");
+        assert_eq!(
+            fake.refresh_anzahl(),
+            1,
+            "Refresh-Token darf nur einmal eingeloest werden"
+        );
+        let geladen = store.load(40, "twitch").await.unwrap().unwrap();
+        assert_eq!(geladen.refresh_token, "ref-neu");
+        assert!(!geladen.needs_reauth);
     }
 
     #[tokio::test]
