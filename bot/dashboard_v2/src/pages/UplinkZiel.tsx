@@ -9,7 +9,6 @@ import {
   PROFIL_WERTE,
   UPLINK_PROFILE,
   profilNameFuer,
-  disconnectUplinkPlatform,
   saveUplinkDestination,
   uplinkConnectUrl,
 } from '@/api/uplink';
@@ -94,55 +93,26 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
  * Verbinden holt alles auf einmal, Chat und Stream-Key. Der Knopf ist ein
  * Link, keine fetch-Aktion: der Server leitet direkt zur Anmeldeseite der
  * Plattform weiter. Ein Link in der Summary folgt beim Klick dem Ziel, statt
- * die Karte auf- oder zuzuklappen. Trennen ist ein POST; kennt der Server die
- * Route noch nicht, steht hier nur ein Hinweis.
+ * die Karte auf- oder zuzuklappen. Statustext und Knopfbeschriftung kommen
+ * fertig aus plattformVerbindungen; bei einer verbundenen Plattform steht
+ * daneben "Neu verbinden" auf demselben Weg.
  */
 function PlattformVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
-  const queryClient = useQueryClient();
-  const trennen = useMutation({
-    mutationFn: () => disconnectUplinkPlatform(chat.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
-    },
-  });
   const knopfKlasse =
-    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60 disabled:opacity-60';
-  const verbindenText = chat.status === 'neu_verbinden' ? 'Neu verbinden' : `Mit ${chat.label} verbinden`;
+    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
+  const statusKlasse = !chat.aktiv
+    ? 'text-text-secondary/80'
+    : chat.status === 'verbunden'
+      ? 'text-success'
+      : 'text-text-secondary';
   return (
     <span data-chat={chat.status} className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal">
-      {!chat.aktiv ? (
-        <span className="text-text-secondary/80">Verbinden folgt</span>
-      ) : chat.status === 'verbunden' ? (
-        <>
-          <span className="text-success">Verbunden</span>
-          <button
-            type="button"
-            onClick={(ereignis) => {
-              ereignis.preventDefault();
-              trennen.mutate();
-            }}
-            disabled={trennen.isPending}
-            className={knopfKlasse}
-          >
-            {trennen.isPending ? <Loader2 aria-hidden="true" className="mr-1 h-3 w-3 animate-spin" /> : null}
-            Trennen
-          </button>
-          {trennen.isError ? (
-            <span role="alert" className="text-warning">
-              Trennen ist gerade nicht möglich
-            </span>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <span className="text-text-secondary">
-            {chat.status === 'neu_verbinden' ? 'Neu verbinden' : 'Nicht verbunden'}
-          </span>
-          <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
-            {verbindenText}
-          </a>
-        </>
-      )}
+      <span className={statusKlasse}>{chat.statusText}</span>
+      {chat.aktiv && chat.knopfText ? (
+        <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
+          {chat.knopfText}
+        </a>
+      ) : null}
     </span>
   );
 }
