@@ -61,6 +61,7 @@ mod eventsub_stats_adapter;
 mod irc_lurker_wiring;
 mod mcp;
 mod oauth_followups;
+mod obs_dock;
 mod offline_side_effects;
 mod outreach_shadow_wiring;
 mod partner_lookup;
@@ -1344,6 +1345,24 @@ async fn main() {
             runtime.hooks.clone()
         }
         None => eventsub_hooks,
+    };
+    // Event-Bus der eigenen OBS-Docks: schreibt jedes dock-taugliche Ereignis
+    // nach `obs_dock_events` und meldet es per NOTIFY an das Gateway. Sitzt
+    // bewusst als AEUSSERSTER Wrapper, damit er alles sieht, was Dispatcher und
+    // Inbox-Handler an die Hook-Kette geben, und delegiert danach unveraendert
+    // weiter. Schalter ist `obs_docks.enabled` in der Config-Datei
+    // `~/.config/deadlock-twitch-bot/bot.json`, Default aus.
+    let obs_docks = obs_dock::ObsDocksConfig::laden();
+    let eventsub_hooks: Arc<dyn EventSubHooks> = if obs_docks.enabled {
+        obs_dock::spawn_retention_loop(&supervisor, pool.clone());
+        tracing::info!("obs_docks: Event-Bus aktiv (obs_docks.enabled in bot.json)");
+        obs_dock::wrap_eventsub_hooks(
+            eventsub_hooks,
+            Arc::new(obs_dock::PgObsDockSink::new(pool.clone())),
+        )
+    } else {
+        tracing::debug!("obs_docks: Event-Bus aus (obs_docks.enabled nicht gesetzt)");
+        eventsub_hooks
     };
     // Go-Live-Enrichment: gezielter /channels-Lookup beim stream.online-Event
     // (sprachfilter-frei) — nur mit HelixClient verfügbar.
