@@ -10,22 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  manifest-scope:
-    name: "Manifest-Scope (keine toten Projekte)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Faengt Drift zwischen dependabot.yml, Frontend-CI und den echten
-      # package.json ab, damit keine verwaisten Manifeste mehr Alerts erzeugen.
-      - name: Scope pruefen
-        run: python3 scripts/check_manifest_scope.py
-
-      - name: Tests des Scope-Checks
-        run: |
-          python3 -m pip install --quiet pytest
-          python3 -m pytest tests/test_check_manifest_scope.py
-
   frontend-ci:
     name: "Frontend CI (${{ matrix.project.name }})"
     runs-on: ubuntu-latest
