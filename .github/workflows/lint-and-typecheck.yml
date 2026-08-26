@@ -21,6 +21,11 @@ jobs:
       - name: Scope pruefen
         run: python3 scripts/check_manifest_scope.py
 
+      - name: Tests des Scope-Checks
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tests/test_check_manifest_scope.py
+
   frontend-ci:
     name: "Frontend CI (${{ matrix.project.name }})"
     runs-on: ubuntu-latest

@@ -9,7 +9,7 @@ entfernt wurde. Beide Faelle sind Drift zwischen Konfiguration und Realitaet.
 Der Check laeuft ohne Fremdbibliotheken (kein PyYAML im CI-Image) und meldet:
   * npm-Verzeichnisse in dependabot.yml ohne package.json im Baum,
   * package.json im Baum ohne Eintrag in dependabot.yml,
-  * npm-Projekte, die weder Frontend-CI baut noch der Rust-Server ausliefert.
+  * npm-Projekte, die die Frontend-CI nicht baut.
 
 Exit 1 bei jedem Befund, sonst 0.
 """
@@ -21,19 +21,18 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
-FRONTEND_CI = REPO_ROOT / ".github" / "workflows" / "lint-and-typecheck.yml"
+DEPENDABOT_REL = Path(".github/dependabot.yml")
+FRONTEND_CI_REL = Path(".github/workflows/lint-and-typecheck.yml")
 
 # Verzeichnisse, die kein eigenes Projekt sind, sondern Build- oder Fremdstand.
 SKIP_PARTS = {"node_modules", "dist", "dist-preview", ".git", ".tasks"}
 
 
-def npm_dirs_in_dependabot() -> set[str]:
+def npm_dirs_in_dependabot(config: Path) -> set[str]:
     """Liest die `directory:`-Werte aller npm-Eintraege aus dependabot.yml."""
-    text = DEPENDABOT.read_text(encoding="utf-8")
     dirs: set[str] = set()
     ecosystem: str | None = None
-    for line in text.splitlines():
+    for line in config.read_text(encoding="utf-8").splitlines():
         eco = re.match(r'\s*-?\s*package-ecosystem:\s*"([^"]+)"', line)
         if eco:
             ecosystem = eco.group(1)
@@ -44,28 +43,27 @@ def npm_dirs_in_dependabot() -> set[str]:
     return dirs
 
 
-def npm_dirs_in_tree() -> set[str]:
+def npm_dirs_in_tree(root: Path) -> set[str]:
     """Findet alle package.json im Arbeitsbaum ausserhalb der Build-Ordner."""
     dirs: set[str] = set()
-    for manifest in REPO_ROOT.rglob("package.json"):
-        rel = manifest.relative_to(REPO_ROOT)
+    for manifest in root.rglob("package.json"):
+        rel = manifest.relative_to(root)
         if SKIP_PARTS & set(rel.parts):
             continue
-        dirs.add(str(rel.parent).strip("."))
-    return {d for d in dirs if d}
+        parent = str(rel.parent).strip(".")
+        if parent:
+            dirs.add(parent)
+    return dirs
 
 
-def npm_dirs_in_frontend_ci() -> set[str]:
+def npm_dirs_in_frontend_ci(workflow: Path) -> set[str]:
     """Liest die `path:`-Werte der Frontend-CI-Matrix."""
-    text = FRONTEND_CI.read_text(encoding="utf-8")
+    text = workflow.read_text(encoding="utf-8")
     return {m.group(1).strip("/") for m in re.finditer(r"\s*path:\s*(\S+)", text)}
 
 
-def main() -> int:
-    configured = npm_dirs_in_dependabot()
-    present = npm_dirs_in_tree()
-    built = npm_dirs_in_frontend_ci()
-
+def find_problems(configured: set[str], present: set[str], built: set[str]) -> list[str]:
+    """Baut die Mangelliste aus den drei Mengen."""
     problems: list[str] = []
 
     for missing in sorted(configured - present):
@@ -86,13 +84,28 @@ def main() -> int:
             "Entweder in lint-and-typecheck.yml aufnehmen oder als tot loeschen."
         )
 
+    return problems
+
+
+def check(root: Path) -> list[str]:
+    """Fuehrt den Abgleich fuer ein Repo-Verzeichnis aus."""
+    return find_problems(
+        configured=npm_dirs_in_dependabot(root / DEPENDABOT_REL),
+        present=npm_dirs_in_tree(root),
+        built=npm_dirs_in_frontend_ci(root / FRONTEND_CI_REL),
+    )
+
+
+def main() -> int:
+    problems = check(REPO_ROOT)
     if problems:
         print("Manifest-Scope stimmt nicht:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
-    print(f"Manifest-Scope in Ordnung: {len(present)} npm-Projekte, alle ueberwacht und gebaut.")
+    count = len(npm_dirs_in_tree(REPO_ROOT))
+    print(f"Manifest-Scope in Ordnung: {count} npm-Projekte, alle ueberwacht und gebaut.")
     return 0
 
 
