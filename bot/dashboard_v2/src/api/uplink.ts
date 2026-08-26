@@ -77,8 +77,10 @@ export interface UplinkPlattformVerbindung {
   status: UplinkVerbindungStatus;
   /** Ob der Knopf "Verbinden" etwas tut. */
   aktiv: boolean;
-  /** Fertiger Text fuer die Oberflaeche. */
+  /** Fertiger Statustext fuer die Oberflaeche. */
   statusText: string;
+  /** Beschriftung des Verbinden-Links; null, wenn die Plattform noch nicht verbunden werden kann. */
+  knopfText: string | null;
 }
 
 /** Eine Zeile je Plattform fuer den Block "Plattformen verbinden". */
@@ -86,12 +88,18 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
   return UPLINK_PLATTFORMEN.map((p) => {
     const status = me.verbindungen?.find((v) => v.platform === p.id)?.status ?? 'getrennt';
     const aktiv = verbindenAktiv(p.id);
-    let statusText = 'Folgt';
+    let statusText = 'Verbinden folgt';
+    let knopfText: string | null = null;
     if (aktiv) {
       statusText =
-        status === 'verbunden' ? 'Verbunden' : status === 'neu_verbinden' ? 'Neu verbinden' : 'Nicht verbunden';
+        status === 'verbunden'
+          ? 'Verbunden'
+          : status === 'neu_verbinden'
+            ? 'Anmeldung abgelaufen'
+            : 'Nicht verbunden';
+      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
     }
-    return { id: p.id, label: p.label, status, aktiv, statusText };
+    return { id: p.id, label: p.label, status, aktiv, statusText, knopfText };
   });
 }
 

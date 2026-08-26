@@ -96,3 +96,18 @@ test('Clipboard-Fehler hinterlassen ein fokussiertes, auswählbares Feld', () =>
   assert.match(UPLINK, /feldRef\.current\?\.select\(\)/);
   assert.match(UPLINK, /readOnly[\s\S]{0,100}type=\{offen \? 'text' : 'password'\}/);
 });
+
+test('verbinden_lebt_in_der_plattform_karte', () => {
+  assert.doesNotMatch(UPLINK, /data-section="plattformen-verbinden"/);
+  assert.match(UPLINK, /Verbinden geht in der jeweiligen Plattform-Karte oben\./);
+  assert.match(UPLINK, /chat=\{chatVerbindungen\.find/);
+  assert.match(ZIEL, /chat\.knopfText/);
+  assert.match(ZIEL, /chat\.statusText/);
+  assert.match(ZIEL, /uplinkConnectUrl\(chat\.id\)/);
+  assert.doesNotMatch(ZIEL, /Trennen/);
+  assert.match(UPLINK_API, /Mit \$\{p\.label\} verbinden/);
+  assert.match(UPLINK_API, /Neu verbinden/);
+  assert.match(UPLINK_API, /Verbinden folgt/);
+  assert.match(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
+  assert.doesNotMatch(UPLINK_API, /disconnect/);
+});

@@ -10,12 +10,14 @@ import {
   UPLINK_PROFILE,
   profilNameFuer,
   saveUplinkDestination,
+  uplinkConnectUrl,
 } from '@/api/uplink';
 import type {
   UplinkCaps,
   UplinkDestination,
   UplinkManuellesProfil,
   UplinkPlattform,
+  UplinkPlattformVerbindung,
   UplinkProfilAnsicht,
   UplinkProfilName,
 } from '@/api/uplink';
@@ -86,6 +88,36 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
 }
 
 /**
+ * Verbindungsstand im Kopf der Plattform-Karte.
+ *
+ * Verbinden holt alles auf einmal, Chat und Stream-Key. Der Knopf ist ein
+ * Link, keine fetch-Aktion: der Server leitet direkt zur Anmeldeseite der
+ * Plattform weiter. Ein Link in der Summary folgt beim Klick dem Ziel, statt
+ * die Karte auf- oder zuzuklappen. Statustext und Knopfbeschriftung kommen
+ * fertig aus plattformVerbindungen; bei einer verbundenen Plattform steht
+ * daneben "Neu verbinden" auf demselben Weg.
+ */
+function PlattformVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
+  const knopfKlasse =
+    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
+  const statusKlasse = !chat.aktiv
+    ? 'text-text-secondary/80'
+    : chat.status === 'verbunden'
+      ? 'text-success'
+      : 'text-text-secondary';
+  return (
+    <span data-chat={chat.status} className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal">
+      <span className={statusKlasse}>{chat.statusText}</span>
+      {chat.aktiv && chat.knopfText ? (
+        <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
+          {chat.knopfText}
+        </a>
+      ) : null}
+    </span>
+  );
+}
+
+/**
  * Eine Zielkarte je Plattform: Zugangsdaten, Qualitaet, Status.
  *
  * Die Qualitaet laesst sich hier ohne den Stream-Key speichern. Das war der
@@ -99,6 +131,7 @@ export function ZielKarte({
   rtmpVorgabe,
   ziel,
   caps,
+  chat,
   offenStart,
 }: {
   platform: UplinkPlattform;
@@ -106,6 +139,8 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
+  /** Stand der Verbindung dieser Plattform (Chat und Stream-Key). */
+  chat?: UplinkPlattformVerbindung;
   offenStart: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -354,6 +389,7 @@ export function ZielKarte({
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
+            {chat ? <PlattformVerbindung chat={chat} /> : null}
           </span>
         </span>
         <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>

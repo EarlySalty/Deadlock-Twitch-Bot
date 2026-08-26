@@ -34,7 +34,6 @@ import {
   reconnectWaitPayload,
   rotateUplinkDockToken,
   saveUplinkReconnectWait,
-  uplinkConnectUrl,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
 import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
@@ -154,7 +153,8 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
  * laedt; danach zeigt die Karte "neu erzeugen", weil die alte Adresse nicht
  * noch einmal ausgeliefert wird. Nach dem Erzeugen wird `uplink-me` neu
  * geladen, damit `dock_url_vorhanden` stimmt und die Karte nach einer
- * Navigation (etwa "Verbinden") nicht wieder "erzeugen" anbietet.
+ * Navigation (etwa "Mit Twitch verbinden" in der Plattform-Karte) nicht wieder
+ * "erzeugen" anbietet.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
   const [neueAdresse, setNeueAdresse] = useState<string | null>(null);
@@ -170,7 +170,6 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
   const eigene = adressen.find((d) => d.eigene);
   const twitchFenster = adressen.filter((d) => !d.eigene);
   const vorhanden = Boolean(me.dock_url_vorhanden) || Boolean(eigene);
-  const verbindungen = plattformVerbindungen(me);
 
   return (
     <div className="space-y-4 border-t border-border/60 px-5 py-4">
@@ -183,7 +182,7 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
         <p className="text-xs font-semibold text-white">Multi-Chat von Uplink</p>
         <p className="text-xs text-text-secondary">
           Ein Fenster für den Chat aller verbundenen Plattformen, die gerade über Uplink laufen. Antworten
-          gehen von dort an alle zugleich.
+          gehen von dort an alle zugleich. Verbinden geht in der jeweiligen Plattform-Karte oben.
         </p>
         {eigene ? (
           <>
@@ -227,44 +226,6 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
             Die Dock-Adresse konnte gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
           </p>
         ) : null}
-      </div>
-
-      <div data-section="plattformen-verbinden" className="space-y-2">
-        <p className="text-xs font-semibold text-white">Plattformen verbinden</p>
-        <p className="text-xs text-text-secondary">
-          Damit der Multi-Chat mitlesen und antworten kann, muss jede Plattform einmal verbunden werden.
-        </p>
-        <ul className="space-y-2">
-          {verbindungen.map((v) => (
-            <li
-              key={v.id}
-              data-platform={v.id}
-              data-state={v.status}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/40 px-3 py-2"
-            >
-              <span className="text-sm text-white">
-                {v.label}
-                <span className="ml-2 text-xs text-text-secondary">{v.statusText}</span>
-              </span>
-              {v.aktiv ? (
-                <a
-                  href={uplinkConnectUrl(v.id)}
-                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
-                >
-                  {v.status === 'verbunden' ? 'Neu verbinden' : 'Verbinden'}
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary opacity-60"
-                >
-                  Folgt
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
       </div>
 
       <div className="space-y-2">
@@ -779,6 +740,8 @@ export function UplinkPage() {
   // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
+  // Verbindung je Plattform (Chat und Stream-Key), steht im Kopf der Plattform-Karte.
+  const chatVerbindungen = data ? plattformVerbindungen(data) : [];
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
   // Leitung und ohne Bezug zu dem, was hier tatsaechlich rausgeht.
@@ -1061,6 +1024,7 @@ export function UplinkPage() {
                             rtmpVorgabe={plattform.rtmp}
                             ziel={ziel}
                             caps={capsFuer(plattform.id)}
+                            chat={chatVerbindungen.find((v) => v.id === plattform.id)}
                             offenStart={false}
                           />
                         );
