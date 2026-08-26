@@ -150,14 +150,21 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
  * Twitch-Fenster bleiben als Zusatz darunter.
  *
  * Die Adresse kommt nach dem Erzeugen genau einmal vom Server. Sie bleibt hier
- * nur im Speicher der Seite, bis neu geladen wird; danach zeigt die Karte
- * "neu erzeugen", weil die alte Adresse nicht noch einmal ausgeliefert wird.
+ * nur im Speicher der Seite, bis der Streamer den Hinweis quittiert oder neu
+ * laedt; danach zeigt die Karte "neu erzeugen", weil die alte Adresse nicht
+ * noch einmal ausgeliefert wird. Nach dem Erzeugen wird `uplink-me` neu
+ * geladen, damit `dock_url_vorhanden` stimmt und die Karte nach einer
+ * Navigation (etwa "Verbinden") nicht wieder "erzeugen" anbietet.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
   const [neueAdresse, setNeueAdresse] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
-    onSuccess: (antwort) => setNeueAdresse(antwort.dock_url),
+    onSuccess: (antwort) => {
+      setNeueAdresse(antwort.dock_url);
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+    },
   });
   const adressen = dockAdressen(neueAdresse ? { ...me, dock_url: neueAdresse } : me);
   const eigene = adressen.find((d) => d.eigene);
@@ -182,10 +189,19 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
           <>
             <DockZeile titel={eigene.titel} url={eigene.url} />
             {neueAdresse ? (
-              <p className="text-xs text-warning">
-                Die Adresse wird nur jetzt einmal angezeigt. Kopiere sie gleich in OBS. Wer sie kennt, kann in
-                deinem Namen im Chat schreiben.
-              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-xs text-warning">
+                  Die Adresse wird nur jetzt einmal angezeigt. Kopiere sie gleich in OBS. Wer sie kennt, kann in
+                  deinem Namen im Chat schreiben.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setNeueAdresse(null)}
+                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
+                >
+                  In OBS eingetragen
+                </button>
+              </div>
             ) : null}
           </>
         ) : null}
