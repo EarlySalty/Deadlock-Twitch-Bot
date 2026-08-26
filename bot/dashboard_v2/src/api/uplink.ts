@@ -88,16 +88,18 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
   return UPLINK_PLATTFORMEN.map((p) => {
     const status = me.verbindungen?.find((v) => v.platform === p.id)?.status ?? 'getrennt';
     const aktiv = verbindenAktiv(p.id);
-    let statusText = 'Verbinden folgt';
+    // Verbinden holt nur den Chat-Zugang (Lesen und Schreiben); der Stream-Key
+    // bleibt im Formular. Darum steht in jedem Text das Wort Chat.
+    let statusText = 'Chat folgt';
     let knopfText: string | null = null;
     if (aktiv) {
       statusText =
         status === 'verbunden'
-          ? 'Verbunden'
+          ? 'Chat verbunden'
           : status === 'neu_verbinden'
-            ? 'Anmeldung abgelaufen'
-            : 'Nicht verbunden';
-      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
+            ? 'Chat abgelaufen'
+            : 'Chat nicht verbunden';
+      knopfText = status === 'getrennt' ? `Chat von ${p.label} verbinden` : 'Chat neu verbinden';
     }
     return { id: p.id, label: p.label, status, aktiv, statusText, knopfText };
   });

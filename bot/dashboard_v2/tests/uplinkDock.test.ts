@@ -70,21 +70,21 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(zeilen[0].id, 'twitch');
   assert.equal(zeilen[0].aktiv, true);
   assert.equal(zeilen[0].status, 'verbunden');
-  assert.equal(zeilen[0].statusText, 'Verbunden');
-  assert.equal(zeilen[0].knopfText, 'Neu verbinden');
+  assert.equal(zeilen[0].statusText, 'Chat verbunden');
+  assert.equal(zeilen[0].knopfText, 'Chat neu verbinden');
   assert.ok(zeilen.slice(1).every((z) => !z.aktiv));
   assert.ok(zeilen.slice(1).every((z) => z.status === 'getrennt'));
-  assert.ok(zeilen.slice(1).every((z) => z.statusText === 'Verbinden folgt'));
+  assert.ok(zeilen.slice(1).every((z) => z.statusText === 'Chat folgt'));
   assert.ok(zeilen.slice(1).every((z) => z.knopfText === null));
 
   const neu = plattformVerbindungen({
     ...BASIS,
     verbindungen: [{ platform: 'twitch', status: 'neu_verbinden' }],
   });
-  assert.equal(neu[0].statusText, 'Anmeldung abgelaufen');
-  assert.equal(neu[0].knopfText, 'Neu verbinden');
-  assert.equal(plattformVerbindungen(BASIS)[0].statusText, 'Nicht verbunden');
-  assert.equal(plattformVerbindungen(BASIS)[0].knopfText, 'Mit Twitch verbinden');
+  assert.equal(neu[0].statusText, 'Chat abgelaufen');
+  assert.equal(neu[0].knopfText, 'Chat neu verbinden');
+  assert.equal(plattformVerbindungen(BASIS)[0].statusText, 'Chat nicht verbunden');
+  assert.equal(plattformVerbindungen(BASIS)[0].knopfText, 'Chat von Twitch verbinden');
 
   assert.equal(uplinkConnectUrl('twitch'), '/twitch/api/v2/uplink/connect/twitch');
 });

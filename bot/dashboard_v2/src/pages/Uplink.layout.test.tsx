@@ -104,10 +104,10 @@ test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.match(ZIEL, /chat\.knopfText/);
   assert.match(ZIEL, /chat\.statusText/);
   assert.match(ZIEL, /uplinkConnectUrl\(chat\.id\)/);
-  assert.doesNotMatch(ZIEL, /Trennen/);
-  assert.match(UPLINK_API, /Mit \$\{p\.label\} verbinden/);
-  assert.match(UPLINK_API, /Neu verbinden/);
-  assert.match(UPLINK_API, /Verbinden folgt/);
+  assert.doesNotMatch(ZIEL, /Trennen ist gerade nicht möglich/);
+  assert.match(UPLINK_API, /Chat von \$\{p\.label\} verbinden/);
+  assert.match(UPLINK_API, /Chat neu verbinden/);
+  assert.match(UPLINK_API, /Chat folgt/);
   assert.match(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
-  assert.doesNotMatch(UPLINK_API, /disconnect/);
+  assert.doesNotMatch(UPLINK_API, /uplinkDisconnect|disconnectUplinkPlatform/);
 });

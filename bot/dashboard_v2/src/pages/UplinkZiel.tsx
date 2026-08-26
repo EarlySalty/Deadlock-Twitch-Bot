@@ -90,12 +90,13 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
 /**
  * Verbindungsstand im Kopf der Plattform-Karte.
  *
- * Verbinden holt alles auf einmal, Chat und Stream-Key. Der Knopf ist ein
- * Link, keine fetch-Aktion: der Server leitet direkt zur Anmeldeseite der
- * Plattform weiter. Ein Link in der Summary folgt beim Klick dem Ziel, statt
- * die Karte auf- oder zuzuklappen. Statustext und Knopfbeschriftung kommen
- * fertig aus plattformVerbindungen; bei einer verbundenen Plattform steht
- * daneben "Neu verbinden" auf demselben Weg.
+ * Verbinden holt nur den Chat-Zugang (Lesen und Schreiben); der Stream-Key
+ * bleibt im Formular. Der Knopf ist ein Link, keine fetch-Aktion: der Server
+ * leitet direkt zur Anmeldeseite der Plattform weiter. Ein Link in der
+ * Summary folgt beim Klick dem Ziel, statt die Karte auf- oder zuzuklappen.
+ * Statustext und Knopfbeschriftung kommen fertig aus plattformVerbindungen;
+ * bei einem verbundenen Chat steht daneben "Chat neu verbinden" auf
+ * demselben Weg.
  */
 function PlattformVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
   const knopfKlasse =
@@ -139,7 +140,7 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
-  /** Stand der Verbindung dieser Plattform (Chat und Stream-Key). */
+  /** Stand des Chat-Zugangs dieser Plattform; der Stream-Key bleibt im Formular. */
   chat?: UplinkPlattformVerbindung;
   offenStart: boolean;
 }) {
