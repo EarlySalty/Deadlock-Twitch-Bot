@@ -153,7 +153,7 @@ function DockZeile({ titel, url }: { titel: string; url: string }) {
  * laedt; danach zeigt die Karte "neu erzeugen", weil die alte Adresse nicht
  * noch einmal ausgeliefert wird. Nach dem Erzeugen wird `uplink-me` neu
  * geladen, damit `dock_url_vorhanden` stimmt und die Karte nach einer
- * Navigation (etwa "Chat verbinden" in der Plattform-Karte) nicht wieder
+ * Navigation (etwa "Mit Twitch verbinden" in der Plattform-Karte) nicht wieder
  * "erzeugen" anbietet.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
@@ -740,7 +740,7 @@ export function UplinkPage() {
   // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
-  // Chat-Verbindung je Plattform, steht im Kopf der Plattform-Karte.
+  // Verbindung je Plattform (Chat und Stream-Key), steht im Kopf der Plattform-Karte.
   const chatVerbindungen = data ? plattformVerbindungen(data) : [];
   // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
   // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale

@@ -66,6 +66,27 @@ export function uplinkConnectUrl(platform: UplinkPlattform): string {
   return `/twitch/api/v2/uplink/connect/${platform}`;
 }
 
+/** Adresse, an die das Trennen einer verbundenen Plattform geht. */
+export function uplinkDisconnectUrl(platform: UplinkPlattform): string {
+  return `${uplinkConnectUrl(platform)}/disconnect`;
+}
+
+/**
+ * Trennt eine verbundene Plattform wieder. Solange der Server die Route noch
+ * nicht kennt, kommt ein Fehler zurueck; die Oberflaeche zeigt dann nur einen
+ * Hinweis.
+ */
+export function disconnectUplinkPlatform(platform: UplinkPlattform): Promise<unknown> {
+  return fetchJson<unknown>(
+    uplinkDisconnectUrl(platform),
+    withCookieCredentials({
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+  );
+}
+
 /** Bis jetzt kann nur Twitch verbunden werden; die anderen folgen. */
 export function verbindenAktiv(platform: UplinkPlattform): boolean {
   return platform === 'twitch';

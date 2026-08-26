@@ -9,6 +9,7 @@ import {
   PROFIL_WERTE,
   UPLINK_PROFILE,
   profilNameFuer,
+  disconnectUplinkPlatform,
   saveUplinkDestination,
   uplinkConnectUrl,
 } from '@/api/uplink';
@@ -88,30 +89,57 @@ function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht
 }
 
 /**
- * Chat-Stand im Kopf der Plattform-Karte.
+ * Verbindungsstand im Kopf der Plattform-Karte.
  *
- * Der Knopf ist ein Link, keine fetch-Aktion: der Server leitet direkt zur
- * Anmeldeseite der Plattform weiter. Ein Link in der Summary folgt beim Klick
- * dem Ziel, statt die Karte auf- oder zuzuklappen.
+ * Verbinden holt alles auf einmal, Chat und Stream-Key. Der Knopf ist ein
+ * Link, keine fetch-Aktion: der Server leitet direkt zur Anmeldeseite der
+ * Plattform weiter. Ein Link in der Summary folgt beim Klick dem Ziel, statt
+ * die Karte auf- oder zuzuklappen. Trennen ist ein POST; kennt der Server die
+ * Route noch nicht, steht hier nur ein Hinweis.
  */
-function ChatVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
+function PlattformVerbindung({ chat }: { chat: UplinkPlattformVerbindung }) {
+  const queryClient = useQueryClient();
+  const trennen = useMutation({
+    mutationFn: () => disconnectUplinkPlatform(chat.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+    },
+  });
   const knopfKlasse =
-    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60';
+    'inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary/60 disabled:opacity-60';
+  const verbindenText = chat.status === 'neu_verbinden' ? 'Neu verbinden' : `Mit ${chat.label} verbinden`;
   return (
     <span data-chat={chat.status} className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal">
       {!chat.aktiv ? (
-        <span className="text-text-secondary/80">Chat folgt</span>
+        <span className="text-text-secondary/80">Verbinden folgt</span>
       ) : chat.status === 'verbunden' ? (
-        <span className="text-success">Chat verbunden</span>
-      ) : chat.status === 'neu_verbinden' ? (
-        <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
-          Chat neu verbinden
-        </a>
+        <>
+          <span className="text-success">Verbunden</span>
+          <button
+            type="button"
+            onClick={(ereignis) => {
+              ereignis.preventDefault();
+              trennen.mutate();
+            }}
+            disabled={trennen.isPending}
+            className={knopfKlasse}
+          >
+            {trennen.isPending ? <Loader2 aria-hidden="true" className="mr-1 h-3 w-3 animate-spin" /> : null}
+            Trennen
+          </button>
+          {trennen.isError ? (
+            <span role="alert" className="text-warning">
+              Trennen ist gerade nicht möglich
+            </span>
+          ) : null}
+        </>
       ) : (
         <>
-          <span className="text-text-secondary">Chat nicht verbunden</span>
+          <span className="text-text-secondary">
+            {chat.status === 'neu_verbinden' ? 'Neu verbinden' : 'Nicht verbunden'}
+          </span>
           <a href={uplinkConnectUrl(chat.id)} className={knopfKlasse}>
-            Chat verbinden
+            {verbindenText}
           </a>
         </>
       )}
@@ -141,7 +169,7 @@ export function ZielKarte({
   rtmpVorgabe: string;
   ziel: UplinkDestination | undefined;
   caps: UplinkCaps | undefined;
-  /** Stand der Chat-Verbindung dieser Plattform fuer den Multi-Chat. */
+  /** Stand der Verbindung dieser Plattform (Chat und Stream-Key). */
   chat?: UplinkPlattformVerbindung;
   offenStart: boolean;
 }) {
@@ -391,7 +419,7 @@ export function ZielKarte({
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
-            {chat ? <ChatVerbindung chat={chat} /> : null}
+            {chat ? <PlattformVerbindung chat={chat} /> : null}
           </span>
         </span>
         <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>
