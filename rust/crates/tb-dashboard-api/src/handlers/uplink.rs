@@ -4,8 +4,10 @@
 // jeden Handler und jede Aufrufstelle verkomplizieren, ohne Laufzeitgewinn.
 #![allow(clippy::result_large_err)]
 
+use std::sync::Arc;
+
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -14,7 +16,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+use super::platform_connect::PlatformConnectionStore;
 use crate::auth::{level::DashboardAuthLevel, require_admin};
+
+/// Feldschluessel fuer `platform_connections`, als Extension. Fehlt er, meldet
+/// `/uplink/me` alle Plattformen als getrennt statt zu scheitern.
+#[derive(Clone)]
+pub struct UplinkCipher(pub Arc<tb_crypto::FieldCipher>);
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -113,6 +121,17 @@ async fn partner_id(pool: &PgPool, auth: &DashboardAuthLevel) -> Result<i64, Res
             )
                 .into_response()
         })
+}
+
+/// Login (klein geschrieben) und numerische Streamer-ID der Session, fuer
+/// Nachbarmodule, die beides brauchen (Chat verbinden).
+pub(crate) async fn partner_identitaet(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+) -> Result<(String, i64), Response> {
+    let id = partner_id(pool, auth).await?;
+    let (login, _) = twitch_identitaet(auth)?;
+    Ok((login.trim().to_lowercase(), id))
 }
 
 async fn relay_json(
@@ -242,8 +261,10 @@ async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
 
 pub async fn me_handler(
     State(pool): State<PgPool>,
+    cipher: Option<Extension<UplinkCipher>>,
     auth: DashboardAuthLevel,
 ) -> Result<Json<Value>, Response> {
+    let cipher = cipher.map(|Extension(c)| c.0);
     let id = partner_id(&pool, &auth).await?;
     let mut wert = relay_json(
         reqwest::Method::GET,
@@ -253,23 +274,88 @@ pub async fn me_handler(
     .await?;
     // Der Live-Status ist Wissen des Bots, nicht des Relays: er kommt aus der
     // Twitch-Beobachtung. Deshalb wird er hier angehaengt und nicht im Relay
-    // nachgebaut.
-    if let Some(objekt) = wert.as_object_mut() {
-        objekt.insert(
-            "live_status".to_string(),
-            Value::String(live_status(&pool, id).await.to_string()),
-        );
-        // Der Login geht mit, damit die Oberflaeche die OBS-Dock-Adressen
-        // fertig hinschreiben kann. Wer auf "Benutzerdefiniert" umstellt,
-        // verliert in OBS Chat und Aktivitaet, und ein Platzhalter zum
-        // Selbstersetzen ist genau die Stelle, an der Leute steckenbleiben.
-        if let Ok((login, _)) = twitch_identitaet(&auth) {
-            objekt.insert(
-                "twitch_login".to_string(),
-                Value::String(login.trim().to_lowercase()),
-            );
-        }
+    // nachgebaut. Gleiches gilt fuer die verbundenen Chat-Plattformen.
+    let live = live_status(&pool, id).await;
+    let login = twitch_identitaet(&auth)
+        .ok()
+        .map(|(login, _)| login.trim().to_lowercase());
+    let verbindungen = match cipher.as_ref() {
+        Some(cipher) => PlatformConnectionStore::new(pool.clone(), cipher.clone())
+            .status_liste(id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("uplink: Chat-Verbindungen fuer {id} nicht lesbar: {e}");
+                Vec::new()
+            }),
+        None => Vec::new(),
+    };
+    me_anreichern(&mut wert, live, login.as_deref(), &verbindungen);
+    Ok(Json(wert))
+}
+
+/// Haengt an die Relay-Antwort an, was nur der Bot weiss: Live-Status, Login,
+/// ob das Relay eine Dock-Adresse mitgegeben hat, und den Stand der
+/// Chat-Verbindungen je Plattform. Reine Funktion, damit sie ohne Relay
+/// pruefbar ist.
+fn me_anreichern(
+    wert: &mut Value,
+    live: &str,
+    login: Option<&str>,
+    verbindungen: &[(String, &'static str)],
+) {
+    let Some(objekt) = wert.as_object_mut() else {
+        return;
+    };
+    objekt.insert("live_status".to_string(), Value::String(live.to_string()));
+    // Der Login geht mit, damit die Oberflaeche die OBS-Dock-Adressen
+    // fertig hinschreiben kann. Wer auf "Benutzerdefiniert" umstellt,
+    // verliert in OBS Chat und Aktivitaet, und ein Platzhalter zum
+    // Selbstersetzen ist genau die Stelle, an der Leute steckenbleiben.
+    if let Some(login) = login {
+        objekt.insert("twitch_login".to_string(), Value::String(login.to_string()));
     }
+    // Die Dock-Adresse selbst kommt vom Relay (`dock_url`), sobald es sie
+    // kennt. Hier nur das Ja/Nein, damit die Oberflaeche den Knopf
+    // "Adresse erzeugen" von "Adresse neu erzeugen" unterscheiden kann.
+    let dock_url_vorhanden = objekt
+        .get("dock_url")
+        .and_then(Value::as_str)
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    objekt.insert(
+        "dock_url_vorhanden".to_string(),
+        Value::Bool(dock_url_vorhanden),
+    );
+    // Jede bekannte Plattform bekommt einen Eintrag; was nicht gespeichert
+    // ist, ist getrennt. So muss die Oberflaeche keine Luecken deuten.
+    let liste: Vec<Value> = PLATTFORMEN
+        .iter()
+        .map(|plattform| {
+            let status = verbindungen
+                .iter()
+                .find(|(p, _)| p == plattform)
+                .map(|(_, s)| *s)
+                .unwrap_or("getrennt");
+            json!({ "platform": plattform, "status": status })
+        })
+        .collect();
+    objekt.insert("verbindungen".to_string(), Value::Array(liste));
+}
+
+/// `POST /twitch/api/v2/uplink/dock-token/rotate`: laesst das Relay eine neue
+/// Dock-Adresse fuer den Streamer ausstellen. Die alte Adresse gilt danach
+/// nicht mehr; die neue kommt einmalig in der Antwort zurueck.
+pub async fn dock_token_rotate_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::POST,
+        "/v1/me/dock-token/rotate",
+        Some(json!({ "streamer_id": id })),
+    )
+    .await?;
     Ok(Json(wert))
 }
 
@@ -1091,6 +1177,47 @@ mod tests {
     /// dafür `set_var` benutzt, wäre ein Datenrennen auf `environ` mit jedem
     /// anderen Test im selben Binary, der die Umgebung anfasst, und davon gibt
     /// es in dieser Crate mehrere.
+    #[test]
+    fn me_traegt_dock_url_und_verbindungen() {
+        let mut wert =
+            json!({ "freigeschaltet": true, "dock_url": "https://relay.test/dock/chat?t=abc" });
+        me_anreichern(
+            &mut wert,
+            "live",
+            Some("streamerin"),
+            &[("twitch".to_string(), "verbunden")],
+        );
+        assert_eq!(wert["live_status"], "live");
+        assert_eq!(wert["twitch_login"], "streamerin");
+        assert_eq!(wert["dock_url_vorhanden"], true);
+        // Die Adresse selbst bleibt unveraendert durchgereicht.
+        assert_eq!(wert["dock_url"], "https://relay.test/dock/chat?t=abc");
+        let liste = wert["verbindungen"].as_array().unwrap();
+        assert_eq!(liste.len(), PLATTFORMEN.len());
+        assert_eq!(
+            liste[0],
+            json!({ "platform": "twitch", "status": "verbunden" })
+        );
+        assert!(liste[1..].iter().all(|e| e["status"] == "getrennt"));
+    }
+
+    #[test]
+    fn me_ohne_dock_url_meldet_keine_adresse() {
+        let mut wert = json!({ "freigeschaltet": false });
+        me_anreichern(&mut wert, "unbekannt", None, &[]);
+        assert_eq!(wert["dock_url_vorhanden"], false);
+        assert!(wert.get("twitch_login").is_none());
+        assert!(wert["verbindungen"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["status"] == "getrennt"));
+
+        let mut leer = json!({ "dock_url": "  " });
+        me_anreichern(&mut leer, "aus", None, &[]);
+        assert_eq!(leer["dock_url_vorhanden"], false);
+    }
+
     #[test]
     fn admin_pfade_nehmen_das_admin_secret() {
         for pfad in [
