@@ -3,7 +3,7 @@ title: Uplink: Was ist das?
 namespace: bot
 category: feature
 audience: streamer
-last_updated: 2026-08-21
+last_updated: 2026-08-27
 source: rs-relay/docs/was-ist.html
 tip_eligible: false
 ---
@@ -20,7 +20,7 @@ Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Pla
 
 ### Was stellst du ein, was passiert bei uns?
 
-Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Dein Twitch-Ziel trägst du im Dashboard ein. Titel und Kategorie änderst du in den Dashboards der Plattformen.
+Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Dein Twitch-Ziel trägst du im Dashboard ein. Titel, Kategorie und Tags änderst du im Stream-Infos-Fenster. Live-Benachrichtigung, Zuschauer und Wiederholen stellst du im Twitch-Dashboard ein.
 
 Für Twitch und Kick gilt CBR. Welche Auflösung wir senden, stellst du im Dashboard ein, von 480p bis 1440p.
 

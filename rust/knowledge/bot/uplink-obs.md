@@ -3,7 +3,7 @@ title: Uplink in OBS einrichten
 namespace: bot
 category: setup
 audience: streamer
-last_updated: 2026-08-22
+last_updated: 2026-08-27
 source: rs-relay/docs/obs.html
 tip_eligible: false
 ---
@@ -118,13 +118,13 @@ Die Qualität je Ziel kannst du auch mitten im Stream umstellen. Der Stream blei
 
 Ins Dashboard kommt nur die SRT-Adresse, und über die läuft dein Stream. SRT verträgt ein Wackelnetz besser. Im Dashboard steht genau eine Adresse, und das ist die SRT-Adresse. Kann dein Programm kein SRT, nimm OBS.
 
-Mit **Stream starten** sendest du danach an uns. Die Plattformen starten wir. Titel und Kategorie stellst du weiter in den Dashboards der Plattformen ein, solange die Synchronisation dafür noch nicht verfügbar ist.
+Mit **Stream starten** sendest du danach an uns. Die Plattformen starten wir. Titel, Kategorie und Tags änderst du im Stream-Infos-Fenster. Live-Benachrichtigung, Zuschauer und Wiederholen stellst du im Twitch-Dashboard ein.
 
 ### 4. Chat und die OBS-Fenster zurückholen
 
 Sobald der Dienst auf **Benutzerdefiniert** steht, verschwinden in OBS die Twitch-Fenster: Chat, Aktivitätsfeed und Stream-Informationen. Dein Chat läuft trotzdem normal weiter. Chat und Video sind bei Twitch getrennte Wege, wir fassen nur das Video an. Weg sind nur die Fenster in OBS, weil OBS die ausschließlich bei verbundenem Twitch-Konto einblendet.
 
-Wir geben dir vier eigene Fenster zurück. Anders als die von Twitch zeigen sie alle Plattformen zugleich, die du verbunden hast: Chat mit Antwortfeld, Aktivität mit Follows, Abos und Bits, Stream-Infos zum Ändern von Titel und Kategorie, und die Kanalpunkte.
+Wir geben dir vier eigene Fenster zurück. Anders als die von Twitch zeigen sie alle Plattformen zugleich, die du verbunden hast: Chat mit Antwortfeld, Aktivität mit Follows, Abos und Bits, Stream-Infos zum Ändern von Titel, Kategorie und Tags, und die Kanalpunkte.
 
 Du holst sie in einer Minute zurück:
 

@@ -3,7 +3,7 @@ title: Uplink: Häufige Störungen
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-08-21
+last_updated: 2026-08-27
 source: rs-relay/docs/stoerungen.html
 tip_eligible: false
 ---
@@ -18,6 +18,12 @@ Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Abend streams
 1. Prüfe im Dashboard, ob Uplink für dich freigeschaltet ist. Steht dort die SRT-Adresse, ist der Zugang da.
 2. Der OBS-Dienst muss **Benutzerdefiniert** sein. Als Server muss die SRT-Adresse aus dem Dashboard eingetragen sein.
 3. Steht in OBS noch eine alte Adresse, kopiere die SRT-Adresse im Dashboard neu und ersetze sie. Der Schlüssel steckt als `streamid` in der Adresse, es gibt keinen zweiten Wert zum Abtippen.
+
+### Im Stream-Infos-Fenster fehlen Live-Benachrichtigung, Zuschauer und Wiederholen
+
+Das ist so gedacht. Unser Fenster ändert Titel, Kategorie und Tags. Die Live-Benachrichtigung, die Zuschauer-Auswahl (zum Beispiel Alle) und das Häkchen Wiederholen stellst du im Twitch-Dashboard ein.
+
+OBS zeigt diese drei Felder, weil es dort die Seite von Twitch einblendet. Unser Fenster kommt von uns und bleibt bei Titel, Kategorie und Tags.
 
 ### Das Bild reißt in Fights
 
