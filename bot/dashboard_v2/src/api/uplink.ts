@@ -345,6 +345,28 @@ export function acceptUplinkAdminWaitlistEntry(
   );
 }
 
+/**
+ * Nimmt einen Wartelisteneintrag zurueck, ohne einen Zugang anzulegen.
+ *
+ * Der Streamer behaelt sein Konto und kann sich neu eintragen; abgelehnt ist
+ * nur diese eine Anfrage.
+ */
+export function rejectUplinkAdminWaitlistEntry(
+  streamerId: number,
+  csrfToken: string,
+): Promise<{ streamer_id: number; rejected: boolean }> {
+  return fetchJson<{ streamer_id: number; rejected: boolean }>(
+    `/twitch/api/v2/uplink/admin/waitlist/${streamerId}`,
+    withCookieCredentials({
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+    }),
+  );
+}
+
 export interface UplinkReconnectWaitSettings {
   reconnect_wait_s: number;
   reconnect_wait_max_s: number;

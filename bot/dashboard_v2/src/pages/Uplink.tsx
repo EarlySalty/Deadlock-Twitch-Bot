@@ -15,6 +15,7 @@ import {
   Settings,
   MonitorPlay,
   FileText,
+  UserMinus,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -32,6 +33,7 @@ import {
   reconnectWaitEingabe,
   plattformVerbindungen,
   reconnectWaitPayload,
+  rejectUplinkAdminWaitlistEntry,
   rotateUplinkDockToken,
   saveUplinkReconnectWait,
   holeUplinkStreamKey,
@@ -631,7 +633,25 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
       queryClient.invalidateQueries({ queryKey: ['uplink-admin-waitlist'] });
     },
   });
+  const ablehnen = useMutation({
+    mutationFn: (streamerId: number) => {
+      if (!csrfToken) {
+        throw new Error('Der Sitzungsschutz fehlt. Lade die Seite neu.');
+      }
+      return rejectUplinkAdminWaitlistEntry(streamerId, csrfToken);
+    },
+    onSuccess: (_antwort, streamerId) => {
+      queryClient.setQueryData<{ entries: UplinkAdminWaitlistEntry[] }>(
+        ['uplink-admin-waitlist'],
+        (alt) => ({
+          entries: (alt?.entries ?? []).filter((eintrag) => eintrag.streamer_id !== streamerId),
+        }),
+      );
+      queryClient.invalidateQueries({ queryKey: ['uplink-admin-waitlist'] });
+    },
+  });
   const eintraege = warteliste.data?.entries ?? [];
+  const beschaeftigt = freischalten.isPending || ablehnen.isPending;
 
   return (
     <Rise
@@ -687,6 +707,8 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
           {eintraege.map((eintrag) => {
             const wirdFreigeschaltet =
               freischalten.isPending && freischalten.variables === eintrag.streamer_id;
+            const wirdAbgelehnt =
+              ablehnen.isPending && ablehnen.variables === eintrag.streamer_id;
             return (
               <li
                 key={eintrag.streamer_id}
@@ -699,15 +721,26 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
                   </p>
                   {eintrag.note ? <p className="mt-1 text-xs text-text-secondary">{eintrag.note}</p> : null}
                 </div>
-                <button
-                  type="button"
-                  disabled={freischalten.isPending || !csrfToken}
-                  onClick={() => freischalten.mutate(eintrag.streamer_id)}
-                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <UserPlus aria-hidden="true" className="h-3.5 w-3.5" />
-                  {wirdFreigeschaltet ? 'Wird freigeschaltet …' : 'Freischalten'}
-                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={beschaeftigt || !csrfToken}
+                    onClick={() => freischalten.mutate(eintrag.streamer_id)}
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UserPlus aria-hidden="true" className="h-3.5 w-3.5" />
+                    {wirdFreigeschaltet ? 'Wird freigeschaltet …' : 'Freischalten'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={beschaeftigt || !csrfToken}
+                    onClick={() => ablehnen.mutate(eintrag.streamer_id)}
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UserMinus aria-hidden="true" className="h-3.5 w-3.5" />
+                    {wirdAbgelehnt ? 'Wird abgelehnt …' : 'Ablehnen'}
+                  </button>
+                </div>
               </li>
             );
           })}
@@ -719,6 +752,14 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
           {freischalten.error instanceof Error
             ? freischalten.error.message
             : 'Die Freischaltung hat nicht geklappt.'}
+        </p>
+      ) : null}
+
+      {ablehnen.isError ? (
+        <p role="alert" className="text-xs text-warning">
+          {ablehnen.error instanceof Error
+            ? ablehnen.error.message
+            : 'Das Ablehnen hat nicht geklappt.'}
         </p>
       ) : null}
     </Rise>

@@ -577,6 +577,51 @@ pub async fn admin_freischalten_handler(
     Ok(Json(freischaltung_antwort(body.streamer_id)))
 }
 
+fn admin_waitlist_eintrag_pfad(streamer_id: i64) -> String {
+    format!("{RELAY_ADMIN_WAITLIST_PFAD}/{streamer_id}")
+}
+
+/// Lehnt einen Wartelisteneintrag ab: der Eintrag verschwindet, ein Zugang
+/// entsteht nicht.
+///
+/// Kein Konto wird geloescht und keine Sperre gesetzt. Wer abgelehnt wurde,
+/// sieht im Dashboard wieder den Knopf und kann sich erneut eintragen. Genau
+/// deshalb steht der Knopf gleichberechtigt neben "Freischalten": die Liste
+/// bleibt sonst voll mit Anfragen, die nie beantwortet werden.
+pub async fn admin_ablehnen_handler(
+    auth: DashboardAuthLevel,
+    Path(streamer_id): Path<i64>,
+) -> Result<Json<Value>, Response> {
+    admin_pruefen(&auth)?;
+    if streamer_id <= 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "ungültige Twitch-ID" })),
+        )
+            .into_response());
+    }
+
+    relay_json(
+        reqwest::Method::DELETE,
+        &admin_waitlist_eintrag_pfad(streamer_id),
+        None,
+    )
+    .await?;
+
+    let (actor, actor_id) = admin_actor_fuer_log(&auth);
+    tracing::info!(
+        actor,
+        actor_twitch_user_id = actor_id.unwrap_or("-"),
+        target_streamer_id = streamer_id,
+        "Uplink-Wartelisteneintrag abgelehnt"
+    );
+
+    Ok(Json(json!({
+        "streamer_id": streamer_id,
+        "rejected": true,
+    })))
+}
+
 /// Die gespeicherten Ziele, ohne Stream-Key.
 ///
 /// Das Relay liefert den Key nicht mit, und das ist richtig so: er ist
@@ -1665,6 +1710,16 @@ mod tests {
         assert_eq!(antwort["enabled"], true);
         assert!(antwort.get("ingest_key").is_none());
         assert!(antwort.get("srt_hint").is_none());
+    }
+
+    #[test]
+    fn ablehnen_laeuft_ueber_den_admin_pfad_und_traegt_die_id() {
+        let pfad = admin_waitlist_eintrag_pfad(4711);
+        assert_eq!(pfad, "/v1/admin/waitlist/4711");
+        // Der Pfad entscheidet ueber das Secret. Rutschte er aus
+        // `/v1/admin/` heraus, ginge das Ablehnen mit dem API-Secret hinaus
+        // und das Relay wiese es ab, ohne dass hier etwas auffiele.
+        assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_ADMIN_SECRET");
     }
 
     #[test]

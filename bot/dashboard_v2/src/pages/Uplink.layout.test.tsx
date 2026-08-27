@@ -80,6 +80,25 @@ test('Admin-Wartelistenaufrufe senden das Session-CSRF-Token', () => {
   assert.match(UPLINK_API, /'X-CSRF-Token': csrfToken/);
 });
 
+test('jeder Wartelisteneintrag laesst sich freischalten und ablehnen', () => {
+  assert.match(UPLINK, /rejectUplinkAdminWaitlistEntry/);
+  assert.match(UPLINK, /freischalten\.mutate\(eintrag\.streamer_id\)/);
+  assert.match(UPLINK, /ablehnen\.mutate\(eintrag\.streamer_id\)/);
+  // Beide Knoepfe sperren waehrend eines laufenden Aufrufs. Sonst schickt ein
+  // zweiter Klick das Freischalten hinterher, das das Ablehnen gerade zurueckholt.
+  assert.match(UPLINK, /const beschaeftigt = freischalten\.isPending \|\| ablehnen\.isPending/);
+  assert.equal(
+    UPLINK.match(/disabled=\{beschaeftigt \|\| !csrfToken\}/g)?.length,
+    2,
+    'beide Wartelisten-Knoepfe muessen an derselben Sperre haengen',
+  );
+});
+
+test('Ablehnen laeuft als DELETE mit CSRF-Token auf den Eintragspfad', () => {
+  assert.match(UPLINK_API, /\/twitch\/api\/v2\/uplink\/admin\/waitlist\/\$\{streamerId\}/);
+  assert.match(UPLINK_API, /method: 'DELETE'[\s\S]{0,200}'X-CSRF-Token': csrfToken/);
+});
+
 test('Disclosure-Zustände werden mit geschlossenen Startwerten gespeichert', () => {
   assert.match(UPLINK, /useUplinkDisclosure\('uplink-hilfe', false\)/);
   assert.match(UPLINK, /useUplinkDisclosure\(`obs-\$\{nummer\}`, offenStart\)/);

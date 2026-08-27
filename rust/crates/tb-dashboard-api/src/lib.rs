@@ -495,6 +495,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(uplink::admin_waitlist_handler),
         )
         .route(
+            "/twitch/api/v2/uplink/admin/waitlist/:streamer_id",
+            axum::routing::delete(uplink::admin_ablehnen_handler),
+        )
+        .route(
             "/twitch/api/v2/uplink/admin/users",
             post(uplink::admin_freischalten_handler),
         )
