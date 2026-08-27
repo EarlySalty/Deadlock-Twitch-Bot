@@ -428,7 +428,17 @@ fn me_anreichern(
         "dock_url_vorhanden".to_string(),
         Value::Bool(dock_url_vorhanden),
     );
-    let dock_urls = objekt.get("dock_urls").cloned().unwrap_or(Value::Null);
+    //
+    // Was kein Objekt ist, wird zu `null`: die Oberflaeche liest die vier
+    // Felder direkt. Ein String oder ein Array kaeme dort als vier fehlende
+    // Felder an und die Karte bliebe stumm leer, waehrend sie daneben
+    // "vorhanden" meldet. Auf `null` landet derselbe Fall auf dem Pfad, der
+    // erklaert ist und einen Knopf anbietet.
+    let dock_urls = objekt
+        .get("dock_urls")
+        .filter(|w| w.is_object())
+        .cloned()
+        .unwrap_or(Value::Null);
     objekt.insert("dock_urls".to_string(), dock_urls);
     // Jede bekannte Plattform bekommt einen Eintrag; was nicht gespeichert
     // ist, ist getrennt. So muss die Oberflaeche keine Luecken deuten.
@@ -451,9 +461,13 @@ fn me_anreichern(
     objekt.insert("verbindungen".to_string(), Value::Array(liste));
 }
 
-/// `POST /twitch/api/v2/uplink/dock-token/rotate`: laesst das Relay eine neue
-/// Dock-Adresse fuer den Streamer ausstellen. Die alte Adresse gilt danach
-/// nicht mehr; die neue kommt einmalig in der Antwort zurueck.
+/// `POST /twitch/api/v2/uplink/dock-token/rotate`: laesst das Relay neue
+/// Dock-Adressen fuer den Streamer ausstellen. Die alten gelten danach nicht
+/// mehr.
+///
+/// Die Antwort ist nicht die einzige Gelegenheit: `GET /uplink/me` traegt
+/// dieselben vier Adressen bei jedem Abruf. Sie steht hier trotzdem, damit die
+/// Oberflaeche direkt nach dem Klick etwas zeigen kann.
 pub async fn dock_token_rotate_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
@@ -1832,6 +1846,15 @@ mod tests {
         me_anreichern(&mut ohne_enc, "aus", &[], &[]);
         assert_eq!(ohne_enc["dock_url_vorhanden"], true);
         assert_eq!(ohne_enc["dock_urls"], Value::Null);
+
+        // Was kein Objekt ist, faellt auf `null`. Ein String kaeme in der
+        // Oberflaeche als vier fehlende Felder an: leere Karte neben der
+        // Meldung "vorhanden", ohne dass irgendwo stuende, warum.
+        for kaputt in [json!("https://relay.test/dock/chat"), json!([]), json!(7)] {
+            let mut wert = json!({ "dock_url_vorhanden": true, "dock_urls": kaputt });
+            me_anreichern(&mut wert, "aus", &[], &[]);
+            assert_eq!(wert["dock_urls"], Value::Null);
+        }
     }
 
     #[test]

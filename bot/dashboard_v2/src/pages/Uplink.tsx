@@ -122,6 +122,14 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
   });
+  // Sobald `me` die neuen Adressen trägt, hat der Vorrang seinen Zweck erfüllt
+  // und fällt weg. Bliebe er stehen, zeigte die Karte für den Rest der
+  // Sitzung, was einmal in einer Antwort stand, und nicht mehr, was der Server
+  // führt. Auf einem Relay, das beim Erzeugen nur die Chat-Adresse liefert,
+  // wäre sie danach dauerhaft auf diese eine Zeile eingefroren.
+  useEffect(() => {
+    if (frisch && me.dock_urls?.chat === frisch.chat) setFrisch(null);
+  }, [frisch, me.dock_urls]);
   const adressen = dockAdressen(me, frisch);
   // "Vorhanden" und "anzeigbar" fallen auseinander: ein Zugang aus der Zeit
   // vor dem Umbau lässt sich nicht mehr anzeigen. Dann gilt trotzdem die

@@ -55,8 +55,8 @@ export interface UplinkVerbindung {
 }
 
 /**
- * Die vier Fenster hinter einer Dock-Adresse. Ein Token fuer alle vier; ein
- * Neuerzeugen macht alle vier alten Adressen ungueltig.
+ * Die vier Fenster hinter einem Zugang. Ein Neuerzeugen macht alle vier alten
+ * Adressen ungueltig.
  *
  * Optional, weil aeltere Server nur `dock_url` liefern. Dann gilt die eine
  * Adresse als Chat-Fenster und die drei anderen fehlen einfach, statt dass die
@@ -70,8 +70,13 @@ export interface DockUrls {
 }
 
 /**
- * Laesst das Relay eine neue Dock-Adresse ausstellen. Die alte gilt danach
- * nicht mehr, die neue kommt genau einmal in dieser Antwort zurueck.
+ * Laesst das Relay neue Dock-Adressen ausstellen. Die alten gelten danach nicht
+ * mehr.
+ *
+ * Die Antwort ist nicht mehr die einzige Gelegenheit: `GET /uplink/me` liefert
+ * dieselben vier Adressen bei jedem Laden. Sie steht hier trotzdem, damit die
+ * Karte direkt nach dem Klick etwas zeigen kann, statt auf den naechsten Abruf
+ * zu warten.
  */
 export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?: DockUrls }> {
   return fetchJson<{ dock_url: string; dock_urls?: DockUrls }>(
