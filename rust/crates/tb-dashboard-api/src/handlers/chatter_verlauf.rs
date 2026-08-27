@@ -406,9 +406,13 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            // Ein Stammgast hat geschrieben. Ohne `total_messages` waere das
+            // eine reine Anwesenheitszeile des Chatters-Pollers und damit
+            // kein Verlauf.
             "INSERT INTO twitch_chatter_rollup
-             (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at)
-             VALUES ('verlaufkanal', 'stammgast', 'id-geheim',
+             (streamer_login, chatter_login, chatter_id, total_messages,
+              first_seen_at, last_seen_at)
+             VALUES ('verlaufkanal', 'stammgast', 'id-geheim', 40,
                      NOW() - INTERVAL '9 days', NOW())",
         )
         .execute(&pool)

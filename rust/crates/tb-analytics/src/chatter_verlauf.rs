@@ -12,6 +12,12 @@
 //! - Der Verlauf beginnt erst in dieser Session; die Person hat also gerade
 //!   eben zum ersten Mal geschrieben und deshalb schon eine Zeile im Rollup.
 //!
+//! Als Verlauf zählen nur Zeilen mit `total_messages > 0`. Der Chatters-Poller
+//! legt für jeden Anwesenden eine Rollup-Zeile mit null Nachrichten an; wer
+//! monatelang nur zuschaut und heute zum ersten Mal schreibt, sähe sonst wie
+//! ein alter Bekannter aus. `stream_kennzahlen` filtert an derselben Stelle
+//! genauso.
+//!
 //! Der dritte Punkt ist der Grund, warum die Session-Startzeit mit in die
 //! Abfrage geht: ohne sie wäre jeder Erstchatter eine Sekunde nach seiner
 //! ersten Nachricht kein Erstchatter mehr.
@@ -62,6 +68,7 @@ pub async fn laden(
                SELECT LOWER(chatter_login) AS login, MIN(first_seen_at) AS erster
                FROM twitch_chatter_rollup
                WHERE LOWER(streamer_login) = $1
+                 AND COALESCE(total_messages, 0) > 0
                GROUP BY 1
            ),
            dabei AS (
@@ -353,6 +360,39 @@ mod tests {
             .map(|e| e.login.as_str())
             .collect();
         assert_eq!(neu, vec!["neuling", "nocheiner"]);
+    }
+
+    /// Der Chatters-Poller legt für jeden Anwesenden eine Rollup-Zeile mit
+    /// null Nachrichten an. Wer lange nur zugeschaut hat und heute zum ersten
+    /// Mal schreibt, ist trotzdem ein Erstchatter.
+    #[tokio::test]
+    async fn wer_bisher_nur_zugeschaut_hat_ist_erstchatter() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_verlauf_lurker").await;
+        sqlx::query(
+            "INSERT INTO twitch_chatter_rollup
+             (streamer_login, chatter_login, total_messages, first_seen_at, last_seen_at)
+             VALUES ('earlysalty', 'stiller', 0, $1, $1)",
+        )
+        .bind(zeit(-240))
+        .execute(&pool)
+        .await
+        .expect("rollup");
+
+        let eintraege = laden(
+            &pool,
+            "earlysalty",
+            &logins(&["stiller"]),
+            Some(7),
+            Some(zeit(0)),
+        )
+        .await
+        .expect("Abfrage");
+        assert!(
+            eintraege[0].erster_chat_ueberhaupt,
+            "Zuschauer ohne eine einzige Nachricht darf nicht als alter Bekannter gelten"
+        );
+        assert_eq!(eintraege[0].erster_chat_am, None);
     }
 
     #[tokio::test]
