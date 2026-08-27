@@ -1565,8 +1565,8 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-/// Interne Routen fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`
-/// und `GET /twitch/api/v2/internal/stream-kennzahlen`.
+/// Interne Routen fuer rs-relay: `platform-token`, `stream-kennzahlen` und
+/// `chatter-verlauf` unter `/twitch/api/v2/internal/`.
 /// Loopback plus `X-Internal-Token` (derselbe Token wie auf den Admin-Routen),
 /// kein Cookie, kein CSRF.
 pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
@@ -1580,6 +1580,12 @@ pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/internal/stream-kennzahlen",
             get(handlers::stream_kennzahlen::internal_stream_kennzahlen_handler),
+        )
+        // Wer schreibt zum ersten Mal in diesem Kanal: fuer die
+        // Erstchatter-Hervorhebung im Dock.
+        .route(
+            "/twitch/api/v2/internal/chatter-verlauf",
+            get(handlers::chatter_verlauf::internal_chatter_verlauf_handler),
         )
         .layer(Extension(ExpectedToken(token)))
         .with_state(pool)

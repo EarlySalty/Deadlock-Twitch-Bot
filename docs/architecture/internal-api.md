@@ -164,3 +164,33 @@ Die Gesamt-Sichten laufen über alle Sessions eines Kanals, die Anwesenheit
 sogar über eine Hypertable. Sie liegen deshalb fünf Minuten in einem Cache je
 Kanal (`GESAMT_CACHE_FRIST`); die Werte des laufenden Streams werden bei jeder
 Anfrage frisch gerechnet. Das Dock fragt alle 30 Sekunden.
+
+### chatter-verlauf
+
+`GET /twitch/api/v2/internal/chatter-verlauf?streamer=&logins=a,b,c`
+
+Beantwortet für bis zu 50 Logins auf einmal, wer zum allerersten Mal in
+diesem Kanal schreibt. Das Chat-Dock hebt diese Nachrichten hervor, so wie
+Twitch die erste Nachricht eines Zuschauers lila färbt (GRILLME C5-A2).
+Ein Raid bringt viele neue Namen; deshalb im Bund und nicht je Login.
+
+Antworten: `200` mit `{"eintraege":[...]}`, `400` ohne `streamer`/`logins`
+oder bei mehr als 50 Namen (`{"error":"zu_viele_logins"}`), `401` ohne
+Loopback oder ohne Token, `404 {"error":"nicht_live"}` ohne laufenden Stream,
+`503 {"error":"nicht_verfuegbar"}`.
+
+```json
+{
+  "eintraege": [
+    { "login": "neuling",   "erster_chat_ueberhaupt": true,  "erster_chat_am": null, "sessions": 0 },
+    { "login": "stammgast", "erster_chat_ueberhaupt": false, "erster_chat_am": "2026-08-18T20:11:00Z", "sessions": 9 }
+  ]
+}
+```
+
+Jeder gefragte Login kommt zurück, auch ein unbekannter; er gilt dann als
+erster Chat überhaupt. Als erster Chat zählt außerdem, wessen Verlauf erst in
+der laufenden Session beginnt: wer gerade eben zum ersten Mal geschrieben hat,
+steht schon im Rollup und wäre sonst eine Sekunde später kein Erstchatter mehr.
+Das eigene Kennzeichen des Bots (`confirmed_first_ever`,
+`is_first_time_streamer` der laufenden Session) gewinnt über beides.
