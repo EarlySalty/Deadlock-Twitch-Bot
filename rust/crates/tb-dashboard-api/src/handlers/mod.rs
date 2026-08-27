@@ -95,6 +95,7 @@ pub mod session_detail;
 pub mod silent_settings;
 pub mod social_media;
 pub mod spa;
+pub mod stream_kennzahlen;
 pub mod stream_report;
 pub mod streamer_comparison;
 pub mod streamer_disconnect;

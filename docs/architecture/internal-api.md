@@ -89,3 +89,78 @@ Interner Client (Subklasse von `BaseInternalHttpClient`) mit `_map_http_error` +
 - **Routen sind dünn, Callbacks sind die Logik:** Wer Verhalten ändert, fasst meist den **Callback** (bot-seitig) an, nicht die Route. Fehlt ein Callback, antwortet die Route mit der Leer-Implementierung (kein Crash, aber auch kein Effekt).
 - **`app.py` assembliert nur:** Fachlogik gehört in die Route-Module bzw. Callbacks, gemeinsame Regeln in `policy.py`/`contracts.py` — nicht in `app.py`.
 - **Discord-Log braucht den Broker:** Läuft das Dashboard headless ohne Broker-Token, scheitert der Self-Explainer-Discord-Log — daher die Token-Fallback-Kette.
+
+## 8. Interne Rust-Routen für rs-relay (Uplink)
+
+Nicht Teil von `bot/internal_api/`, sondern des Rust-Dashboards
+(`tb-dashboard-api`, `build_platform_token_router`). Gleiche Idee, gleiche
+Tür: Loopback plus `X-Internal-Token`, kein Cookie, kein CSRF. Gegenstelle ist
+rs-relay, nicht der Bot-Prozess.
+
+| Route | Zweck |
+|-------|-------|
+| `GET /twitch/api/v2/internal/platform-token?streamer=&platform=` | Gültiger Access-Token des Streamers, ohne Refresh-Token (REQ-7). |
+| `GET /twitch/api/v2/internal/stream-kennzahlen?streamer=` | Kennzahlen des laufenden Streams für das Karussell im Chat-Dock. |
+
+`streamer` ist in beiden Fällen die Twitch-Nutzernummer.
+
+### stream-kennzahlen
+
+Antworten: `200` mit dem Rumpf unten, `400` ohne `streamer`, `401` ohne
+Loopback oder ohne gültigen Token, `404 {"error":"nicht_live"}` wenn gerade
+kein Stream läuft, `503 {"error":"nicht_verfuegbar"}` wenn die Auswertung
+nicht antwortet.
+
+Jede Kennzahl kommt in zwei Sichten: `session` ist der laufende Stream,
+`gesamt` geht über alle Streams des Kanals (GRILLME C4-A1). Ausgegeben werden
+nur Logins und Zahlen, nie eine Chatter-ID. Bots und der Streamer selbst
+stehen in keiner Liste; die Ausschlussliste ist dieselbe wie in der
+Zuschauer-Zeitleiste (`viewer_exclusion_logins`).
+
+```json
+{
+  "streamer_login": "earlysalty",
+  "session_id": 91,
+  "session_started_at": "2026-08-27T18:00:00Z",
+  "stand": "2026-08-27T19:30:00Z",
+  "zuschauer": { "jetzt": 37, "spitze_session": 44, "spitze_gesamt": 300 },
+  "top_chatter": {
+    "session": [{ "login": "anna", "nachrichten": 12 }],
+    "gesamt":  [{ "login": "cara", "nachrichten": 900 }]
+  },
+  "laengster_zuschauer": {
+    "session": [{ "login": "anna", "minuten": 10.0 }],
+    "gesamt":  [{ "login": "bert", "minuten": 52.0 }]
+  },
+  "haeufigster_zuschauer": {
+    "gesamt": [{ "login": "bert", "sessions": 9 }]
+  },
+  "lurker": {
+    "session": { "anwesend": 10, "still": 4, "anteil": 0.4 },
+    "gesamt":  { "anteil_durchschnitt": 0.55 }
+  }
+}
+```
+
+Woher die Zahlen kommen (`tb-analytics::stream_kennzahlen`):
+
+- **Minuten** aus `twitch_viewer_presence_ticks`; ein Tick je Zuschauer je
+  30 Sekunden, Minuten sind also `Ticks / 2`.
+- **Häufigkeit** als `COUNT(DISTINCT session_id)` aus
+  `twitch_session_chatters`. `twitch_chatter_rollup.total_sessions` zählt nur
+  Sessions mit Nachricht und taugt dafür nicht.
+- **Nachrichten gesamt** aus `twitch_chatter_rollup.total_messages`,
+  Nachrichten der Session aus `twitch_session_chatters.messages`.
+- **Still mitlesend** heißt: über die Zuschauerliste gesehen, aber ohne
+  Nachricht. `lurker.gesamt.anteil_durchschnitt` ist das Mittel der
+  Session-Anteile, nicht Summe durch Summe; sonst bestimmte ein einziger
+  großer Stream die Zahl allein.
+- **Zuschauerspitzen** aus `twitch_stream_sessions.peak_viewers`.
+
+Die Listen sind auf drei Namen begrenzt und bei Gleichstand nach Login
+sortiert, damit die Karte im Dock zwischen zwei Abrufen nicht springt.
+
+Die Gesamt-Sichten laufen über alle Sessions eines Kanals, die Anwesenheit
+sogar über eine Hypertable. Sie liegen deshalb fünf Minuten in einem Cache je
+Kanal (`GESAMT_CACHE_FRIST`); die Werte des laufenden Streams werden bei jeder
+Anfrage frisch gerechnet. Das Dock fragt alle 30 Sekunden.

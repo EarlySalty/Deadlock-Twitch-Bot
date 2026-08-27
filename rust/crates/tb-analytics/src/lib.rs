@@ -47,6 +47,7 @@ pub mod raid_blacklist;
 pub mod raid_history;
 pub mod raids;
 pub mod self_explainer_log;
+pub mod stream_kennzahlen;
 pub mod streamer_link;
 pub mod ads_schedule_collector;
 pub mod subs_snapshot_collector;

@@ -1565,7 +1565,8 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-/// Interne Token-Route fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`.
+/// Interne Routen fuer rs-relay: `GET /twitch/api/v2/internal/platform-token`
+/// und `GET /twitch/api/v2/internal/stream-kennzahlen`.
 /// Loopback plus `X-Internal-Token` (derselbe Token wie auf den Admin-Routen),
 /// kein Cookie, kein CSRF.
 pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
@@ -1573,6 +1574,12 @@ pub fn build_platform_token_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/internal/platform-token",
             get(handlers::platform_token::internal_platform_token_handler),
+        )
+        // Kennzahlen des laufenden Streams fuer das Chat-Dock. Gleiche Tuer,
+        // gleicher Token: das Relay hat genau einen internen Zugang.
+        .route(
+            "/twitch/api/v2/internal/stream-kennzahlen",
+            get(handlers::stream_kennzahlen::internal_stream_kennzahlen_handler),
         )
         .layer(Extension(ExpectedToken(token)))
         .with_state(pool)
