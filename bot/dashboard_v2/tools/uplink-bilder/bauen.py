@@ -80,7 +80,8 @@ s.append(f'<text x="30" y="80" class="dim">Dock-Name</text>')
 s.append(f'<text x="250" y="80" class="dim">URL</text>')
 
 # Unsere vier Fenster, nicht die von Twitch: die Adressen stehen im Dashboard
-# in der Karte "Chat und OBS-Fenster". Der Zugang hinter "t=" ist hier nur
+# in der Karte "OBS einrichten", Schritt 5 "Fenster einrichten". Der Zugang
+# hinter "t=" ist hier nur
 # angedeutet, das Bild zeigt die Form, nicht den Wert.
 reihen = [
     ("Chat", "https://deutsche-deadlock-community.de/dock/chat?t=…"),

@@ -124,35 +124,33 @@ Mit **Stream starten** sendest du danach an uns. Die Plattformen starten wir. Ti
 
 Sobald der Dienst auf **Benutzerdefiniert** steht, verschwinden in OBS die Twitch-Fenster: Chat, Aktivitätsfeed und Stream-Informationen. Dein Chat läuft trotzdem normal weiter. Chat und Video sind bei Twitch getrennte Wege, wir fassen nur das Video an. Weg sind nur die Fenster in OBS, weil OBS die ausschließlich bei verbundenem Twitch-Konto einblendet.
 
+Wir geben dir vier eigene Fenster zurück. Anders als die von Twitch zeigen sie alle Plattformen zugleich, die du verbunden hast: Chat mit Antwortfeld, Aktivität mit Follows, Abos und Bits, Stream-Infos zum Ändern von Titel und Kategorie, und die Kanalpunkte.
+
 Du holst sie in einer Minute zurück:
 
-1. In OBS: **Docks**, dann **Benutzerdefinierte Browser-Docks**.
-2. Pro Zeile einen Namen und die Adresse aus der Tabelle eintragen. `DEINKANAL` durch deinen Kanalnamen ersetzen.
+1. Im Dashboard unter **Uplink**, Karte **OBS einrichten**, Schritt 5 **Fenster einrichten**: die vier Adressen stehen dort fertig zum Kopieren.
+2. In OBS: **Docks**, dann **Benutzerdefinierte Browser-Docks**. Pro Zeile Namen und Adresse eintragen.
 3. Fenster anordnen, dann unter **Docks** das Layout speichern.
 
-| Fenster | Adresse |
+| Fenster | Woher kommt die Adresse |
 | --- | --- |
-| Chat | `https://www.twitch.tv/popout/DEINKANAL/chat?darkpopout` |
-| Aktivitätsfeed | `https://dashboard.twitch.tv/popout/stream-manager/activity-feed` |
-| Stream-Informationen | `https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info` |
-| Kanalpunkte | `https://dashboard.twitch.tv/popout/stream-manager/community-points` |
+| Chat | Dashboard, Karte **OBS einrichten**, Schritt 5 **Fenster einrichten** |
+| Aktivität | derselbe Schritt |
+| Stream-Infos | derselbe Schritt |
+| Kanalpunkte | derselbe Schritt |
 
-Nur beim Chat steht dein Kanalname in der Adresse. Bei den drei anderen schickt dich Twitch automatisch auf deinen eigenen Kanal, sobald du angemeldet bist. Im Dashboard stehen alle Adressen fertig zum Kopieren.
+Die Adressen sind im Dashboard verdeckt, weil in jeder von ihnen dein Zugang steckt: wer sie mitliest, kann in deinem Namen im Chat schreiben. Zeig sie also nicht im Stream. Kopieren geht auch verdeckt. Ist eine Adresse irgendwo gelandet, wo sie nicht hingehört, drückst du im Dashboard **Neu erzeugen**; dann gelten die alten vier nicht mehr und du trägst die neuen in OBS ein.
 
-Es sind übrigens dieselben Seiten, die OBS auch in seine eingebauten Twitch-Fenster lädt. Der Unterschied ist nur, dass OBS sie bei verbundenem Konto selbst anlegt. Du legst sie einmal von Hand an, ordnest die Fenster und speicherst unter **Docks** das Layout. Das übersteht jeden OBS-Neustart.
+#### „Muss ich mich da anmelden?“
 
-#### „Aber ich bin doch gar nicht angemeldet“
+Nein. Genau das ist der Unterschied zu den eingebauten Twitch-Fenstern: die laden Twitch-Seiten in den Browser von OBS und brauchen dort ein eigenes Twitch-Cookie. Unsere vier Fenster kommen von uns und bringen ihren Zugang in der Adresse mit. Einmal eintragen, fertig.
 
-Das ist die häufigste Frage an dieser Stelle, und dahinter stecken zwei verschiedene Anmeldungen:
+Zwei Anmeldungen gehen an dieser Stelle gern durcheinander:
 
-- **Konto verbinden** in den Stream-Einstellungen. Damit holt sich OBS deinen Twitch-Streamschlüssel. Die brauchst du bei uns nicht, deshalb ist sie weg.
-- **Anmeldung im Fenster.** In OBS steckt ein vollständiger Browser mit eigenen Cookies, genau wie Chrome oder Firefox. Damit meldest du dich bei Twitch an, und darüber laufen Chat, Aktivität und Stream-Info.
+- **Konto verbinden** in den Stream-Einstellungen von OBS. Damit holt sich OBS deinen Twitch-Streamschlüssel. Die brauchst du bei uns nicht, deshalb ist sie weg.
+- **Mit Twitch verbinden** im Dashboard, in der Plattform-Karte. Darüber holen wir Chat, Aktivität, Stream-Infos, Kanalpunkte und deinen Stream-Schlüssel in einem Schritt. Ohne diesen Klick bleiben die vier Fenster leer.
 
-Beim ersten Öffnen zeigt das Fenster einen Anmelden-Knopf. Ein Klick, einmal einloggen, fertig. OBS legt das Cookie ab und findet es beim nächsten Start wieder.
-
-Die eingebauten Twitch-Fenster machen es genauso: dieselben Seiten, derselbe Browser, dasselbe Cookie. Du sparst dir mit ihnen nur das Anlegen, nicht die Anmeldung.
-
-Über unseren Server läuft davon nichts. Dafür müssten wir deine Twitch-Sitzung durch unsere Hand laufen lassen, und wer bei uns einbräche, hätte damit Zugriff auf deinen Kanal. Deine Anmeldung bleibt zwischen dir und Twitch.
+Deine Zugänge bleiben dabei auf unserem Server. In den Fenster-Adressen steckt nur dein Zugang zu uns, nichts von Twitch.
 
 Was im eigenen Chat-Fenster fehlt, sind BetterTTV- und FrankerFaceZ-Emotes: die spritzt OBS nur in seine eigenen Fenster ein.
 
