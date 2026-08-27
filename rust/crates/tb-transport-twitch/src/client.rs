@@ -354,6 +354,38 @@ impl HelixClient {
         }
         Ok(out)
     }
+
+    /// Holt Twitch-User-Infos für eine Liste numerischer User-IDs.
+    ///
+    /// Gibt eine Map `id → TwitchUser` zurück (Login und Anzeigename inklusive).
+    /// Leere IDs werden ignoriert. Unbekannte IDs erscheinen nicht in der Map.
+    /// Gegenstück zu [`get_users`](Self::get_users), nur mit `id`- statt
+    /// `login`-Parametern; Helix erlaubt beide an `/users`.
+    pub async fn get_users_by_id(
+        &self,
+        ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, TwitchUser>, HelixError> {
+        let mut out = std::collections::HashMap::new();
+        // Helix /users akzeptiert max. 100 id-Parameter pro Request, wie bei login.
+        for chunk in ids.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk
+                .iter()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| ("id", l))
+                .collect();
+            if params.is_empty() {
+                continue;
+            }
+            let builder = self.get("/users").await?;
+            let resp = self.send_with_retry(builder.query(&params)).await?;
+            let body: HelixUsersResponse = check_status_and_json(resp).await?;
+            for u in body.data {
+                out.insert(u.id.clone(), u);
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.

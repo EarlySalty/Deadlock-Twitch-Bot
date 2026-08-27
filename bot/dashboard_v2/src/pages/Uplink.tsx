@@ -715,10 +715,28 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
                 className="flex flex-col gap-3 rounded-xl border border-border bg-background/55 p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-white">Twitch-ID {eintrag.streamer_id}</p>
-                  <p className="mt-0.5 text-[11px] text-text-secondary">
-                    Anfrage {wartelistenZeit(eintrag.requested_at)}
-                  </p>
+                  {eintrag.display_name || eintrag.twitch_login ? (
+                    <>
+                      <p className="truncate text-sm font-semibold text-white">
+                        {eintrag.display_name ?? eintrag.twitch_login}
+                        {eintrag.twitch_login &&
+                        eintrag.display_name &&
+                        eintrag.twitch_login.toLowerCase() !== eintrag.display_name.toLowerCase() ? (
+                          <span className="ml-1 font-normal text-text-secondary">@{eintrag.twitch_login}</span>
+                        ) : null}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-text-secondary">
+                        Twitch-ID {eintrag.streamer_id} · Anfrage {wartelistenZeit(eintrag.requested_at)}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="truncate text-sm font-semibold text-white">Twitch-ID {eintrag.streamer_id}</p>
+                      <p className="mt-0.5 text-[11px] text-text-secondary">
+                        Anfrage {wartelistenZeit(eintrag.requested_at)}
+                      </p>
+                    </>
+                  )}
                   {eintrag.note ? <p className="mt-1 text-xs text-text-secondary">{eintrag.note}</p> : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">

@@ -318,6 +318,10 @@ export interface UplinkAdminWaitlistEntry {
   requested_at: string;
   note?: string | null;
   enabled: boolean;
+  /** Twitch-Login, per Helix aus der ID aufgelöst; null, wenn nicht auflösbar. */
+  twitch_login?: string | null;
+  /** Twitch-Anzeigename; null, wenn nicht auflösbar. */
+  display_name?: string | null;
 }
 
 export function fetchUplinkAdminWaitlist(): Promise<{ entries: UplinkAdminWaitlistEntry[] }> {

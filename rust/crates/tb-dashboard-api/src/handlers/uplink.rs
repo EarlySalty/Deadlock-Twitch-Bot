@@ -13,6 +13,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::collections::HashMap;
+use tb_transport_twitch::{HelixClient, HelixConfig, TwitchUser};
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
 use crate::auth::{
@@ -535,16 +537,95 @@ fn admin_actor_fuer_log(auth: &DashboardAuthLevel) -> (&str, Option<&str>) {
     }
 }
 
+/// Baut aus der tb-dashboard-Env einen Helix-Client (App-Token).
+///
+/// Dieselbe Secret-Quelle wie der AvatarCache (`TWITCH_CLIENT_ID`/`_SECRET`, aus
+/// Infisical in die Prozess-Env geladen). Fehlt ein Secret oder scheitert die
+/// Konstruktion, gibt es keinen Client; die Warteliste bleibt dann bei den
+/// nackten IDs, statt den ganzen Abruf zu verlieren.
+fn helix_aus_env() -> Option<HelixClient> {
+    let lese = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let client_id = lese("TWITCH_CLIENT_ID")?;
+    let client_secret = lese("TWITCH_CLIENT_SECRET")?;
+    HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()
+}
+
+/// Die `streamer_id` eines Eintrags als String, egal ob JSON-Zahl oder -String.
+fn eintrag_id(eintrag: &Value) -> Option<String> {
+    eintrag.get("streamer_id").and_then(|id| {
+        id.as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| id.as_str().map(str::to_string))
+    })
+}
+
+/// Sammelt die `streamer_id` aller Einträge als Strings für den Helix-Abruf.
+fn waitlist_ids(wert: &Value) -> Vec<String> {
+    wert.get("entries")
+        .and_then(Value::as_array)
+        .map(|eintraege| eintraege.iter().filter_map(eintrag_id).collect())
+        .unwrap_or_default()
+}
+
+/// Hängt an jeden Eintrag `twitch_login` und `display_name`, sofern Twitch die
+/// ID auflöst. Nicht aufgelöste IDs bekommen `null`, damit das Frontend sauber
+/// auf die nackte ID zurückfällt statt einen fremden Namen zu zeigen.
+fn mit_namen(mut wert: Value, users: &HashMap<String, TwitchUser>) -> Value {
+    if let Some(eintraege) = wert.get_mut("entries").and_then(Value::as_array_mut) {
+        for eintrag in eintraege {
+            let user = eintrag_id(eintrag).and_then(|id| users.get(&id));
+            if let Some(obj) = eintrag.as_object_mut() {
+                obj.insert(
+                    "twitch_login".into(),
+                    user.map(|u| json!(u.login)).unwrap_or(Value::Null),
+                );
+                obj.insert(
+                    "display_name".into(),
+                    user.map(|u| json!(u.display_name)).unwrap_or(Value::Null),
+                );
+            }
+        }
+    }
+    wert
+}
+
 /// Wartende Uplink-Konten für die Admin-Box.
 ///
 /// Gate ist `admin_pruefen`: jeder Admin und zusätzlich der Owner, der nur mit
 /// seiner Twitch-Identität eingeloggt ist (Partner mit Admin-Login). So sieht
 /// und bedient der Owner die Warteliste auch ohne aktivierten Admin-Modus; ein
 /// normaler Partner bekommt weiterhin 403.
+///
+/// Die Einträge tragen nur die numerische `streamer_id`; für die Anzeige wird
+/// jeder Name best-effort über Twitch-Helix nachgeladen. Scheitert das (kein
+/// Secret, Twitch nicht erreichbar), bleibt die Liste mit den IDs erhalten.
 pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
     admin_pruefen(&auth)?;
     let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
-    Ok(Json(wert))
+
+    let ids = waitlist_ids(&wert);
+    if ids.is_empty() {
+        return Ok(Json(wert));
+    }
+    let users = match helix_aus_env() {
+        Some(helix) => {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            match helix.get_users_by_id(&refs).await {
+                Ok(map) => map,
+                Err(fehler) => {
+                    tracing::warn!(%fehler, "uplink: Wartelisten-Namen nicht aufloesbar");
+                    HashMap::new()
+                }
+            }
+        }
+        None => HashMap::new(),
+    };
+    Ok(Json(mit_namen(wert, &users)))
 }
 
 #[derive(Deserialize)]
@@ -1726,6 +1807,37 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[test]
+    fn waitlist_namen_werden_angehaengt_und_fehlende_bleiben_null() {
+        let wert = json!({
+            "entries": [
+                {"streamer_id": 1367527782_i64, "requested_at": "x", "enabled": false},
+                {"streamer_id": 99_i64, "requested_at": "y", "enabled": false}
+            ]
+        });
+        let mut users = HashMap::new();
+        users.insert(
+            "1367527782".to_string(),
+            TwitchUser {
+                id: "1367527782".into(),
+                login: "coolstreamer".into(),
+                display_name: "CoolStreamer".into(),
+                profile_image_url: None,
+            },
+        );
+
+        assert_eq!(waitlist_ids(&wert), vec!["1367527782", "99"]);
+
+        let angereichert = mit_namen(wert, &users);
+        let e = &angereichert["entries"];
+        // Aufgelöste ID trägt Login und Anzeigename.
+        assert_eq!(e[0]["twitch_login"], "coolstreamer");
+        assert_eq!(e[0]["display_name"], "CoolStreamer");
+        // Unbekannte ID bleibt null, das Frontend fällt auf die ID zurück.
+        assert_eq!(e[1]["twitch_login"], Value::Null);
+        assert_eq!(e[1]["display_name"], Value::Null);
     }
 
     #[test]
