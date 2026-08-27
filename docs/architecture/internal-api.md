@@ -191,6 +191,14 @@ Loopback oder ohne Token, `404 {"error":"nicht_live"}` ohne laufenden Stream,
 Jeder gefragte Login kommt zurück, auch ein unbekannter; er gilt dann als
 erster Chat überhaupt. Als erster Chat zählt außerdem, wessen Verlauf erst in
 der laufenden Session beginnt: wer gerade eben zum ersten Mal geschrieben hat,
-steht schon im Rollup und wäre sonst eine Sekunde später kein Erstchatter mehr.
-Das eigene Kennzeichen des Bots (`confirmed_first_ever`,
+steht schon im Verlauf und wäre sonst eine Sekunde später kein Erstchatter
+mehr. Das eigene Kennzeichen des Bots (`confirmed_first_ever`,
 `is_first_time_streamer` der laufenden Session) gewinnt über beides.
+
+`erster_chat_am` ist der erste Chat, nicht die erste Anwesenheit. Die Zahl
+kommt aus `twitch_session_chatters.first_message_at` und zählt nur Zeilen mit
+Nachrichten. `twitch_chatter_rollup.first_seen_at` steht schon, sobald der
+Chatters-Poller jemanden im Kanal sieht, und bleibt danach unverändert; wer
+lange nur zuschaut und heute zum ersten Mal schreibt, sähe darüber wie ein
+alter Bekannter aus. `sessions` zählt dagegen weiter die Anwesenheit, also bei
+wie vielen Streams jemand dabei war.

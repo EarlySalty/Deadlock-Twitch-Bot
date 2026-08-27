@@ -12,11 +12,14 @@
 //! - Der Verlauf beginnt erst in dieser Session; die Person hat also gerade
 //!   eben zum ersten Mal geschrieben und deshalb schon eine Zeile im Rollup.
 //!
-//! Als Verlauf zählen nur Zeilen mit `total_messages > 0`. Der Chatters-Poller
-//! legt für jeden Anwesenden eine Rollup-Zeile mit null Nachrichten an; wer
-//! monatelang nur zuschaut und heute zum ersten Mal schreibt, sähe sonst wie
-//! ein alter Bekannter aus. `stream_kennzahlen` filtert an derselben Stelle
-//! genauso.
+//! Der Verlauf kommt aus `twitch_session_chatters` und zählt nur Zeilen mit
+//! Nachrichten. `twitch_chatter_rollup.first_seen_at` taugt dafür nicht: der
+//! Chatters-Poller legt für jeden Anwesenden eine Rollup-Zeile an, und der
+//! Nachrichten-Pfad erhöht später nur `total_messages`, ohne `first_seen_at`
+//! anzufassen. Wer monatelang zugeschaut hat und heute die erste Nachricht
+//! schreibt, hätte dort ein Datum von damals und sähe aus wie ein alter
+//! Bekannter. `first_message_at` je Session sagt dagegen wirklich, wann jemand
+//! zum ersten Mal geschrieben hat.
 //!
 //! Der dritte Punkt ist der Grund, warum die Session-Startzeit mit in die
 //! Abfrage geht: ohne sie wäre jeder Erstchatter eine Sekunde nach seiner
@@ -65,10 +68,10 @@ pub async fn laden(
                SELECT UNNEST($2::text[]) AS login
            ),
            verlauf AS (
-               SELECT LOWER(chatter_login) AS login, MIN(first_seen_at) AS erster
-               FROM twitch_chatter_rollup
+               SELECT LOWER(chatter_login) AS login, MIN(first_message_at) AS erster
+               FROM twitch_session_chatters
                WHERE LOWER(streamer_login) = $1
-                 AND COALESCE(total_messages, 0) > 0
+                 AND COALESCE(messages, 0) > 0
                GROUP BY 1
            ),
            dabei AS (
@@ -219,18 +222,45 @@ mod tests {
         .expect("rollup");
     }
 
-    async fn chatter(pool: &PgPool, session_id: i64, login: &str, erstmals: bool) {
+    /// Eine Zeile, wie sie der Nachrichten-Pfad schreibt: mit Nachrichten und
+    /// mit dem Zeitpunkt der ersten.
+    async fn chatter(
+        pool: &PgPool,
+        session_id: i64,
+        login: &str,
+        erstmals: bool,
+        erste: DateTime<Utc>,
+    ) {
         sqlx::query(
             "INSERT INTO twitch_session_chatters
-             (session_id, streamer_login, chatter_login, messages, confirmed_first_ever)
-             VALUES ($1, 'earlysalty', $2, 3, $3)",
+             (session_id, streamer_login, chatter_login, messages,
+              confirmed_first_ever, first_message_at)
+             VALUES ($1, 'earlysalty', $2, 3, $3, $4)",
         )
         .bind(session_id)
         .bind(login)
         .bind(erstmals)
+        .bind(erste)
         .execute(pool)
         .await
         .expect("chatter");
+    }
+
+    /// Eine Zeile, wie sie der Chatters-Poller schreibt: anwesend, aber ohne
+    /// eine einzige Nachricht.
+    async fn zuschauer(pool: &PgPool, session_id: i64, login: &str, gesehen: DateTime<Utc>) {
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters
+             (session_id, streamer_login, chatter_login, messages,
+              seen_via_chatters_api, confirmed_first_ever, first_message_at)
+             VALUES ($1, 'earlysalty', $2, 0, TRUE, FALSE, $3)",
+        )
+        .bind(session_id)
+        .bind(login)
+        .bind(gesehen)
+        .execute(pool)
+        .await
+        .expect("zuschauer");
     }
 
     fn logins(namen: &[&str]) -> Vec<String> {
@@ -267,8 +297,8 @@ mod tests {
         let pool = make_pool(&dsn, "test_verlauf_stammgast").await;
         // Schreibt seit gestern, war bei zwei Streams dabei.
         rollup(&pool, "stammgast", zeit(-24)).await;
-        chatter(&pool, 6, "stammgast", false).await;
-        chatter(&pool, 7, "stammgast", false).await;
+        chatter(&pool, 6, "stammgast", false, zeit(-24)).await;
+        chatter(&pool, 7, "stammgast", false, zeit(1)).await;
 
         let eintraege = laden(
             &pool,
@@ -291,7 +321,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_verlauf_gerade_eben").await;
         rollup(&pool, "neuling", zeit(1)).await;
-        chatter(&pool, 7, "neuling", false).await;
+        chatter(&pool, 7, "neuling", false, zeit(1)).await;
 
         let eintraege = laden(
             &pool,
@@ -313,7 +343,10 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_verlauf_kennzeichen").await;
         rollup(&pool, "markiert", zeit(-48)).await;
-        chatter(&pool, 7, "markiert", true).await;
+        // Der Verlauf sieht alt aus, das Kennzeichen des Bots sagt trotzdem
+        // "zum ersten Mal".
+        chatter(&pool, 5, "markiert", false, zeit(-48)).await;
+        chatter(&pool, 7, "markiert", true, zeit(1)).await;
 
         let eintraege = laden(
             &pool,
@@ -332,7 +365,8 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_verlauf_bund").await;
         rollup(&pool, "stammgast", zeit(-24)).await;
-        chatter(&pool, 7, "stammgast", false).await;
+        chatter(&pool, 6, "stammgast", false, zeit(-24)).await;
+        chatter(&pool, 7, "stammgast", false, zeit(1)).await;
         // Derselbe Name in einem anderen Kanal darf nichts ändern.
         sqlx::query(
             "INSERT INTO twitch_chatter_rollup
@@ -362,22 +396,35 @@ mod tests {
         assert_eq!(neu, vec!["neuling", "nocheiner"]);
     }
 
-    /// Der Chatters-Poller legt für jeden Anwesenden eine Rollup-Zeile mit
-    /// null Nachrichten an. Wer lange nur zugeschaut hat und heute zum ersten
-    /// Mal schreibt, ist trotzdem ein Erstchatter.
+    /// Der Fall aus dem Betrieb: jemand schaut seit Wochen zu, ohne je zu
+    /// schreiben, und schreibt heute zum ersten Mal.
+    ///
+    /// So sieht die Datenbank in dem Moment aus: der Chatters-Poller hat je
+    /// Stream eine stille Zeile angelegt und eine Rollup-Zeile von damals;
+    /// der Nachrichten-Pfad hat gerade `total_messages` erhöht, `first_seen_at`
+    /// aber stehen lassen, und `confirmed_first_ever` ist nicht gesetzt, weil
+    /// Twitchs eigenes Kennzeichen nicht immer kommt. Wer den Verlauf aus dem
+    /// Rollup liest, hält die Person deshalb für einen alten Bekannten.
     #[tokio::test]
     async fn wer_bisher_nur_zugeschaut_hat_ist_erstchatter() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_verlauf_lurker").await;
+        // Rollup-Zeile von damals, durch die erste Nachricht gerade auf eins
+        // erhöht.
         sqlx::query(
             "INSERT INTO twitch_chatter_rollup
              (streamer_login, chatter_login, total_messages, first_seen_at, last_seen_at)
-             VALUES ('earlysalty', 'stiller', 0, $1, $1)",
+             VALUES ('earlysalty', 'stiller', 1, $1, NOW())",
         )
         .bind(zeit(-240))
         .execute(&pool)
         .await
         .expect("rollup");
+        // Zwei Streams nur zugeschaut.
+        zuschauer(&pool, 5, "stiller", zeit(-240)).await;
+        zuschauer(&pool, 6, "stiller", zeit(-48)).await;
+        // Und heute die erste Nachricht.
+        chatter(&pool, 7, "stiller", false, zeit(1)).await;
 
         let eintraege = laden(
             &pool,
@@ -390,9 +437,14 @@ mod tests {
         .expect("Abfrage");
         assert!(
             eintraege[0].erster_chat_ueberhaupt,
-            "Zuschauer ohne eine einzige Nachricht darf nicht als alter Bekannter gelten"
+            "wer noch nie geschrieben hat, ist beim ersten Mal ein Erstchatter"
         );
-        assert_eq!(eintraege[0].erster_chat_am, None);
+        assert_eq!(
+            eintraege[0].erster_chat_am,
+            Some(zeit(1)),
+            "erster_chat_am ist der erste Chat, nicht die erste Anwesenheit"
+        );
+        assert_eq!(eintraege[0].sessions, 3, "dabei war er dreimal");
     }
 
     #[tokio::test]

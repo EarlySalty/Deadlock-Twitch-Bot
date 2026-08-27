@@ -418,10 +418,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Der Verlauf steckt in den Session-Zeilen: einmal vor Wochen, einmal
+        // im laufenden Stream. Ohne die alte Zeile waere der Stammgast heute
+        // ein Erstchatter, und genau so soll es auch sein.
         sqlx::query(
             "INSERT INTO twitch_session_chatters
-             (session_id, streamer_login, chatter_login, chatter_id, messages)
-             VALUES (55, 'verlaufkanal', 'stammgast', 'id-geheim', 4)",
+             (session_id, streamer_login, chatter_login, chatter_id, messages,
+              first_message_at)
+             VALUES (54, 'verlaufkanal', 'stammgast', 'id-geheim', 30,
+                     NOW() - INTERVAL '9 days'),
+                    (55, 'verlaufkanal', 'stammgast', 'id-geheim', 4, NOW())",
         )
         .execute(&pool)
         .await
@@ -443,7 +449,7 @@ mod tests {
             .find(|e| e["login"] == "stammgast")
             .expect("stammgast");
         assert_eq!(stammgast["erster_chat_ueberhaupt"], false);
-        assert_eq!(stammgast["sessions"], 1);
+        assert_eq!(stammgast["sessions"], 2);
         let neuling = eintraege
             .iter()
             .find(|e| e["login"] == "neuling")
