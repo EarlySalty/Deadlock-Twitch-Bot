@@ -20,6 +20,7 @@ const UPLINK_API = readFileSync(join(WURZEL, 'src/api/uplink.ts'), 'utf8');
 const UPLINK_SEITE = readFileSync(join(WURZEL, 'src/pages/Uplink.tsx'), 'utf8');
 const OBS_HILFE = readFileSync(join(WURZEL, 'public/uplink/obs.html'), 'utf8');
 const OBS_WISSEN = readFileSync(join(WURZEL, '../../rust/knowledge/bot/uplink-obs.md'), 'utf8');
+const BILDER_SKRIPT = readFileSync(join(WURZEL, 'tools/uplink-bilder/bauen.py'), 'utf8');
 
 const BASIS: UplinkMe = {
   enabled: true,
@@ -165,6 +166,7 @@ test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {
     ['public/uplink/obs.html', OBS_HILFE],
     ['rust/knowledge/bot/uplink-obs.md', OBS_WISSEN],
     ['src/pages/Uplink.tsx', UPLINK_SEITE],
+    ['tools/uplink-bilder/bauen.py', BILDER_SKRIPT],
   ] as const) {
     assert.ok(
       !quelle.includes('Chat und OBS-Fenster'),
