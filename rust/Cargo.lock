@@ -2815,6 +2815,7 @@ dependencies = [
  "tb-internal-api",
  "tb-knowledge",
  "tb-llm",
+ "tb-load",
  "tb-monitoring",
  "tb-observability",
  "tb-platform-core",
@@ -3078,6 +3079,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-load"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
 name = "tb-monitoring"
 version = "0.1.0"
 dependencies = [
@@ -3174,6 +3182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tb-load",
  "tracing",
 ]
 
