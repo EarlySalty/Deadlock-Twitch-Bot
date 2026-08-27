@@ -37,7 +37,7 @@ import {
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
-import type { DockUrls, UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
+import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import {
@@ -84,106 +84,50 @@ function SidebarLink({
 }
 
 /**
- * Kopierfeld mit verdecktem Wert.
- *
- * Kopieren geht immer, auch verdeckt: dafuer muss niemand den Wert sehen.
- * Aufdecken haengt an `darfAufdecken`. Sendet der Streamer gerade, bleibt der
- * Wert verdeckt, denn ein geteilter Bildschirm zeigt ihn sonst der ganzen
- * Zuschauerschaft.
- *
- * Der Effekt verdeckt auch wieder: wer aufdeckt und dann den Stream startet,
- * haette den Wert sonst offen auf dem Schirm, genau im gefaehrlichsten Moment.
- *
- * `navigator.clipboard` scheitert still ohne HTTPS oder ohne Erlaubnis. Ohne
- * den Fehlerzweig meldete das Feld "Kopiert", waehrend die Zwischenablage leer
- * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
- */
-function DockZeile({ titel, url }: { titel: string; url: string }) {
-  const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
-  const feldRef = useRef<HTMLInputElement>(null);
-
-  async function kopieren() {
-    try {
-      await navigator.clipboard.writeText(url);
-      setStand('ok');
-      window.setTimeout(() => setStand('ruhe'), 1600);
-    } catch {
-      setStand('fehler');
-      feldRef.current?.focus();
-      feldRef.current?.select();
-    }
-  }
-
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        {/* Der Name steht sichtbar davor: vier Adressen ohne Beschriftung sind
-            vier gleich aussehende Zeilen, und in OBS braucht jedes Fenster
-            genau diesen Namen. */}
-        <span className="w-28 shrink-0 text-[11px] font-semibold text-white">{titel}</span>
-        <input
-          ref={feldRef}
-          readOnly
-          value={url}
-          aria-label={`${titel}-Dock-Adresse`}
-          className="min-h-11 min-w-0 flex-1 truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-[11px] text-text-secondary"
-        />
-      <button
-        type="button"
-        onClick={kopieren}
-        title={url}
-        aria-label={`${titel}-Dock-Adresse kopieren`}
-        className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
-      >
-        <Copy aria-hidden="true" className="h-3.5 w-3.5" />
-        {stand === 'ok' ? 'Kopiert' : 'Kopieren'}
-      </button>
-      </div>
-      <p aria-live="polite" className={`text-[11px] ${stand === 'fehler' ? 'text-warning' : 'text-success'}`}>
-        {stand === 'fehler' ? 'Automatisches Kopieren blockiert. Feld ist markiert; Strg+C drücken.' : ''}
-      </p>
-    </div>
-  );
-}
-
-/**
  * Inhalt der Karte "Chat und OBS-Fenster".
  *
- * Unsere eigene Dock-Adresse steht zuerst: ein Fenster fuer den Chat aller
- * Plattformen, die gerade ueber Uplink laufen, mit Antwortfeld. Die vier
- * Twitch-Fenster bleiben als Zusatz darunter.
+ * Vier Fenster, ein Zugang: Chat mit Antwortfeld, Aktivität, Stream-Infos und
+ * Kanalpunkte, jeweils für alle verbundenen Plattformen zugleich. Die Adressen
+ * stehen dauerhaft hier, nicht nur in der Sekunde nach dem Erzeugen; wer die
+ * Seite neu lädt, findet dieselben vier Zeilen wieder.
  *
- * Die Adresse kommt nach dem Erzeugen genau einmal vom Server. Sie bleibt hier
- * nur im Speicher der Seite, bis der Streamer den Hinweis quittiert oder neu
- * laedt; danach zeigt die Karte "neu erzeugen", weil die alte Adresse nicht
- * noch einmal ausgeliefert wird. Nach dem Erzeugen wird `uplink-me` neu
- * geladen, damit `dock_url_vorhanden` stimmt und die Karte nach einer
- * Navigation (etwa "Mit Twitch verbinden" in der Plattform-Karte) nicht wieder
- * "erzeugen" anbietet.
+ * Verdeckt wie die Serveradresse in Schritt 2, mit derselben Komponente: in
+ * jeder Adresse steckt der Zugang zum Chat, und wer sie mitliest, kann im Namen
+ * des Streamers schreiben. Kopieren geht trotzdem, dafür muss niemand etwas
+ * sehen.
+ *
+ * Die fertigen Twitch-Fenster sind hier weggefallen. Sie zeigten nur Twitch,
+ * brauchten eine eigene Anmeldung im OBS-Browser und standen direkt neben vier
+ * Fenstern, die dasselbe für alle Plattformen tun.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
-  const [neueAdressen, setNeueAdressen] = useState<DockUrls | null>(null);
+  const [nachfrage, setNachfrage] = useState(false);
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
-    onSuccess: (antwort) => {
-      // Aeltere Server kennen nur die eine Adresse. Dann gilt sie als
-      // Chat-Fenster; die drei anderen fehlen, statt ins Leere zu zeigen.
-      setNeueAdressen(
-        antwort.dock_urls ?? {
-          chat: antwort.dock_url,
-          activity: '',
-          stream_info: '',
-          points: '',
-        }
+    onSuccess: (neue) => {
+      // Die neuen Adressen gehen direkt in den Zwischenspeicher, aus dem die
+      // Karte liest. Damit stehen sie sofort da, ohne zweite Quelle daneben:
+      // ein eigener Zustand für "gerade erzeugt" wäre ein zweiter Stand, der
+      // hängen bleiben kann, während der Server längst etwas anderes führt.
+      // Der Abruf danach holt sich, was sonst noch am Nutzer hängt.
+      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+        alt ? { ...alt, dock_urls: neue, dock_url_vorhanden: true } : alt
       );
+      setNachfrage(false);
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
   });
-  const adressen = dockAdressen(me, neueAdressen);
-  const eigene = adressen.filter((d) => d.eigene);
-  const twitchFenster = adressen.filter((d) => !d.eigene);
-  const vorhanden = Boolean(me.dock_url_vorhanden) || eigene.length > 0;
+  const adressen = dockAdressen(me);
+  // "Vorhanden" und "anzeigbar" fallen auseinander: ein Zugang aus der Zeit
+  // vor dem Umbau lässt sich nicht mehr anzeigen. Dann gilt trotzdem die
+  // Rückfrage, denn ein Neuerzeugen entwertet auch diese Eintragungen in OBS.
+  const vorhanden = Boolean(me.dock_url_vorhanden) || adressen.length > 0;
+  const darfAufdecken = me.live_status === 'aus';
+  const grundVerdeckt =
+    me.live_status === 'live'
+      ? 'Du bist gerade live. Solange bleiben die Adressen verdeckt, damit sie nicht im Stream landen. Kopieren geht trotzdem.'
+      : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleiben die Adressen verdeckt. Kopieren geht trotzdem.';
 
   return (
     <div className="space-y-4 border-t border-border/60 px-5 py-4">
@@ -192,72 +136,103 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
         den Namen und die jeweilige Adresse eintragen.
       </p>
 
-      <div data-section="eigenes-dock" className="space-y-2">
-        <p className="text-xs font-semibold text-white">Fenster von Uplink</p>
+      <div data-section="eigenes-dock" className="space-y-3">
         <p className="text-xs text-text-secondary">
           Vier Fenster für alle verbundenen Plattformen zugleich: Chat mit Antwortfeld, Aktivität mit
           Follows, Abos und Bits, Stream-Infos zum Ändern von Titel und Kategorie, und die Kanalpunkte.
           Verbinden geht in der jeweiligen Plattform-Karte oben.
         </p>
-        {eigene.length > 0 ? (
+
+        {adressen.length > 0 ? (
           <>
-            {eigene.map((dock) => (
-              <DockZeile key={dock.titel} titel={dock.titel} url={dock.url} />
+            {adressen.map((dock) => (
+              <CopyField
+                key={dock.titel}
+                label={dock.titel}
+                value={dock.url}
+                darfAufdecken={darfAufdecken}
+                grundVerdeckt={grundVerdeckt}
+                grundAnzeigen={false}
+              />
             ))}
-            {neueAdressen ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <p className="text-xs text-warning">
-                  Diese Adressen werden nur jetzt einmal angezeigt. Kopiere sie gleich alle in OBS. Wer eine
-                  davon kennt, kann in deinem Namen im Chat schreiben.
+            {/* Der Grund steht einmal unter allen vier Zeilen. Viermal
+                derselbe Satz liest sich wie ein Fehler. */}
+            {!darfAufdecken ? <p className="text-xs text-text-secondary">{grundVerdeckt}</p> : null}
+            <div
+              data-uplink-dock-warning
+              role="note"
+              className="rounded-xl border border-warning/45 bg-warning/10 px-3 py-2.5 text-xs text-warning shadow-[inset_3px_0_0_var(--color-warning)]"
+            >
+              <div className="flex items-start gap-2.5">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-warning/35 bg-warning/15">
+                  <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+                </span>
+                <p className="pt-0.5 leading-relaxed">
+                  <strong className="font-semibold text-white">Privat:</strong> Wer eine dieser Adressen
+                  hat, kann in deinem Namen im Chat schreiben. Nicht im Stream zeigen.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setNeueAdressen(null)}
-                  className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50"
-                >
-                  In OBS eingetragen
-                </button>
               </div>
-            ) : null}
+            </div>
           </>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-3">
+        ) : (
+          <p className="text-xs text-text-secondary">
+            {vorhanden
+              ? 'Deine Fenster laufen weiter, ihre Adressen lassen sich hier aber nicht mehr anzeigen. Erzeuge sie einmal neu, dann stehen sie dauerhaft hier.'
+              : 'Noch keine Adressen erzeugt.'}
+          </p>
+        )}
+
+        {nachfrage ? (
+          <div className="flex flex-col gap-2 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2">
+            <p className="text-xs text-warning">
+              Die vier Adressen, die jetzt in OBS stehen, gelten danach nicht mehr. Du musst sie dort
+              alle vier neu eintragen.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={erzeugen.isPending}
+                onClick={() => erzeugen.mutate()}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
+              >
+                {erzeugen.isPending ? (
+                  <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                {erzeugen.isPending ? 'Wird erzeugt' : 'Ja, neu erzeugen'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Auch die Fehlerzeile geht mit: sie gehoert zu einem
+                  // Versuch, den es nach dem Abbrechen nicht mehr gibt.
+                  erzeugen.reset();
+                  setNachfrage(false);
+                }}
+                className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        ) : (
           <button
             type="button"
-            onClick={() => erzeugen.mutate()}
+            onClick={() => (vorhanden ? setNachfrage(true) : erzeugen.mutate())}
             disabled={erzeugen.isPending}
             className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
           >
-            {erzeugen.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
-            {vorhanden ? 'Dock-Adressen neu erzeugen' : 'Dock-Adressen erzeugen'}
+            {erzeugen.isPending ? (
+              <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+            ) : null}
+            {vorhanden ? 'Neu erzeugen' : 'Adressen erzeugen'}
           </button>
-          {vorhanden && eigene.length === 0 ? (
-            <span className="text-xs text-text-secondary">
-              Es gibt schon Dock-Adressen. Sie werden aus Sicherheitsgründen nicht noch einmal angezeigt; beim
-              Neuerzeugen gelten die alten nicht mehr.
-            </span>
-          ) : null}
-        </div>
+        )}
+
         {erzeugen.isError ? (
           <p role="alert" className="text-xs text-warning">
-            Die Dock-Adressen konnten gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
+            Die Adressen konnten gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
           </p>
         ) : null}
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-xs font-semibold text-white">Twitch-Fenster</p>
-        {twitchFenster.map((dock) => (
-          <DockZeile key={dock.titel} titel={dock.titel} url={dock.url} />
-        ))}
-        {!me.twitch_login ? (
-          <p className="text-xs text-text-secondary">
-            Für den Chat fehlt gerade dein Kanalname. Nach einer neuen Anmeldung erscheint auch diese Adresse.
-          </p>
-        ) : null}
-        <p className="text-xs text-text-secondary">
-          Einmal bei Twitch anmelden, Fenster anordnen und das Layout in OBS speichern.
-        </p>
       </div>
     </div>
   );
@@ -431,16 +406,38 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
   ];
 }
 
+/**
+ * Kopierfeld mit verdecktem Wert.
+ *
+ * Kopieren geht immer, auch verdeckt: dafuer muss niemand den Wert sehen.
+ * Aufdecken haengt an `darfAufdecken`. Sendet der Streamer gerade, bleibt der
+ * Wert verdeckt, denn ein geteilter Bildschirm zeigt ihn sonst der ganzen
+ * Zuschauerschaft.
+ *
+ * Der Effekt verdeckt auch wieder: wer aufdeckt und dann den Stream startet,
+ * haette den Wert sonst offen auf dem Schirm, genau im gefaehrlichsten Moment.
+ *
+ * `navigator.clipboard` scheitert still ohne HTTPS oder ohne Erlaubnis. Ohne
+ * den Fehlerzweig meldete das Feld "Kopiert", waehrend die Zwischenablage leer
+ * bliebe, und der Streamer suchte den Fehler spaeter in OBS.
+ *
+ * `grundAnzeigen` schaltet nur den Satz unter dem Feld ab, nicht die Sperre und
+ * nicht den Hinweis am Knopf. Gedacht fuer die Dock-Karte: dort stehen vier
+ * Felder untereinander, und viermal derselbe Satz liest sich wie ein Fehler.
+ * Der Grund steht dann einmal darunter.
+ */
 function CopyField({
   label,
   value,
   darfAufdecken,
   grundVerdeckt,
+  grundAnzeigen = true,
 }: {
   label: string;
   value: string;
   darfAufdecken: boolean;
   grundVerdeckt: string;
+  grundAnzeigen?: boolean;
 }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const [offen, setOffen] = useState(false);
@@ -476,6 +473,11 @@ function CopyField({
           ref={feldRef}
           readOnly
           type={offen ? 'text' : 'password'}
+          // Verdeckt heisst hier nur "nicht auf dem Schirm". Ohne diese Zeile
+          // bietet der Passwortmanager fuer jede Adresse das Speichern an.
+          autoComplete="off"
+          data-1p-ignore
+          data-lpignore="true"
           value={value}
           aria-label={`${label}: ${offen ? value : 'verdeckt'}`}
           className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"
@@ -514,7 +516,9 @@ function CopyField({
           Dein Browser hat das automatische Kopieren nicht erlaubt. Das Feld ist markiert; kopier es mit Strg+C.
         </p>
       )}
-      {!darfAufdecken && <p className="text-xs text-text-secondary">{grundVerdeckt}</p>}
+      {!darfAufdecken && grundAnzeigen && (
+        <p className="text-xs text-text-secondary">{grundVerdeckt}</p>
+      )}
     </div>
   );
 }
@@ -1176,7 +1180,7 @@ export function UplinkPage() {
                   <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
                     <span>
                       <span className="block text-base font-bold text-white">Chat und OBS-Fenster</span>
-                      <span className="mt-0.5 block text-xs text-text-secondary">Unser Multi-Chat plus vier Twitch-Fenster</span>
+                      <span className="mt-0.5 block text-xs text-text-secondary">Vier Fenster für alle Plattformen</span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
                   </summary>

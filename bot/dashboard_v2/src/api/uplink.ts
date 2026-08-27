@@ -19,18 +19,27 @@ export interface UplinkMe {
   rtmp_url: string;
   srt_hint: string;
   live_status?: UplinkLiveStatus;
-  /** Fuer die fertigen OBS-Dock-Adressen. Fehlt bei aelteren Servern. */
-  twitch_login?: string;
   /** Wartezeit nur nach einem unerwarteten Internetabriss. */
   reconnect_wait_s: number;
   /** Vom Relay gelieferte Obergrenze, nicht im Frontend duplizieren. */
   reconnect_wait_max_s: number;
   /**
-   * Unsere eigene Dock-Adresse fuer den Multi-Chat, sobald das Relay sie
-   * kennt. Fehlt bei aelteren Servern und solange keine erzeugt wurde.
+   * Die vier Dock-Adressen, sobald das Relay sie herstellen kann.
+   *
+   * `null` heisst: es gibt nichts anzuzeigen. Zwei Faelle laufen darin
+   * zusammen, und beide enden bei demselben Knopf: es wurde nie eine erzeugt,
+   * oder der Zugang stammt aus der Zeit, in der das Relay nur den Fingerabdruck
+   * gespeichert hat.
    */
-  dock_url?: string;
-  /** Ob es schon eine Dock-Adresse gibt, auch wenn sie hier nicht mitkommt. */
+  dock_urls?: DockUrls | null;
+  /**
+   * Ob es schon Dock-Adressen gibt, auch wenn sie hier nicht mitkommen.
+   *
+   * Steht neben `dock_urls`, weil beides auseinanderfallen kann. Nur so
+   * unterscheidet die Karte "erzeugen" von "neu erzeugen", und nur so erfaehrt
+   * der Streamer vorher, dass ein Neuerzeugen seine Eintraege in OBS
+   * entwertet.
+   */
   dock_url_vorhanden?: boolean;
   /** Je Plattform ein Eintrag; was nicht gespeichert ist, ist getrennt. */
   verbindungen?: UplinkVerbindung[];
@@ -46,12 +55,12 @@ export interface UplinkVerbindung {
 }
 
 /**
- * Die vier Fenster hinter einer Dock-Adresse. Ein Token fuer alle vier; ein
- * Neuerzeugen macht alle vier alten Adressen ungueltig.
+ * Die vier Fenster hinter einem Zugang. Ein Neuerzeugen macht alle vier alten
+ * Adressen ungueltig.
  *
- * Optional, weil aeltere Server nur `dock_url` liefern. Dann gilt die eine
- * Adresse als Chat-Fenster und die drei anderen fehlen einfach, statt dass die
- * Karte auf einen Platzhalter zeigt.
+ * Ein leeres Feld ist erlaubt und bedeutet "diese Adresse gibt es nicht":
+ * `dockAdressen` laesst die Zeile dann weg, statt eine Kopierzeile ohne Ziel
+ * anzubieten.
  */
 export interface DockUrls {
   chat: string;
@@ -61,11 +70,16 @@ export interface DockUrls {
 }
 
 /**
- * Laesst das Relay eine neue Dock-Adresse ausstellen. Die alte gilt danach
- * nicht mehr, die neue kommt genau einmal in dieser Antwort zurueck.
+ * Laesst das Relay neue Dock-Adressen ausstellen. Die alten gelten danach nicht
+ * mehr.
+ *
+ * Die Antwort ist nicht mehr die einzige Gelegenheit: `GET /uplink/me` liefert
+ * dieselben vier Adressen bei jedem Laden. Sie steht hier trotzdem, damit die
+ * Karte direkt nach dem Klick etwas zeigen kann, statt auf den naechsten Abruf
+ * zu warten.
  */
-export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?: DockUrls }> {
-  return fetchJson<{ dock_url: string; dock_urls?: DockUrls }>(
+export async function rotateUplinkDockToken(): Promise<DockUrls> {
+  const antwort = await fetchJson<{ dock_urls?: DockUrls }>(
     '/twitch/api/v2/uplink/dock-token/rotate',
     withCookieCredentials({
       method: 'POST',
@@ -73,6 +87,14 @@ export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?:
       body: '{}',
     })
   );
+  // Kommt hier nichts Anzeigbares zurueck, ist der Zugang trotzdem schon
+  // gedreht und die Eintraege in OBS sind tot. Das darf nicht still
+  // durchgehen: sonst drueckt der Streamer denselben Knopf noch einmal und
+  // entwertet jedes Mal einen weiteren Zugang, ohne je eine Adresse zu sehen.
+  if (!antwort.dock_urls?.chat) {
+    throw new Error('Das Relay hat keine Dock-Adressen zurueckgegeben.');
+  }
+  return antwort.dock_urls;
 }
 
 /**
@@ -236,43 +258,13 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
 }
 
 /**
- * Die vier fertigen Twitch-Fenster fuer OBS.
- *
- * Es sind dieselben Adressen, die OBS in seine eigenen Docks laedt: siehe
- * `frontend/oauth/TwitchAuth.cpp` im OBS-Quellcode. Die eingebauten Docks sind
- * selbst nur Browser-Fenster, sie werden nur automatisch angelegt, sobald ein
- * Twitch-Konto verbunden ist. Inhaltlich ist ein eigenes Dock dasselbe Fenster.
- *
- * Drei der vier Adressen kommen ohne Kanalnamen aus: Twitch leitet einen
- * angemeldeten Nutzer auf seinen eigenen Kanal weiter. Das ist robuster als
- * der Namensweg, weil es auch nach einer Namensaenderung noch stimmt. Nur der
- * Chat braucht den Kanal in der Adresse.
- */
-export const OBS_DOCKS = [
-  {
-    titel: 'Chat',
-    pfad: (k: string) => (k ? `https://www.twitch.tv/popout/${k}/chat?darkpopout` : ''),
-  },
-  {
-    titel: 'Aktivitätsfeed',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/activity-feed',
-  },
-  {
-    titel: 'Stream-Informationen',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/edit-stream-info',
-  },
-  {
-    titel: 'Kanalpunkte',
-    pfad: () => 'https://dashboard.twitch.tv/popout/stream-manager/community-points',
-  },
-] as const;
-
-export const EIGENES_DOCK_TITEL = 'Chat';
-
-/**
  * Die vier eigenen Fenster in Anzeigereihenfolge, mit den Namen, die auch in
  * OBS eingetragen werden. Feste Reihenfolge, damit die Karte nicht bei jedem
- * Erzeugen anders aussieht.
+ * Laden anders aussieht.
+ *
+ * Fertige Twitch-Fenster stehen hier bewusst nicht mehr: sie zeigten nur
+ * Twitch, brauchten eine eigene Anmeldung im OBS-Browser und standen neben
+ * vier Fenstern, die dasselbe fuer alle verbundenen Plattformen tun.
  */
 export const EIGENE_DOCKS = [
   { titel: 'Chat', feld: 'chat' },
@@ -284,34 +276,24 @@ export const EIGENE_DOCKS = [
 export interface DockAdresse {
   titel: string;
   url: string;
-  /** true fuer unsere eigenen Adressen, false fuer die Twitch-Fenster. */
-  eigene: boolean;
 }
 
 /**
- * Alle Dock-Adressen in Anzeigereihenfolge: unsere vier zuerst, danach die
- * Twitch-Fenster. Ohne Kanalname faellt der Twitch-Chat weg, die drei uebrigen
- * Twitch-Fenster brauchen ihn nicht.
+ * Unsere vier Dock-Adressen in Anzeigereihenfolge.
  *
- * `dockUrls` kommt einmalig aus dem Erzeugen. Fehlt es, weil der Server die
- * vier Adressen noch nicht kennt, bleibt die eine bekannte Adresse als
- * Chat-Fenster stehen. Lieber ein Fenster weniger als drei Adressen, die ins
- * Leere zeigen.
+ * Eine Quelle, `me`. Frisch erzeugte Adressen kommen ueber den
+ * Zwischenspeicher der Abfrage hier an, nicht ueber einen zweiten Parameter:
+ * ein eigener Zustand fuer "gerade erzeugt" waere ein zweiter Stand, der
+ * haengen bleiben kann, waehrend der Server laengst etwas anderes fuehrt.
+ *
+ * Eine leere Adresse faellt weg, statt eine Kopierzeile ohne Ziel anzubieten.
  */
-export function dockAdressen(me: UplinkMe, dockUrls?: DockUrls | null): DockAdresse[] {
+export function dockAdressen(me: UplinkMe): DockAdresse[] {
+  if (!me.dock_urls) return [];
   const liste: DockAdresse[] = [];
-  if (dockUrls) {
-    for (const dock of EIGENE_DOCKS) {
-      const url = dockUrls[dock.feld]?.trim() ?? '';
-      if (url) liste.push({ titel: dock.titel, url, eigene: true });
-    }
-  } else {
-    const eigene = me.dock_url?.trim() ?? '';
-    if (eigene) liste.push({ titel: EIGENES_DOCK_TITEL, url: eigene, eigene: true });
-  }
-  for (const dock of OBS_DOCKS) {
-    const url = dock.pfad(me.twitch_login ?? '');
-    if (url) liste.push({ titel: dock.titel, url, eigene: false });
+  for (const dock of EIGENE_DOCKS) {
+    const url = me.dock_urls[dock.feld]?.trim() ?? '';
+    if (url) liste.push({ titel: dock.titel, url });
   }
   return liste;
 }

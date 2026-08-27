@@ -390,10 +390,15 @@ const UPLINK_ME_FIXTURE = {
   srt_hint:
     'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',
   live_status: 'aus',
-  twitch_login: 'earlysalty',
   reconnect_wait_s: 90,
   reconnect_wait_max_s: 300,
-  dock_url_vorhanden: false,
+  dock_url_vorhanden: true,
+  dock_urls: {
+    chat: 'https://deutsche-deadlock-community.de/dock/chat?t=dock_vorschau',
+    activity: 'https://deutsche-deadlock-community.de/dock/activity?t=dock_vorschau',
+    stream_info: 'https://deutsche-deadlock-community.de/dock/stream-info?t=dock_vorschau',
+    points: 'https://deutsche-deadlock-community.de/dock/points?t=dock_vorschau',
+  },
   verbindungen: [
     { platform: 'twitch', status: 'verbunden' },
     { platform: 'kick', status: 'getrennt' },
