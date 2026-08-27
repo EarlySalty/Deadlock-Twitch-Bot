@@ -8,8 +8,8 @@
 //! neuen Namen nicht viele Anfragen kostet.
 //!
 //! Schutz wie bei den anderen internen Routen: Loopback plus
-//! `X-Internal-Token`. Herausgegeben werden nur Logins, Zahlen und ein
-//! Zeitpunkt, nie eine Chatter-ID.
+//! `X-Internal-Token`. Herausgegeben werden nur Logins und Zahlen, nie eine
+//! Chatter-ID und kein Zeitpunkt.
 
 // Axum-Responses direkt im Result, wie in platform_token.rs.
 #![allow(clippy::result_large_err)]
