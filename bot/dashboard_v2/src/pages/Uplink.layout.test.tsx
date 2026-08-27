@@ -17,11 +17,46 @@ test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzuständ
   assert.doesNotMatch(UPLINK, />OBS verbunden</);
 });
 
-test('OBS ist eine geordnete Liste aus vier nativen Disclosures', () => {
+test('OBS ist eine geordnete Liste aus fünf nativen Disclosures', () => {
   assert.match(UPLINK, /<ol[^>]+aria-label="OBS einrichten"/);
   assert.equal((UPLINK.match(/data-obs-step=/g) ?? []).length, 1);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<details/);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<summary/);
+  // Fünf Schritte, und die Zählung im Schrittkopf zählt bis fünf. Stand dort
+  // weiter "von 4", waere der letzte Schritt der, den es laut Kopf nicht gibt.
+  assert.match(UPLINK, /Schritt \{nummer\} von 5/);
+  assert.doesNotMatch(UPLINK, /Schritt \{nummer\} von 4/);
+  for (const nummer of [1, 2, 3, 4, 5]) {
+    assert.match(UPLINK, new RegExp(`<ObsSchritt nummer=\\{${nummer}\\}`));
+  }
+  assert.match(UPLINK, /Fünf kurze Schritte/);
+  assert.doesNotMatch(UPLINK, /Vier kurze Schritte/);
+  assert.match(UPLINK, /5 Schritte/);
+  assert.doesNotMatch(UPLINK, /4 Schritte/);
+});
+
+test('die vier Fensteradressen stehen als Schritt 5 in der OBS-Anleitung', () => {
+  // Vorher eine eigene Karte weit unten, an der die Anleitung vorbeilief. Die
+  // Adressen gehoeren dahin, wo OBS eingerichtet wird: hinter "Ausgabe
+  // einstellen", als letzter Schritt derselben Liste.
+  assert.match(
+    UPLINK,
+    /<ObsSchritt nummer=\{4\} titel="Ausgabe einstellen">[\s\S]*?<ObsSchritt nummer=\{5\} titel="Fenster einrichten">/,
+  );
+  assert.match(
+    UPLINK,
+    /<ObsSchritt nummer=\{5\} titel="Fenster einrichten">[\s\S]{0,200}<DockSchrittInhalt me=\{data\} \/>/,
+  );
+  // Der Schritt nutzt dieselbe Aufklapp-Mechanik wie 1 bis 4, kein zweites
+  // Klappmuster daneben.
+  assert.match(UPLINK, /function DockSchrittInhalt/);
+
+  // Die eigene Karte ist weg, samt ihrem gespeicherten Klappzustand.
+  assert.doesNotMatch(UPLINK, /data-section="obs-docks"/);
+  assert.doesNotMatch(UPLINK, /Chat und OBS-Fenster/);
+  assert.doesNotMatch(UPLINK, /docksOffen/);
+  assert.doesNotMatch(UPLINK, /useUplinkDisclosure\('obs-docks'/);
+  assert.doesNotMatch(UPLINK, /Vier Fenster für alle Plattformen/);
 });
 
 test('der private OBS-Schlüsselhinweis steht in einer eigenen Warnbox', () => {
@@ -46,11 +81,9 @@ test('Admin-Wartelistenaufrufe senden das Session-CSRF-Token', () => {
 });
 
 test('Disclosure-Zustände werden mit geschlossenen Startwerten gespeichert', () => {
-  assert.match(UPLINK, /useUplinkDisclosure\('obs-docks', false\)/);
   assert.match(UPLINK, /useUplinkDisclosure\('uplink-hilfe', false\)/);
   assert.match(UPLINK, /useUplinkDisclosure\(`obs-\$\{nummer\}`, offenStart\)/);
   assert.match(ZIEL, /useUplinkDisclosure\(`plattform-\$\{platform\}`, offenStart\)/);
-  assert.match(UPLINK, /data-section="obs-docks"[\s\S]{0,100}open=\{docksOffen\}/);
   assert.match(UPLINK, /data-section="uplink-help"[\s\S]{0,100}open=\{hilfeOffen\}/);
 });
 
@@ -99,7 +132,10 @@ test('Clipboard-Fehler hinterlassen ein fokussiertes, auswählbares Feld', () =>
 
 test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.doesNotMatch(UPLINK, /data-section="plattformen-verbinden"/);
-  assert.match(UPLINK, /Verbinden geht in der jeweiligen Plattform-Karte oben\./);
+  // Ohne "oben": der Satz steht jetzt in Schritt 5 der linken Spalte, die
+  // Plattform-Karten stehen daneben.
+  assert.match(UPLINK, /Verbinden geht in der jeweiligen Plattform-Karte\./);
+  assert.doesNotMatch(UPLINK, /Plattform-Karte oben/);
   assert.match(UPLINK, /chat=\{chatVerbindungen\.find/);
   assert.match(ZIEL, /chat\.knopfText/);
   assert.match(ZIEL, /chat\.statusText/);
@@ -169,7 +205,7 @@ test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => 
   assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
 });
 
-test('die Dock-Karte zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
+test('Schritt 5 zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
   // Vier Fenster hinter einem Zugang; die Namen sind die, die in OBS
   // eingetragen werden.
   assert.match(UPLINK_API, /titel: 'Chat', feld: 'chat'/);
@@ -199,5 +235,4 @@ test('die Dock-Karte zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () 
   // Kein internes Vokabular in der Karte und keine Twitch-Popouts mehr.
   assert.doesNotMatch(UPLINK, /twitch\.tv\/popout/);
   assert.doesNotMatch(UPLINK, /Einmal bei Twitch anmelden/);
-  assert.match(UPLINK, /Vier Fenster für alle Plattformen/);
 });

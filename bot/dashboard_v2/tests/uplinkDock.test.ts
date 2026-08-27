@@ -19,6 +19,7 @@ const WURZEL = join(import.meta.dirname, '..');
 const UPLINK_API = readFileSync(join(WURZEL, 'src/api/uplink.ts'), 'utf8');
 const UPLINK_SEITE = readFileSync(join(WURZEL, 'src/pages/Uplink.tsx'), 'utf8');
 const OBS_HILFE = readFileSync(join(WURZEL, 'public/uplink/obs.html'), 'utf8');
+const OBS_WISSEN = readFileSync(join(WURZEL, '../../rust/knowledge/bot/uplink-obs.md'), 'utf8');
 
 const BASIS: UplinkMe = {
   enabled: true,
@@ -154,4 +155,27 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   // Uplink-Scope-Profil; einen eigenen Connect-Pfad gibt es nicht mehr.
   assert.equal(uplinkConnectUrl('twitch'), '/twitch/raid/auth?scope_profile=uplink');
   assert.equal(uplinkConnectUrl('kick'), '');
+});
+
+test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {
+  // Beide Fassungen schicken den Streamer an die Stelle, an der die Adressen
+  // wirklich stehen. Zeigen sie auf eine Karte, die es nicht mehr gibt, sucht
+  // er im Dashboard nach etwas, das dort nie auftaucht.
+  for (const [name, quelle] of [
+    ['public/uplink/obs.html', OBS_HILFE],
+    ['rust/knowledge/bot/uplink-obs.md', OBS_WISSEN],
+    ['src/pages/Uplink.tsx', UPLINK_SEITE],
+  ] as const) {
+    assert.ok(
+      !quelle.includes('Chat und OBS-Fenster'),
+      `${name} nennt noch die abgeschaffte Karte`,
+    );
+  }
+  for (const [name, quelle] of [
+    ['public/uplink/obs.html', OBS_HILFE],
+    ['rust/knowledge/bot/uplink-obs.md', OBS_WISSEN],
+  ] as const) {
+    assert.ok(quelle.includes('Fenster einrichten'), `${name} nennt Schritt 5 nicht beim Namen`);
+    assert.ok(quelle.includes('Schritt 5'), `${name} nennt die Schrittnummer nicht`);
+  }
 });
