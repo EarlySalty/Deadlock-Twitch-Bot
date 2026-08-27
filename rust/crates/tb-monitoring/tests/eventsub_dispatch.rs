@@ -1327,3 +1327,52 @@ async fn hype_train_end_mit_started_at_null_kein_verwaister_insert() {
     assert_eq!(rows.len(), 1, "Genau ein End-Insert erwartet");
     assert_eq!(rows[0].0, "end");
 }
+
+/// Regression: Der EventSub-`stream.offline`-Schnellpfad muss dieselbe
+/// 5-Minuten-Reannounce-Sperre setzen wie der Poller
+/// (`claim_announcement_reannounce_cooldown`). Fehlt sie, wertet ein Reconnect
+/// innerhalb des Fensters als Neustart und postet eine zweite Live-Nachricht,
+/// statt die bestehende zu refreshen (real beobachtet: A um 20:36 bleibt live,
+/// B um 20:57 nach 12-Sekunden-Flap frisch gepostet).
+#[tokio::test]
+async fn stream_offline_armt_reannounce_cooldown_gegen_flap_doppelpost() {
+    let pool = pool_or_skip!("t4d_offline_arms_reannounce");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack(&pool, hooks.clone());
+
+    // Laufender Go-Live-Post: Live-State mit bestehender Announcement-Message.
+    sqlx::query(
+        "INSERT INTO twitch_live_state \
+         (twitch_user_id, streamer_login, is_live, last_discord_message_id, last_stream_id) \
+         VALUES ('42', 'drag', 1, 'msg-1', 's-1')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.offline"},
+        "event": {"broadcaster_user_id": "42", "broadcaster_user_login": "drag"}
+    });
+    let outcome = dispatcher
+        .dispatch("stream.offline", Some("m-off-flap-1"), &body)
+        .await
+        .unwrap();
+    assert!(outcome.queued);
+    assert!(wait_until_empty(&store).await);
+    runtime.shutdown().await;
+
+    let guard = GuardStore::new(pool.clone());
+    let active = guard
+        .is_active(
+            GuardKind::BusinessEffect,
+            "announcement_reannounce:drag",
+            epoch_clock(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        active,
+        "stream.offline muss die Reannounce-Sperre armen, damit ein schneller Reconnect refresht statt neu zu posten"
+    );
+}

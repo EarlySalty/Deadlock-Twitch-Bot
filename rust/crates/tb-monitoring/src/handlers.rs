@@ -16,7 +16,9 @@ use crate::dispatch::EventSubHooks;
 use crate::guard::{GuardKind, GuardStore};
 use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
 use crate::live_state::LiveStateStore;
-use crate::poller::hooks::announcement_reannounce_cooldown_key;
+use crate::poller::hooks::{
+    announcement_reannounce_cooldown_key, ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS,
+};
 use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
 use crate::stream::{iso_seconds, StreamSnapshot};
@@ -510,6 +512,35 @@ impl MonitoringEventHandler {
             },
         )
         .await?;
+
+        // Reannounce-Sperre wie im Poller (claim_announcement_reannounce_cooldown).
+        // Der EventSub-Offline-Schnellpfad feuert deutlich früher als der Poll-Tick;
+        // ohne diese Sperre wertet ein Reconnect innerhalb des 5-Minuten-Fensters
+        // als Neustart und postet eine zweite Live-Nachricht (bzw. verwirft die
+        // message_id über den Clear-Pfad), statt die bestehende zu refreshen.
+        // claim_or_extend re-armt auch einen abgelaufenen Marker aus einem
+        // früheren Flap-Zyklus (sweep_expired hält announcement_reannounce:*
+        // bewusst vor).
+        if !login.is_empty() {
+            if let Some(key) = announcement_reannounce_cooldown_key(&login) {
+                if let Err(error) = self
+                    .guard
+                    .claim_or_extend(
+                        GuardKind::BusinessEffect,
+                        &key,
+                        ANNOUNCE_REANNOUNCE_COOLDOWN_SECONDS,
+                        epoch,
+                    )
+                    .await
+                {
+                    tracing::debug!(
+                        %error,
+                        login = %login,
+                        "stream.offline: Reannounce-Sperre konnte nicht gesetzt werden"
+                    );
+                }
+            }
+        }
 
         run_business_effect_once(
             &self.guard,
