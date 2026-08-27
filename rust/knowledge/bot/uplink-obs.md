@@ -128,16 +128,16 @@ Wir geben dir vier eigene Fenster zurück. Anders als die von Twitch zeigen sie 
 
 Du holst sie in einer Minute zurück:
 
-1. Im Dashboard unter **Uplink**, Karte **Chat und OBS-Fenster**: die vier Adressen stehen dort fertig zum Kopieren.
+1. Im Dashboard unter **Uplink**, Karte **OBS einrichten**, Schritt 5 **Fenster einrichten**: die vier Adressen stehen dort fertig zum Kopieren.
 2. In OBS: **Docks**, dann **Benutzerdefinierte Browser-Docks**. Pro Zeile Namen und Adresse eintragen.
 3. Fenster anordnen, dann unter **Docks** das Layout speichern.
 
 | Fenster | Woher kommt die Adresse |
 | --- | --- |
-| Chat | Dashboard, Karte **Chat und OBS-Fenster** |
-| Aktivität | dieselbe Karte |
-| Stream-Infos | dieselbe Karte |
-| Kanalpunkte | dieselbe Karte |
+| Chat | Dashboard, Karte **OBS einrichten**, Schritt 5 **Fenster einrichten** |
+| Aktivität | derselbe Schritt |
+| Stream-Infos | derselbe Schritt |
+| Kanalpunkte | derselbe Schritt |
 
 Die Adressen sind im Dashboard verdeckt, weil in jeder von ihnen dein Zugang steckt: wer sie mitliest, kann in deinem Namen im Chat schreiben. Zeig sie also nicht im Stream. Kopieren geht auch verdeckt. Ist eine Adresse irgendwo gelandet, wo sie nicht hingehört, drückst du im Dashboard **Neu erzeugen**; dann gelten die alten vier nicht mehr und du trägst die neuen in OBS ein.
 

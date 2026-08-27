@@ -84,12 +84,16 @@ function SidebarLink({
 }
 
 /**
- * Inhalt der Karte "Chat und OBS-Fenster".
+ * Inhalt von Schritt 5 der OBS-Anleitung, "Fenster einrichten".
  *
  * Vier Fenster, ein Zugang: Chat mit Antwortfeld, Aktivität, Stream-Infos und
  * Kanalpunkte, jeweils für alle verbundenen Plattformen zugleich. Die Adressen
  * stehen dauerhaft hier, nicht nur in der Sekunde nach dem Erzeugen; wer die
  * Seite neu lädt, findet dieselben vier Zeilen wieder.
+ *
+ * Vorher eine eigene Karte weit unter der Anleitung. Wer OBS einrichtete,
+ * arbeitete die Schritte ab und war fertig, bevor er die Karte ueberhaupt sah.
+ * Jetzt ist das Eintragen der Fenster der letzte Schritt derselben Liste.
  *
  * Verdeckt wie die Serveradresse in Schritt 2, mit derselben Komponente: in
  * jeder Adresse steckt der Zugang zum Chat, und wer sie mitliest, kann im Namen
@@ -100,7 +104,7 @@ function SidebarLink({
  * brauchten eine eigene Anmeldung im OBS-Browser und standen direkt neben vier
  * Fenstern, die dasselbe für alle Plattformen tun.
  */
-function DockKarteInhalt({ me }: { me: UplinkMe }) {
+function DockSchrittInhalt({ me }: { me: UplinkMe }) {
   const [nachfrage, setNachfrage] = useState(false);
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
@@ -130,19 +134,13 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
       : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleiben die Adressen verdeckt. Kopieren geht trotzdem.';
 
   return (
-    <div className="space-y-4 border-t border-border/60 px-5 py-4">
-      <p className="text-sm text-text-secondary">
-        In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong>{' '}
-        den Namen und die jeweilige Adresse eintragen.
+    <div className="space-y-3">
+      <p className="text-xs text-text-secondary">
+        In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong> Namen
+        und Adresse eintragen. Verbinden geht in der jeweiligen Plattform-Karte.
       </p>
 
       <div data-section="eigenes-dock" className="space-y-3">
-        <p className="text-xs text-text-secondary">
-          Vier Fenster für alle verbundenen Plattformen zugleich: Chat mit Antwortfeld, Aktivität mit
-          Follows, Abos und Bits, Stream-Infos zum Ändern von Titel und Kategorie, und die Kanalpunkte.
-          Verbinden geht in der jeweiligen Plattform-Karte oben.
-        </p>
-
         {adressen.length > 0 ? (
           <>
             {adressen.map((dock) => (
@@ -299,7 +297,7 @@ function ObsSchritt({
             </span>
             <span>
               <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-                Schritt {nummer} von 4
+                Schritt {nummer} von 5
               </span>
               <span className="block text-sm font-bold text-white">{titel}</span>
             </span>
@@ -796,7 +794,6 @@ export function UplinkPage() {
   const queryClient = useQueryClient();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
-  const [docksOffen, setDocksOffen] = useUplinkDisclosure('obs-docks', false);
   const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['uplink-me'],
@@ -975,11 +972,11 @@ export function UplinkPage() {
                       </div>
                       <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                       <p className="mt-1 text-sm text-text-secondary">
-                        Vier kurze Schritte. Die Serveradresse ist direkt in Schritt 2.
+                        Fünf kurze Schritte. Die Serveradresse ist direkt in Schritt 2.
                       </p>
                     </div>
                     <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary">
-                      4 Schritte
+                      5 Schritte
                     </span>
                   </div>
 
@@ -1052,6 +1049,10 @@ export function UplinkPage() {
                           </div>
                         ))}
                       </dl>
+                    </ObsSchritt>
+
+                    <ObsSchritt nummer={5} titel="Fenster einrichten">
+                      <DockSchrittInhalt me={data} />
                     </ObsSchritt>
                   </ol>
 
@@ -1169,25 +1170,7 @@ export function UplinkPage() {
               />
             )}
 
-            <div className={`grid gap-4 md:gap-5 ${data?.enabled ? 'xl:grid-cols-2' : ''}`}>
-              {data?.enabled && (
-                <details
-                  data-section="obs-docks"
-                  open={docksOffen}
-                  onToggle={(ereignis) => setDocksOffen(ereignis.currentTarget.open)}
-                  className="panel-card group self-start rounded-2xl"
-                >
-                  <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
-                    <span>
-                      <span className="block text-base font-bold text-white">Chat und OBS-Fenster</span>
-                      <span className="mt-0.5 block text-xs text-text-secondary">Vier Fenster für alle Plattformen</span>
-                    </span>
-                    <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
-                  </summary>
-                  <DockKarteInhalt me={data} />
-                </details>
-              )}
-
+            <div className="grid gap-4 md:gap-5">
               <details
                 data-section="uplink-help"
                 open={hilfeOffen}
