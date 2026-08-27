@@ -174,16 +174,17 @@ diesem Kanal schreibt. Das Chat-Dock hebt diese Nachrichten hervor, so wie
 Twitch die erste Nachricht eines Zuschauers lila färbt (GRILLME C5-A2).
 Ein Raid bringt viele neue Namen; deshalb im Bund und nicht je Login.
 
-Antworten: `200` mit `{"eintraege":[...]}`, `400` ohne `streamer`/`logins`
-oder bei mehr als 50 Namen (`{"error":"zu_viele_logins"}`), `401` ohne
-Loopback oder ohne Token, `404 {"error":"nicht_live"}` ohne laufenden Stream,
-`503 {"error":"nicht_verfuegbar"}`.
+Antworten: `200` mit `{"eintraege":[...]}`, `400` ohne `streamer`, ohne einen
+einzigen Login (`{"error":"logins_fehlen"}`) oder bei mehr als 50 Namen
+(`{"error":"zu_viele_logins"}`), `401` ohne Loopback oder ohne Token,
+`404 {"error":"nicht_live"}` ohne laufenden Stream,
+`503 {"error":"nicht_verfuegbar"}`. Die Liste kommt nach Login sortiert.
 
 ```json
 {
   "eintraege": [
-    { "login": "neuling",   "erster_chat_ueberhaupt": true,  "erster_chat_am": null, "sessions": 0 },
-    { "login": "stammgast", "erster_chat_ueberhaupt": false, "erster_chat_am": "2026-08-18T20:11:00Z", "sessions": 9 }
+    { "login": "neuling",   "erster_chat_ueberhaupt": true,  "sessions": 0 },
+    { "login": "stammgast", "erster_chat_ueberhaupt": false, "sessions": 9 }
   ]
 }
 ```
@@ -195,10 +196,14 @@ steht schon im Verlauf und wäre sonst eine Sekunde später kein Erstchatter
 mehr. Das eigene Kennzeichen des Bots (`confirmed_first_ever`,
 `is_first_time_streamer` der laufenden Session) gewinnt über beides.
 
-`erster_chat_am` ist der erste Chat, nicht die erste Anwesenheit. Die Zahl
-kommt aus `twitch_session_chatters.first_message_at` und zählt nur Zeilen mit
-Nachrichten. `twitch_chatter_rollup.first_seen_at` steht schon, sobald der
-Chatters-Poller jemanden im Kanal sieht, und bleibt danach unverändert; wer
+Als Verlauf zählen nur Zeilen aus `twitch_session_chatters` mit Nachrichten.
+`twitch_chatter_rollup.first_seen_at` taugt dafür nicht: es steht schon, sobald
+der Chatters-Poller jemanden im Kanal sieht, und bleibt danach unverändert; wer
 lange nur zuschaut und heute zum ersten Mal schreibt, sähe darüber wie ein
-alter Bekannter aus. `sessions` zählt dagegen weiter die Anwesenheit, also bei
-wie vielen Streams jemand dabei war.
+alter Bekannter aus.
+
+Einen Zeitpunkt der ersten Nachricht gibt die Antwort bewusst nicht aus. Auch
+`first_message_at` steht auf einer Zeile des Pollers auf dem Moment der
+Sichtung, nicht der Nachricht. Für "schon mal geschrieben, ja oder nein?"
+reicht das, für eine Uhrzeit im Dock nicht. `sessions` zählt die Anwesenheit,
+also bei wie vielen Streams jemand dabei war.

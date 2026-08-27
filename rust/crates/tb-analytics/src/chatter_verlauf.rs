@@ -18,8 +18,14 @@
 //! Nachrichten-Pfad erhöht später nur `total_messages`, ohne `first_seen_at`
 //! anzufassen. Wer monatelang zugeschaut hat und heute die erste Nachricht
 //! schreibt, hätte dort ein Datum von damals und sähe aus wie ein alter
-//! Bekannter. `first_message_at` je Session sagt dagegen wirklich, wann jemand
-//! zum ersten Mal geschrieben hat.
+//! Bekannter.
+//!
+//! Einen genauen Zeitpunkt der ersten Nachricht gibt die Antwort bewusst nicht
+//! aus. `first_message_at` steht auf einer Zeile des Chatters-Pollers auf dem
+//! Moment der Sichtung, nicht der Nachricht, und der Nachrichten-Pfad fasst
+//! das Feld nicht mehr an. Für die Frage "schon mal geschrieben, ja oder
+//! nein?" reicht das, für eine Uhrzeit im Dock nicht, und ein Feld, das etwas
+//! anderes behauptet als es enthält, hat hier nichts verloren.
 //!
 //! Der dritte Punkt ist der Grund, warum die Session-Startzeit mit in die
 //! Abfrage geht: ohne sie wäre jeder Erstchatter eine Sekunde nach seiner
@@ -36,13 +42,12 @@ pub const LOGINS_MAX: usize = 50;
 pub struct VerlaufEintrag {
     pub login: String,
     pub erster_chat_ueberhaupt: bool,
-    /// Wann diese Person in diesem Kanal zum ersten Mal geschrieben hat.
-    pub erster_chat_am: Option<DateTime<Utc>>,
-    /// Bei wie vielen Streams dieses Kanals sie schon dabei war.
+    /// Bei wie vielen Streams dieses Kanals sie schon dabei war. Anwesenheit,
+    /// nicht Nachrichten.
     pub sessions: i64,
 }
 
-/// Der Verlauf zu einer Liste von Logins, in derselben Reihenfolge.
+/// Der Verlauf zu einer Liste von Logins, nach Login sortiert.
 ///
 /// Unbekannte Logins kommen als "erster Chat überhaupt" zurück, nicht als
 /// Lücke: das Dock soll für jeden Namen eine Antwort bekommen.
@@ -71,6 +76,7 @@ pub async fn laden(
                SELECT LOWER(chatter_login) AS login, MIN(first_message_at) AS erster
                FROM twitch_session_chatters
                WHERE LOWER(streamer_login) = $1
+                 AND LOWER(chatter_login) = ANY($2::text[])
                  AND COALESCE(messages, 0) > 0
                GROUP BY 1
            ),
@@ -79,6 +85,7 @@ pub async fn laden(
                       COUNT(DISTINCT session_id) AS sessions
                FROM twitch_session_chatters
                WHERE LOWER(streamer_login) = $1
+                 AND LOWER(chatter_login) = ANY($2::text[])
                GROUP BY 1
            ),
            jetzt AS (
@@ -92,13 +99,14 @@ pub async fn laden(
                GROUP BY 1
            )
            SELECT g.login                          AS login,
-                  v.erster                         AS erster_chat_am,
+                  v.erster                         AS erster,
                   COALESCE(d.sessions, 0)          AS sessions,
                   COALESCE(j.erstmals, FALSE)      AS erstmals
            FROM gefragt g
            LEFT JOIN verlauf v ON v.login = g.login
            LEFT JOIN dabei   d ON d.login = g.login
-           LEFT JOIN jetzt   j ON j.login = g.login"#,
+           LEFT JOIN jetzt   j ON j.login = g.login
+           ORDER BY g.login"#,
     )
     .bind(streamer_login.trim().to_lowercase())
     .bind(&gefragt)
@@ -110,16 +118,15 @@ pub async fn laden(
     zeilen
         .into_iter()
         .map(|z| {
-            let erster_chat_am: Option<DateTime<Utc>> = z.try_get("erster_chat_am")?;
+            let erster: Option<DateTime<Utc>> = z.try_get("erster")?;
             let erstmals: bool = z.try_get("erstmals")?;
-            let beginnt_jetzt = match (erster_chat_am, session_started_at) {
+            let beginnt_jetzt = match (erster, session_started_at) {
                 (Some(erster), Some(start)) => erster >= start,
                 _ => false,
             };
             Ok(VerlaufEintrag {
                 login: z.try_get("login")?,
-                erster_chat_ueberhaupt: erstmals || erster_chat_am.is_none() || beginnt_jetzt,
-                erster_chat_am,
+                erster_chat_ueberhaupt: erstmals || erster.is_none() || beginnt_jetzt,
                 sessions: z.try_get("sessions")?,
             })
         })
@@ -285,7 +292,6 @@ mod tests {
             vec![VerlaufEintrag {
                 login: "neuling".into(),
                 erster_chat_ueberhaupt: true,
-                erster_chat_am: None,
                 sessions: 0,
             }]
         );
@@ -310,7 +316,6 @@ mod tests {
         .await
         .expect("Abfrage");
         assert!(!eintraege[0].erster_chat_ueberhaupt);
-        assert_eq!(eintraege[0].erster_chat_am, Some(zeit(-24)));
         assert_eq!(eintraege[0].sessions, 2);
     }
 
@@ -333,7 +338,6 @@ mod tests {
         .await
         .expect("Abfrage");
         assert!(eintraege[0].erster_chat_ueberhaupt);
-        assert_eq!(eintraege[0].erster_chat_am, Some(zeit(1)));
     }
 
     /// Das eigene Kennzeichen des Bots gewinnt, auch wenn der Verlauf älter
@@ -438,11 +442,6 @@ mod tests {
         assert!(
             eintraege[0].erster_chat_ueberhaupt,
             "wer noch nie geschrieben hat, ist beim ersten Mal ein Erstchatter"
-        );
-        assert_eq!(
-            eintraege[0].erster_chat_am,
-            Some(zeit(1)),
-            "erster_chat_am ist der erste Chat, nicht die erste Anwesenheit"
         );
         assert_eq!(eintraege[0].sessions, 3, "dabei war er dreimal");
     }

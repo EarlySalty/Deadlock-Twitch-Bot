@@ -106,7 +106,13 @@ pub async fn internal_chatter_verlauf_handler(
                 .into_response(),
         };
     if logins.is_empty() {
-        return Json(json!({ "eintraege": [] })).into_response();
+        // `logins=` oder `logins=,,` fragt nach niemandem. Das ist ein Fehler
+        // im Aufruf, keine leere Antwort, und die Doku sagt es auch so.
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "logins_fehlen" })),
+        )
+            .into_response();
     }
 
     let session = match laufende_session(&pool, streamer_id).await {
@@ -374,6 +380,21 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "zu_viele_logins");
 
+        // Nach niemandem fragen ist ein Fehler im Aufruf, keine leere
+        // Antwort: sonst sieht der Aufrufer einen Tippfehler nie.
+        for leer in ["", ",,", " , "] {
+            let (status, body) = aufrufen(
+                &pool,
+                Some([127, 0, 0, 1]),
+                Some("geheim"),
+                Some(42),
+                Some(leer),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "logins={leer:?}");
+            assert_eq!(body["error"], "logins_fehlen", "logins={leer:?}");
+        }
+
         // Nicht live: 404, kein Fehler.
         let (status, body) = aufrufen(
             &pool,
@@ -455,7 +476,6 @@ mod tests {
             .find(|e| e["login"] == "neuling")
             .expect("neuling");
         assert_eq!(neuling["erster_chat_ueberhaupt"], true);
-        assert_eq!(neuling["erster_chat_am"], serde_json::Value::Null);
 
         assert!(!body.to_string().contains("id-geheim"), "{body}");
     }

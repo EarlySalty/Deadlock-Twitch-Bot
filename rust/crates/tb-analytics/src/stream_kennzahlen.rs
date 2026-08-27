@@ -140,6 +140,16 @@ fn gesamt_cache() -> &'static Mutex<HashMap<String, (Instant, GesamtWerte)>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Schlüssel des Gesamt-Caches. Die Ausschlussliste gehört dazu: sie kommt aus
+/// der Datenbank und kann sich ändern, und mit ihr die Bestenlisten. Ohne sie
+/// im Schlüssel stünde ein frisch eingetragener Bot noch fünf Minuten in der
+/// Liste.
+fn gesamt_schluessel(streamer_login: &str, ausgeschlossen: &[String]) -> String {
+    let mut sortiert: Vec<&str> = ausgeschlossen.iter().map(|s| s.as_str()).collect();
+    sortiert.sort_unstable();
+    format!("{streamer_login}\u{1f}{}", sortiert.join("\u{1e}"))
+}
+
 /// Baut `LOWER(<spalte>) NOT IN ($n, $n+1, ...)` ab Platzhalter `start_idx`.
 /// Ohne Ausschlüsse eine Bedingung, die immer wahr ist, damit der Aufrufer
 /// den Rest der Abfrage nicht doppelt schreiben muss.
@@ -249,18 +259,22 @@ pub async fn laden_mit_frist(
     }))
 }
 
-/// Die Gesamt-Werte aus dem Cache oder frisch. Ein Fehler beim Rechnen wird
-/// durchgereicht, ein alter Stand aber nicht weggeworfen: das Dock zeigt
-/// lieber eine fünf Minuten alte Bestenliste als eine leere.
+/// Die Gesamt-Werte aus dem Cache oder frisch.
+///
+/// Ein Fehler beim Rechnen wird durchgereicht; der Handler antwortet dann für
+/// die ganze Abfrage mit 503, auch für die frischen Session-Zahlen. Das Relay
+/// behält in dem Fall seinen letzten Stand und zeigt weiter Karten, das
+/// Auffangen passiert also dort und nicht hier.
 async fn gesamt_werte(
     pool: &PgPool,
     streamer_login: &str,
     ausgeschlossen: &[String],
     cache_frist: Duration,
 ) -> Result<GesamtWerte, sqlx::Error> {
+    let schluessel = gesamt_schluessel(streamer_login, ausgeschlossen);
     if !cache_frist.is_zero() {
         let cache = gesamt_cache().lock().expect("Kennzahlen-Cache");
-        if let Some((seit, werte)) = cache.get(streamer_login) {
+        if let Some((seit, werte)) = cache.get(&schluessel) {
             if seit.elapsed() < cache_frist {
                 return Ok(werte.clone());
             }
@@ -276,10 +290,11 @@ async fn gesamt_werte(
         spitze_zuschauer: spitze_zuschauer_gesamt(pool, streamer_login).await?,
     };
     if !cache_frist.is_zero() {
-        gesamt_cache()
-            .lock()
-            .expect("Kennzahlen-Cache")
-            .insert(streamer_login.to_string(), (Instant::now(), werte.clone()));
+        let mut cache = gesamt_cache().lock().expect("Kennzahlen-Cache");
+        // Abgelaufene Einträge raus, bevor ein neuer dazukommt: sonst wächst
+        // die Karte mit jeder Änderung der Ausschlussliste weiter.
+        cache.retain(|_, (seit, _)| seit.elapsed() < cache_frist);
+        cache.insert(schluessel, (Instant::now(), werte.clone()));
     }
     Ok(werte)
 }
@@ -309,6 +324,12 @@ async fn laengster_zuschauer_session(
 
 /// Anwesenheit über alle Streams dieses Kanals. Läuft über die Hypertable
 /// und ist der Grund für den Cache.
+///
+/// Der Filter geht über `session_id`, nicht über `streamer_login`. Die
+/// Hypertable ist nach `session_id` segmentiert und indiziert
+/// (`20260728120100_presence_ticks_hypertable.sql`); ein Filter auf
+/// `streamer_login` könnte weder Index noch Chunk noch Segment ausschließen
+/// und würde die ganze Tabelle auspacken.
 async fn laengster_zuschauer_gesamt(
     pool: &PgPool,
     streamer_login: &str,
@@ -318,7 +339,11 @@ async fn laengster_zuschauer_gesamt(
     let sql = format!(
         r#"SELECT LOWER(viewer_login) AS login, COUNT(*) AS ticks
            FROM twitch_viewer_presence_ticks
-           WHERE LOWER(streamer_login) = $1 AND {bedingung}
+           WHERE session_id IN (
+                   SELECT id FROM twitch_stream_sessions
+                   WHERE LOWER(streamer_login) = $1
+                 )
+             AND {bedingung}
            GROUP BY 1
            ORDER BY ticks DESC, login ASC
            LIMIT $2"#
