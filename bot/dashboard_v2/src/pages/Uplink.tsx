@@ -105,17 +105,15 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
-    onSuccess: (antwort) => {
+    onSuccess: (neue) => {
       // Die neuen Adressen gehen direkt in den Zwischenspeicher, aus dem die
       // Karte liest. Damit stehen sie sofort da, ohne zweite Quelle daneben:
       // ein eigener Zustand für "gerade erzeugt" wäre ein zweiter Stand, der
       // hängen bleiben kann, während der Server längst etwas anderes führt.
       // Der Abruf danach holt sich, was sonst noch am Nutzer hängt.
-      if (antwort.dock_urls?.chat) {
-        queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
-          alt ? { ...alt, dock_urls: antwort.dock_urls, dock_url_vorhanden: true } : alt
-        );
-      }
+      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+        alt ? { ...alt, dock_urls: neue, dock_url_vorhanden: true } : alt
+      );
       setNachfrage(false);
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
@@ -204,7 +202,12 @@ function DockKarteInhalt({ me }: { me: UplinkMe }) {
               </button>
               <button
                 type="button"
-                onClick={() => setNachfrage(false)}
+                onClick={() => {
+                  // Auch die Fehlerzeile geht mit: sie gehoert zu einem
+                  // Versuch, den es nach dem Abbrechen nicht mehr gibt.
+                  erzeugen.reset();
+                  setNachfrage(false);
+                }}
                 className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white"
               >
                 Abbrechen
@@ -470,6 +473,11 @@ function CopyField({
           ref={feldRef}
           readOnly
           type={offen ? 'text' : 'password'}
+          // Verdeckt heisst hier nur "nicht auf dem Schirm". Ohne diese Zeile
+          // bietet der Passwortmanager fuer jede Adresse das Speichern an.
+          autoComplete="off"
+          data-1p-ignore
+          data-lpignore="true"
           value={value}
           aria-label={`${label}: ${offen ? value : 'verdeckt'}`}
           className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"

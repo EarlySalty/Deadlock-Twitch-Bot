@@ -78,8 +78,8 @@ export interface DockUrls {
  * Karte direkt nach dem Klick etwas zeigen kann, statt auf den naechsten Abruf
  * zu warten.
  */
-export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?: DockUrls }> {
-  return fetchJson<{ dock_url: string; dock_urls?: DockUrls }>(
+export async function rotateUplinkDockToken(): Promise<DockUrls> {
+  const antwort = await fetchJson<{ dock_urls?: DockUrls }>(
     '/twitch/api/v2/uplink/dock-token/rotate',
     withCookieCredentials({
       method: 'POST',
@@ -87,6 +87,14 @@ export function rotateUplinkDockToken(): Promise<{ dock_url: string; dock_urls?:
       body: '{}',
     })
   );
+  // Kommt hier nichts Anzeigbares zurueck, ist der Zugang trotzdem schon
+  // gedreht und die Eintraege in OBS sind tot. Das darf nicht still
+  // durchgehen: sonst drueckt der Streamer denselben Knopf noch einmal und
+  // entwertet jedes Mal einen weiteren Zugang, ohne je eine Adresse zu sehen.
+  if (!antwort.dock_urls?.chat) {
+    throw new Error('Das Relay hat keine Dock-Adressen zurueckgegeben.');
+  }
+  return antwort.dock_urls;
 }
 
 /**

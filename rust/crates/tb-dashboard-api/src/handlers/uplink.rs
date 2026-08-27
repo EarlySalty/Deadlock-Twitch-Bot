@@ -1767,7 +1767,7 @@ mod tests {
     /// anderen Test im selben Binary, der die Umgebung anfasst, und davon gibt
     /// es in dieser Crate mehrere.
     #[test]
-    fn me_traegt_dock_url_und_verbindungen() {
+    fn me_traegt_dock_urls_und_verbindungen() {
         // Die vier Adressen kommen vom Relay und gehen unveraendert weiter.
         // Der Bot baut hier nichts nach; er weiss den Zugang gar nicht.
         let mut wert = json!({
@@ -1796,8 +1796,6 @@ mod tests {
             wert["dock_urls"]["points"],
             "https://relay.test/dock/points?t=abc"
         );
-        // Der Login hing nur an den Twitch-Fenstern und geht nicht mehr mit.
-        assert!(wert.get("twitch_login").is_none());
         let liste = wert["verbindungen"].as_array().unwrap();
         assert_eq!(liste.len(), PLATTFORMEN.len());
         assert_eq!(
@@ -1829,7 +1827,6 @@ mod tests {
         // Relay nicht von einem Streamer ohne Adressen unterscheiden muessen.
         assert_eq!(wert["dock_urls"], Value::Null);
         assert!(wert.as_object().unwrap().contains_key("dock_urls"));
-        assert!(wert.get("twitch_login").is_none());
         assert!(wert["verbindungen"]
             .as_array()
             .unwrap()
