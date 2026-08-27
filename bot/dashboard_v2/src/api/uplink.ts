@@ -364,6 +364,9 @@ export function rejectUplinkAdminWaitlistEntry(
         'X-CSRF-Token': csrfToken,
       },
     }),
+    // Ohne diesen Satz stuende hier "Server-Fehler (HTTP 404)". Der Fall ist
+    // harmlos und hat einen klaren Grund: der Eintrag ist schon weg.
+    { notFoundMessage: 'Dieser Eintrag steht nicht mehr auf der Warteliste.' },
   );
 }
 
