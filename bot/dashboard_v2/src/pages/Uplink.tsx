@@ -665,7 +665,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
           </span>
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-warning">
-              Admin-Modus
+              Verwaltung
             </div>
             <h2 className="text-base font-bold text-white">Uplink-Warteliste</h2>
             <p className="mt-1 text-xs text-text-secondary">
@@ -1194,7 +1194,7 @@ export function UplinkPage() {
                     </details>
                   </Rise>
 
-                  {authStatus?.adminMode ? (
+                  {authStatus?.adminMode || authStatus?.adminEligible ? (
                     <AdminUplinkWarteliste
                       csrfToken={authStatus.csrfToken ?? authStatus.csrf_token ?? null}
                     />

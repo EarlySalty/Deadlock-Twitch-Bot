@@ -15,7 +15,10 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
-use crate::auth::{level::DashboardAuthLevel, require_admin};
+use crate::auth::{
+    level::{is_admin_login, DashboardAuthLevel},
+    require_admin,
+};
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -497,7 +500,19 @@ pub async fn waitlist_handler(
     Ok(Json(wert))
 }
 
+/// Gate für die Uplink-Wartelistenverwaltung.
+///
+/// Zugelassen ist jeder Admin (Discord-Master oder per Twitch-OAuth promoteter
+/// Admin) und zusätzlich der Owner, der nur mit seiner Twitch-Identität
+/// eingeloggt ist: eine Partner-Session mit Admin-Login (`is_admin_login`, also
+/// `earlysalty`) verwaltet die Warteliste, ohne vorher den Admin-Modus
+/// einzuschalten. Ein normaler Partner bleibt draußen.
 fn admin_pruefen(auth: &DashboardAuthLevel) -> Result<(), Response> {
+    if let DashboardAuthLevel::Partner { twitch_login, .. } = auth {
+        if is_admin_login(twitch_login) {
+            return Ok(());
+        }
+    }
     match require_admin(auth) {
         Some(fehler) => Err(fehler.into_response()),
         None => Ok(()),
@@ -522,8 +537,10 @@ fn admin_actor_fuer_log(auth: &DashboardAuthLevel) -> (&str, Option<&str>) {
 
 /// Wartende Uplink-Konten für die Admin-Box.
 ///
-/// Der effektive `DashboardAuthLevel` ist hier das Gate. Ein Owner-Login ohne
-/// aktivierten Admin-Modus kommt als Partner an und erhält deshalb 403.
+/// Gate ist `admin_pruefen`: jeder Admin und zusätzlich der Owner, der nur mit
+/// seiner Twitch-Identität eingeloggt ist (Partner mit Admin-Login). So sieht
+/// und bedient der Owner die Warteliste auch ohne aktivierten Admin-Modus; ein
+/// normaler Partner bekommt weiterhin 403.
 pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
     admin_pruefen(&auth)?;
     let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
@@ -1682,17 +1699,25 @@ mod tests {
     }
 
     #[test]
-    fn wartelistenverwaltung_braucht_den_aktiven_admin_modus() {
+    fn wartelistenverwaltung_erlaubt_admin_und_owner_ohne_admin_modus() {
         let admin = DashboardAuthLevel::Admin { actor: None };
-        let partner = DashboardAuthLevel::Partner {
+        // Owner nur mit Twitch-Identität, ohne aktiven Admin-Modus.
+        let owner_partner = DashboardAuthLevel::Partner {
             twitch_login: "earlysalty".into(),
             twitch_user_id: "42".into(),
             display_name: "Early".into(),
         };
+        // Normaler Partner bleibt draußen.
+        let fremder_partner = DashboardAuthLevel::Partner {
+            twitch_login: "someone".into(),
+            twitch_user_id: "7".into(),
+            display_name: "Someone".into(),
+        };
 
         assert!(admin_pruefen(&admin).is_ok());
+        assert!(admin_pruefen(&owner_partner).is_ok());
         assert_eq!(
-            admin_pruefen(&partner).unwrap_err().status(),
+            admin_pruefen(&fremder_partner).unwrap_err().status(),
             StatusCode::FORBIDDEN
         );
         assert_eq!(
