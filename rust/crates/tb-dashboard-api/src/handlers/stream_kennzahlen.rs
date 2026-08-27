@@ -58,7 +58,8 @@ fn intern_erlaubt(
 
 /// `GET /twitch/api/v2/internal/stream-kennzahlen?streamer=`.
 ///
-/// 200 mit den Kennzahlen, 404 `nicht_live` ohne laufenden Stream,
+/// 200 mit den Kennzahlen (Session leer, Verlauf gefüllt, wenn der Stream
+/// gerade nicht läuft), 404 `nicht_live` ohne bekannten Kanal,
 /// 400 ohne `streamer`, 401 ohne gültigen internen Zugang,
 /// 503 wenn die Auswertung gerade nicht antwortet.
 pub async fn internal_stream_kennzahlen_handler(
@@ -84,8 +85,8 @@ pub async fn internal_stream_kennzahlen_handler(
     };
 
     // Erst den Kanal auflösen, dann die Ausschlussliste dazu: Bots und der
-    // Streamer selbst gehören in keine Bestenliste. Ohne laufenden Stream
-    // fällt das gleich auf 404, die Ausschlussliste kostet dann nichts mehr.
+    // Streamer selbst gehören in keine Bestenliste. Ohne bekannte Zeile
+    // fällt das auf 404; ohne laufenden Stream kommt der Verlauf trotzdem.
     let streamer_login = match streamer_login_lesen(&pool, streamer_id).await {
         Ok(Some(login)) => login,
         Ok(None) => return nicht_live(),
@@ -108,8 +109,7 @@ pub async fn internal_stream_kennzahlen_handler(
     }
 }
 
-/// Der Kanalname zur Nutzernummer, aber nur solange der Stream läuft.
-/// `None` heißt: nicht live, und damit gibt es hier nichts zu zeigen.
+/// Der Kanalname zur Nutzernummer. `None` heißt: diesen Kanal kennen wir nicht.
 async fn streamer_login_lesen(
     pool: &PgPool,
     streamer_id: i64,
@@ -118,8 +118,6 @@ async fn streamer_login_lesen(
         "SELECT LOWER(streamer_login)
          FROM twitch_live_state
          WHERE twitch_user_id = $1
-           AND COALESCE(is_live, 0) = 1
-           AND active_session_id IS NOT NULL
          LIMIT 1",
     )
     .bind(streamer_id.to_string())
@@ -398,12 +396,12 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "streamer fehlt");
 
-        // Kein laufender Stream: 404 `nicht_live`, kein Fehler.
+        // Unbekannter Kanal: 404 `nicht_live`, kein Fehler.
         let (status, body) = aufrufen(&pool, Some([127, 0, 0, 1]), Some("geheim"), Some(42)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["error"], "nicht_live");
 
-        // Offline-Zeile in der DB zaehlt genauso wenig.
+        // Offline-Zeile: Verlauf kommt trotzdem, die Session-Listen bleiben leer.
         sqlx::query(
             "INSERT INTO twitch_live_state
              (twitch_user_id, streamer_login, is_live, active_session_id)
@@ -413,8 +411,10 @@ mod tests {
         .await
         .unwrap();
         let (status, body) = aufrufen(&pool, Some([127, 0, 0, 1]), Some("geheim"), Some(42)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body["error"], "nicht_live");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["session_id"], 0);
+        assert_eq!(body["zuschauer"]["jetzt"], 0);
+        assert!(body["top_chatter"]["session"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -200,13 +200,16 @@ pub async fn laden_mit_frist(
     let Some(live) = live else {
         return Ok(None);
     };
-    if live.try_get::<i32, _>("is_live")? != 1 {
-        return Ok(None);
-    }
-    let Some(session_id) = live.try_get::<Option<i64>, _>("active_session_id")? else {
-        return Ok(None);
-    };
     let streamer_login: String = live.try_get("streamer_login")?;
+    let is_live = live.try_get::<i32, _>("is_live")? == 1;
+    let session_id = live.try_get::<Option<i64>, _>("active_session_id")?;
+    if !is_live || session_id.is_none() {
+        // Der Verlauf lebt ohne laufenden Stream. Das Chat-Dock soll die
+        // Bestenliste auch in OBS zeigen, solange der Streamer nur einrichtet.
+        let gesamt = gesamt_werte(pool, &streamer_login, ausgeschlossen, cache_frist).await?;
+        return Ok(Some(offline_kennzahlen(streamer_login, gesamt)));
+    }
+    let session_id = session_id.expect("oben geprüft");
     let zuschauer_jetzt = i64::from(live.try_get::<i32, _>("last_viewer_count")?);
 
     let session_zeile = sqlx::query(
@@ -257,6 +260,41 @@ pub async fn laden_mit_frist(
             },
         },
     }))
+}
+
+fn offline_kennzahlen(streamer_login: String, gesamt: GesamtWerte) -> StreamKennzahlen {
+    StreamKennzahlen {
+        streamer_login,
+        session_id: 0,
+        session_started_at: DateTime::<Utc>::UNIX_EPOCH,
+        stand: Utc::now(),
+        zuschauer: Zuschauer {
+            jetzt: 0,
+            spitze_session: 0,
+            spitze_gesamt: gesamt.spitze_zuschauer,
+        },
+        top_chatter: Sichten {
+            session: Vec::new(),
+            gesamt: gesamt.top_chatter,
+        },
+        laengster_zuschauer: Sichten {
+            session: Vec::new(),
+            gesamt: gesamt.laengster_zuschauer,
+        },
+        haeufigster_zuschauer: NurGesamt {
+            gesamt: gesamt.haeufigster_zuschauer,
+        },
+        lurker: LurkerSichten {
+            session: LurkerAnteil {
+                anwesend: 0,
+                still: 0,
+                anteil: 0.0,
+            },
+            gesamt: LurkerGesamt {
+                anteil_durchschnitt: gesamt.lurker_anteil_durchschnitt,
+            },
+        },
+    }
 }
 
 /// Die Gesamt-Werte aus dem Cache oder frisch.
@@ -755,8 +793,12 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_kennzahlen_offline").await;
         assert_eq!(kennzahlen(&pool, "999").await, None);
+    }
 
-        // Zeile da, aber offline: auch nichts.
+    #[tokio::test]
+    async fn offline_liefert_gesamt_ohne_session() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_kennzahlen_offline_gesamt").await;
         sqlx::query(
             "INSERT INTO twitch_live_state
              (twitch_user_id, streamer_login, is_live, active_session_id)
@@ -765,7 +807,13 @@ mod tests {
         .execute(&pool)
         .await
         .expect("offline-Zeile");
-        assert_eq!(kennzahlen(&pool, "42").await, None);
+        rollup(&pool, "earlysalty", "cara", 900).await;
+        let k = kennzahlen(&pool, "42").await.expect("Verlauf ohne Stream");
+        assert_eq!(k.session_id, 0);
+        assert!(k.top_chatter.session.is_empty());
+        assert_eq!(k.zuschauer.jetzt, 0);
+        assert_eq!(k.top_chatter.gesamt[0].login, "cara");
+        assert_eq!(k.top_chatter.gesamt[0].nachrichten, 900);
     }
 
     #[tokio::test]
