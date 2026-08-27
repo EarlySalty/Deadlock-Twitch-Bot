@@ -58,9 +58,9 @@ export interface UplinkVerbindung {
  * Die vier Fenster hinter einem Zugang. Ein Neuerzeugen macht alle vier alten
  * Adressen ungueltig.
  *
- * Optional, weil aeltere Server nur `dock_url` liefern. Dann gilt die eine
- * Adresse als Chat-Fenster und die drei anderen fehlen einfach, statt dass die
- * Karte auf einen Platzhalter zeigt.
+ * Ein leeres Feld ist erlaubt und bedeutet "diese Adresse gibt es nicht":
+ * `dockAdressen` laesst die Zeile dann weg, statt eine Kopierzeile ohne Ziel
+ * anzubieten.
  */
 export interface DockUrls {
   chat: string;
@@ -273,20 +273,18 @@ export interface DockAdresse {
 /**
  * Unsere vier Dock-Adressen in Anzeigereihenfolge.
  *
- * `frisch` kommt aus dem Erzeugen und geht vor: das Relay liefert die neuen
- * Adressen sofort in der Antwort, waehrend `me` erst mit dem naechsten Abruf
- * nachzieht. Ohne diesen Vorrang stuende der Streamer direkt nach dem Klick
- * kurz vor einer leeren Karte, obwohl seine alten Adressen schon nicht mehr
- * gelten.
+ * Eine Quelle, `me`. Frisch erzeugte Adressen kommen ueber den
+ * Zwischenspeicher der Abfrage hier an, nicht ueber einen zweiten Parameter:
+ * ein eigener Zustand fuer "gerade erzeugt" waere ein zweiter Stand, der
+ * haengen bleiben kann, waehrend der Server laengst etwas anderes fuehrt.
  *
  * Eine leere Adresse faellt weg, statt eine Kopierzeile ohne Ziel anzubieten.
  */
-export function dockAdressen(me: UplinkMe, frisch?: DockUrls | null): DockAdresse[] {
-  const quelle = frisch ?? me.dock_urls;
-  if (!quelle) return [];
+export function dockAdressen(me: UplinkMe): DockAdresse[] {
+  if (!me.dock_urls) return [];
   const liste: DockAdresse[] = [];
   for (const dock of EIGENE_DOCKS) {
-    const url = quelle[dock.feld]?.trim() ?? '';
+    const url = me.dock_urls[dock.feld]?.trim() ?? '';
     if (url) liste.push({ titel: dock.titel, url });
   }
   return liste;

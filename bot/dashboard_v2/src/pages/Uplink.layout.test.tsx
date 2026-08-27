@@ -185,6 +185,12 @@ test('die Dock-Karte zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () 
   assert.match(UPLINK, /\{offen \? 'Verdecken' : 'Zeigen'\}/);
   assert.equal((UPLINK.match(/\{offen \? 'Verdecken' : 'Zeigen'\}/g) ?? []).length, 1);
 
+  // Frisch erzeugte Adressen gehen in den Zwischenspeicher der Abfrage, nicht
+  // in einen zweiten Zustand daneben: sonst zeigt die Karte weiter, was einmal
+  // in einer Antwort stand, waehrend der Server laengst etwas anderes fuehrt.
+  assert.match(UPLINK, /setQueryData\(\['uplink-me'\]/);
+  assert.doesNotMatch(UPLINK, /setFrisch/);
+
   // Neu erzeugen fragt nach: die alten Adressen stehen schon in OBS.
   assert.match(UPLINK, /Ja, neu erzeugen/);
   assert.match(UPLINK, /gelten danach nicht mehr/);

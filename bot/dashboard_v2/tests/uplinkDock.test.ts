@@ -59,10 +59,6 @@ test('dockAdressen_liefert_genau_vier_eigene', () => {
   assert.equal(nurAusMe.length, 4);
   assert.equal(nurAusMe[0].url, VIER.chat);
 
-  // Frisch erzeugte Adressen gehen vor, solange `me` noch den alten Stand hat.
-  const frisch: DockUrls = { ...VIER, chat: 'https://relay.test/dock/chat?t=neu' };
-  assert.equal(dockAdressen({ ...BASIS, dock_urls: VIER }, frisch)[0].url, frisch.chat);
-
   // Ohne Adressen bleibt die Liste leer, statt auf Platzhalter zu zeigen.
   assert.deepEqual(dockAdressen(BASIS), []);
   assert.deepEqual(dockAdressen({ ...BASIS, dock_urls: null, dock_url_vorhanden: true }), []);

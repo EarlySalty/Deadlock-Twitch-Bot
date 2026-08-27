@@ -37,7 +37,7 @@ import {
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
-import type { DockUrls, UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
+import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import {
@@ -101,36 +101,26 @@ function SidebarLink({
  * Fenstern, die dasselbe für alle Plattformen tun.
  */
 function DockKarteInhalt({ me }: { me: UplinkMe }) {
-  // Die Antwort des Servers geht vor, bis der nächste Abruf von `uplink-me`
-  // sie eingeholt hat. Sonst stünde direkt nach dem Klick kurz eine leere
-  // Karte da, obwohl die alten Adressen schon nicht mehr gelten.
-  const [frisch, setFrisch] = useState<DockUrls | null>(null);
   const [nachfrage, setNachfrage] = useState(false);
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
     onSuccess: (antwort) => {
-      setFrisch(
-        antwort.dock_urls ?? {
-          chat: antwort.dock_url,
-          activity: '',
-          stream_info: '',
-          points: '',
-        }
-      );
+      // Die neuen Adressen gehen direkt in den Zwischenspeicher, aus dem die
+      // Karte liest. Damit stehen sie sofort da, ohne zweite Quelle daneben:
+      // ein eigener Zustand für "gerade erzeugt" wäre ein zweiter Stand, der
+      // hängen bleiben kann, während der Server längst etwas anderes führt.
+      // Der Abruf danach holt sich, was sonst noch am Nutzer hängt.
+      if (antwort.dock_urls?.chat) {
+        queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+          alt ? { ...alt, dock_urls: antwort.dock_urls, dock_url_vorhanden: true } : alt
+        );
+      }
       setNachfrage(false);
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
   });
-  // Sobald `me` die neuen Adressen trägt, hat der Vorrang seinen Zweck erfüllt
-  // und fällt weg. Bliebe er stehen, zeigte die Karte für den Rest der
-  // Sitzung, was einmal in einer Antwort stand, und nicht mehr, was der Server
-  // führt. Auf einem Relay, das beim Erzeugen nur die Chat-Adresse liefert,
-  // wäre sie danach dauerhaft auf diese eine Zeile eingefroren.
-  useEffect(() => {
-    if (frisch && me.dock_urls?.chat === frisch.chat) setFrisch(null);
-  }, [frisch, me.dock_urls]);
-  const adressen = dockAdressen(me, frisch);
+  const adressen = dockAdressen(me);
   // "Vorhanden" und "anzeigbar" fallen auseinander: ein Zugang aus der Zeit
   // vor dem Umbau lässt sich nicht mehr anzeigen. Dann gilt trotzdem die
   // Rückfrage, denn ein Neuerzeugen entwertet auch diese Eintragungen in OBS.
