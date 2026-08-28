@@ -1445,6 +1445,19 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             });
         }
 
+        // Der Grant ist jetzt persistiert (needs_reauth=FALSE, aktualisierte
+        // Scopes committed und per SELECT sofort sichtbar). Das
+        // Chat-Subscription-Reconcile fuer GENAU diesen Kanal sofort anstossen,
+        // fuer Erst-Auth UND jede Re-Auth. Frueher hing der Trigger allein am
+        // Erst-Auth-Arm des Followup-Match unten; nach einer Re-Auth
+        // (had_existing_auth == true) feuerte er nie, sodass das
+        // channel.chat.message-Abo erst im naechsten 30-Min-Takt entstand und
+        // der Kanal bis dahin auf keinen Chat-Command reagierte.
+        request_chat_subscription_reconcile(
+            &Ok::<(), ()>(()),
+            self.chat_subscription_reconcile.as_deref(),
+        );
+
         // 10. Followups als Background-Tasks (Python `schedule_background`,
         // `oauth_callback.py:207-254`): Erst-Auth → complete_setup
         // (Partner-Sync, first_login, Moderator-Einsetzung, Chat-Begrüßung);
@@ -3507,5 +3520,69 @@ mod callback_tests {
             .expect("callback");
         assert_eq!(result.status, 400);
         assert_eq!(result.title, "Ungültiger State");
+    }
+
+    /// Regression: Nach einer erfolgreichen Re-Auth (bestehende Auth-Zeile,
+    /// `had_existing_auth == true`) muss das Chat-Subscription-Reconcile SOFORT
+    /// angestossen werden, ohne auf den 30-Min-Takt zu warten. PartnerSetup=None
+    /// trifft den Followup-Arm `(None, true)`, der vor dem Fix keinen Trigger
+    /// feuerte. Vor dem Fix: Timeout auf `notified()` => rot.
+    #[tokio::test]
+    async fn reauth_triggert_sofortigen_chat_subscription_reconcile() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_reauth_chat_reconcile").await;
+
+        // Bestehende Auth-Zeile => Re-Auth-Pfad. needs_reauth=TRUE bildet den
+        // vor der Re-Auth geblockten Kanal ab.
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+             VALUES ('333', 'deusasta', TRUE, TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = seed_state(&pool, "deusasta", None, None).await;
+
+        let reconcile = Arc::new(tokio::sync::Notify::new());
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        let imp = TbRaidOAuthImpl::new(
+            pool.clone(),
+            StateStore::new(pool.clone(), "https://example.test/callback"),
+            AuthWriter::new(pool.clone(), cipher),
+            Arc::new(StubTokenClient::ok(&raid_scopes(), "333", "deusasta")),
+            "cid".to_string(),
+            "https://example.test/callback".to_string(),
+            None,
+            Some(Arc::clone(&reconcile)),
+        );
+
+        let result = imp
+            .oauth_callback("code-reauth", &state, "")
+            .await
+            .expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+
+        // Persist-Kontrolle: needs_reauth zurueckgesetzt, channel:bot vorhanden.
+        let (needs_reauth, scopes): (Option<bool>, Option<String>) = sqlx::query_as(
+            "SELECT needs_reauth, scopes FROM twitch_raid_auth WHERE twitch_user_id = '333'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            needs_reauth,
+            Some(false),
+            "needs_reauth muss nach Re-Auth false sein"
+        );
+        assert!(
+            scopes.as_deref().unwrap_or_default().contains("channel:bot"),
+            "channel:bot muss gesetzt sein: {scopes:?}"
+        );
+
+        // Kern: der Chat-Subscription-Reconcile muss SOFORT angestossen werden.
+        tokio::time::timeout(Duration::from_millis(500), reconcile.notified())
+            .await
+            .expect("Re-Auth muss den Chat-Subscription-Reconcile sofort ausloesen");
     }
 }
