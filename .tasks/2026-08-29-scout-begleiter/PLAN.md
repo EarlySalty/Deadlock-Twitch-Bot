@@ -54,3 +54,11 @@ klasse: kritisch — Shadow zuerst, Limits, je-Kanal-Ramp
 
 - 2026-08-29: Plan erstellt. Voraussetzung: Slice 1 liefert Safelist;
   N1 wartet auf den Account-Namen vom Owner.
+- 2026-08-29, User-Begrenzung (Contract-Freeze, daher hier): Der Begleiter
+  wirkt NUR im frühen Fenster eines Kanals, gemessen an den
+  Owner-Nachrichten: unter 100 Nachrichten von earlysalty im Kanal = KI
+  darf; ab 100 = Kanal gilt als etabliert, KI tritt zurück (keine Entwürfe
+  mehr, Handback an den Owner, Status im Dashboard sichtbar). DB-Befund als
+  Grundlage: 51 Kanäle im Fenster, davon 26 in den letzten 30 Tagen aktiv;
+  22 Kanäle etabliert (7.228 Nachrichten). Umsetzung in N2 (Fenster-Check
+  vor jedem Entwurf, fail-closed) und N3 (Handback-Status im Dashboard).
