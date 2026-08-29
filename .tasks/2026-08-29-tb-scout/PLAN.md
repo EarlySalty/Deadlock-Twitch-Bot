@@ -41,28 +41,33 @@ eintragen (Datum + Ergebnis + Validierungsbefehl).
   neuen Tests), `cargo clippy -p tb-dashboard-api`.
 - Stop-Regel: Auth/CSRF-Lücke → sofort fixen, kein Weiterbau.
 
-## M3 — Dispatch in den bestehenden Weg
+## M3 — Besuch-Erkennung statt Bot-Dispatch (überholt den ursprünglichen M3)
 
-- Änderungen: In `rust/bin/tb-bot` ein Tick (am bestehenden
-  Wartungs-/Recruit-Tick-Ort, eigener Funktion `scout_dispatch_approved`):
-  liest approved-ohne-dispatched (höchstens 3 pro Tick, Tagesdeckel 8 wie
-  partner_recruit), ruft für jeden das bestehende
-  `enqueue_partner_outreach` auf, setzt `dispatched_at`. Gates von
-  partner_recruit bleiben unangetastet (INV-02). Kein eigener Versandcode.
-- Erwarteter Zwischenzustand: Test zeigt: approved → Zeile in
-  `twitch_partner_outreach` mit Cooldown, dispatched_at gesetzt;
-  übersprungene/pausierte werden nie dispatcht; Doppel-Tick idempotent.
-- Validierung: `cargo test -p tb-bot scout_dispatch`.
-- Stop-Regel: würde ein neuer Nachrichtentyp oder Kaltkontakt nötig → Stop,
-  zurück an den Orchestrator (Contract-Verstoß).
+- Stand 2026-08-29, User: die Trust-Leiter (`recruitment_messaging.rs`) ist
+  deaktiviert und wird nicht mehr genutzt; darauf wird NICHT gebaut. Der
+  ursprüngliche Dispatch über `enqueue_partner_outreach` entfällt ersatzlos.
+- Änderungen: Im Tick von `rust/bin/tb-bot` (oder im tb-scout-Store) eine
+  read-only Erkennung: taucht der Owner-Login (earlysalty) im Chat oder in
+  `twitch_viewer_presence_ticks` eines Kandidaten-Kanals auf, wird der
+  Kandidat auf "persönlich" gesetzt bzw. mit `visited_at` markiert. Kein
+  Versand, keine Nachricht, kein LLM.
+- Erwarteter Zwischenzustand: Test mit seedeten Chat-/Präsenzzeilen zeigt
+  die Markierung; ohne Owner-Auftritt keine Markierung; idempotent.
+- Validierung: `cargo test -p tb-scout besuch` (bzw. benannte Tests).
+- Stop-Regel: würde ein Versand nötig → Stop, Contract-Verstoß.
 
 ## M4 — Frontend Research-Seite
 
 - Änderungen: Section "Scout-Freigaben" in Research.tsx (Tabelle: Login,
   Sessions, Ø Zuschauer, first_seen, last_seen, Sprache, Status, Grund;
-  je Zeile Freigeben/Überspringen/Pausieren mit Grund-Eingabe), zwei
-  Client-Funktionen in client.ts, Query-Invalidierung. Stil an die
-  bestehende Gold-Optik der Seite angelehnt (Bestandsklassen wiederverwenden).
+  je Zeile Freigeben/Überspringen/Pausieren/Nehme-ich-persönlich mit
+  Grund-Eingabe), zwei Client-Funktionen in client.ts, Query-Invalidierung.
+  Zusatz 2026-08-29: Ansicht "Meine persönliche Besuchsliste" (Status
+  persönlich, sortiert nach Potenzial) und, falls für den Kandidaten eine
+  persönliche Invite-URL existiert (`twitch_streamer_invites`, Anzeige über
+  Bestands-API `tb-internal-api discord_invite`), deren Anzeige zum
+  Rausexen im Chat. Nur Anzeige, kein Versand. Stil an die bestehende
+  Gold-Optik der Seite angelehnt (Bestandsklassen wiederverwenden).
 - Erwarteter Zwischenzustand: Seite zeigt Kandidaten aus der Test-/Prod-Daten
   korrekt; Aktionen persistieren und überleben Reload; Desktop und Mobil
   sauber (Screenshot-Prüfung).
@@ -93,3 +98,8 @@ eintragen (Datum + Ergebnis + Validierungsbefehl).
   unverändert korrekt). M4 zeigt den Status als eigene Ansicht "Meine
   persönliche Besuchsliste" mit Kennzahlen. DB-Befund als Grund: 51 von 73
   bespielten Kanälen waren reine Chat-Beziehungen ohne Raid.
+- 2026-08-29, User-Korrektur: Die Trust-Leiter (`recruitment_messaging.rs`)
+  ist deaktiviert und bringt nichts mehr; darauf wird nicht aufgebaut.
+  M3 (Dispatch in den Outreach-Weg) ist damit überholt und wurde durch die
+  Besuch-Erkennung ersetzt (siehe M3 neu). Zusätzlich in M4: Anzeige einer
+  existierenden persönlichen Invite-URL je Kandidat (nur Anzeige).
