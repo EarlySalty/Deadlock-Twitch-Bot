@@ -91,6 +91,12 @@ eintragen (Datum + Ergebnis + Validierungsbefehl).
 ## Status
 
 - 2026-08-29: Plan erstellt, M1-M5 offen.
+- 2026-08-29: M1 erledigt — Migration `20260829090000_twitch_scout_candidates.sql`,
+  Crate `rust/crates/tb-scout` (Detector-Query klein + first_seen mit harten
+  Filtern als NOT-EXISTS, Global-Ban-Probe fail-closed im Code; Store mit
+  Upsert-Schutz nur für `vorgeschlagen`, Entscheidung, approved-ohne-dispatch,
+  Dispatch-Stempel). Validierung: `TB_TEST_DATABASE_URL=… cargo test -p tb-scout`
+  → 9 bestanden (2 Lib- + 7 PG-Tests), `cargo clippy -p tb-scout --all-targets` sauber.
 - 2026-08-29, User-Nachtrag (Contract-Freeze, daher hier): Vierter
   Kandidaten-Status **"persoenlich"** in M1 (DB-Enum) und M2 (POST-Decision)
   aufnehmen: Bedeutung "Owner übernimmt den Kanal persönlich (Chat, Hilfe,

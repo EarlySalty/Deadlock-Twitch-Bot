@@ -1,0 +1,16 @@
+[package]
+name = "tb-scout"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+chrono  = { workspace = true }
+sqlx    = { workspace = true }
+tracing = { workspace = true }
+# Nur für den bestehenden Global-Ban-Gate (`RaidBlacklistStore::is_hard_banned`,
+# fail-closed) — dieselbe Sperre, die der Recruiting-Pfad nutzt.
+tb-raid = { workspace = true }
+
+[dev-dependencies]
+# rt+macros: #[tokio::test] der PG-Tests.
+tokio = { workspace = true, features = ["rt", "macros"] }

@@ -3143,6 +3143,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-scout"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "sqlx",
+ "tb-raid",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tb-social-media"
 version = "0.1.0"
 dependencies = [
