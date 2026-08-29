@@ -86,3 +86,10 @@ eintragen (Datum + Ergebnis + Validierungsbefehl).
 ## Status
 
 - 2026-08-29: Plan erstellt, M1-M5 offen.
+- 2026-08-29, User-Nachtrag (Contract-Freeze, daher hier): Vierter
+  Kandidaten-Status **"persoenlich"** in M1 (DB-Enum) und M2 (POST-Decision)
+  aufnehmen: Bedeutung "Owner übernimmt den Kanal persönlich (Chat, Hilfe,
+  Beziehung)"; der Bot dispatcht nur "approved", "persönlich" nie (M3 bleibt
+  unverändert korrekt). M4 zeigt den Status als eigene Ansicht "Meine
+  persönliche Besuchsliste" mit Kennzahlen. DB-Befund als Grund: 51 von 73
+  bespielten Kanälen waren reine Chat-Beziehungen ohne Raid.
