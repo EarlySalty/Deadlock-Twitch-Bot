@@ -109,3 +109,11 @@ eintragen (Datum + Ergebnis + Validierungsbefehl).
   M3 (Dispatch in den Outreach-Weg) ist damit überholt und wurde durch die
   Besuch-Erkennung ersetzt (siehe M3 neu). Zusätzlich in M4: Anzeige einer
   existierenden persönlichen Invite-URL je Kandidat (nur Anzeige).
+- 2026-08-29, User-Korrektur: Längere bekannte Streamer mit bestehendem
+  Beziehungsverhältnis sind KEINE Kandidaten. Ergänzung in M1
+  (Kandidaten-Query): Kanäle, in denen der Owner (earlysalty) bereits
+  Chatnachrichten (`twitch_chat_messages`) oder Präsenz
+  (`twitch_viewer_presence_ticks`) vor dem Kandidaten-Erstkontakt hat,
+  werden nicht vorgeschlagen. Ergänzung in M2/M4: manueller Status
+  "bekannter Kontakt" (niemals Vorschlag, niemals KI), der Datenoverride
+  schlägt jede Automatik.

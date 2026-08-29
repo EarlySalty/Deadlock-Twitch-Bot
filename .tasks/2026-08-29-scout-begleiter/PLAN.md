@@ -62,3 +62,8 @@ klasse: kritisch — Shadow zuerst, Limits, je-Kanal-Ramp
   Grundlage: 51 Kanäle im Fenster, davon 26 in den letzten 30 Tagen aktiv;
   22 Kanäle etabliert (7.228 Nachrichten). Umsetzung in N2 (Fenster-Check
   vor jedem Entwurf, fail-closed) und N3 (Handback-Status im Dashboard).
+- 2026-08-29, User-Begrenzung: Streamer mit länger bestehendem
+  Beziehungsverhältnis zum Owner (Status "bekannter Kontakt" im Scout oder
+  Owner-Historie im Kanal vor dem Erstkontakt) erhalten NIEMALS
+  KI-Entwürfe — die KI schreibt nur echte Erstkontakte. Umsetzung in N2
+  (Zusatzfilter, fail-closed) und N3 (Status sichtbar, ohne KI-Aktion).
