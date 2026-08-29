@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use crate::detector::KandidatFund;
 use crate::{
     normalisiere_login, normalize_entscheidung, STATUS_APPROVED, STATUS_PAUSIERT,
-    STATUS_VORGESCHLAGEN,
+    STATUS_PERSOENLICH, STATUS_VORGESCHLAGEN,
 };
 
 /// Eine Zeile aus `twitch_scout_candidates`.
@@ -30,6 +30,8 @@ pub struct KandidatZeile {
     pub approver: Option<String>,
     pub decided_at: Option<DateTime<Utc>>,
     pub dispatched_at: Option<DateTime<Utc>>,
+    /// Erster erkannter Owner-Besuch im Kanal (Besuch-Erkennung, tb-bot-Tick).
+    pub visited_at: Option<DateTime<Utc>>,
 }
 
 type Zeile = (
@@ -44,6 +46,7 @@ type Zeile = (
     String,
     Option<String>,
     Option<String>,
+    Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
 );
@@ -64,12 +67,14 @@ impl From<Zeile> for KandidatZeile {
             approver: z.10,
             decided_at: z.11,
             dispatched_at: z.12,
+            visited_at: z.13,
         }
     }
 }
 
 const SPALTEN: &str = "streamer_login, twitch_user_id, sessions_count, avg_viewers, first_seen, \
-     last_seen, language, deadlock_share, status, entscheid_grund, approver, decided_at, dispatched_at";
+     last_seen, language, deadlock_share, status, entscheid_grund, approver, decided_at, dispatched_at, \
+     visited_at";
 
 /// Merkt einen Kandidaten vor. `true`, wenn geschrieben wurde (neu angelegt
 /// oder Kennzahlen einer `vorgeschlagen`-Zeile aktualisiert). Zeilen mit
@@ -104,9 +109,10 @@ pub async fn vermerke_kandidat(pool: &PgPool, fund: &KandidatFund) -> Result<boo
     Ok(ergebnis.rows_affected() > 0)
 }
 
-/// Setzt eine Admin-Entscheidung (`approved` | `uebersprungen` | `pausiert`)
-/// samt Grund und Entscheider. `false`, wenn der Login unbekannt oder der
-/// Status ungültig ist — dann wird nichts geschrieben.
+/// Setzt eine Admin-Entscheidung (`approved` | `uebersprungen` | `pausiert` |
+/// `persoenlich` | `bekannter_kontakt`) samt Grund und Entscheider. `false`,
+/// wenn der Login unbekannt oder der Status ungültig ist — dann wird nichts
+/// geschrieben.
 pub async fn setze_entscheidung(
     pool: &PgPool,
     login: &str,
@@ -144,6 +150,24 @@ pub async fn liste_offen(pool: &PgPool) -> Result<Vec<KandidatZeile>, sqlx::Erro
          ORDER BY first_seen ASC NULLS LAST, streamer_login ASC",
         v = STATUS_VORGESCHLAGEN,
         p = STATUS_PAUSIERT
+    );
+    let zeilen = sqlx::query_as::<_, Zeile>(&sql)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(KandidatZeile::from)
+        .collect();
+    Ok(zeilen)
+}
+
+/// Persönliche Besuchsliste: Status `persoenlich`, nach Potenzial sortiert
+/// (wiederkehrende Kanäle zuerst, dann Ø Zuschauer, dann älteste first_seen).
+pub async fn liste_persoenlich(pool: &PgPool) -> Result<Vec<KandidatZeile>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {SPALTEN} FROM twitch_scout_candidates \
+         WHERE status = '{p}' \
+         ORDER BY sessions_count DESC, avg_viewers DESC, first_seen ASC",
+        p = STATUS_PERSOENLICH
     );
     let zeilen = sqlx::query_as::<_, Zeile>(&sql)
         .fetch_all(pool)

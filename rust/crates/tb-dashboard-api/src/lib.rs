@@ -812,7 +812,7 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
 /// Writes laufen wie der Admin-Config-Router durch den CSRF-Schutz (GET/HEAD
 /// passieren, Localhost-Bypass für interne Tools).
 pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
-    use handlers::{admin_research, admin_streamers, social_media};
+    use handlers::{admin_research, admin_scout, admin_streamers, social_media};
 
     Router::new()
         .route(
@@ -822,6 +822,17 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/research/:login",
             get(admin_research::handler),
+        )
+        // Scout-Freigaben: Kandidatenliste (mit Erkennungs-Lauf) und
+        // Admin-Entscheidung; dieselben Schutzschichten wie die Research- und
+        // Streamer-Routen oben (require_admin_before_csrf + csrf_protect).
+        .route(
+            "/twitch/api/admin/scout/candidates",
+            get(admin_scout::candidates_handler),
+        )
+        .route(
+            "/twitch/api/admin/scout/candidates/:login/decision",
+            post(admin_scout::decision_handler),
         )
         .route(
             "/twitch/api/admin/streamers",

@@ -85,7 +85,7 @@ async fn pool_or_skip(schema: &str) -> Option<PgPool> {
              avg_viewers REAL NOT NULL DEFAULT 0, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ, \
              language TEXT, deadlock_share REAL NOT NULL DEFAULT 0, \
              status TEXT NOT NULL DEFAULT 'vorgeschlagen', entscheid_grund TEXT, approver TEXT, \
-             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ)",
+             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ, visited_at TIMESTAMPTZ)",
     ] {
         sqlx::query(ddl)
             .execute(&pool)

@@ -14,12 +14,21 @@ pub const STATUS_VORGESCHLAGEN: &str = "vorgeschlagen";
 pub const STATUS_APPROVED: &str = "approved";
 pub const STATUS_UEBERSPRUNGEN: &str = "uebersprungen";
 pub const STATUS_PAUSIERT: &str = "pausiert";
+/// Owner übernimmt den Kanal persönlich (Chat, Hilfe, Beziehung); der
+/// Automatik-Dispatch fasst diesen Status nie an.
+pub const STATUS_PERSOENLICH: &str = "persoenlich";
+/// Länger bekannter Streamer mit bestehendem Beziehungsverhältnis; manueller
+/// Datenoverride, der jede Automatik schlägt (nie Vorschlag, nie KI, nie
+/// Dispatch).
+pub const STATUS_BEKANNT: &str = "bekannter_kontakt";
 
 /// Entscheidungswerte des Admin-Endpoints (POST …/decision). `approve` ist
 /// der Eingabewert; gespeichert wird [`STATUS_APPROVED`].
 pub const DECISION_APPROVE: &str = "approve";
 pub const DECISION_UEBERSPRUNGEN: &str = "uebersprungen";
 pub const DECISION_PAUSIERT: &str = "pausiert";
+pub const DECISION_PERSOENLICH: &str = "persoenlich";
+pub const DECISION_BEKANNT: &str = "bekannter_kontakt";
 
 /// Normalisiert einen Entscheidungswert auf den gespeicherten Status.
 /// Unbekannte Eingaben → `None` (kein stiller Default wie im Bestand).
@@ -28,6 +37,8 @@ pub fn normalize_entscheidung(decision: &str) -> Option<&'static str> {
         DECISION_APPROVE | STATUS_APPROVED => Some(STATUS_APPROVED),
         DECISION_UEBERSPRUNGEN => Some(STATUS_UEBERSPRUNGEN),
         DECISION_PAUSIERT => Some(STATUS_PAUSIERT),
+        DECISION_PERSOENLICH | "persönlich" => Some(STATUS_PERSOENLICH),
+        DECISION_BEKANNT | "bekannter kontakt" => Some(STATUS_BEKANNT),
         _ => None,
     }
 }
@@ -55,6 +66,22 @@ mod tests {
             Some(STATUS_UEBERSPRUNGEN)
         );
         assert_eq!(normalize_entscheidung("pausiert"), Some(STATUS_PAUSIERT));
+        assert_eq!(
+            normalize_entscheidung("persoenlich"),
+            Some(STATUS_PERSOENLICH)
+        );
+        assert_eq!(
+            normalize_entscheidung("persönlich"),
+            Some(STATUS_PERSOENLICH)
+        );
+        assert_eq!(
+            normalize_entscheidung("bekannter_kontakt"),
+            Some(STATUS_BEKANNT)
+        );
+        assert_eq!(
+            normalize_entscheidung("Bekannter Kontakt"),
+            Some(STATUS_BEKANNT)
+        );
         assert_eq!(normalize_entscheidung("vorgeschlagen"), None);
         assert_eq!(normalize_entscheidung("  "), None);
     }

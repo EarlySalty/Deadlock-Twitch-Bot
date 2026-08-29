@@ -43,6 +43,7 @@ tb-chat       = { workspace = true }
 tb-engagement = { workspace = true }
 tb-knowledge  = { workspace = true }
 tb-raid       = { workspace = true }
+tb-scout      = { workspace = true }
 tb-social-media = { workspace = true }
 tb-transport-twitch = { workspace = true }
 

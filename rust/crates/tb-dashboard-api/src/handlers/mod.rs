@@ -16,6 +16,7 @@ pub mod admin_partner_signup_block;
 pub mod admin_promo_mode;
 pub mod admin_research;
 pub mod admin_roadmap;
+pub mod admin_scout;
 pub mod admin_spa;
 pub mod admin_streamers;
 pub mod ads_schedule;

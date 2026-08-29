@@ -2931,6 +2931,7 @@ dependencies = [
  "tb-http-core",
  "tb-knowledge",
  "tb-raid",
+ "tb-scout",
  "tb-social-media",
  "tb-transport-twitch",
  "thiserror 1.0.69",
