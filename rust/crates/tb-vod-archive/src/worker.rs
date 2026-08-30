@@ -26,7 +26,9 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
-use tb_social_media::uploaders::youtube::{ChunkOutcome, ResumeStand, YouTubeUploader};
+use tb_social_media::uploaders::youtube::{
+    ChunkOutcome, ResumeStand, VideoZustand, YouTubeUploader,
+};
 use tb_social_media::uploaders::UploadError;
 use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
 
@@ -39,6 +41,17 @@ use crate::twitch::{self, CommandRunner};
 /// Erster Lauf erst nach dieser Frist, damit der Bot-Start nicht sofort einen
 /// mehrstuendigen Download anwirft.
 const INITIAL_DELAY_SECS: u64 = 300;
+
+/// Wie weit zurueck fertige Uploads bei YouTube nachgeprueft werden. Der
+/// Befund (abgelehnt, entfernt) liegt oft erst Stunden nach dem Upload vor,
+/// also weit genug ueber den Tag hinaus, aber begrenzt, damit alte Laeufe
+/// nicht ewig nachgefragt werden.
+const PRUEF_FENSTER_TAGE: i32 = 14;
+
+/// Auszeit fuer ein von YouTube verworfenes Teil, bevor es erneut
+/// hochgeladen wird. Sonst zieht jeder Lauf dieselbe Ablehnung mit einem
+/// Volllast-Upload neu durch.
+const ABGELEHNT_PAUSE_STUNDEN: i64 = 12;
 
 /// Der Upload-Weg eines einzelnen Teils. Als Trait wie [`CommandRunner`],
 /// damit der Ablauf des Worker samt seiner Deckel ohne echtes YouTube
@@ -62,6 +75,13 @@ pub trait TeilHochlader: Send + Sync {
         pfad: &Path,
         offset: u64,
     ) -> Result<ChunkOutcome, UploadError>;
+
+    /// Verarbeitungsstand eines bereits hochgeladenen Videos. `None`, wenn
+    /// YouTube die Video-ID nicht mehr kennt.
+    async fn video_status(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<VideoZustand>, UploadError>;
 }
 
 #[async_trait]
@@ -89,6 +109,13 @@ impl TeilHochlader for YouTubeUploader {
         offset: u64,
     ) -> Result<ChunkOutcome, UploadError> {
         YouTubeUploader::upload_chunk(self, sitzung, pfad, offset).await
+    }
+
+    async fn video_status(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<VideoZustand>, UploadError> {
+        YouTubeUploader::video_status(self, video_id).await
     }
 }
 
@@ -293,6 +320,12 @@ impl VodArchiveWorker {
             uploader.insert(einstellung.streamer_login.clone(), zugang);
         }
 
+        // Der resumable Upload meldet nur angekommene Bytes, nicht den
+        // Verbleib. Befunde wie "Video ist zu lang" liegen erst Stunden
+        // spaeter vor und werden hier eingesammelt, bevor neue Uploads
+        // starten.
+        self.pruefe_fruehe_uploads(streamer, &uploader).await;
+
         // Reserve auf beide Grenzen, damit nach einem Download im selben Lauf
         // noch Uploads gefunden werden.
         let reserve =
@@ -395,6 +428,121 @@ impl VodArchiveWorker {
         Ok(())
     }
 
+    /// Holt den Befund ueber frische Uploads ein. YouTube nimmt einen
+    /// fertigen resumable Upload erstmal an und wirft ihn spaeter wieder
+    /// raus, etwa beim 15-Minuten-Limit eines nicht verifizierten Kanals.
+    /// Ohne diese Nachfrage bliebe so ein Verlust als "Fertig" stehen, und
+    /// das Aufraeumen wuerde irgendwann die letzte lokale Kopie loeschen.
+    async fn pruefe_fruehe_uploads(
+        &self,
+        streamer: &[VodArchiveSettings],
+        uploader: &HashMap<String, Option<Arc<dyn TeilHochlader>>>,
+    ) {
+        for einstellung in streamer {
+            let login = einstellung.streamer_login.as_str();
+            let Some(hochlader) = uploader.get(login).cloned().flatten() else {
+                continue;
+            };
+            let frische = match store::frisch_hochgeladene_teile(
+                &self.pool,
+                login,
+                PRUEF_FENSTER_TAGE,
+            )
+            .await
+            {
+                Ok(frische) if frische.is_empty() => continue,
+                Ok(frische) => frische,
+                Err(fehler) => {
+                    tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
+                    continue;
+                }
+            };
+            tracing::info!(kanal = login, teile = frische.len(), "Upload-Nachpruefung");
+            for eintrag in frische {
+                match hochlader.video_status(&eintrag.video_id).await {
+                    Ok(None) => {
+                        self.markiere_verworfen(
+                            login,
+                            &eintrag,
+                            "YouTube kennt die Video-ID nicht mehr (entfernt oder abgelehnt)",
+                        )
+                        .await;
+                    }
+                    Ok(Some(stand))
+                        if matches!(stand.upload_status.as_str(), "rejected" | "failed") =>
+                    {
+                        let grund = match stand.rejection_reason.as_deref() {
+                            Some(reason) => format!(
+                                "YouTube hat den Upload verworfen: uploadStatus={}, rejectionReason={}",
+                                stand.upload_status, reason
+                            ),
+                            None => format!(
+                                "YouTube hat den Upload verworfen: uploadStatus={}",
+                                stand.upload_status
+                            ),
+                        };
+                        self.markiere_verworfen(login, &eintrag, &grund).await;
+                    }
+                    Ok(Some(_)) => {}
+                    Err(UploadError::QuotaExceeded(_)) => {
+                        // Das Tageskontingent haengt am Google-Projekt: ist
+                        // es leer, lohnt weder die Nachpruefung noch der
+                        // restliche Lauf.
+                        tracing::warn!(
+                            kanal = login,
+                            "YouTube-Tageskontingent erschoepft, Upload-Nachpruefung endet"
+                        );
+                        return;
+                    }
+                    Err(fehler) => {
+                        tracing::warn!(
+                            kanal = login,
+                            video = %eintrag.video_id,
+                            %fehler,
+                            "Upload-Nachpruefung fehlgeschlagen"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Trägt einen von YouTube wieder verworfenen Upload als solchen fest:
+    /// das Teil geht in die Auszeit und das VOD aus "hochgeladen" zurueck in
+    /// die Warteschlange, damit die lokale Kopie nicht aufgeräumt wird, solange
+    /// bei YouTube nichts liegt.
+    async fn markiere_verworfen(
+        &self,
+        kanal: &str,
+        eintrag: &store::FrischerUpload,
+        grund: &str,
+    ) {
+        tracing::error!(
+            kanal = %kanal,
+            video = %eintrag.video_id,
+            teil = eintrag.part_index,
+            grund,
+            "Upload von YouTube verworfen; häufigste Ursache ist das 15-Minuten-Limit eines nicht verifizierten Kanals (youtube.com/verify). Das Teil pausiert und geht erneut hinaus, danach folgt der Upload von selbst."
+        );
+        if let Err(fehler) =
+            store::setze_teil_abgelehnt(&self.pool, eintrag.teil_id, grund).await
+        {
+            tracing::error!(%fehler, "Verworfenes Teil konnte nicht markiert werden");
+            return;
+        }
+        if eintrag.vod_status == store::STATUS_ARCHIVIERT {
+            // Lokal ist hier nichts mehr zu retten; der Eintrag bleibt
+            // abgeschlossen.
+            return;
+        }
+        if let Err(fehler) =
+            store::setze_fehler(&self.pool, eintrag.vod_id, store::STATUS_UPLOAD_FEHLER, grund)
+                .await
+        {
+            tracing::error!(%fehler, "VOD konnte nicht zurueckgesetzt werden");
+        }
+    }
+
     /// Laedt das VOD (falls noetig) und schiebt seine Teile hoch. Alles, was
     /// wirklich passiert ist, landet sofort in `bilanz`: der Upload-Deckel
     /// zaehlt Teile, und ein Abbruch mittendrin darf die bereits verbrauchten
@@ -476,6 +624,18 @@ impl VodArchiveWorker {
         let mut offen = 0usize;
         for teil in &teile {
             if teil.status == store::TEIL_FERTIG {
+                continue;
+            }
+            if teil.abgelehnt_kuehlt_noch(ABGELEHNT_PAUSE_STUNDEN) {
+                // Frisch von YouTube verworfen: die Auszeit verhindert, dass
+                // jeder Lauf dieselbe Ablehnung mit einem Volllast-Upload neu
+                // durchzieht. Solange das Teil aussteht, bleibt das VOD offen.
+                tracing::debug!(
+                    vod = %vod.twitch_id,
+                    teil = teil.part_index,
+                    "Verworfenes Teil pausiert, der Upload folgt nach der Auszeit"
+                );
+                offen += 1;
                 continue;
             }
             if bilanz.hochgeladen >= self.config.max_uploads_per_run {
@@ -915,10 +1075,12 @@ mod tests {
     }
 
     /// Zaehlt, wie oft wirklich ein Teil zu YouTube geschoben wurde. Genau
-    /// diese Zahl kostet Tageskontingent.
+    /// diese Zahl kostet Tageskontingent. Mit `verwerfen` kann der Test
+    /// simulieren, dass YouTube die fertigen Uploads wieder einsammelt.
     #[derive(Default)]
     struct ZaehlenderHochlader {
         uploads: AtomicUsize,
+        verwerfen: Mutex<bool>,
     }
 
     #[async_trait]
@@ -947,6 +1109,19 @@ mod tests {
         ) -> Result<ChunkOutcome, UploadError> {
             let nummer = self.uploads.fetch_add(1, Ordering::SeqCst);
             Ok(ChunkOutcome::Fertig(format!("yt-{nummer}")))
+        }
+
+        async fn video_status(
+            &self,
+            _video_id: &str,
+        ) -> Result<Option<VideoZustand>, UploadError> {
+            if *self.verwerfen.lock().unwrap() {
+                return Ok(None);
+            }
+            Ok(Some(VideoZustand {
+                upload_status: "processed".to_string(),
+                rejection_reason: None,
+            }))
         }
     }
 
@@ -1193,6 +1368,86 @@ mod tests {
         // Und es geht zurueck in die Download-Warteschlange, sonst haengt es
         // fuer immer im Upload-Pfad ohne etwas zum Hochladen.
         assert!(offen[0].braucht_download());
+
+        let _ = std::fs::remove_dir_all(verzeichnis);
+    }
+
+    /// Der resumable Upload meldet nur angekommene Bytes. Verwirft YouTube
+    /// das Video erst spaeter (15-Minuten-Limit), darf das nicht als
+    /// "Fertig" stehen bleiben: der Befund muss zum Teil und VOD durchschlagen
+    /// und der Upload nach einer Auszeit erneut laufen, sobald der Grund weg
+    /// ist.
+    #[tokio::test]
+    async fn verworfene_uploads_fallen_nicht_unter_den_tisch() {
+        let Some(pool) = pool("t_vod_verworfen").await else {
+            return;
+        };
+        let verzeichnis = temp_verzeichnis("verworfen");
+        let pfad = verzeichnis.join("v1.mp4");
+        std::fs::write(&pfad, b"videodaten").unwrap();
+
+        store::merke_vod(&pool, "v1", "earlysalty", "Langer Stream", 60_000)
+            .await
+            .unwrap();
+        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        store::setze_geladen(&pool, vod.id, &pfad.display().to_string(), None, 60_000)
+            .await
+            .unwrap();
+        store::setze_teile(&pool, vod.id, "earlysalty", &[pfad.display().to_string()])
+            .await
+            .unwrap();
+
+        let hochlader = Arc::new(ZaehlenderHochlader::default());
+        let worker = worker(&pool, config(&verzeichnis), &hochlader);
+
+        // Lauf eins: der Upload geht raus, alles gilt als fertig.
+        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store::offene_vods(&pool, "earlysalty", 10).await.unwrap().len(),
+            0,
+            "der Lauf kennt nur erfolgreiche Uploads, das VOD ist abgeschlossen"
+        );
+
+        // Jetzt sammelt YouTube den Upload wieder ein.
+        *hochlader.verwerfen.lock().unwrap() = true;
+        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        let teile = store::teile(&pool, vod.id).await.unwrap();
+        assert_eq!(teile[0].status, store::TEIL_ABGELEHNT);
+        let vod_status: String = sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id = $1")
+            .bind(vod.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            vod_status,
+            store::STATUS_UPLOAD_FEHLER,
+            "das VOD muss aus 'uploaded' zurueckfallen, sonst raeumt das Archiv die letzte Kopie weg"
+        );
+
+        // Die Auszeit greift: kein neuer Upload, das VOD bleibt offen.
+        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(store::offene_vods(&pool, "earlysalty", 10).await.unwrap().len(), 1);
+
+        // Auszeit vorbei: der Upload geht erneut hinaus, der Grund ist weg.
+        sqlx::query(
+            "UPDATE twitch_vod_archive_parts SET updated_at = CURRENT_TIMESTAMP - INTERVAL '13 hours'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        *hochlader.verwerfen.lock().unwrap() = false;
+        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        assert_eq!(
+            hochlader.uploads.load(Ordering::SeqCst),
+            2,
+            "nach der Auszeit und ohne neuen Verwerfungsgrund muss erneut hochgeladen werden"
+        );
+        let teile = store::teile(&pool, vod.id).await.unwrap();
+        assert_eq!(teile[0].status, store::TEIL_FERTIG);
+        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        assert_eq!(offen.len(), 0);
 
         let _ = std::fs::remove_dir_all(verzeichnis);
     }

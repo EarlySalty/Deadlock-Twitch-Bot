@@ -132,6 +132,22 @@ pub struct ShortsUpload {
     pub session_uri: String,
 }
 
+/// Verarbeitungsstand eines hochgeladenen Videos laut YouTube.
+///
+/// Der resumable Upload meldet nur, dass die Bytes angekommen sind. YouTube
+/// nimmt das Video danach aber trotzdem wieder raus, etwa wenn der Kanal
+/// nicht verifiziert ist und das Video laenger als 15 Minuten ist: die
+/// Verarbeitung bricht ab, und von aussen bleibt nur ein toter Link. Diese
+/// Abfrage holt den Befund nach hinten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoZustand {
+    /// `uploaded` (wartet auf Verarbeitung), `processed`, `rejected`,
+    /// `failed` oder `deleted`.
+    pub upload_status: String,
+    /// YouTube-Ablehnungsgrund, soweit gemeldet.
+    pub rejection_reason: Option<String>,
+}
+
 /// Zwischenstand waehrend des Uploads. Geht an die Fortschrittssenke, damit der
 /// Aufrufer Sitzung und Byte-Position dauerhaft festhalten kann; ohne das
 /// beginnt jeder Abbruch wieder bei null.
@@ -431,6 +447,37 @@ impl YouTubeUploader {
                 .bearer_auth(token)
         })
         .await
+    }
+
+    /// Fragt den Zustand eines Videos ab. `None`, wenn YouTube die Video-ID
+    /// nicht mehr kennt — das Video wurde also entfernt oder abgelehnt und
+    /// aus der Liste geworfen.
+    pub async fn video_status(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<VideoZustand>, UploadError> {
+        let resp = self.get_videos("status", video_id).await?;
+        if !resp.status().is_success() {
+            return Err(fehler_aus_antwort(resp, "YouTube videos.list").await);
+        }
+        let daten: Value = resp
+            .json()
+            .await
+            .map_err(|e| UploadError::Request(e.to_string()))?;
+        let Some(item) = daten.get("items").and_then(|i| i.get(0)) else {
+            return Ok(None);
+        };
+        Ok(Some(VideoZustand {
+            upload_status: item
+                .pointer("/status/uploadStatus")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unbekannt")
+                .to_string(),
+            rejection_reason: item
+                .pointer("/status/rejectionReason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        }))
     }
 
     // ------------------------------------------------------------------

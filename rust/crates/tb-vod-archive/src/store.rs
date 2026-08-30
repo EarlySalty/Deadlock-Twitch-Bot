@@ -8,7 +8,7 @@
 //! Makros. Das ist im Repo die haeufigere Form und haelt neue Tabellen vom
 //! Offline-Cache unabhaengig.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use sqlx::{PgPool, Row};
 
 use crate::error::VodArchiveError;
@@ -25,6 +25,11 @@ pub const STATUS_ARCHIVIERT: &str = "archived";
 
 pub const TEIL_OFFEN: &str = "pending";
 pub const TEIL_FERTIG: &str = "done";
+
+/// YouTube hat den fertigen Upload wieder verworfen (z. B. 15-Minuten-Limit
+/// eines nicht verifizierten Kanals). Solche Teile pausieren, statt sie in
+/// jedem Lauf sofort erneut hochzuladen.
+pub const TEIL_ABGELEHNT: &str = "rejected";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vod {
@@ -57,6 +62,21 @@ pub struct Teil {
     pub upload_session_uri: Option<String>,
     pub upload_offset: i64,
     pub youtube_video_id: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl Teil {
+    /// Steht ein abgelehntes Teil noch in seiner Auszeit? Erst danach darf es
+    /// erneut hochgeladen werden, sonst radelt jeder Lauf dieselbe Ablehnung
+    /// mitsamt Volllast-Upload durch.
+    pub fn abgelehnt_kuehlt_noch(&self, stunden: i64) -> bool {
+        if self.status != TEIL_ABGELEHNT {
+            return false;
+        }
+        self.updated_at
+            .map(|stand| Utc::now() - stand < Duration::hours(stunden))
+            .unwrap_or(false)
+    }
 }
 
 /// Traegt ein neu entdecktes VOD ein. Bekannte VODs bleiben unberuehrt, damit
@@ -210,7 +230,7 @@ pub async fn setze_teile(
 pub async fn teile(pool: &PgPool, vod_id: i64) -> Result<Vec<Teil>, VodArchiveError> {
     let rows = sqlx::query(
         "SELECT id, part_index, file_path, status, upload_session_uri, upload_offset, \
-                youtube_video_id \
+                youtube_video_id, updated_at \
          FROM twitch_vod_archive_parts WHERE vod_id = $1 ORDER BY part_index ASC",
     )
     .bind(vod_id)
@@ -226,6 +246,7 @@ pub async fn teile(pool: &PgPool, vod_id: i64) -> Result<Vec<Teil>, VodArchiveEr
             upload_session_uri: row.get("upload_session_uri"),
             upload_offset: row.get("upload_offset"),
             youtube_video_id: row.get("youtube_video_id"),
+            updated_at: row.get("updated_at"),
         })
         .collect())
 }
@@ -315,6 +336,71 @@ pub async fn setze_teil_fehler(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Vermerkt, dass YouTube einen fertigen Upload wieder verworfen hat. Das
+/// Teil bleibt mit seiner Datei stehen und geht nach der Auszeit erneut in
+/// den Upload, sobald der Grund (etwa ein nicht verifizierter Kanal) weg ist.
+pub async fn setze_teil_abgelehnt(
+    pool: &PgPool,
+    teil_id: i64,
+    grund: &str,
+) -> Result<(), VodArchiveError> {
+    let kurz: String = grund.chars().take(1000).collect();
+    sqlx::query(
+        "UPDATE twitch_vod_archive_parts \
+         SET status = 'rejected', last_error = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    )
+    .bind(teil_id)
+    .bind(kurz)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Ein fertiger Upload, dessen Verbleib bei YouTube noch ungeprueft ist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrischerUpload {
+    pub teil_id: i64,
+    pub vod_id: i64,
+    pub part_index: i32,
+    pub video_id: String,
+    /// Status des VOD im Moment der Abfrage. Ein zurueckgesetztes VOD darf
+    /// nur aus `uploaded` fallen, niemals aus `archived`.
+    pub vod_status: String,
+}
+
+/// Fertige Teile der letzten `tage`, die bei YouTube nachgeprueft werden
+/// wollen. Der Befund (abgelehnt, geloescht) liegt oft erst Stunden nach dem
+/// Upload vor — der naechste Lauf holt ihn ein.
+pub async fn frisch_hochgeladene_teile(
+    pool: &PgPool,
+    streamer_login: &str,
+    tage: i32,
+) -> Result<Vec<FrischerUpload>, VodArchiveError> {
+    let rows = sqlx::query(
+        "SELECT p.id AS teil_id, p.vod_id, p.part_index, p.youtube_video_id, v.status AS vod_status \
+         FROM twitch_vod_archive_parts p \
+         JOIN twitch_vod_archive_vods v ON v.id = p.vod_id \
+         WHERE LOWER(p.streamer_login) = LOWER($1) \
+           AND p.status = 'done' AND p.youtube_video_id IS NOT NULL \
+           AND p.updated_at > CURRENT_TIMESTAMP - make_interval(days => $2) \
+         ORDER BY p.updated_at ASC",
+    )
+    .bind(streamer_login)
+    .bind(tage)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| FrischerUpload {
+            teil_id: row.get("teil_id"),
+            vod_id: row.get("vod_id"),
+            part_index: row.get("part_index"),
+            video_id: row.get::<String, _>("youtube_video_id"),
+            vod_status: row.get("vod_status"),
+        })
+        .collect())
 }
 
 /// Markiert das VOD als vollstaendig hochgeladen.
