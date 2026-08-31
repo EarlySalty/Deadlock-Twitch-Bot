@@ -35,12 +35,12 @@ $$;
 ALTER TABLE public.dashboard_sessions
     VALIDATE CONSTRAINT dashboard_sessions_session_id_sha256;
 
--- Die plattformübergreifenden OAuth-State-Tokens sind ebenfalls kurzlebige
--- Bearer-Werte. Alle Rust-Schreib- und Lesepfade verwenden denselben
--- SHA-256-Lookup-Key; das Backfill erhält gerade laufende OAuth-Flows.
-UPDATE public.oauth_state_tokens
-SET state_token = encode(sha256(convert_to(state_token, 'UTF8')), 'hex')
-WHERE state_token !~ '^[0-9a-f]{64}$';
+-- Die plattformübergreifenden OAuth-State-Tokens sind kurzlebige Bearer-Werte.
+-- Alte Raid-Rohwerte hatten bereits exakt das 64-Hex-Format eines SHA-256-
+-- Lookup-Keys und lassen sich deshalb nicht sicher von neuen Hashes
+-- unterscheiden. Der Cutover läuft offline; alle höchstens zehn Minuten alten
+-- Flows werden bewusst verworfen und müssen einmal neu gestartet werden.
+DELETE FROM public.oauth_state_tokens;
 
 DO $$
 BEGIN
@@ -61,13 +61,7 @@ ALTER TABLE public.oauth_state_tokens
     VALIDATE CONSTRAINT oauth_state_tokens_state_token_sha256;
 
 -- PKCE-Verifier müssen für den Code-Tausch reversibel bleiben und werden
--- deshalb mit dem vorhandenen AES-256-GCM-Feldschlüssel verschlüsselt. Alte
--- Social-Media-Flows laufen höchstens zehn Minuten; beim Offline-Cutover werden
--- sie bewusst verworfen, statt einen Klartext-Fallback im neuen Code zu lassen.
-DELETE FROM public.oauth_state_tokens
-WHERE platform IN ('tiktok', 'youtube')
-  AND pkce_verifier IS NOT NULL;
-
+-- deshalb mit dem vorhandenen AES-256-GCM-Feldschlüssel verschlüsselt.
 DO $$
 BEGIN
     IF NOT EXISTS (

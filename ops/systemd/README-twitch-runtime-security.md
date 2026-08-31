@@ -6,12 +6,15 @@ Die produktiven Prozesse laufen als getrennte Systemnutzer:
 - `twitchdash`
 - `twitchaudit`
 
-Beide sind weder in `sudo` noch in `docker`. Nur das Medienverzeichnis
+Alle drei sind weder in `sudo` noch in `docker`. Nur das Medienverzeichnis
 `/var/lib/deadlock-twitch-media/clips` ist über die nicht privilegierte Gruppe
 `twitchmedia` geteilt. Sonstiger Zustand und Logs sind getrennt. Der Code liegt
 als root-eigenes, nicht beschreibbares Release unter `/opt/deadlock/twitch`.
 `UMask=0007` lässt Dateien im setgid-Medienordner für beide Dienste lesbar;
 die privaten Zustandswurzeln gehören weiterhin jeweils nur einem Dienstkonto.
+Bot und Coaching-Audit teilen ausschließlich den root-eigenen, nicht
+beschreibbaren STT-Werkzeugbaum über die Gruppe `twitchstt`; Daten- und
+Secret-Verzeichnisse sind darüber nicht erreichbar.
 
 Schemaänderungen laufen ausschließlich über `deadlock-twitch-migrate.service`
 als lokaler PostgreSQL-Systemnutzer. Bot und Dashboard starten mit
