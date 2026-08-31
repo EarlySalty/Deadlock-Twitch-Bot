@@ -47,6 +47,7 @@ fi
 generated=(
   rust/target/release/tb-bot
   rust/target/release/tb-dashboard
+  rust/target/release/tb-stream-audit
   bot/analytics/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
@@ -94,6 +95,7 @@ if [[ ! -e "$release" ]]; then
 
   install -m 0755 "$checkout/rust/target/release/tb-bot" "$stage/rust/target/release/tb-bot"
   install -m 0755 "$checkout/rust/target/release/tb-dashboard" "$stage/rust/target/release/tb-dashboard"
+  install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
 
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
   # angegebenen SHA. Unversionierte Dateien aus dem Build-Baum werden niemals
@@ -101,6 +103,7 @@ if [[ ! -e "$release" ]]; then
   git -C "$checkout" archive --format=tar "$git_sha" -- \
     rust/scripts/run_tb_bot_service.sh \
     rust/scripts/run_tb_dashboard_service.sh \
+    rust/scripts/run_stream_audit_service.sh \
     rust/migrations \
     rust/knowledge \
     ops/systemd/twitch-runtime-roles.sql \
@@ -108,7 +111,8 @@ if [[ ! -e "$release" ]]; then
 
   chmod 0755 \
     "$stage/rust/scripts/run_tb_bot_service.sh" \
-    "$stage/rust/scripts/run_tb_dashboard_service.sh"
+    "$stage/rust/scripts/run_tb_dashboard_service.sh" \
+    "$stage/rust/scripts/run_stream_audit_service.sh"
   chmod 0644 "$stage/ops/systemd/twitch-runtime-roles.sql"
   cp -a "$checkout/bot/analytics/dashboard_v2/dist/." "$stage/bot/analytics/dashboard_v2/dist/"
   cp -a "$checkout/bot/admin_dashboard/dist/." "$stage/bot/admin_dashboard/dist/"

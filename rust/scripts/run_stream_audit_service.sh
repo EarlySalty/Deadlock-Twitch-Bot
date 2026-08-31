@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
 INFISICAL_LOADER="${INFISICAL_LOADER:-$HOME/.local/bin/dl-infisical-env}"
+RUNTIME_CONFIG_FILE="${TWITCH_RUNTIME_CONFIG_FILE:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Infisical-Config fehlt: $CONFIG_FILE" >&2
@@ -22,6 +23,17 @@ set -a
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 set +a
+
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  if [[ ! -f "$RUNTIME_CONFIG_FILE" ]]; then
+    echo "Runtime-Konfiguration fehlt: $RUNTIME_CONFIG_FILE" >&2
+    exit 7
+  fi
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
 
 # Das systemd-Credential gewinnt gegen einen Wert aus der Config-Datei: es ist
 # die Stelle, die rotiert wird. Ein alter Token in infisical.conf hat den

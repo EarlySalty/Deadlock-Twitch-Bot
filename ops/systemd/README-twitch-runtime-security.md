@@ -4,6 +4,7 @@ Die produktiven Prozesse laufen als getrennte Systemnutzer:
 
 - `twitchbot`
 - `twitchdash`
+- `twitchaudit`
 
 Beide sind weder in `sudo` noch in `docker`. Nur das Medienverzeichnis
 `/var/lib/deadlock-twitch-media/clips` ist über die nicht privilegierte Gruppe
@@ -27,6 +28,10 @@ Das Infisical-Bootstrap-Credential wird mit `systemd-creds` hostgebunden
 verschlüsselt und über `LoadCredentialEncrypted=` nur in den jeweiligen
 Mount-Namespace gereicht. Der inhaltliche Umbau auf getrennte Infisical-Pfade
 ist bewusst nicht Teil dieses Schritts.
+Die rclone-Konfiguration des Coaching-Audits liegt ebenfalls nur als
+hostgebunden verschlüsseltes systemd-Credential vor; der Audit-Prozess erhält
+die entschlüsselte Laufzeitkopie ausschließlich in seinem privaten
+Credential-Verzeichnis.
 
 Die Peer-DSNs enthalten kein Passwort. Der Infisical-Loader liefert zwar noch
 die gemeinsame alte DSN, aber die Startskripte überschreiben sie nach dem Laden
@@ -48,8 +53,8 @@ keinen PostgreSQL-Superuser-Zugang.
 3. Die Regeln aus `pg_hba-twitch.conf` vor `local all all peer` einfügen und
    PostgreSQL neu laden. Dadurch können die Peer-Rollen keine andere lokale
    Datenbank öffnen.
-4. Beide alten User-Dienste stoppen und deaktivieren. Verifizieren, dass keine
-   alten `tb-bot`-/`tb-dashboard`-Prozesse und keine zugehörigen
+4. Alle drei alten User-Dienste stoppen und deaktivieren. Verifizieren, dass keine
+   alten `tb-bot`-/`tb-dashboard`-/`tb-stream-audit`-Prozesse und keine zugehörigen
    PostgreSQL-Backends mit der Superuser-Rolle mehr leben.
 5. Erst offline `deadlock-twitch-migrate.service` starten. Nach erfolgreichen Migrationen
    wendet sein `ExecStartPost` die Runtime-Rollen und Grants erneut an; dadurch
