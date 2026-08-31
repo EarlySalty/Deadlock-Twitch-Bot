@@ -177,7 +177,8 @@ if [[ ! -e "$release" ]]; then
   expected_archive="$(mktemp "$release_root/.expected-$git_sha-XXXXXXXX")"
   actual_archive="$(mktemp "$release_root/.actual-$git_sha-XXXXXXXX")"
   cleanup_archive_lists() {
-    unlink -- "$expected_archive" "$actual_archive" 2>/dev/null || true
+    unlink -- "$expected_archive" 2>/dev/null || true
+    unlink -- "$actual_archive" 2>/dev/null || true
   }
   trap 'cleanup_archive_lists; cleanup_stage' EXIT
   "${git_safe[@]}" -C "$checkout" ls-tree -rz --name-only "$git_sha" -- \
