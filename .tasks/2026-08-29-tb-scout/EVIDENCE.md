@@ -27,6 +27,6 @@ Analoge Implementierungen und Schnittstellen (Mindestens 3, alle als pfad:zeile)
    (setup mit Schema, seed-Helper :456, Verhaltenstests :469, :493);
    `rust/crates/tb-dashboard-api/src/handlers/admin_research.rs:562-650`
    (pool_or_skip, request-Helper).
-6. Frontend-Tab im bestehenden Dashboard: 
+6. Frontend-Tab im bestehenden Dashboard:
    `bot/admin_dashboard/src/pages/community/Research.tsx:213-222` (useQuery),
    `:290` (Vorschläge-Tabelle), `bot/admin_dashboard/src/api/client.ts:1333-1341`.
