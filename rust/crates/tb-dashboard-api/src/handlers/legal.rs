@@ -25,12 +25,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{Form, Query},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use hmac::{Hmac, Mac};
+use rand::{rngs::OsRng, RngCore};
 use serde::Deserialize;
 use sha2::Sha256;
 
@@ -39,7 +40,9 @@ type HmacSha256 = Hmac<Sha256>;
 const LEGAL_GATE_TURNSTILE_VERIFY_URL: &str =
     "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 const LEGAL_GATE_COOKIE_NAME: &str = "twitch_legal_gate";
+const LEGAL_GATE_CSRF_COOKIE_NAME: &str = "twitch_legal_csrf";
 const LEGAL_GATE_COOKIE_TTL_SECONDS: u64 = 600;
+const LEGAL_GATE_CSRF_TTL_SECONDS: u64 = 600;
 const LEGAL_GATE_TURNSTILE_ACTION: &str = "legal_access";
 const X_ROBOTS_TAG: &str = "noindex, nofollow, noarchive, nosnippet, noimageindex";
 
@@ -738,9 +741,10 @@ fn render_legal_page(
     )
 }
 
-fn render_legal_gate_page(next_path: &str, site_key: &str) -> String {
+fn render_legal_gate_page(next_path: &str, site_key: &str, csrf_token: &str) -> String {
     let escaped_next = escape_html(next_path);
     let escaped_site_key = escape_html(site_key);
+    let escaped_csrf_token = escape_html(csrf_token);
     format!(
         concat!(
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>",
@@ -776,6 +780,7 @@ fn render_legal_gate_page(next_path: &str, site_key: &str) -> String {
             // und die muss anklickbar sein.
             "<form id='lgf' method='post' action='/twitch/legal/verify'>",
             "<input type='hidden' name='next' value='{next}'>",
+            "<input type='hidden' name='csrf_token' value='{csrf_token}'>",
             "<div class='cf-turnstile' data-sitekey='{site_key}'",
             " data-action='{action}'",
             " data-appearance='interaction-only'",
@@ -811,6 +816,7 @@ fn render_legal_gate_page(next_path: &str, site_key: &str) -> String {
         ),
         next = escaped_next,
         site_key = escaped_site_key,
+        csrf_token = escaped_csrf_token,
         action = LEGAL_GATE_TURNSTILE_ACTION,
     )
 }
@@ -867,6 +873,63 @@ fn gate_cookie_value(cookie_secret: &str, expires_at: u64) -> String {
     let expires_raw = expires_at.to_string();
     let signature = gate_cookie_signature(cookie_secret, &expires_raw);
     format!("{expires_raw}.{signature}")
+}
+
+fn csrf_token_value(cookie_secret: &str, expires_at: u64, nonce_hex: &str) -> String {
+    let unsigned = format!("{expires_at}.{nonce_hex}");
+    let mut mac = HmacSha256::new_from_slice(cookie_secret.as_bytes())
+        .expect("HMAC akzeptiert beliebige Key-Längen");
+    mac.update(unsigned.as_bytes());
+    let signature = hex::encode(mac.finalize().into_bytes());
+    format!("{unsigned}.{signature}")
+}
+
+fn new_csrf_token(cookie_secret: &str) -> String {
+    let mut nonce = [0_u8; 16];
+    OsRng.fill_bytes(&mut nonce);
+    csrf_token_value(
+        cookie_secret,
+        now_epoch_secs() + LEGAL_GATE_CSRF_TTL_SECONDS,
+        &hex::encode(nonce),
+    )
+}
+
+fn csrf_token_is_valid(cookie_secret: &str, token: &str) -> bool {
+    let mut parts = token.trim().split('.');
+    let (Some(expires_raw), Some(nonce_hex), Some(signature_hex), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let Ok(expires_at) = expires_raw.parse::<u64>() else {
+        return false;
+    };
+    let now = now_epoch_secs();
+    if expires_at <= now || expires_at > now + LEGAL_GATE_CSRF_TTL_SECONDS {
+        return false;
+    }
+    if nonce_hex.len() != 32 || !nonce_hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    let Ok(signature) = hex::decode(signature_hex) else {
+        return false;
+    };
+    let unsigned = format!("{expires_raw}.{nonce_hex}");
+    let mut mac = HmacSha256::new_from_slice(cookie_secret.as_bytes())
+        .expect("HMAC akzeptiert beliebige Key-Längen");
+    mac.update(unsigned.as_bytes());
+    mac.verify_slice(&signature).is_ok()
+}
+
+fn csrf_request_is_valid(cookie_secret: &str, headers: &HeaderMap, form_token: &str) -> bool {
+    let normalized_form = form_token.trim();
+    if !csrf_token_is_valid(cookie_secret, normalized_form) {
+        return false;
+    }
+    let Some(cookie_token) = read_cookie(headers, LEGAL_GATE_CSRF_COOKIE_NAME) else {
+        return false;
+    };
+    tb_crypto::constant_time_eq(cookie_token.as_bytes(), normalized_form.as_bytes())
 }
 
 fn gate_cookie_is_valid(config: &LegalGateConfig, headers: &HeaderMap) -> bool {
@@ -1018,6 +1081,71 @@ fn set_gate_cookie_header(headers: &HeaderMap, cookie_secret: &str) -> String {
     cookie
 }
 
+fn set_csrf_cookie_header(headers: &HeaderMap, token: &str) -> String {
+    let mut cookie = format!(
+        "{LEGAL_GATE_CSRF_COOKIE_NAME}={token}; HttpOnly; \
+         Max-Age={LEGAL_GATE_CSRF_TTL_SECONDS}; Path=/twitch/legal/verify; SameSite=Strict"
+    );
+    if request_is_secure(headers) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn clear_csrf_cookie_header(headers: &HeaderMap) -> String {
+    let mut cookie = format!(
+        "{LEGAL_GATE_CSRF_COOKIE_NAME}=; HttpOnly; Max-Age=0; \
+         Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/twitch/legal/verify; SameSite=Strict"
+    );
+    if request_is_secure(headers) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn legal_gate_page_response(
+    headers: &HeaderMap,
+    next_path: &str,
+    site_key: &str,
+    csrf_token: &str,
+) -> Response {
+    let csrf_cookie = set_csrf_cookie_header(headers, csrf_token);
+    let page = render_legal_gate_page(next_path, site_key, csrf_token);
+    let mut response = (StatusCode::OK, page).into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response_headers.insert("x-robots-tag", HeaderValue::from_static(X_ROBOTS_TAG));
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&csrf_cookie).expect("CSRF-Cookie ist ein gültiger Header"),
+    );
+    response
+}
+
+fn verified_gate_response(
+    headers: &HeaderMap,
+    next_path: &str,
+    cookie_secret: &str,
+) -> Response {
+    let gate_cookie = set_gate_cookie_header(headers, cookie_secret);
+    let clear_csrf_cookie = clear_csrf_cookie_header(headers);
+    let mut response = (StatusCode::FOUND, [(header::LOCATION, next_path)]).into_response();
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&gate_cookie).expect("Gate-Cookie ist ein gültiger Header"),
+    );
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&clear_csrf_cookie)
+            .expect("CSRF-Löschcookie ist ein gültiger Header"),
+    );
+    response
+}
+
 // ---------------------------------------------------------------------------
 // Turnstile-Verifikation
 // ---------------------------------------------------------------------------
@@ -1156,24 +1284,25 @@ pub async fn legal_access_handler(
         return gate_unavailable_response();
     }
     if gate_cookie_is_valid(&config, &headers) {
-        return (StatusCode::FOUND, [(header::LOCATION, next_path)]).into_response();
+        return (
+            StatusCode::FOUND,
+            [
+                (header::LOCATION.as_str(), next_path),
+                (header::CACHE_CONTROL.as_str(), "no-store"),
+            ],
+        )
+            .into_response();
     }
-    let page = render_legal_gate_page(next_path, &config.site_key);
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE.as_str(), "text/html; charset=utf-8"),
-            ("X-Robots-Tag", X_ROBOTS_TAG),
-        ],
-        page,
-    )
-        .into_response()
+    let csrf_token = new_csrf_token(&config.cookie_secret);
+    legal_gate_page_response(&headers, next_path, &config.site_key, &csrf_token)
 }
 
 #[derive(Deserialize)]
 pub struct LegalVerifyForm {
     #[serde(default)]
     next: String,
+    #[serde(default)]
+    csrf_token: String,
     #[serde(rename = "cf-turnstile-response", default)]
     turnstile_response: String,
 }
@@ -1191,6 +1320,14 @@ pub async fn legal_verify_handler(
     if !config.is_enabled() {
         return gate_unavailable_response();
     }
+    if !csrf_request_is_valid(&config.cookie_secret, &headers, &form.csrf_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            [("X-Robots-Tag", X_ROBOTS_TAG)],
+            "CSRF verification failed.",
+        )
+            .into_response();
+    }
     if !verify_turnstile_token(&config, &headers, &form.turnstile_response).await {
         return (
             StatusCode::FORBIDDEN,
@@ -1199,15 +1336,7 @@ pub async fn legal_verify_handler(
         )
             .into_response();
     }
-    let cookie = set_gate_cookie_header(&headers, &config.cookie_secret);
-    (
-        StatusCode::FOUND,
-        [
-            (header::LOCATION.as_str(), next_path.to_string()),
-            (header::SET_COOKIE.as_str(), cookie),
-        ],
-    )
-        .into_response()
+    verified_gate_response(&headers, next_path, &config.cookie_secret)
 }
 
 fn gated_legal_page_response(
@@ -1376,6 +1505,106 @@ mod tests {
     }
 
     #[test]
+    fn csrf_double_submit_akzeptiert_nur_passendes_cookie_und_formular() {
+        let secret = "cookie-secret";
+        let token = csrf_token_value(secret, now_epoch_secs() + 600, "ab".repeat(16).as_str());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{LEGAL_GATE_CSRF_COOKIE_NAME}={token}")
+                .parse()
+                .unwrap(),
+        );
+
+        assert!(csrf_request_is_valid(secret, &headers, &token));
+        assert!(!csrf_request_is_valid(secret, &HeaderMap::new(), &token));
+
+        let anderer_token =
+            csrf_token_value(secret, now_epoch_secs() + 600, "cd".repeat(16).as_str());
+        assert!(!csrf_request_is_valid(secret, &headers, &anderer_token));
+    }
+
+    #[test]
+    fn csrf_token_lehnt_ablauf_und_manipulation_ab() {
+        let secret = "cookie-secret";
+        let abgelaufen = csrf_token_value(secret, now_epoch_secs() - 1, &"ab".repeat(16));
+        assert!(!csrf_token_is_valid(secret, &abgelaufen));
+
+        let mut manipuliert =
+            csrf_token_value(secret, now_epoch_secs() + 600, &"ab".repeat(16));
+        manipuliert.push('0');
+        assert!(!csrf_token_is_valid(secret, &manipuliert));
+
+        for ungueltig in [
+            "",
+            "123",
+            "123.ab.cd",
+            "123.0123456789abcdef0123456789abcdeg.00",
+            "123.0123456789abcdef0123456789abcdef.00.extra",
+        ] {
+            assert!(!csrf_token_is_valid(secret, ungueltig), "{ungueltig}");
+        }
+    }
+
+    #[test]
+    fn csrf_tokens_sind_pro_abruf_einmalig() {
+        let secret = "cookie-secret";
+        let erster = new_csrf_token(secret);
+        let zweiter = new_csrf_token(secret);
+        assert_ne!(erster, zweiter);
+        assert!(csrf_token_is_valid(secret, &erster));
+        assert!(csrf_token_is_valid(secret, &zweiter));
+    }
+
+    #[test]
+    fn gate_formular_und_cookie_enthalten_csrf_schutz() {
+        let token = csrf_token_value(
+            "cookie-secret",
+            now_epoch_secs() + 600,
+            &"ab".repeat(16),
+        );
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY", &token);
+        assert!(gate.contains("name='csrf_token'"));
+        assert!(gate.contains(&format!("value='{token}'")));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "https".parse().unwrap());
+        let cookie = set_csrf_cookie_header(&headers, &token);
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(cookie.contains("Path=/twitch/legal/verify"));
+        assert!(cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn gate_antwort_ist_nicht_cachebar_und_loescht_csrf_cookie_nach_erfolg() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "https".parse().unwrap());
+        let token = new_csrf_token("cookie-secret");
+
+        let gate = legal_gate_page_response(&headers, "/twitch/agb", "SITE-KEY", &token);
+        assert_eq!(
+            gate.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+
+        let erfolg = verified_gate_response(&headers, "/twitch/agb", "cookie-secret");
+        let cookies = erfolg
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with(&format!("{LEGAL_GATE_CSRF_COOKIE_NAME}=;"))
+                && cookie.contains("Max-Age=0")
+                && cookie.contains("Path=/twitch/legal/verify")
+                && cookie.contains("Secure")
+        }));
+    }
+
+    #[test]
     fn next_pfad_wird_auf_allowlist_normalisiert() {
         assert_eq!(normalize_gate_next_path(Some("/twitch/agb")), "/twitch/agb");
         assert_eq!(
@@ -1469,7 +1698,7 @@ mod tests {
             let page = render_legal_page(&doc.title, &doc.body, footer, noindex);
             std::fs::write(format!("/tmp/rust_legal_{slug}.html"), page).unwrap();
         }
-        let gate = render_legal_gate_page("/twitch/agb", "DIFF-SITE-KEY");
+        let gate = render_legal_gate_page("/twitch/agb", "DIFF-SITE-KEY", "CSRF-TOKEN");
         std::fs::write("/tmp/rust_legal_gate.html", gate).unwrap();
     }
 
@@ -1478,7 +1707,7 @@ mod tests {
     /// laeuft ewig.
     #[test]
     fn gate_widget_liegt_nicht_in_einem_versteckten_container() {
-        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY", "CSRF-TOKEN");
         let widget = gate.find("cf-turnstile").expect("Widget fehlt");
         let form = gate.find("<form").expect("Form fehlt");
         assert!(form < widget, "Widget liegt nicht in der Form");
@@ -1493,7 +1722,7 @@ mod tests {
     /// oder Browser-Schild challenges.cloudflare.com blockiert.
     #[test]
     fn gate_meldet_fehler_und_timeout_statt_ewig_zu_drehen() {
-        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY", "CSRF-TOKEN");
         for hook in [
             "data-error-callback",
             "data-timeout-callback",
@@ -1515,7 +1744,7 @@ mod tests {
     /// Millisekunden antwortet.
     #[test]
     fn gate_behauptet_keinen_langsamen_server() {
-        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY");
+        let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY", "CSRF-TOKEN");
         assert!(!gate.contains("langsam"), "Falsche Ursache im Gate-Text");
     }
 

@@ -79,3 +79,16 @@ test("die Empfangsseite /twitch/faq wird gebaut (Caddy serviert dist/faq)", () =
     "vite.config.ts hat keinen faq-Entry — dist/faq entsteht nicht",
   );
 });
+
+test("keine Streamer-Seite bindet den manuellen Cloudflare-Beacon ein", () => {
+  const htmlFiles = ["index.html", ...pageDirsWithHtml().map((dir) => `${dir}/index.html`)];
+  const offenders = htmlFiles.filter((rel) => {
+    const html = readFileSync(join(websiteRoot, rel), "utf8");
+    return html.includes("static.cloudflareinsights.com") || html.includes("beacon.min.js");
+  });
+  assert.deepEqual(
+    offenders,
+    [],
+    `Externe Beacon-Skripte ohne SRI/CSP-Freigabe gefunden:\n  ${offenders.join("\n  ")}`,
+  );
+});
