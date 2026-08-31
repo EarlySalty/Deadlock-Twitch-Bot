@@ -39,6 +39,11 @@ if [[ ! -d "$git_dir" || -L "$git_dir" ]]; then
   echo "Der Release-Checkout muss ein eigenständiger Clone mit internem .git-Verzeichnis sein." >&2
   exit 1
 fi
+unsafe_git_entry="$(find "$git_dir" -xdev ! \( -type f -o -type d \) -print -quit)"
+if [[ -n "$unsafe_git_entry" ]]; then
+  echo "Git-Metadaten enthalten einen Symlink oder Sonderdateityp: $unsafe_git_entry" >&2
+  exit 1
+fi
 unsafe_checkout="$(find "$checkout" -xdev \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit)"
 if [[ -n "$unsafe_checkout" ]]; then
   echo "Checkout oder Git-Metadaten sind nicht vollständig eingefroren: $unsafe_checkout" >&2
