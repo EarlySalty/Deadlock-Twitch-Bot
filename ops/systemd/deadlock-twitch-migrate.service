@@ -31,7 +31,8 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-RemoveIPC=yes
+# Kein RemoveIPC: Der One-shot teilt den Systemnutzer `postgres` mit dem
+# laufenden Datenbankserver und darf dessen Shared-Memory-Segmente nie löschen.
 KeyringMode=private
 CapabilityBoundingSet=
 AmbientCapabilities=
