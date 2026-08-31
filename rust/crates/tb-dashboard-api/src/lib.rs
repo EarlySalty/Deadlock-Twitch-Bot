@@ -91,7 +91,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
         streamer_comparison,
     };
 
-    Router::new()
+    let public_api = Router::new()
         .route("/healthz", get(health_probe::healthz_handler))
         .route("/readyz", get(health_probe::readyz_handler))
         .route("/health", get(health_probe::readyz_handler))
@@ -124,10 +124,20 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/overlay",
             get(overlay::overlay_api_handler),
         )
-        .route("/twitch/overlay", get(overlay::overlay_html_handler))
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).
+        .with_state(pool.clone())
+        .layer(Extension(
+            streamer_comparison::StreamerComparisonCache::default(),
+        ))
+        .layer(CorsLayer::permissive());
+
+    // HTML, Login-Redirects und OAuth-Callbacks sind zwar öffentlich erreichbar,
+    // aber keine browserübergreifende API. Wildcard-CORS auf diesen Antworten
+    // vergrößert nur die Angriffsfläche und löste den ZAP-CORS-Fund aus.
+    let public_pages = Router::new()
+        .route("/twitch/overlay", get(overlay::overlay_html_handler))
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -140,11 +150,9 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/social-media/oauth/callback/:platform",
             get(social_media::oauth_callback_handler),
         )
-        .with_state(pool)
-        .layer(Extension(
-            streamer_comparison::StreamerComparisonCache::default(),
-        ))
-        .layer(CorsLayer::permissive())
+        .with_state(pool);
+
+    public_api.merge(public_pages)
 }
 
 /// Baut den Router für Admin-geschützte Routes.
@@ -1935,6 +1943,51 @@ mod router_wiring_tests {
         assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
         assert_eq!(h.get("x-xss-protection").unwrap(), "0");
         assert_eq!(h.get(header::LOCATION).unwrap(), "/streamer/foo");
+    }
+
+    #[tokio::test]
+    async fn cors_gilt_nur_fuer_public_api_nicht_fuer_html_redirects() {
+        let app = build_public_router(lazy_pool());
+        let html = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/overlay")
+                    .header("host", "deutsche-deadlock-community.de")
+                    .header(header::ORIGIN, "https://evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(html.status(), StatusCode::SEE_OTHER);
+        assert!(
+            html.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none(),
+            "HTML- und Login-Antworten dürfen kein Wildcard-CORS tragen"
+        );
+
+        let api = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/healthz")
+                    .header("host", "deutsche-deadlock-community.de")
+                    .header(header::ORIGIN, "https://example.org")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(api.status(), StatusCode::OK);
+        assert_eq!(
+            api.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("*")
+        );
     }
 
     /// Die eingeloggten Main-Domain-Shells duerfen ausgeloggt keine Shell
