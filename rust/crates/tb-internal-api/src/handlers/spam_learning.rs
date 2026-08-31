@@ -532,7 +532,9 @@ mod tests {
         assert_eq!(row.0, "deusta");
         assert_eq!(row.1, "discord-moderator");
         assert_eq!(row.2, None);
-        assert_eq!(row.3, "aha, so sammelt man viewer");
+        // Das Audit bewahrt die menschlich eingegebene Originalnachricht als
+        // Beleg; nur der aktive Pattern-Schlüssel wird normalisiert.
+        assert_eq!(row.3, "Aha, so sammelt man Viewer");
         assert_eq!(row.4, "clean");
         assert_eq!(row.5, "Manuelle Harmlos-Korrektur (Discord)");
 
