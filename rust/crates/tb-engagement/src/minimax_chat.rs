@@ -1575,18 +1575,19 @@ mod tests {
 
     #[tokio::test]
     async fn generate_ohne_key_unavailable() {
-        // Der leere Key faellt auf die Env zurueck. Ohne den gemeinsamen Lock
-        // konnte ein Nachbar-Test zwischen Pruefung und Aufruf MINIMAX_API_KEY
-        // setzen; dann ging ein echter Request an 127.0.0.1:1 raus und der Test
-        // sah einen Http-Fehler statt Unavailable.
-        let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        clear_provider_env();
-        let client = EngagementMinimaxClient::new(
-            Some(String::new()), // leer → kein Key (Env hier ignoriert)
-            Some("http://127.0.0.1:1".to_string()),
-            Some("MiniMax-M3".to_string()),
-            None,
-        );
+        // Der leere Key fällt beim Bau auf die Env zurück. Der Lock muss nur
+        // diese Momentaufnahme schützen; der fertige Client liest beim
+        // asynchronen Aufruf keine Provider-Variablen mehr.
+        let client = {
+            let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            clear_provider_env();
+            EngagementMinimaxClient::new(
+                Some(String::new()),
+                Some("http://127.0.0.1:1".to_string()),
+                Some("MiniMax-M3".to_string()),
+                None,
+            )
+        };
         match client.generate("s", &[], 500, 480).await {
             Err(GenerateError::Unavailable(_)) => {}
             other => panic!("erwartete Unavailable, war {other:?}"),

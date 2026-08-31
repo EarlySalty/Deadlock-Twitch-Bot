@@ -77,7 +77,18 @@ mod tests {
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_global_promo_modes (\
+                config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
+                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                is_enabled INTEGER NOT NULL DEFAULT 0, \
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
     }
 
     async fn body_json(r: Result<impl IntoResponse, ApiError>) -> (StatusCode, Value) {

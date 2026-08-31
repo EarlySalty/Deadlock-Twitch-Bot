@@ -60,14 +60,9 @@ unset TWITCH_BOT_ANALYTICS_DSN TWITCH_DASHBOARD_ANALYTICS_DSN
 
 # 8767 (Doku-Plan) ist real vom Turnier-Public-Cog der Deadlock-Bots belegt -> 8769.
 export DASHBOARD_PORT="${DASHBOARD_PORT:-8769}"
-# Split-Runtime-Härtung (enforce_dashboard_runtime) ist Cutover-Scope
-# (OPS-RUNTIME-006): scharf erzwingt sie Rolle==dashboard UND Port==8765, der
-# Live-Dienst läuft aber bewusst auf 8769. Bis der Cutover Rollen/Ports aller
-# Dienste sauber verdrahtet, bleibt sie aus (= bisheriges Live-Verhalten).
-# Vor dem Scharfschalten (=1): Port-Check in enforce_dashboard_runtime prüft gegen
-# die Konstante DASHBOARD_SERVICE_PORT=8765 statt gegen den konfigurierten
-# DASHBOARD_PORT -> lehnt den legitimen 8769-Override ab; das muss zuerst gefixt
-# und die Rolle (TWITCH_RUNTIME_ROLE=dashboard) gesetzt werden.
+# Split-Runtime-Härtung erzwingt die Dashboard-Rolle und blockiert den für die
+# Master-API reservierten Port. Die gehärtete System-Unit schaltet sie ein und
+# setzt den legitimen Dashboard-Port 8769 ausdrücklich.
 export TWITCH_SPLIT_RUNTIME_ENFORCE="${TWITCH_SPLIT_RUNTIME_ENFORCE:-0}"
 # Legal-Overrides liegen relativ zum Repo-Root (WorkingDirectory der Unit).
 export TB_LEGAL_PAGES_PATH="${TB_LEGAL_PAGES_PATH:-$ROOT_DIR/data/admin_dashboard/legal_pages.json}"

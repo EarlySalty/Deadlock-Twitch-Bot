@@ -261,6 +261,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_global_promo_modes (\
+                config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
+                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                is_enabled INTEGER NOT NULL DEFAULT 0, \
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('a', 'a', 'active')")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -313,7 +323,7 @@ mod tests {
     #[tokio::test]
     async fn overview_aggregiert_promo_raids_chat() {
         let Some(pool) = make_pool("t_acfg_overview").await else { return };
-        // scope=None → active. load_global_promo_mode legt seine Tabelle selbst an.
+        // scope=None → active. Das Testschema bildet die Migration bereits ab.
         let r = config_overview_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(OverviewQuery { scope: None })).await;
         let (s, j) = body_json(r).await;
         assert_eq!(s, StatusCode::OK);
