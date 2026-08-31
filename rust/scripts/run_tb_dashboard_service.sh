@@ -4,9 +4,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
-INFISICAL_LOADER="${INFISICAL_LOADER:-/home/naniadm/.local/bin/dl-infisical-env}"
-RUNTIME_CONFIG_FILE="${TWITCH_RUNTIME_CONFIG_FILE:-}"
+SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-dashboard-rust.service'
+if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
+  CREDENTIALS_DIRECTORY="$SYSTEMD_CREDENTIAL_DIR"
+  CONFIG_FILE='/etc/deadlock-twitch/infisical.conf'
+  INFISICAL_LOADER='/usr/local/libexec/dl-infisical-env'
+  RUNTIME_CONFIG_FILE='/etc/deadlock-twitch/dashboard.conf'
+else
+  CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
+  INFISICAL_LOADER="${INFISICAL_LOADER:-/home/naniadm/.local/bin/dl-infisical-env}"
+  RUNTIME_CONFIG_FILE="${TWITCH_RUNTIME_CONFIG_FILE:-}"
+fi
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing Infisical config: $CONFIG_FILE" >&2

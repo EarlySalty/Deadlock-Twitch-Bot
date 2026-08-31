@@ -44,9 +44,8 @@ if [[ -n "$unsafe_checkout" ]]; then
   echo "Checkout oder Git-Metadaten sind nicht vollständig eingefroren: $unsafe_checkout" >&2
   exit 1
 fi
-if [[ -f "$git_dir/objects/info/alternates" ]] ||
-   [[ -n "$(git -C "$checkout" config --local --get core.worktree || true)" ]]; then
-  echo "Externe Git-Objekte oder ein externes Worktree sind für Releases nicht erlaubt." >&2
+if [[ -f "$git_dir/objects/info/alternates" ]]; then
+  echo "Externe Git-Objekte sind für Releases nicht erlaubt." >&2
   exit 1
 fi
 
@@ -59,10 +58,10 @@ if [[ "$("${git_safe[@]}" -C "$checkout" rev-parse --absolute-git-dir)" != "$git
   echo "Checkout und angegebener Git-SHA stimmen nicht überein." >&2
   exit 1
 fi
-if [[ -n "$("${git_safe[@]}" -C "$checkout" status --porcelain --untracked-files=normal)" ]]; then
-  echo "Der Checkout enthält Änderungen oder unversionierte Dateien; Release abgebrochen." >&2
-  exit 1
-fi
+# Kein `git status` als root: lokale Filter/Attribute des zuvor unprivilegierten
+# Builders könnten dabei Programme ausführen. Vertrauenswürdige Skripte und SQL
+# kommen unten ausschließlich per `git archive` aus dem expliziten SHA;
+# generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
 
 generated=(
   rust/target/release/tb-bot

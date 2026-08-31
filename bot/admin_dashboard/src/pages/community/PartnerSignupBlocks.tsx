@@ -269,8 +269,8 @@ export default function PartnerSignupBlocksPage() {
           </button>
         </div>
 
-        <div className="mt-4 flex gap-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-white/80">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+        <div className="mt-4 flex gap-3 rounded-2xl border border-primary/35 bg-primary/10 p-4 text-sm text-white/80">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <div>
             <div className="font-medium text-white">Das passiert zusätzlich</div>
             <ul className="mt-1 list-disc space-y-1 pl-5">

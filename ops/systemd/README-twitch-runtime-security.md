@@ -51,12 +51,14 @@ Restdienste folgt zusammen mit den späteren getrennten Infisical-Bereichen.
    mit der separaten Build-Identität `twitchbuild` bauen und testen. Kein
    Laufzeitdienst gehört dieser Identität an. Den fertigen Baum danach
    root-eigen und nicht mehr beschreibbar unter
-   `/opt/deadlock/twitch/builds/<git-sha>` einfrieren.
+   `/opt/deadlock/twitch/builds/<git-sha>` einfrieren. Arbeitsbaum und HEAD
+   werden noch als `twitchbuild` geprüft; root führt auf dem Checkout bewusst
+   kein `git status` aus.
 2. Den geprüften Installer zuerst root-eigen nach
    `/usr/local/sbin/install-twitch-release` installieren und ausschließlich
    diese Kopie als root mit `<checkout> <git-sha>` ausführen. Niemals das
    Skript direkt aus dem Build-Checkout als root starten. Der
-   Installer prüft SHA, Arbeitsbaum, Eigentümer, Dateitypen und Artefakte,
+   Installer prüft SHA, Eigentümer, Dateitypen und Artefakte,
    übernimmt ausführbare Quellen direkt aus Git, schreibt ein Prüfsummenmanifest
    und kopiert root-eigen nach
    `/opt/deadlock/twitch/releases/<sha>` und wechselt `current` atomar.
