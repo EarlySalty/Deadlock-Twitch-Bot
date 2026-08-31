@@ -6,6 +6,14 @@
 //! über `OsRng`, nie über selbstgebaute Mischfunktionen.
 
 use rand::RngCore;
+use sha2::{Digest, Sha256};
+
+/// Irreversibler Datenbank-Lookup-Key für zufällige Bearer- und OAuth-Tokens.
+/// Der präsentierte Rohwert bleibt ausschließlich beim Client; Datenbankkopien
+/// enthalten nur 64 kleine Hexzeichen.
+pub fn token_lookup_key(raw: &str) -> String {
+    hex::encode(Sha256::digest(raw.as_bytes()))
+}
 
 /// Erzeugt `n_bytes` OS-Zufall, hex-kodiert (`2 * n_bytes` Zeichen, URL-safe).
 ///
@@ -69,13 +77,26 @@ mod tests {
     }
 
     #[test]
+    fn lookup_key_ist_sha256_ohne_rohwert() {
+        let raw = "oauth-state-geheim";
+        let key = token_lookup_key(raw);
+        assert_eq!(key.len(), 64);
+        assert!(key
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert!(!key.contains(raw));
+        assert_eq!(key, token_lookup_key(raw));
+    }
+
+    #[test]
     fn urlsafe_token_laenge_und_alphabet() {
         // 32 Byte → 43 Zeichen base64-urlsafe ohne Padding (ceil(32*4/3)).
         let t = random_urlsafe_token(32);
         assert_eq!(t.len(), 43);
         assert!(!t.contains('='), "kein Padding wie secrets.token_urlsafe");
         assert!(
-            t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             "nur url-safe-Alphabet"
         );
     }

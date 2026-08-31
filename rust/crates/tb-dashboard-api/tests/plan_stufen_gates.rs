@@ -272,11 +272,13 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
         return;
     };
     for login in ["freistreamer", "plusstreamer", "prostreamer"] {
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)")
-            .bind(login)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)",
+        )
+        .bind(login)
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     stufe_setzen(&pool, "plusstreamer", "plus").await;
     stufe_setzen(&pool, "prostreamer", "pro").await;
@@ -308,9 +310,21 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
 
     // Weg 2: direktes Einreihen, auch ohne `schedule` und mit `platforms: all`.
     for (login, clip_id, body) in [
-        ("freistreamer", 1, json!({ "clip_id": 1, "platforms": ["tiktok"], "schedule": "auto" })),
-        ("plusstreamer", 2, json!({ "clip_id": 2, "platforms": ["tiktok"] })),
-        ("prostreamer", 3, json!({ "clip_id": 3, "platforms": "all" })),
+        (
+            "freistreamer",
+            1,
+            json!({ "clip_id": 1, "platforms": ["tiktok"], "schedule": "auto" }),
+        ),
+        (
+            "plusstreamer",
+            2,
+            json!({ "clip_id": 2, "platforms": ["tiktok"] }),
+        ),
+        (
+            "prostreamer",
+            3,
+            json!({ "clip_id": 3, "platforms": "all" }),
+        ),
     ] {
         let resp = social_media::queue_upload_handler(
             partner(login),
@@ -324,13 +338,12 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
             StatusCode::FORBIDDEN,
             "{login} darf einreihen: {body}"
         );
-        let eingereiht: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1",
-        )
-        .bind(clip_id as i32)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let eingereiht: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(
             eingereiht > 0,
             "{login}: Status ohne Wirkung, nichts in der Warteschlange"
@@ -482,11 +495,17 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
     assert_eq!(stand(pool.clone()).await, 3);
 
     // Verworfene Clips zaehlen nicht mehr mit.
-    sqlx::query("UPDATE twitch_clips_social_media SET discarded_at = NOW() WHERE clip_id = 'selbst-0'")
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(stand(pool).await, 2, "ein Fehlgriff darf nicht teuer bleiben");
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET discarded_at = NOW() WHERE clip_id = 'selbst-0'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stand(pool).await,
+        2,
+        "ein Fehlgriff darf nicht teuer bleiben"
+    );
 }
 
 /// Der `!clip`-Schalter bleibt ohne 403 (Chat-Befehle sind Free) und traegt den
@@ -589,19 +608,22 @@ async fn weekly_hourly_calendar_ohne_plus_verkuerzt() {
     }
 
     for name in ["weekly", "hourly", "calendar"] {
-        for (login, erwartet_gekuerzt, erwartete_zeilen) in
-            [("freistreamer", true, 1_usize), ("plusstreamer", false, 2_usize)]
-        {
+        for (login, erwartet_gekuerzt, erwartete_zeilen) in [
+            ("freistreamer", true, 1_usize),
+            ("plusstreamer", false, 2_usize),
+        ] {
             let query = performance::DaysQuery {
                 streamer: None,
                 days: Some("365".into()),
             };
             let resp = match name {
-                "weekly" => {
-                    performance::weekly_stats_handler(partner(login), State(pool.clone()), Query(query))
-                        .await
-                        .into_response()
-                }
+                "weekly" => performance::weekly_stats_handler(
+                    partner(login),
+                    State(pool.clone()),
+                    Query(query),
+                )
+                .await
+                .into_response(),
                 "hourly" => performance::hourly_heatmap_handler(
                     partner(login),
                     State(pool.clone()),
@@ -677,7 +699,10 @@ async fn chat_analytics_ohne_plus_verkuerzt_statt_403() {
     let (status, gekuerzt, body) = zerlegen(bezahlt).await;
     assert_eq!(status, StatusCode::OK);
     assert!(!gekuerzt);
-    assert!(body.get("plan_limit").is_none(), "Plus sieht keinen Hinweis");
+    assert!(
+        body.get("plan_limit").is_none(),
+        "Plus sieht keinen Hinweis"
+    );
 }
 
 /// Kategorie-Vergleich: ebenfalls kein 403, nur ein kuerzerer Zeitraum.
@@ -716,7 +741,10 @@ async fn category_comparison_ohne_plus_verkuerzt_statt_403() {
     assert_eq!(status, StatusCode::OK, "Free darf kein 403 sehen");
     assert!(gekuerzt);
     assert_eq!(body["plan_limit"]["gekuerzt"], true);
-    assert!(body["yourStats"].is_object(), "Free sieht dieselbe Struktur");
+    assert!(
+        body["yourStats"].is_object(),
+        "Free sieht dieselbe Struktur"
+    );
     // Die eigenen Werte kommen aus dem geklemmten Fenster, die Verteilung aus
     // dem angefragten Zeitraum. Ein Perzentil aus zwei Fenstern waere eine
     // erfundene Zahl, also kommt keine.

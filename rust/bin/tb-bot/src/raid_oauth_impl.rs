@@ -2133,13 +2133,12 @@ mod db_tests {
         // Requirements-Dedupe nutzt im Test dieselbe Migration wie das
         // Deployment. Das `public.`-Präfix wird nur für das isolierte
         // search_path-Testschema entfernt.
-        let requirements_migration = include_str!(
-            "../../../migrations/20260831100000_raid_requirements_dm_dedupe.sql"
-        )
-        .replace(
-            "public.twitch_raid_requirements_dm_dedupe",
-            "twitch_raid_requirements_dm_dedupe",
-        );
+        let requirements_migration =
+            include_str!("../../../migrations/20260831100000_raid_requirements_dm_dedupe.sql")
+                .replace(
+                    "public.twitch_raid_requirements_dm_dedupe",
+                    "twitch_raid_requirements_dm_dedupe",
+                );
         sqlx::raw_sql(&requirements_migration)
             .execute(pool)
             .await
@@ -3176,7 +3175,7 @@ mod callback_tests {
         // State ist konsumiert (Single-Use).
         let leftover: Option<(String,)> =
             sqlx::query_as("SELECT state_token FROM oauth_state_tokens WHERE state_token = $1")
-                .bind(&state)
+                .bind(tb_crypto::token_lookup_key(&state))
                 .fetch_optional(&pool)
                 .await
                 .unwrap();
@@ -3563,7 +3562,10 @@ mod callback_tests {
             "needs_reauth muss nach Re-Auth false sein"
         );
         assert!(
-            scopes.as_deref().unwrap_or_default().contains("channel:bot"),
+            scopes
+                .as_deref()
+                .unwrap_or_default()
+                .contains("channel:bot"),
             "channel:bot muss gesetzt sein: {scopes:?}"
         );
 

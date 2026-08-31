@@ -103,6 +103,7 @@ impl StateStore {
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
         let expires_at = now + Duration::seconds(STATE_TTL_SECONDS);
+        let state_lookup_key = tb_crypto::token_lookup_key(state_token);
         sqlx::query!(
             r#"
             INSERT INTO oauth_state_tokens
@@ -115,7 +116,7 @@ impl StateStore {
                 pkce_verifier = EXCLUDED.pkce_verifier,
                 expires_at = EXCLUDED.expires_at
             "#,
-            state_token,
+            state_lookup_key,
             PLATFORM_RAID,
             &state.requested_login,
             &self.redirect_uri,
@@ -134,6 +135,7 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<RaidOAuthState>, sqlx::Error> {
+        let state_lookup_key = tb_crypto::token_lookup_key(state_token);
         let row = sqlx::query!(
             r#"
             SELECT COALESCE(streamer_login, '') AS "streamer_login!",
@@ -142,7 +144,7 @@ impl StateStore {
             WHERE state_token = $1 AND platform = $2 AND expires_at > $3
             LIMIT 1
             "#,
-            state_token,
+            state_lookup_key,
             PLATFORM_RAID,
             now
         )
@@ -159,6 +161,7 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<RaidOAuthState>, sqlx::Error> {
+        let state_lookup_key = tb_crypto::token_lookup_key(state_token);
         let row = sqlx::query!(
             r#"
             DELETE FROM oauth_state_tokens
@@ -166,7 +169,7 @@ impl StateStore {
             RETURNING COALESCE(streamer_login, '') AS "streamer_login!",
                       pkce_verifier AS "pkce_verifier?"
             "#,
-            state_token,
+            state_lookup_key,
             PLATFORM_RAID,
             now
         )

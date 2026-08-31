@@ -1142,6 +1142,7 @@ impl DashboardAuthState {
         &self,
         state_token: &str,
     ) -> Result<Option<RaidOAuthStateInfo>, sqlx::Error> {
+        let state_lookup_key = tb_crypto::token_lookup_key(state_token);
         let row = sqlx::query!(
             r#"
             SELECT streamer_login, pkce_verifier AS "pkce_verifier?"
@@ -1151,7 +1152,7 @@ impl DashboardAuthState {
               AND expires_at > $3
             LIMIT 1
             "#,
-            state_token,
+            state_lookup_key,
             RAID_OAUTH_STATE_PLATFORM,
             Utc::now()
         )

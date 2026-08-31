@@ -95,8 +95,9 @@ async fn persist_lookup_consume_roundtrip() {
     // platform-Gate: ein social-media-Eintrag mit gleichem Token-Namespace stört nicht.
     sqlx::query(
         "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, expires_at)
-         VALUES ('sm-1', 'instagram', 'fremd', NOW() + INTERVAL '10 minutes')",
+         VALUES ($1, 'instagram', 'fremd', NOW() + INTERVAL '10 minutes')",
     )
+    .bind(tb_crypto::token_lookup_key("sm-1"))
     .execute(&pool)
     .await
     .unwrap();
@@ -128,10 +129,12 @@ async fn abgelaufene_tokens_unsichtbar_und_cleanup_nur_eigene_plattform() {
     // Abgelaufener raid-Token + fremder Plattform-Token.
     sqlx::query(
         "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, expires_at)
-         VALUES ('alt', $1, 'drag', $2), ('sm-alt', 'youtube', 'fremd', $2)",
+         VALUES ($1, $2, 'drag', $3), ($4, 'youtube', 'fremd', $3)",
     )
+    .bind(tb_crypto::token_lookup_key("alt"))
     .bind(PLATFORM_RAID)
     .bind(now - Duration::seconds(60))
+    .bind(tb_crypto::token_lookup_key("sm-alt"))
     .execute(&pool)
     .await
     .unwrap();
@@ -148,12 +151,16 @@ async fn abgelaufene_tokens_unsichtbar_und_cleanup_nur_eigene_plattform() {
             .fetch_all(&pool)
             .await
             .unwrap();
+    let mut expected = vec![
+        (
+            tb_crypto::token_lookup_key("frisch"),
+            PLATFORM_RAID.to_string(),
+        ),
+        (tb_crypto::token_lookup_key("sm-alt"), "youtube".to_string()),
+    ];
+    expected.sort();
     assert_eq!(
-        rest,
-        vec![
-            ("frisch".to_string(), PLATFORM_RAID.to_string()),
-            ("sm-alt".to_string(), "youtube".to_string()),
-        ],
+        rest, expected,
         "fremde Plattform + frischer raid-Token bleiben"
     );
 }

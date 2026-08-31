@@ -1,7 +1,7 @@
 //! MCP-Connector — MCP-Server (Streamable HTTP, JSON-RPC) im tb-bot-Prozess.
 //!
 //! Eine Claude-Sitzung verbindet sich als MCP-Client auf
-//! `http://127.0.0.1:8891/mcp` und verwaltet den Twitch-Bot mit der Identität
+//! `http://127.0.0.1:8892/mcp` und verwaltet den Twitch-Bot mit der Identität
 //! des laufenden Prozesses: Postgres-Pool, Streamer-Token, Helix-Zugang und
 //! Discord-Broker liegen alle schon hier. Der Aufrufer braucht deshalb kein
 //! einziges Secret.
@@ -21,7 +21,7 @@
 //!
 //! Env (Netzwerkparameter optional):
 //!   TB_MCP_HOST    default 127.0.0.1 (muss Loopback sein, sonst startet er nicht)
-//!   TB_MCP_PORT    default 8891
+//!   TB_MCP_PORT    default 8892 (dediziert; 8891 gehört dem Relay)
 //!   TWITCH_INTERNAL_API_TOKEN wird aus der bestehenden Bot-Konfiguration
 //!   übernommen und ist Pflicht: ausschließlich `Authorization: Bearer <t>`.
 //!
@@ -31,6 +31,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::{to_bytes, Body},
@@ -38,7 +39,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
@@ -53,7 +54,7 @@ use crate::task_supervisor::TaskSupervisor;
 use crate::token_lifecycle_wiring::SharedDeadlockPauseReactor;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 8891;
+const DEFAULT_PORT: u16 = 8892;
 const PROTOCOL_FALLBACK: &str = "2025-03-26";
 const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 /// Obergrenze für `list_partners`, damit eine vergessene Filterangabe nicht das
@@ -65,6 +66,9 @@ const SESSION_LIMIT: usize = 10;
 /// erfolgt erst nach dem Header-Gate, damit Unauthentifizierte keinen Body
 /// einlesen lassen können.
 const MAX_MCP_BODY_BYTES: usize = 1024 * 1024;
+const MAX_MCP_BATCH_ITEMS: usize = 16;
+const MAX_MCP_CONCURRENT_REQUESTS: usize = 4;
+const MAX_MCP_REQUEST_SECONDS: u64 = 30;
 
 // ───────────────────────────── Zustand ─────────────────────────────
 
@@ -77,6 +81,7 @@ pub(crate) struct McpState {
     removal_ext: ModeratorRemovalExt,
     ban_probe: Option<Arc<dyn BotBanStatusProbe>>,
     deadlock_pause: Option<SharedDeadlockPauseReactor>,
+    request_slots: tokio::sync::Semaphore,
 }
 
 impl McpState {
@@ -95,6 +100,7 @@ impl McpState {
             removal_ext,
             ban_probe,
             deadlock_pause,
+            request_slots: tokio::sync::Semaphore::new(MAX_MCP_CONCURRENT_REQUESTS),
         }
     }
 }
@@ -170,7 +176,16 @@ pub(crate) fn spawn(supervisor: &TaskSupervisor, state: Arc<McpState>) {
 pub(crate) fn router(state: Arc<McpState>) -> Router {
     Router::new()
         .route("/mcp", post(mcp_post).get(mcp_get))
-        .route("/healthz", get(|| async { "ok" }))
+        .route(
+            "/healthz",
+            get(|| async {
+                Json(json!({
+                    "ok": true,
+                    "service": "tb-mcp-connector",
+                    "protocol": PROTOCOL_FALLBACK,
+                }))
+            }),
+        )
         .with_state(state)
 }
 
@@ -223,10 +238,7 @@ fn auth_ok(st: &McpState, headers: &HeaderMap) -> bool {
 /// zeigen. Die MCP-Streamable-HTTP-Spec verlangt genau diese Pruefung.
 fn origin_ok(headers: &HeaderMap) -> bool {
     fn ist_loopback_host(wert: &str) -> bool {
-        let ohne_schema = wert
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .unwrap_or(wert);
+        let ohne_schema = wert.split_once("://").map(|(_, rest)| rest).unwrap_or(wert);
         let host = ohne_schema
             .split('/')
             .next()
@@ -243,10 +255,10 @@ fn origin_ok(headers: &HeaderMap) -> bool {
             return false;
         }
     }
-    match headers.get(header::HOST).and_then(|v| v.to_str().ok()) {
-        Some(host) => ist_loopback_host(host),
-        None => true,
-    }
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(ist_loopback_host)
 }
 
 async fn mcp_get() -> Response {
@@ -268,6 +280,30 @@ async fn mcp_post(State(st): State<Arc<McpState>>, request: Request<Body>) -> Re
     if !auth_ok(&st, headers) {
         return json_response(StatusCode::UNAUTHORIZED, json!({"error": "unauthorized"}));
     }
+    let _permit = match st.request_slots.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return json_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({"error": "zu viele parallele MCP-Anfragen"}),
+            )
+        }
+    };
+    match tokio::time::timeout(
+        Duration::from_secs(MAX_MCP_REQUEST_SECONDS),
+        handle_authenticated_request(&st, request),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => json_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            json!({"error": "MCP-Anfrage hat das Zeitlimit überschritten"}),
+        ),
+    }
+}
+
+async fn handle_authenticated_request(st: &Arc<McpState>, request: Request<Body>) -> Response {
     let body = match to_bytes(request.into_body(), MAX_MCP_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => {
@@ -290,9 +326,18 @@ async fn mcp_post(State(st): State<Arc<McpState>>, request: Request<Body>) -> Re
 
     match parsed {
         Value::Array(items) => {
+            if items.is_empty() || items.len() > MAX_MCP_BATCH_ITEMS {
+                return json_response(
+                    StatusCode::OK,
+                    json!({"jsonrpc": "2.0", "id": null, "error": {
+                        "code": -32600,
+                        "message": format!("Batch muss 1 bis {MAX_MCP_BATCH_ITEMS} Einträge enthalten")
+                    }}),
+                );
+            }
             let mut out = Vec::new();
             for item in items {
-                if let Some(response) = handle_rpc(&st, item).await {
+                if let Some(response) = handle_rpc(st, item).await {
                     out.push(response);
                 }
             }
@@ -302,7 +347,7 @@ async fn mcp_post(State(st): State<Arc<McpState>>, request: Request<Body>) -> Re
                 json_response(StatusCode::OK, Value::Array(out))
             }
         }
-        object => match handle_rpc(&st, object).await {
+        object => match handle_rpc(st, object).await {
             Some(response) => json_response(StatusCode::OK, response),
             None => StatusCode::ACCEPTED.into_response(),
         },
@@ -517,7 +562,7 @@ fn arg_usize(args: &Value, key: &str) -> Option<usize> {
     args.get(key)
         .and_then(|v| v.as_i64())
         .filter(|v| *v > 0)
-        .map(|v| v as usize)
+        .map(|v| (v as usize).min(DEFAULT_PARTNER_LIMIT))
 }
 
 // ───────────────────────────── Werkzeuge: Lesen ─────────────────────────────
@@ -933,8 +978,8 @@ mod tests {
 
     #[test]
     fn ohne_origin_geht_der_lokale_client_durch() {
-        assert!(origin_ok(&headers_mit(&[(header::HOST, "127.0.0.1:8891")])));
-        assert!(origin_ok(&HeaderMap::new()));
+        assert!(origin_ok(&headers_mit(&[(header::HOST, "127.0.0.1:8892")])));
+        assert!(!origin_ok(&HeaderMap::new()));
     }
 
     #[test]
@@ -943,17 +988,21 @@ mod tests {
         // zu sehen. Der Schreibvorgang liefe trotzdem, deshalb hier der Riegel.
         assert!(!origin_ok(&headers_mit(&[
             (header::ORIGIN, "https://boese.example"),
-            (header::HOST, "127.0.0.1:8891"),
+            (header::HOST, "127.0.0.1:8892"),
         ])));
     }
 
     #[test]
     fn loopback_origin_bleibt_erlaubt() {
-        for origin in ["http://localhost:5173", "http://127.0.0.1:8891", "http://[::1]:8891"] {
+        for origin in [
+            "http://localhost:5173",
+            "http://127.0.0.1:8892",
+            "http://[::1]:8892",
+        ] {
             assert!(
                 origin_ok(&headers_mit(&[
                     (header::ORIGIN, origin),
-                    (header::HOST, "127.0.0.1:8891"),
+                    (header::HOST, "127.0.0.1:8892"),
                 ])),
                 "{origin} sollte durchgehen"
             );
@@ -964,7 +1013,7 @@ mod tests {
     fn fremder_host_faengt_dns_rebinding() {
         assert!(!origin_ok(&headers_mit(&[(
             header::HOST,
-            "angreifer.example:8891"
+            "angreifer.example:8892"
         )])));
     }
 
@@ -980,6 +1029,7 @@ mod tests {
             removal_ext: ModeratorRemovalExt(None),
             ban_probe: None,
             deadlock_pause: None,
+            request_slots: tokio::sync::Semaphore::new(MAX_MCP_CONCURRENT_REQUESTS),
         })
     }
 
@@ -1017,7 +1067,9 @@ mod tests {
             .await
             .expect("healthz");
         assert!(health.status().is_success());
-        assert_eq!(health.text().await.unwrap(), "ok");
+        let health_body: Value = health.json().await.expect("healthz JSON");
+        assert_eq!(health_body["ok"], true);
+        assert_eq!(health_body["service"], "tb-mcp-connector");
 
         let response: Value = client
             .post(format!("{base}/mcp"))
@@ -1119,6 +1171,25 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn batchgroesse_ist_begrenzt() {
+        let base = serve_test(test_state(Some("geheim"))).await;
+        let batch = vec![
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+            MAX_MCP_BATCH_ITEMS + 1
+        ];
+        let response = reqwest::Client::new()
+            .post(format!("{base}/mcp"))
+            .bearer_auth("geheim")
+            .json(&batch)
+            .send()
+            .await
+            .expect("MCP-Aufruf");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.expect("JSON-Antwort");
+        assert_eq!(body["error"]["code"], -32600);
+    }
+
     #[test]
     fn login_wird_normalisiert() {
         assert_eq!(
@@ -1127,6 +1198,14 @@ mod tests {
         );
         assert!(arg_login(&args(json!({"login": "  "}))).is_err());
         assert!(arg_login(&args(json!({}))).is_err());
+    }
+
+    #[test]
+    fn caller_limit_wird_hart_gedeckelt() {
+        assert_eq!(
+            arg_usize(&args(json!({"limit": 999_999})), "limit"),
+            Some(DEFAULT_PARTNER_LIMIT)
+        );
     }
 
     /// Ein Aufruf ohne Meinung darf nichts anfassen: `dry_run` fehlt → true.

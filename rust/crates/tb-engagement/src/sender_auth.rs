@@ -142,10 +142,10 @@ impl SenderAuthStore {
 
         // Noch frisch genug → Access-Token direkt entschlüsseln.
         if now < row.expires_at - REFRESH_SKEW_SECONDS {
-            match self
-                .cipher
-                .decrypt_field(&row.access_enc, &aad::engagement_sender("access_token", &row.user_id))
-            {
+            match self.cipher.decrypt_field(
+                &row.access_enc,
+                &aad::engagement_sender("access_token", &row.user_id),
+            ) {
                 Ok(access) => return Some((access, row.user_id)),
                 Err(_) => tracing::warn!(
                     "Engagement-Sender: Access-Token-Decrypt fehlgeschlagen, versuche Refresh"
@@ -156,7 +156,10 @@ impl SenderAuthStore {
         // Refresh.
         let refresh_token = self
             .cipher
-            .decrypt_field(&row.refresh_enc, &aad::engagement_sender("refresh_token", &row.user_id))
+            .decrypt_field(
+                &row.refresh_enc,
+                &aad::engagement_sender("refresh_token", &row.user_id),
+            )
             .ok()?;
         let token = match self.post_refresh(&refresh_token).await {
             Ok(t) => t,
@@ -227,12 +230,18 @@ impl SenderAuthStore {
         scopes: &str,
     ) {
         let (Ok(access_enc), Ok(refresh_enc)) = (
-            self.cipher
-                .encrypt_field(access_token, &aad::engagement_sender("access_token", user_id)),
-            self.cipher
-                .encrypt_field(refresh_token, &aad::engagement_sender("refresh_token", user_id)),
+            self.cipher.encrypt_field(
+                access_token,
+                &aad::engagement_sender("access_token", user_id),
+            ),
+            self.cipher.encrypt_field(
+                refresh_token,
+                &aad::engagement_sender("refresh_token", user_id),
+            ),
         ) else {
-            tracing::error!("Engagement-Sender: Verschlüsseln fehlgeschlagen — Tokens NICHT geschrieben");
+            tracing::error!(
+                "Engagement-Sender: Verschlüsseln fehlgeschlagen — Tokens NICHT geschrieben"
+            );
             return;
         };
         let expires_at = chrono::Utc::now().timestamp() + expires_in.max(0);
@@ -311,9 +320,20 @@ impl SenderAuthStore {
             .error_for_status()
             .map_err(|e| e.to_string())?;
         let payload: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        let first = payload.get("data").and_then(serde_json::Value::as_array).and_then(|a| a.first());
-        let id = first.and_then(|d| d.get("id")).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
-        let login = first.and_then(|d| d.get("login")).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+        let first = payload
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|a| a.first());
+        let id = first
+            .and_then(|d| d.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let login = first
+            .and_then(|d| d.get("login"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if id.is_empty() {
             return Err("helix/users lieferte keine Daten".to_string());
         }
@@ -322,13 +342,18 @@ impl SenderAuthStore {
 
     /// Persistiert einen State-Token (Upsert) in der geteilten
     /// `oauth_state_tokens`-Tabelle, plattform-gated auf `engagement_sender`.
-    async fn persist_state(&self, state: &str, expires_at: DateTime<Utc>) -> Result<(), sqlx::Error> {
+    async fn persist_state(
+        &self,
+        state: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        let state_lookup_key = tb_crypto::token_lookup_key(state);
         sqlx::query!(
             "INSERT INTO oauth_state_tokens \
                 (state_token, platform, streamer_login, redirect_uri, expires_at) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (state_token) DO UPDATE SET expires_at = EXCLUDED.expires_at",
-            state,
+            state_lookup_key,
             PLATFORM,
             SENDER_LOGIN,
             REDIRECT_URI,
@@ -346,10 +371,11 @@ impl SenderAuthStore {
         if state.is_empty() {
             return false;
         }
+        let state_lookup_key = tb_crypto::token_lookup_key(state);
         let row = sqlx::query!(
             r#"DELETE FROM oauth_state_tokens WHERE state_token = $1 AND platform = $2
              RETURNING expires_at AS "expires_at?""#,
-            state,
+            state_lookup_key,
             PLATFORM
         )
         .fetch_optional(&self.pool)
@@ -369,7 +395,9 @@ impl SenderAuthStore {
     pub async fn build_authorize_url(&self) -> Result<String, String> {
         let state = format!("engsender-{}", tb_crypto::random_hex_token(18));
         let expires_at = Utc::now() + Duration::seconds(STATE_TTL_SECONDS);
-        self.persist_state(&state, expires_at).await.map_err(|e| e.to_string())?;
+        self.persist_state(&state, expires_at)
+            .await
+            .map_err(|e| e.to_string())?;
         let scope = SCOPES.join(" ");
         let url = reqwest::Url::parse_with_params(
             AUTHORIZE_URL,
@@ -401,10 +429,25 @@ impl SenderAuthStore {
             return Err("Token-Response unvollständig".to_string());
         }
         let (user_id, login) = self.fetch_user(&token.access_token).await?;
-        let login = if login.is_empty() { SENDER_LOGIN.to_string() } else { login };
-        let scopes = if token.scope.is_empty() { SCOPES.join(" ") } else { token.scope.clone() };
-        self.store_tokens(&user_id, &login, &token.access_token, &token.refresh_token, token.expires_in, &scopes)
-            .await;
+        let login = if login.is_empty() {
+            SENDER_LOGIN.to_string()
+        } else {
+            login
+        };
+        let scopes = if token.scope.is_empty() {
+            SCOPES.join(" ")
+        } else {
+            token.scope.clone()
+        };
+        self.store_tokens(
+            &user_id,
+            &login,
+            &token.access_token,
+            &token.refresh_token,
+            token.expires_in,
+            &scopes,
+        )
+        .await;
         Ok(CallbackResult { login, user_id })
     }
 }
@@ -420,7 +463,12 @@ struct TokenResponse {
 
 impl TokenResponse {
     fn from_value(v: &serde_json::Value) -> Self {
-        let str_field = |k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+        let str_field = |k: &str| {
+            v.get(k)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
         let scope = match v.get("scope") {
             Some(serde_json::Value::Array(a)) => a
                 .iter()
@@ -433,7 +481,10 @@ impl TokenResponse {
         Self {
             access_token: str_field("access_token"),
             refresh_token: str_field("refresh_token"),
-            expires_in: v.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            expires_in: v
+                .get("expires_in")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
             scope,
         }
     }
@@ -441,7 +492,10 @@ impl TokenResponse {
 
 /// Env-Var nur wenn gesetzt UND nicht leer.
 fn nonempty_env(var: &str) -> Option<String> {
-    std::env::var(var).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -478,12 +532,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE oauth_state_tokens (state_token TEXT PRIMARY KEY, platform TEXT, \
              streamer_login TEXT, redirect_uri TEXT, expires_at TIMESTAMPTZ)",
@@ -499,7 +569,13 @@ mod tests {
     }
 
     /// Helper: legt eine Zeile mit verschlüsseltem Token-Paar + Ablauf an.
-    async fn seed(s: &SenderAuthStore, user_id: &str, access: &str, refresh: &str, expires_at: i64) {
+    async fn seed(
+        s: &SenderAuthStore,
+        user_id: &str,
+        access: &str,
+        refresh: &str,
+        expires_at: i64,
+    ) {
         let access_enc = s
             .cipher
             .encrypt_field(access, &aad::engagement_sender("access_token", user_id))
@@ -524,7 +600,9 @@ mod tests {
 
     #[tokio::test]
     async fn none_wenn_kein_account() {
-        let Some(pool) = make_pool("t_eng_sender_none").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_none").await else {
+            return;
+        };
         let s = store(pool);
         assert!(s.validate_table().await.is_err());
         s.ensure_table().await;
@@ -534,7 +612,9 @@ mod tests {
 
     #[tokio::test]
     async fn frischer_token_wird_direkt_entschluesselt() {
-        let Some(pool) = make_pool("t_eng_sender_fresh").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_fresh").await else {
+            return;
+        };
         let s = store(pool);
         s.ensure_table().await;
         // Ablauf weit in der Zukunft → kein Refresh, direkter Decrypt.
@@ -546,7 +626,9 @@ mod tests {
 
     #[tokio::test]
     async fn abgelaufener_token_wird_refreshed() {
-        let Some(pool) = make_pool("t_eng_sender_refresh").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_refresh").await else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth2/token"))
@@ -572,19 +654,27 @@ mod tests {
         assert!(row.expires_at > chrono::Utc::now().timestamp());
         let access = s
             .cipher
-            .decrypt_field(&row.access_enc, &aad::engagement_sender("access_token", "42"))
+            .decrypt_field(
+                &row.access_enc,
+                &aad::engagement_sender("access_token", "42"),
+            )
             .unwrap();
         assert_eq!(access, "new-access");
         let refresh = s
             .cipher
-            .decrypt_field(&row.refresh_enc, &aad::engagement_sender("refresh_token", "42"))
+            .decrypt_field(
+                &row.refresh_enc,
+                &aad::engagement_sender("refresh_token", "42"),
+            )
             .unwrap();
         assert_eq!(refresh, "new-refresh");
     }
 
     #[tokio::test]
     async fn authorize_url_legt_state_an() {
-        let Some(pool) = make_pool("t_eng_sender_authurl").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_authurl").await else {
+            return;
+        };
         let s = store(pool.clone());
         let url = s.build_authorize_url().await.unwrap();
         assert!(url.starts_with("https://id.twitch.tv/oauth2/authorize?"));
@@ -594,15 +684,19 @@ mod tests {
         // Scope url-encoded (Leerzeichen → +/%20), beide Scopes enthalten.
         assert!(url.contains("user%3Awrite%3Achat"));
         // Genau ein State-Token persistiert, plattform-gated.
-        let (token, platform): (String, String) = sqlx::query_as(
-            "SELECT state_token, platform FROM oauth_state_tokens LIMIT 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(token.starts_with("engsender-"));
+        let (token, platform): (String, String) =
+            sqlx::query_as("SELECT state_token, platform FROM oauth_state_tokens LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let raw_state = url
+            .split("state=")
+            .nth(1)
+            .and_then(|value| value.split('&').next())
+            .expect("State in Authorize-URL");
+        assert!(raw_state.starts_with("engsender-"));
+        assert_eq!(token, tb_crypto::token_lookup_key(raw_state));
         assert_eq!(platform, "engagement_sender");
-        assert!(url.contains(&format!("state={token}")));
     }
 
     /// senderauth-03: `oauth_state_tokens.expires_at` wird durchgängig als
@@ -612,7 +706,9 @@ mod tests {
     /// muss ohne Decode-Fehler funktionieren und Ablauf korrekt auswerten.
     #[tokio::test]
     async fn expires_at_timestamptz_roundtrip_und_ablauf() {
-        let Some(pool) = make_pool("t_eng_sender_expts").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_expts").await else {
+            return;
+        };
         let s = store(pool.clone());
 
         // (1) Gültiger State (in der Zukunft) → consume_state == true, Zeile weg.
@@ -621,25 +717,36 @@ mod tests {
         // Die Spalte ist echtes TIMESTAMPTZ: typisiertes Lesen als DateTime<Utc>
         // gelingt (kein TEXT/ISO-Parsing nötig).
         let stored: (DateTime<Utc>,) =
-            sqlx::query_as("SELECT expires_at FROM oauth_state_tokens WHERE state_token = 'valid-state'")
+            sqlx::query_as("SELECT expires_at FROM oauth_state_tokens WHERE state_token = $1")
+                .bind(tb_crypto::token_lookup_key("valid-state"))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert!(stored.0 > Utc::now());
-        assert!(s.consume_state("valid-state").await, "frischer State ist gültig");
+        assert!(
+            s.consume_state("valid-state").await,
+            "frischer State ist gültig"
+        );
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_state_tokens")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(remaining, 0, "consume löscht den State");
 
         // (2) Abgelaufener State (in der Vergangenheit) → consume_state == false.
         let past = Utc::now() - Duration::seconds(10);
         s.persist_state("expired-state", past).await.unwrap();
-        assert!(!s.consume_state("expired-state").await, "abgelaufener State wird abgewiesen");
+        assert!(
+            !s.consume_state("expired-state").await,
+            "abgelaufener State wird abgewiesen"
+        );
     }
 
     #[tokio::test]
     async fn callback_speichert_token() {
-        let Some(pool) = make_pool("t_eng_sender_cb").await else { return };
+        let Some(pool) = make_pool("t_eng_sender_cb").await else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth2/token"))
@@ -665,18 +772,27 @@ mod tests {
         s.ensure_table().await;
         // Gültigen State seeden (wie build_authorize_url ihn anlegen würde).
         let future = chrono::Utc::now() + chrono::Duration::seconds(600);
-        sqlx::query("INSERT INTO oauth_state_tokens (state_token, platform, expires_at) VALUES ('st1', 'engagement_sender', $1)")
-            .bind(future).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO oauth_state_tokens (state_token, platform, expires_at) VALUES ($1, 'engagement_sender', $2)")
+            .bind(tb_crypto::token_lookup_key("st1"))
+            .bind(future)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let result = s.handle_callback("the-code", "st1").await.unwrap();
         assert_eq!(result.user_id, "555");
         assert_eq!(result.login, "iamspyingthroughtyourcam");
         // State verbraucht (gelöscht).
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_state_tokens")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(remaining, 0);
         // Token gespeichert + via get_valid_access_token lesbar.
-        assert_eq!(s.get_valid_access_token().await, Some(("onb-access".to_string(), "555".to_string())));
+        assert_eq!(
+            s.get_valid_access_token().await,
+            Some(("onb-access".to_string(), "555".to_string()))
+        );
 
         // Zweiter Callback mit demselben (verbrauchten) State → State-Fehler.
         let err = s.handle_callback("the-code", "st1").await.unwrap_err();

@@ -43,8 +43,8 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle,
-    price_id_map_from_env, resolved_price_id,
+    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_map_from_env,
+    resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
@@ -261,8 +261,7 @@ pub async fn checkout_start_handler(
     // die Einstiegsstufe, deshalb `plus`. Dauer bleibt vorerst 30 Tage; die
     // Umstellung auf 14 plus 14 ist SPEC M3 und laeuft separat.
     if cycle == 1 && plan_id == "plus" {
-        session_payload["subscription_data"] =
-            json!({ "trial_period_days": CHECKOUT_TRIAL_DAYS });
+        session_payload["subscription_data"] = json!({ "trial_period_days": CHECKOUT_TRIAL_DAYS });
     }
     // KEINE Bonus-Monate mehr beim Jahreszyklus. Der Jahresvorteil steckt seit
     // dem Drei-Stufen-Umbau im Preis (49,90 bzw. 99,90 sind zehn Monatspreise,
@@ -610,7 +609,7 @@ fn stufen_hinweis(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot) -> 
     }
     if current.plan_id == tb_analytics::trial::ANALYTICS_TRIAL_PLAN_ID {
         return Some(match resttage(current.expires_at.as_deref()) {
-            Some(tage) if tage == 1 => "Läuft noch einen Tag als Test.".to_string(),
+            Some(1) => "Läuft noch einen Tag als Test.".to_string(),
             Some(tage) if tage > 1 => format!("Läuft noch {tage} Tage als Test."),
             _ => "Läuft gerade als Test.".to_string(),
         });
@@ -1917,7 +1916,10 @@ mod tests {
         // Die Karte zeigt deshalb "Bald buchbar" statt eines Kaufknopfs.
         let pro = plans.iter().find(|p| p["id"] == "pro").unwrap();
         assert_eq!(pro["buchbar"], false);
-        assert_eq!(pro["checkout_available"], false, "Pro darf nicht buchbar sein");
+        assert_eq!(
+            pro["checkout_available"], false,
+            "Pro darf nicht buchbar sein"
+        );
         // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
         // persistiert; recipient_name fällt auf den Login zurück, country=DE).
         assert_eq!(v["billing_profile"]["customer_reference"], "login");
@@ -1955,8 +1957,7 @@ mod tests {
         assert!(!ist_aktuelle_stufe("plus", &trial), "Trial ist keine Stufe");
         assert!(!ist_aktuelle_stufe("free", &trial));
         assert!(
-            stufen_hinweis("plus", &trial)
-                .is_some_and(|text| text.contains("Test")),
+            stufen_hinweis("plus", &trial).is_some_and(|text| text.contains("Test")),
             "Trial braucht einen ruhigen Hinweis neben dem Knopf"
         );
 

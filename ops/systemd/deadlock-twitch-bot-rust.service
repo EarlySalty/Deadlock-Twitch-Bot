@@ -24,6 +24,7 @@ Environment=INFISICAL_LOADER=/usr/local/libexec/dl-infisical-env
 Environment=TWITCH_RUNTIME_CONFIG_FILE=/etc/deadlock-twitch/bot.conf
 Environment=TWITCH_RUNTIME_ROLE=twitch_worker
 Environment=TB_DB_MIGRATE=0
+Environment=TB_MCP_PORT=8892
 Environment=TB_CHAT_ENABLED=1
 Environment=TB_CLIP_FETCHER_ENABLED=1
 Environment=VOICE_REACTION_STREAMLINK_BIN=/usr/local/libexec/deadlock-streamlink

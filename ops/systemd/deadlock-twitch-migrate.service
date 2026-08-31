@@ -10,7 +10,7 @@ Type=oneshot
 User=postgres
 Group=postgres
 WorkingDirectory=/opt/deadlock/twitch/current/rust
-ExecStart=/usr/local/libexec/cargo-sqlx migrate run --source /opt/deadlock/twitch/current/rust/migrations --ignore-missing --no-dotenv --database-url postgresql:///twitch_analytics?host=/var/run/postgresql&application_name=tb-migrate
+ExecStart=/usr/local/libexec/cargo-sqlx sqlx migrate run --source /opt/deadlock/twitch/current/rust/migrations --no-dotenv --database-url postgresql:///twitch_analytics?host=/var/run/postgresql&application_name=tb-migrate
 ExecStartPost=/usr/bin/psql --no-psqlrc --dbname=twitch_analytics --file=/opt/deadlock/twitch/current/ops/systemd/twitch-runtime-roles.sql
 
 NoNewPrivileges=yes

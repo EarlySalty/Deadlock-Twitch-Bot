@@ -2026,7 +2026,7 @@ async fn main() {
             store: tb_raid::ReauthAdminStore::new(pool.clone()),
         }));
 
-    // MCP-Connector (loopback-only, default 127.0.0.1:8891): zweite Oberfläche
+    // MCP-Connector (loopback-only, dediziert auf 127.0.0.1:8892): zweite Oberfläche
     // auf dieselben Ports und Handler wie die interne API, damit eine
     // Claude-Sitzung den Bot ohne eigene Secrets verwalten kann. Ein Bind-Fehler
     // kostet nur den Connector, nicht den Bot.

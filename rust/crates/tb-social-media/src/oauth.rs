@@ -19,6 +19,7 @@ use tb_crypto::{aad, FieldCipher};
 const STATE_TTL_MINUTES: i64 = 10;
 /// HTTP-Timeout der Token-Endpoints (Python total=30s).
 const OAUTH_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+const PKCE_ENC_PREFIX: &str = "enc:v1:";
 
 /// Fehler des OAuth-Flows.
 #[derive(Debug, thiserror::Error)]
@@ -145,15 +146,20 @@ impl OAuthManager {
         };
 
         let expires_at = Utc::now() + Duration::minutes(STATE_TTL_MINUTES);
+        let state_lookup_key = tb_crypto::token_lookup_key(&state);
+        let pkce_verifier_enc = pkce_verifier
+            .as_deref()
+            .map(|verifier| encrypt_pkce(&self.cipher, platform, &state_lookup_key, verifier))
+            .transpose()?;
         sqlx::query!(
             "INSERT INTO oauth_state_tokens \
                 (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NULL)",
-            &state,
+            &state_lookup_key,
             platform,
             streamer_login,
             redirect_uri,
-            pkce_verifier.as_deref(),
+            pkce_verifier_enc.as_deref(),
             expires_at
         )
         .execute(&self.pool)
@@ -209,6 +215,7 @@ impl OAuthManager {
             .map(|p| p.trim().to_lowercase())
             .filter(|p| !p.is_empty());
         let now = Utc::now();
+        let state_lookup_key = tb_crypto::token_lookup_key(state);
         // Plattform-Filter optional über $3 (NULL = kein Filter).
         let row = sqlx::query!(
             "UPDATE oauth_state_tokens SET consumed_at = $1 \
@@ -216,7 +223,7 @@ impl OAuthManager {
                AND ($3::text IS NULL OR platform = $3) \
              RETURNING platform, streamer_login, redirect_uri, pkce_verifier",
             now,
-            state,
+            state_lookup_key,
             expected_platform.as_deref()
         )
         .fetch_optional(&self.pool)
@@ -226,7 +233,11 @@ impl OAuthManager {
         let platform = row.platform;
         let streamer_login = row.streamer_login;
         let redirect_uri = row.redirect_uri.unwrap_or_default();
-        let verifier = row.pkce_verifier;
+        let verifier = row
+            .pkce_verifier
+            .as_deref()
+            .map(|encoded| decrypt_pkce(&self.cipher, &platform, &state_lookup_key, encoded))
+            .transpose()?;
 
         if let Some(expected) = expected_redirect_uri
             .map(normalize_redirect)
@@ -748,6 +759,45 @@ fn error_detail(v: &serde_json::Value) -> String {
     v.to_string().chars().take(200).collect()
 }
 
+fn pkce_aad(platform: &str, state_lookup_key: &str) -> String {
+    format!("oauth_state_tokens|pkce_verifier|{platform}|{state_lookup_key}|1")
+}
+
+fn encrypt_pkce(
+    cipher: &FieldCipher,
+    platform: &str,
+    state_lookup_key: &str,
+    verifier: &str,
+) -> Result<String, OAuthError> {
+    let blob = cipher
+        .encrypt_field(verifier, &pkce_aad(platform, state_lookup_key))
+        .map_err(|_| OAuthError::Exchange {
+            platform: "persist",
+            detail: "PKCE-Verschlüsselung fehlgeschlagen".to_string(),
+        })?;
+    Ok(format!(
+        "{PKCE_ENC_PREFIX}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(blob)
+    ))
+}
+
+fn decrypt_pkce(
+    cipher: &FieldCipher,
+    platform: &str,
+    state_lookup_key: &str,
+    encoded: &str,
+) -> Result<String, OAuthError> {
+    let payload = encoded
+        .strip_prefix(PKCE_ENC_PREFIX)
+        .ok_or(OAuthError::StateInvalid)?;
+    let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| OAuthError::StateInvalid)?;
+    cipher
+        .decrypt_field(&blob, &pkce_aad(platform, state_lookup_key))
+        .map_err(|_| OAuthError::StateInvalid)
+}
+
 /// PKCE-S256-Challenge: `base64url(sha256(verifier))` ohne Padding.
 fn pkce_challenge(verifier: &str) -> String {
     let digest = Sha256::digest(verifier.as_bytes());
@@ -862,6 +912,20 @@ mod tests {
         // Kein Padding, url-safe.
         assert!(!c.contains('='));
         assert!(!c.contains('+') && !c.contains('/'));
+    }
+
+    #[test]
+    fn pkce_verifier_liegt_nur_verschluesselt_vor() {
+        let cipher = test_cipher();
+        let stored = encrypt_pkce(&cipher, "youtube", "lookup-key", "verifier-geheim").unwrap();
+        assert!(stored.starts_with(PKCE_ENC_PREFIX));
+        assert!(!stored.contains("verifier-geheim"));
+        assert_eq!(
+            decrypt_pkce(&cipher, "youtube", "lookup-key", &stored).unwrap(),
+            "verifier-geheim"
+        );
+        assert!(decrypt_pkce(&cipher, "youtube", "anderer-key", &stored).is_err());
+        assert!(decrypt_pkce(&cipher, "youtube", "lookup-key", "verifier-geheim").is_err());
     }
 
     fn with_env<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
@@ -1139,11 +1203,19 @@ mod tests {
         redirect: &str,
         verifier: Option<&str>,
     ) {
+        let state_lookup_key = tb_crypto::token_lookup_key(state);
+        let cipher = test_cipher();
+        let verifier_enc = verifier
+            .map(|value| encrypt_pkce(&cipher, platform, &state_lookup_key, value).unwrap());
         sqlx::query(
             "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
              VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '5 minutes', NULL)",
         )
-        .bind(state).bind(platform).bind(streamer).bind(redirect).bind(verifier)
+        .bind(state_lookup_key)
+        .bind(platform)
+        .bind(streamer)
+        .bind(redirect)
+        .bind(verifier_enc)
         .execute(pool).await.unwrap();
     }
 
@@ -1162,22 +1234,31 @@ mod tests {
         assert!(url.contains("access_type=offline"));
 
         // State persistiert mit PKCE-Verifier + 10min-Ablauf.
-        let (platform, streamer, verifier, in_future): (
+        let (stored_state, platform, streamer, verifier, in_future): (
+            String,
             String,
             Option<String>,
             Option<String>,
             bool,
         ) = sqlx::query_as(
-            "SELECT platform, streamer_login, pkce_verifier, \
+            "SELECT state_token, platform, streamer_login, pkce_verifier, \
                         expires_at > NOW() + INTERVAL '9 minutes' \
                  FROM oauth_state_tokens LIMIT 1",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
+        let raw_state = url
+            .split("state=")
+            .nth(1)
+            .and_then(|value| value.split('&').next())
+            .expect("State in Authorize-URL");
+        assert_eq!(stored_state, tb_crypto::token_lookup_key(raw_state));
         assert_eq!(platform, "youtube");
         assert_eq!(streamer.as_deref(), Some("nani"));
-        assert!(verifier.is_some()); // youtube → PKCE
+        let verifier = verifier.expect("YouTube-PKCE gespeichert");
+        assert!(verifier.starts_with(PKCE_ENC_PREFIX));
+        assert!(!verifier.contains(raw_state));
         assert!(in_future);
         std::env::remove_var("YOUTUBE_CLIENT_ID");
     }

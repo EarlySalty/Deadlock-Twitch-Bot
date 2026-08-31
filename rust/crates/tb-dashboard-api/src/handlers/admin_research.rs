@@ -702,10 +702,14 @@ mod tests {
             r#"INSERT INTO twitch_stats_category
                 (ts_utc, streamer, viewer_count, stream_title, language)
             VALUES
-                (NOW() - INTERVAL '5 hours',       'subject', 10, 'First',  'de'),
-                (NOW() - INTERVAL '4 hours 50 min','subject', 20, 'First',  'de'),
-                (NOW() - INTERVAL '4 hours 10 min','subject', 30, 'Second', 'en'),
-                (NOW() - INTERVAL '3 hours 40 min','subject', 40, 'Third',  'de')"#,
+                (date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '10 hours',
+                    'subject', 10, 'First', 'de'),
+                (date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '10 hours 10 min',
+                    'subject', 20, 'First', 'de'),
+                (date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '10 hours 50 min',
+                    'subject', 30, 'Second', 'en'),
+                (date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '11 hours 20 min',
+                    'subject', 40, 'Third', 'de')"#,
         )
         .execute(&pool)
         .await
