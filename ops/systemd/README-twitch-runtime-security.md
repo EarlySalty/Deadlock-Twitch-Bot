@@ -36,7 +36,11 @@ Credential-Verzeichnis.
 Die Peer-DSNs enthalten kein Passwort. Der Infisical-Loader liefert zwar noch
 die gemeinsame alte DSN, aber die Startskripte überschreiben sie nach dem Laden
 zwingend mit der dienstspezifischen Socket-DSN. Der Rust-Prozess erbt damit
-keinen PostgreSQL-Superuser-Zugang.
+keinen PostgreSQL-Superuser-Zugang. Das gemeinsame Legacy-Secret zeigt nur noch
+auf die eingeschränkte Übergangsrolle `twitchlegacy`; sie besitzt breite DML-
+Kompatibilität für noch nicht getrennte lokale Dienste, aber keinerlei DDL-,
+Superuser-, Rollen- oder Dateisystemrechte. Die fachliche Aufteilung dieser
+Restdienste folgt zusammen mit den späteren getrennten Infisical-Bereichen.
 
 ## Installation und Deploy
 

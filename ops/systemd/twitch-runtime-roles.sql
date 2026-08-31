@@ -12,6 +12,10 @@ BEGIN
         CREATE ROLE twitchdash LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
             NOREPLICATION NOBYPASSRLS;
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'twitchlegacy') THEN
+        CREATE ROLE twitchlegacy LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOREPLICATION NOBYPASSRLS;
+    END IF;
 END
 $rollen$;
 
@@ -21,6 +25,8 @@ ALTER ROLE twitchbot PASSWORD NULL;
 ALTER ROLE twitchdash PASSWORD NULL;
 ALTER ROLE twitchbot RESET ALL;
 ALTER ROLE twitchdash RESET ALL;
+ALTER ROLE twitchlegacy NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE twitchlegacy RESET ALL;
 
 DO $keine_rollenerbschaft$
 DECLARE
@@ -31,7 +37,7 @@ BEGIN
         FROM pg_auth_members memberships
         JOIN pg_roles granted ON granted.oid = memberships.roleid
         JOIN pg_roles members ON members.oid = memberships.member
-        WHERE members.rolname IN ('twitchbot', 'twitchdash')
+        WHERE members.rolname IN ('twitchbot', 'twitchdash', 'twitchlegacy')
     LOOP
         EXECUTE format(
             'REVOKE %I FROM %I',
@@ -44,10 +50,11 @@ $keine_rollenerbschaft$;
 
 ALTER ROLE twitchbot IN DATABASE twitch_analytics SET search_path = public, pg_catalog;
 ALTER ROLE twitchdash IN DATABASE twitch_analytics SET search_path = public, pg_catalog;
+ALTER ROLE twitchlegacy IN DATABASE twitch_analytics SET search_path = public, pg_catalog;
 
-GRANT CONNECT ON DATABASE twitch_analytics TO twitchbot, twitchdash;
-GRANT USAGE ON SCHEMA public TO twitchbot, twitchdash;
-REVOKE CREATE ON SCHEMA public FROM twitchbot, twitchdash;
+GRANT CONNECT ON DATABASE twitch_analytics TO twitchbot, twitchdash, twitchlegacy;
+GRANT USAGE ON SCHEMA public TO twitchbot, twitchdash, twitchlegacy;
+REVOKE CREATE ON SCHEMA public FROM twitchbot, twitchdash, twitchlegacy;
 
 -- Konvergent zuerst alles entziehen, dann die fachliche Matrix neu aufbauen.
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM twitchbot, twitchdash;
@@ -56,6 +63,17 @@ GRANT SELECT, INSERT, UPDATE, DELETE
     ON ALL TABLES IN SCHEMA public TO twitchbot, twitchdash;
 GRANT USAGE, SELECT
     ON ALL SEQUENCES IN SCHEMA public TO twitchbot, twitchdash;
+
+-- Befristete Kompatibilitätsrolle für übrige lokale Dienste, die noch das
+-- gemeinsame TWITCH_ANALYTICS_DSN-Secret lesen. Sie ersetzt den bisherigen
+-- PostgreSQL-Superuser sofort, bleibt aber bis zur späteren Vault-Aufteilung
+-- fachlich breit. DDL, Rollenwechsel, Dateizugriff und BYPASSRLS sind gesperrt.
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM twitchlegacy;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM twitchlegacy;
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON ALL TABLES IN SCHEMA public TO twitchlegacy;
+GRANT USAGE, SELECT
+    ON ALL SEQUENCES IN SCHEMA public TO twitchlegacy;
 
 -- Der Bot verarbeitet Twitch-Laufzeitdaten, aber keine Web-Sessions,
 -- Admin-Audits, Affiliate-PII oder Zahlungsdaten. Das Dashboard besitzt diese
@@ -113,17 +131,17 @@ $dienstmatrix$;
 DO $optional_revoke$
 BEGIN
     IF to_regclass('public._sqlx_migrations') IS NOT NULL THEN
-        REVOKE ALL ON TABLE public._sqlx_migrations FROM twitchbot, twitchdash;
+        REVOKE ALL ON TABLE public._sqlx_migrations FROM twitchbot, twitchdash, twitchlegacy;
     END IF;
     IF to_regclass('public.tb_schema_ownership') IS NOT NULL THEN
-        REVOKE ALL ON TABLE public.tb_schema_ownership FROM twitchbot, twitchdash;
+        REVOKE ALL ON TABLE public.tb_schema_ownership FROM twitchbot, twitchdash, twitchlegacy;
     END IF;
     IF to_regclass('public.schema_version') IS NOT NULL THEN
-        REVOKE ALL ON TABLE public.schema_version FROM twitchbot, twitchdash;
+        REVOKE ALL ON TABLE public.schema_version FROM twitchbot, twitchdash, twitchlegacy;
     END IF;
     IF to_regclass('public.twitch_stream_sessions_duration_repair_backup') IS NOT NULL THEN
         REVOKE ALL ON TABLE public.twitch_stream_sessions_duration_repair_backup
-            FROM twitchbot, twitchdash;
+            FROM twitchbot, twitchdash, twitchlegacy;
     END IF;
 END
 $optional_revoke$;
@@ -131,6 +149,6 @@ $optional_revoke$;
 -- Neue Tabellen starten ohne Laufzeitrechte. Nach jeder Migration baut der
 -- ExecStartPost diese Matrix anhand der nun vorhandenen Tabellen neu auf.
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-    REVOKE ALL ON TABLES FROM twitchbot, twitchdash;
+    REVOKE ALL ON TABLES FROM twitchbot, twitchdash, twitchlegacy;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-    REVOKE ALL ON SEQUENCES FROM twitchbot, twitchdash;
+    REVOKE ALL ON SEQUENCES FROM twitchbot, twitchdash, twitchlegacy;
