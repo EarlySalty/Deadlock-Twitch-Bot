@@ -210,7 +210,11 @@ if [[ ! -e "$release" ]]; then
   fi
   (
     cd "$stage"
-    find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+    # Die Ausgabedatei existiert durch die Shell-Umleitung bereits, bevor
+    # `find` startet. Sie darf deshalb nicht ihren eigenen Vorzustand hashen.
+    find . -type f ! -path ./SHA256SUMS -print0 \
+      | sort -z \
+      | xargs -0 sha256sum > SHA256SUMS
     sha256sum --check --strict SHA256SUMS >/dev/null
   )
   chmod 0644 "$stage/SHA256SUMS"
