@@ -558,7 +558,7 @@ mod route_tests {
             .unwrap();
         let session_type: String =
             sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
-                .bind(sid)
+                .bind(crate::auth::session::session_lookup_key(sid))
                 .fetch_one(&pool)
                 .await
                 .unwrap();

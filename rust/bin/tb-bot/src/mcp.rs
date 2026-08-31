@@ -19,10 +19,11 @@
 //! einer Vorschau, nicht mit einem Fehler: ein vergessenes Flag soll erklären,
 //! was passiert wäre, statt den Aufrufer raten zu lassen.
 //!
-//! Env (alle optional):
+//! Env (Netzwerkparameter optional):
 //!   TB_MCP_HOST    default 127.0.0.1 (muss Loopback sein, sonst startet er nicht)
 //!   TB_MCP_PORT    default 8891
-//!   TB_MCP_TOKEN   wenn gesetzt: `Authorization: Bearer <t>` ODER `?token=<t>`
+//!   TWITCH_INTERNAL_API_TOKEN wird aus der bestehenden Bot-Konfiguration
+//!   übernommen und ist Pflicht: ausschließlich `Authorization: Bearer <t>`.
 //!
 //! Ein Bind-Fehler beendet den Bot NICHT (anders als beim Discord-Bot): tb-bot
 //! ist ein Produktivdienst, ein belegter Debug-Port darf ihn nicht kosten.
@@ -32,7 +33,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    body::{to_bytes, Body},
+    extract::{Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -59,6 +61,10 @@ const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"]
 const DEFAULT_PARTNER_LIMIT: usize = 200;
 /// Sessions je Partner in `partner_status`.
 const SESSION_LIMIT: usize = 10;
+/// Harte Obergrenze für einen authentifizierten JSON-RPC-Request. Die Prüfung
+/// erfolgt erst nach dem Header-Gate, damit Unauthentifizierte keinen Body
+/// einlesen lassen können.
+const MAX_MCP_BODY_BYTES: usize = 1024 * 1024;
 
 // ───────────────────────────── Zustand ─────────────────────────────
 
@@ -76,6 +82,7 @@ pub(crate) struct McpState {
 impl McpState {
     pub(crate) fn new(
         pool: PgPool,
+        auth_token: String,
         role_ext: DiscordRoleExt,
         removal_ext: ModeratorRemovalExt,
         ban_probe: Option<Arc<dyn BotBanStatusProbe>>,
@@ -83,16 +90,18 @@ impl McpState {
     ) -> Self {
         Self {
             pool,
-            auth_token: std::env::var("TB_MCP_TOKEN")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty()),
+            auth_token: normalize_auth_token(auth_token),
             role_ext,
             removal_ext,
             ban_probe,
             deadlock_pause,
         }
     }
+}
+
+fn normalize_auth_token(token: String) -> Option<String> {
+    let token = token.trim().to_string();
+    (!token.is_empty()).then_some(token)
 }
 
 /// Bind-Adresse aus der Umgebung. `Err` beschreibt, warum nicht gebunden wird —
@@ -126,6 +135,12 @@ fn bind_addr() -> Result<SocketAddr, String> {
 /// Bind-Fehler werden geloggt und beenden nur diesen Task. Der Bot läuft ohne
 /// MCP weiter.
 pub(crate) fn spawn(supervisor: &TaskSupervisor, state: Arc<McpState>) {
+    if state.auth_token.is_none() {
+        tracing::warn!(
+            "MCP-Connector nicht gestartet: TWITCH_INTERNAL_API_TOKEN fehlt oder ist leer"
+        );
+        return;
+    }
     let addr = match bind_addr() {
         Ok(addr) => addr,
         Err(reason) => {
@@ -178,9 +193,9 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn auth_ok(st: &McpState, headers: &HeaderMap, query: &HashMap<String, String>) -> bool {
+fn auth_ok(st: &McpState, headers: &HeaderMap) -> bool {
     let Some(expected) = &st.auth_token else {
-        return true;
+        return false;
     };
     if let Some(value) = headers
         .get(header::AUTHORIZATION)
@@ -192,10 +207,7 @@ fn auth_ok(st: &McpState, headers: &HeaderMap, query: &HashMap<String, String>) 
             }
         }
     }
-    query
-        .get("token")
-        .map(|t| constant_time_eq(t, expected))
-        .unwrap_or(false)
+    false
 }
 
 /// Schuetzt gegen DNS-Rebinding und CSRF aus dem Browser.
@@ -245,22 +257,27 @@ async fn mcp_get() -> Response {
     )
 }
 
-async fn mcp_post(
-    State(st): State<Arc<McpState>>,
-    Query(query): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    if !origin_ok(&headers) {
+async fn mcp_post(State(st): State<Arc<McpState>>, request: Request<Body>) -> Response {
+    let headers = request.headers();
+    if !origin_ok(headers) {
         return json_response(
             StatusCode::FORBIDDEN,
             json!({"error": "nur ueber Loopback erreichbar"}),
         );
     }
-    if !auth_ok(&st, &headers, &query) {
+    if !auth_ok(&st, headers) {
         return json_response(StatusCode::UNAUTHORIZED, json!({"error": "unauthorized"}));
     }
-    let parsed: Value = match serde_json::from_str(&body) {
+    let body = match to_bytes(request.into_body(), MAX_MCP_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            return json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                json!({"error": "request body too large"}),
+            )
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(error) => {
             return json_response(
@@ -966,6 +983,16 @@ mod tests {
         })
     }
 
+    #[test]
+    fn leerer_interner_token_deaktiviert_mcp() {
+        assert_eq!(normalize_auth_token(String::new()), None);
+        assert_eq!(normalize_auth_token("  \t".to_string()), None);
+        assert_eq!(
+            normalize_auth_token("  intern-token  ".to_string()).as_deref(),
+            Some("intern-token")
+        );
+    }
+
     async fn serve_test(state: Arc<McpState>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -981,7 +1008,7 @@ mod tests {
     /// bekommen — der Server ist stateless.
     #[tokio::test]
     async fn tools_list_ohne_initialize_und_healthz() {
-        let base = serve_test(test_state(None)).await;
+        let base = serve_test(test_state(Some("test-token"))).await;
         let client = reqwest::Client::new();
 
         let health = client
@@ -994,6 +1021,7 @@ mod tests {
 
         let response: Value = client
             .post(format!("{base}/mcp"))
+            .bearer_auth("test-token")
             .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
             .send()
             .await
@@ -1027,7 +1055,8 @@ mod tests {
         // scheitert an der Attrappen-DB — entscheidend ist, dass kein Sweep
         // startet, sondern eine Fehlermeldung kommt.
         let antwort: Value = client
-            .post(format!("{base}/mcp?token=geheim"))
+            .post(format!("{base}/mcp"))
+            .bearer_auth("geheim")
             .json(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                           "params": {"name": "run_deadlock_pause_sweep", "arguments": {}}}))
             .send()
@@ -1041,6 +1070,53 @@ mod tests {
             text.contains("Kandidaten nicht ladbar"),
             "unerwartete Antwort: {text}"
         );
+    }
+
+    /// Ohne konfiguriertes Token darf der MCP-Router niemals offen werden. Das
+    /// bleibt auch als zweite Schutzschicht wahr, falls ein Aufrufer `spawn`
+    /// umgeht und den Router direkt baut.
+    #[tokio::test]
+    async fn fehlendes_token_ist_fail_closed() {
+        let base = serve_test(test_state(None)).await;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/mcp"))
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .expect("MCP-Aufruf");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// URL-Querys landen in Browser-History, Proxy-Logs und Prozesslisten. Ein
+    /// MCP-Token wird deshalb ausschließlich im Authorization-Header akzeptiert.
+    #[tokio::test]
+    async fn query_token_wird_nicht_akzeptiert() {
+        let base = serve_test(test_state(Some("geheim"))).await;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/mcp?token=geheim"))
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .expect("MCP-Aufruf");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Authentifizierung muss passieren, bevor Axum den Request-Body einliest.
+    /// Sonst kann ein nicht authentifizierter Client schon am Body-Limit Arbeit
+    /// und Speicher verursachen bzw. eine 413-Antwort vor dem Auth-Gate erzwingen.
+    #[tokio::test]
+    async fn auth_laeuft_vor_body_extraktion() {
+        let base = serve_test(test_state(Some("geheim"))).await;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/mcp"))
+            .body("x".repeat(3 * 1024 * 1024))
+            .send()
+            .await
+            .expect("MCP-Aufruf");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

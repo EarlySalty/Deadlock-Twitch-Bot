@@ -1468,7 +1468,7 @@ mod tests {
         assert!(state.load_partner_session(&sid).await.unwrap().is_some());
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&sid)
+            .bind(crate::auth::session::session_lookup_key(&sid))
             .execute(&pool)
             .await
             .ok();

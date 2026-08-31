@@ -2034,6 +2034,7 @@ async fn main() {
         &supervisor,
         Arc::new(mcp::McpState::new(
             pool.clone(),
+            settings.internal_api.token.clone(),
             tb_internal_api::DiscordRoleExt(discord_role.clone()),
             tb_internal_api::ModeratorRemovalExt(moderator_removal.clone()),
             bot_ban_status_probe,

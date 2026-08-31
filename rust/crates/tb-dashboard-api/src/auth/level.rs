@@ -771,7 +771,7 @@ mod tests {
             .unwrap()
             .is_some());
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind("zentral-gueltig")
+            .bind(crate::auth::session::session_lookup_key("zentral-gueltig"))
             .execute(&pool)
             .await
             .unwrap();
@@ -800,7 +800,9 @@ mod tests {
             matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty")
         );
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session.session_id)
+            .bind(crate::auth::session::session_lookup_key(
+                &session.session_id,
+            ))
             .execute(&pool)
             .await
             .unwrap();
@@ -840,7 +842,9 @@ mod tests {
             Some(session.session_id.as_str())
         );
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session.session_id)
+            .bind(crate::auth::session::session_lookup_key(
+                &session.session_id,
+            ))
             .execute(&pool)
             .await
             .unwrap();
@@ -879,7 +883,10 @@ mod tests {
             matches!(auth, DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty")
         );
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)")
-            .bind(vec![partner.session_id, admin.session_id])
+            .bind(vec![
+                crate::auth::session::session_lookup_key(&partner.session_id),
+                crate::auth::session::session_lookup_key(&admin.session_id),
+            ])
             .execute(&pool)
             .await
             .unwrap();
@@ -914,7 +921,10 @@ mod tests {
         let auth = extract_auth(parts, state.clone()).await;
         assert_eq!(auth, DashboardAuthLevel::admin());
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = ANY($1)")
-            .bind(vec![partner.session_id, admin.session_id])
+            .bind(vec![
+                crate::auth::session::session_lookup_key(&partner.session_id),
+                crate::auth::session::session_lookup_key(&admin.session_id),
+            ])
             .execute(&pool)
             .await
             .unwrap();
@@ -947,7 +957,7 @@ mod tests {
             DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
         ));
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&admin.session_id)
+            .bind(crate::auth::session::session_lookup_key(&admin.session_id))
             .execute(&pool)
             .await
             .unwrap();

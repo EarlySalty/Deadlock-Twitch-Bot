@@ -557,7 +557,13 @@ mod tests {
         let session = state.create_partner_session("csrf_fallback", "9062401", "CSRF Fallback").await.unwrap();
         let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://dashboard.example.com")).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key(
+                &session.session_id,
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE id = 9062401").execute(&pool).await.unwrap();
     }
 
@@ -568,7 +574,13 @@ mod tests {
         let session = state.create_partner_session("csrf_cross", "9062402", "CSRF Cross").await.unwrap();
         let resp = post_with_state(state.clone(), Some(format!("{}={}", PARTNER_COOKIE_NAME, session.session_id)), Some("https://evil.example.org")).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1").bind(&session.session_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key(
+                &session.session_id,
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE id = 9062402").execute(&pool).await.unwrap();
     }
 
@@ -603,7 +615,9 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session.session_id)
+            .bind(crate::auth::session::session_lookup_key(
+                &session.session_id,
+            ))
             .execute(&pool)
             .await
             .unwrap();

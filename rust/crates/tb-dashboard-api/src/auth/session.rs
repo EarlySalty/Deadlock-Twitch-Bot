@@ -8,7 +8,8 @@
 //!
 //! DB-Tabelle: `dashboard_sessions`
 //! Spalten (prod_schema_twitch.txt):
-//! - `session_id  TEXT`
+//! - `session_id  TEXT` — historischer Spaltenname; enthält ausschließlich den
+//!   SHA-256-Hash der im Cookie ausgegebenen Session-ID, nie den Rohwert
 //! - `session_type TEXT`
 //! - `payload_enc  BYTEA` — Fernet-verschlüsseltes JSON
 //! - `created_at   DOUBLE PRECISION` — Unix-Timestamp (float)
@@ -42,6 +43,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -410,6 +412,15 @@ const SESSION_ID_BYTES: usize = 32;
 /// Refresh wird erst persistiert wenn die Verlängerung diesen Drift übersteigt
 /// (Python: services.py:224 / auth_mixin.py:994 — identische Schwelle).
 const REFRESH_PERSIST_DRIFT_SECS: f64 = 1800.0;
+
+/// Irreversibler Datenbank-Lookup für Session- und OAuth-State-Tokens.
+///
+/// Die Tokens besitzen 256 Bit CSPRNG-Entropie; SHA-256 ist deshalb auch ohne
+/// langsamen Passwort-Hash gegen Offline-Raten sicher. Der Cookie-/State-Rohwert
+/// bleibt ausschließlich beim Client bzw. kurzzeitig im Prozessspeicher.
+pub(crate) fn session_lookup_key(session_id: &str) -> String {
+    hex::encode(Sha256::digest(session_id.as_bytes()))
+}
 
 /// Gemeinsamer Auth-State: Pool + Caches + Fernet-Key.
 ///
@@ -836,6 +847,7 @@ impl DashboardAuthState {
     ) -> Result<(), sqlx::Error> {
         let token = fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes())
             .map_err(|e| sqlx::Error::Encode(Box::new(SessionEncryptError(e.to_string()))))?;
+        let session_key = session_lookup_key(session_id);
 
         sqlx::query!(
             r#"
@@ -846,7 +858,7 @@ impl DashboardAuthState {
                 payload_enc = EXCLUDED.payload_enc,
                 expires_at  = EXCLUDED.expires_at
             "#,
-            session_id,
+            session_key,
             session_type,
             token.as_bytes(),
             created_at,
@@ -898,6 +910,7 @@ impl DashboardAuthState {
         state_token: &str,
     ) -> Result<Option<OAuthLoginState>, sqlx::Error> {
         let now = unix_now();
+        let session_key = session_lookup_key(state_token);
         let row = sqlx::query!(
             r#"
             DELETE FROM dashboard_sessions
@@ -906,7 +919,7 @@ impl DashboardAuthState {
               AND expires_at > $3
             RETURNING payload_enc
             "#,
-            state_token,
+            session_key,
             OAUTH_STATE_SESSION_TYPE,
             now as f64
         )
@@ -1070,6 +1083,7 @@ impl DashboardAuthState {
         session_type: &str,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let now = unix_now();
+        let session_key = session_lookup_key(state_token);
         let row = sqlx::query!(
             r#"
             DELETE FROM dashboard_sessions
@@ -1078,7 +1092,7 @@ impl DashboardAuthState {
               AND expires_at > $3
             RETURNING payload_enc
             "#,
-            state_token,
+            session_key,
             session_type,
             now as f64
         )
@@ -1201,6 +1215,7 @@ impl DashboardAuthState {
         state_id: &str,
     ) -> Result<Option<(String, String)>, sqlx::Error> {
         let now = unix_now();
+        let session_key = session_lookup_key(state_id);
         let row = sqlx::query!(
             r#"
             DELETE FROM dashboard_sessions
@@ -1209,7 +1224,7 @@ impl DashboardAuthState {
               AND expires_at > $3
             RETURNING payload_enc
             "#,
-            state_id,
+            session_key,
             PARTNER_LOGIN_STATE_TYPE,
             now as f64
         )
@@ -1901,6 +1916,7 @@ impl DashboardAuthState {
         now: u64,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         // `expires_at` ist DOUBLE PRECISION (float8), `now` als float vergleichen
+        let session_key = session_lookup_key(session_id);
         let row = sqlx::query!(
             r#"
             SELECT payload_enc
@@ -1909,7 +1925,7 @@ impl DashboardAuthState {
               AND session_type = $2
               AND expires_at > $3
             "#,
-            session_id,
+            session_key,
             session_type,
             now as f64
         )
@@ -1925,10 +1941,7 @@ impl DashboardAuthState {
         let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
             Ok(p) => p,
             Err(e) => {
-                warn!(
-                    "Fernet-Decrypt fehlgeschlagen für session {}: {}",
-                    session_id, e
-                );
+                warn!(%e, "Fernet-Decrypt einer Session fehlgeschlagen");
                 return Ok(None);
             }
         };
@@ -1936,7 +1949,7 @@ impl DashboardAuthState {
         let json: serde_json::Value = match serde_json::from_slice(&plaintext) {
             Ok(v) => v,
             Err(e) => {
-                warn!("Session-JSON ungültig für session {}: {}", session_id, e);
+                warn!(%e, "Session-JSON ungültig");
                 return Ok(None);
             }
         };
@@ -1947,14 +1960,15 @@ impl DashboardAuthState {
     /// Löscht eine Session-Row (abgelaufener Payload). Fehler nur als Debug-Log —
     /// Auth-Entscheid hängt nicht davon ab (Python verhält sich identisch).
     async fn delete_session(&self, session_id: &str) {
+        let session_key = session_lookup_key(session_id);
         if let Err(e) = sqlx::query!(
             "DELETE FROM dashboard_sessions WHERE session_id = $1",
-            session_id
+            session_key
         )
         .execute(&self.pool)
         .await
         {
-            debug!("Session-Delete fehlgeschlagen für {}: {}", session_id, e);
+            debug!(%e, "Session-Delete fehlgeschlagen");
         }
     }
 
@@ -1993,16 +2007,14 @@ impl DashboardAuthState {
         let token = match fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes()) {
             Ok(t) => t,
             Err(e) => {
-                debug!(
-                    "Session-Refresh-Encrypt fehlgeschlagen für {}: {}",
-                    session_id, e
-                );
+                debug!(%e, "Session-Refresh-Encrypt fehlgeschlagen");
                 return;
             }
         };
 
         // Gleiche Semantik wie Python upsert_session (sessions_db.py:123-143):
         // bei Konflikt nur payload_enc + expires_at aktualisieren.
+        let session_key = session_lookup_key(session_id);
         if let Err(e) = sqlx::query!(
             r#"
             INSERT INTO dashboard_sessions
@@ -2012,7 +2024,7 @@ impl DashboardAuthState {
                 payload_enc = EXCLUDED.payload_enc,
                 expires_at  = EXCLUDED.expires_at
             "#,
-            session_id,
+            session_key,
             session_type,
             token.as_bytes(),
             created_at,
@@ -2021,10 +2033,7 @@ impl DashboardAuthState {
         .execute(&self.pool)
         .await
         {
-            debug!(
-                "Session-Refresh-Persist fehlgeschlagen für {}: {}",
-                session_id, e
-            );
+            debug!(%e, "Session-Refresh-Persist fehlgeschlagen");
         }
     }
 }
@@ -2319,6 +2328,32 @@ mod tests {
         let token = b"gAAAAA-dummy-token-passthrough==";
         let result = encode_b64(token);
         assert_eq!(result, "gAAAAA-dummy-token-passthrough==");
+    }
+
+    #[test]
+    fn session_lookup_key_ist_sha256_und_enthaelt_keinen_rohwert() {
+        let raw = "session-token-mit-ü-und-Sonderzeichen_!?";
+        let key = session_lookup_key(raw);
+
+        assert_eq!(key.len(), 64, "SHA-256 muss als 64 Hexzeichen vorliegen");
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(key, raw);
+        assert!(!key.contains(raw));
+        assert_eq!(
+            key,
+            session_lookup_key(raw),
+            "Lookup muss deterministisch sein"
+        );
+        assert_ne!(key, session_lookup_key("anderes-token"));
+    }
+
+    #[test]
+    fn session_lookup_key_hashes_auch_leere_und_grosse_eingaben() {
+        assert_eq!(
+            session_lookup_key(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(session_lookup_key(&"x".repeat(100_000)).len(), 64);
     }
 
     #[test]
@@ -2619,14 +2654,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
         let session_type: String =
             sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
-                .bind(&created.session_id)
+                .bind(session_lookup_key(&created.session_id))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(session_type, AFFILIATE_SESSION_TYPE);
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&created.session_id)
+            .bind(session_lookup_key(&created.session_id))
             .execute(&pool)
             .await
             .unwrap();
@@ -2666,7 +2701,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (session_id) DO NOTHING",
         )
-        .bind(&session_id)
+        .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
         .bind(now)
@@ -2681,7 +2716,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
         // Cleanup
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session_id)
+            .bind(session_lookup_key(&session_id))
             .execute(&pool)
             .await
             .unwrap();
@@ -2725,7 +2760,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
             "INSERT INTO dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(&session_id)
+        .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
         .bind(now - 100.0)
@@ -2742,7 +2777,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         let (payload_enc, db_expires): (Vec<u8>, f64) = sqlx::query_as(
             "SELECT payload_enc, expires_at FROM dashboard_sessions WHERE session_id = $1",
         )
-        .bind(&session_id)
+        .bind(session_lookup_key(&session_id))
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -2767,7 +2802,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert!((payload["created_at"].as_f64().unwrap() - (now - 100.0)).abs() < 1.0);
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session_id)
+            .bind(session_lookup_key(&session_id))
             .execute(&pool)
             .await
             .unwrap();
@@ -2803,7 +2838,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (session_id) DO NOTHING",
         )
-        .bind(&session_id)
+        .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
         .bind(now - 7200.0)
@@ -2817,7 +2852,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert_eq!(result, None);
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&session_id)
+            .bind(session_lookup_key(&session_id))
             .execute(&pool)
             .await
             .unwrap();
@@ -2876,7 +2911,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         // DB-Spalte expires_at muss ~6h in der Zukunft liegen (hartkodierte TTL).
         let db_expires: f64 =
             sqlx::query_scalar("SELECT expires_at FROM dashboard_sessions WHERE session_id = $1")
-                .bind(&created.session_id)
+                .bind(session_lookup_key(&created.session_id))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -2917,7 +2952,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .unwrap());
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&created.session_id)
+            .bind(session_lookup_key(&created.session_id))
             .execute(&pool)
             .await
             .unwrap();
@@ -3021,7 +3056,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
             "INSERT INTO dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(&token)
+        .bind(session_lookup_key(&token))
         .bind(OAUTH_STATE_SESSION_TYPE)
         .bind(fernet_bytes)
         .bind(now - 700.0)
@@ -3032,7 +3067,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert_eq!(state.consume_oauth_login_state(&token).await.unwrap(), None);
 
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
-            .bind(&token)
+            .bind(session_lookup_key(&token))
             .execute(&pool)
             .await
             .ok();
@@ -3236,7 +3271,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         // Row trägt den partner_token-Typ.
         let session_type: String =
             sqlx::query_scalar("SELECT session_type FROM dashboard_sessions WHERE session_id = $1")
-                .bind(&created.session_id)
+                .bind(session_lookup_key(&created.session_id))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -3483,7 +3518,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         sqlx::query(&format!(
             "INSERT INTO {schema}.dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)"
         ))
-        .bind(&session_id)
+        .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
         .bind(now)
