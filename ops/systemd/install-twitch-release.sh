@@ -211,6 +211,9 @@ if [[ ! -e "$release" ]]; then
 
   chown -R root:root "$stage"
   chmod -R go-w "$stage"
+  # mktemp legt die Stage-Wurzel mit 0700 an. Die Laufzeitnutzer brauchen
+  # Traversal-Rechte, dürfen den root-eigenen Release-Baum aber nie ändern.
+  chmod 0755 "$stage"
   if [[ -n "$(find "$stage" -xdev ! \( -type f -o -type d \) -print -quit)" ]]; then
     echo "Der erzeugte Release-Baum enthält einen Symlink oder Sonderdateityp." >&2
     exit 1
