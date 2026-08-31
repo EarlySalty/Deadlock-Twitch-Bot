@@ -31,10 +31,10 @@ use crate::util::mask_log_identifier as mask;
 /// `TOKEN_ERROR_CHANNEL_ID`). Konstante 1:1 übernommen.
 pub const TOKEN_ERROR_CHANNEL_ID: i64 = 1374364800817303632;
 
-/// Standard-Re-Auth-Ziel: das Verwaltungs-Dashboard. Dort ist "Twitch-Verbindung"
-/// der erste Punkt, über den der Streamer den Bot neu autorisiert — damit gilt das
-/// Dashboard sofort wieder als vertraut. Per Env `STREAMER_REAUTH_URL`
-/// überschreibbar (kein Domain-Raten im Code).
+/// Re-Auth-Ziel: das Verwaltungs-Dashboard. Dort ist "Twitch-Verbindung" der
+/// erste Punkt, über den der Streamer den Bot neu autorisiert — damit gilt das
+/// Dashboard sofort wieder als vertraut. Bewusst kein einzelner OAuth-State-Link:
+/// Der kann ungenutzt ablaufen und wäre danach wertlos.
 pub const DEFAULT_REAUTH_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung";
 
 /// Obergrenze an Kanälen pro aktivem Ban-Sweep. Reine Sicherheitsleine gegen
@@ -363,15 +363,10 @@ pub struct TokenLifecycleReactor<N: TokenLifecycleNotifier> {
 
 impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
     pub fn new(pool: PgPool, notifier: N) -> Self {
-        let reauth_url = std::env::var("STREAMER_REAUTH_URL")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| DEFAULT_REAUTH_URL.to_string());
         Self {
             pool,
             notifier,
-            reauth_url,
+            reauth_url: DEFAULT_REAUTH_URL.to_string(),
             bot_ban_status_probe: None,
         }
     }
