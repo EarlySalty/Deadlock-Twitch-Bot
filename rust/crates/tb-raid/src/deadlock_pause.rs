@@ -781,7 +781,7 @@ mod tests {
             true,
         )
         .await;
-        // Kanal C: streamt viel, aber kein Deadlock → fällig.
+        // Kanal C: streamt viel, aber nie Deadlock → kein Pausen-Fall.
         seed_partner(&pool, "3", "andersspiel", long_ago).await;
         seed_session(
             &pool,
@@ -800,12 +800,12 @@ mod tests {
             BotBanStatus::NotBanned,
         );
 
-        assert_eq!(reactor.unmod_idle_channels().await, 2);
+        assert_eq!(reactor.unmod_idle_channels().await, 1);
         let mut calls = unmod.calls.lock().unwrap().clone();
         calls.sort();
-        assert_eq!(calls, vec!["alt".to_string(), "andersspiel".to_string()]);
+        assert_eq!(calls, vec!["alt".to_string()]);
 
-        // Genau die beiden sind markiert.
+        // Nur der frühere Deadlock-Kanal ist markiert.
         let marked: Vec<String> = sqlx::query_scalar(
             "SELECT twitch_login FROM twitch_partners
               WHERE deadlock_pause_unmodded_at IS NOT NULL ORDER BY twitch_login",
@@ -813,18 +813,17 @@ mod tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        assert_eq!(marked, vec!["alt".to_string(), "andersspiel".to_string()]);
+        assert_eq!(marked, vec!["alt".to_string()]);
 
-        // Jeder bekommt genau eine DM, personalisiert und mit dem Trennweg.
+        // Der Pausen-Kandidat bekommt genau eine personalisierte DM mit Trennweg.
         let dms = notifier.dms.lock().unwrap().clone();
-        assert_eq!(dms.len(), 2);
+        assert_eq!(dms.len(), 1);
         assert!(dms.iter().all(|d| d.contains(BOT_SECTION_URL)));
         assert!(dms.iter().any(|d| d.contains("alt")));
-        assert!(dms.iter().any(|d| d.contains("andersspiel")));
 
         // Zweiter Lauf ist ein No-op: der Marker dedupliziert.
         assert_eq!(reactor.unmod_idle_channels().await, 0);
-        assert_eq!(notifier.dms.lock().unwrap().len(), 2);
+        assert_eq!(notifier.dms.lock().unwrap().len(), 1);
     }
 
     /// Eine Vorschau, die etwas anderes zeigt als der Lauf tut, ist schlimmer
