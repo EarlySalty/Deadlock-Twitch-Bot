@@ -44,15 +44,23 @@ if [[ -n "$unsafe_checkout" ]]; then
   echo "Checkout oder Git-Metadaten sind nicht vollständig eingefroren: $unsafe_checkout" >&2
   exit 1
 fi
-if [[ -f "$git_dir/objects/info/alternates" ]]; then
-  echo "Externe Git-Objekte sind für Releases nicht erlaubt." >&2
+if [[ -f "$git_dir/objects/info/alternates" ]] ||
+   [[ -e "$git_dir/info/attributes" || -L "$git_dir/info/attributes" ]]; then
+  echo "Externe Git-Objekte oder unverfolgte Git-Attribute sind für Releases nicht erlaubt." >&2
   exit 1
 fi
 
 # Ersetzungsobjekte könnten selbst einen expliziten SHA transparent umbiegen.
 export GIT_NO_REPLACE_OBJECTS=1
 export GIT_OPTIONAL_LOCKS=0
-git_safe=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.file.allow=never)
+export GIT_ATTR_NOSYSTEM=1
+git_safe=(
+  git
+  -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null
+  -c core.attributesFile=/dev/null
+  -c protocol.file.allow=never
+)
 if [[ "$("${git_safe[@]}" -C "$checkout" rev-parse --absolute-git-dir)" != "$git_dir" ]] ||
    [[ "$("${git_safe[@]}" -C "$checkout" rev-parse HEAD)" != "$git_sha" ]]; then
   echo "Checkout und angegebener Git-SHA stimmen nicht überein." >&2
@@ -127,6 +135,55 @@ if [[ ! -e "$release" ]]; then
     rust/knowledge \
     ops/systemd/twitch-runtime-roles.sql \
     | tar --extract --file=- --directory="$stage" --no-same-owner --no-same-permissions
+
+  # Vor jedem root-seitigen chmod/chown müssen archivierte Quellen echte
+  # reguläre Dateien sein. Ein getrackter Symlink dürfte sonst beim chmod sein
+  # Ziel außerhalb des Releases verändern. Außerdem muss der extrahierte
+  # Umfang exakt dem Git-Baum entsprechen; export-ignore darf nichts verbergen.
+  archived_roots=(
+    rust/scripts/run_tb_bot_service.sh
+    rust/scripts/run_tb_dashboard_service.sh
+    rust/scripts/run_stream_audit_service.sh
+    rust/migrations
+    rust/knowledge
+    ops/systemd/twitch-runtime-roles.sql
+  )
+  unsafe_archived="$({
+    cd "$stage"
+    find "${archived_roots[@]}" -xdev ! \( -type f -o -type d \) -print -quit
+  })"
+  if [[ -n "$unsafe_archived" ]]; then
+    echo "Archivierte Release-Quelle ist keine reguläre Datei: $unsafe_archived" >&2
+    exit 1
+  fi
+  for required_file in \
+    rust/scripts/run_tb_bot_service.sh \
+    rust/scripts/run_tb_dashboard_service.sh \
+    rust/scripts/run_stream_audit_service.sh \
+    ops/systemd/twitch-runtime-roles.sql; do
+    if [[ ! -f "$stage/$required_file" || -L "$stage/$required_file" ]]; then
+      echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2
+      exit 1
+    fi
+  done
+  expected_archive="$(mktemp "$release_root/.expected-$git_sha-XXXXXXXX")"
+  actual_archive="$(mktemp "$release_root/.actual-$git_sha-XXXXXXXX")"
+  cleanup_archive_lists() {
+    unlink -- "$expected_archive" "$actual_archive" 2>/dev/null || true
+  }
+  trap 'cleanup_archive_lists; cleanup_stage' EXIT
+  "${git_safe[@]}" -C "$checkout" ls-tree -rz --name-only "$git_sha" -- \
+    "${archived_roots[@]}" | LC_ALL=C sort -z >"$expected_archive"
+  (
+    cd "$stage"
+    find "${archived_roots[@]}" -type f -print0 | LC_ALL=C sort -z
+  ) >"$actual_archive"
+  if ! cmp --silent "$expected_archive" "$actual_archive"; then
+    echo "Archivierter Release-Umfang stimmt nicht mit dem Git-SHA überein." >&2
+    exit 1
+  fi
+  cleanup_archive_lists
+  trap cleanup_stage EXIT
 
   chmod 0755 \
     "$stage/rust/scripts/run_tb_bot_service.sh" \
