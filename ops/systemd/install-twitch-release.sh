@@ -53,13 +53,16 @@ fi
 # Ersetzungsobjekte könnten selbst einen expliziten SHA transparent umbiegen.
 export GIT_NO_REPLACE_OBJECTS=1
 export GIT_OPTIONAL_LOCKS=0
+export GIT_NO_LAZY_FETCH=1
 export GIT_ATTR_NOSYSTEM=1
 git_safe=(
   git
   -c core.fsmonitor=false
   -c core.hooksPath=/dev/null
   -c core.attributesFile=/dev/null
-  -c protocol.file.allow=never
+  -c core.sshCommand=/usr/bin/false
+  -c credential.helper=
+  -c protocol.allow=never
 )
 if [[ "$("${git_safe[@]}" -C "$checkout" rev-parse --absolute-git-dir)" != "$git_dir" ]] ||
    [[ "$("${git_safe[@]}" -C "$checkout" rev-parse HEAD)" != "$git_sha" ]]; then
