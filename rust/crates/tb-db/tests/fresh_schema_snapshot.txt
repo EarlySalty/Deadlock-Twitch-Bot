@@ -1180,6 +1180,16 @@ twitch_raid_history|target_stream_started_at|timestamp with time zone|YES|
 twitch_raid_history|to_broadcaster_id|text|NO|
 twitch_raid_history|to_broadcaster_login|text|NO|
 twitch_raid_history|viewer_count|integer|YES|0
+twitch_raid_requirements_dm_dedupe|claimed_at|text|NO|CURRENT_TIMESTAMP
+twitch_raid_requirements_dm_dedupe|discord_user_id|text|NO|''::text
+twitch_raid_requirements_dm_dedupe|error_message|text|YES|
+twitch_raid_requirements_dm_dedupe|message_id|text|YES|
+twitch_raid_requirements_dm_dedupe|purpose|text|NO|
+twitch_raid_requirements_dm_dedupe|sent_at|text|YES|
+twitch_raid_requirements_dm_dedupe|status|text|NO|'pending'::text
+twitch_raid_requirements_dm_dedupe|twitch_login|text|NO|''::text
+twitch_raid_requirements_dm_dedupe|twitch_user_id|text|NO|
+twitch_raid_requirements_dm_dedupe|updated_at|text|NO|CURRENT_TIMESTAMP
 twitch_raid_retention|chatters_at_plus15m|integer|YES|
 twitch_raid_retention|chatters_at_plus30m|integer|YES|
 twitch_raid_retention|chatters_at_plus5m|integer|YES|
@@ -1242,6 +1252,20 @@ twitch_scam_guard_verdicts|id|bigint|NO|nextval('twitch_scam_guard_verdicts_id_s
 twitch_scam_guard_verdicts|reasoning|text|NO|
 twitch_scam_guard_verdicts|transcript_snapshot|text|NO|
 twitch_scam_guard_verdicts|verdict|text|NO|
+twitch_scout_candidates|approver|text|YES|
+twitch_scout_candidates|avg_viewers|real|NO|0
+twitch_scout_candidates|deadlock_share|real|NO|0
+twitch_scout_candidates|decided_at|timestamp with time zone|YES|
+twitch_scout_candidates|dispatched_at|timestamp with time zone|YES|
+twitch_scout_candidates|entscheid_grund|text|YES|
+twitch_scout_candidates|first_seen|timestamp with time zone|YES|
+twitch_scout_candidates|language|text|YES|
+twitch_scout_candidates|last_seen|timestamp with time zone|YES|
+twitch_scout_candidates|sessions_count|integer|NO|0
+twitch_scout_candidates|status|text|NO|'vorgeschlagen'::text
+twitch_scout_candidates|streamer_login|text|NO|
+twitch_scout_candidates|twitch_user_id|text|YES|
+twitch_scout_candidates|visited_at|timestamp with time zone|YES|
 twitch_scout_pitch_blacklist|created_at|timestamp with time zone|YES|now()
 twitch_scout_pitch_blacklist|reason|text|YES|
 twitch_scout_pitch_blacklist|streamer_login|text|NO|
