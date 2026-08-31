@@ -39,14 +39,14 @@ const CHANNEL_REFRESH_SECONDS: u64 = 300;
 const CONNECT_BACKOFF_SECONDS: u64 = 30;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Fügt die `irc_read`-Spalte lazy hinzu (kein Eingriff in den Settings-Flow).
-async fn ensure_schema(pool: &PgPool) {
-    let _ = sqlx::query!(
-        "ALTER TABLE twitch_engagement_settings \
-         ADD COLUMN IF NOT EXISTS irc_read BOOLEAN NOT NULL DEFAULT FALSE",
-    )
-    .execute(pool)
-    .await;
+/// Prüft den migrationsverwalteten Schema-Vertrag, ohne ihn zur Laufzeit zu
+/// verändern. Ein fehlendes Schema deaktiviert den Reader sichtbar statt ihn
+/// endlos auf vermeintlich leere Konfiguration warten zu lassen.
+async fn validate_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT irc_read FROM twitch_engagement_settings LIMIT 0")
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Lädt Kanäle, bis mindestens einer da ist. Ohne dieses Warten wäre ein
@@ -76,7 +76,6 @@ where
 
 /// Aktive Kanäle mit `irc_read = TRUE` (kleingeschrieben).
 async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
-    ensure_schema(pool).await;
     sqlx::query_scalar!(
         r#"SELECT channel_login AS "channel_login!"
            FROM twitch_engagement_settings
@@ -112,6 +111,14 @@ impl EngagementIrcReader {
     /// seinen Kanal erst zur Laufzeit frei, und ein beendeter Reader würde ihn
     /// nie joinen. Reconnectet bei Verbindungsabbruch dauerhaft.
     pub async fn run(self) {
+        if let Err(error) = validate_schema(&self.pool).await {
+            tracing::error!(
+                %error,
+                event = "engagement_irc.schema_missing",
+                "Engagement-IRC: Schema-Migration fehlt, Reader wird nicht gestartet"
+            );
+            return;
+        }
         let pool = self.pool.clone();
         let mut channels = wait_for_channels(Duration::from_secs(CHANNEL_REFRESH_SECONDS), || {
             let pool = pool.clone();
@@ -341,6 +348,49 @@ mod tests {
             runde.load(std::sync::atomic::Ordering::SeqCst) >= 3,
             "der Reader muss erneut nachsehen, statt beim ersten leeren Ergebnis aufzugeben"
         );
+    }
+
+    #[tokio::test]
+    async fn schema_vertrag_erkennt_fehlende_irc_read_spalte() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        let schema = "t_eng_irc_schema_contract";
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE twitch_engagement_settings (enabled BOOLEAN NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(validate_schema(&pool).await.is_err());
+        sqlx::query(
+            "ALTER TABLE twitch_engagement_settings \
+             ADD COLUMN irc_read BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(validate_schema(&pool).await.is_ok());
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// Am Sitzungsende faellt der Testkanal aus `irc_read` heraus. Wird er

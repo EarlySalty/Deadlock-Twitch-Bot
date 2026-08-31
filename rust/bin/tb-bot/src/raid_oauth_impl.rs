@@ -820,33 +820,6 @@ impl TbRaidOAuthImpl {
         Ok(())
     }
 
-    async fn ensure_requirements_dedupe_table(&self) -> Result<(), RaidOAuthError> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS twitch_raid_requirements_dm_dedupe (
-                twitch_user_id TEXT NOT NULL,
-                purpose TEXT NOT NULL,
-                twitch_login TEXT NOT NULL DEFAULT '',
-                discord_user_id TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'pending',
-                message_id TEXT,
-                error_message TEXT,
-                claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                sent_at TEXT,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (twitch_user_id, purpose)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "raid requirements Dedupe-Tabelle konnte nicht angelegt werden");
-            RaidOAuthError::Internal
-        })?;
-        Ok(())
-    }
-
     async fn load_requirements_partner(
         &self,
         login: &str,
@@ -1104,7 +1077,6 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             return Err(RaidOAuthError::Upstream);
         };
 
-        self.ensure_requirements_dedupe_table().await?;
         let partner = self.load_requirements_partner(login).await?;
         let claimed = self.claim_requirements_marker(&partner).await?;
         if !claimed {
@@ -2157,6 +2129,21 @@ mod db_tests {
         .execute(pool)
         .await
         .expect("DDL oauth_state_tokens");
+
+        // Requirements-Dedupe nutzt im Test dieselbe Migration wie das
+        // Deployment. Das `public.`-Präfix wird nur für das isolierte
+        // search_path-Testschema entfernt.
+        let requirements_migration = include_str!(
+            "../../../migrations/20260831100000_raid_requirements_dm_dedupe.sql"
+        )
+        .replace(
+            "public.twitch_raid_requirements_dm_dedupe",
+            "twitch_raid_requirements_dm_dedupe",
+        );
+        sqlx::raw_sql(&requirements_migration)
+            .execute(pool)
+            .await
+            .expect("Migration twitch_raid_requirements_dm_dedupe");
     }
 
     struct UnusedTokenClient;

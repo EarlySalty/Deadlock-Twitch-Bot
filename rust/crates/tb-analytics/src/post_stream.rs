@@ -1979,37 +1979,23 @@ impl AiModel {
     }
 }
 
-/// Legt die AI-Report-Tabellen/-Spalten/-Indizes idempotent an (Python
-/// `_ensure_report_ab_columns`). Feedback-Tabellen liegen in Migration
-/// 20260630143000.
+/// Prüft den migrationsverwalteten AI-Report-Schema-Vertrag. Die Runtime-Rolle
+/// verändert kein Schema; ein unvollständiges Deployment liefert einen Fehler.
 pub async fn ensure_report_ab_columns(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let statements: [&str; 11] = [
-        "CREATE TABLE IF NOT EXISTS twitch_chat_word_groups (\
-            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
-            group_name TEXT NOT NULL, keywords TEXT[] NOT NULL, message_count INT DEFAULT 0, \
-            created_at TIMESTAMPTZ DEFAULT NOW())",
-        "CREATE TABLE IF NOT EXISTS twitch_stream_ai_reports (\
-            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
-            model TEXT NOT NULL, generated_at TIMESTAMPTZ DEFAULT NOW(), status TEXT DEFAULT 'pending', \
-            schema_version TEXT DEFAULT 'post_stream_report_v1', report_variant TEXT DEFAULT 'compact', \
-            input_snapshot_json JSONB, prompt_version TEXT, started_at TIMESTAMPTZ DEFAULT NOW(), \
-            finished_at TIMESTAMPTZ, retry_count INTEGER DEFAULT 0, report_json JSONB, \
-            word_groups_json JSONB, error TEXT)",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS schema_version TEXT DEFAULT 'post_stream_report_v1'",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS report_variant TEXT DEFAULT 'compact'",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS input_snapshot_json JSONB",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS prompt_version TEXT",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NOW()",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_session_variant \
-            ON twitch_stream_ai_reports (session_id, report_variant, generated_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_streamer \
-            ON twitch_stream_ai_reports (streamer_login, generated_at DESC)",
-    ];
-    for stmt in statements {
-        sqlx::query(stmt).execute(pool).await?;
-    }
+    sqlx::query(
+        "SELECT id, session_id, streamer_login, group_name, keywords, message_count, created_at \
+         FROM twitch_chat_word_groups LIMIT 0",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "SELECT id, session_id, streamer_login, model, generated_at, status, schema_version, \
+                report_variant, input_snapshot_json, prompt_version, started_at, finished_at, \
+                retry_count, report_json, word_groups_json, error \
+         FROM twitch_stream_ai_reports LIMIT 0",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -2196,9 +2182,10 @@ pub async fn trigger_post_stream_analysis(
         },
     };
 
-    // Report-Tabellen sicherstellen (best-effort).
+    // Schema-Vertrag vor allen Report-Schreibvorgängen prüfen.
     if let Err(error) = ensure_report_ab_columns(pool).await {
-        tracing::warn!(%error, session_id, "PostStream: Report-AB-Spalten nicht sichergestellt");
+        tracing::error!(%error, session_id, "PostStream: Schema-Migration fehlt, Analyse abgebrochen");
+        return;
     }
 
     // Wortgruppen (nur bei vorhandenen Nachrichten).
@@ -2313,7 +2300,8 @@ pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: 
     }
 
     if let Err(error) = ensure_report_ab_columns(pool).await {
-        tracing::warn!(%error, "PostStream Backfill: Report-AB-Spalten nicht sichergestellt");
+        tracing::error!(%error, "PostStream Backfill: Schema-Migration fehlt, Backfill abgebrochen");
+        return;
     }
 
     let streamers: Vec<String> = match sqlx::query_scalar!(
@@ -2921,6 +2909,35 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    async fn create_report_fixtures(pool: &PgPool) {
+        assert!(
+            ensure_report_ab_columns(pool).await.is_err(),
+            "ohne Migration muss die Runtime-Validierung fehlschlagen"
+        );
+        sqlx::query(
+            "CREATE TABLE twitch_chat_word_groups (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                group_name TEXT NOT NULL, keywords TEXT[] NOT NULL, message_count INT DEFAULT 0, \
+                created_at TIMESTAMPTZ DEFAULT NOW())",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_ai_reports (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                model TEXT NOT NULL, generated_at TIMESTAMPTZ DEFAULT NOW(), status TEXT DEFAULT 'pending', \
+                schema_version TEXT DEFAULT 'post_stream_report_v1', report_variant TEXT DEFAULT 'compact', \
+                input_snapshot_json JSONB, prompt_version TEXT, started_at TIMESTAMPTZ DEFAULT NOW(), \
+                finished_at TIMESTAMPTZ, retry_count INTEGER DEFAULT 0, report_json JSONB, \
+                word_groups_json JSONB, error TEXT)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        ensure_report_ab_columns(pool).await.unwrap();
     }
 
     #[tokio::test]
@@ -3531,7 +3548,7 @@ mod tests {
         let Some(pool) = core_pool_or_skip("t6m_post_stream_wg").await else {
             return;
         };
-        ensure_report_ab_columns(&pool).await.unwrap();
+        create_report_fixtures(&pool).await;
         let groups = vec![
             WordGroup {
                 group_name: "Lob".into(),
@@ -3583,6 +3600,7 @@ mod tests {
         let Some(pool) = core_pool_or_skip("t6l_post_stream_trigger").await else {
             return;
         };
+        create_report_fixtures(&pool).await;
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, \
@@ -3676,7 +3694,7 @@ mod tests {
         let Some(pool) = core_pool_or_skip("t6n_post_stream_backfill").await else {
             return;
         };
-        ensure_report_ab_columns(&pool).await.unwrap();
+        create_report_fixtures(&pool).await;
         sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")
@@ -3727,7 +3745,7 @@ mod tests {
         let Some(pool) = core_pool_or_skip("t6o_post_stream_retry").await else {
             return;
         };
-        ensure_report_ab_columns(&pool).await.unwrap();
+        create_report_fixtures(&pool).await;
         sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")

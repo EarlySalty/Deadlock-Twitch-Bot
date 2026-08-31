@@ -708,9 +708,30 @@ mod tests {
     }
 
     async fn create_stream_report_fixtures(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE twitch_chat_word_groups (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                group_name TEXT NOT NULL, keywords TEXT[] NOT NULL, message_count INT DEFAULT 0, \
+                created_at TIMESTAMPTZ DEFAULT NOW())",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_ai_reports (\
+                id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+                model TEXT NOT NULL, generated_at TIMESTAMPTZ DEFAULT NOW(), status TEXT DEFAULT 'pending', \
+                schema_version TEXT DEFAULT 'post_stream_report_v1', report_variant TEXT DEFAULT 'compact', \
+                input_snapshot_json JSONB, prompt_version TEXT, started_at TIMESTAMPTZ DEFAULT NOW(), \
+                finished_at TIMESTAMPTZ, retry_count INTEGER DEFAULT 0, report_json JSONB, \
+                word_groups_json JSONB, error TEXT)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
         tb_analytics::post_stream::ensure_report_ab_columns(pool)
             .await
-            .unwrap();
+            .expect("Test-Fixture muss den Runtime-Schema-Vertrag erfüllen");
         sqlx::query(
             "CREATE TABLE twitch_stream_report_ratings (\
                 id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \

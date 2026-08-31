@@ -110,21 +110,27 @@ impl SenderAuthStore {
         self
     }
 
-    /// Legt die Token-Tabelle an, falls sie fehlt (idempotent, self-contained;
-    /// bewusst getrennt von `twitch_raid_auth`). Byte-genau zu Pythons Schema.
-    pub async fn ensure_table(&self) {
-        let _ = sqlx::query!(
-            "CREATE TABLE IF NOT EXISTS twitch_engagement_sender_auth (\
-                twitch_user_id     TEXT PRIMARY KEY,\
-                twitch_login       TEXT NOT NULL,\
-                access_token_enc   BYTEA NOT NULL,\
-                refresh_token_enc  BYTEA NOT NULL,\
-                scopes             TEXT,\
-                token_expires_at   BIGINT NOT NULL,\
-                updated_at         TIMESTAMPTZ NOT NULL DEFAULT now())",
+    /// Prüft beim Start den migrationsverwalteten Token-Schema-Vertrag.
+    /// Ein fehlendes oder veraltetes Schema ist ein Deploymentfehler und stoppt
+    /// die Initialisierung, statt den Smoke-Sender unbemerkt zu deaktivieren.
+    async fn validate_table(&self) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "SELECT twitch_user_id, twitch_login, access_token_enc, refresh_token_enc, \
+                    scopes, token_expires_at, updated_at \
+             FROM twitch_engagement_sender_auth LIMIT 0",
         )
         .execute(&self.pool)
-        .await;
+        .await?;
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    pub async fn ensure_table(&self) {
+        self.validate_table()
+            .await
+            .expect(
+                "twitch_engagement_sender_auth fehlt oder ist veraltet; SQLx-Migrationen zuerst ausführen",
+            );
     }
 
     /// Liefert `(access_token, sender_user_id)` für den Sende-Account; refresht
@@ -439,6 +445,25 @@ fn nonempty_env(var: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+impl SenderAuthStore {
+    /// Unit-Test-Fixture; produktive Builds enthalten diesen Schemaaufbau nicht.
+    pub async fn ensure_table(&self) {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_engagement_sender_auth (\
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL, \
+                access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA NOT NULL, scopes TEXT, \
+                token_expires_at BIGINT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+        )
+        .execute(&self.pool)
+        .await
+        .expect("Engagement-Sender-Testtabelle");
+        self.validate_table()
+            .await
+            .expect("Engagement-Sender-Testtabelle erfüllt Schema-Vertrag");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -501,7 +526,9 @@ mod tests {
     async fn none_wenn_kein_account() {
         let Some(pool) = make_pool("t_eng_sender_none").await else { return };
         let s = store(pool);
+        assert!(s.validate_table().await.is_err());
         s.ensure_table().await;
+        assert!(s.validate_table().await.is_ok());
         assert_eq!(s.get_valid_access_token().await, None);
     }
 

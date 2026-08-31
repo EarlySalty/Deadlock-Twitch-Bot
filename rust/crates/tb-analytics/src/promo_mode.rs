@@ -483,27 +483,13 @@ pub fn evaluate_global_promo_mode(raw: &Value, now: Option<DateTime<Utc>>) -> Pr
 
 // ── Persistenz ───────────────────────────────────────────────────────────────
 
-/// Legt die Tabelle idempotent an (Python `ensure_global_promo_mode_storage`).
-pub async fn ensure_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"
-        CREATE TABLE IF NOT EXISTS twitch_global_promo_modes (
-            config_key TEXT PRIMARY KEY,
-            mode TEXT NOT NULL DEFAULT 'standard',
-            custom_message TEXT,
-            starts_at TEXT,
-            ends_at TEXT,
-            is_enabled INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_by TEXT
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query!(
-        "CREATE INDEX IF NOT EXISTS idx_twitch_global_promo_modes_updated_at \
-         ON twitch_global_promo_modes(updated_at)",
+/// Prüft den migrationsverwalteten Tabellenvertrag. Schemaänderungen gehören in
+/// SQLx-Migrationen und werden nicht mit den Runtime-Rechten des Bots ausgeführt.
+async fn validate_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "SELECT config_key, mode, custom_message, starts_at, ends_at, is_enabled, \
+                updated_at, updated_by \
+         FROM twitch_global_promo_modes LIMIT 0",
     )
     .execute(pool)
     .await?;
@@ -512,7 +498,7 @@ pub async fn ensure_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx:
 
 /// Lädt den Singleton-Datensatz, normalisiert (Python `load_global_promo_mode`).
 pub async fn load_global_promo_mode(pool: &PgPool) -> Result<PromoModeConfig, sqlx::Error> {
-    ensure_global_promo_mode_storage(pool).await?;
+    validate_global_promo_mode_storage(pool).await?;
     let row = sqlx::query!(
         "SELECT mode AS \"mode!\", custom_message, starts_at, ends_at, is_enabled AS \"is_enabled!\", updated_at, updated_by \
          FROM twitch_global_promo_modes WHERE config_key = $1 LIMIT 1",
@@ -566,7 +552,7 @@ pub async fn save_global_promo_mode(
     raw_config: &Value,
     updated_by: &str,
 ) -> Result<PromoModeConfig, SavePromoModeError> {
-    ensure_global_promo_mode_storage(pool).await?;
+    validate_global_promo_mode_storage(pool).await?;
     let (normalized, issues) = validate_global_promo_mode_config(raw_config);
     if let Some(first) = issues.first() {
         return Err(SavePromoModeError::Validation(first.message.clone()));
@@ -745,5 +731,48 @@ mod tests {
             "ends_at": "2026-06-15T10:00:00Z",
         }));
         assert!(issues.iter().any(|i| i.field == "ends_at"));
+    }
+
+    #[tokio::test]
+    async fn schema_vertrag_schlaegt_ohne_migration_fehl() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        let schema = "t_promo_mode_schema_contract";
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(validate_global_promo_mode_storage(&pool).await.is_err());
+        sqlx::query(
+            "CREATE TABLE twitch_global_promo_modes (\
+                config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
+                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                is_enabled INTEGER NOT NULL DEFAULT 0, \
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(validate_global_promo_mode_storage(&pool).await.is_ok());
+
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

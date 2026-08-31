@@ -55,9 +55,10 @@ const BUDGET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Lazy gebauter, prozessweit gecachter Pool auf die zentrale Postgres.
 ///
-/// Der Pool wird beim ersten Zugriff einmal aufgebaut (Schema-Ensure inklusive)
-/// und danach wiederverwendet. Scheitert der Aufbau, bleibt der Cache leer und
-/// jeder Aufruf versucht es erneut (best-effort, kein dauerhaftes Vergiften).
+/// Der Pool wird beim ersten Zugriff einmal aufgebaut. Das Schema muss vorher
+/// über die SQLx-Migrationen installiert sein. Scheitert der Aufbau, bleibt der
+/// Cache leer und jeder Aufruf versucht es erneut (best-effort, kein dauerhaftes
+/// Vergiften).
 static POOL: OnceCell<PgPool> = OnceCell::const_new();
 
 /// Zeitpunkt der letzten Budget-Prüfung. `None` = noch nie geprüft. Drosselt
@@ -87,7 +88,7 @@ fn budget_from_env() -> i64 {
         .unwrap_or(0)
 }
 
-/// Baut den Ledger-Pool gegen die zentrale Postgres und stellt das Schema sicher.
+/// Baut den Ledger-Pool gegen die zentrale Postgres.
 /// Ohne DSN (`TWITCH_ANALYTICS_DSN`/`DATABASE_URL`) scheitert der Aufbau bewusst —
 /// der Aufrufer loggt und macht best-effort weiter.
 async fn build_pool() -> sqlx::Result<PgPool> {
@@ -97,44 +98,11 @@ async fn build_pool() -> sqlx::Result<PgPool> {
         )
     })?;
     // Wenige Verbindungen genügen — das Ledger wird nur sporadisch beschrieben.
-    let pool = PgPoolOptions::new()
+    PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(10))
         .connect(&dsn)
-        .await?;
-    ensure_schema(&pool).await?;
-    Ok(pool)
-}
-
-/// Stellt das Ledger-Schema best-effort sicher (self-sufficient auch ohne die
-/// Migration). `CREATE TABLE/INDEX IF NOT EXISTS` sind idempotent; existiert die
-/// Tabelle bereits (Regelfall via Migration), sind die Statements No-Ops.
-async fn ensure_schema(pool: &PgPool) -> sqlx::Result<()> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS minimax_usage (
-            id         BIGSERIAL PRIMARY KEY,
-            ts         TEXT      NOT NULL,
-            source     TEXT      NOT NULL,
-            purpose    TEXT,
-            model      TEXT,
-            tokens_in  BIGINT    DEFAULT 0,
-            tokens_out BIGINT    DEFAULT 0,
-            total      BIGINT    DEFAULT 0,
-            success    BIGINT    DEFAULT 1,
-            meta       TEXT
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mmu_ts ON minimax_usage(ts)")
-        .execute(pool)
-        .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mmu_source ON minimax_usage(source)")
-        .execute(pool)
-        .await?;
-    Ok(())
+        .await
 }
 
 /// Holt den gecachten Pool oder baut ihn beim ersten Mal. `None`, wenn der Aufbau
@@ -317,7 +285,7 @@ mod tests {
     /// Öffnet einen frischen, isolierten Postgres-Schema-Pool mit Ledger-Tabelle —
     /// entkoppelt vom gecachten Prozess-Pool, damit jeder Test seine eigene Tabelle
     /// prüfen kann. Ohne `TB_TEST_DATABASE_URL` (keine Test-DB) → `None`, der Test
-    /// überspringt sich. Nutzt die produktive [`ensure_schema`] für 1:1-Aufbau.
+    /// überspringt sich. Das Fixture entspricht der produktiven Migration.
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
@@ -342,7 +310,25 @@ mod tests {
             .connect_with(opts)
             .await
             .expect("Schema-Pool");
-        ensure_schema(&pool).await.expect("Schema");
+        sqlx::query(
+            r#"
+            CREATE TABLE minimax_usage (
+                id BIGSERIAL PRIMARY KEY,
+                ts TEXT NOT NULL,
+                source TEXT NOT NULL,
+                purpose TEXT,
+                model TEXT,
+                tokens_in BIGINT DEFAULT 0,
+                tokens_out BIGINT DEFAULT 0,
+                total BIGINT DEFAULT 0,
+                success BIGINT DEFAULT 1,
+                meta TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Ledger-Testtabelle");
         Some(pool)
     }
 
