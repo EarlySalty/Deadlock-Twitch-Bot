@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
 INFISICAL_LOADER="${INFISICAL_LOADER:-/home/naniadm/.local/bin/dl-infisical-env}"
+RUNTIME_CONFIG_FILE="${TWITCH_RUNTIME_CONFIG_FILE:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing Infisical config: $CONFIG_FILE" >&2
@@ -15,8 +16,20 @@ fi
 # Nicht-geheime Verbindungsparameter laden (API-URL, Project-ID, Env-Name).
 # INFISICAL_SERVICE_TOKEN steht seit der systemd-creds-Migration NICHT mehr hier.
 set -a
+# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 set +a
+
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  if [[ ! -f "$RUNTIME_CONFIG_FILE" ]]; then
+    echo "Runtime-Konfiguration fehlt: $RUNTIME_CONFIG_FILE" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
 
 # Bootstrap-Token aus systemd-Credentials übernehmen (bevorzugt).
 if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
@@ -39,6 +52,11 @@ if [[ "${DL_INFISICAL_READY:-0}" != "1" ]]; then
 fi
 unset DL_INFISICAL_READY
 unset INFISICAL_SERVICE_TOKEN
+
+if [[ -n "${TWITCH_DASHBOARD_ANALYTICS_DSN:-}" ]]; then
+  export TWITCH_ANALYTICS_DSN="$TWITCH_DASHBOARD_ANALYTICS_DSN"
+fi
+unset TWITCH_BOT_ANALYTICS_DSN TWITCH_DASHBOARD_ANALYTICS_DSN
 
 # 8767 (Doku-Plan) ist real vom Turnier-Public-Cog der Deadlock-Bots belegt -> 8769.
 export DASHBOARD_PORT="${DASHBOARD_PORT:-8769}"

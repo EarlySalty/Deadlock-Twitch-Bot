@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
 INFISICAL_LOADER="${INFISICAL_LOADER:-/home/naniadm/.local/bin/dl-infisical-env}"
+RUNTIME_CONFIG_FILE="${TWITCH_RUNTIME_CONFIG_FILE:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing Infisical config: $CONFIG_FILE" >&2
@@ -15,8 +16,23 @@ fi
 # Nicht-geheime Verbindungsparameter laden (API-URL, Project-ID, Env-Name).
 # INFISICAL_SERVICE_TOKEN steht seit der systemd-creds-Migration NICHT mehr hier.
 set -a
+# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 set +a
+
+# Nicht geheime Laufzeitwerte können bei den gehärteten Systemdiensten aus
+# einer normalen, root-verwalteten Konfigurationsdatei kommen. Die alte
+# user-systemd-Unit setzt sie weiterhin selbst und lässt diesen Pfad leer.
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  if [[ ! -f "$RUNTIME_CONFIG_FILE" ]]; then
+    echo "Runtime-Konfiguration fehlt: $RUNTIME_CONFIG_FILE" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
 
 # Bootstrap-Token aus systemd-Credentials übernehmen (bevorzugt).
 if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
@@ -40,6 +56,14 @@ fi
 unset DL_INFISICAL_READY
 export INFISICAL_WRITE_TOKEN="${INFISICAL_WRITE_TOKEN:-$INFISICAL_SERVICE_TOKEN}"
 unset INFISICAL_SERVICE_TOKEN
+
+# Die gemeinsame Legacy-DSN darf nach der Rollen-Trennung nicht mehr den
+# Bot bestimmen. Der dienstspezifische, eingeschränkte Zugang gewinnt; die
+# jeweils andere DSN wird vor dem Prozessstart aus der Umgebung entfernt.
+if [[ -n "${TWITCH_BOT_ANALYTICS_DSN:-}" ]]; then
+  export TWITCH_ANALYTICS_DSN="$TWITCH_BOT_ANALYTICS_DSN"
+fi
+unset TWITCH_BOT_ANALYTICS_DSN TWITCH_DASHBOARD_ANALYTICS_DSN
 
 # Nicht-Secret-Konfiguration (Werte aus dem bisherigen Worker übernommen):
 export TWITCH_EVENTSUB_CALLBACK_URL="${TWITCH_EVENTSUB_CALLBACK_URL:-https://deutsche-deadlock-community.de/twitch/eventsub/callback}"
@@ -82,7 +106,11 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
 # streamlink liegt im venv, nicht im System-PATH. Ohne diesen Pfad findet der
 # Capturer nichts und der Zeitstrahl bekommt nur Chat, keinen Stream-Ton.
-export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/home/nathanael/stt-tools/bin/streamlink}"
+if [[ -x /opt/stt-tools/bin/streamlink ]]; then
+  export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/opt/stt-tools/bin/streamlink}"
+else
+  export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/home/nathanael/stt-tools/bin/streamlink}"
+fi
 # Kein venv-Default mehr: der Deploy-Baum hat keins, der Pfad zeigte ins Leere.
 # Ohne diese Variable sucht der Bot selbst (venv, ~/.local/bin, PATH).
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"

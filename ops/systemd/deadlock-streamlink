@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Das kopierte venv enthält im generierten Konsolenskript noch den alten
+# Home-Pfad. Der root-eigene Wrapper startet dasselbe Modul explizit mit dem
+# Interpreter aus /opt und funktioniert dadurch auch mit ProtectHome=yes.
+exec /opt/stt-tools/bin/python3 -m streamlink "$@"

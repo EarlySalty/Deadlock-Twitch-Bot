@@ -1,0 +1,41 @@
+[Unit]
+Description=Deadlock Twitch PostgreSQL-Migrationen
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+# Migrationen sind der einzige privilegierte DB-Pfad. Der Prozess läuft kurz,
+# nur über den lokalen Socket und ausschließlich aus einem root-eigenen Release.
+User=postgres
+Group=postgres
+WorkingDirectory=/opt/deadlock/twitch/current/rust
+ExecStart=/usr/local/libexec/cargo-sqlx migrate run --source /opt/deadlock/twitch/current/rust/migrations --ignore-missing --no-dotenv --database-url postgresql:///twitch_analytics?host=/var/run/postgresql&application_name=tb-migrate
+ExecStartPost=/usr/bin/psql --no-psqlrc --dbname=twitch_analytics --file=/opt/deadlock/twitch/current/ops/systemd/twitch-runtime-roles.sql
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+LimitCORE=0
