@@ -47,6 +47,13 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
     .execute(&pool)
     .await
     .expect("Session-Tabelle anlegen");
+    sqlx::query(&format!(
+        "CREATE TABLE {schema}.oauth_state_tokens (\
+             state_token TEXT PRIMARY KEY, platform TEXT NOT NULL, pkce_verifier TEXT)"
+    ))
+    .execute(&pool)
+    .await
+    .expect("OAuth-State-Tabelle anlegen");
 
     let raw_session = "aktive-session-🔥";
     let rate_id = "rl:60:iphash:123:abcd";
@@ -62,12 +69,24 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
     .execute(&pool)
     .await
     .expect("Testdaten schreiben");
+    let alter_raid_rohwert = "a".repeat(64);
+    sqlx::query(&format!(
+        "INSERT INTO {schema}.oauth_state_tokens (state_token, platform) VALUES ($1, 'raid')"
+    ))
+    .bind(&alter_raid_rohwert)
+    .execute(&pool)
+    .await
+    .expect("alten Raid-State schreiben");
 
     let migration =
         include_str!("../../../migrations/20260831090000_dashboard_session_ids_sha256.sql")
             .replace(
                 "public.dashboard_sessions",
                 &format!("{schema}.dashboard_sessions"),
+            )
+            .replace(
+                "public.oauth_state_tokens",
+                &format!("{schema}.oauth_state_tokens"),
             );
     sqlx::raw_sql(&migration)
         .execute(&pool)
@@ -83,6 +102,15 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
     assert!(stored.contains(&lookup_key(raw_session)));
     assert!(!stored.iter().any(|value| value == raw_session));
     assert!(stored.iter().any(|value| value == rate_id));
+    let oauth_states: i64 =
+        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {schema}.oauth_state_tokens"))
+            .fetch_one(&pool)
+            .await
+            .expect("OAuth-Cutover prüfen");
+    assert_eq!(
+        oauth_states, 0,
+        "auch ein alter 64-Hex-Raid-Rohwert muss beim Offline-Cutover verschwinden"
+    );
 
     let active_payload: Vec<u8> = sqlx::query_scalar(&format!(
         "SELECT payload_enc FROM {schema}.dashboard_sessions WHERE session_id = $1"

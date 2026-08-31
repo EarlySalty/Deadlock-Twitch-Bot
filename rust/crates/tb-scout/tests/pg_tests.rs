@@ -135,7 +135,7 @@ async fn findet_kleinen_neuen_kanal_mit_kennzahlen() {
     seed_sessions(&pool, "KleinAnfang", 1, 2, 5).await;
     seed_user_id(&pool, "kleinanfang", "4711").await;
 
-    let funds = finde_kandidaten(&pool).await;
+    let funds = finde_kandidaten(&pool).await.unwrap();
 
     assert_eq!(funds.len(), 1, "genau der kleine neue Kanal");
     let fund = &funds[0];
@@ -261,6 +261,7 @@ async fn filter_schlagen_an() {
 
     let logins: Vec<String> = finde_kandidaten(&pool)
         .await
+        .unwrap()
         .into_iter()
         .map(|f| f.login)
         .collect();
@@ -453,7 +454,7 @@ async fn scan_vormerkt_und_ban_probe_faellt_zu() {
     .await
     .unwrap();
 
-    let angefasst = laufe_scout_scan(&pool).await;
+    let angefasst = laufe_scout_scan(&pool).await.unwrap();
     assert_eq!(
         angefasst, 1,
         "nur der ungebannte Kandidat landet in der Tabelle"
@@ -466,13 +467,12 @@ async fn scan_vormerkt_und_ban_probe_faellt_zu() {
     .unwrap();
     assert_eq!(status, "vorgeschlagen");
 
-    // Fail-closed: ohne Global-Ban-Tabelle wirft die Probe einen Fehler und
-    // ALLE Kandidaten fallen raus.
+    // Ohne Global-Ban-Tabelle wird der Scan sichtbar abgebrochen, statt eine
+    // leere Kandidatenliste als Erfolg auszugeben.
     sqlx::query("DROP TABLE twitch_chatter_global_ban")
         .execute(&pool)
         .await
         .unwrap();
     seed_sessions(&pool, "zweiter", 1, 1, 5).await;
-    let funds = finde_kandidaten(&pool).await;
-    assert!(funds.is_empty(), "Ban-Probe-Fehler verwirft Kandidaten");
+    assert!(finde_kandidaten(&pool).await.is_err());
 }

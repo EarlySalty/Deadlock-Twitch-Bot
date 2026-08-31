@@ -136,8 +136,10 @@ impl SenderAuthStore {
     /// Liefert `(access_token, sender_user_id)` für den Sende-Account; refresht
     /// bei (nahem) Ablauf. `None`, wenn kein Account onboarded ist oder der
     /// Refresh scheitert (Aufrufer verwirft die AI-Antwort).
-    pub async fn get_valid_access_token(&self) -> Option<(String, String)> {
-        let row = self.load_row().await?;
+    pub async fn get_valid_access_token(&self) -> Result<Option<(String, String)>, String> {
+        let Some(row) = self.load_row().await.map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
         let now = chrono::Utc::now().timestamp();
 
         // Noch frisch genug → Access-Token direkt entschlüsseln.
@@ -146,7 +148,7 @@ impl SenderAuthStore {
                 &row.access_enc,
                 &aad::engagement_sender("access_token", &row.user_id),
             ) {
-                Ok(access) => return Some((access, row.user_id)),
+                Ok(access) => return Ok(Some((access, row.user_id))),
                 Err(_) => tracing::warn!(
                     "Engagement-Sender: Access-Token-Decrypt fehlgeschlagen, versuche Refresh"
                 ),
@@ -160,16 +162,22 @@ impl SenderAuthStore {
                 &row.refresh_enc,
                 &aad::engagement_sender("refresh_token", &row.user_id),
             )
-            .ok()?;
+            .map_err(|_| {
+                "Engagement-Sender: Refresh-Token konnte nicht entschlüsselt werden".to_string()
+            })?;
         let token = match self.post_refresh(&refresh_token).await {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "Engagement-Sender: Token-Refresh fehlgeschlagen");
-                return None;
+                return Err(format!(
+                    "Engagement-Sender: Token-Refresh fehlgeschlagen: {e}"
+                ));
             }
         };
         if token.access_token.is_empty() {
-            return None;
+            return Err(
+                "Engagement-Sender: Token-Refresh lieferte keinen Access-Token".to_string(),
+            );
         }
         let new_refresh = if token.refresh_token.is_empty() {
             refresh_token
@@ -189,12 +197,12 @@ impl SenderAuthStore {
             token.expires_in,
             &scopes,
         )
-        .await;
-        Some((token.access_token, row.user_id))
+        .await?;
+        Ok(Some((token.access_token, row.user_id)))
     }
 
     /// Jüngste onboardete Zeile (Python `_load_row`, `ORDER BY updated_at DESC`).
-    async fn load_row(&self) -> Option<SenderRow> {
+    async fn load_row(&self) -> Result<Option<SenderRow>, sqlx::Error> {
         let row = sqlx::query!(
             r#"SELECT twitch_user_id AS "twitch_user_id!", twitch_login AS "twitch_login!",
                     access_token_enc AS "access_token_enc!",
@@ -203,19 +211,21 @@ impl SenderAuthStore {
              FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1"#
         )
         .fetch_optional(&self.pool)
-        .await
-        .ok()??;
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
         if row.access_token_enc.is_empty() || row.refresh_token_enc.is_empty() {
-            return None;
+            return Ok(None);
         }
-        Some(SenderRow {
+        Ok(Some(SenderRow {
             user_id: row.twitch_user_id,
             login: row.twitch_login,
             access_enc: row.access_token_enc,
             refresh_enc: row.refresh_token_enc,
             scopes: row.scopes,
             expires_at: row.token_expires_at,
-        })
+        }))
     }
 
     /// Verschlüsselt + persistiert das Token-Paar (Python `_store_tokens`).
@@ -228,24 +238,27 @@ impl SenderAuthStore {
         refresh_token: &str,
         expires_in: i64,
         scopes: &str,
-    ) {
-        let (Ok(access_enc), Ok(refresh_enc)) = (
-            self.cipher.encrypt_field(
+    ) -> Result<(), String> {
+        let access_enc = self
+            .cipher
+            .encrypt_field(
                 access_token,
                 &aad::engagement_sender("access_token", user_id),
-            ),
-            self.cipher.encrypt_field(
+            )
+            .map_err(|_| {
+                "Engagement-Sender: Access-Token-Verschlüsselung fehlgeschlagen".to_string()
+            })?;
+        let refresh_enc = self
+            .cipher
+            .encrypt_field(
                 refresh_token,
                 &aad::engagement_sender("refresh_token", user_id),
-            ),
-        ) else {
-            tracing::error!(
-                "Engagement-Sender: Verschlüsseln fehlgeschlagen — Tokens NICHT geschrieben"
-            );
-            return;
-        };
+            )
+            .map_err(|_| {
+                "Engagement-Sender: Refresh-Token-Verschlüsselung fehlgeschlagen".to_string()
+            })?;
         let expires_at = chrono::Utc::now().timestamp() + expires_in.max(0);
-        let _ = sqlx::query!(
+        sqlx::query!(
             "INSERT INTO twitch_engagement_sender_auth \
                 (twitch_user_id, twitch_login, access_token_enc, refresh_token_enc, \
                  scopes, token_expires_at, updated_at) \
@@ -265,7 +278,9 @@ impl SenderAuthStore {
             expires_at
         )
         .execute(&self.pool)
-        .await;
+        .await
+        .map_err(|e| format!("Engagement-Sender: Token-Speichern fehlgeschlagen: {e}"))?;
+        Ok(())
     }
 
     /// Generischer Token-Endpoint-POST (Python `_post_token`); Grant-spezifische
@@ -367,9 +382,9 @@ impl SenderAuthStore {
     /// Verbraucht einen State-Token atomar (Python `_consume_state`): existiert +
     /// nicht abgelaufen → true. `expires_at` NULL/unbestimmt → nicht künstlich
     /// abweisen (Python-Toleranz).
-    async fn consume_state(&self, state: &str) -> bool {
+    async fn consume_state(&self, state: &str) -> Result<bool, sqlx::Error> {
         if state.is_empty() {
-            return false;
+            return Ok(false);
         }
         let state_lookup_key = tb_crypto::token_lookup_key(state);
         let row = sqlx::query!(
@@ -379,15 +394,14 @@ impl SenderAuthStore {
             PLATFORM
         )
         .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
-        match row {
+        .await?;
+        Ok(match row {
             Some(row) => match row.expires_at {
                 Some(exp) => Utc::now() <= exp,
                 None => true,
             },
             None => false,
-        }
+        })
     }
 
     /// Erzeugt einen Twitch-Authorize-Link für den Sende-Account und legt den
@@ -421,14 +435,24 @@ impl SenderAuthStore {
         if code.is_empty() {
             return Err("Kein Code im Callback".to_string());
         }
-        if !self.consume_state(state).await {
+        let state_gueltig = self.consume_state(state).await.map_err(|error| {
+            tracing::error!(%error, "Engagement-Sender: OAuth-State konnte nicht geprüft werden");
+            "State konnte nicht geprüft werden".to_string()
+        })?;
+        if !state_gueltig {
             return Err("State ungültig oder abgelaufen".to_string());
         }
-        let token = self.exchange_code(code).await?;
+        let token = self.exchange_code(code).await.map_err(|error| {
+            tracing::error!(%error, "Engagement-Sender: OAuth-Code-Austausch fehlgeschlagen");
+            "Token-Austausch fehlgeschlagen".to_string()
+        })?;
         if token.access_token.is_empty() || token.refresh_token.is_empty() {
             return Err("Token-Response unvollständig".to_string());
         }
-        let (user_id, login) = self.fetch_user(&token.access_token).await?;
+        let (user_id, login) = self.fetch_user(&token.access_token).await.map_err(|error| {
+            tracing::error!(%error, "Engagement-Sender: Twitch-Benutzer konnte nicht gelesen werden");
+            "Twitch-Benutzer konnte nicht gelesen werden".to_string()
+        })?;
         let login = if login.is_empty() {
             SENDER_LOGIN.to_string()
         } else {
@@ -447,7 +471,11 @@ impl SenderAuthStore {
             token.expires_in,
             &scopes,
         )
-        .await;
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Engagement-Sender: OAuth-Token konnte nicht gespeichert werden");
+            "Token konnte nicht gespeichert werden".to_string()
+        })?;
         Ok(CallbackResult { login, user_id })
     }
 }
@@ -607,7 +635,7 @@ mod tests {
         assert!(s.validate_table().await.is_err());
         s.ensure_table().await;
         assert!(s.validate_table().await.is_ok());
-        assert_eq!(s.get_valid_access_token().await, None);
+        assert_eq!(s.get_valid_access_token().await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -620,7 +648,7 @@ mod tests {
         // Ablauf weit in der Zukunft → kein Refresh, direkter Decrypt.
         let future = chrono::Utc::now().timestamp() + 3600;
         seed(&s, "42", "fresh-access", "the-refresh", future).await;
-        let got = s.get_valid_access_token().await;
+        let got = s.get_valid_access_token().await.unwrap();
         assert_eq!(got, Some(("fresh-access".to_string(), "42".to_string())));
     }
 
@@ -647,10 +675,10 @@ mod tests {
         let past = chrono::Utc::now().timestamp() - 10;
         seed(&s, "42", "old-access", "old-refresh", past).await;
 
-        let got = s.get_valid_access_token().await;
+        let got = s.get_valid_access_token().await.unwrap();
         assert_eq!(got, Some(("new-access".to_string(), "42".to_string())));
         // Neuer Token persistiert + entschlüsselbar, Ablauf jetzt in der Zukunft.
-        let row = s.load_row().await.unwrap();
+        let row = s.load_row().await.unwrap().unwrap();
         assert!(row.expires_at > chrono::Utc::now().timestamp());
         let access = s
             .cipher
@@ -668,6 +696,61 @@ mod tests {
             )
             .unwrap();
         assert_eq!(refresh, "new-refresh");
+    }
+
+    #[tokio::test]
+    async fn refresh_gilt_bei_persistenzfehler_nicht_als_erfolgreich() {
+        let Some(pool) = make_pool("t_eng_sender_refresh_store_fail").await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 14400,
+                "scope": ["user:write:chat", "user:bot"]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = store(pool.clone()).with_token_url(format!("{}/oauth2/token", server.uri()));
+        s.ensure_table().await;
+        seed(
+            &s,
+            "42",
+            "old-access",
+            "old-refresh",
+            chrono::Utc::now().timestamp() - 10,
+        )
+        .await;
+        sqlx::query(
+            "CREATE FUNCTION verhindere_sender_update() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'Testfehler'; END $$",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER sender_update_blocker BEFORE UPDATE ON twitch_engagement_sender_auth \
+             FOR EACH ROW EXECUTE FUNCTION verhindere_sender_update()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let fehler = s.get_valid_access_token().await.unwrap_err();
+        assert!(fehler.contains("Token-Speichern"));
+        let row = s.load_row().await.unwrap().unwrap();
+        let access = s
+            .cipher
+            .decrypt_field(
+                &row.access_enc,
+                &aad::engagement_sender("access_token", "42"),
+            )
+            .unwrap();
+        assert_eq!(access, "old-access");
     }
 
     #[tokio::test]
@@ -724,7 +807,7 @@ mod tests {
                 .unwrap();
         assert!(stored.0 > Utc::now());
         assert!(
-            s.consume_state("valid-state").await,
+            s.consume_state("valid-state").await.unwrap(),
             "frischer State ist gültig"
         );
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_state_tokens")
@@ -737,7 +820,7 @@ mod tests {
         let past = Utc::now() - Duration::seconds(10);
         s.persist_state("expired-state", past).await.unwrap();
         assert!(
-            !s.consume_state("expired-state").await,
+            !s.consume_state("expired-state").await.unwrap(),
             "abgelaufener State wird abgewiesen"
         );
     }
@@ -790,12 +873,75 @@ mod tests {
         assert_eq!(remaining, 0);
         // Token gespeichert + via get_valid_access_token lesbar.
         assert_eq!(
-            s.get_valid_access_token().await,
+            s.get_valid_access_token().await.unwrap(),
             Some(("onb-access".to_string(), "555".to_string()))
         );
 
         // Zweiter Callback mit demselben (verbrauchten) State → State-Fehler.
         let err = s.handle_callback("the-code", "st1").await.unwrap_err();
         assert!(err.contains("State"));
+    }
+
+    #[tokio::test]
+    async fn callback_meldet_state_und_token_db_fehler() {
+        let Some(pool) = make_pool("t_eng_sender_cb_db_fail").await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "onb-access",
+                "refresh_token": "onb-refresh",
+                "expires_in": 14400
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "555", "login": "smoke"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = store(pool.clone())
+            .with_token_url(format!("{}/oauth2/token", server.uri()))
+            .with_users_url(format!("{}/helix/users", server.uri()));
+        s.ensure_table().await;
+        s.persist_state("st-store-fail", Utc::now() + Duration::seconds(600))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE FUNCTION verhindere_sender_insert() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'Testfehler'; END $$",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER sender_insert_blocker BEFORE INSERT ON twitch_engagement_sender_auth \
+             FOR EACH ROW EXECUTE FUNCTION verhindere_sender_insert()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let fehler = s
+            .handle_callback("the-code", "st-store-fail")
+            .await
+            .unwrap_err();
+        assert_eq!(fehler, "Token konnte nicht gespeichert werden");
+
+        sqlx::query("DROP TABLE oauth_state_tokens")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let fehler = s
+            .handle_callback("the-code", "st-db-fail")
+            .await
+            .unwrap_err();
+        assert_eq!(fehler, "State konnte nicht geprüft werden");
+        assert!(!fehler.contains("ungültig oder abgelaufen"));
     }
 }

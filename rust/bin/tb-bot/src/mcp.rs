@@ -44,14 +44,11 @@ use axum::{
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
+use crate::task_supervisor::TaskSupervisor;
+use crate::token_lifecycle_wiring::SharedDeadlockPauseReactor;
 use tb_analytics::{raid_blacklist, streamers_crud};
 use tb_internal_api::{disconnect_bot_handler_inner, DiscordRoleExt, ModeratorRemovalExt};
 use tb_raid::token_lifecycle::{BotBanStatus, BotBanStatusProbe};
-use tb_raid::TokenBlacklist;
-
-use crate::partner_lookup;
-use crate::task_supervisor::TaskSupervisor;
-use crate::token_lifecycle_wiring::SharedDeadlockPauseReactor;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8892;
@@ -780,9 +777,9 @@ async fn tool_partner_status(st: &Arc<McpState>, args: &Value) -> Result<Value, 
             .unwrap_or(Value::Null);
     let token_blacklisted = match twitch_user_id.as_deref() {
         Some(user_id) => Value::Bool(
-            tb_raid::TokenBlacklistStore::new(st.pool.clone())
-                .is_blacklisted(user_id)
-                .await,
+            token_blacklist_status(&st.pool, user_id)
+                .await
+                .map_err(|error| format!("Token-Blacklist nicht lesbar: {error}"))?,
         ),
         None => Value::Null,
     };
@@ -807,6 +804,39 @@ async fn tool_partner_status(st: &Arc<McpState>, args: &Value) -> Result<Value, 
         "stats_30d": serde_json::to_value(&stats).unwrap_or(Value::Null),
         "letzte_sessions": sessions,
     }))
+}
+
+async fn token_blacklist_status(pool: &PgPool, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
+    let error_count = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = $1",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(token_error_count_is_blacklisted(error_count))
+}
+
+fn token_error_count_is_blacklisted(error_count: Option<i32>) -> bool {
+    error_count.is_some_and(|count| {
+        i64::from(count) >= tb_raid::token_blacklist::BLACKLIST_DISABLE_THRESHOLD
+    })
+}
+
+async fn active_partner_id(pool: &PgPool, login: &str) -> Result<Option<String>, sqlx::Error> {
+    let login = login.trim().to_lowercase();
+    if login.is_empty() {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_partners \
+         WHERE LOWER(twitch_login) = $1 AND status = 'active' \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&login)
+    .fetch_optional(pool)
+    .await?
+    .filter(|id: &String| !id.trim().is_empty()))
 }
 
 /// Vorschau auf den nächsten Sweep. Nutzt die Pausendauer des laufenden
@@ -867,7 +897,9 @@ async fn tool_bot_ban_status(st: &Arc<McpState>, args: &Value) -> Result<Value, 
     };
     // Bewusst nur aktive Partner: die Probe moddet den Bot im selben Aufruf ein.
     // In einem fremden Kanal wäre das ein Eingriff ohne Anlass.
-    let Some(user_id) = partner_lookup::resolve_active_partner_id_by_login(&st.pool, &login).await
+    let Some(user_id) = active_partner_id(&st.pool, &login)
+        .await
+        .map_err(|error| format!("Partnerstatus nicht lesbar: {error}"))?
     else {
         return Err(format!(
             "{login} ist kein aktiver Partner mit bekannter User-ID — Ban-Probe abgelehnt"
@@ -1206,6 +1238,20 @@ mod tests {
             arg_usize(&args(json!({"limit": 999_999})), "limit"),
             Some(DEFAULT_PARTNER_LIMIT)
         );
+    }
+
+    #[tokio::test]
+    async fn diagnose_lookups_maskieren_keine_db_fehler() {
+        let state = test_state(Some("test-token"));
+        assert!(token_blacklist_status(&state.pool, "42").await.is_err());
+        assert!(active_partner_id(&state.pool, "earlysalty").await.is_err());
+    }
+
+    #[test]
+    fn token_blacklist_greift_erst_ab_dem_schwellwert() {
+        assert!(!token_error_count_is_blacklisted(None));
+        assert!(!token_error_count_is_blacklisted(Some(1)));
+        assert!(token_error_count_is_blacklisted(Some(3)));
     }
 
     /// Ein Aufruf ohne Meinung darf nichts anfassen: `dry_run` fehlt → true.

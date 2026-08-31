@@ -33,6 +33,7 @@ if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
   source "$RUNTIME_CONFIG_FILE"
   set +a
 fi
+unset INFISICAL_SERVICE_TOKEN
 
 # Bootstrap-Token aus systemd-Credentials übernehmen (bevorzugt).
 if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
@@ -55,6 +56,16 @@ if [[ "${DL_INFISICAL_READY:-0}" != "1" ]]; then
 fi
 unset DL_INFISICAL_READY
 export INFISICAL_WRITE_TOKEN="${INFISICAL_WRITE_TOKEN:-$INFISICAL_SERVICE_TOKEN}"
+unset INFISICAL_SERVICE_TOKEN
+
+# Der Bulk-Load kann alte gemeinsame Nicht-Secret-Werte enthalten. Die
+# root-verwaltete Dienstkonfiguration gewinnt deshalb unmittelbar vor Start.
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
 unset INFISICAL_SERVICE_TOKEN
 
 # Die gemeinsame Legacy-DSN darf nach der Rollen-Trennung nicht mehr den
@@ -106,8 +117,8 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
 # streamlink liegt im venv, nicht im System-PATH. Ohne diesen Pfad findet der
 # Capturer nichts und der Zeitstrahl bekommt nur Chat, keinen Stream-Ton.
-if [[ -x /opt/stt-tools/bin/streamlink ]]; then
-  export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/opt/stt-tools/bin/streamlink}"
+if [[ -x /usr/local/libexec/deadlock-streamlink ]]; then
+  export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/usr/local/libexec/deadlock-streamlink}"
 else
   export VOICE_REACTION_STREAMLINK_BIN="${VOICE_REACTION_STREAMLINK_BIN:-/home/nathanael/stt-tools/bin/streamlink}"
 fi

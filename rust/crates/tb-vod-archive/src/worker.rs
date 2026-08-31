@@ -78,10 +78,7 @@ pub trait TeilHochlader: Send + Sync {
 
     /// Verarbeitungsstand eines bereits hochgeladenen Videos. `None`, wenn
     /// YouTube die Video-ID nicht mehr kennt.
-    async fn video_status(
-        &self,
-        video_id: &str,
-    ) -> Result<Option<VideoZustand>, UploadError>;
+    async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError>;
 }
 
 #[async_trait]
@@ -111,10 +108,7 @@ impl TeilHochlader for YouTubeUploader {
         YouTubeUploader::upload_chunk(self, sitzung, pfad, offset).await
     }
 
-    async fn video_status(
-        &self,
-        video_id: &str,
-    ) -> Result<Option<VideoZustand>, UploadError> {
+    async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
         YouTubeUploader::video_status(self, video_id).await
     }
 }
@@ -443,20 +437,16 @@ impl VodArchiveWorker {
             let Some(hochlader) = uploader.get(login).cloned().flatten() else {
                 continue;
             };
-            let frische = match store::frisch_hochgeladene_teile(
-                &self.pool,
-                login,
-                PRUEF_FENSTER_TAGE,
-            )
-            .await
-            {
-                Ok(frische) if frische.is_empty() => continue,
-                Ok(frische) => frische,
-                Err(fehler) => {
-                    tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
-                    continue;
-                }
-            };
+            let frische =
+                match store::frisch_hochgeladene_teile(&self.pool, login, PRUEF_FENSTER_TAGE).await
+                {
+                    Ok(frische) if frische.is_empty() => continue,
+                    Ok(frische) => frische,
+                    Err(fehler) => {
+                        tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
+                        continue;
+                    }
+                };
             tracing::info!(kanal = login, teile = frische.len(), "Upload-Nachpruefung");
             for eintrag in frische {
                 match hochlader.video_status(&eintrag.video_id).await {
@@ -511,12 +501,7 @@ impl VodArchiveWorker {
     /// das Teil geht in die Auszeit und das VOD aus "hochgeladen" zurueck in
     /// die Warteschlange, damit die lokale Kopie nicht aufgeräumt wird, solange
     /// bei YouTube nichts liegt.
-    async fn markiere_verworfen(
-        &self,
-        kanal: &str,
-        eintrag: &store::FrischerUpload,
-        grund: &str,
-    ) {
+    async fn markiere_verworfen(&self, kanal: &str, eintrag: &store::FrischerUpload, grund: &str) {
         tracing::error!(
             kanal = %kanal,
             video = %eintrag.video_id,
@@ -525,21 +510,9 @@ impl VodArchiveWorker {
             "Upload von YouTube verworfen; häufigste Ursache ist das 15-Minuten-Limit eines nicht verifizierten Kanals (youtube.com/verify). Das Teil pausiert und geht erneut hinaus, danach folgt der Upload von selbst."
         );
         if let Err(fehler) =
-            store::setze_teil_abgelehnt(&self.pool, eintrag.teil_id, grund).await
+            store::setze_upload_abgelehnt(&self.pool, eintrag.teil_id, eintrag.vod_id, grund).await
         {
-            tracing::error!(%fehler, "Verworfenes Teil konnte nicht markiert werden");
-            return;
-        }
-        if eintrag.vod_status == store::STATUS_ARCHIVIERT {
-            // Lokal ist hier nichts mehr zu retten; der Eintrag bleibt
-            // abgeschlossen.
-            return;
-        }
-        if let Err(fehler) =
-            store::setze_fehler(&self.pool, eintrag.vod_id, store::STATUS_UPLOAD_FEHLER, grund)
-                .await
-        {
-            tracing::error!(%fehler, "VOD konnte nicht zurueckgesetzt werden");
+            tracing::error!(%fehler, "Verworfener Upload konnte nicht atomar zurückgesetzt werden");
         }
     }
 
@@ -1111,10 +1084,7 @@ mod tests {
             Ok(ChunkOutcome::Fertig(format!("yt-{nummer}")))
         }
 
-        async fn video_status(
-            &self,
-            _video_id: &str,
-        ) -> Result<Option<VideoZustand>, UploadError> {
+        async fn video_status(&self, _video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
             if *self.verwerfen.lock().unwrap() {
                 return Ok(None);
             }
@@ -1217,12 +1187,8 @@ mod tests {
         cfg: VodArchiveConfig,
         hochlader: &Arc<ZaehlenderHochlader>,
     ) -> VodArchiveWorker {
-        VodArchiveWorker::mit_zugang(
-            pool.clone(),
-            cfg,
-            Arc::new(FesteQuelle(hochlader.clone())),
-        )
-        .with_runner(Arc::new(WerkzeugAttrappe::neu()))
+        VodArchiveWorker::mit_zugang(pool.clone(), cfg, Arc::new(FesteQuelle(hochlader.clone())))
+            .with_runner(Arc::new(WerkzeugAttrappe::neu()))
     }
 
     /// Fund 1: der Upload-Deckel griff nur auf dem reinen Upload-Pfad. Sechs
@@ -1248,7 +1214,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(bilanz.geladen, 6, "alle sechs duerfen lokal gesichert werden");
+        assert_eq!(
+            bilanz.geladen, 6,
+            "alle sechs duerfen lokal gesichert werden"
+        );
         assert_eq!(
             hochlader.uploads.load(Ordering::SeqCst),
             2,
@@ -1404,7 +1373,10 @@ mod tests {
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
         assert_eq!(
-            store::offene_vods(&pool, "earlysalty", 10).await.unwrap().len(),
+            store::offene_vods(&pool, "earlysalty", 10)
+                .await
+                .unwrap()
+                .len(),
             0,
             "der Lauf kennt nur erfolgreiche Uploads, das VOD ist abgeschlossen"
         );
@@ -1414,11 +1386,15 @@ mod tests {
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         let teile = store::teile(&pool, vod.id).await.unwrap();
         assert_eq!(teile[0].status, store::TEIL_ABGELEHNT);
-        let vod_status: String = sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id = $1")
-            .bind(vod.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        assert!(teile[0].upload_session_uri.is_none());
+        assert_eq!(teile[0].upload_offset, 0);
+        assert!(teile[0].youtube_video_id.is_none());
+        let vod_status: String =
+            sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id = $1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(
             vod_status,
             store::STATUS_UPLOAD_FEHLER,
@@ -1428,7 +1404,13 @@ mod tests {
         // Die Auszeit greift: kein neuer Upload, das VOD bleibt offen.
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
-        assert_eq!(store::offene_vods(&pool, "earlysalty", 10).await.unwrap().len(), 1);
+        assert_eq!(
+            store::offene_vods(&pool, "earlysalty", 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Auszeit vorbei: der Upload geht erneut hinaus, der Grund ist weg.
         sqlx::query(

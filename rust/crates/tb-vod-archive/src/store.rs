@@ -160,7 +160,7 @@ pub async fn setze_fehler(
     )
     .bind(id)
     .bind(status)
-    .bind(kurz)
+    .bind(&kurz)
     .execute(pool)
     .await?;
     Ok(())
@@ -332,7 +332,7 @@ pub async fn setze_teil_fehler(
          SET status = 'failed', last_error = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )
     .bind(teil_id)
-    .bind(kurz)
+    .bind(&kurz)
     .execute(pool)
     .await?;
     Ok(())
@@ -341,20 +341,47 @@ pub async fn setze_teil_fehler(
 /// Vermerkt, dass YouTube einen fertigen Upload wieder verworfen hat. Das
 /// Teil bleibt mit seiner Datei stehen und geht nach der Auszeit erneut in
 /// den Upload, sobald der Grund (etwa ein nicht verifizierter Kanal) weg ist.
-pub async fn setze_teil_abgelehnt(
+pub async fn setze_upload_abgelehnt(
     pool: &PgPool,
     teil_id: i64,
+    vod_id: i64,
     grund: &str,
 ) -> Result<(), VodArchiveError> {
     let kurz: String = grund.chars().take(1000).collect();
-    sqlx::query(
+    let mut tx = pool.begin().await?;
+    let vod_status: String =
+        sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id = $1 FOR UPDATE")
+            .bind(vod_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+    let geaendert = sqlx::query(
         "UPDATE twitch_vod_archive_parts \
-         SET status = 'rejected', last_error = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+         SET status = 'rejected', last_error = $3, upload_session_uri = NULL, \
+             upload_offset = 0, youtube_video_id = NULL, updated_at = CURRENT_TIMESTAMP \
+         WHERE id = $1 AND vod_id = $2",
     )
     .bind(teil_id)
-    .bind(kurz)
-    .execute(pool)
-    .await?;
+    .bind(vod_id)
+    .bind(&kurz)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if geaendert != 1 {
+        return Err(sqlx::Error::RowNotFound.into());
+    }
+    if vod_status != STATUS_ARCHIVIERT {
+        sqlx::query(
+            "UPDATE twitch_vod_archive_vods \
+             SET status = 'upload_failed', uploaded_at = NULL, last_error = $2, \
+                 updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(vod_id)
+        .bind(&kurz)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -365,9 +392,6 @@ pub struct FrischerUpload {
     pub vod_id: i64,
     pub part_index: i32,
     pub video_id: String,
-    /// Status des VOD im Moment der Abfrage. Ein zurueckgesetztes VOD darf
-    /// nur aus `uploaded` fallen, niemals aus `archived`.
-    pub vod_status: String,
 }
 
 /// Fertige Teile der letzten `tage`, die bei YouTube nachgeprueft werden
@@ -379,9 +403,8 @@ pub async fn frisch_hochgeladene_teile(
     tage: i32,
 ) -> Result<Vec<FrischerUpload>, VodArchiveError> {
     let rows = sqlx::query(
-        "SELECT p.id AS teil_id, p.vod_id, p.part_index, p.youtube_video_id, v.status AS vod_status \
+        "SELECT p.id AS teil_id, p.vod_id, p.part_index, p.youtube_video_id \
          FROM twitch_vod_archive_parts p \
-         JOIN twitch_vod_archive_vods v ON v.id = p.vod_id \
          WHERE LOWER(p.streamer_login) = LOWER($1) \
            AND p.status = 'done' AND p.youtube_video_id IS NOT NULL \
            AND p.updated_at > CURRENT_TIMESTAMP - make_interval(days => $2) \
@@ -398,7 +421,6 @@ pub async fn frisch_hochgeladene_teile(
             vod_id: row.get("vod_id"),
             part_index: row.get("part_index"),
             video_id: row.get::<String, _>("youtube_video_id"),
-            vod_status: row.get("vod_status"),
         })
         .collect())
 }
@@ -616,6 +638,90 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn abgelehnter_upload_wird_atomar_zurueckgesetzt() {
+        let Some(pool) = pool("t_vod_abgelehnt_atomar").await else {
+            return;
+        };
+        merke_vod(&pool, "v2a", "earlysalty", "Langer Stream", 50_000)
+            .await
+            .unwrap();
+        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2a.mp4".into()])
+            .await
+            .unwrap();
+        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42)
+            .await
+            .unwrap();
+        setze_teil_fertig(&pool, teil.id, "yt-alt").await.unwrap();
+        setze_hochgeladen(&pool, vod.id).await.unwrap();
+
+        setze_upload_abgelehnt(&pool, teil.id, vod.id, "von YouTube verworfen")
+            .await
+            .unwrap();
+
+        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        assert_eq!(teil.status, TEIL_ABGELEHNT);
+        assert!(teil.upload_session_uri.is_none());
+        assert_eq!(teil.upload_offset, 0);
+        assert!(teil.youtube_video_id.is_none());
+        let (status, uploaded_at): (String, Option<DateTime<Utc>>) =
+            sqlx::query_as("SELECT status, uploaded_at FROM twitch_vod_archive_vods WHERE id = $1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, STATUS_UPLOAD_FEHLER);
+        assert!(uploaded_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn abgelehnter_upload_rollt_bei_vod_fehler_zurueck() {
+        let Some(pool) = pool("t_vod_abgelehnt_rollback").await else {
+            return;
+        };
+        merke_vod(&pool, "v2b", "earlysalty", "Langer Stream", 50_000)
+            .await
+            .unwrap();
+        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2b.mp4".into()])
+            .await
+            .unwrap();
+        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42)
+            .await
+            .unwrap();
+        setze_teil_fertig(&pool, teil.id, "yt-alt").await.unwrap();
+        setze_hochgeladen(&pool, vod.id).await.unwrap();
+        sqlx::query(
+            "CREATE FUNCTION verhindere_vod_update() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'Testfehler'; END $$",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER vod_update_blocker BEFORE UPDATE ON twitch_vod_archive_vods \
+             FOR EACH ROW EXECUTE FUNCTION verhindere_vod_update()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
+            .await
+            .is_err());
+        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        assert_eq!(teil.status, TEIL_FERTIG);
+        assert_eq!(
+            teil.upload_session_uri.as_deref(),
+            Some("https://sitzung/alt")
+        );
+        assert_eq!(teil.upload_offset, 42);
+        assert_eq!(teil.youtube_video_id.as_deref(), Some("yt-alt"));
     }
 
     #[tokio::test]

@@ -23,6 +23,8 @@ Environment=INFISICAL_CONFIG_FILE=/etc/deadlock-twitch/infisical.conf
 Environment=INFISICAL_LOADER=/usr/local/libexec/dl-infisical-env
 Environment=TWITCH_RUNTIME_CONFIG_FILE=/etc/deadlock-twitch/bot.conf
 Environment=TWITCH_RUNTIME_ROLE=twitch_worker
+Environment=TWITCH_RUNTIME_ENFORCE=1
+Environment=TWITCH_SPLIT_RUNTIME_ENFORCE=1
 Environment=TB_DB_MIGRATE=0
 Environment=TB_MCP_PORT=8892
 Environment=TB_CHAT_ENABLED=1

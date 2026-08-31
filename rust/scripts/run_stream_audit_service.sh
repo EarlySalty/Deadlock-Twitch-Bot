@@ -34,6 +34,7 @@ if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
   source "$RUNTIME_CONFIG_FILE"
   set +a
 fi
+unset INFISICAL_SERVICE_TOKEN
 
 # Das systemd-Credential gewinnt gegen einen Wert aus der Config-Datei: es ist
 # die Stelle, die rotiert wird. Ein alter Token in infisical.conf hat den
@@ -66,6 +67,22 @@ unset INFISICAL_SERVICE_TOKEN
 # Die Marke hat ihren Zweck erfuellt; sie muss nicht in streamlink und ffmpeg
 # weiterleben.
 unset DL_INFISICAL_READY
+
+# Nicht-Secret-Werte nach dem Bulk-Load erneut aus der root-verwalteten
+# Audit-Konfiguration übernehmen. Das rclone-Credential ist unverrückbar an
+# das von systemd bereitgestellte, nur für diesen Dienst lesbare File gebunden.
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
+unset INFISICAL_SERVICE_TOKEN
+if [[ -z "${CREDENTIALS_DIRECTORY:-}" || ! -r "$CREDENTIALS_DIRECTORY/rclone-config" ]]; then
+  echo "Verschlüsseltes rclone-Credential fehlt." >&2
+  exit 8
+fi
+export RCLONE_CONFIG="$CREDENTIALS_DIRECTORY/rclone-config"
 
 BINARY="$ROOT_DIR/rust/target/release/tb-stream-audit"
 # Gebaut wird nicht hier, sondern beim Deploy (siehe docs/STREAM_COACHING_AUDIT.md).

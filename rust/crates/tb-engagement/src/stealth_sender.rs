@@ -71,7 +71,14 @@ impl StealthSender {
             return Some(false);
         }
 
-        let (access_token, sender_id) = self.auth.get_valid_access_token().await?;
+        let (access_token, sender_id) = match self.auth.get_valid_access_token().await {
+            Ok(Some(token)) => token,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::error!(%error, "StealthSender: Sende-Token nicht verfügbar");
+                return Some(false);
+            }
+        };
 
         let body = serde_json::json!({
             "broadcaster_id": broadcaster_id,
@@ -107,8 +114,14 @@ impl StealthSender {
 
         // HTTP 200 kann trotzdem einen serverseitigen Drop bedeuten.
         let payload: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
-        let first = payload.get("data").and_then(serde_json::Value::as_array).and_then(|a| a.first());
-        match first.and_then(|d| d.get("is_sent")).and_then(serde_json::Value::as_bool) {
+        let first = payload
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|a| a.first());
+        match first
+            .and_then(|d| d.get("is_sent"))
+            .and_then(serde_json::Value::as_bool)
+        {
             Some(true) => Some(true),
             Some(false) => {
                 let drop = first
@@ -145,12 +158,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
         )
@@ -174,8 +203,12 @@ mod tests {
     async fn auth_with_token(pool: PgPool, c: Arc<FieldCipher>) -> Arc<SenderAuthStore> {
         let s = SenderAuthStore::new(pool.clone(), c.clone(), "cid".into(), "csec".into());
         s.ensure_table().await;
-        let access_enc = c.encrypt_field("acc", &aad::engagement_sender("access_token", "77")).unwrap();
-        let refresh_enc = c.encrypt_field("ref", &aad::engagement_sender("refresh_token", "77")).unwrap();
+        let access_enc = c
+            .encrypt_field("acc", &aad::engagement_sender("access_token", "77"))
+            .unwrap();
+        let refresh_enc = c
+            .encrypt_field("ref", &aad::engagement_sender("refresh_token", "77"))
+            .unwrap();
         let future = chrono::Utc::now().timestamp() + 3600;
         sqlx::query(
             "INSERT INTO twitch_engagement_sender_auth (twitch_user_id, twitch_login, \
@@ -193,7 +226,9 @@ mod tests {
 
     #[tokio::test]
     async fn none_ohne_account() {
-        let Some(pool) = make_pool("t_eng_stealth_none").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_none").await else {
+            return;
+        };
         add_active_partner(&pool, "partner").await;
         let s = SenderAuthStore::new(pool.clone(), cipher(), "cid".into(), "csec".into());
         s.ensure_table().await;
@@ -204,7 +239,9 @@ mod tests {
 
     #[tokio::test]
     async fn leerer_input_ist_false() {
-        let Some(pool) = make_pool("t_eng_stealth_empty").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_empty").await else {
+            return;
+        };
         add_active_partner(&pool, "partner").await;
         let auth = auth_with_token(pool.clone(), cipher()).await;
         let sender = StealthSender::new(auth, "cid".into(), pool);
@@ -214,7 +251,9 @@ mod tests {
 
     #[tokio::test]
     async fn nicht_partner_wird_blockiert_ohne_http() {
-        let Some(pool) = make_pool("t_eng_stealth_non_partner").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_non_partner").await else {
+            return;
+        };
         let auth = auth_with_token(pool.clone(), cipher()).await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -228,12 +267,17 @@ mod tests {
         let sender = StealthSender::new(auth, "cid".into(), pool)
             .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
 
-        assert_eq!(sender.send("123", "kein_partner", "hallo").await, Some(false));
+        assert_eq!(
+            sender.send("123", "kein_partner", "hallo").await,
+            Some(false)
+        );
     }
 
     #[tokio::test]
     async fn aktiver_partner_sendet() {
-        let Some(pool) = make_pool("t_eng_stealth_sent").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_sent").await else {
+            return;
+        };
         add_active_partner(&pool, "partner").await;
         let c = cipher();
         let auth = auth_with_token(pool.clone(), c).await;
@@ -263,7 +307,9 @@ mod tests {
 
     #[tokio::test]
     async fn is_sent_false_ist_drop() {
-        let Some(pool) = make_pool("t_eng_stealth_drop").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_drop").await else {
+            return;
+        };
         add_active_partner(&pool, "partner").await;
         let auth = auth_with_token(pool.clone(), cipher()).await;
         let server = MockServer::start().await;
@@ -281,7 +327,9 @@ mod tests {
 
     #[tokio::test]
     async fn http_error_ist_false() {
-        let Some(pool) = make_pool("t_eng_stealth_err").await else { return };
+        let Some(pool) = make_pool("t_eng_stealth_err").await else {
+            return;
+        };
         add_active_partner(&pool, "partner").await;
         let auth = auth_with_token(pool.clone(), cipher()).await;
         let server = MockServer::start().await;

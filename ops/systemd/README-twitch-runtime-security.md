@@ -47,29 +47,42 @@ Restdienste folgt zusammen mit den späteren getrennten Infisical-Bereichen.
 
 ## Installation und Deploy
 
-1. Frontends und die beiden Rust-Release-Binaries in einem sauberen Checkout
+1. Frontends und die drei Rust-Release-Binaries in einem eigenständigen Clone
    mit der separaten Build-Identität `twitchbuild` bauen und testen. Kein
    Laufzeitdienst gehört dieser Identität an. Den fertigen Baum danach
    root-eigen und nicht mehr beschreibbar unter
    `/opt/deadlock/twitch/builds/<git-sha>` einfrieren.
-2. `install-twitch-release.sh <checkout> <git-sha>` als root ausführen. Der
+2. Den geprüften Installer zuerst root-eigen nach
+   `/usr/local/sbin/install-twitch-release` installieren und ausschließlich
+   diese Kopie als root mit `<checkout> <git-sha>` ausführen. Niemals das
+   Skript direkt aus dem Build-Checkout als root starten. Der
    Installer prüft SHA, Arbeitsbaum, Eigentümer, Dateitypen und Artefakte,
    übernimmt ausführbare Quellen direkt aus Git, schreibt ein Prüfsummenmanifest
    und kopiert root-eigen nach
    `/opt/deadlock/twitch/releases/<sha>` und wechselt `current` atomar.
-3. Die Regeln aus `pg_hba-twitch.conf` vor `local all all peer` einfügen und
-   PostgreSQL neu laden. Dadurch können die Peer-Rollen keine andere lokale
-   Datenbank öffnen.
+3. Die Regeln aus `pg_hba-twitch.conf` vor den allgemeinen Local- und
+   Host-Regeln einfügen und PostgreSQL neu laden. Positiv gegen
+   `twitch_analytics` sowie negativ gegen `postgres` und eine weitere lokale
+   Datenbank prüfen. Dadurch können weder die Peer-Rollen noch `twitchlegacy`
+   eine andere lokale Datenbank öffnen.
 4. Alle drei alten User-Dienste stoppen und deaktivieren. Verifizieren, dass keine
    alten `tb-bot`-/`tb-dashboard`-/`tb-stream-audit`-Prozesse und keine zugehörigen
    PostgreSQL-Backends mit der Superuser-Rolle mehr leben.
 5. Erst offline `deadlock-twitch-migrate.service` starten. Nach erfolgreichen Migrationen
    wendet sein `ExecStartPost` die Runtime-Rollen und Grants erneut an; dadurch
    sind neue Tabellen nutzbar, Migrations- und Sicherungstabellen aber gesperrt.
-6. Nur bei Erfolg die neuen Systemdienste starten und live prüfen. Ein Rollback
+6. Das gemeinsame `TWITCH_ANALYTICS_DSN`-Secret auf `twitchlegacy` umstellen,
+   alle verbleibenden Verbraucher neu starten und über `pg_stat_activity`
+   verifizieren, dass kein TCP-Backend mehr als `postgres` verbunden ist. Erst
+   danach das TCP-Passwort der Rolle `postgres` entfernen.
+7. Das verschlüsselte rclone-Credential anlegen und als `twitchaudit` mit einer
+   reinen Leseprobe prüfen. Nur bei Erfolg die neuen Systemdienste starten und
+   Bot, Dashboard, MCP, Audit, STT und Datenbankrechte live prüfen. Ein Rollback
    wechselt auf das vorige root-eigene Release, führt aber niemals die alten
    Dienste oder PostgreSQL-Superuser-Zugänge wieder ein.
 
-Der alte Klartext-Bootstrap-Token darf erst nach einer erfolgreichen
-Live-Prüfung entfernt werden. Die Systemdienste verwenden ausschließlich das
-hostgebundene `LoadCredentialEncrypted=`-Credential.
+Alte Klartextkopien des Infisical-Bootstrap-Tokens und der rclone-Konfiguration
+dürfen erst nach einer erfolgreichen Live-Prüfung entfernt werden. Danach die
+alten Bootstrap- und Google/rclone-Tokens serverseitig widerrufen, neue
+Credentials hostgebunden verschlüsseln und die Dienste erneut prüfen. Die
+Systemdienste verwenden ausschließlich `LoadCredentialEncrypted=`.

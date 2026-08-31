@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+unset GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 if [[ $EUID -ne 0 ]]; then
   echo "Der Release-Installer muss als root laufen." >&2
@@ -25,21 +28,38 @@ if [[ "$(basename -- "$checkout")" != "$git_sha" ]]; then
   echo "Das Build-Verzeichnis muss exakt den vollständigen Git-SHA tragen." >&2
   exit 1
 fi
-for frozen_path in "$build_root" "$checkout"; do
-  if [[ "$(stat -c '%U:%G' -- "$frozen_path")" != "root:root" ]] ||
-     [[ -n "$(find "$frozen_path" -maxdepth 0 -perm /022 -print -quit)" ]]; then
-    echo "Build-Pfad ist nicht root-eigen und schreibgeschützt: $frozen_path" >&2
-    exit 1
-  fi
-done
+if [[ "$(stat -c '%U:%G' -- "$build_root")" != "root:root" ]] ||
+   [[ -n "$(find "$build_root" -maxdepth 0 -perm /022 -print -quit)" ]]; then
+  echo "Build-Wurzel ist nicht root-eigen und schreibgeschützt: $build_root" >&2
+  exit 1
+fi
+
+git_dir="$checkout/.git"
+if [[ ! -d "$git_dir" || -L "$git_dir" ]]; then
+  echo "Der Release-Checkout muss ein eigenständiger Clone mit internem .git-Verzeichnis sein." >&2
+  exit 1
+fi
+unsafe_checkout="$(find "$checkout" -xdev \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit)"
+if [[ -n "$unsafe_checkout" ]]; then
+  echo "Checkout oder Git-Metadaten sind nicht vollständig eingefroren: $unsafe_checkout" >&2
+  exit 1
+fi
+if [[ -f "$git_dir/objects/info/alternates" ]] ||
+   [[ -n "$(git -C "$checkout" config --local --get core.worktree || true)" ]]; then
+  echo "Externe Git-Objekte oder ein externes Worktree sind für Releases nicht erlaubt." >&2
+  exit 1
+fi
 
 # Ersetzungsobjekte könnten selbst einen expliziten SHA transparent umbiegen.
 export GIT_NO_REPLACE_OBJECTS=1
-if [[ "$(git -C "$checkout" rev-parse HEAD)" != "$git_sha" ]]; then
+export GIT_OPTIONAL_LOCKS=0
+git_safe=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.file.allow=never)
+if [[ "$("${git_safe[@]}" -C "$checkout" rev-parse --absolute-git-dir)" != "$git_dir" ]] ||
+   [[ "$("${git_safe[@]}" -C "$checkout" rev-parse HEAD)" != "$git_sha" ]]; then
   echo "Checkout und angegebener Git-SHA stimmen nicht überein." >&2
   exit 1
 fi
-if [[ -n "$(git -C "$checkout" status --porcelain --untracked-files=normal)" ]]; then
+if [[ -n "$("${git_safe[@]}" -C "$checkout" status --porcelain --untracked-files=normal)" ]]; then
   echo "Der Checkout enthält Änderungen oder unversionierte Dateien; Release abgebrochen." >&2
   exit 1
 fi
@@ -100,7 +120,7 @@ if [[ ! -e "$release" ]]; then
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
   # angegebenen SHA. Unversionierte Dateien aus dem Build-Baum werden niemals
   # mit postgres- oder Dienstrechten ausgeführt.
-  git -C "$checkout" archive --format=tar "$git_sha" -- \
+  "${git_safe[@]}" -C "$checkout" archive --format=tar "$git_sha" -- \
     rust/scripts/run_tb_bot_service.sh \
     rust/scripts/run_tb_dashboard_service.sh \
     rust/scripts/run_stream_audit_service.sh \

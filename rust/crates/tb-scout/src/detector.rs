@@ -100,9 +100,9 @@ const FINDE_SQL: &str = r#"WITH ticks AS (
    ORDER BY first_seen ASC, login ASC
    LIMIT $4"#;
 
-/// Liefert die aktuellen Kandidaten. Query-Fehler → leere Liste (gleiche
-/// Haltung wie `detect_recruit_candidates` im Recruiting-Pfad).
-pub async fn finde_kandidaten(pool: &PgPool) -> Vec<KandidatFund> {
+/// Liefert die aktuellen Kandidaten. Datenbankfehler werden an den Aufrufer
+/// gereicht, damit ein defekter Scan nicht wie „keine Kandidaten“ aussieht.
+pub async fn finde_kandidaten(pool: &PgPool) -> Result<Vec<KandidatFund>, sqlx::Error> {
     let seit = Utc::now() - chrono::Duration::days(LOOKBACK_DAYS);
     let zeilen = sqlx::query_as::<_, FundZeile>(FINDE_SQL)
         .bind(seit)
@@ -111,15 +111,9 @@ pub async fn finde_kandidaten(pool: &PgPool) -> Vec<KandidatFund> {
         .bind(MAX_ERGEBNIS)
         .fetch_all(pool)
         .await;
-    let zeilen = match zeilen {
-        Ok(zeilen) => zeilen,
-        Err(error) => {
-            tracing::debug!(%error, "tb-scout: Kandidaten-Query fehlgeschlagen");
-            return Vec::new();
-        }
-    };
-    // Globaler Ban als Code-Probe (fail-closed): Query-Fehler oder Treffer
-    // → Kandidat fällt raus, erscheint nie in der Freigabeliste.
+    let zeilen = zeilen?;
+    // Globaler Ban als Code-Probe. Ein Treffer verwirft den Kandidaten; ein
+    // Queryfehler bricht den Scan sichtbar ab.
     let ban_store = RaidBlacklistStore::new(pool.clone());
     let mut funds = Vec::with_capacity(zeilen.len());
     for zeile in zeilen {
@@ -146,27 +140,9 @@ pub async fn finde_kandidaten(pool: &PgPool) -> Vec<KandidatFund> {
                 tracing::error!(
                     %error,
                     login,
-                    "tb-scout: Global-Ban-Prüfung fehlgeschlagen; fail-closed, Kandidat verworfen"
+                    "tb-scout: Global-Ban-Prüfung fehlgeschlagen; Scan wird abgebrochen"
                 );
-                continue;
-            }
-        }
-        if let Some(user_id) = twitch_user_id.as_deref() {
-            // Zweite Probe mit der ID (Bestand matcht teils nur per ID).
-            match ban_store.is_hard_banned(Some(user_id), &login).await {
-                Ok(false) => {}
-                Ok(true) => {
-                    tracing::info!(login, "tb-scout: Kandidat per ID global gebannt, verworfen");
-                    continue;
-                }
-                Err(error) => {
-                    tracing::error!(
-                        %error,
-                        login,
-                        "tb-scout: Global-Ban-Probe (ID) fehlgeschlagen; fail-closed"
-                    );
-                    continue;
-                }
+                return Err(error);
             }
         }
         funds.push(KandidatFund {
@@ -180,30 +156,22 @@ pub async fn finde_kandidaten(pool: &PgPool) -> Vec<KandidatFund> {
             deadlock_share,
         });
     }
-    funds
+    Ok(funds)
 }
 
 /// Erkennen und vormerken: legt jeden Fund als `vorgeschlagen` in
 /// `twitch_scout_candidates` (bestehende Zeilen mit anderer Entscheidung
 /// bleiben unangetastet, siehe [`store::vermerke_kandidat`]). Liefert die
 /// Anzahl angefasster Zeilen.
-pub async fn laufe_scout_scan(pool: &PgPool) -> usize {
+pub async fn laufe_scout_scan(pool: &PgPool) -> Result<usize, sqlx::Error> {
     let mut angefasst = 0usize;
-    for fund in finde_kandidaten(pool).await {
-        match store::vermerke_kandidat(pool, &fund).await {
-            Ok(true) => angefasst += 1,
-            Ok(false) => {}
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    login = %fund.login,
-                    "tb-scout: Kandidat konnte nicht vorgemerkt werden"
-                );
-            }
+    for fund in finde_kandidaten(pool).await? {
+        if store::vermerke_kandidat(pool, &fund).await? {
+            angefasst += 1;
         }
     }
     if angefasst > 0 {
         tracing::info!(angefasst, "tb-scout: Scan-Kandidaten vorgemerkt");
     }
-    angefasst
+    Ok(angefasst)
 }

@@ -30,6 +30,7 @@ if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
   source "$RUNTIME_CONFIG_FILE"
   set +a
 fi
+unset INFISICAL_SERVICE_TOKEN
 
 # Bootstrap-Token aus systemd-Credentials übernehmen (bevorzugt).
 if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
@@ -51,6 +52,16 @@ if [[ "${DL_INFISICAL_READY:-0}" != "1" ]]; then
   exec "$INFISICAL_LOADER" --profile all -- "$0" "$@"
 fi
 unset DL_INFISICAL_READY
+unset INFISICAL_SERVICE_TOKEN
+
+# Alte Werte aus dem gemeinsamen Infisical-Profil dürfen weder Rolle,
+# Härtungs-Gate noch Port dieses getrennten Dienstes bestimmen.
+if [[ -n "$RUNTIME_CONFIG_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNTIME_CONFIG_FILE"
+  set +a
+fi
 unset INFISICAL_SERVICE_TOKEN
 
 if [[ -n "${TWITCH_DASHBOARD_ANALYTICS_DSN:-}" ]]; then

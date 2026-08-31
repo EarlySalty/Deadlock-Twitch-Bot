@@ -55,39 +55,46 @@ async fn validate_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 async fn wait_for_channels<F, Fut>(interval: Duration, mut load: F) -> HashSet<String>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = HashSet<String>>,
+    Fut: std::future::Future<Output = Result<HashSet<String>, sqlx::Error>>,
 {
     let mut logged = false;
     loop {
-        let channels = load().await;
-        if !channels.is_empty() {
-            return channels;
-        }
-        if !logged {
-            tracing::info!(
-                event = "engagement_irc.waiting_for_channels",
-                "Engagement-IRC: noch keine irc_read-Kanäle, Reader wartet"
-            );
-            logged = true;
+        match load().await {
+            Ok(channels) if !channels.is_empty() => return channels,
+            Ok(_) => {
+                if !logged {
+                    tracing::info!(
+                        event = "engagement_irc.waiting_for_channels",
+                        "Engagement-IRC: noch keine irc_read-Kanäle, Reader wartet"
+                    );
+                    logged = true;
+                }
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    event = "engagement_irc.channel_load_failed",
+                    "Engagement-IRC: Kanalliste nicht lesbar, Reader versucht es erneut"
+                );
+            }
         }
         tokio::time::sleep(interval).await;
     }
 }
 
 /// Aktive Kanäle mit `irc_read = TRUE` (kleingeschrieben).
-async fn load_irc_channels(pool: &PgPool) -> HashSet<String> {
-    sqlx::query_scalar!(
+async fn load_irc_channels(pool: &PgPool) -> Result<HashSet<String>, sqlx::Error> {
+    Ok(sqlx::query_scalar!(
         r#"SELECT channel_login AS "channel_login!"
            FROM twitch_engagement_settings
            WHERE enabled = TRUE AND irc_read = TRUE"#
     )
     .fetch_all(pool)
-    .await
-    .unwrap_or_default()
+    .await?
     .into_iter()
     .map(|c| c.trim().to_lowercase())
     .filter(|c| !c.is_empty())
-    .collect()
+    .collect())
 }
 
 /// Anonymer IRC-Reader, der Chat in die Engagement-Pipeline speist.
@@ -144,11 +151,17 @@ impl EngagementIrcReader {
             }
         };
         let (rd, mut wr) = stream.into_split();
-        if let Err(error) = wr.write_all(format!("NICK {ANON_NICK}\r\n").as_bytes()).await {
+        if let Err(error) = wr
+            .write_all(format!("NICK {ANON_NICK}\r\n").as_bytes())
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: NICK-Handshake fehlgeschlagen");
             return None;
         }
-        if let Err(error) = wr.write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n").await {
+        if let Err(error) = wr
+            .write_all(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
+            .await
+        {
             tracing::warn!(%error, "Engagement-IRC: CAP-Handshake fehlgeschlagen");
             return None;
         }
@@ -214,15 +227,24 @@ impl EngagementIrcReader {
                     }
                 }
                 _ = refresh.tick() => {
-                    let latest = load_irc_channels(&self.pool).await;
-                    let (to_join, to_part) = channel_delta(channels, &latest);
-                    for ch in &to_join {
-                        join(&mut writer, ch).await;
+                    match channel_refresh_plan(channels, load_irc_channels(&self.pool).await) {
+                        Ok((to_join, to_part, latest)) => {
+                            for ch in &to_join {
+                                join(&mut writer, ch).await;
+                            }
+                            for ch in &to_part {
+                                part(&mut writer, ch).await;
+                            }
+                            *channels = latest;
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                %error,
+                                event = "engagement_irc.channel_refresh_failed",
+                                "Engagement-IRC: Kanalliste nicht lesbar; bestehende Joins bleiben unverändert"
+                            );
+                        }
                     }
-                    for ch in &to_part {
-                        part(&mut writer, ch).await;
-                    }
-                    *channels = latest;
                 }
             }
         }
@@ -276,10 +298,24 @@ async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
 /// Sitzungsende wieder zurueck. Ohne PART bliebe der Reader im fremden Kanal
 /// und laese dort weiter mit, obwohl keine Sitzung mehr laeuft, und bei
 /// stuendlicher Rotation summierten sich die Joins.
-fn channel_delta(current: &HashSet<String>, latest: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+fn channel_delta(
+    current: &HashSet<String>,
+    latest: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
     let to_join = latest.difference(current).cloned().collect();
     let to_part = current.difference(latest).cloned().collect();
     (to_join, to_part)
+}
+
+type ChannelRefresh = (Vec<String>, Vec<String>, HashSet<String>);
+
+fn channel_refresh_plan(
+    current: &HashSet<String>,
+    latest: Result<HashSet<String>, sqlx::Error>,
+) -> Result<ChannelRefresh, sqlx::Error> {
+    let latest = latest?;
+    let (to_join, to_part) = channel_delta(current, &latest);
+    Ok((to_join, to_part, latest))
 }
 
 /// Verlässt einen Kanal (`PART #channel`).
@@ -335,9 +371,9 @@ mod tests {
                 // Erst ab der dritten Abfrage liefert die DB einen Kanal,
                 // so wie wenn der Loop ihn mitten im Betrieb aktiviert.
                 if zaehler.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
-                    HashSet::new()
+                    Ok(HashSet::new())
                 } else {
-                    HashSet::from(["fremder_kanal".to_owned()])
+                    Ok(HashSet::from(["fremder_kanal".to_owned()]))
                 }
             }
         })
@@ -418,6 +454,20 @@ mod tests {
         let (to_join, to_part) = channel_delta(&gleich, &gleich);
 
         assert!(to_join.is_empty() && to_part.is_empty());
+    }
+
+    #[test]
+    fn refresh_db_fehler_erzeugt_keine_parts() {
+        let aktuell = HashSet::from(["partner".to_owned(), "testkanal".to_owned()]);
+
+        let plan = channel_refresh_plan(&aktuell, Err(sqlx::Error::RowNotFound));
+
+        assert!(plan.is_err());
+        assert_eq!(
+            aktuell,
+            HashSet::from(["partner".to_owned(), "testkanal".to_owned()]),
+            "bei einem DB-Fehler bleiben die bestehenden Joins unangetastet"
+        );
     }
 
     #[test]

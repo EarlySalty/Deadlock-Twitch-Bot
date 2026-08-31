@@ -85,9 +85,12 @@ fn gueltiger_login(login: &str) -> bool {
 /// Persönliche Invite-URLs je Login aus `twitch_streamer_invites` — dieselbe
 /// Quelle wie die Bestands-API `tb-internal-api discord_invite`; die interne
 /// API ist token-geschützt, deshalb liefert der Admin-GET die URL direkt mit.
-async fn lade_invites(pool: &PgPool, logins: &[String]) -> BTreeMap<String, String> {
+async fn lade_invites(
+    pool: &PgPool,
+    logins: &[String],
+) -> Result<BTreeMap<String, String>, sqlx::Error> {
     if logins.is_empty() {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
     let zeilen: Vec<(String, String)> = sqlx::query_as(
         "SELECT LOWER(streamer_login), MIN(invite_url) \
@@ -97,9 +100,8 @@ async fn lade_invites(pool: &PgPool, logins: &[String]) -> BTreeMap<String, Stri
     )
     .bind(logins)
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    zeilen.into_iter().collect()
+    .await?;
+    Ok(zeilen.into_iter().collect())
 }
 
 fn zu_kandidat(zeile: &KandidatZeile, invites: &BTreeMap<String, String>) -> ScoutKandidat {
@@ -127,9 +129,10 @@ pub async fn candidates_handler(auth: DashboardAuthLevel, State(pool): State<PgP
     }
 
     // Erkennungs-Lauf vor der Liste: neue Kandidaten werden vorgemerkt,
-    // Entscheidungen bleiben unangetastet (Upsert-Schutz im Store). Der Lauf
-    // protokolliert Fehler selbst und kann die Liste nicht scheitern lassen.
-    let _ = tb_scout::detector::laufe_scout_scan(&pool).await;
+    // Entscheidungen bleiben unangetastet (Upsert-Schutz im Store).
+    if let Err(error) = tb_scout::detector::laufe_scout_scan(&pool).await {
+        return db_error(error);
+    }
 
     let (offen, persoenlich) =
         match tokio::try_join!(store::liste_offen(&pool), store::liste_persoenlich(&pool)) {
@@ -144,7 +147,10 @@ pub async fn candidates_handler(auth: DashboardAuthLevel, State(pool): State<PgP
         .collect();
     logins.sort_unstable();
     logins.dedup();
-    let invites = lade_invites(&pool, &logins).await;
+    let invites = match lade_invites(&pool, &logins).await {
+        Ok(invites) => invites,
+        Err(error) => return db_error(error),
+    };
 
     Json(ScoutCandidatesResponse {
         items: offen.iter().map(|z| zu_kandidat(z, &invites)).collect(),
@@ -348,6 +354,40 @@ mod tests {
             body["persoenlich"].as_array().expect("persoenlich").len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn get_meldet_scan_und_invite_db_fehler() {
+        let Some(pool) = pool_or_skip("admin_scout_db_fehler").await else {
+            return;
+        };
+        sqlx::query("DROP TABLE twitch_stats_category")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, body) = get_candidates(DashboardAuthLevel::admin(), pool.clone()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"], "internal_error");
+
+        sqlx::query(
+            "CREATE TABLE twitch_stats_category (ts_utc TIMESTAMPTZ, streamer TEXT, \
+             viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, \
+             stream_title TEXT, tags TEXT, language TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_scout_candidates (streamer_login) VALUES ('kandidat')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE twitch_streamer_invites")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, body) = get_candidates(DashboardAuthLevel::admin(), pool).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"], "internal_error");
     }
 
     #[tokio::test]
