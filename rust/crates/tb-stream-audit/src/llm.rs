@@ -4,12 +4,10 @@
 //! sexuelle Inhalte oder diskriminierende Aussagen ohne Reizwort brauchen ein
 //! Modell.
 //!
-//! Der Anbieter kommt aus `tb_llm::selection::endpoint_for` unter dem
-//! Anwendungsfall `stream_audit`, nicht fest verdrahtet. Das ist genau ein
-//! Anbieter, keine Kette: faellt er aus, bleibt es bei den Regelfunden, und
-//! der Bericht sagt es. Damit folgt das Audit
-//! derselben Konfiguration wie der Rest des Bots (`TB_LLM_PROVIDER_*`), und ein
-//! Anbieterwechsel passiert an einer Stelle statt in jedem Aufrufer.
+//! Das Modell kommt aus `tb_llm::selection::endpoint_for` unter dem
+//! Anwendungsfall `stream_audit`: DeepSeek V4 Flash bei Fireworks, wie im
+//! restlichen Bot. Fällt es aus, bleibt es bei den Regelfunden, und der Bericht
+//! sagt es. Provider- und Modell-Overrides werden nicht verwendet.
 //!
 //! # Was an das Modell geht
 //!
@@ -22,7 +20,7 @@
 //! [`crate::rules`] und sonst nichts. Alles andere - Namen, Beleidigungen ohne
 //! Reizwort, private Erzaehlungen - geht im Wortlaut mit. Das ist der Preis
 //! dafuer, dass ein Modell ueberhaupt etwas bewerten kann, und es ist der
-//! Grund, warum ein fremder Anbieter ausdruecklich erlaubt werden muss. Ohne
+//! Grund, warum der externe Fireworks-Aufruf ausdruecklich erlaubt werden muss. Ohne
 //! Erlaubnis bleibt es bei den Regelfunden, und der Bericht sagt das (siehe
 //! `report::Bericht`). Audio verlaesst den Rechner nie.
 //!
@@ -77,7 +75,7 @@ pub fn stapel(segmente: &[Segment]) -> Vec<&[Segment]> {
     segmente.chunks(SEGMENTE_JE_ANFRAGE).collect()
 }
 
-/// Umgebungsschalter fuer einen Anbieter ausserhalb dieses Rechners.
+/// Umgebungsschalter für den Fireworks-Aufruf außerhalb dieses Rechners.
 pub const REMOTE_ERLAUBT_ENV: &str = "STREAM_AUDIT_ALLOW_REMOTE_LLM";
 
 /// Darf dieser Anbieter Transkriptausschnitte sehen?

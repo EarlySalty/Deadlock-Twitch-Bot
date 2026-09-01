@@ -204,13 +204,9 @@ impl OutreachReviewClient {
         if OUTREACH_SYSTEM_PROMPT.trim().is_empty() {
             return Err(OutreachError::Unavailable);
         }
-        // Gleiches Gate wie `crew_review::FireworksReviewClient::from_env`:
-        // abgeschaltet nur durch fehlenden Schluessel
-        // (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder eine eigene
-        // `TB_LLM_PROVIDER_OUTREACH_SHADOW` auf einen anderen Anbieter.
-        // Adresse und Modell kommen aus der zentralen Auswahl und werden
-        // durchgereicht (`TB_LLM_MODEL_OUTREACH_SHADOW`, `FIREWORKS_MODEL`,
-        // `FIREWORKS_BASE_URL`).
+        // Gleiches Gate wie beim Crew-Review: Ohne Fireworks-Schlüssel aus;
+        // Anbieter und Modell sind zentral fest, die Basis-URL bleibt für
+        // Proxy- und Testpfade konfigurierbar.
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks"
             || endpoint.api_key.as_deref().is_none_or(|key| key.trim().is_empty())
@@ -631,8 +627,8 @@ impl NewOutreachEvent {
 mod tests {
     #[test]
     fn outreach_shadow_steht_in_der_nur_fireworks_liste() {
-        // Sonst wuerde ein globales TB_LLM_PROVIDER_DEFAULT das fail-closed-Gate
-        // still ausloesen.
+        // Historischer Guard-Vertrag; inzwischen sind alle Anwendungsfälle
+        // zentral Fireworks-only.
         assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&super::USE_CASE));
     }
 

@@ -162,14 +162,10 @@ pub struct FireworksReviewClient {
 }
 
 impl FireworksReviewClient {
-    /// Fail-closed-Gate: abgeschaltet wird nur durch fehlenden Schluessel
-    /// (`FIREWORK_API_KEY`/`FIREWORKS_API_KEY`) oder durch eine eigene
-    /// `TB_LLM_PROVIDER_RICKY_CREW_REVIEW`, die auf einen anderen Anbieter
-    /// zeigt. Adresse und Modell kommen aus der zentralen Auswahl und werden
-    /// durchgereicht: `TB_LLM_MODEL_RICKY_CREW_REVIEW` (bzw. das globale
-    /// `FIREWORKS_MODEL`) und `FIREWORKS_BASE_URL` wirken, wie der
-    /// Service-Wrapper es verspricht. Ein Modell ist nie "fehlend", die
-    /// Auswahl liefert immer eines.
+    /// Fail-closed-Gate: Ohne Fireworks-Schlüssel ist das Review aus. Anbieter
+    /// und Modell kommen fest aus der zentralen Auswahl; alte Provider- und
+    /// Modell-Overrides werden ignoriert. Nur die Fireworks-Basis-URL bleibt
+    /// für den betrieblichen Proxy- und Testpfad konfigurierbar.
     pub fn from_env() -> Result<Self, ReviewError> {
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks" || endpoint.api_key.is_none() {
@@ -585,8 +581,8 @@ mod tests {
 
     #[test]
     fn crew_review_steht_in_der_nur_fireworks_liste() {
-        // Sonst wuerde ein globales TB_LLM_PROVIDER_DEFAULT das fail-closed-Gate
-        // still ausloesen.
+        // Historischer Guard-Vertrag; inzwischen sind alle Anwendungsfälle
+        // zentral Fireworks-only.
         assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&USE_CASE));
     }
     use serde_json::{json, Value};
