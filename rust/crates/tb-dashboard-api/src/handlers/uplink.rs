@@ -61,6 +61,35 @@ struct RotationZustand {
     antwort: Option<Value>,
 }
 
+struct RotationAbschluss<'a> {
+    zustand: &'a mut RotationZustand,
+    jetzt: Arc<dyn Fn() -> Instant + Send + Sync>,
+    abgeschlossen: bool,
+}
+
+impl RotationAbschluss<'_> {
+    fn abschliessen(&mut self, ergebnis: &Result<Value, Response>) {
+        self.zustand.terminal = Some((self.jetzt)());
+        if let Ok(antwort) = ergebnis {
+            self.zustand.antwort = Some(antwort.clone());
+        }
+        self.abgeschlossen = true;
+    }
+}
+
+impl Drop for RotationAbschluss<'_> {
+    fn drop(&mut self) {
+        if self.abgeschlossen {
+            return;
+        }
+        // Ein abgebrochener HTTP-Request droppt die äußere Handler-Future an
+        // jedem Await. Der unbekannte Ausgang bleibt deshalb für die normale
+        // Sperrfrist fail-closed, aber niemals für die gesamte Prozesslaufzeit.
+        self.zustand.terminal = Some((self.jetzt)());
+        self.zustand.antwort = None;
+    }
+}
+
 impl Default for IngestRotationCoordinator {
     fn default() -> Self {
         Self {
@@ -128,11 +157,13 @@ impl IngestRotationCoordinator {
         zustand.schluessel = Some(idempotenz);
         zustand.terminal = None;
         zustand.antwort = None;
+        let mut abschluss = RotationAbschluss {
+            zustand: &mut zustand,
+            jetzt: Arc::clone(&self.jetzt),
+            abgeschlossen: false,
+        };
         let ergebnis = operation().await;
-        zustand.terminal = Some((self.jetzt)());
-        if let Ok(antwort) = &ergebnis {
-            zustand.antwort = Some(antwort.clone());
-        }
+        abschluss.abschliessen(&ergebnis);
         ergebnis
     }
 }
@@ -2455,10 +2486,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abgebrochener_schreibaufruf_bleibt_fuer_andere_keys_fail_closed() {
+    async fn abgebrochener_schreibaufruf_sperrt_fail_closed_aber_nicht_fuer_immer() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let coordinator = IngestRotationCoordinator::default();
+        let basis = Instant::now();
+        let uhr = Arc::new(Mutex::new(basis));
+        let test_uhr = Arc::clone(&uhr);
+        let coordinator = IngestRotationCoordinator {
+            eintraege: Arc::new(Mutex::new(HashMap::new())),
+            jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
+        };
         let aufrufe = Arc::new(AtomicUsize::new(0));
         let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
@@ -2488,6 +2525,18 @@ mod tests {
             .await;
         assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+
+        *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
+        let dritter_aufrufe = Arc::clone(&aufrufe);
+        let dritter = coordinator
+            .ausfuehren(42, zweiter_key, || async move {
+                dritter_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
+            })
+            .await
+            .expect("nach terminalem Abbruch und Sperrfrist wieder freigeben");
+        assert_eq!(dritter["srt_hint"], "srt://relay.invalid/neu");
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
     }
 
     #[test]
