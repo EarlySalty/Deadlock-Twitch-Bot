@@ -876,8 +876,10 @@ mod tests {
 
     #[test]
     fn zeitbudget_bleibt_unter_zwei_minuten() {
-        assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
-        assert!(ANSWER_TIMEOUT_SEC < 120);
+        const {
+            assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
+            assert!(ANSWER_TIMEOUT_SEC < 120);
+        }
     }
 
     #[test]
