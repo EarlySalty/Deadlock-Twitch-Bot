@@ -84,7 +84,8 @@ impl RotationAusgang {
                 let status = antwort.status();
                 let unklar = rotation_antwort_ist_unklar(&antwort)
                     || status.is_server_error()
-                    || status == StatusCode::REQUEST_TIMEOUT;
+                    || status == StatusCode::REQUEST_TIMEOUT
+                    || status == StatusCode::TOO_EARLY;
                 let wert = axum::body::to_bytes(antwort.into_body(), 64 * 1024)
                     .await
                     .ok()
@@ -308,7 +309,10 @@ where
     let mut letzter_fehler = None;
     for _ in 0..ROTATIONS_RECONCILE_VERSUCHE {
         match operation().await {
-            Err(antwort) if rotation_antwort_ist_unklar(&antwort) => {
+            Err(antwort)
+                if rotation_antwort_ist_unklar(&antwort)
+                    || antwort.status() == StatusCode::TOO_EARLY =>
+            {
                 letzter_fehler = Some(antwort);
             }
             ausgang => return ausgang,
@@ -584,11 +588,13 @@ async fn relay_json_mit_header(
         let wert = serde_json::from_slice::<Value>(&bytes)
             .unwrap_or_else(|_| json!({ "error": "Uplink hat den Aufruf abgelehnt." }));
         let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-        return Err(if status.is_server_error() {
-            relay_unklar_antwort(status, wert)
-        } else {
-            (status, Json(wert)).into_response()
-        });
+        return Err(
+            if status.is_server_error() || status == StatusCode::TOO_EARLY {
+                relay_unklar_antwort(status, wert)
+            } else {
+                (status, Json(wert)).into_response()
+            },
+        );
     }
     let wert = serde_json::from_slice::<Value>(&bytes).map_err(|_| {
         tracing::warn!(
@@ -2885,6 +2891,67 @@ mod tests {
         assert_eq!(erster.status(), StatusCode::CONFLICT);
         assert_eq!(zweiter.status(), StatusCode::CONFLICT);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn relay_425_bleibt_unklar_und_wird_mit_derselben_uuid_reconciled() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let key = "11111111-1111-4111-8111-111111111111";
+        Mock::given(method("POST"))
+            .and(path("/v1/me/key/rotate-idempotent"))
+            .and(header("idempotency-key", key))
+            .respond_with(ResponseTemplate::new(425).set_body_json(json!({
+                "error": "noch nicht terminal"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fehler = relay_json_mit_header(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::POST,
+            "/v1/me/key/rotate-idempotent",
+            None,
+            Some(key),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::TOO_EARLY);
+        assert!(rotation_antwort_ist_unklar(&fehler));
+
+        let coordinator = IngestRotationCoordinator::default();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let test_aufrufe = Arc::clone(&aufrufe);
+        let wert = coordinator
+            .ausfuehren(42, uuid::Uuid::parse_str(key).unwrap(), move || {
+                let test_aufrufe = Arc::clone(&test_aufrufe);
+                async move {
+                    rotation_reconciliieren(|| {
+                        let nummer = test_aufrufe.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            if nummer == 0 {
+                                Err((
+                                    StatusCode::TOO_EARLY,
+                                    Json(json!({ "error": "noch nicht terminal" })),
+                                )
+                                    .into_response())
+                            } else {
+                                Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                            }
+                        }
+                    })
+                    .await
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(wert["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

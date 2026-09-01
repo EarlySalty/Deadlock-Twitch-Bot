@@ -450,10 +450,25 @@ test('Rotation erklärt die Folgen und wiederholt bei unklarem Ausgang nur diese
 test('nach erfolgreicher Rotation wird nur srt_hint im Query-Cache ersetzt', () => {
   assert.match(
     UPLINK_PAGE,
-    /setQueryData\(\['uplink-me'\][\s\S]*?alt \? \{ \.\.\.alt, srt_hint: antwort\.srt_hint \} : alt/,
+    /setQueryData\(\['uplink-me', twitchUserId\][\s\S]*?alt \? \{ \.\.\.alt, srt_hint: antwort\.srt_hint \} : alt/,
   );
-  assert.match(UPLINK_PAGE, /invalidateQueries\(\{ queryKey: \['uplink-me'\] \}\)/);
+  assert.match(
+    UPLINK_PAGE,
+    /invalidateQueries\(\{ queryKey: \['uplink-me', twitchUserId\], exact: true \}\)/,
+  );
   assert.doesNotMatch(UPLINK_PAGE, /ingest_key:\s*antwort/);
+});
+
+test('Uplink liest ohne authentifizierte Twitch-Identität keinen fremden Stand', () => {
+  assert.match(
+    UPLINK_PAGE,
+    /const twitchUserId = authStatus\?\.twitchUserId\?\.trim\(\) \|\| null/,
+  );
+  assert.match(
+    UPLINK_PAGE,
+    /enabled: Boolean\(twitchUserId\) && !ingestRotationUnklar/,
+    'ein Discord-Admin ohne Twitch-Akteur darf weder Uplink lesen noch rotieren',
+  );
 });
 
 test('Lese- und Rotationspfad verbieten den Browser-Cache', () => {
