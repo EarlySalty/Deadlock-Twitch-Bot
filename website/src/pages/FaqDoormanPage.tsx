@@ -24,7 +24,7 @@ import { DoormanBadge, KeyRackBackdrop } from "@/components/faq/LobbyArt";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 const DISCORD_URL = "https://discord.gg/z5TfVHuQq2";
-const REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 125_000;
 const MAX_QUESTION_LENGTH = 500;
 
 const SUGGESTIONS = [
@@ -77,6 +77,11 @@ export function FaqDoormanPage() {
     const text = raw.trim();
     if (!text || loading) return;
 
+    const history = entries.slice(-8).map((entry) => ({
+      role: entry.role === "guest" ? "user" : "assistant",
+      content: entry.text,
+    }));
+
     if (text.length > MAX_QUESTION_LENGTH) {
       setError(
         `Das ist eine lange Frage. Fass sie bitte auf ${MAX_QUESTION_LENGTH} Zeichen zusammen, dann findet der Concierge die Stelle schneller.`,
@@ -98,7 +103,7 @@ export function FaqDoormanPage() {
       const response = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text }),
+        body: JSON.stringify({ question: text, history }),
         signal: controller.signal,
       });
 

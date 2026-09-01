@@ -3,10 +3,9 @@ name = "tb-llm"
 version = "0.1.0"
 edition.workspace = true
 
-# Gemeinsame LLM-Schicht des Twitch-Bots: ein HTTP-Weg (`hub`) und eine
-# Anbieterauswahl je Use-Case (`selection`) fuer drei Anbieter: Fireworks/DeepSeek
-# (Standard, wenn ein Key da ist), MiniMax (Ausweichweg) und Anthropic
-# (Premium-Use-Cases). Jeder erfolgreiche Call verbucht Tokens best-effort ins
+# Gemeinsame LLM-Schicht des Twitch-Bots: ein zentraler HTTP-Weg (`hub`) nur
+# für das freigegebene DeepSeek-V4-Flash-Modell bei Fireworks. Jeder
+# erfolgreiche Call verbucht Tokens best-effort ins
 # gemeinsame Usage-Ledger (Tabelle `minimax_usage`, zentrale Postgres).
 [dependencies]
 chrono      = { workspace = true }

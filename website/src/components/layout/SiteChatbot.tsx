@@ -4,6 +4,7 @@ import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 const OPEN_EVENT = "ddc:open-support-chat";
+const REQUEST_TIMEOUT_MS = 125_000;
 
 const SUGGESTIONS = [
   "Was macht der Bot?",
@@ -66,19 +67,24 @@ export function SiteChatbot() {
     const text = raw.trim();
     if (!text || loading) return;
 
+    const history = messages.slice(-8).map((message) => ({
+      role: message.role === "user" ? "user" : "assistant",
+      content: message.text,
+    }));
+
     addMessage("user", text);
     setQuestion("");
     setLoading(true);
     setError(null);
 
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 65000);
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       const response = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text }),
+        body: JSON.stringify({ question: text, history }),
         signal: controller.signal,
       });
 

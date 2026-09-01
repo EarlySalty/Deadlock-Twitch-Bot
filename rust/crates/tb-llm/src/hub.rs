@@ -1,15 +1,12 @@
 //! Der eine Eingang fuer jeden Sprachmodell-Aufruf des Bots.
 //!
 //! Aufrufer nennen ihren Anwendungsfall und schicken einen [`Request`]; alles
-//! andere passiert hier: Anbieterwahl ueber [`crate::selection`], Ausweichkette,
+//! andere passiert hier: Fireworks-Auswahl ueber [`crate::selection`],
 //! Zeitgrenze, Wiederholung bei 429, Verbuchung im Ledger, `<think>`-Strip und
 //! die Einordnung des Fehlers. Wer hier vorbeigeht und selbst HTTP spricht,
-//! umgeht damit die Anbieterwahl und die Kostenerfassung; deshalb gibt es genau
+//! umgeht damit den Modell-Lock und die Kostenerfassung; deshalb gibt es genau
 //! diese eine Tuer.
-//!
-//! Zwei Transportformen stecken dahinter, nach Anbieter ausgewaehlt:
-//! OpenAI-kompatibles `/chat/completions` (Fireworks, MiniMax) und die
-//! Anthropic-Messages-API. Der Aufrufer merkt den Unterschied nicht.
+//! Der einzige Transport ist Fireworks' OpenAI-kompatibles `/chat/completions`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,12 +19,6 @@ use crate::selection::{endpoint_chain, endpoint_for, LlmEndpoint};
 
 /// Zeitgrenze, wenn der Aufrufer keine nennt.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(240);
-/// Anthropic verlangt `max_tokens` im Request. Hat der Aufrufer keins gesetzt,
-/// geht dieser Wert in den Body; bei OpenAI-kompatiblen Anbietern bleibt das
-/// Feld dann weg.
-pub const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 4096;
-/// Versionskopf der Anthropic-Messages-API.
-const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Obergrenze fuer eine vom Anbieter genannte Wartezeit.
 const MAX_RETRY_AFTER_SECS: u64 = 5;
 
@@ -79,9 +70,7 @@ pub type Accept = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 pub struct Request {
     pub system: Option<String>,
     pub messages: Vec<Message>,
-    /// `None` laesst `max_tokens` bei OpenAI-kompatiblen Anbietern im Body
-    /// weg. Anthropic verlangt das Feld; dort gilt dann
-    /// [`ANTHROPIC_DEFAULT_MAX_TOKENS`].
+    /// `None` lässt `max_tokens` im Fireworks-Body weg.
     pub max_tokens: Option<i64>,
     /// `None` laesst `temperature` im Body weg.
     pub temperature: Option<f64>,
@@ -310,6 +299,25 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
             }
         }
     };
+    if let Some(endpoint) = chain.iter().find(|endpoint| {
+        endpoint.provider != "fireworks"
+            || endpoint.model != crate::selection::FIREWORKS_DEFAULT_MODEL
+    })
+    {
+        tracing::warn!(
+            use_case,
+            provider = endpoint.provider,
+            "nicht freigegebener LLM-Anbieter abgewiesen"
+        );
+        return Err(LlmFailure {
+            provider: endpoint.provider.to_string(),
+            model: endpoint.model.clone(),
+            error: LlmError::Unavailable(
+                "der Twitch-Bot darf ausschließlich das freigegebene Fireworks-Modell verwenden"
+                    .to_string(),
+            ),
+        });
+    }
     complete_chain(use_case, request, chain).await
 }
 
@@ -452,13 +460,7 @@ async fn call_endpoint(
         let rest = ende.saturating_duration_since(started);
         // Die Frist liegt um den ganzen Request (Senden, Warten, Body lesen),
         // nicht im Client: so reicht ein einziger Client fuer alle Fristen.
-        let senden = async {
-            if endpoint.provider == "anthropic" {
-                send_anthropic(&client, endpoint, api_key, request).await
-            } else {
-                send_openai_compatible(&client, endpoint, api_key, request).await
-            }
-        };
+        let senden = send_openai_compatible(&client, endpoint, api_key, request);
         let outcome = match tokio::time::timeout(rest, senden).await {
             Ok(outcome) => outcome,
             Err(_) => {
@@ -495,21 +497,10 @@ async fn call_endpoint(
     };
     let (payload, latency_ms) = raw;
 
-    let (text, prompt_tokens, completion_tokens) = if endpoint.provider == "anthropic" {
-        let usage = payload.get("usage");
-        (
-            extract_anthropic_text(payload.get("content").unwrap_or(&Value::Null)),
-            usage_field(usage, &["input_tokens", "tokens_in"]),
-            usage_field(usage, &["output_tokens", "tokens_out"]),
-        )
-    } else {
-        let usage = payload.get("usage");
-        (
-            extract_openai_text(&payload, request.allow_reasoning_content),
-            usage_field(usage, &["prompt_tokens", "tokens_in"]),
-            usage_field(usage, &["completion_tokens", "tokens_out"]),
-        )
-    };
+    let usage = payload.get("usage");
+    let text = extract_openai_text(&payload, request.allow_reasoning_content);
+    let prompt_tokens = usage_field(usage, &["prompt_tokens", "tokens_in"]);
+    let completion_tokens = usage_field(usage, &["completion_tokens", "tokens_out"]);
 
     // Verbucht direkt nach der Antwort, damit der Verbrauch auch dann zaehlt,
     // wenn der Text unten am `accept`-Praedikat scheitert. Verbraucht sind die
@@ -555,7 +546,10 @@ async fn call_endpoint(
 enum RawError {
     /// Der Body kommt mit, damit er bei erschoepften Wiederholungen im
     /// Fehler steht wie bei jedem anderen 4xx.
-    TooManyRequests { retry_after: Option<u64>, body: String },
+    TooManyRequests {
+        retry_after: Option<u64>,
+        body: String,
+    },
     Fehler(LlmError),
 }
 
@@ -593,47 +587,13 @@ async fn send_openai_compatible(
     request: &Request,
 ) -> Result<Value, RawError> {
     let body = openai_compatible_body(endpoint, request);
-    let url = format!("{}/chat/completions", endpoint.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/chat/completions",
+        endpoint.base_url.trim_end_matches('/')
+    );
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| RawError::Fehler(transport_error(&error)))?;
-    finish(response).await
-}
-
-async fn send_anthropic(
-    client: &reqwest::Client,
-    endpoint: &LlmEndpoint,
-    api_key: &str,
-    request: &Request,
-) -> Result<Value, RawError> {
-    let messages: Vec<Value> = request
-        .messages
-        .iter()
-        .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
-        .collect();
-    let mut body = serde_json::json!({
-        "model": endpoint.model,
-        "messages": Value::Array(messages),
-    });
-    // Anthropic verlangt `max_tokens`. Fehlt es, faellt der Aufruf sonst mit
-    // einem 400 auf, das nach einem Konfigurationsfehler aussieht.
-    body["max_tokens"] =
-        serde_json::json!(request.max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS));
-    if let Some(temperature) = request.temperature {
-        body["temperature"] = serde_json::json!(temperature);
-    }
-    if let Some(system) = &request.system {
-        body["system"] = Value::String(system.clone());
-    }
-
-    let response = client
-        .post(&endpoint.base_url)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
         .json(&body)
         .send()
         .await
@@ -715,33 +675,6 @@ fn extract_openai_text(payload: &Value, allow_reasoning_content: bool) -> String
         .to_string()
 }
 
-/// Text aus dem `content`-Block-Array der Anthropic-Antwort. Text-Bloecke
-/// werden mit Zeilenumbruch verbunden.
-pub fn extract_anthropic_text(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.trim().to_string(),
-        Value::Array(items) => {
-            let parts: Vec<String> = items
-                .iter()
-                .filter_map(|item| {
-                    if let Some(s) = item.as_str() {
-                        return Some(s.to_string());
-                    }
-                    if let Some(t) = item.get("text").and_then(Value::as_str) {
-                        return Some(t.to_string());
-                    }
-                    item.get("content")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .filter(|p| !p.is_empty())
-                .collect();
-            parts.join("\n").trim().to_string()
-        }
-        _ => String::new(),
-    }
-}
-
 /// Entfernt geschlossene `<think>...</think>`-Bloecke. Ein offener Block ohne
 /// Schluss bleibt stehen: bei einer abgeschnittenen Antwort steht das JSON
 /// oft nach dem offenen Tag, und der Aufrufer (Spam-Judge) schneidet sich das
@@ -755,7 +688,7 @@ pub fn extract_anthropic_text(content: &Value) -> String {
 pub fn strip_think(raw: &str) -> String {
     static THINK: OnceLock<regex::Regex> = OnceLock::new();
     let re = THINK.get_or_init(|| {
-regex::Regex::new(r"(?si)<think>.*?</think>").expect("think-Regex ist konstant")
+        regex::Regex::new(r"(?si)<think>.*?</think>").expect("think-Regex ist konstant")
     });
     re.replace_all(raw, "").trim().to_string()
 }
@@ -789,15 +722,11 @@ mod tests {
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn endpoint(server: &MockServer, provider: &'static str) -> LlmEndpoint {
+    fn endpoint(server: &MockServer, _provider: &'static str) -> LlmEndpoint {
         LlmEndpoint {
-            provider,
-            base_url: if provider == "anthropic" {
-                format!("{}/v1/messages", server.uri())
-            } else {
-                server.uri()
-            },
-            model: "test-model".to_string(),
+            provider: "fireworks",
+            base_url: server.uri(),
+            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
             api_key: Some("k".to_string()),
         }
     }
@@ -835,7 +764,7 @@ mod tests {
         let endpoint = LlmEndpoint {
             provider: "fireworks",
             base_url: "http://x".to_string(),
-            model: "m".to_string(),
+            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
             api_key: Some("k".to_string()),
         };
         let request = Request::simple("SYSTEM", sentinel).json_object();
@@ -850,12 +779,6 @@ mod tests {
         // nicht zu einer eigenen Rolle.
         assert!(messages.iter().filter(|m| m["role"] == "system").count() == 1);
         assert_eq!(body["response_format"]["type"], "json_object");
-    }
-
-    #[test]
-    fn anthropic_text_verbindet_bloecke() {
-        let content = json!([{"type": "text", "text": "eins"}, {"type": "text", "text": "zwei"}]);
-        assert_eq!(extract_anthropic_text(&content), "eins\nzwei");
     }
 
     #[tokio::test]
@@ -885,6 +808,44 @@ mod tests {
         assert_eq!(response.prompt_tokens, Some(7));
         assert_eq!(response.completion_tokens, Some(3));
         assert_eq!(response.provider, "fireworks");
+    }
+
+    #[tokio::test]
+    async fn zentraler_hub_weist_andere_anbieter_vor_dem_http_aufruf_ab() {
+        let server = MockServer::start().await;
+
+        let error = complete(
+            "test",
+            Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
+                provider: "minimax",
+                base_url: server.uri(),
+                model: "MiniMax-M3".to_string(),
+                api_key: Some("k".to_string()),
+            }),
+        )
+        .await
+        .expect_err("MiniMax muss bereits im zentralen Hub abgewiesen werden");
+
+        assert!(matches!(error, LlmError::Unavailable(_)));
+        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
+    }
+
+    #[tokio::test]
+    async fn zentraler_hub_weist_anderes_fireworks_modell_ab() {
+        let error = complete(
+            "test",
+            Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
+                provider: "fireworks",
+                base_url: "http://127.0.0.1:1".to_string(),
+                model: "accounts/fireworks/models/anderes-modell".to_string(),
+                api_key: Some("k".to_string()),
+            }),
+        )
+        .await
+        .expect_err("ein anderes Fireworks-Modell darf nicht aufgerufen werden");
+
+        assert!(matches!(error, LlmError::Unavailable(_)));
+        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
     }
 
     #[tokio::test]
@@ -947,34 +908,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_pfad_setzt_kopfzeilen_und_system_feld() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .and(header("x-api-key", "k"))
-            .and(header("anthropic-version", ANTHROPIC_VERSION))
-            .and(body_string_contains("\"system\":\"sys\""))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "content": [{"type": "text", "text": "Antwort"}],
-                "usage": {"input_tokens": 4, "output_tokens": 2}
-            })))
-            .mount(&server)
-            .await;
-
-        let response = complete(
-            "test",
-            Request::simple("sys", "hi")
-                .max_tokens(100)
-                .no_ledger()
-                .endpoint(endpoint(&server, "anthropic")),
-        )
-        .await
-        .expect("Antwort");
-        assert_eq!(response.text, "Antwort");
-        assert_eq!(response.prompt_tokens, Some(4));
-    }
-
-    #[tokio::test]
     async fn fehlerbody_kommt_beim_aufrufer_an() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -986,7 +919,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
-                .endpoint(endpoint(&server, "anthropic")),
+                .endpoint(endpoint(&server, "fireworks")),
         )
         .await
         .expect_err("Fehler");
@@ -1028,7 +961,7 @@ mod tests {
             Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
                 provider: "fireworks",
                 base_url: "http://127.0.0.1:1".to_string(),
-                model: "m".to_string(),
+                model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: None,
             }),
         )
@@ -1086,7 +1019,10 @@ mod tests {
         .await
         .expect_err("429 ohne Erfolg");
         assert_eq!(failure.provider, "fireworks");
-        assert_eq!(failure.model, "test-model");
+        assert_eq!(
+            failure.model,
+            crate::selection::FIREWORKS_DEFAULT_MODEL
+        );
         assert_eq!(
             failure.error,
             LlmError::Http {
@@ -1099,14 +1035,20 @@ mod tests {
     #[test]
     fn token_zahlen_mit_alternativnamen() {
         let usage = json!({"tokens_in": 12, "tokens_out": 3});
-        assert_eq!(usage_field(Some(&usage), &["prompt_tokens", "tokens_in"]), Some(12));
+        assert_eq!(
+            usage_field(Some(&usage), &["prompt_tokens", "tokens_in"]),
+            Some(12)
+        );
         assert_eq!(
             usage_field(Some(&usage), &["completion_tokens", "tokens_out"]),
             Some(3)
         );
         // Der OpenAI-Name gewinnt, wenn beide da sind.
         let beide = json!({"prompt_tokens": 5, "tokens_in": 99});
-        assert_eq!(usage_field(Some(&beide), &["prompt_tokens", "tokens_in"]), Some(5));
+        assert_eq!(
+            usage_field(Some(&beide), &["prompt_tokens", "tokens_in"]),
+            Some(5)
+        );
         assert_eq!(usage_field(None, &["prompt_tokens"]), None);
     }
 
@@ -1114,7 +1056,10 @@ mod tests {
     fn warnung_ohne_anbieter_ist_je_anwendungsfall_gedrosselt() {
         let t0 = Instant::now();
         assert!(kein_anbieter_warnung_faellig("drossel_a", t0));
-        assert!(!kein_anbieter_warnung_faellig("drossel_a", t0 + Duration::from_secs(10)));
+        assert!(!kein_anbieter_warnung_faellig(
+            "drossel_a",
+            t0 + Duration::from_secs(10)
+        ));
         // Anderer Anwendungsfall, eigene Drossel.
         assert!(kein_anbieter_warnung_faellig("drossel_b", t0));
         // Nach dem Abstand darf wieder gewarnt werden.
@@ -1155,7 +1100,10 @@ mod tests {
             .mount(&schnell)
             .await;
 
-        let kette = vec![endpoint(&langsam, "fireworks"), endpoint(&schnell, "minimax")];
+        let kette = vec![
+            endpoint(&langsam, "fireworks"),
+            endpoint(&schnell, "minimax"),
+        ];
         let failure = complete_chain(
             "test",
             Request::prompt("hi")
@@ -1169,8 +1117,8 @@ mod tests {
         assert!(matches!(failure.error, LlmError::Timeout(_)), "{failure}");
         assert_eq!(failure.provider, "fireworks");
 
-        // Ohne Gesamtfrist gilt die Summe der Einzelfristen: das zweite Glied
-        // kommt dran und antwortet.
+        // Die interne Kettenfunktion hält auch bei zwei Fireworks-Testendpunkten
+        // die Gesamtfrist ein; produktiv liefert `endpoint_chain` nur einen.
         let schnell2 = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1184,11 +1132,14 @@ mod tests {
                 .no_ledger()
                 .timeout(Duration::from_millis(150))
                 .accept(|text| text == "schnell"),
-            vec![endpoint(&langsam, "fireworks"), endpoint(&schnell2, "minimax")],
+            vec![
+                endpoint(&langsam, "fireworks"),
+                endpoint(&schnell2, "minimax"),
+            ],
         )
         .await
         .expect("zweites Glied antwortet");
         assert_eq!(response.text, "schnell");
-        assert_eq!(response.provider, "minimax");
+        assert_eq!(response.provider, "fireworks");
     }
 }

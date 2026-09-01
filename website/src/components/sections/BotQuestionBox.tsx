@@ -37,7 +37,7 @@ export function BotQuestionBox() {
     setParts([]);
 
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 65000);
+    const timer = window.setTimeout(() => controller.abort(), 125_000);
     try {
       const res = await fetch(ASK_URL, {
         method: "POST",

@@ -36,10 +36,10 @@ Ja. Der Bot räumt automatisch die nervigen Werbe-Bots aus dem Chat, die dir meh
 
 ### Welche Rechte braucht der Bot in meinem Kanal?
 
-Der Bot meldet sich per Twitch-Login an und braucht ein paar Standard-Rechte: Chat-Nachrichten lesen und schreiben, Live-Status sehen, Raid auslösen. Für ein paar optionale Features (z. B. Lurker-Tax) bittet er zusätzlich um den Moderator-Lesescope für Chatter — das siehst du beim Login.
+Der Bot meldet sich per Twitch-Login an und fordert nur die Rechte an, die seine einzelnen Funktionen brauchen. Auto-Raid, Clips und optionale Chatter-Auswertungen verwenden getrennte, zweckgebundene Twitch-Berechtigungen; die Moderator-Rolle des Bot-Accounts ist für konkrete Chat-Aktionen nötig.
 
 - Du autorisierst den Bot über deinen Twitch-Account — kein extra Passwort.
-- Der Bot muss zusätzlich als Mod in deinem Chat angekündigt sein, damit Announcements sauber funktionieren.
+- Als Mod kann der Bot Ankündigungen senden und erkannte Werbe-Bots entfernen. Ohne diese Rolle funktionieren diese Chat-Aktionen nicht.
 - Du kannst die Verbindung jederzeit in deinen Twitch-Einstellungen widerrufen.
 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)

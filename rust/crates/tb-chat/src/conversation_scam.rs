@@ -1650,7 +1650,7 @@ pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxCl
             return;
         }
         Err(error) => {
-            debug!("Scam-Self-Learning: MiniMax nicht verfügbar: {error}");
+            debug!("Scam-Self-Learning: Fireworks nicht verfügbar: {error}");
             return;
         }
     };
@@ -2366,8 +2366,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "benötigt produktive MiniMax-Zugangsdaten"]
-    async fn live_minimax_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
+    #[ignore = "benötigt produktive Fireworks-Zugangsdaten"]
+    async fn live_fireworks_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         let judge: Arc<dyn ScamJudge> = Arc::new(MiniMaxScamJudge::new(
             EngagementMinimaxClient::new(None, None, None, None),
@@ -2902,7 +2902,7 @@ mod tests {
     /// live urteilt. Ohne echten Call ist „hätte der Bot gebannt?" nicht
     /// beantwortbar — der Mock-Judge misst nur die Verdrahtung.
     #[tokio::test]
-    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
+    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY"]
     async fn live_judge_baseline_gemeldeter_recon_smalltalk() {
         let judge = MiniMaxScamJudge::new(EngagementMinimaxClient::new(None, None, None, None));
         let enforcement_threshold =

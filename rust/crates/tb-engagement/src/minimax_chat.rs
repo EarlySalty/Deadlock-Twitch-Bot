@@ -1,5 +1,5 @@
-//! Engagement-spezifischer MiniMax-M3-Client (Port von
-//! `bot/engagement/minimax_chat.py`).
+//! Legacy-kompatible Engagement-Fassade für den zentralen Fireworks-Connector
+//! (ursprünglich Port von `bot/engagement/minimax_chat.py`).
 //!
 //! Slice 3a (hier): die I/O-freien Teile — Nachrichten-/Antwort-Typen,
 //! Text-Sanitizing, die Antwort-Nachbearbeitung ([`process_response_text`]:
@@ -687,25 +687,22 @@ impl From<tb_llm::LlmError> for GenerateError {
 /// zum Engagement gehört: Verlauf falten, Temperatur, Nachbehandlung des Textes
 /// und die Fehlerform, die die Aufrufer kennen.
 ///
-/// Anbieter, Adresse und Modell kommen aus der gemeinsamen Auswahl unter dem
-/// Anwendungsfall `engagement`. Der frühere MiniMax-Sonderpfad
-/// (`MINIMAX_TOKEN_PLAN_KEY`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL` mit eigener
-/// Rangfolge, dazu `ENGAGEMENT_MINIMAX_MODEL`) ist weg: dieselben Variablen
-/// wirken weiter, aber nur noch mit der Rangfolge aus `tb_llm::selection`. Zwei
-/// Rangfolgen für dieselben Variablen sind eine Fehlerquelle, kein Netz. Das
-/// Modell dieses Anwendungsfalls stellt `TB_LLM_MODEL_ENGAGEMENT` um.
+/// Anbieter und Modell kommen ausschließlich aus der gemeinsamen Auswahl unter
+/// dem jeweiligen Anwendungsfall. Frühere MiniMax-Variablen und Modell-
+/// Overrides werden nicht verwendet.
 pub struct EngagementMinimaxClient {
     use_case: &'static str,
     endpoint: tb_llm::LlmEndpoint,
-    /// Explizite Parameter (Schluessel, Adresse, Modell) nageln den Endpunkt
-    /// fest; ohne sie arbeitet der Aufruf die Ausweichkette des Eingangs ab.
+    /// Expliziter Schlüssel oder eine Basis-URL nageln den Endpunkt für Tests
+    /// fest. Der Modellparameter bleibt nur aus API-Kompatibilität bestehen und
+    /// wird bewusst ignoriert.
     festgenagelt: bool,
     timeout: Duration,
 }
 
 impl EngagementMinimaxClient {
-    /// Baut den Client. Explizite Parameter gewinnen immer; sonst entscheidet
-    /// die gemeinsame Provider-Auswahl ([`tb_llm::endpoint_for`]).
+    /// Baut den Client. Ohne Test-Endpunkt entscheidet ausschließlich die
+    /// gemeinsame Auswahl ([`tb_llm::endpoint_for`]).
     pub fn new(
         api_key: Option<String>,
         base_url: Option<String>,
@@ -716,17 +713,7 @@ impl EngagementMinimaxClient {
     }
 
     /// Wie [`Self::new`] ohne explizite Parameter, aber unter einem eigenen
-    /// Anwendungsfall. So bekommt etwa der Self-Explainer im Dashboard sein
-    /// eigenes `TB_LLM_PROVIDER_<USE_CASE>`/`TB_LLM_MODEL_<USE_CASE>`, ohne
-    /// den gesamten `engagement`-Pfad mitzuziehen.
-    ///
-    /// Mit Ausweichkette wie `new` ohne Parameter: Der Wrapper legt den
-    /// Self-Explainer per `TB_LLM_PROVIDER_DASHBOARD_SELF_EXPLAINER=minimax`
-    /// auf MiniMax-Text-01 (kein `<think>`-Block). Faellt MiniMax aus oder
-    /// fehlt der Schluessel, antwortet Fireworks/DeepSeek als zweites Glied:
-    /// schlechter (Reasoning-Modell, Antwort kann nach dem `<think>`-Strip
-    /// leer ausfallen), aber nicht dauerhaft `Unavailable`. Festnageln hiesse,
-    /// ohne MiniMax-Schluessel fuer immer zu schweigen.
+    /// Anwendungsfall für Logs und Ledger. Anbieter und Modell bleiben gleich.
     pub fn for_use_case(use_case: &'static str, timeout: Option<Duration>) -> Self {
         Self::build(use_case, None, None, None, timeout)
     }
@@ -735,7 +722,7 @@ impl EngagementMinimaxClient {
         use_case: &'static str,
         api_key: Option<String>,
         base_url: Option<String>,
-        model: Option<String>,
+        _model: Option<String>,
         timeout: Option<Duration>,
     ) -> Self {
         let mut endpoint = tb_llm::endpoint_for(use_case);
@@ -746,10 +733,6 @@ impl EngagementMinimaxClient {
         }
         if let Some(base_url) = base_url.filter(|u| !u.is_empty()) {
             endpoint.base_url = base_url;
-            festgenagelt = true;
-        }
-        if let Some(model) = model.filter(|m| !m.is_empty()) {
-            endpoint.model = model;
             festgenagelt = true;
         }
         Self {
@@ -815,9 +798,8 @@ impl EngagementMinimaxClient {
         let messages = history
             .iter()
             .map(|turn| {
-                // Sprecher in den Content falten statt ins name-Feld: MiniMax
-                // verlangt über alle Messages konsistente name-Werte (Fehler
-                // 2013), was bei Multi-User-Chat bricht.
+                // Sprecher in den Content falten statt ein anbieterspezifisches
+                // `name`-Feld zu verwenden.
                 let content = match &turn.name {
                     Some(name) => format!("{name}: {}", turn.content),
                     None => turn.content.clone(),
@@ -939,20 +921,12 @@ impl EngagementMinimaxClient {
     /// Einziger Weg nach draußen: Zeitgrenze dieses Clients an den gemeinsamen
     /// Eingang, Fehler in die Form bringen, die die Aufrufer kennen.
     ///
-    /// Ohne explizite Parameter laeuft der Aufruf ueber die Ausweichkette
-    /// (`endpoint_chain`): faellt der bevorzugte Anbieter aus, kommt der
-    /// andere dran. Nur ein festgenagelter Endpunkt (Tests, Sonderfaelle)
-    /// umgeht die Kette.
-    ///
-    /// Die Zeitgrenze des Clients gilt je Glied (Chat 30 s, Dashboard-
-    /// Folgechat 240 s); die Gesamtfrist ueber die Kette ist das Doppelte.
-    /// So kommt das Ausweichglied auch dann dran, wenn das erste Glied die
-    /// volle Frist haengt, und die Antwort dauert trotzdem nie laenger als
-    /// zwei Fristen.
+    /// Ohne explizite Testparameter läuft der Aufruf über die zentrale Kette,
+    /// die genau den freigegebenen Fireworks-Endpunkt enthält.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
         let request = request
             .timeout(self.timeout)
-            .total_deadline(self.timeout.saturating_mul(2));
+            .total_deadline(self.timeout);
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {
@@ -1023,7 +997,7 @@ mod tests {
         EngagementMinimaxClient::new(
             Some("test-key".to_string()),
             Some(server.uri()),
-            Some("MiniMax-M3".to_string()),
+            None,
             None,
         )
     }
@@ -1093,11 +1067,10 @@ mod tests {
         clear_provider_env();
     }
 
-    /// Die Modellvariable dieses Anwendungsfalls gilt fuer jeden Anbieter. Der
-    /// frueher noetige Sonderpfad ("nur wenn die Auswahl MiniMax ergab") ist
-    /// weg; wer das Modell umstellt, meint genau dieses Modell.
+    /// Das freigegebene Modell ist fest und kann nicht pro Anwendungsfall
+    /// umgestellt werden.
     #[test]
-    fn modellvariable_des_anwendungsfalls_gilt_fuer_jeden_anbieter() {
+    fn modellvariable_des_anwendungsfalls_wird_ignoriert() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
@@ -1108,25 +1081,25 @@ mod tests {
         std::env::set_var("TB_LLM_MODEL_ENGAGEMENT", "accounts/fireworks/models/anders");
         let client = EngagementMinimaxClient::new(None, None, None, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), "accounts/fireworks/models/anders");
+        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
         clear_provider_env();
     }
 
     #[test]
-    fn ohne_fireworks_key_bleibt_alles_bei_minimax() {
+    fn ohne_fireworks_key_gibt_es_keinen_altanbieter_fallback() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.endpoint.api_key.as_deref(), Some("minimax-key"));
-        assert_eq!(client.endpoint.base_url, tb_llm::selection::MINIMAX_BASE_URL);
-        assert_eq!(client.model(), tb_llm::selection::MINIMAX_DEFAULT_MODEL);
+        assert_eq!(client.endpoint.api_key, None);
+        assert_eq!(client.endpoint.provider, "fireworks");
+        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
         clear_provider_env();
     }
 
     #[test]
-    fn expliziter_provider_schaltet_zurueck_auf_minimax() {
+    fn expliziter_altanbieter_provider_wird_ignoriert() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
@@ -1134,8 +1107,8 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_ENGAGEMENT", "minimax");
 
         let client = EngagementMinimaxClient::new(None, None, None, None);
-        assert_eq!(client.endpoint.api_key.as_deref(), Some("minimax-key"));
-        assert_eq!(client.endpoint.base_url, tb_llm::selection::MINIMAX_BASE_URL);
+        assert_eq!(client.endpoint.api_key.as_deref(), Some("fireworks-key"));
+        assert_eq!(client.endpoint.provider, "fireworks");
         clear_provider_env();
     }
 
@@ -1410,7 +1383,7 @@ mod tests {
         assert_eq!(resp.text.as_deref(), Some("klar, bebop ist stark"));
         assert_eq!(resp.prompt_tokens, Some(42));
         assert_eq!(resp.completion_tokens, Some(7));
-        assert_eq!(resp.model, "MiniMax-M3");
+        assert_eq!(resp.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
     }
 
     #[tokio::test]
@@ -1461,57 +1434,17 @@ mod tests {
     // `tests/ledger_side_effects.rs` — siehe [`super::redirect_ledger_for_tests`] zur
     // Begründung (geteilter OnceCell-PG-Pool über viele `#[tokio::test]`-Runtimes).
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn fireworks_404_wiederholt_mit_aufgeloestem_namen() {
-        redirect_ledger_for_tests();
+    #[test]
+    fn explizites_modell_wird_ignoriert() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .and(body_string_contains("deepseek-v4-flash\""))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .and(body_string_contains("deepseek-v4-flash-0731"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{"message": {"content": "ok"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        std::env::set_var("FIREWORK_API_KEY", "fw-key");
-        std::env::set_var("FIREWORK_BASE_URL", server.uri());
-
         let client = EngagementMinimaxClient::new(
             Some("fw-key".to_string()),
-            Some(server.uri()),
-            Some("accounts/fireworks/models/deepseek-v4-flash".to_string()),
+            Some("http://127.0.0.1:1".to_string()),
+            Some("nicht-freigegebenes-modell".to_string()),
             None,
         );
-        let text = client
-            .messages_completion_uncapped(
-                serde_json::json!([{"role": "user", "content": "ping"}]),
-                0.0,
-            )
-            .await
-            .expect("404 muss mit der neuen Fassung geheilt werden");
-        assert_eq!(text, "ok");
+        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
 
         clear_provider_env();
     }

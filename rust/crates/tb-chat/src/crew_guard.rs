@@ -453,21 +453,12 @@ Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde d
 
 /// Timeout des Judge-HTTP-Calls.
 const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
-/// Default-Endpoint (OpenAI-kompatibel); via `OPENAI_BASE_URL` überschreibbar.
-///
-/// Diese Konstante bleibt bewusst hier und wandert NICHT nach `tb-llm`: der
-/// Crew-Judge ist der einzige Aufrufer hinter einem OpenAI-Schlüssel, und
-/// `tb-llm` nimmt laut Direktive im Crate-Kopf keinen OpenAI-Anbieter auf. Über
-/// den gemeinsamen Eingang läuft er trotzdem, mit explizitem Endpunkt: so
-/// teilen sich Transport, Zeitgrenze und Fehler-Einordnung eine Stelle mit dem
-/// Rest des Bots.
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// Anwendungsfall des Crew-Judges (nur für Logs und Ledger-Zweck).
 const CREW_JUDGE_USE_CASE: &str = "crew_guard";
 
-/// OpenAI-kompatibler Judge. Modellname NIE hardcoden — kommt aus
-/// `CREW_GUARD_MODEL`. Fehlt das Modell (oder der Key), antwortet der Judge
-/// fail-safe mit `unsure` (kein Crew), statt zu raten.
+/// Crew-Judge über den zentralen Fireworks-Connector. Der historische
+/// Typname bleibt vorerst API-kompatibel; produktiv löst er weder OpenAI-
+/// Schlüssel noch ein eigenes Modell auf.
 pub struct OpenAiCrewJudge {
     endpoint: Option<tb_llm::LlmEndpoint>,
     timeout: Duration,
@@ -487,25 +478,13 @@ const KONFIG_WARNUNG_ABSTAND: Duration = Duration::from_secs(300);
 
 impl OpenAiCrewJudge {
     pub fn from_env() -> Self {
-        // Ohne Schlüssel ODER ohne Modell gibt es keinen Endpunkt: der Judge
-        // antwortet dann fail-safe `unsure`, statt zu raten. Gewarnt wird
-        // gedrosselt beim Aufruf (`warne_nicht_konfiguriert`), nicht hier,
-        // sonst stuende dieselbe Zeile zweimal im Log.
-        let api_key = non_empty_env("OPENAI_API_KEY");
-        let model = non_empty_env("CREW_GUARD_MODEL");
-        let konfig_luecke = match (api_key.is_some(), model.is_some()) {
-            (true, true) => "",
-            (false, true) => "OPENAI_API_KEY",
-            (true, false) => "CREW_GUARD_MODEL",
-            (false, false) => "OPENAI_API_KEY und CREW_GUARD_MODEL",
+        let endpoint = tb_llm::endpoint_for(CREW_JUDGE_USE_CASE);
+        let konfig_luecke = if endpoint.api_key.is_some() {
+            ""
+        } else {
+            "FIREWORK_API_KEY/FIREWORKS_API_KEY"
         };
-        let endpoint = api_key.zip(model).map(|(api_key, model)| tb_llm::LlmEndpoint {
-            provider: "openai_kompatibel",
-            base_url: non_empty_env("OPENAI_BASE_URL")
-                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
-            model,
-            api_key: Some(api_key),
-        });
+        let endpoint = endpoint.api_key.is_some().then_some(endpoint);
         Self {
             endpoint,
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
@@ -746,6 +725,7 @@ struct RawCrewVerdict {
     reasoning: String,
 }
 
+#[cfg(test)]
 fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -1054,7 +1034,7 @@ impl CrewGuard {
         self
     }
 
-    /// Baut den Wächter aus der Umgebung: Feature-Flag + OpenAI-Judge.
+    /// Baut den Wächter aus der Umgebung: Feature-Flag + zentraler Fireworks-Judge.
     pub fn from_env(
         alerter: Arc<ModAlerter>,
         pool: PgPool,
@@ -1272,7 +1252,9 @@ async fn decide(
                 Some(reason) => {
                     debug!(
                         channel,
-                        chatter = login, reason, "crew_guard: Verhaltens-Gate ruft Judge"
+                        chatter = login,
+                        reason,
+                        "crew_guard: Verhaltens-Gate ruft Judge"
                     );
                     ask_judge(judge, content, recent_context, &facts, threshold).await
                 }
@@ -1972,9 +1954,9 @@ Ich hab nichts getan."
             .await;
         let judge = OpenAiCrewJudge {
             endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "openai_kompatibel",
+                provider: "fireworks",
                 base_url: server.uri(),
-                model: "test-model".to_string(),
+                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: Some("test-key".to_string()),
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
@@ -2008,9 +1990,9 @@ Ich hab nichts getan."
             .await;
         let judge = OpenAiCrewJudge {
             endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "openai_kompatibel",
+                provider: "fireworks",
                 base_url: server.uri(),
-                model: "test-model".to_string(),
+                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: Some("test-key".to_string()),
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
@@ -2039,9 +2021,9 @@ Ich hab nichts getan."
             .await;
         let error_judge = OpenAiCrewJudge {
             endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "openai_kompatibel",
+                provider: "fireworks",
                 base_url: error_server.uri(),
-                model: "test-model".to_string(),
+                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: Some("test-key".to_string()),
             }),
             timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
@@ -2062,9 +2044,9 @@ Ich hab nichts getan."
             .await;
         let timeout_judge = OpenAiCrewJudge {
             endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "openai_kompatibel",
+                provider: "fireworks",
                 base_url: timeout_server.uri(),
-                model: "test-model".to_string(),
+                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: Some("test-key".to_string()),
             }),
             timeout: Duration::from_millis(10),
@@ -2265,10 +2247,9 @@ Ich hab nichts getan."
 
     #[tokio::test]
     async fn judge_backtest_precision_recall_wenn_konfiguriert() {
-        if non_empty_env("OPENAI_API_KEY").is_none() || non_empty_env("CREW_GUARD_MODEL").is_none()
-        {
+        if tb_llm::endpoint_for(CREW_JUDGE_USE_CASE).api_key.is_none() {
             eprintln!(
-                "SKIP judge_backtest_precision_recall_wenn_konfiguriert: OPENAI_API_KEY/CREW_GUARD_MODEL nicht gesetzt"
+                "SKIP judge_backtest_precision_recall_wenn_konfiguriert: Fireworks-Schlüssel nicht gesetzt"
             );
             return;
         }
@@ -2368,24 +2349,22 @@ Ich hab nichts getan."
     }
 
     /// Echter DB-Backtest gegen `twitch_chat_messages` (NUR lesend, keine
-    /// Writes). Gated auf TB_TEST_DATABASE_URL + OPENAI_API_KEY + CREW_GUARD_MODEL
+    /// Writes). Gated auf TB_TEST_DATABASE_URL + Fireworks-Schlüssel
     /// und `#[ignore]` — läuft nur auf explizite Anforderung mit DSN+Key. Er
     /// misst zwei Dinge: (A) das End-to-End-System (screen + Judge mit Kontext)
     /// und (B) die EHRLICHE Judge-Recall auf realem Kampagnentext, indem der
     /// deterministische HardId-Kurzschluss bewusst umgangen wird.
     #[tokio::test]
-    #[ignore = "DB-Backtest: braucht TB_TEST_DATABASE_URL + OPENAI_API_KEY + CREW_GUARD_MODEL; nur lesend"]
+    #[ignore = "DB-Backtest: braucht TB_TEST_DATABASE_URL + Fireworks-Schlüssel; nur lesend"]
     async fn crew_guard_db_backtest_realdaten() {
-        let (Some(dsn), Some(_), Some(_)) = (
-            non_empty_env("TB_TEST_DATABASE_URL"),
-            non_empty_env("OPENAI_API_KEY"),
-            non_empty_env("CREW_GUARD_MODEL"),
-        ) else {
-            eprintln!(
-                "SKIP crew_guard_db_backtest_realdaten: TB_TEST_DATABASE_URL/OPENAI_API_KEY/CREW_GUARD_MODEL nicht gesetzt"
-            );
+        let Some(dsn) = non_empty_env("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP crew_guard_db_backtest_realdaten: TB_TEST_DATABASE_URL nicht gesetzt");
             return;
         };
+        if tb_llm::endpoint_for(CREW_JUDGE_USE_CASE).api_key.is_none() {
+            eprintln!("SKIP crew_guard_db_backtest_realdaten: Fireworks-Schlüssel nicht gesetzt");
+            return;
+        }
 
         let pool = match sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)

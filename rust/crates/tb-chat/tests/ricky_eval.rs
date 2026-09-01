@@ -130,18 +130,10 @@ fn ricky_eval_fixtures_are_redacted_and_complete() {
 }
 
 #[tokio::test]
-#[ignore = "Live-Baseline: braucht OPENAI_API_KEY und CREW_GUARD_MODEL"]
+#[ignore = "Live-Baseline: braucht einen Fireworks-Schlüssel"]
 async fn ricky_eval_baseline() {
-    if std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_none()
-        || std::env::var("CREW_GUARD_MODEL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .is_none()
-    {
-        eprintln!("SKIP ricky_eval_baseline: OPENAI_API_KEY/CREW_GUARD_MODEL nicht gesetzt");
+    if tb_llm::endpoint_for("crew_guard").api_key.is_none() {
+        eprintln!("SKIP ricky_eval_baseline: Fireworks-Schlüssel nicht gesetzt");
         return;
     }
 
@@ -196,7 +188,7 @@ async fn ricky_eval_baseline() {
     );
     eprintln!(
         "RICKY_BASELINE model={} cases={} full={}/{} escalation={}/{} patterns={}/{} reply={}/{} fp={} fn={}",
-        std::env::var("CREW_GUARD_MODEL").unwrap_or_else(|_| "<unset>".to_string()),
+        tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
         cases.len(),
         full_correct,
         cases.len(),

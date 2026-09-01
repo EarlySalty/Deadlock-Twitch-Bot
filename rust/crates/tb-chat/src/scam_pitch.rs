@@ -13,7 +13,7 @@
 //!
 //! [`SpamAiReviewer`] liefert im Verdachtspfad ein synchrones Urteil:
 //! `review_for_verdict(event)` fragt den Judge (DeepSeek via Fireworks,
-//! Fallback MiniMax M3), lernt bei Spam-Urteil ein distinktives Muster und
+//! zentralen Fireworks-Connector), lernt bei Spam-Urteil ein distinktives Muster und
 //! gibt ein [`AiReviewOutcome`] zurück — der Orchestrator entscheidet über
 //! Aktion und Alert. Das Modell lernt automatisch nur die bestätigten Spam-
 //! Muster; ein Safe-Pattern entsteht ausschließlich über den menschlichen
@@ -129,7 +129,7 @@ const STATE_PRUNE_INTERVAL_SEC: f64 = 60.0;
 const JUDGE_PURPOSE: &str = "spam-review";
 /// Anwendungsfall in der gemeinsamen Anbieterauswahl.
 const JUDGE_USE_CASE: &str = "spam_judge";
-/// Token-Budget für den Judge. Reasoning-Modelle (DeepSeek, MiniMax-M3 mit
+/// Token-Budget für den Judge. Das freigegebene DeepSeek-Modell mit
 /// <think>-Block) brauchen Platz für den Denktext VOR dem JSON — die alten
 /// 200 Tokens schnitten das Urteil oft ab (stille „kein JSON"-Reviews).
 const JUDGE_MAX_TOKENS: u32 = 1500;
@@ -1563,7 +1563,7 @@ pub enum AiReviewOutcome {
     Skipped,
 }
 
-/// Spam-AI-Review — DeepSeek via Fireworks primär, MiniMax M3 als Fallback.
+/// Spam-AI-Review — ausschließlich DeepSeek V4 Flash über Fireworks.
 ///
 /// Ersetzt den alten fire-and-forget-Pfad (`maybe_review*`): Der Orchestrator
 /// wartet auf das Urteil und baut daraus Aktion + Alert.
@@ -2130,21 +2130,19 @@ mod tests {
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
-        assert_eq!(providers[0].model, "MiniMax-M3");
+        assert!(providers.is_empty());
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
+        assert_eq!(providers.len(), 1);
         assert!(providers[0].base_url.contains("fireworks.ai"));
         assert!(providers[0].model.contains("deepseek"));
-        assert_eq!(providers[1].base_url, "https://api.minimax.io/v1");
-        assert_eq!(providers[1].model, "MiniMax-M3");
 
         std::env::set_var("TB_LLM_PROVIDER_SPAM_JUDGE", "minimax");
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
-        assert_eq!(providers[0].base_url, "https://api.minimax.io/v1");
-        assert_eq!(providers[0].model, "MiniMax-M3");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].provider, "fireworks");
+        assert_eq!(providers[0].model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
         clear_provider_env();
     }
 
@@ -3080,10 +3078,10 @@ mod tests {
             .await;
 
         let provider = tb_llm::LlmEndpoint {
-            provider: "test",
+            provider: "fireworks",
             base_url: server.uri(),
             api_key: Some("test-key".to_string()),
-            model: "test-model".to_string(),
+            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
         };
         let review = call_judge(Some(&provider), false, content)
             .await
@@ -3109,7 +3107,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn call_judge_heilt_fireworks_404() {
+    async fn call_judge_wechselt_das_festgelegte_modell_bei_404_nicht() {
         let _guard = PROVIDER_ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3118,92 +3116,24 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .and(body_string_contains("deepseek-v4-flash\""))
+            .and(body_string_contains("deepseek-v4-flash-0731"))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .and(body_string_contains("deepseek-v4-flash-0731"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{
-                    "message": {"content": "{\"is_spam\": true, \"reason\": \"viewbot\"}"}
-                }]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        std::env::set_var("FIREWORK_API_KEY", "fw-key");
-        std::env::set_var("FIREWORK_BASE_URL", server.uri());
-
-        let http = reqwest::Client::new();
         let provider = tb_llm::LlmEndpoint {
             provider: "fireworks",
             base_url: server.uri(),
             api_key: Some("fw-key".to_string()),
-            model: "accounts/fireworks/models/deepseek-v4-flash".to_string(),
+            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
         };
-        let review = call_judge(&http, &provider, false, "cheap viewers telegram", None)
+        let error = call_judge(Some(&provider), false, "cheap viewers telegram")
             .await
-            .expect("404 muss geheilt werden")
-            .expect("Urteil muss parsebar sein");
-        assert!(review.is_spam);
-
-        clear_provider_env();
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn call_judge_minimax_404_ohne_fireworks_retry() {
-        let _guard = PROVIDER_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        clear_provider_env();
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "accounts/fireworks/models/deepseek-v4-flash-0731"}]
-            })))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        std::env::set_var("FIREWORK_API_KEY", "fw-key");
-        std::env::set_var("FIREWORK_BASE_URL", server.uri());
-
-        let http = reqwest::Client::new();
-        let provider = tb_llm::LlmEndpoint {
-            provider: "minimax",
-            base_url: server.uri(),
-            api_key: Some("minimax-key".to_string()),
-            model: "MiniMax-M3".to_string(),
-        };
-        let err = call_judge(&http, &provider, false, "cheap viewers telegram", None)
-            .await
-            .expect_err("MiniMax-404 darf nicht den Fireworks-Resolver anstossen");
+            .expect_err("404 bleibt ein Providerfehler");
         assert!(
-            matches!(err, JudgeCallError::Provider(ref detail) if detail.contains("404")),
-            "erwartete Provider-404, war {err:?}"
+            matches!(error.error, JudgeCallError::Provider(ref detail) if detail.contains("404")),
+            "erwartete Provider-404, war {error:?}"
         );
-
         clear_provider_env();
     }
 
@@ -3498,7 +3428,7 @@ mod tests {
     /// Dienstnamen (der am 10.08.2026 live durchgerutschte Typ), die harmlosen
     /// Fälle das Viewer-Gerede, an dem v1 scheiterte.
     #[tokio::test]
-    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY oder MINIMAX_API_KEY"]
+    #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY"]
     async fn live_judge_erkennt_anonyme_viewbot_angebote() {
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         let provider = providers.first().expect("kein Judge-Key gesetzt");

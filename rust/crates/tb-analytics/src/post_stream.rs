@@ -314,23 +314,22 @@ pub fn normalize_word_groups(value: &serde_json::Value) -> Vec<WordGroup> {
 }
 
 // ---------------------------------------------------------------------------
-// KI-Aufruf + Modellwahl (Python `_call_minimax` / `_call_claude` / `_plan_ai_model`)
+// KI-Aufruf + historische Report-Stufen
 // ---------------------------------------------------------------------------
 
-/// Anwendungsfaelle in der gemeinsamen Anbieterauswahl. Zwei Namen, weil zwei
-/// Plaene: der MiniMax-Zweig ist die Legacy-Variante, der Opus-Zweig gehoert
-/// zum `analytics`-Flag. Welcher Anbieter dahinter steckt, entscheidet
-/// `tb_llm::selection`, nicht diese Datei.
+/// Zwei Namen bleiben für getrennte Ledger-Zwecke und historische DB-Daten.
+/// Beide Pfade verwenden dasselbe festgelegte Fireworks-Modell im zentralen
+/// Connector.
 const USE_CASE_MINIMAX: &str = "post_stream";
 const USE_CASE_OPUS: &str = "post_stream_opus";
 
 /// Plan-basiertes KI-Modell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiModel {
-    /// Claude Opus — Plan mit dem konsolidierten `analytics`-Flag.
+    /// Historische Premium-Reportstufe mit dem `analytics`-Flag.
     Opus,
-    /// MiniMax — Legacy-Variante (kein Plan vergibt sie mehr; nur noch
-    /// Code-Pfad/Rendering für ggf. historisch persistierte Reports).
+    /// Historische Legacy-Reportstufe (kein Plan vergibt sie mehr; nur noch
+    /// Code-Pfad/Rendering für bereits persistierte Reports).
     Minimax,
 }
 
@@ -348,18 +347,17 @@ pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiMod
     }
 }
 
-/// Ledger-Zweck des MiniMax-/Fireworks-Zweigs (Python
-/// `_track_minimax_completion(..., purpose="post-stream-report")`).
+/// Ledger-Zweck der Legacy-Reportstufe.
 const LEDGER_PURPOSE: &str = "post-stream-report";
-/// Ledger-Zweck des Opus-Zweigs. Eigener Name, weil Opus um Groessenordnungen
-/// teurer ist: unter einem gemeinsamen Zweck waere in der Kostenauswertung
-/// nicht mehr zu sehen, welcher Anteil auf den Premium-Plan entfaellt.
+/// Historischer Ledger-Zweck der Premium-Reportstufe. Der Wert bleibt für die
+/// Vergleichbarkeit bestehender Auswertungen erhalten und bezeichnet keinen
+/// aktiven Anbieter.
 const LEDGER_PURPOSE_OPUS: &str = "post-stream-report-claude";
 
 /// KI-Aufruf des Post-Stream-Reports über den gemeinsamen Eingang.
 ///
-/// Der MiniMax-Zweig darf lange laufen (grosse Reports, 16000 Tokens), der
-/// Opus-Zweig ist auf 6000 begrenzt — beides wie bisher.
+/// Die beiden historischen Reportstufen behalten ihre bisherigen Token- und
+/// Zeitbudgets; Anbieter und Modell sind für beide zentral festgelegt.
 pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
     let (use_case, purpose, request) = match model {
         AiModel::Minimax => (
@@ -373,7 +371,7 @@ pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
         AiModel::Opus => (
             USE_CASE_OPUS,
             LEDGER_PURPOSE_OPUS,
-            // KEINE temperature (Anthropic-Default, 1:1 Python).
+            // Die Premium-Reportstufe lässt die zentrale Standardtemperatur stehen.
             tb_llm::Request::prompt(prompt).max_tokens(6000).timeout_secs(240),
         ),
     };
@@ -2408,14 +2406,14 @@ mod tests {
         clear_provider_env();
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         let endpoint = tb_llm::endpoint_for("post_stream");
-        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
-        assert_eq!(endpoint.model, "MiniMax-M3");
+        assert_eq!(endpoint.provider, "fireworks");
+        assert!(endpoint.api_key.is_none());
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
         std::env::set_var("TB_LLM_PROVIDER_POST_STREAM", "minimax");
         let endpoint = tb_llm::endpoint_for("post_stream");
-        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
-        assert_eq!(endpoint.model, "MiniMax-M3");
+        assert_eq!(endpoint.provider, "fireworks");
+        assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
     }
 
     fn msg(content: &str, author: &str, minute: Option<i64>) -> ChatMessageRow {
@@ -2466,8 +2464,8 @@ mod tests {
     // aendern.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn call_ai_minimax_liefert_content() {
-        use wiremock::matchers::{method, path};
+    async fn call_ai_legacy_stufe_nutzt_fireworks() {
+        use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let _guard = provider_env();
         // Ledger NIE die echte zentrale DB anfassen lassen: vor dem ersten
@@ -2477,25 +2475,28 @@ mod tests {
         std::env::remove_var("DATABASE_URL");
         std::env::remove_var("MINIMAX_USAGE_DB");
         let server = MockServer::start().await;
-        let body = serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]});
+        std::env::set_var("FIREWORK_API_KEY", "k");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .and(body_string_contains(
+                tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]}),
+            ))
             .mount(&server)
             .await;
-        std::env::set_var("MINIMAX_API_KEY", "k");
-        std::env::set_var("MINIMAX_BASE_URL", server.uri());
 
         let out = call_ai(AiModel::Minimax, "prompt").await.unwrap();
         assert_eq!(out, "ANTWORT");
     }
 
     #[test]
-    fn ledger_zwecke_sind_je_anbieter_unterscheidbar() {
+    fn historische_reportstufen_bleiben_im_ledger_unterscheidbar() {
         // Vertrag mit dem Audit (P2.70): purpose='post-stream-report'.
         assert_eq!(LEDGER_PURPOSE, "post-stream-report");
-        // Opus getrennt ausweisen: sonst verschwindet der teure Anteil in der
-        // Summe des guenstigen.
+        // Der alte Wert bleibt ausschließlich für bestehende Zeitreihen.
         assert_eq!(LEDGER_PURPOSE_OPUS, "post-stream-report-claude");
         assert_ne!(LEDGER_PURPOSE, LEDGER_PURPOSE_OPUS);
     }
@@ -2514,26 +2515,28 @@ mod tests {
     // aendern.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn call_ai_opus_setzt_kopfzeilen_und_liefert_content() {
-        use wiremock::matchers::{header, method, path};
+    async fn call_ai_premium_stufe_nutzt_fireworks() {
+        use wiremock::matchers::{body_string_contains, header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let _guard = provider_env();
         std::env::remove_var("TWITCH_ANALYTICS_DSN");
         std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
-        let body = serde_json::json!({"content": [{"type": "text", "text": "CLAUDE-ANTWORT"}]});
+        let body = serde_json::json!({"choices": [{"message": {"content": "FIREWORKS-ANTWORT"}}]});
         Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .and(header("x-api-key", "secret"))
-            .and(header("anthropic-version", "2023-06-01"))
+            .and(path("/chat/completions"))
+            .and(header("authorization", "Bearer secret"))
+            .and(body_string_contains(
+                tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        std::env::set_var("ANTHROPIC_API_KEY", "secret");
-        std::env::set_var("ANTHROPIC_BASE_URL", format!("{}/v1/messages", server.uri()));
+        std::env::set_var("FIREWORK_API_KEY", "secret");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
 
         let out = call_ai(AiModel::Opus, "prompt").await.unwrap();
-        assert_eq!(out, "CLAUDE-ANTWORT");
+        assert_eq!(out, "FIREWORKS-ANTWORT");
     }
 
     // Die Env-Werte muessen bis nach dem HTTP-Call exklusiv bleiben; sonst
@@ -2549,16 +2552,15 @@ mod tests {
         std::env::remove_var("DATABASE_URL");
         let server = MockServer::start().await;
         let body = serde_json::json!({
-            "type": "error",
             "error": {"type": "invalid_request_error", "message": "model: unknown-model"}
         });
         Mock::given(method("POST"))
-            .and(path("/v1/messages"))
+            .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(400).set_body_json(body))
             .mount(&server)
             .await;
-        std::env::set_var("ANTHROPIC_API_KEY", "secret");
-        std::env::set_var("ANTHROPIC_BASE_URL", format!("{}/v1/messages", server.uri()));
+        std::env::set_var("FIREWORK_API_KEY", "secret");
+        std::env::set_var("FIREWORK_BASE_URL", server.uri());
 
         let err = call_ai(AiModel::Opus, "prompt").await.unwrap_err();
         // Ohne Body ist ein 400 nicht diagnostizierbar (Modellname? Limit?).

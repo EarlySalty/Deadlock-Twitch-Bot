@@ -2,7 +2,7 @@
 //!
 //! [`complete`] ist die einzige Stelle im ganzen Repo, die HTTP gegen ein
 //! Sprachmodell spricht. Aufrufer nennen ihren Anwendungsfall und schicken
-//! einen [`Request`]; Anbieterwahl, Ausweichkette, Zeitgrenze, Wiederholung bei
+//! einen [`Request`]; Zeitgrenze, Wiederholung bei
 //! 429, Verbuchung im Ledger und die Einordnung des Fehlers passieren hier.
 //!
 //! ```ignore
@@ -15,17 +15,9 @@
 //!
 //! # Anbieter
 //!
-//! Drei, alle in [`selection`] konstant gehalten:
-//! - **Fireworks/DeepSeek** — Standard, solange ein Fireworks-Key gesetzt ist.
-//! - **MiniMax** — Rückfall ohne Fireworks-Key und Ausweichweg der Kette.
-//! - **Anthropic** — nur für die Anwendungsfälle in
-//!   [`selection::ANTHROPIC_USE_CASES`] (Dashboard-KI, Opus-Report,
-//!   Clip-Anreicherung).
-//!
-//! **OpenAI ist raus** — diese Crate enthält keinen OpenAI-Client, keine
-//! OpenAI-Konstante und keinen OpenAI-Pfad (Querschnitts-Direktive 2 des
-//! Grillme-Audits). Neue Anbieter kommen nicht dazu, ohne dass diese Direktive
-//! ausdrücklich aufgehoben wird.
+//! Ausschließlich **DeepSeek V4 Flash bei Fireworks**. Ohne Fireworks-Schlüssel
+//! schlägt der Connector geschlossen fehl. Altanbieter, Provider-Overrides und
+//! Modell-Overrides werden nicht verwendet.
 //!
 //! # Ledger
 //!
@@ -42,14 +34,10 @@
 pub mod hub;
 pub mod keys;
 pub mod ledger;
-pub mod model_resolver;
 pub mod selection;
 
-pub use model_resolver::{
-    invalidate_and_refresh, model_cache_pool, refresh_fireworks, spawn_refresh_loop,
-};
 pub use hub::{
-    complete, complete_detailed, extract_anthropic_text, strip_think, Accept, Ledger, LlmError,
-    LlmFailure, Message, Request, Response,
+    complete, complete_detailed, strip_think, Accept, Ledger, LlmError, LlmFailure, Message,
+    Request, Response,
 };
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

@@ -87,7 +87,10 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect("Ledger-Zeile mit 777/333 vorhanden");
         assert_eq!(row.0, "twitch-bot");
         assert_eq!(row.1.as_deref(), Some("engagement"));
-        assert_eq!(row.2.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(
+            row.2.as_deref(),
+            Some(tb_llm::selection::FIREWORKS_DEFAULT_MODEL)
+        );
     }
 
     // 2) raw_completion_tracked() → chat-deep-analysis 888/444.
@@ -108,7 +111,10 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect("Ledger-Zeile mit 888/444 vorhanden");
         assert_eq!(row.0, "twitch-bot");
         assert_eq!(row.1.as_deref(), Some("chat-deep-analysis"));
-        assert_eq!(row.2.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(
+            row.2.as_deref(),
+            Some(tb_llm::selection::FIREWORKS_DEFAULT_MODEL)
+        );
     }
 
     // 3) raw_completion() (untracked) → schreibt KEINE Zeile (999/111 bleibt 0).

@@ -534,10 +534,9 @@ async fn titel_completion(
 }
 
 /// Endpunkt dieses Anwendungsfalls aus expliziten Testwerten.
-fn endpunkt(base_url: &str, api_key: &str, model: &str) -> tb_llm::LlmEndpoint {
+fn endpunkt(base_url: &str, api_key: &str, _model: &str) -> tb_llm::LlmEndpoint {
     let mut endpoint = tb_llm::endpoint_for(USE_CASE);
     endpoint.base_url = base_url.to_string();
-    endpoint.model = model.to_string();
     endpoint.api_key = Some(api_key.to_string());
     endpoint
 }
@@ -847,14 +846,14 @@ mod tests {
         clear_provider_env();
         std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         let endpoint = tb_llm::endpoint_for("title_ai");
-        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
-        assert_eq!(endpoint.model, "MiniMax-M3");
+        assert_eq!(endpoint.provider, "fireworks");
+        assert!(endpoint.api_key.is_none());
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
         std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "minimax");
         let endpoint = tb_llm::endpoint_for("title_ai");
-        assert_eq!(endpoint.base_url, "https://api.minimax.io/v1");
-        assert_eq!(endpoint.model, "MiniMax-M3");
+        assert_eq!(endpoint.provider, "fireworks");
+        assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
         clear_provider_env();
     }
 

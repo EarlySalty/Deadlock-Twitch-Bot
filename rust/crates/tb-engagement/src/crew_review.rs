@@ -186,17 +186,17 @@ impl FireworksReviewClient {
     fn from_parts(
         api_key: String,
         base_url: String,
-        model: String,
+        _model: String,
         timeout: Duration,
     ) -> Result<Self, ReviewError> {
-        if api_key.trim().is_empty() || base_url.trim().is_empty() || model.trim().is_empty() {
+        if api_key.trim().is_empty() || base_url.trim().is_empty() {
             return Err(ReviewError::Unavailable);
         }
         Ok(Self {
             endpoint: tb_llm::LlmEndpoint {
                 provider: "fireworks",
                 base_url,
-                model,
+                model: FIREWORKS_DEFAULT_MODEL.to_string(),
                 api_key: Some(api_key),
             },
             timeout,
@@ -1204,44 +1204,28 @@ mod tests {
 
         assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_err());
 
-        // Eigene Provider-Variable auf einen anderen Anbieter: aus.
+        // Altanbieter- und Modellvariablen dürfen die zentrale Auswahl nicht
+        // mehr verändern.
         std::env::set_var("FIREWORK_API_KEY", "dummy-legacy");
         std::env::set_var("MINIMAX_API_KEY", "m");
         std::env::set_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW", "minimax");
         std::env::set_var("TB_LLM_PROVIDER_OUTREACH_SHADOW", "minimax");
-        assert_eq!(
-            FireworksReviewClient::from_env().err(),
-            Some(ReviewError::Unavailable)
-        );
-        assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_err());
-        std::env::remove_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW");
-        std::env::remove_var("TB_LLM_PROVIDER_OUTREACH_SHADOW");
-        std::env::remove_var("MINIMAX_API_KEY");
+        assert!(FireworksReviewClient::from_env().is_ok());
+        assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_ok());
 
-        // Globale Fireworks-Variablen und der eigene Modell-Override schalten
-        // das Review NICHT ab, sondern werden durchgereicht.
-        std::env::set_var("FIREWORKS_API_KEY", "   ");
         std::env::set_var("FIREWORKS_BASE_URL", "https://example.invalid/inference/v1");
         std::env::set_var("FIREWORKS_MODEL", "accounts/fireworks/models/anderes");
         std::env::set_var("TB_LLM_MODEL_RICKY_CREW_REVIEW", "arbitrary-model");
         let mit_override = FireworksReviewClient::from_env().expect("Override schaltet nicht ab");
         assert_eq!(mit_override.endpoint.base_url, "https://example.invalid/inference/v1");
-        assert_eq!(mit_override.endpoint.model, "arbitrary-model");
-        // Ohne eigenen Override gilt das globale Fireworks-Modell.
-        std::env::remove_var("TB_LLM_MODEL_RICKY_CREW_REVIEW");
-        let global = FireworksReviewClient::from_env().expect("globales Modell schaltet nicht ab");
-        assert_eq!(global.endpoint.model, "accounts/fireworks/models/anderes");
-        // Dasselbe Gate gilt fuer das Outreach-Schatten-Review (hier unter
-        // derselben Env-Sperre geprueft, weil beide dieselben Variablen lesen).
+        assert_eq!(mit_override.endpoint.model, FIREWORKS_DEFAULT_MODEL);
+
         std::env::set_var("TB_LLM_MODEL_OUTREACH_SHADOW", "outreach-model");
         let outreach = crate::outreach_shadow::OutreachReviewClient::from_env()
-            .expect("Outreach: globales Modell schaltet nicht ab");
-        assert_eq!(outreach.endpoint_model(), "outreach-model");
-        std::env::remove_var("TB_LLM_MODEL_OUTREACH_SHADOW");
+            .expect("Outreach bleibt auf Fireworks");
+        assert_eq!(outreach.endpoint_model(), FIREWORKS_DEFAULT_MODEL);
 
         std::env::set_var("FIREWORKS_BASE_URL", FIREWORKS_DEFAULT_BASE_URL);
-        std::env::remove_var("FIREWORKS_MODEL");
-        std::env::remove_var("TB_LLM_MODEL_RICKY_CREW_REVIEW");
         let legacy = FireworksReviewClient::from_env().expect("Legacy-Fallback");
         assert_eq!(legacy.endpoint.api_key.as_deref(), Some("dummy-legacy"));
         assert_eq!(legacy.endpoint.base_url, FIREWORKS_DEFAULT_BASE_URL);
