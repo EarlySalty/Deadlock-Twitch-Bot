@@ -18,7 +18,9 @@ const UPLINK_API = readFileSync(join(DASHBOARD_ROOT, 'src', 'api', 'uplink.ts'),
 test('Schlüsselrotation sendet Cookie, CSRF und genau einen leeren JSON-Rumpf', async () => {
   const vorher = globalThis.fetch;
   let aufruf: { input: RequestInfo | URL; init?: RequestInit } | undefined;
+  let aufrufe = 0;
   globalThis.fetch = async (input, init) => {
+    aufrufe += 1;
     aufruf = { input, init };
     return new Response(JSON.stringify({ srt_hint: 'srt://example.invalid:8899?streamid=dummy' }), {
       status: 200,
@@ -28,6 +30,7 @@ test('Schlüsselrotation sendet Cookie, CSRF und genau einen leeren JSON-Rumpf',
   try {
     const antwort = await rotateUplinkIngestKey('csrf-dummy', '11111111-1111-4111-8111-111111111111');
     assert.equal(antwort.srt_hint, 'srt://example.invalid:8899?streamid=dummy');
+    assert.equal(aufrufe, 1);
     assert.equal(String(aufruf?.input), '/twitch/api/v2/uplink/key/rotate');
     assert.equal(aufruf?.init?.method, 'POST');
     assert.equal(aufruf?.init?.credentials, 'same-origin');
@@ -129,7 +132,9 @@ test('Rotation erklärt die Folgen und behandelt einen unklaren Ausgang ohne Wie
   assert.match(UPLINK_PAGE, /alte Adresse kann sich danach nicht neu verbinden/);
   assert.match(UPLINK_PAGE, /neue Adresse danach in OBS eintragen/);
   assert.match(UPLINK_PAGE, /retry:\s*false/);
-  assert.match(UPLINK_PAGE, /onError:[\s\S]*?invalidateQueries\(\{ queryKey: \['uplink-me'\] \}\)/);
+  assert.match(UPLINK_PAGE, /onError:[\s\S]*?srt_hint: ''[\s\S]*?refetchQueries\([\s\S]*?throwOnError: true/);
+  assert.match(UPLINK_PAGE, /setRotationUnklar\(true\)/);
+  assert.match(UPLINK_PAGE, /disabled=\{!csrfToken \|\| rotationUnklar\}/);
   assert.match(UPLINK_PAGE, /Ergebnis ist unklar/);
   assert.match(UPLINK_PAGE, /role="status"/);
 });

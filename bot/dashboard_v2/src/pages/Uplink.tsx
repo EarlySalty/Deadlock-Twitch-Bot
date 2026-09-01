@@ -524,6 +524,7 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
   const queryClient = useQueryClient();
   const [dialogOffen, setDialogOffen] = useState(false);
   const [erfolg, setErfolg] = useState<string | null>(null);
+  const [rotationUnklar, setRotationUnklar] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const sichereAktionRef = useRef<HTMLButtonElement>(null);
   const oeffnerRef = useRef<HTMLButtonElement>(null);
@@ -547,6 +548,7 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
     retry: false,
     onSuccess: (antwort) => {
       rotationLaeuftRef.current = false;
+      setRotationUnklar(false);
       queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
         alt ? { ...alt, srt_hint: antwort.srt_hint } : alt
       );
@@ -559,8 +561,19 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
       rotationLaeuftRef.current = false;
       // Nach einem Timeout ist der Schreibstand unklar. Nur ein lesender Abruf
       // darf den sichtbaren Zustand berichtigen; die Mutation wird nicht
-      // wiederholt.
-      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      // wiederholt. Bis dieser Abruf nachweislich gelingt, darf insbesondere
+      // keine möglicherweise bereits entwertete Adresse mehr kopierbar sein.
+      setRotationUnklar(true);
+      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+        alt ? { ...alt, srt_hint: '' } : alt
+      );
+      void queryClient
+        .refetchQueries({ queryKey: ['uplink-me'], type: 'active' }, { throwOnError: true })
+        .then(() => setRotationUnklar(false))
+        .catch(() => {
+          // Die dauerhafte Warnung bleibt sichtbar. Erst ein bestätigter GET
+          // oder ein vollständiges Neuladen darf sie entfernen.
+        });
     },
   });
 
@@ -595,7 +608,7 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
       <button
         ref={oeffnerRef}
         type="button"
-        disabled={!csrfToken}
+        disabled={!csrfToken || rotationUnklar}
         onClick={oeffnen}
         aria-haspopup="dialog"
         className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-warning/50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -605,6 +618,11 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
       </button>
       {!csrfToken ? (
         <p className="text-xs text-warning">Die sichere Sitzung wird noch geladen. Danach kannst du den Schlüssel rotieren.</p>
+      ) : null}
+      {rotationUnklar ? (
+        <p role="alert" className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Das Ergebnis der letzten Rotation ist unklar. Die alte Adresse bleibt ausgeblendet, bis der aktuelle Stand sicher geladen wurde. Bleibt diese Meldung stehen, lade die Seite neu.
+        </p>
       ) : null}
       {erfolg ? (
         <p role="status" aria-live="polite" className="text-xs text-success">
