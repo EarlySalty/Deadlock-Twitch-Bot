@@ -386,7 +386,6 @@ export function getPreviewApiFixture(
 const UPLINK_ME_FIXTURE = {
   enabled: true,
   waitlisted: false,
-  ingest_key: 'rsr_preview',
   rtmp_url: '',
   srt_hint:
     'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',

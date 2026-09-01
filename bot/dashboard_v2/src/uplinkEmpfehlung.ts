@@ -83,51 +83,33 @@ export function normalisiereCaps(roh: UplinkCapsRoh): UplinkCaps {
  */
 
 export interface ObsBitrateStufe {
-  /** Zielbitrate fuer VBR. */
+  /** Konstante Zielbitrate fuer HQCBR beziehungsweise CBR. */
   kbps: number;
-  /** Maximalbitrate fuer VBR. */
-  maxKbps: number;
 }
 
 /**
  * Fuer alles, was bei uns hoechstens 1080p verlaesst.
  *
- * Woertlich aus `obs.html`, Zeile "5 bis 8 Mbit": 1920x1080, 60 fps,
- * "HEVC, VBR 6000 / max 8000". Dieselben Zahlen stehen dort auch als
+ * Woertlich aus `obs.html`, Zeile "8 bis 12 Mbit": 1920x1080, 60 fps,
+ * "HEVC, HQCBR/CBR 6000". Dieselbe Zahl steht dort auch als
  * "Standard bei knapper Leitung".
  */
-export const OBS_STUFE_STANDARD: ObsBitrateStufe = { kbps: 6000, maxKbps: 8000 };
+export const OBS_STUFE_STANDARD: ObsBitrateStufe = { kbps: 6000 };
 
 /**
  * Nur fuer den, der 2K auch wirklich weitersendet.
  *
- * Woertlich aus `obs.html`, Zeile "ab 14 Mbit, wenn du 2K auch rausschicken
- * willst": 2560x1440, 60 fps, "HEVC, VBR 9000 / max 12000".
+ * Woertlich aus `obs.html`, Zeile "ab 12 Mbit, wenn du 2K auch rausschicken
+ * willst": 2560x1440, 60 fps, "HEVC, HQCBR/CBR 9000".
  *
  * Wer 1440p schickt, damit wir daraus ein schaerferes 1080p rechnen, bleibt
  * bei [`OBS_STUFE_STANDARD`]. Auch das steht so in der Hilfeseite, Zeile
  * "ab 8 Mbit, GPU haelt 1440".
  */
-export const OBS_STUFE_2K: ObsBitrateStufe = { kbps: 9000, maxKbps: 12000 };
+export const OBS_STUFE_2K: ObsBitrateStufe = { kbps: 9000 };
 
 /** Ab dieser Zielhoehe geht 2K raus und die groessere Stufe gilt. */
 const HOEHE_1080 = 1080;
-
-/**
- * Um wie viel die AMD-Encoder im VBR-Modus ueber die eingetragene Bitrate
- * hinausgehen.
- *
- * Bei "AMD HW H.264/H.265/AV1" gibt es kein Feld fuer die Maximalbitrate. OBS
- * setzt sie selbst, und zwar auf das Anderthalbfache der Zielbitrate; im
- * Quelltext steht das als `set_hevc_property(enc, PEAK_BITRATE, bitrate * 1.5)`
- * in `texture-amf.cpp`. Wer 16000 eintraegt, sendet also in Spitzen 24000.
- *
- * Das ist kein Randfall, den man in einem Nebensatz erwaehnt: die Empfehlung
- * neben dem Feld nennt eine Zielbitrate und eine Maximalbitrate, und bei einer
- * AMD-Karte ist die zweite Zahl nicht einstellbar. Wer sie fuer eine Grenze
- * haelt, plant seine Leitung um ein Drittel zu knapp.
- */
-export const AMD_VBR_SPITZENFAKTOR = 1.5;
 
 /**
  * Anteil der Leitung, den ein Stream hoechstens belegen soll.
@@ -139,24 +121,12 @@ export const AMD_VBR_SPITZENFAKTOR = 1.5;
 export const UPLOAD_RESERVE = 0.8;
 
 /**
- * Die Spitze, die eine AMD-Karte bei dieser Stufe wirklich sendet.
- *
- * Nicht `stufe.maxKbps`: das ist die Zahl fuer die Encoder, bei denen man sie
- * eintragen kann.
- */
-export function amdSpitzeKbps(stufe: ObsBitrateStufe): number {
-  return Math.round(stufe.kbps * AMD_VBR_SPITZENFAKTOR);
-}
-
-/**
  * Welchen gemessenen Upload diese Stufe braucht, in Mbit, aufgerundet.
- *
- * `amd` schaltet auf die Spitze um, die OBS dort selbst setzt. Ohne das stuende
- * bei einer AMD-Karte eine Zahl da, die der Streamer gar nicht erreicht.
+ * HQCBR und CBR halten beide die eingetragene Zielbitrate konstant. Daher gibt
+ * es weder einen Encoder-Sonderfall noch eine zweite Maximalbitrate.
  */
-export function noetigerUploadMbit(stufe: ObsBitrateStufe, amd = false): number {
-  const spitze = amd ? amdSpitzeKbps(stufe) : stufe.maxKbps;
-  return Math.ceil(spitze / UPLOAD_RESERVE / 1000);
+export function noetigerUploadMbit(stufe: ObsBitrateStufe): number {
+  return Math.ceil(stufe.kbps / UPLOAD_RESERVE / 1000);
 }
 
 /**
@@ -167,10 +137,9 @@ export function noetigerUploadMbit(stufe: ObsBitrateStufe, amd = false): number 
  * gerundet, weil eine Empfehlung auf 33 kbps genau eine Genauigkeit vortaeuscht,
  * die eine Leitungsmessung nicht hergibt.
  */
-export function zielbitrateFuerUploadKbps(uploadKbps: number, amd = false): number {
+export function zielbitrateFuerUploadKbps(uploadKbps: number): number {
   const nutzbar = uploadKbps * UPLOAD_RESERVE;
-  const ziel = amd ? nutzbar / AMD_VBR_SPITZENFAKTOR : nutzbar;
-  return Math.floor(ziel / 100) * 100;
+  return Math.floor(nutzbar / 100) * 100;
 }
 
 /**

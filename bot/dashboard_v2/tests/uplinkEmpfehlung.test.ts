@@ -47,8 +47,8 @@ test('beide Stufen stehen woertlich so in der eingebetteten OBS-Hilfeseite', () 
   for (const stufe of [OBS_STUFE_STANDARD, OBS_STUFE_2K]) {
     assert.match(
       OBS_HILFE,
-      new RegExp(`VBR ${stufe.kbps} / max ${stufe.maxKbps}`),
-      `VBR ${stufe.kbps} / max ${stufe.maxKbps} fehlt in obs.html`,
+      new RegExp(`(?:HQCBR|CBR) ${stufe.kbps}`),
+      `HQCBR/CBR ${stufe.kbps} fehlt in obs.html`,
     );
   }
 });
@@ -59,7 +59,6 @@ test('ohne Ziele nennt die Anleitung die Standardstufe', () => {
     assert.equal(ergebnis.herkunft, 'start');
     assert.equal(ergebnis.hoehe, null);
     assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
-    assert.equal(ergebnis.maxKbps, OBS_STUFE_STANDARD.maxKbps);
   }
 });
 
@@ -84,14 +83,12 @@ test('Ziele bis 1080p bekommen die Standardstufe', () => {
   assert.equal(ergebnis.herkunft, 'ziele');
   assert.equal(ergebnis.hoehe, 1080);
   assert.equal(ergebnis.kbps, OBS_STUFE_STANDARD.kbps);
-  assert.equal(ergebnis.maxKbps, OBS_STUFE_STANDARD.maxKbps);
 });
 
 test('geht irgendwo 2K raus, gilt die groessere Stufe', () => {
   const ergebnis = obsBitrateEmpfehlung([ziel('twitch', 1080), ziel('youtube', 1440)]);
   assert.equal(ergebnis.hoehe, 1440);
   assert.equal(ergebnis.kbps, OBS_STUFE_2K.kbps);
-  assert.equal(ergebnis.maxKbps, OBS_STUFE_2K.maxKbps);
 });
 
 test('keine Zielbitrate treibt die Empfehlung ueber die Hilfeseite hinaus', () => {
@@ -103,11 +100,35 @@ test('keine Zielbitrate treibt die Empfehlung ueber die Hilfeseite hinaus', () =
     for (const hoehe of [480, 720, 1080, 1440, 2160]) {
       const ergebnis = obsBitrateEmpfehlung([ziel('youtube', hoehe, true, bitrate)]);
       assert.ok(
-        ergebnis.maxKbps <= OBS_STUFE_2K.maxKbps,
-        `${hoehe}p bei ${bitrate} kbps ergibt ${ergebnis.maxKbps}`,
+        ergebnis.kbps <= OBS_STUFE_2K.kbps,
+        `${hoehe}p bei ${bitrate} kbps ergibt ${ergebnis.kbps}`,
       );
     }
   }
+});
+
+test('Dashboard-Anleitung ist VBR-frei und ordnet HQCBR nur AMD zu', () => {
+  const STOERUNGEN = readFileSync(
+    join(DASHBOARD_ROOT, 'public', 'uplink', 'stoerungen.html'),
+    'utf8',
+  );
+  const AUSGABE_SVG = readFileSync(
+    join(DASHBOARD_ROOT, 'public', 'uplink', 'bilder', '4-ausgabe.svg'),
+    'utf8',
+  );
+  for (const [datei, inhalt] of [
+    ['Uplink.tsx', UPLINK_PAGE],
+    ['uplinkEmpfehlung.ts', readFileSync(join(DASHBOARD_ROOT, 'src', 'uplinkEmpfehlung.ts'), 'utf8')],
+    ['obs.html', OBS_HILFE],
+    ['stoerungen.html', STOERUNGEN],
+    ['4-ausgabe.svg', AUSGABE_SVG],
+  ] as const) {
+    assert.doesNotMatch(inhalt, /VBR/i, `${datei} enthält noch VBR`);
+  }
+  assert.match(UPLINK_PAGE, /HQCBR bei AMD/);
+  assert.match(UPLINK_PAGE, /CBR bei Encodern ohne HQCBR/);
+  assert.match(UPLINK_PAGE, /Für NVIDIA, Intel und Apple behaupten wir keine HQCBR-Option/);
+  assert.doesNotMatch(UPLINK_PAGE, /(?:NVIDIA|Apple)[^.\n]*(?:bietet|nutzt|nimm) HQCBR/);
 });
 
 test('pausierte Ziele zaehlen nicht, solange ein Ziel eingeschaltet ist', () => {

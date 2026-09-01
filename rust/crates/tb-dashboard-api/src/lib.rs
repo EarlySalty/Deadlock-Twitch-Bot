@@ -531,6 +531,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/uplink/dock-token/rotate",
             post(uplink::dock_token_rotate_handler),
         )
+        .route(
+            "/twitch/api/v2/uplink/key/rotate",
+            post(uplink::ingest_key_rotate_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/correlation",
+            get(uplink::correlation_handler),
+        )
         // P3.5: Admin-Raid-Historie (Login-Filter `from`/`from_broadcaster`,
         // `limit` 1..=500, Default 50). Admin-Gate via DashboardAuthLevel.
         .route(

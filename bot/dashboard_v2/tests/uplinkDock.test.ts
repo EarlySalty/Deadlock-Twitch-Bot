@@ -25,7 +25,6 @@ const BILDER_SKRIPT = readFileSync(join(WURZEL, 'tools/uplink-bilder/bauen.py'),
 const BASIS: UplinkMe = {
   enabled: true,
   waitlisted: false,
-  ingest_key: 'rsr_test',
   rtmp_url: '',
   srt_hint: '',
   reconnect_wait_s: 90,

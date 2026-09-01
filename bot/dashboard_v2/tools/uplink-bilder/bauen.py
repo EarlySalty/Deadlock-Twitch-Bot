@@ -3,18 +3,47 @@
 # Die Generatoren liegen bewusst ausserhalb von public/: Vite kopiert public/
 # unveraendert ins Bundle, dort haetten .py-Dateien und __pycache__ nichts zu
 # suchen. Aufruf aus diesem Verzeichnis: python3 bauen.py
-import os
-os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "public", "uplink", "bilder"))
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-from _stil import *
+from _stil import BLAU, OBS_GRAU, OBS_PANEL, OBS_RAND, feld, kopf, nummer, ring
+
+AUSGABE = Path(__file__).resolve().parents[2] / "public" / "uplink" / "bilder"
+
+
+def schreibe_svg(name: str, zeilen: list[str]) -> None:
+    """Schreibt ein vollständiges UTF-8-SVG atomar ins öffentliche Verzeichnis."""
+    ziel = AUSGABE / name
+    temporaer: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=AUSGABE,
+            prefix=f".{name}.",
+            delete=False,
+        ) as datei:
+            temporaer = Path(datei.name)
+            datei.write("\n".join(zeilen))
+        # NamedTemporaryFile respektiert die restriktive Prozess-umask und
+        # erzeugt typischerweise 0600. Die fertigen Public-Assets müssen wie
+        # die übrigen getrackten Dateien für den getrennten Webdienst lesbar
+        # sein; der Modus wird beim atomaren Replace mit übernommen.
+        temporaer.chmod(0o644)
+        temporaer.replace(ziel)
+        temporaer = None
+    finally:
+        if temporaer is not None:
+            temporaer.unlink(missing_ok=True)
 
 # ---------------------------------------------------------------- 1. Stream
 B, H = 900, 330
 s = [kopf(B, H, "OBS-Einstellungen, Reiter Stream: Dienst Benutzerdefiniert, Serveradresse eingetragen, Streamschluessel leer")]
 s.append(f'<rect x="0" y="0" width="{B}" height="46" rx="10" fill="{OBS_PANEL}"/>')
 s.append(f'<rect x="0" y="36" width="{B}" height="10" fill="{OBS_PANEL}"/>')
-s.append(f'<text x="24" y="30" class="titel">Einstellungen</text>')
-s.append(f'<text x="180" y="30" class="dim">Stream</text>')
+s.append('<text x="24" y="30" class="titel">Einstellungen</text>')
+s.append('<text x="180" y="30" class="dim">Stream</text>')
 s.append(f'<rect x="168" y="42" width="66" height="3" fill="{BLAU}"/>')
 
 zeilen = [
@@ -36,10 +65,10 @@ for label, wert, y, markiert, n in zeilen:
         s.append(ring(210, y, 620, 34))
         s.append(nummer(858, y + 17, n))
 
-s.append(f'<text x="222" y="252" class="dim" font-style="italic">leer lassen</text>')
-s.append(f'<text x="24" y="300" class="mark">1 Benutzerdefiniert wählen &#183; 2 Adresse aus dem Dashboard einfügen &#183; 3 nichts eintragen</text>')
+s.append('<text x="222" y="252" class="dim" font-style="italic">leer lassen</text>')
+s.append('<text x="24" y="300" class="mark">1 Benutzerdefiniert wählen &#183; 2 Adresse aus dem Dashboard einfügen &#183; 3 nichts eintragen</text>')
 s.append('</svg>')
-open("1-stream.svg", "w").write("\n".join(s))
+schreibe_svg("1-stream.svg", s)
 
 # ------------------------------------------------------------ 2. Docks-Menue
 B, H = 900, 330
@@ -66,18 +95,18 @@ s.append(f'<rect x="{menue_x+6}" y="{yy-19}" width="318" height="30" rx="4" fill
 s.append(f'<text x="{menue_x+18}" y="{yy}" class="lbl">Benutzerdefinierte Browser-Docks…</text>')
 s.append(ring(menue_x + 6, yy - 19, 318, 30))
 s.append(nummer(menue_x + 350, yy - 4, 1))
-s.append(f'<text x="24" y="290" class="mark">In der Menüleiste auf „Docks“, dann ganz unten „Benutzerdefinierte Browser-Docks“.</text>')
+s.append('<text x="24" y="290" class="mark">In der Menüleiste auf „Docks“, dann ganz unten „Benutzerdefinierte Browser-Docks“.</text>')
 s.append('</svg>')
-open("2-docks-menue.svg", "w").write("\n".join(s))
+schreibe_svg("2-docks-menue.svg", s)
 
 # ----------------------------------------------------------- 3. Docks-Dialog
 B, H = 900, 400
 s = [kopf(B, H, "Dialog Benutzerdefinierte Browser-Docks mit vier eingetragenen Fenstern")]
 s.append(f'<rect x="0" y="0" width="{B}" height="46" rx="10" fill="{OBS_PANEL}"/>')
 s.append(f'<rect x="0" y="36" width="{B}" height="10" fill="{OBS_PANEL}"/>')
-s.append(f'<text x="24" y="30" class="titel">Benutzerdefinierte Browser-Docks</text>')
-s.append(f'<text x="30" y="80" class="dim">Dock-Name</text>')
-s.append(f'<text x="250" y="80" class="dim">URL</text>')
+s.append('<text x="24" y="30" class="titel">Benutzerdefinierte Browser-Docks</text>')
+s.append('<text x="30" y="80" class="dim">Dock-Name</text>')
+s.append('<text x="250" y="80" class="dim">URL</text>')
 
 # Unsere vier Fenster, nicht die von Twitch: die Adressen stehen im Dashboard
 # in der Karte "OBS einrichten", Schritt 5 "Fenster einrichten". Der Zugang
@@ -100,30 +129,30 @@ for i, (name, url) in enumerate(reihen):
 s.append(ring(30, 94, 804, 4 * 46 - 12))
 s.append(nummer(866, 100, 2))
 s.append(f'<rect x="30" y="292" width="40" height="32" rx="4" fill="{OBS_PANEL}" stroke="{OBS_RAND}"/>')
-s.append(f'<text x="50" y="314" text-anchor="middle" class="lbl" font-size="20">+</text>')
+s.append('<text x="50" y="314" text-anchor="middle" class="lbl" font-size="20">+</text>')
 s.append(ring(30, 292, 40, 32))
 s.append(nummer(96, 308, 1))
 s.append(f'<rect x="726" y="292" width="108" height="34" rx="4" fill="{BLAU}"/>')
-s.append(f'<text x="780" y="314" text-anchor="middle" class="lbl">Übernehmen</text>')
+s.append('<text x="780" y="314" text-anchor="middle" class="lbl">Übernehmen</text>')
 s.append(nummer(862, 309, 3))
-s.append(f'<text x="30" y="368" class="mark">1 Pro Fenster einmal auf „+“ &#183; 2 Name und Adresse einfügen &#183; 3 Übernehmen</text>')
+s.append('<text x="30" y="368" class="mark">1 Pro Fenster einmal auf „+“ &#183; 2 Name und Adresse einfügen &#183; 3 Übernehmen</text>')
 s.append('</svg>')
-open("3-docks-dialog.svg", "w").write("\n".join(s))
+schreibe_svg("3-docks-dialog.svg", s)
 
 # ---------------------------------------------------------------- 4. Ausgabe
 B, H = 900, 330
-s = [kopf(B, H, "OBS-Einstellungen, Reiter Ausgabe: Hardware-HEVC, VBR, Keyframe 2 Sekunden")]
+s = [kopf(B, H, "OBS-Einstellungen, Reiter Ausgabe: AMD Hardware-HEVC, HQCBR, Keyframe 2 Sekunden")]
 s.append(f'<rect x="0" y="0" width="{B}" height="46" rx="10" fill="{OBS_PANEL}"/>')
 s.append(f'<rect x="0" y="36" width="{B}" height="10" fill="{OBS_PANEL}"/>')
-s.append(f'<text x="24" y="30" class="titel">Einstellungen</text>')
-s.append(f'<text x="180" y="30" class="dim">Ausgabe</text>')
+s.append('<text x="24" y="30" class="titel">Einstellungen</text>')
+s.append('<text x="180" y="30" class="dim">Ausgabe</text>')
 s.append(f'<rect x="168" y="42" width="80" height="3" fill="{BLAU}"/>')
 
 felder = [
     ("Ausgabemodus", "Erweitert", 76),
-    ("Videokodierer", "NVIDIA NVENC HEVC", 122),
-    ("Ratensteuerung", "VBR", 168),
-    ("Bitrate / Maximum", "6000 Kbps / 8000 Kbps", 214),
+    ("Videokodierer", "AMD HW H.265 (HEVC)", 122),
+    ("Ratensteuerung", "HQCBR", 168),
+    ("Bitrate", "6000 Kbps", 214),
     ("Keyframe-Intervall", "2 s", 260),
 ]
 for label, wert, y in felder:
@@ -135,7 +164,7 @@ s.append(ring(260, 122, 520, 34))
 s.append(nummer(818, 139, 1))
 s.append(ring(260, 168, 520, 34))
 s.append(nummer(818, 185, 2))
-s.append(f'<text x="24" y="316" class="mark">1 Hardware-HEVC, nicht x264 &#183; 2 VBR, nicht CBR und nicht ABR</text>')
+s.append('<text x="24" y="316" class="mark">1 AMD Hardware-HEVC, nicht x264 &#183; 2 HQCBR; sonst CBR</text>')
 s.append('</svg>')
-open("4-ausgabe.svg", "w").write("\n".join(s))
+schreibe_svg("4-ausgabe.svg", s)
 print("gebaut")

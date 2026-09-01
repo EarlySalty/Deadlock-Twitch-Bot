@@ -15,7 +15,6 @@ export type UplinkLiveStatus = 'live' | 'aus' | 'unbekannt';
 export interface UplinkMe {
   enabled: boolean;
   waitlisted: boolean;
-  ingest_key: string;
   rtmp_url: string;
   srt_hint: string;
   live_status?: UplinkLiveStatus;
@@ -67,6 +66,64 @@ export interface DockUrls {
   activity: string;
   stream_info: string;
   points: string;
+}
+
+export interface UplinkKeyRotation {
+  srt_hint: string;
+}
+
+/**
+ * Ersetzt den Uplink-Eingangsschlüssel und liefert ausschließlich die neue,
+ * bereits vollständige SRT-Adresse zurück.
+ *
+ * Ein HTTP-Erfolg ohne Adresse ist kein Erfolg für die Oberfläche: der Server
+ * kann den Schlüssel dann bereits gedreht haben, während OBS noch die alte
+ * Adresse zeigt. Der Aufrufer behandelt diesen Ausgang deshalb ausdrücklich
+ * als unklar und wiederholt den Schreibaufruf nicht automatisch.
+ */
+export async function rotateUplinkIngestKey(
+  csrfToken: string,
+  idempotencyKey: string,
+): Promise<UplinkKeyRotation> {
+  if (!csrfToken.trim()) {
+    throw new Error('Der Sicherheitstoken fehlt. Lade die Seite neu.');
+  }
+  if (!idempotencyKey.trim()) {
+    throw new Error('Die sichere Rotationskennung fehlt. Lade die Seite neu.');
+  }
+  const antwort = await fetchJson<Partial<UplinkKeyRotation>>(
+    '/twitch/api/v2/uplink/key/rotate',
+    withCookieCredentials({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: '{}',
+      cache: 'no-store',
+    }),
+  );
+  const srtHint = typeof antwort.srt_hint === 'string' ? antwort.srt_hint.trim() : '';
+  const gueltig = (() => {
+    try {
+      const adresse = new URL(srtHint);
+      return (
+        adresse.protocol === 'srt:' &&
+        Boolean(adresse.hostname) &&
+        !adresse.username &&
+        !adresse.password &&
+        !/\s/.test(srtHint)
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (!gueltig) {
+    throw new Error('Der Server hat keine neue SRT-Adresse zurückgegeben.');
+  }
+  return { srt_hint: srtHint };
 }
 
 /**
@@ -299,7 +356,10 @@ export function dockAdressen(me: UplinkMe): DockAdresse[] {
 }
 
 export function fetchUplinkMe(): Promise<UplinkMe> {
-  return fetchJson<UplinkMe>('/twitch/api/v2/uplink/me', withCookieCredentials());
+  return fetchJson<UplinkMe>(
+    '/twitch/api/v2/uplink/me',
+    withCookieCredentials({ cache: 'no-store' }),
+  );
 }
 
 export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {

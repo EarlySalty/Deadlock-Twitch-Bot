@@ -5,15 +5,20 @@
 #![allow(clippy::result_large_err)]
 
 use axum::{
-    extract::{Extension, Path, State},
-    http::StatusCode,
+    extract::{Extension, Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 use tb_transport_twitch::{HelixClient, HelixConfig, TwitchUser};
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
@@ -24,6 +29,142 @@ use crate::auth::{
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
+const ROTATIONS_SPERRE: Duration = Duration::from_secs(30);
+const ROTATIONS_CACHE_AUFRAEUMEN: Duration = Duration::from_secs(60 * 60);
+
+fn no_store_json(wert: Value) -> Response {
+    (
+        [
+            (header::CACHE_CONTROL, "no-store, max-age=0"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        Json(wert),
+    )
+        .into_response()
+}
+
+#[derive(Clone)]
+struct IngestRotationCoordinator {
+    eintraege: Arc<Mutex<HashMap<i64, RotationSperre>>>,
+    jetzt: Arc<dyn Fn() -> Instant + Send + Sync>,
+}
+
+struct RotationSperre {
+    letzter_zugriff: Instant,
+    zustand: Arc<tokio::sync::Mutex<RotationZustand>>,
+}
+
+#[derive(Default)]
+struct RotationZustand {
+    schluessel: Option<uuid::Uuid>,
+    terminal: Option<Instant>,
+    antwort: Option<Value>,
+}
+
+impl Default for IngestRotationCoordinator {
+    fn default() -> Self {
+        Self {
+            eintraege: Arc::new(Mutex::new(HashMap::new())),
+            jetzt: Arc::new(Instant::now),
+        }
+    }
+}
+
+impl IngestRotationCoordinator {
+    fn fuer_streamer(&self, streamer_id: i64) -> Arc<tokio::sync::Mutex<RotationZustand>> {
+        let jetzt = (self.jetzt)();
+        let mut eintraege = self.eintraege.lock().unwrap_or_else(|e| e.into_inner());
+        eintraege.retain(|_, eintrag| {
+            jetzt.duration_since(eintrag.letzter_zugriff) < ROTATIONS_CACHE_AUFRAEUMEN
+                || Arc::strong_count(&eintrag.zustand) > 1
+        });
+        let eintrag = eintraege
+            .entry(streamer_id)
+            .or_insert_with(|| RotationSperre {
+                letzter_zugriff: jetzt,
+                zustand: Arc::new(tokio::sync::Mutex::new(RotationZustand::default())),
+            });
+        eintrag.letzter_zugriff = jetzt;
+        Arc::clone(&eintrag.zustand)
+    }
+
+    async fn ausfuehren<F, Fut>(
+        &self,
+        streamer_id: i64,
+        idempotenz: uuid::Uuid,
+        operation: F,
+    ) -> Result<Value, Response>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Value, Response>>,
+    {
+        let sperre = self.fuer_streamer(streamer_id);
+        let mut zustand = sperre.lock().await;
+        let jetzt = (self.jetzt)();
+
+        if zustand.schluessel == Some(idempotenz) {
+            if let Some(antwort) = &zustand.antwort {
+                return Ok(antwort.clone());
+            }
+            return Err(rotation_gesperrt_antwort());
+        }
+        // `terminal=None` bei gesetztem Schlüssel bedeutet: der externe
+        // Schreibaufruf läuft noch oder der Request wurde währenddessen
+        // abgebrochen. Beides ist ein unklarer Ausgang. Ein anderer Tab darf
+        // ihn nicht mit einer zweiten Rotation überholen.
+        if zustand.schluessel.is_some() && zustand.terminal.is_none() {
+            return Err(rotation_gesperrt_antwort());
+        }
+        if zustand
+            .terminal
+            .is_some_and(|terminal| jetzt.saturating_duration_since(terminal) < ROTATIONS_SPERRE)
+        {
+            return Err(rotation_gesperrt_antwort());
+        }
+
+        // Vor dem externen Schreibaufruf markieren. Bleibt dessen Ausgang
+        // unklar, darf weder derselbe noch ein zweiter Tab sofort erneut
+        // rotieren; ein lesender GET liefert stattdessen den aktuellen Stand.
+        zustand.schluessel = Some(idempotenz);
+        zustand.terminal = None;
+        zustand.antwort = None;
+        let ergebnis = operation().await;
+        zustand.terminal = Some((self.jetzt)());
+        if let Ok(antwort) = &ergebnis {
+            zustand.antwort = Some(antwort.clone());
+        }
+        ergebnis
+    }
+}
+
+fn rotation_gesperrt_antwort() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "Der Stream-Schlüssel wurde gerade rotiert. Lade die aktuelle OBS-Adresse neu."
+        })),
+    )
+        .into_response()
+}
+
+fn ingest_rotation_coordinator() -> &'static IngestRotationCoordinator {
+    static COORDINATOR: OnceLock<IngestRotationCoordinator> = OnceLock::new();
+    COORDINATOR.get_or_init(IngestRotationCoordinator::default)
+}
+
+fn idempotenz_schluessel(headers: &HeaderMap) -> Result<uuid::Uuid, Response> {
+    headers
+        .get("idempotency-key")
+        .and_then(|wert| wert.to_str().ok())
+        .and_then(|wert| uuid::Uuid::parse_str(wert).ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Gültiger Idempotency-Key fehlt." })),
+            )
+                .into_response()
+        })
+}
 
 fn relay_base() -> String {
     std::env::var("RS_RELAY_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8891".into())
@@ -352,7 +493,7 @@ pub async fn me_handler(
     State(pool): State<PgPool>,
     config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
-) -> Result<Json<Value>, Response> {
+) -> Result<Response, Response> {
     let config = config.map(|Extension(c)| c);
     let id = partner_id(&pool, &auth).await?;
     let mut wert = relay_json(
@@ -380,7 +521,7 @@ pub async fn me_handler(
         Err(_) => Vec::new(),
     };
     me_anreichern(&mut wert, live, &verbindungen, &ziele);
-    Ok(Json(wert))
+    Ok(no_store_json(wert))
 }
 
 /// Plattformen, fuer die das Relay ein Ziel fuehrt (`GET /v1/me/destinations`).
@@ -414,6 +555,7 @@ fn me_anreichern(
     let Some(objekt) = wert.as_object_mut() else {
         return;
     };
+    objekt.remove("ingest_key");
     objekt.insert("live_status".to_string(), Value::String(live.to_string()));
     // Beide Dock-Felder kommen vom Relay und werden unveraendert
     // durchgereicht, nur auf eine feste Form gebracht.
@@ -476,16 +618,117 @@ fn me_anreichern(
 pub async fn dock_token_rotate_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
-) -> Result<Json<Value>, Response> {
+) -> Result<Response, Response> {
     let id = partner_id(&pool, &auth).await?;
     let wert = relay_json(reqwest::Method::POST, &dock_token_rotate_pfad(id), None).await?;
-    Ok(Json(wert))
+    Ok(no_store_json(wert))
 }
 
 /// Das Relay liest den Streamer wie bei `/v1/me/waitlist` aus der Query
 /// (`Query<MeQuery>` in rs-relay `src/api/chat.rs`), nicht aus einem Body.
 fn dock_token_rotate_pfad(streamer_id: i64) -> String {
     format!("/v1/me/dock-token/rotate?streamer_id={streamer_id}")
+}
+
+/// Dreht den persönlichen Ingest-Schlüssel und gibt dem Browser nur die neue
+/// vollständige OBS-Adresse zurück.
+///
+/// Das Relay liefert den nackten Schlüssel zusätzlich zu `srt_hint`. Für die
+/// Oberfläche wäre das eine zweite geheime Darstellung desselben Zugangs und
+/// damit eine unnötige Stelle, an der er versehentlich geloggt oder angezeigt
+/// werden könnte. OBS braucht ausschließlich die vollständige Adresse.
+pub async fn ingest_key_rotate_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let idempotenz = idempotenz_schluessel(&headers)?;
+    let pfad = ingest_key_rotate_pfad(id);
+    let antwort = ingest_rotation_coordinator()
+        .ausfuehren(id, idempotenz, || async {
+            let wert = relay_json(reqwest::Method::POST, &pfad, None).await?;
+            ingest_key_rotate_antwort(wert).ok_or_else(|| {
+                tracing::warn!(
+                    streamer_id = id,
+                    "Uplink-Relay hat nach Schlüsselrotation keine OBS-Adresse geliefert"
+                );
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "Uplink hat keine neue OBS-Adresse geliefert." })),
+                )
+                    .into_response()
+            })
+        })
+        .await?;
+    Ok(no_store_json(antwort))
+}
+
+fn ingest_key_rotate_pfad(streamer_id: i64) -> String {
+    format!("/v1/me/key/rotate?streamer_id={streamer_id}")
+}
+
+fn ingest_key_rotate_antwort(wert: Value) -> Option<Value> {
+    let srt_hint = wert.get("srt_hint")?.as_str()?.trim();
+    if srt_hint.is_empty() {
+        return None;
+    }
+    Some(json!({ "srt_hint": srt_hint }))
+}
+
+#[derive(Deserialize)]
+pub struct CorrelationQuery {
+    pub session: Option<i64>,
+    pub started_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub started_before: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Vollständiger Rohdatenexport der eigenen normalen SRT-Session.
+///
+/// Die Streamer-ID kommt ausschließlich aus der angemeldeten Dashboard-
+/// Session. Damit kann der Browser den späteren Live-Beleg herunterladen,
+/// ohne ein Relay-Secret oder eine fremde ID zu kennen.
+pub async fn correlation_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Query(query): Query<CorrelationQuery>,
+) -> Result<Response, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let pfad = correlation_pfad(id, &query).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Session oder eindeutiges Startzeitfenster fehlt." })),
+        )
+            .into_response()
+    })?;
+    let wert = relay_json(reqwest::Method::GET, &pfad, None).await?;
+    Ok(correlation_antwort(wert))
+}
+
+fn correlation_antwort(wert: Value) -> Response {
+    no_store_json(wert)
+}
+
+fn correlation_pfad(streamer_id: i64, query: &CorrelationQuery) -> Option<String> {
+    let mut parameter = url::form_urlencoded::Serializer::new(String::new());
+    parameter.append_pair("streamer_id", &streamer_id.to_string());
+    match (query.session, query.started_after, query.started_before) {
+        (Some(session), None, None) if session > 0 => {
+            parameter.append_pair("session", &session.to_string());
+        }
+        (None, Some(von), Some(bis)) if von < bis => {
+            parameter.append_pair(
+                "started_after",
+                &von.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            );
+            parameter.append_pair(
+                "started_before",
+                &bis.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            );
+        }
+        _ => return None,
+    }
+    Some(format!("/v1/me/correlation?{}", parameter.finish()))
 }
 
 pub async fn waitlist_handler(
@@ -1964,6 +2207,7 @@ mod tests {
         // Der Bot baut hier nichts nach; er weiss den Zugang gar nicht.
         let mut wert = json!({
             "freigeschaltet": true,
+            "ingest_key": "darf-nicht-zum-browser",
             "dock_url_vorhanden": true,
             "dock_urls": {
                 "chat": "https://relay.test/dock/chat?t=abc",
@@ -1979,6 +2223,7 @@ mod tests {
             &["twitch".to_string()],
         );
         assert_eq!(wert["live_status"], "live");
+        assert!(wert.get("ingest_key").is_none());
         assert_eq!(wert["dock_url_vorhanden"], true);
         assert_eq!(
             wert["dock_urls"]["chat"],
@@ -2051,6 +2296,254 @@ mod tests {
         let pfad = dock_token_rotate_pfad(4242);
         assert_eq!(pfad, "/v1/me/dock-token/rotate?streamer_id=4242");
         assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
+    }
+
+    #[test]
+    fn ingest_key_rotate_traegt_streamer_in_der_query_und_gibt_nur_die_obs_adresse_aus() {
+        let pfad = ingest_key_rotate_pfad(4242);
+        assert_eq!(pfad, "/v1/me/key/rotate?streamer_id=4242");
+        assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
+
+        let antwort = ingest_key_rotate_antwort(json!({
+            "streamer_id": 4242,
+            "ingest_key": "darf-nicht-separat-zum-browser",
+            "srt_hint": "srt://relay.invalid:8899?streamid=dummy"
+        }))
+        .expect("vollstaendige Relay-Antwort");
+        assert_eq!(
+            antwort,
+            json!({ "srt_hint": "srt://relay.invalid:8899?streamid=dummy" })
+        );
+        assert!(antwort.get("ingest_key").is_none());
+        assert!(antwort.get("streamer_id").is_none());
+
+        assert!(ingest_key_rotate_antwort(json!({ "srt_hint": "" })).is_none());
+        assert!(ingest_key_rotate_antwort(json!({})).is_none());
+    }
+
+    #[test]
+    fn geheime_uplink_antworten_sind_nicht_cachebar() {
+        let antwort = no_store_json(json!({ "srt_hint": "srt://relay.invalid/dummy" }));
+        assert_eq!(
+            antwort.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store, max-age=0"
+        );
+        assert_eq!(antwort.headers().get(header::PRAGMA).unwrap(), "no-cache");
+    }
+
+    #[test]
+    fn nur_gueltige_idempotenz_schluessel_kommen_durch() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            idempotenz_schluessel(&headers).unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+        headers.insert("idempotency-key", "kein-uuid".parse().unwrap());
+        assert_eq!(
+            idempotenz_schluessel(&headers).unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+        headers.insert(
+            "idempotency-key",
+            "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+        );
+        assert_eq!(
+            idempotenz_schluessel(&headers).unwrap(),
+            uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn parallele_rotationen_drehen_pro_streamer_nur_einmal() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+
+        let erster_start = Arc::clone(&start);
+        let erster_aufrufe = Arc::clone(&aufrufe);
+        let erster = coordinator.ausfuehren(42, erster_key, move || async move {
+            erster_aufrufe.fetch_add(1, Ordering::SeqCst);
+            erster_start.wait().await;
+            Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
+        });
+        let zweiter = async {
+            start.wait().await;
+            coordinator
+                .ausfuehren(42, zweiter_key, || async {
+                    aufrufe.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({ "srt_hint": "srt://relay.invalid/veraltet" }))
+                })
+                .await
+        };
+
+        let (erster, zweiter) = tokio::join!(erster, zweiter);
+        assert_eq!(erster.unwrap()["srt_hint"], "srt://relay.invalid/neu");
+        assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn gleiche_idempotenz_liefert_dieselbe_rotation_ohne_zweiten_schreibaufruf() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let basis = Instant::now();
+        let uhr = Arc::new(Mutex::new(basis));
+        let test_uhr = Arc::clone(&uhr);
+        let coordinator = IngestRotationCoordinator {
+            eintraege: Arc::new(Mutex::new(HashMap::new())),
+            jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
+        };
+        let aufrufe = AtomicUsize::new(0);
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let erste = coordinator
+            .ausfuehren(42, key, || async {
+                aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
+            })
+            .await
+            .unwrap();
+        *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
+        let zweite = coordinator
+            .ausfuehren(42, key, || async {
+                aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(erste, zweite);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn sperrfrist_beginnt_am_terminalen_ausgang_nicht_am_schreibstart() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let basis = Instant::now();
+        let uhr = Arc::new(Mutex::new(basis));
+        let test_uhr = Arc::clone(&uhr);
+        let coordinator = IngestRotationCoordinator {
+            eintraege: Arc::new(Mutex::new(HashMap::new())),
+            jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
+        };
+        let aufrufe = AtomicUsize::new(0);
+        let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let lange_uhr = Arc::clone(&uhr);
+
+        coordinator
+            .ausfuehren(42, erster_key, || async {
+                aufrufe.fetch_add(1, Ordering::SeqCst);
+                *lange_uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
+            })
+            .await
+            .unwrap();
+        let zweiter = coordinator
+            .ausfuehren(42, zweiter_key, || async {
+                aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
+            })
+            .await;
+
+        assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn abgebrochener_schreibaufruf_bleibt_fuer_andere_keys_fail_closed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let erster_coordinator = coordinator.clone();
+        let erster_aufrufe = Arc::clone(&aufrufe);
+
+        let erster = tokio::spawn(async move {
+            erster_coordinator
+                .ausfuehren(42, erster_key, || async move {
+                    erster_aufrufe.fetch_add(1, Ordering::SeqCst);
+                    gestartet_tx.send(()).expect("Startbarriere melden");
+                    std::future::pending::<Result<Value, Response>>().await
+                })
+                .await
+        });
+        gestartet_rx.await.expect("Schreibaufruf gestartet");
+        erster.abort();
+        assert!(erster.await.unwrap_err().is_cancelled());
+
+        let zweiter_aufrufe = Arc::clone(&aufrufe);
+        let zweiter = coordinator
+            .ausfuehren(42, zweiter_key, || async move {
+                zweiter_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
+            })
+            .await;
+        assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn correlation_nimmt_identitaet_nur_aus_der_session_und_kodiert_das_zeitfenster() {
+        let von = "2026-09-01T10:00:00Z".parse().expect("Startzeit");
+        let bis = "2026-09-01T11:00:00Z".parse().expect("Endzeit");
+        let pfad = correlation_pfad(
+            4242,
+            &CorrelationQuery {
+                session: None,
+                started_after: Some(von),
+                started_before: Some(bis),
+            },
+        )
+        .expect("gültiges Zeitfenster");
+        assert_eq!(
+            pfad,
+            "/v1/me/correlation?streamer_id=4242&started_after=2026-09-01T10%3A00%3A00Z&started_before=2026-09-01T11%3A00%3A00Z"
+        );
+        assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
+
+        assert_eq!(
+            correlation_pfad(
+                4242,
+                &CorrelationQuery {
+                    session: Some(77),
+                    started_after: None,
+                    started_before: None,
+                }
+            )
+            .as_deref(),
+            Some("/v1/me/correlation?streamer_id=4242&session=77")
+        );
+        assert!(correlation_pfad(
+            4242,
+            &CorrelationQuery {
+                session: None,
+                started_after: Some(bis),
+                started_before: Some(von),
+            }
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn correlation_rohdaten_sind_nicht_cachebar() {
+        let antwort = correlation_antwort(json!({
+            "session_id": 77,
+            "metrics_complete": true,
+            "samples": []
+        }));
+        assert_eq!(
+            antwort.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store, max-age=0"
+        );
+        assert_eq!(antwort.headers().get(header::PRAGMA).unwrap(), "no-cache");
     }
 
     #[test]

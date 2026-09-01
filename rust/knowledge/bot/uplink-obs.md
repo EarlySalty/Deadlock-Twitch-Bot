@@ -7,7 +7,7 @@ last_updated: 2026-08-22
 source: rs-relay/docs/obs.html
 tip_eligible: false
 ---
-Du stellst den Weg zu uns ein. CBR und das Keyframe für Twitch musst du nicht übernehmen, und welche Auflösung rausgeht, wählst du im Dashboard. Ziel ist viel Bild bei wenig Upload und wenig Last neben dem Spiel.
+Du stellst den Weg zu uns ein. Eine konstante Bitrate verhindert unkontrollierte Spitzen, und welche Auflösung rausgeht, wählst du im Dashboard. Ziel ist viel Bild bei planbarem Upload und wenig Last neben dem Spiel.
 
 ### 1. Ausgabe
 
@@ -25,59 +25,50 @@ Lass `x265`, `SVT-AV1`, `AOM AV1` und Hardware-AV1 weg. Diese Varianten sind neb
 
 ### Qualitätsregulierung
 
-CBR, VBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. Sie ändern nicht den Codec.
+HQCBR, CBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. Sie ändern nicht den Codec.
 
 | Modus | Was er macht | In Deadlock | Zu uns |
 | --- | --- | --- | --- |
-| **CBR** | Jede Sekunde bekommt gleich viele Bits, in der Lobby wie im Fight. | Upload wird in ruhigen Szenen verschenkt. Der Fight wird dadurch nicht schöner. | Nicht nötig. Twitch und Kick brauchen CBR von uns, nicht von dir. |
-| **VBR** | Zielbitrate plus Maximalbitrate. In ruhigen Szenen spart VBR, im Fight gibt es mehr, begrenzt durch das Maximum. Bei AMD gibt es kein Feld für das Maximum, dort liegt es fest beim Anderthalbfachen der Zielbitrate. | Planbar und passend für deine Leitung. | Empfehlung. |
+| **HQCBR** | Hält die Zielbitrate konstant und verteilt die Bits bei AMD hochwertiger über die Bilder. | Planbar: ein Fight schießt nicht über deine Leitung. | **Empfehlung bei AMD.** |
+| **CBR** | Hält dieselbe Zielbitrate konstant. | Ebenso planbar, aber ohne die AMD-spezifische Qualitätsverteilung. | **Nimm CBR, wenn dein Encoder HQCBR nicht anbietet.** |
 | **CQP** oder bei x264 **CRF** | Du setzt eine Qualitätszahl. Der Encoder nimmt so viele Bits, wie die Szene braucht. | In der Lobby oft 2 bis 3 Mbit, im Teamfight plötzlich 10 bis 15 Mbit. | Beste Qualität pro Bit, wenn deine Leitung die Spitze trägt. |
-| **ABR** | Hält im Schnitt eine Bitrate, oft ohne hartes Maximum. Das fällt vor allem bei x264 auf. | Kann über deine Leitung schießen, ohne so klar zu sein wie CQP. | Weglassen. Das ist der schlechtere Kompromiss. |
+| **ABR** | Hält im Schnitt eine Bitrate, oft ohne hartes Maximum. Das fällt vor allem bei x264 auf. | Kann über deine Leitung schießen. | Weglassen. Das ist der schlechtere Kompromiss. |
 
-- **VBR**: Du begrenzt die Leitung. Der Encoder verteilt innerhalb der Grenze.
+- **HQCBR**: Bei AMD die konstante Zielbitrate mit besserer Bit-Verteilung.
+- **CBR**: Konstante Zielbitrate für Encoder ohne HQCBR.
 - **CQP oder CRF**: Du bestellst Qualität. Die Bitrate folgt der Szene.
-- **ABR**: Ungefähr VBR, aber ohne zuverlässigen Deckel.
-- **CBR**: Deckel und Boden sind gleich. Für den direkten Twitch-Weg ist das Pflicht, für uns ist es Verschwendung.
+- **ABR**: Hält nur den Durchschnitt und hat oft keinen zuverlässigen Deckel.
 
 #### Welche Zahl?
 
-**Standard bei knapper Leitung: VBR**
+**Standard: HQCBR bei AMD, sonst CBR**
 
 - Zielbitrate: 6000 Kbps
-- Maximalbitrate: 8000 Kbps oder 80 Prozent vom gemessenen Upload, falls das niedriger ist
-- Unter 5 Mbit realem Upload: Ziel 4000, Maximum 5000 und 30 fps
+- Die Zielbitrate darf höchstens 80 Prozent vom gemessenen Upload belegen.
+- Bei 5 bis 8 Mbit realem Upload: 4000 Kbps und 30 fps
 
-##### Wenn du eine AMD-Karte hast
+##### Welche Ratensteuerung bei welchem Encoder?
 
-Bei **AMD HW H.264/H.265/AV1** gibt es im VBR-Modus **kein Feld für die Maximalbitrate**. Es steht nur eine Zahl da, und OBS setzt die Spitze selbst: **anderthalbmal die Zielbitrate**. Wer 16000 einträgt, sendet in Spitzen bis 24000, ohne dass es irgendwo steht. Das Feld "AMF/FFmpeg-Optionen" hilft nicht, es kennt `maxrate` und `bufsize` nicht.
+- **AMD HW H.264/H.265:** HQCBR
+- **NVIDIA, Intel, Apple und andere Encoder:** CBR, falls HQCBR nicht in der Liste steht
 
-Damit gibt es zwei Wege:
-
-- **CBR**: Die eingetragene Zahl ist auch die Obergrenze. Einfachster Weg, und zu uns kostet er nichts an Qualität, weil wir für jede Plattform ohnehin neu rechnen. Nur die Leitung zahlt in ruhigen Szenen drauf.
-- **VBR** mit einer Zielbitrate, die mal 1,5 noch in die Leitung passt. Die Rechnung: **Zielbitrate = gemessener Upload × 0,8 ÷ 1,5**.
+HQCBR ist hier ausdrücklich eine AMD-Empfehlung. Die Anleitung behauptet nicht, dass NVIDIA oder Apple diesen Modus anbieten.
 
 ##### Deine Leitung, deine Zahl
 
 Miss deinen Upload, wenn nichts anderes läuft. Danach sind 80 Prozent davon die Obergrenze. Der Rest ist Reserve für Schwankungen und alles, was nebenbei hochlädt.
 
-| Gemessener Upload | NVIDIA, Intel, Apple | AMD (VBR) | AMD (CBR) |
-| --- | --- | --- | --- |
-| 6 Mbit | Ziel 4000, max 5000, 30 fps | Ziel 3200 | 4800 |
-| 10 Mbit | Ziel 6000, max 8000 | Ziel 5300 | 8000 |
-| 14 Mbit | Ziel 9000, max 12000 | Ziel 7400 | 11000 |
-| Ab 20 Mbit | Ziel 9000, max 12000 | Ziel 9000 | 12000 |
+| Gemessener Upload | Konstante Zielbitrate | Bildrate |
+| --- | --- | --- |
+| 5 bis 8 Mbit | 4000 Kbps | 30 fps |
+| 8 bis 12 Mbit | 6000 Kbps | 60 fps |
+| Ab 12 Mbit | 9000 Kbps, wenn du 2K weitersendest | 60 fps |
 
-Die AMD-VBR-Spalte sieht kleiner aus und ist es nicht: 5300 mit Spitze 8000 ist dieselbe Last auf der Leitung wie 6000 mit Maximum 8000. Nur die Zahl im Feld ist eine andere, weil das Feld etwas anderes bedeutet.
+Die Rechnung ist für alle Encoder gleich: Zielbitrate durch 0,8. Für 6000 Kbps brauchst du damit mindestens 8 Mbit gemessenen Upload, für 9000 Kbps mindestens 12 Mbit.
 
 Mehr als die oberste Zeile braucht niemand. Zu uns geht HEVC, wir rechnen daraus für jede Plattform H.264, und HEVC packt dasselbe Bild in deutlich weniger Bits.
 
-**CQP oder CRF**, wenn der Upload stabil über 10 Mbit liegt und du das Maximum willst:
-
-- AMD oder Intel: CQP 20. 18 ist schärfer und schwerer, 22 ist sparsamer.
-- NVIDIA: CQP 18 bis 20
-- x264 als Notnagel: CRF 20
-
-Spiele danach eine echte Runde. Steigt die Bitrate in OBS ständig über deine Leitung, wechsel zurück zu VBR.
+Spiele danach eine echte Runde. Bleibt die Verbindung nicht stabil, senke die konstante Zielbitrate oder gehe auf 30 fps.
 
 Setze das Keyframeintervall auf **2 s**, nicht auf 0 für automatisch.
 
@@ -98,10 +89,10 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 
 | Gemessener Upload | Basis und Ausgabe | FPS | Kodierung |
 | --- | --- | --- | --- |
-| 3 bis 5 Mbit | 1920×1080 | 30 | HEVC, VBR 4000, maximal 5000 |
-| 5 bis 8 Mbit | 1920×1080 | 60 | HEVC, VBR 6000, maximal 8000 |
-| Ab 8 Mbit, wenn die GPU 1440 ohne Drops hält | 2560×1440 | 60 | HEVC, VBR 6000, maximal 8000 |
-| Ab 14 Mbit, wenn du 2K auch rausschicken willst | 2560×1440 | 60 | HEVC, VBR 9000, maximal 12000 |
+| 5 bis 8 Mbit | 1920×1080 | 30 | HEVC, HQCBR oder CBR 4000 |
+| 8 bis 12 Mbit | 1920×1080 | 60 | HEVC, HQCBR oder CBR 6000 |
+| Ab 8 Mbit, wenn die GPU 1440 ohne Drops hält | 2560×1440 | 60 | HEVC, HQCBR oder CBR 6000 |
+| Ab 12 Mbit, wenn du 2K auch rausschicken willst | 2560×1440 | 60 | HEVC, HQCBR oder CBR 9000 |
 | Wenn die GPU Drops hat oder das Spiel ruckelt | Eine Stufe kleiner oder 30 fps |  | Derselbe Encoder, nicht auf Software wechseln |
 
 1440p an uns zu schicken lohnt sich zweifach: entweder rechnen wir daraus 1080p und behalten dabei Schärfe, oder wir senden die vollen 2K weiter, wenn du diese Stufe im Dashboard wählst. Es lohnt sich nicht, wenn der Encoder Frames schluckt. **Skipped frames** bleibt in OBS bei 0.
@@ -162,9 +153,9 @@ Zwei Dinge bleiben anders als vorher:
 ### 5. Check vor dem Abend
 
 1. Hardware-HEVC, nicht x264.
-2. VBR mit Ziel und Maximum, nicht CBR und nicht ABR.
+2. HQCBR bei AMD; CBR, wenn dein Encoder HQCBR nicht anbietet.
 3. Keyframe 2 s.
-4. Eine Testminute: Skipped frames 0, Bitrate unter dem Maximum und kein Stottern im Spiel.
-5. Bricht das Bild bei Fights: Maximum um 1000 Kbps senken oder 30 fps wählen. Den Encoder nicht wechseln.
+4. Eine Testminute: Skipped frames 0, konstante Bitrate und kein Stottern im Spiel.
+5. Bricht das Bild bei Fights: Zielbitrate um 1000 Kbps senken oder 30 fps wählen. Den Encoder nicht wechseln.
 
 Viele Streamlabs-Versionen können kein SRT. Kannst du dort die SRT-Adresse nicht eintragen, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar. Dann ist der Bandbreitenvorteil weg.

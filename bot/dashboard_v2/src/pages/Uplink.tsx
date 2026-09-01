@@ -35,6 +35,7 @@ import {
   reconnectWaitPayload,
   rejectUplinkAdminWaitlistEntry,
   rotateUplinkDockToken,
+  rotateUplinkIngestKey,
   saveUplinkReconnectWait,
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
@@ -52,7 +53,7 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
-import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import { noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
@@ -350,32 +351,20 @@ function bitrateBegruendung(bitrate: ObsBitrateEmpfehlung): string {
           : `Passt zu deinen Zielen: dein höchstes geht mit ${bitrate.hoehe}p raus. `;
   return (
     anfang +
-    `Die Grenze ist dein Upload, und den kennen wir nicht: dafür brauchst du gemessene ${noetigerUploadMbit(bitrate)} Mbit, bei einer AMD-Karte ${noetigerUploadMbit(bitrate, true)} Mbit. Miss ihn, und wenn er darunter liegt, geh eine Stufe runter. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.`
+    `Die Grenze ist dein Upload, und den kennen wir nicht: dafür brauchst du gemessene ${noetigerUploadMbit(bitrate)} Mbit. Deine konstante HQCBR/CBR-Zielbitrate darf höchstens 80 Prozent des gemessenen Uploads belegen, damit Reserve für Schwankungen bleibt. Miss deinen Upload, und wenn er darunter liegt, geh eine Stufe runter. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.`
   );
 }
 
-/**
- * Was im Bitraten-Feld steht, samt der Spitze, die AMD daraus macht.
- *
- * Die Maximalbitrate ist bei "AMD HW H.264/H.265/AV1" kein Feld: OBS setzt sie
- * dort selbst auf das Anderthalbfache. Wer das nicht weiss, haelt die zweite
- * Zahl fuer eine Grenze und plant seine Leitung ein Drittel zu knapp. Deshalb
- * steht die echte Spitze hier und nicht in einer Fussnote.
- */
 function bitrateWert(bitrate: ObsBitrateEmpfehlung): string {
-  return `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`;
-}
-
-function bitrateAmdHinweis(bitrate: ObsBitrateEmpfehlung): string {
-  return `Bei AMD gibt es das Feld „Maximalbitrate“ nicht. Trag dort nur die ${bitrate.kbps} ein, OBS macht daraus von selbst eine Spitze von ${amdSpitzeKbps(bitrate)} kbps. Wenn deine Leitung das nicht trägt, nimm stattdessen CBR: dann ist die eingetragene Zahl auch die Obergrenze.`;
+  return `${bitrate.kbps} kbps`;
 }
 
 /**
  * Die Ausgabe-Einstellungen, jede mit dem Grund dahinter.
  *
  * Ohne den Grund stellt niemand etwas um, was schon laeuft. HEVC ist der
- * Punkt, an dem Uplink sich lohnt, und VBR ist genau die Einstellung, die man
- * bei Twitch direkt nicht setzen darf und hier setzen soll.
+ * Punkt, an dem Uplink sich lohnt. Die konstante Ratensteuerung verhindert,
+ * dass eine schwere Szene unbemerkt ueber die Upload-Grenze schiesst.
  *
  * Die Bitrate ist keine feste Zahl mehr, sondern die Stufe aus der
  * eingebetteten Hilfeseite, die zu den eingestellten Zielen passt: siehe
@@ -390,13 +379,13 @@ function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
     },
     {
       feld: 'Ratensteuerung',
-      wert: 'VBR',
-      warum: 'Zu uns darf die Bitrate schwanken. Was zu den Plattformen rausgeht, machen wir selbst konstant.',
+      wert: 'HQCBR bei AMD; CBR bei Encodern ohne HQCBR',
+      warum: 'AMD bietet HQCBR für eine konstante, hochwertig verteilte Zielbitrate. Wenn dein Encoder HQCBR nicht anbietet, nimm CBR. Für NVIDIA, Intel und Apple behaupten wir keine HQCBR-Option.',
     },
     {
       feld: 'Bitrate',
       wert: bitrateWert(bitrate),
-      warum: `${bitrateBegruendung(bitrate)} ${bitrateAmdHinweis(bitrate)}`,
+      warum: bitrateBegruendung(bitrate),
     },
     {
       feld: 'Keyframe-Intervall',
@@ -447,6 +436,14 @@ function CopyField({
   useEffect(() => {
     if (!darfAufdecken) setOffen(false);
   }, [darfAufdecken]);
+
+  // Eine Rotation ersetzt denselben Feldinhalt unter derselben Komponente.
+  // Ohne diesen Reset bliebe die neue geheime Adresse sichtbar oder trüge
+  // noch die Kopiermeldung der alten Adresse.
+  useEffect(() => {
+    setOffen(false);
+    setStand('ruhe');
+  }, [value]);
 
   if (!value) return null;
 
@@ -519,6 +516,170 @@ function CopyField({
       {!darfAufdecken && grundAnzeigen && (
         <p className="text-xs text-text-secondary">{grundVerdeckt}</p>
       )}
+    </div>
+  );
+}
+
+function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
+  const queryClient = useQueryClient();
+  const [dialogOffen, setDialogOffen] = useState(false);
+  const [erfolg, setErfolg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const sichereAktionRef = useRef<HTMLButtonElement>(null);
+  const oeffnerRef = useRef<HTMLButtonElement>(null);
+  const rotationLaeuftRef = useRef(false);
+  const idempotenzRef = useRef<string | null>(null);
+
+  const fokusZurueck = () => {
+    window.requestAnimationFrame(() => oeffnerRef.current?.focus());
+  };
+
+  const rotation = useMutation({
+    mutationFn: () => {
+      if (!csrfToken) throw new Error('Der Sicherheitstoken fehlt. Lade die Seite neu.');
+      const idempotenz = idempotenzRef.current;
+      if (!idempotenz) throw new Error('Die sichere Rotationskennung fehlt. Lade die Seite neu.');
+      return rotateUplinkIngestKey(csrfToken, idempotenz);
+    },
+    // Der Server kann bereits geschrieben haben, auch wenn die Antwort auf dem
+    // Weg zum Browser verloren geht. Ein zweiter Versuch duerfte daher niemals
+    // automatisch einen weiteren Schlüssel erzeugen.
+    retry: false,
+    onSuccess: (antwort) => {
+      rotationLaeuftRef.current = false;
+      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+        alt ? { ...alt, srt_hint: antwort.srt_hint } : alt
+      );
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      setErfolg('Schlüssel rotiert. Die neue Serveradresse steht verdeckt im Feld und muss jetzt in OBS eingetragen werden.');
+      setDialogOffen(false);
+      fokusZurueck();
+    },
+    onError: () => {
+      rotationLaeuftRef.current = false;
+      // Nach einem Timeout ist der Schreibstand unklar. Nur ein lesender Abruf
+      // darf den sichtbaren Zustand berichtigen; die Mutation wird nicht
+      // wiederholt.
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+    },
+  });
+
+  useEffect(() => {
+    if (!dialogOffen) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    const fokus = window.requestAnimationFrame(() => sichereAktionRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(fokus);
+      if (dialog.open) dialog.close();
+    };
+  }, [dialogOffen]);
+
+  const schliessen = () => {
+    if (rotation.isPending) return;
+    setDialogOffen(false);
+    fokusZurueck();
+  };
+
+  const oeffnen = () => {
+    rotation.reset();
+    rotationLaeuftRef.current = false;
+    idempotenzRef.current = null;
+    setErfolg(null);
+    setDialogOffen(true);
+  };
+
+  return (
+    <div className="space-y-2">
+      <button
+        ref={oeffnerRef}
+        type="button"
+        disabled={!csrfToken}
+        onClick={oeffnen}
+        aria-haspopup="dialog"
+        className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-warning/50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Lock aria-hidden="true" className="h-3.5 w-3.5" />
+        Stream-Schlüssel rotieren
+      </button>
+      {!csrfToken ? (
+        <p className="text-xs text-warning">Die sichere Sitzung wird noch geladen. Danach kannst du den Schlüssel rotieren.</p>
+      ) : null}
+      {erfolg ? (
+        <p role="status" aria-live="polite" className="text-xs text-success">
+          {erfolg}
+        </p>
+      ) : null}
+
+      {dialogOffen ? (
+        <dialog
+          ref={dialogRef}
+          aria-modal="true"
+          aria-busy={rotation.isPending}
+          aria-labelledby="uplink-key-rotate-title"
+          aria-describedby="uplink-key-rotate-description"
+          tabIndex={-1}
+          onCancel={(ereignis) => {
+            ereignis.preventDefault();
+            if (!rotation.isPending) schliessen();
+          }}
+          className="m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border border-warning/45 bg-background p-0 text-white shadow-2xl backdrop:bg-black/75"
+        >
+          <div className="space-y-4 p-5">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-warning/40 bg-warning/10 text-warning">
+                <AlertTriangle aria-hidden="true" className="h-4 w-4" />
+              </span>
+              <div className="space-y-2">
+                <h3 id="uplink-key-rotate-title" className="text-base font-bold">
+                  Stream-Schlüssel wirklich rotieren?
+                </h3>
+                <div id="uplink-key-rotate-description" className="space-y-2 text-sm text-text-secondary">
+                  <p>Die laufende SRT-Session läuft weiter. Die alte Adresse kann sich danach nicht neu verbinden.</p>
+                  <p>Du musst die neue Adresse danach in OBS eintragen, bevor du den nächsten Stream startest oder OBS neu verbindet.</p>
+                </div>
+              </div>
+            </div>
+
+            {rotation.isError ? (
+              <p role="alert" className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                Das Ergebnis ist unklar. Der Schlüssel könnte bereits rotiert sein. Wir laden den Stand neu;
+                rotiere nicht noch einmal und prüfe danach die verdeckte Serveradresse.
+              </p>
+            ) : null}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                ref={sichereAktionRef}
+                type="button"
+                disabled={rotation.isPending}
+                onClick={schliessen}
+                className="inline-flex min-h-11 items-center rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                Abbrechen
+              </button>
+              {!rotation.isError ? (
+                <button
+                  type="button"
+                  disabled={rotation.isPending}
+                  onClick={() => {
+                    if (rotationLaeuftRef.current) return;
+                    rotationLaeuftRef.current = true;
+                    idempotenzRef.current = window.crypto.randomUUID();
+                    rotation.mutate();
+                    dialogRef.current?.focus();
+                  }}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-warning/55 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
+                >
+                  {rotation.isPending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
+                  {rotation.isPending ? 'Wird rotiert' : 'Ja, Schlüssel rotieren'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </dialog>
+      ) : null}
     </div>
   );
 }
@@ -1075,6 +1236,9 @@ export function UplinkPage() {
                               </p>
                             </div>
                           </div>
+                          <IngestKeyRotation
+                            csrfToken={authStatus?.csrfToken ?? authStatus?.csrf_token ?? null}
+                          />
                         </>
                       ) : (
                         <p role="alert" className="text-sm text-warning">

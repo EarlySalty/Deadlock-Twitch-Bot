@@ -23,7 +23,7 @@ Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Abend streams
 
 Deine Leitung oder der Encoder kommt nicht hinterher.
 
-- Senke bei VBR das Maximum um 1000 Kbps.
+- Senke die konstante HQCBR- oder CBR-Zielbitrate um 1000 Kbps.
 - Oder nutze 30 fps statt 60.
 - Ist **Skipped frames** in OBS größer als 0, setze die Auflösung eine Stufe herunter und lass den Encoder auf Hardware-HEVC.
 
