@@ -584,14 +584,11 @@ async fn relay_json_mit_header(
         let wert = serde_json::from_slice::<Value>(&bytes)
             .unwrap_or_else(|_| json!({ "error": "Uplink hat den Aufruf abgelehnt." }));
         let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-        return Err(
-            if status.is_server_error() || (idempotenz.is_some() && status == StatusCode::CONFLICT)
-            {
-                relay_unklar_antwort(status, wert)
-            } else {
-                (status, Json(wert)).into_response()
-            },
-        );
+        return Err(if status.is_server_error() {
+            relay_unklar_antwort(status, wert)
+        } else {
+            (status, Json(wert)).into_response()
+        });
     }
     let wert = serde_json::from_slice::<Value>(&bytes).map_err(|_| {
         tracing::warn!(
@@ -2831,7 +2828,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relay_409_mit_idempotenz_bleibt_unklar_und_wird_nicht_terminal_vorgetaeuscht() {
+    async fn relay_409_mit_idempotenz_ist_terminal_ueberholt_und_wird_statusgetreu_gecached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2840,7 +2838,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/me/key/rotate-idempotent"))
             .and(header("idempotency-key", key))
-            .respond_with(ResponseTemplate::new(409).set_body_json(json!({ "error": "läuft" })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({ "error": "überholt" })))
             .expect(1)
             .mount(&server)
             .await;
@@ -2856,18 +2854,37 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(fehler.status(), StatusCode::CONFLICT);
-        assert!(rotation_antwort_ist_unklar(&fehler));
+        assert!(!rotation_antwort_ist_unklar(&fehler));
 
         let coordinator = IngestRotationCoordinator::default();
-        let ausgang = coordinator
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let erste_aufrufe = Arc::clone(&aufrufe);
+        let erster = coordinator
             .ausfuehren(
                 42,
                 uuid::Uuid::parse_str(key).unwrap(),
-                move || async move { Err(fehler) },
+                move || async move {
+                    erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                    Err(fehler)
+                },
             )
             .await
             .unwrap_err();
-        assert_eq!(ausgang.status(), StatusCode::TOO_EARLY);
+        let zweite_aufrufe = Arc::clone(&aufrufe);
+        let zweiter = coordinator
+            .ausfuehren(
+                42,
+                uuid::Uuid::parse_str(key).unwrap(),
+                move || async move {
+                    zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({ "darf": "nicht laufen" }))
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(erster.status(), StatusCode::CONFLICT);
+        assert_eq!(zweiter.status(), StatusCode::CONFLICT);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -3380,6 +3397,78 @@ mod tests {
         let antwort = replay.await.unwrap().unwrap();
         assert_eq!(antwort["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
         assert_eq!(*aktueller_key.lock().unwrap(), "neuer-dummy-key");
+    }
+
+    #[tokio::test]
+    async fn a_unklar_restart_b_erfolgreich_a_ueberholt_entsperrt_den_barriere_get() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let alter_coordinator = IngestRotationCoordinator::default();
+        let a = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let b = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let a_erster = alter_coordinator
+            .ausfuehren(42, a, || async {
+                Err(relay_unklar_antwort(
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "error": "A-Antwortweg verloren" }),
+                ))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(a_erster.status(), StatusCode::TOO_EARLY);
+
+        // Dashboard-Neustart: der neue Coordinator kennt A nicht mehr. B wird
+        // im Relay durable erfolgreich und ist danach der autoritative Stand.
+        let basis = Instant::now();
+        let uhr = Arc::new(Mutex::new(basis));
+        let test_uhr = Arc::clone(&uhr);
+        let neuer_coordinator = IngestRotationCoordinator {
+            eintraege: Arc::new(Mutex::new(HashMap::new())),
+            jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
+        };
+        let aktueller_hint = Arc::new(Mutex::new(String::new()));
+        let b_hint = Arc::clone(&aktueller_hint);
+        neuer_coordinator
+            .ausfuehren(42, b, move || async move {
+                *b_hint.lock().unwrap() = DUMMY_SRT_OBS_ADRESSE.to_string();
+                Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+            })
+            .await
+            .unwrap();
+
+        // Nach der Sperrfrist erreicht A das Relay. Dessen 409 bedeutet
+        // terminal "überholt": B bleibt gültig, A darf nie wieder rotieren.
+        *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
+        let relay_aufrufe = Arc::new(AtomicUsize::new(0));
+        let erste_aufrufe = Arc::clone(&relay_aufrufe);
+        let a_ueberholt = neuer_coordinator
+            .ausfuehren(42, a, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "Rotationskennung wurde überholt." })),
+                )
+                    .into_response())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(a_ueberholt.status(), StatusCode::CONFLICT);
+
+        // Der Coordinator hat 409 terminal gespeichert. Der Browser darf nun
+        // seinen begrenzten, vollständig validierenden GET ausführen und B
+        // laden; ein weiterer A-Replay erreicht das Relay nicht mehr.
+        neuer_coordinator.vor_lesen_warten(42).await.unwrap();
+        assert_eq!(*aktueller_hint.lock().unwrap(), DUMMY_SRT_OBS_ADRESSE);
+        let zweite_aufrufe = Arc::clone(&relay_aufrufe);
+        let a_nochmal = neuer_coordinator
+            .ausfuehren(42, a, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "darf": "nicht laufen" }))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(a_nochmal.status(), StatusCode::CONFLICT);
+        assert_eq!(relay_aufrufe.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
