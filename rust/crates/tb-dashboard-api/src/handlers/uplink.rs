@@ -33,6 +33,11 @@ const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
 const ROTATIONS_SPERRE: Duration = Duration::from_secs(30);
 const ROTATIONS_CACHE_AUFRAEUMEN: Duration = Duration::from_secs(60 * 60);
+const ROTATIONS_LESE_BARRIERE_TIMEOUT: Duration = Duration::from_secs(20);
+const ROTATIONS_RECONCILE_VERSUCHE: usize = 4;
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn no_store_json(wert: Value) -> Response {
     (
@@ -60,8 +65,58 @@ struct RotationSperre {
 struct RotationZustand {
     schluessel: Option<uuid::Uuid>,
     terminal: Option<Instant>,
-    antwort: Option<Value>,
+    ausgang: Option<RotationAusgang>,
     abgeschlossen: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Clone)]
+enum RotationAusgang {
+    Erfolg(Value),
+    Fehler { status: StatusCode, wert: Value },
+    Unklar { wert: Value },
+}
+
+impl RotationAusgang {
+    async fn aus_ergebnis(ergebnis: Result<Value, Response>) -> Self {
+        match ergebnis {
+            Ok(wert) => Self::Erfolg(wert),
+            Err(antwort) => {
+                let status = antwort.status();
+                let unklar = rotation_antwort_ist_unklar(&antwort)
+                    || status.is_server_error()
+                    || status == StatusCode::REQUEST_TIMEOUT;
+                let wert = axum::body::to_bytes(antwort.into_body(), 64 * 1024)
+                    .await
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_else(|| {
+                        json!({ "error": "Die Schlüsselrotation konnte nicht sicher abgeschlossen werden." })
+                    });
+                if unklar {
+                    Self::Unklar { wert }
+                } else {
+                    Self::Fehler { status, wert }
+                }
+            }
+        }
+    }
+
+    fn in_ergebnis(self) -> Result<Value, Response> {
+        match self {
+            Self::Erfolg(wert) => Ok(wert),
+            Self::Fehler { status, wert } => Err((status, Json(wert)).into_response()),
+            // Nur dieser Status bedeutet am Browser: dieselbe gespeicherte
+            // UUID erneut abgleichen. Definitive Relay-/Dashboard-Fehler
+            // behalten ihren eigenen Status und räumen die Pending-UUID weg.
+            Self::Unklar { wert } => Err((StatusCode::TOO_EARLY, Json(wert)).into_response()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IdempotenzSchluessel {
+    uuid: uuid::Uuid,
+    roh: String,
 }
 
 impl Default for IngestRotationCoordinator {
@@ -80,6 +135,12 @@ impl IngestRotationCoordinator {
         eintraege.retain(|_, eintrag| {
             jetzt.duration_since(eintrag.letzter_zugriff) < ROTATIONS_CACHE_AUFRAEUMEN
                 || Arc::strong_count(&eintrag.zustand) > 1
+                || eintrag.zustand.try_lock().map_or(true, |zustand| {
+                    zustand
+                        .ausgang
+                        .as_ref()
+                        .is_some_and(|ausgang| matches!(ausgang, RotationAusgang::Unklar { .. }))
+                })
         });
         let eintrag = eintraege
             .entry(streamer_id)
@@ -105,22 +166,37 @@ impl IngestRotationCoordinator {
         let mut zustand = sperre.lock().await;
         let jetzt = (self.jetzt)();
 
+        let mut gleicher_unklarer_ausgang = false;
         if zustand.schluessel == Some(idempotenz) {
-            if let Some(antwort) = &zustand.antwort {
-                return Ok(antwort.clone());
+            if let Some(ausgang) = &zustand.ausgang {
+                if !matches!(ausgang, RotationAusgang::Unklar { .. }) {
+                    return ausgang.clone().in_ergebnis();
+                }
+                gleicher_unklarer_ausgang = true;
             }
-            return Err(rotation_gesperrt_antwort());
+            if zustand.terminal.is_none() {
+                return Err(rotation_gleiche_uuid_laeuft_antwort());
+            }
         }
         // `terminal=None` bei gesetztem Schlüssel bedeutet: der externe
         // Schreibaufruf läuft noch oder der Request wurde währenddessen
         // abgebrochen. Beides ist ein unklarer Ausgang. Ein anderer Tab darf
         // ihn nicht mit einer zweiten Rotation überholen.
         if zustand.schluessel.is_some() && zustand.terminal.is_none() {
-            return Err(rotation_gesperrt_antwort());
+            return Err(rotation_unklarer_konflikt_antwort());
+        }
+        if !gleicher_unklarer_ausgang
+            && zustand
+                .ausgang
+                .as_ref()
+                .is_some_and(|ausgang| matches!(ausgang, RotationAusgang::Unklar { .. }))
+        {
+            return Err(rotation_unklarer_konflikt_antwort());
         }
         if zustand
             .terminal
             .is_some_and(|terminal| jetzt.saturating_duration_since(terminal) < ROTATIONS_SPERRE)
+            && !gleicher_unklarer_ausgang
         {
             return Err(rotation_gesperrt_antwort());
         }
@@ -132,7 +208,7 @@ impl IngestRotationCoordinator {
         // entsperren, waehrend das Relay den neuen Key erst danach festschreibt.
         zustand.schluessel = Some(idempotenz);
         zustand.terminal = None;
-        zustand.antwort = None;
+        zustand.ausgang = None;
         let abgeschlossen = Arc::clone(&zustand.abgeschlossen);
         drop(zustand);
 
@@ -152,15 +228,14 @@ impl IngestRotationCoordinator {
                     Err(rotation_intern_fehler_antwort())
                 }
             };
+            let ausgang = RotationAusgang::aus_ergebnis(ergebnis).await;
             {
                 let mut zustand = task_sperre.lock().await;
                 zustand.terminal = Some((task_jetzt)());
-                if let Ok(antwort) = &ergebnis {
-                    zustand.antwort = Some(antwort.clone());
-                }
+                zustand.ausgang = Some(ausgang.clone());
             }
             abgeschlossen.notify_waiters();
-            if ergebnis_tx.send(ergebnis).is_err() {
+            if ergebnis_tx.send(ausgang).is_err() {
                 // Erwarteter Weg, wenn der Browser die wartende Anfrage
                 // geschlossen hat. Der terminale Zustand oben bleibt erhalten.
                 tracing::debug!(
@@ -172,6 +247,7 @@ impl IngestRotationCoordinator {
 
         ergebnis_rx
             .await
+            .map(RotationAusgang::in_ergebnis)
             .unwrap_or_else(|_| Err(rotation_intern_fehler_antwort()))
     }
 
@@ -179,12 +255,34 @@ impl IngestRotationCoordinator {
     /// lesen, wenn der bereits gestartete Schreibaufruf terminal ist. Das ist
     /// die Barriere zwischen einem abgebrochenen Browser-POST und dem
     /// anschliessenden Sicherheitsabruf.
-    async fn vor_lesen_warten(&self, streamer_id: i64) {
+    async fn vor_lesen_warten(&self, streamer_id: i64) -> Result<(), Response> {
+        self.vor_lesen_warten_mit_timeout(streamer_id, ROTATIONS_LESE_BARRIERE_TIMEOUT)
+            .await
+    }
+
+    async fn vor_lesen_warten_mit_timeout(
+        &self,
+        streamer_id: i64,
+        frist: Duration,
+    ) -> Result<(), Response> {
+        tokio::time::timeout(frist, self.vor_lesen_warten_unbegrenzt(streamer_id))
+            .await
+            .map_err(|_| rotation_stand_unklar_antwort())?
+    }
+
+    async fn vor_lesen_warten_unbegrenzt(&self, streamer_id: i64) -> Result<(), Response> {
         let sperre = self.fuer_streamer(streamer_id);
         loop {
             let zustand = sperre.lock().await;
-            if zustand.schluessel.is_none() || zustand.terminal.is_some() {
-                return;
+            if zustand.schluessel.is_none() {
+                return Ok(());
+            }
+            if let Some(ausgang) = &zustand.ausgang {
+                return if matches!(ausgang, RotationAusgang::Unklar { .. }) {
+                    Err(rotation_stand_unklar_antwort())
+                } else {
+                    Ok(())
+                };
             }
             // `notify_waiters` speichert kein Permit. Deshalb die Future noch
             // unter derselben Zustandssperre aktivieren, die der Schreibtask
@@ -198,6 +296,27 @@ impl IngestRotationCoordinator {
     }
 }
 
+fn rotation_antwort_ist_unklar(antwort: &Response) -> bool {
+    antwort.headers().contains_key("x-uplink-outcome-unknown")
+}
+
+async fn rotation_reconciliieren<F, Fut>(mut operation: F) -> Result<Value, Response>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Value, Response>>,
+{
+    let mut letzter_fehler = None;
+    for _ in 0..ROTATIONS_RECONCILE_VERSUCHE {
+        match operation().await {
+            Err(antwort) if rotation_antwort_ist_unklar(&antwort) => {
+                letzter_fehler = Some(antwort);
+            }
+            ausgang => return ausgang,
+        }
+    }
+    Err(letzter_fehler.unwrap_or_else(rotation_intern_fehler_antwort))
+}
+
 fn rotation_gesperrt_antwort() -> Response {
     (
         StatusCode::CONFLICT,
@@ -208,10 +327,39 @@ fn rotation_gesperrt_antwort() -> Response {
         .into_response()
 }
 
-fn rotation_intern_fehler_antwort() -> Response {
+fn rotation_gleiche_uuid_laeuft_antwort() -> Response {
     (
+        StatusCode::TOO_EARLY,
+        Json(json!({
+            "error": "Diese Schlüsselrotation läuft noch. Gleiche denselben Vorgang erneut ab."
+        })),
+    )
+        .into_response()
+}
+
+fn rotation_unklarer_konflikt_antwort() -> Response {
+    (
+        StatusCode::TOO_EARLY,
+        Json(json!({
+            "error": "Eine Schlüsselrotation ist noch nicht terminal. Gleiche denselben Vorgang erneut ab."
+        })),
+    )
+        .into_response()
+}
+
+fn rotation_intern_fehler_antwort() -> Response {
+    relay_unklar_antwort(
         StatusCode::BAD_GATEWAY,
-        Json(json!({ "error": "Die Schlüsselrotation konnte nicht sicher abgeschlossen werden." })),
+        json!({ "error": "Die Schlüsselrotation konnte nicht sicher abgeschlossen werden." }),
+    )
+}
+
+fn rotation_stand_unklar_antwort() -> Response {
+    (
+        StatusCode::GATEWAY_TIMEOUT,
+        Json(json!({
+            "error": "Der aktuelle Stream-Schlüssel konnte noch nicht sicher geladen werden."
+        })),
     )
         .into_response()
 }
@@ -221,18 +369,28 @@ fn ingest_rotation_coordinator() -> &'static IngestRotationCoordinator {
     COORDINATOR.get_or_init(IngestRotationCoordinator::default)
 }
 
-fn idempotenz_schluessel(headers: &HeaderMap) -> Result<uuid::Uuid, Response> {
-    headers
+fn idempotenz_schluessel(headers: &HeaderMap) -> Result<IdempotenzSchluessel, Response> {
+    let roh = headers
         .get("idempotency-key")
         .and_then(|wert| wert.to_str().ok())
-        .and_then(|wert| uuid::Uuid::parse_str(wert).ok())
         .ok_or_else(|| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Gültiger Idempotency-Key fehlt." })),
             )
                 .into_response()
-        })
+        })?;
+    let uuid = uuid::Uuid::parse_str(roh).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Gültiger Idempotency-Key fehlt." })),
+        )
+            .into_response()
+    })?;
+    Ok(IdempotenzSchluessel {
+        uuid,
+        roh: roh.to_string(),
+    })
 }
 
 fn relay_base() -> String {
@@ -351,7 +509,7 @@ pub(crate) async fn relay_json(
         )
             .into_response()
     })?;
-    relay_json_mit(&relay_base(), &secret, method, path, body).await
+    relay_json_mit_header(&relay_base(), &secret, method, path, body, None).await
 }
 
 /// Der Relay-Aufruf mit ausdruecklicher Basis-URL und Secret, damit der Weg im
@@ -365,13 +523,31 @@ pub(crate) async fn relay_json_mit(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, Response> {
+    relay_json_mit_header(base, secret, method, path, body, None).await
+}
+
+async fn relay_json_mit_header(
+    base: &str,
+    secret: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+    idempotenz: Option<&str>,
+) -> Result<Value, Response> {
     let methode_fuer_log = method.clone();
     let url = format!("{}{path}", base.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(RELAY_CONNECT_TIMEOUT)
+        .timeout(RELAY_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|_| relay_nicht_erreichbar_antwort())?;
     let mut req = client
         .request(method, url)
         .header("X-Relay-Auth", secret)
         .header("Accept", "application/json");
+    if let Some(idempotenz) = idempotenz {
+        req = req.header("idempotency-key", idempotenz);
+    }
     if let Some(body) = body {
         req = req.json(&body);
     }
@@ -379,17 +555,25 @@ pub(crate) async fn relay_json_mit(
         tracing::warn!(
             method = %methode_fuer_log,
             path,
-            error = %fehler,
+            timeout = fehler.is_timeout(),
+            connect = fehler.is_connect(),
             "Uplink-Relay-Aufruf fehlgeschlagen"
         );
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": "Uplink antwortet nicht." })),
-        )
-            .into_response()
+        relay_nicht_erreichbar_antwort()
     })?;
     let status = antwort.status();
-    let wert = antwort.json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let bytes = tokio::time::timeout(RELAY_RESPONSE_TIMEOUT, antwort.bytes())
+        .await
+        .map_err(|_| {
+            tracing::warn!(
+                method = %methode_fuer_log,
+                path,
+                status = status.as_u16(),
+                "Uplink-Relay-Antwort lief in die Zeitgrenze"
+            );
+            relay_nicht_erreichbar_antwort()
+        })?
+        .map_err(|_| relay_nicht_erreichbar_antwort())?;
     if !status.is_success() {
         tracing::warn!(
             method = %methode_fuer_log,
@@ -397,13 +581,47 @@ pub(crate) async fn relay_json_mit(
             status = status.as_u16(),
             "Uplink-Relay hat den Aufruf abgelehnt"
         );
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(wert),
-        )
-            .into_response());
+        let wert = serde_json::from_slice::<Value>(&bytes)
+            .unwrap_or_else(|_| json!({ "error": "Uplink hat den Aufruf abgelehnt." }));
+        let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        return Err(
+            if status.is_server_error() || (idempotenz.is_some() && status == StatusCode::CONFLICT)
+            {
+                relay_unklar_antwort(status, wert)
+            } else {
+                (status, Json(wert)).into_response()
+            },
+        );
     }
+    let wert = serde_json::from_slice::<Value>(&bytes).map_err(|_| {
+        tracing::warn!(
+            method = %methode_fuer_log,
+            path,
+            status = status.as_u16(),
+            "Uplink-Relay-Antwort war kein gültiges JSON"
+        );
+        relay_unklar_antwort(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "Uplink hat ungültig geantwortet." }),
+        )
+    })?;
     Ok(wert)
+}
+
+fn relay_nicht_erreichbar_antwort() -> Response {
+    relay_unklar_antwort(
+        StatusCode::BAD_GATEWAY,
+        json!({ "error": "Uplink antwortet nicht." }),
+    )
+}
+
+fn relay_unklar_antwort(status: StatusCode, wert: Value) -> Response {
+    let mut antwort = (status, Json(wert)).into_response();
+    antwort.headers_mut().insert(
+        "x-uplink-outcome-unknown",
+        axum::http::HeaderValue::from_static("1"),
+    );
+    antwort
 }
 
 /// Wie lange ein Eintrag aus `twitch_live_state` als Aussage ueber jetzt gilt.
@@ -565,7 +783,7 @@ pub async fn me_handler(
 ) -> Result<Response, Response> {
     let config = config.map(|Extension(c)| c);
     let id = partner_id(&pool, &auth).await?;
-    ingest_rotation_coordinator().vor_lesen_warten(id).await;
+    ingest_rotation_coordinator().vor_lesen_warten(id).await?;
     let mut wert = relay_json(
         reqwest::Method::GET,
         &format!("/v1/me?streamer_id={id}"),
@@ -578,24 +796,32 @@ pub async fn me_handler(
     let live = live_status(&pool, id).await;
     let verbindungen = verbindungen_lesen(&pool, config.as_ref(), id).await;
     // Ob je Plattform ein Uplink-Ziel (und damit ein Stream-Key) liegt, weiss
-    // nur das Relay. Faellt der Abruf aus, gilt "kein Ziel bekannt": lieber
-    // einmal zu viel "Stream-Key fehlt" zeigen als ein Ziel behaupten.
-    let ziele = match relay_json(
+    // nur das Relay. Ein Abruffehler darf nicht wie eine sicher leere Liste
+    // aussehen: sonst fordert das Dashboard zum erneuten Schreiben bereits
+    // vorhandener Schlüssel auf.
+    let ziel_wert = relay_json(
         reqwest::Method::GET,
         &format!("{RELAY_ZIEL_PFAD}?streamer_id={id}"),
         None,
     )
-    .await
-    {
-        Ok(wert) => ziel_plattformen(&wert),
-        Err(_) => Vec::new(),
-    };
+    .await?;
+    let ziele = ziel_plattformen(&ziel_wert).ok_or_else(|| {
+        tracing::warn!(
+            streamer_id = id,
+            "Uplink-Zielliste hatte eine ungültige Form"
+        );
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": "Uplink hat keine gültige Zielliste geliefert." })),
+        )
+            .into_response()
+    })?;
     me_anreichern(&mut wert, live, &verbindungen, &ziele);
     Ok(no_store_json(wert))
 }
 
 /// Plattformen, fuer die das Relay ein Ziel fuehrt (`GET /v1/me/destinations`).
-fn ziel_plattformen(wert: &Value) -> Vec<String> {
+fn ziel_plattformen(wert: &Value) -> Option<Vec<String>> {
     wert.get("destinations")
         .and_then(Value::as_array)
         .map(|liste| {
@@ -603,9 +829,8 @@ fn ziel_plattformen(wert: &Value) -> Vec<String> {
                 .iter()
                 .filter_map(|z| z.get("platform").and_then(Value::as_str))
                 .map(str::to_string)
-                .collect()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
 }
 
 /// Haengt an die Relay-Antwort an, was nur der Bot weiss: Live-Status und den
@@ -715,27 +940,52 @@ pub async fn ingest_key_rotate_handler(
     let id = partner_id(&pool, &auth).await?;
     let idempotenz = idempotenz_schluessel(&headers)?;
     let pfad = ingest_key_rotate_pfad(id);
+    let idempotenz_roh = idempotenz.roh;
     let antwort = ingest_rotation_coordinator()
-        .ausfuehren(id, idempotenz, move || async move {
-            let wert = relay_json(reqwest::Method::POST, &pfad, None).await?;
-            ingest_key_rotate_antwort(wert).ok_or_else(|| {
-                tracing::warn!(
-                    streamer_id = id,
-                    "Uplink-Relay hat nach Schlüsselrotation keine OBS-Adresse geliefert"
-                );
+        .ausfuehren(id, idempotenz.uuid, move || async move {
+            let secret = secret_fuer(&pfad).ok_or_else(|| {
                 (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "Uplink hat keine neue OBS-Adresse geliefert." })),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": "Uplink ist noch nicht verbunden." })),
                 )
                     .into_response()
+            })?;
+            rotation_reconciliieren(|| {
+                let pfad = pfad.clone();
+                let secret = secret.clone();
+                let idempotenz_roh = idempotenz_roh.clone();
+                async move {
+                    let wert = relay_json_mit_header(
+                        &relay_base(),
+                        &secret,
+                        reqwest::Method::POST,
+                        &pfad,
+                        None,
+                        Some(&idempotenz_roh),
+                    )
+                    .await?;
+                    ingest_key_rotate_antwort(wert).ok_or_else(|| {
+                        tracing::warn!(
+                            streamer_id = id,
+                            "Uplink-Relay hat nach Schlüsselrotation keine OBS-Adresse geliefert"
+                        );
+                        relay_unklar_antwort(
+                            StatusCode::BAD_GATEWAY,
+                            json!({
+                                "error": "Uplink hat keine neue OBS-Adresse geliefert."
+                            }),
+                        )
+                    })
+                }
             })
+            .await
         })
         .await?;
     Ok(no_store_json(antwort))
 }
 
 fn ingest_key_rotate_pfad(streamer_id: i64) -> String {
-    format!("/v1/me/key/rotate?streamer_id={streamer_id}")
+    format!("/v1/me/key/rotate-idempotent?streamer_id={streamer_id}")
 }
 
 fn ingest_key_rotate_antwort(wert: Value) -> Option<Value> {
@@ -2386,8 +2636,8 @@ mod tests {
             { "platform": "twitch", "rtmp_url": "rtmp://live.twitch.tv/app" },
             { "platform": "kick" }
         ]});
-        assert_eq!(ziel_plattformen(&wert), vec!["twitch", "kick"]);
-        assert!(ziel_plattformen(&json!({})).is_empty());
+        assert_eq!(ziel_plattformen(&wert).unwrap(), vec!["twitch", "kick"]);
+        assert!(ziel_plattformen(&json!({})).is_none());
     }
 
     #[test]
@@ -2436,7 +2686,7 @@ mod tests {
     #[test]
     fn ingest_key_rotate_traegt_streamer_in_der_query_und_gibt_nur_die_obs_adresse_aus() {
         let pfad = ingest_key_rotate_pfad(4242);
-        assert_eq!(pfad, "/v1/me/key/rotate?streamer_id=4242");
+        assert_eq!(pfad, "/v1/me/key/rotate-idempotent?streamer_id=4242");
         assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
 
         let antwort = ingest_key_rotate_antwort(json!({
@@ -2491,9 +2741,158 @@ mod tests {
             "11111111-1111-4111-8111-111111111111".parse().unwrap(),
         );
         assert_eq!(
-            idempotenz_schluessel(&headers).unwrap(),
+            idempotenz_schluessel(&headers).unwrap().uuid,
             uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
         );
+        assert_eq!(
+            idempotenz_schluessel(&headers).unwrap().roh,
+            "11111111-1111-4111-8111-111111111111"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotation_reicht_idempotency_key_unveraendert_bis_zum_relay() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let key = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+        Mock::given(method("POST"))
+            .and(path("/v1/me/key/rotate-idempotent"))
+            .and(header("idempotency-key", key))
+            .and(header("X-Relay-Auth", "dummy-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "ok": true })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let wert = relay_json_mit_header(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::POST,
+            "/v1/me/key/rotate-idempotent",
+            None,
+            Some(key),
+        )
+        .await
+        .unwrap();
+        assert_eq!(wert["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn erfolgreiches_aber_abgeschnittenes_relay_json_ist_bad_gateway() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("{\"srt_hint\":", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fehler = relay_json_mit(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::GET,
+            "/v1/me",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn non_2xx_ohne_json_bleibt_statusgetreu() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/me/key/rotate-idempotent"))
+            .respond_with(ResponseTemplate::new(409).set_body_raw("", "text/plain"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let fehler = relay_json_mit(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::POST,
+            "/v1/me/key/rotate-idempotent",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn relay_409_mit_idempotenz_bleibt_unklar_und_wird_nicht_terminal_vorgetaeuscht() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let key = "11111111-1111-4111-8111-111111111111";
+        Mock::given(method("POST"))
+            .and(path("/v1/me/key/rotate-idempotent"))
+            .and(header("idempotency-key", key))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({ "error": "läuft" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fehler = relay_json_mit_header(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::POST,
+            "/v1/me/key/rotate-idempotent",
+            None,
+            Some(key),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::CONFLICT);
+        assert!(rotation_antwort_ist_unklar(&fehler));
+
+        let coordinator = IngestRotationCoordinator::default();
+        let ausgang = coordinator
+            .ausfuehren(
+                42,
+                uuid::Uuid::parse_str(key).unwrap(),
+                move || async move { Err(fehler) },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(ausgang.status(), StatusCode::TOO_EARLY);
+    }
+
+    #[tokio::test]
+    async fn destination_get_fehler_bleibt_ein_fehler() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(RELAY_ZIEL_PFAD))
+            .respond_with(ResponseTemplate::new(503).set_body_json(json!({ "error": "dummy" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fehler = relay_json_mit(
+            &server.uri(),
+            "dummy-secret",
+            reqwest::Method::GET,
+            RELAY_ZIEL_PFAD,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -2501,33 +2900,79 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let coordinator = IngestRotationCoordinator::default();
-        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let erster_coordinator = coordinator.clone();
         let aufrufe = Arc::new(AtomicUsize::new(0));
         let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let (freigabe_tx, freigabe_rx) = tokio::sync::oneshot::channel();
 
-        let erster_start = Arc::clone(&start);
         let erster_aufrufe = Arc::clone(&aufrufe);
-        let zweiter_aufrufe = Arc::clone(&aufrufe);
-        let erster = coordinator.ausfuehren(42, erster_key, move || async move {
-            erster_aufrufe.fetch_add(1, Ordering::SeqCst);
-            erster_start.wait().await;
-            Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
-        });
-        let zweiter = async {
-            start.wait().await;
-            coordinator
-                .ausfuehren(42, zweiter_key, move || async move {
-                    zweiter_aufrufe.fetch_add(1, Ordering::SeqCst);
-                    Ok(json!({ "srt_hint": "srt://relay.invalid/veraltet" }))
+        let erster = tokio::spawn(async move {
+            erster_coordinator
+                .ausfuehren(42, erster_key, move || async move {
+                    erster_aufrufe.fetch_add(1, Ordering::SeqCst);
+                    gestartet_tx.send(()).unwrap();
+                    freigabe_rx.await.unwrap();
+                    Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
                 })
                 .await
-        };
+        });
+        gestartet_rx.await.unwrap();
 
-        let (erster, zweiter) = tokio::join!(erster, zweiter);
-        assert_eq!(erster.unwrap()["srt_hint"], "srt://relay.invalid/neu");
-        assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
+        let zweiter_aufrufe = Arc::clone(&aufrufe);
+        let zweiter = coordinator
+            .ausfuehren(42, zweiter_key, move || async move {
+                zweiter_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": "srt://relay.invalid/veraltet" }))
+            })
+            .await;
+        assert_eq!(zweiter.unwrap_err().status(), StatusCode::TOO_EARLY);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+
+        freigabe_tx.send(()).unwrap();
+        assert_eq!(
+            erster.await.unwrap().unwrap()["srt_hint"],
+            "srt://relay.invalid/neu"
+        );
+    }
+
+    #[tokio::test]
+    async fn gleiche_uuid_in_flight_ist_sichtbar_zu_frueh_und_startet_nicht_zweimal() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let erster_coordinator = coordinator.clone();
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let erste_aufrufe = Arc::clone(&aufrufe);
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let (freigabe_tx, freigabe_rx) = tokio::sync::oneshot::channel();
+        let erster = tokio::spawn(async move {
+            erster_coordinator
+                .ausfuehren(42, key, move || async move {
+                    erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                    gestartet_tx.send(()).unwrap();
+                    freigabe_rx.await.unwrap();
+                    Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                })
+                .await
+        });
+        gestartet_rx.await.unwrap();
+
+        let zweite_aufrufe = Arc::clone(&aufrufe);
+        let zweiter = coordinator
+            .ausfuehren(42, key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "darf": "nicht laufen" }))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(zweiter.status(), StatusCode::TOO_EARLY);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+
+        freigabe_tx.send(()).unwrap();
+        erster.await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -2563,6 +3008,212 @@ mod tests {
 
         assert_eq!(erste, zweite);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn gleiche_idempotenz_liefert_auch_terminalen_fehler_statt_dauernd_409() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let erste_aufrufe = Arc::clone(&aufrufe);
+        let erste = coordinator
+            .ausfuehren(42, key, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "dummy-terminal" })),
+                )
+                    .into_response())
+            })
+            .await
+            .unwrap_err();
+        let zweite_aufrufe = Arc::clone(&aufrufe);
+        let zweite = coordinator
+            .ausfuehren(42, key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "darf": "nicht laufen" }))
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(erste.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(zweite.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn unklarer_relay_ausgang_wird_mit_derselben_uuid_reconciled() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let dauerhafter_ausgang = Arc::new(Mutex::new(None::<Value>));
+        let test_aufrufe = Arc::clone(&aufrufe);
+        let test_ausgang = Arc::clone(&dauerhafter_ausgang);
+        let wert = rotation_reconciliieren(move || {
+            let nummer = test_aufrufe.fetch_add(1, Ordering::SeqCst);
+            let test_ausgang = Arc::clone(&test_ausgang);
+            async move {
+                let mut gespeichert = test_ausgang.lock().unwrap();
+                if nummer == 0 {
+                    *gespeichert = Some(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }));
+                    return Err(relay_unklar_antwort(
+                        StatusCode::BAD_GATEWAY,
+                        json!({ "error": "Dummy-Antwort verloren" }),
+                    ));
+                }
+                Ok(gespeichert.clone().expect("erster Versuch hat committed"))
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(wert["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            dauerhafter_ausgang.lock().unwrap().as_ref().unwrap()["srt_hint"],
+            DUMMY_SRT_OBS_ADRESSE,
+            "der Retry liest denselben durable Ausgang statt ein zweites Mal zu rotieren"
+        );
+    }
+
+    #[tokio::test]
+    async fn verspaeteter_commit_bleibt_hinter_get_barriere_bis_zum_idempotenten_replay() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let aktueller_key = Arc::new(Mutex::new("alter-dummy-key".to_string()));
+        let versuche = Arc::new(AtomicUsize::new(0));
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+        let gestartet_tx = Arc::new(Mutex::new(Some(gestartet_tx)));
+        let commit_rx = Arc::new(tokio::sync::Mutex::new(Some(commit_rx)));
+        let rotation_coordinator = coordinator.clone();
+        let rotation_key = Arc::clone(&aktueller_key);
+        let rotation_versuche = Arc::clone(&versuche);
+        let rotation = tokio::spawn(async move {
+            rotation_coordinator
+                .ausfuehren(42, key, move || async move {
+                    rotation_reconciliieren(move || {
+                        let nummer = rotation_versuche.fetch_add(1, Ordering::SeqCst);
+                        let rotation_key = Arc::clone(&rotation_key);
+                        let gestartet_tx = Arc::clone(&gestartet_tx);
+                        let commit_rx = Arc::clone(&commit_rx);
+                        async move {
+                            if nummer == 0 {
+                                gestartet_tx
+                                    .lock()
+                                    .unwrap()
+                                    .take()
+                                    .unwrap()
+                                    .send(())
+                                    .unwrap();
+                                let commit = commit_rx.lock().await.take().unwrap();
+                                commit.await.unwrap();
+                                *rotation_key.lock().unwrap() = "neuer-dummy-key".to_string();
+                                return Err(relay_unklar_antwort(
+                                    StatusCode::BAD_GATEWAY,
+                                    json!({ "error": "Antwort nach Commit verloren" }),
+                                ));
+                            }
+                            Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                        }
+                    })
+                    .await
+                })
+                .await
+        });
+        gestartet_rx.await.unwrap();
+
+        let mut lesen = Box::pin(coordinator.vor_lesen_warten(42));
+        assert!(matches!(
+            futures_util::poll!(lesen.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(*aktueller_key.lock().unwrap(), "alter-dummy-key");
+
+        commit_tx.send(()).unwrap();
+        rotation.await.unwrap().unwrap();
+        lesen.await.unwrap();
+        assert_eq!(*aktueller_key.lock().unwrap(), "neuer-dummy-key");
+        assert_eq!(versuche.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn nach_unklarem_reconcile_bleibt_get_zu_und_nur_dieselbe_uuid_darf_weiter() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let anderer = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let erste_aufrufe = Arc::clone(&aufrufe);
+        let fehler = coordinator
+            .ausfuehren(42, key, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Err(relay_unklar_antwort(
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "error": "dummy-unklar" }),
+                ))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::TOO_EARLY);
+        assert_eq!(
+            coordinator.vor_lesen_warten(42).await.unwrap_err().status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            coordinator
+                .ausfuehren(42, anderer, || async { Ok(json!({})) })
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::TOO_EARLY
+        );
+
+        let zweite_aufrufe = Arc::clone(&aufrufe);
+        let wert = coordinator
+            .ausfuehren(42, key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+            })
+            .await
+            .unwrap();
+        assert_eq!(wert["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
+        coordinator.vor_lesen_warten(42).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn panic_bleibt_unklar_und_nur_dieselbe_idempotenz_darf_reconciliieren() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coordinator = IngestRotationCoordinator::default();
+        let aufrufe = Arc::new(AtomicUsize::new(0));
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let erste_aufrufe = Arc::clone(&aufrufe);
+        let erste = coordinator
+            .ausfuehren(42, key, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
+                panic!("deterministischer Dummy-Panic")
+            })
+            .await
+            .unwrap_err();
+        let zweite_aufrufe = Arc::clone(&aufrufe);
+        let zweite = coordinator
+            .ausfuehren(42, key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(erste.status(), StatusCode::TOO_EARLY);
+        assert_eq!(zweite["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
+        assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -2655,11 +3306,11 @@ mod tests {
                 Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
             })
             .await;
-        assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
+        assert_eq!(zweiter.unwrap_err().status(), StatusCode::TOO_EARLY);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
 
         freigabe_tx.send(()).expect("Schreibabschluss ausloesen");
-        lesen.await;
+        lesen.await.unwrap();
         assert_eq!(*aktueller_key.lock().unwrap(), "neuer-dummy-key");
 
         *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
@@ -2673,6 +3324,90 @@ mod tests {
             .expect("nach terminalem Schreibabschluss und Sperrfrist wieder freigeben");
         assert_eq!(dritter["srt_hint"], "srt://relay.invalid/neu");
         assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn nach_dashboard_restart_beweist_nur_same_uuid_replay_den_spaeten_commit() {
+        let alter_coordinator = IngestRotationCoordinator::default();
+        let neuer_coordinator = IngestRotationCoordinator::default();
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let aktueller_key = Arc::new(Mutex::new("alter-dummy-key".to_string()));
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let commit_freigabe = Arc::new(tokio::sync::Barrier::new(2));
+        let commit_fertig = Arc::new(tokio::sync::Barrier::new(2));
+
+        let alter_schreib_key = Arc::clone(&aktueller_key);
+        let alte_freigabe = Arc::clone(&commit_freigabe);
+        let altes_fertig = Arc::clone(&commit_fertig);
+        let browser_request = tokio::spawn(async move {
+            alter_coordinator
+                .ausfuehren(42, key, move || async move {
+                    gestartet_tx.send(()).unwrap();
+                    alte_freigabe.wait().await;
+                    *alter_schreib_key.lock().unwrap() = "neuer-dummy-key".to_string();
+                    altes_fertig.wait().await;
+                    Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                })
+                .await
+        });
+        gestartet_rx.await.unwrap();
+        browser_request.abort();
+        assert!(browser_request.await.unwrap_err().is_cancelled());
+
+        // Ein leerer Coordinator nach dem Neustart würde einen GET zulassen,
+        // obwohl das alte Relay-Schreiben noch aussteht. Genau deshalb darf
+        // das Frontend nach Transport/5xx/425 keinen GET als Beweis verwenden.
+        neuer_coordinator.vor_lesen_warten(42).await.unwrap();
+        assert_eq!(*aktueller_key.lock().unwrap(), "alter-dummy-key");
+
+        let replay_lese_key = Arc::clone(&aktueller_key);
+        let replay_fertig = Arc::clone(&commit_fertig);
+        let (replay_gestartet_tx, replay_gestartet_rx) = tokio::sync::oneshot::channel();
+        let replay = tokio::spawn(async move {
+            neuer_coordinator
+                .ausfuehren(42, key, move || async move {
+                    replay_gestartet_tx.send(()).unwrap();
+                    replay_fertig.wait().await;
+                    assert_eq!(*replay_lese_key.lock().unwrap(), "neuer-dummy-key");
+                    Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                })
+                .await
+        });
+        replay_gestartet_rx.await.unwrap();
+        assert_eq!(*aktueller_key.lock().unwrap(), "alter-dummy-key");
+
+        commit_freigabe.wait().await;
+        let antwort = replay.await.unwrap().unwrap();
+        assert_eq!(antwort["srt_hint"], DUMMY_SRT_OBS_ADRESSE);
+        assert_eq!(*aktueller_key.lock().unwrap(), "neuer-dummy-key");
+    }
+
+    #[tokio::test]
+    async fn get_barriere_hat_eine_sichtbare_frist_und_bleibt_fail_closed() {
+        let coordinator = IngestRotationCoordinator::default();
+        let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let (freigabe_tx, freigabe_rx) = tokio::sync::oneshot::channel();
+        let rotation_coordinator = coordinator.clone();
+        let rotation = tokio::spawn(async move {
+            rotation_coordinator
+                .ausfuehren(42, key, move || async move {
+                    gestartet_tx.send(()).unwrap();
+                    freigabe_rx.await.unwrap();
+                    Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
+                })
+                .await
+        });
+        gestartet_rx.await.unwrap();
+
+        let fehler = coordinator
+            .vor_lesen_warten_mit_timeout(42, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert_eq!(fehler.status(), StatusCode::GATEWAY_TIMEOUT);
+
+        freigabe_tx.send(()).unwrap();
+        rotation.await.unwrap().unwrap();
     }
 
     #[test]
@@ -2766,7 +3501,7 @@ mod tests {
             "/v1/me",
             "/v1/caps",
             "/v1/me/destinations",
-            "/v1/me/key/rotate",
+            "/v1/me/key/rotate-idempotent",
             // Kein Admin-Pfad, auch wenn "admin" darin vorkommt: das Relay
             // kennt nur `/v1/admin/...`.
             "/v1/me/adminwunsch",

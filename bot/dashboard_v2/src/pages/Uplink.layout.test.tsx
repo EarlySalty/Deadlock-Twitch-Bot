@@ -146,7 +146,10 @@ test('Laden und Fehler erfinden keine leeren Plattformziele', () => {
 test('Clipboard-Fehler hinterlassen ein fokussiertes, auswählbares Feld', () => {
   assert.match(UPLINK, /feldRef\.current\?\.focus\(\)/);
   assert.match(UPLINK, /feldRef\.current\?\.select\(\)/);
-  assert.match(UPLINK, /readOnly[\s\S]{0,100}type=\{offen \? 'text' : 'password'\}/);
+  assert.match(
+    UPLINK,
+    /readOnly[\s\S]{0,120}type=\{offen && !gesperrt \? 'text' : 'password'\}/,
+  );
 });
 
 test('verbinden_lebt_in_der_plattform_karte', () => {

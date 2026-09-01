@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -25,19 +25,25 @@ import {
   acceptUplinkAdminWaitlistEntry,
   UPLINK_PLATTFORMEN,
   dockAdressen,
+  darfAutoritativenStandNachRotationsfehlerLesen,
   fetchUplinkAdminWaitlist,
   fetchUplinkCaps,
   fetchUplinkDestinations,
   fetchUplinkMe,
-  istVollstaendigeSrtObsAdresse,
+  fetchAutoritativenUplinkStand,
+  hatPendingUplinkRotation,
   joinUplinkWaitlist,
+  istPendingUplinkRotation,
+  ladePendingUplinkRotation,
+  loeschePendingUplinkRotation,
   reconnectWaitEingabe,
   plattformVerbindungen,
   reconnectWaitPayload,
   rejectUplinkAdminWaitlistEntry,
   rotateUplinkDockToken,
-  rotateUplinkIngestKey,
+  rotateUplinkIngestKeyNachLeseabbruch,
   saveUplinkReconnectWait,
+  speicherePendingUplinkRotation,
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
@@ -422,12 +428,14 @@ function CopyField({
   darfAufdecken,
   grundVerdeckt,
   grundAnzeigen = true,
+  gesperrt = false,
 }: {
   label: string;
   value: string;
   darfAufdecken: boolean;
   grundVerdeckt: string;
   grundAnzeigen?: boolean;
+  gesperrt?: boolean;
 }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const [offen, setOffen] = useState(false);
@@ -435,8 +443,8 @@ function CopyField({
 
   // Sobald das Aufdecken nicht mehr erlaubt ist, faellt ein offener Wert zu.
   useEffect(() => {
-    if (!darfAufdecken) setOffen(false);
-  }, [darfAufdecken]);
+    if (!darfAufdecken || gesperrt) setOffen(false);
+  }, [darfAufdecken, gesperrt]);
 
   // Eine Rotation ersetzt denselben Feldinhalt unter derselben Komponente.
   // Ohne diesen Reset bliebe die neue geheime Adresse sichtbar oder trüge
@@ -449,6 +457,7 @@ function CopyField({
   if (!value) return null;
 
   const kopieren = async () => {
+    if (gesperrt) return;
     try {
       await navigator.clipboard.writeText(value);
       setStand('ok');
@@ -470,7 +479,7 @@ function CopyField({
         <input
           ref={feldRef}
           readOnly
-          type={offen ? 'text' : 'password'}
+          type={offen && !gesperrt ? 'text' : 'password'}
           // Verdeckt heisst hier nur "nicht auf dem Schirm". Ohne diese Zeile
           // bietet der Passwortmanager fuer jede Adresse das Speichern an.
           autoComplete="off"
@@ -484,7 +493,7 @@ function CopyField({
           <button
             type="button"
             onClick={() => setOffen((vorher) => !vorher)}
-            disabled={!darfAufdecken}
+            disabled={!darfAufdecken || gesperrt}
             aria-expanded={offen}
             title={darfAufdecken ? undefined : grundVerdeckt}
             className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-secondary"
@@ -494,6 +503,7 @@ function CopyField({
           </button>
           <button
             type="button"
+            disabled={gesperrt}
             aria-label={`${label} kopieren`}
             className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-white"
             onClick={kopieren}
@@ -521,67 +531,162 @@ function CopyField({
   );
 }
 
-function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
+type Rotationsauftrag = {
+  twitchUserId: string;
+  idempotenz: string;
+  generation: number;
+};
+
+class RotationNichtGestartetFehler extends Error {}
+
+function IngestKeyRotation({
+  csrfToken,
+  twitchUserId,
+  rotationUnklar,
+  setRotationUnklar,
+}: {
+  csrfToken: string | null;
+  twitchUserId: string | null;
+  rotationUnklar: boolean;
+  setRotationUnklar: (unklar: boolean) => void;
+}) {
   const queryClient = useQueryClient();
   const [dialogOffen, setDialogOffen] = useState(false);
   const [erfolg, setErfolg] = useState<string | null>(null);
-  const [rotationUnklar, setRotationUnklar] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const sichereAktionRef = useRef<HTMLButtonElement>(null);
   const oeffnerRef = useRef<HTMLButtonElement>(null);
   const rotationLaeuftRef = useRef(false);
+  const wiederaufnahmeGestartetRef = useRef(false);
   const idempotenzRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
+  const aktivRef = useRef(true);
+
+  const istAktuell = useCallback(
+    (auftrag: Rotationsauftrag) =>
+      aktivRef.current &&
+      generationRef.current === auftrag.generation &&
+      twitchUserId === auftrag.twitchUserId,
+    [twitchUserId],
+  );
+
+  useEffect(() => {
+    // React StrictMode führt Setup/Cleanup beim Mount einmal probeweise aus.
+    // Das zweite Setup muss dieselbe, weiterhin gültige Generation wieder
+    // aktivieren; nur ein echtes Unmount bleibt ohne anschließendes Setup.
+    aktivRef.current = true;
+    return () => {
+      aktivRef.current = false;
+    };
+  }, []);
 
   const fokusZurueck = () => {
     window.requestAnimationFrame(() => oeffnerRef.current?.focus());
   };
 
   const rotation = useMutation({
-    mutationFn: () => {
-      if (!csrfToken) throw new Error('Der Sicherheitstoken fehlt. Lade die Seite neu.');
-      const idempotenz = idempotenzRef.current;
-      if (!idempotenz) throw new Error('Die sichere Rotationskennung fehlt. Lade die Seite neu.');
-      return rotateUplinkIngestKey(csrfToken, idempotenz);
+    mutationFn: (auftrag: Rotationsauftrag) => {
+      if (!csrfToken) throw new RotationNichtGestartetFehler('Der Sicherheitstoken fehlt. Lade die Seite neu.');
+      if (!twitchUserId || twitchUserId !== auftrag.twitchUserId) {
+        throw new RotationNichtGestartetFehler('Die angemeldete Twitch-Identität hat gewechselt.');
+      }
+      if (!auftrag.idempotenz) {
+        throw new RotationNichtGestartetFehler('Die sichere Rotationskennung fehlt. Lade die Seite neu.');
+      }
+      // Erst nach erfolgreichem Speichern schreiben. Ohne reload-feste UUID
+      // dürfte ein verlorener Antwortweg später nur mit einer neuen UUID und
+      // damit potenziell einer zweiten Rotation fortgesetzt werden.
+      try {
+        speicherePendingUplinkRotation(auftrag.twitchUserId, auftrag.idempotenz);
+      } catch (fehler) {
+        throw new RotationNichtGestartetFehler(
+          fehler instanceof Error ? fehler.message : 'Die Rotation wurde nicht gestartet.'
+        );
+      }
+      return rotateUplinkIngestKeyNachLeseabbruch(csrfToken, auftrag.idempotenz, () =>
+        queryClient.cancelQueries({ queryKey: ['uplink-me', twitchUserId], exact: true })
+      );
     },
     // Der Server kann bereits geschrieben haben, auch wenn die Antwort auf dem
     // Weg zum Browser verloren geht. Ein zweiter Versuch duerfte daher niemals
     // automatisch einen weiteren Schlüssel erzeugen.
     retry: false,
-    onSuccess: (antwort) => {
+    onSuccess: (antwort, auftrag) => {
+      if (!istAktuell(auftrag)) return;
       rotationLaeuftRef.current = false;
+      loeschePendingUplinkRotation(auftrag.twitchUserId, auftrag.idempotenz);
+      idempotenzRef.current = null;
       setRotationUnklar(false);
-      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
+      queryClient.setQueryData(['uplink-me', twitchUserId], (alt?: UplinkMe) =>
         alt ? { ...alt, srt_hint: antwort.srt_hint } : alt
       );
-      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      void queryClient.invalidateQueries({ queryKey: ['uplink-me', twitchUserId], exact: true });
       setErfolg('Schlüssel rotiert. Die neue Serveradresse steht verdeckt im Feld und muss jetzt in OBS eingetragen werden.');
       setDialogOffen(false);
       fokusZurueck();
     },
-    onError: () => {
-      rotationLaeuftRef.current = false;
-      // Nach einem Timeout ist der Schreibstand unklar. Nur ein lesender Abruf
-      // darf den sichtbaren Zustand berichtigen; die Mutation wird nicht
-      // wiederholt. Bis dieser Abruf nachweislich gelingt, darf insbesondere
-      // keine möglicherweise bereits entwertete Adresse mehr kopierbar sein.
+    onError: async (fehler, auftrag) => {
+      if (!istAktuell(auftrag)) return;
+      if (fehler instanceof RotationNichtGestartetFehler) {
+        loeschePendingUplinkRotation(auftrag.twitchUserId, auftrag.idempotenz);
+        idempotenzRef.current = null;
+        rotationLaeuftRef.current = false;
+        setRotationUnklar(false);
+        return;
+      }
       setRotationUnklar(true);
-      queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
-        alt ? { ...alt, srt_hint: '' } : alt
-      );
-      void fetchUplinkMe()
-        .then((aktuell) => {
-          if (!istVollstaendigeSrtObsAdresse(aktuell.srt_hint?.trim() ?? '')) {
-            throw new Error('Der aktuelle Uplink-Zugang ist noch nicht sicher geladen.');
-          }
-          queryClient.setQueryData(['uplink-me'], aktuell);
-          setRotationUnklar(false);
-        })
-        .catch(() => {
-          // Die dauerhafte Warnung bleibt sichtbar. Erst ein bestätigter GET
-          // oder ein vollständiges Neuladen darf sie entfernen.
-        });
+      // Transportfehler, 5xx, Request-Timeout und 425 können trotz fehlender
+      // Browserantwort später schreiben. Nach einem Dashboard-Neustart wäre
+      // ein GET dann unbarriert und könnte den alten Stand fälschlich
+      // freigeben. Diese Ausgänge dürfen ausschließlich dieselbe UUID replayen.
+      const darfSicherLesen = darfAutoritativenStandNachRotationsfehlerLesen(fehler);
+      if (!darfSicherLesen) {
+        rotationLaeuftRef.current = false;
+        return;
+      }
+      try {
+        const stand = await fetchAutoritativenUplinkStand();
+        if (!istAktuell(auftrag)) return;
+        if (!istPendingUplinkRotation(auftrag.twitchUserId, auftrag.idempotenz)) return;
+        queryClient.setQueryData(['uplink-me', auftrag.twitchUserId], stand);
+        loeschePendingUplinkRotation(auftrag.twitchUserId, auftrag.idempotenz);
+        idempotenzRef.current = null;
+        setRotationUnklar(false);
+      } catch {
+        // Pending-UUID behalten: der sichtbare Retry sendet exakt sie erneut.
+      } finally {
+        if (istAktuell(auftrag)) rotationLaeuftRef.current = false;
+      }
     },
   });
+  const rotationStarten = rotation.mutate;
+
+  const auftragStarten = useCallback(
+    (idempotenz: string) => {
+      generationRef.current += 1;
+      const auftrag = {
+        twitchUserId: twitchUserId ?? '',
+        idempotenz,
+        generation: generationRef.current,
+      };
+      idempotenzRef.current = idempotenz;
+      rotationLaeuftRef.current = true;
+      setRotationUnklar(true);
+      rotationStarten(auftrag);
+    },
+    [rotationStarten, setRotationUnklar, twitchUserId],
+  );
+
+  useEffect(() => {
+    if (!csrfToken || !twitchUserId || wiederaufnahmeGestartetRef.current) return;
+    const pending = ladePendingUplinkRotation(twitchUserId);
+    if (!pending) return;
+    // Nach einem Reload muss der UUID-Replay vor jedem `/uplink-me`-GET
+    // laufen. Sonst könnte ein frischer Dashboard-Coordinator kurz den alten
+    // Relay-Stand lesen und in den Cache legen.
+    wiederaufnahmeGestartetRef.current = true;
+    auftragStarten(pending);
+  }, [auftragStarten, csrfToken, twitchUserId]);
 
   useEffect(() => {
     if (!dialogOffen) return;
@@ -609,12 +714,17 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
     setDialogOffen(true);
   };
 
+  const erneutAbgleichen = () => {
+    if (rotationLaeuftRef.current || !idempotenzRef.current) return;
+    auftragStarten(idempotenzRef.current);
+  };
+
   return (
     <div className="space-y-2">
       <button
         ref={oeffnerRef}
         type="button"
-        disabled={!csrfToken || rotationUnklar}
+        disabled={!csrfToken || !twitchUserId || rotationUnklar}
         onClick={oeffnen}
         aria-haspopup="dialog"
         className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-warning/50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -626,9 +736,18 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
         <p className="text-xs text-warning">Die sichere Sitzung wird noch geladen. Danach kannst du den Schlüssel rotieren.</p>
       ) : null}
       {rotationUnklar ? (
-        <p role="alert" className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-          Das Ergebnis der letzten Rotation ist unklar. Die alte Adresse bleibt ausgeblendet, bis der aktuelle Stand sicher geladen wurde. Bleibt diese Meldung stehen, lade die Seite neu.
-        </p>
+        <div role="alert" className="space-y-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <p>Das Ergebnis der letzten Rotation ist unklar. Die alte Adresse bleibt ausgeblendet, bis derselbe Vorgang sicher abgeglichen wurde.</p>
+          <button
+            type="button"
+            disabled={!csrfToken || !twitchUserId || rotation.isPending}
+            onClick={erneutAbgleichen}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-warning/50 px-3 py-2 font-semibold disabled:opacity-60"
+          >
+            {rotation.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+            {rotation.isPending ? 'Wird abgeglichen' : 'Denselben Vorgang erneut abgleichen'}
+          </button>
+        </div>
       ) : null}
       {erfolg ? (
         <p role="status" aria-live="polite" className="text-xs text-success">
@@ -668,8 +787,9 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
 
             {rotation.isError ? (
               <p role="alert" className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-                Das Ergebnis ist unklar. Der Schlüssel könnte bereits rotiert sein. Wir laden den Stand neu;
-                rotiere nicht noch einmal und prüfe danach die verdeckte Serveradresse.
+                {rotationUnklar
+                  ? 'Das Ergebnis ist noch unklar. Gleiche genau denselben Vorgang erneut ab; es wird kein neuer Schlüssel erzeugt.'
+                  : 'Die Rotation wurde eindeutig abgelehnt. Es wurde kein unklarer Vorgang gespeichert.'}
               </p>
             ) : null}
 
@@ -690,14 +810,25 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
                   onClick={() => {
                     if (rotationLaeuftRef.current) return;
                     rotationLaeuftRef.current = true;
-                    idempotenzRef.current = window.crypto.randomUUID();
-                    rotation.mutate();
+                    // Ab jetzt bleibt das sichtbare Feld fail-closed. Erst ein
+                    // terminaler POST oder ein bestätigter Sicherheits-GET
+                    // gibt Aufdecken und Kopieren wieder frei.
+                    auftragStarten(window.crypto.randomUUID());
                     dialogRef.current?.focus();
                   }}
                   className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-warning/55 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
                 >
                   {rotation.isPending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
                   {rotation.isPending ? 'Wird rotiert' : 'Ja, Schlüssel rotieren'}
+                </button>
+              ) : rotationUnklar ? (
+                <button
+                  type="button"
+                  disabled={rotation.isPending}
+                  onClick={erneutAbgleichen}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-warning/55 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
+                >
+                  Denselben Vorgang abgleichen
                 </button>
               ) : null}
             </div>
@@ -1037,11 +1168,18 @@ function useRueckkehrVomVerbinden(
 export function UplinkPage() {
   const queryClient = useQueryClient();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
+  const twitchUserId = authStatus?.twitchUserId?.trim() || null;
+  const [ingestRotationUnklar, setIngestRotationUnklar] = useState(
+    () => hatPendingUplinkRotation(),
+  );
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
   const [hilfeOffen, setHilfeOffen] = useUplinkDisclosure('uplink-hilfe', false);
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['uplink-me'],
-    queryFn: fetchUplinkMe,
+    queryKey: ['uplink-me', twitchUserId],
+    queryFn: ({ signal }) => fetchUplinkMe(signal),
+    // Ein reload-fester Pending-Eintrag muss zuerst mit derselben UUID
+    // reconciled werden. Vorher darf kein alter Relay-Stand in DOM oder Cache.
+    enabled: Boolean(twitchUserId) && !ingestRotationUnklar,
     retry: false,
     // Der Live-Status steckt in dieser Antwort und entscheidet, ob die Adresse
     // aufgedeckt werden darf. Beendet der Streamer den Stream, waehrend das
@@ -1050,6 +1188,11 @@ export function UplinkPage() {
     refetchInterval: 15_000,
     refetchOnWindowFocus: true,
   });
+  useEffect(() => {
+    if (!twitchUserId) return;
+    const pending = ladePendingUplinkRotation(twitchUserId);
+    setIngestRotationUnklar(pending !== null);
+  }, [twitchUserId]);
   const { data: helpPages, isError: isHelpError } = useQuery({
     queryKey: ['uplink-help'],
     queryFn: fetchUplinkHelp,
@@ -1170,10 +1313,27 @@ export function UplinkPage() {
             )}
 
             {isError && (
-              <div role="alert" className="panel-card rounded-2xl p-5 text-sm text-warning">
-                {error instanceof Error ? error.message : 'Uplink ist gerade nicht erreichbar.'}
+              <div className="panel-card space-y-3 rounded-2xl p-5 text-sm text-warning">
+                <p role="alert">
+                  {error instanceof Error ? error.message : 'Uplink ist gerade nicht erreichbar.'}
+                </p>
               </div>
             )}
+
+            {ingestRotationUnklar && !data ? (
+              <div className="panel-card space-y-3 rounded-2xl p-5 text-sm text-warning">
+                <p role="alert">
+                  Die letzte Schlüsselrotation wird vor dem Laden der OBS-Adresse sicher abgeglichen.
+                </p>
+                <IngestKeyRotation
+                  key={`pending-${twitchUserId ?? 'ohne-identitaet'}`}
+                  csrfToken={authStatus?.csrfToken ?? authStatus?.csrf_token ?? null}
+                  twitchUserId={twitchUserId}
+                  rotationUnklar={ingestRotationUnklar}
+                  setRotationUnklar={setIngestRotationUnklar}
+                />
+              </div>
+            ) : null}
 
             {data && !data.enabled && (
               <div className="panel-card relative overflow-hidden rounded-2xl p-6">
@@ -1237,8 +1397,13 @@ export function UplinkPage() {
                         <>
                           <CopyField
                             label="Serveradresse für OBS"
-                            value={data.srt_hint}
+                            // Bei unklarem Rotationsausgang reicht ein
+                            // deaktivierter Knopf nicht: die möglicherweise
+                            // bereits entwertete Adresse darf auch nicht als
+                            // Passwortfeld im DOM liegen.
+                            value={ingestRotationUnklar ? '' : data.srt_hint}
                             darfAufdecken={data.live_status === 'aus'}
+                            gesperrt={ingestRotationUnklar}
                             grundVerdeckt={
                               data.live_status === 'live'
                                 ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
@@ -1261,7 +1426,11 @@ export function UplinkPage() {
                             </div>
                           </div>
                           <IngestKeyRotation
+                            key={`bereit-${twitchUserId ?? 'ohne-identitaet'}`}
                             csrfToken={authStatus?.csrfToken ?? authStatus?.csrf_token ?? null}
+                            twitchUserId={twitchUserId}
+                            rotationUnklar={ingestRotationUnklar}
+                            setRotationUnklar={setIngestRotationUnklar}
                           />
                         </>
                       ) : (

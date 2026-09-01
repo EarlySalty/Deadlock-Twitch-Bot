@@ -45,7 +45,7 @@ HQCBR, CBR, ABR und CQP oder CRF bestimmen, wie viele Bits eine Szene bekommt. S
 
 - Zielbitrate: 6000 Kbps
 - Die Zielbitrate darf höchstens 80 Prozent vom gemessenen Upload belegen.
-- Bei 5 bis 8 Mbit realem Upload: 4000 Kbps und 30 fps
+- Bei 5 bis unter 8 Mbit realem Upload: 4000 Kbps und 30 fps
 
 ##### Welche Ratensteuerung bei welchem Encoder?
 
@@ -60,8 +60,8 @@ Miss deinen Upload, wenn nichts anderes läuft. Danach sind 80 Prozent davon die
 
 | Gemessener Upload | Konstante Zielbitrate | Bildrate |
 | --- | --- | --- |
-| 5 bis 8 Mbit | 4000 Kbps | 30 fps |
-| 8 bis 12 Mbit | 6000 Kbps | 60 fps |
+| 5 bis unter 8 Mbit | 4000 Kbps | 30 fps |
+| 8 bis unter 12 Mbit | 6000 Kbps | 60 fps |
 | Ab 12 Mbit | 9000 Kbps, wenn du 2K weitersendest | 60 fps |
 
 Die Rechnung ist für alle Encoder gleich: Zielbitrate durch 0,8. Für 6000 Kbps brauchst du damit mindestens 8 Mbit gemessenen Upload, für 9000 Kbps mindestens 12 Mbit.
@@ -89,8 +89,8 @@ Als x264-Notnagel nimm das Preset `veryfast`, das Profil `high` und das Tune `ze
 
 | Gemessener Upload | Basis und Ausgabe | FPS | Kodierung |
 | --- | --- | --- | --- |
-| 5 bis 8 Mbit | 1920×1080 | 30 | HEVC, HQCBR oder CBR 4000 |
-| 8 bis 12 Mbit | 1920×1080 | 60 | HEVC, HQCBR oder CBR 6000 |
+| 5 bis unter 8 Mbit | 1920×1080 | 30 | HEVC, HQCBR oder CBR 4000 |
+| 8 bis unter 12 Mbit | 1920×1080 | 60 | HEVC, HQCBR oder CBR 6000 |
 | Ab 8 Mbit, wenn die GPU 1440 ohne Drops hält | 2560×1440 | 60 | HEVC, HQCBR oder CBR 6000 |
 | Ab 12 Mbit, wenn du 2K auch rausschicken willst | 2560×1440 | 60 | HEVC, HQCBR oder CBR 9000 |
 | Wenn die GPU Drops hat oder das Spiel ruckelt | Eine Stufe kleiner oder 30 fps |  | Derselbe Encoder, nicht auf Software wechseln |

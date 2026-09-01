@@ -1,4 +1,4 @@
-import { fetchJson, withCookieCredentials } from './core';
+import { ApiHttpError, fetchJson, withCookieCredentials } from './core';
 import { normalisiereCaps } from '../uplinkEmpfehlung';
 import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 
@@ -72,6 +72,133 @@ export interface UplinkKeyRotation {
   srt_hint: string;
 }
 
+export function darfAutoritativenStandNachRotationsfehlerLesen(fehler: unknown): boolean {
+  return (
+    fehler instanceof ApiHttpError &&
+    fehler.status >= 400 &&
+    fehler.status < 500 &&
+    fehler.status !== 408 &&
+    fehler.status !== 425
+  );
+}
+
+const UPLINK_ROTATION_PENDING_STORAGE_KEY = 'uplink-ingest-rotation-pending-v1';
+type RotationStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface PendingUplinkRotation {
+  twitchUserId: string;
+  idempotencyKey: string;
+}
+
+function pendingRotationAus(wert: string | null): PendingUplinkRotation | null {
+  if (!wert) return null;
+  try {
+    const pending = JSON.parse(wert) as Partial<PendingUplinkRotation>;
+    const twitchUserId = typeof pending.twitchUserId === 'string' ? pending.twitchUserId.trim() : '';
+    const idempotencyKey =
+      typeof pending.idempotencyKey === 'string' ? pending.idempotencyKey.trim() : '';
+    if (twitchUserId && UUID_V4.test(idempotencyKey)) return { twitchUserId, idempotencyKey };
+  } catch {
+    // Kaputte oder alte Einträge werden unten verworfen.
+  }
+  return null;
+}
+
+/** Erkennt einen gültigen Pending-Eintrag, bevor die Auth-Identität geladen ist. */
+export function hatPendingUplinkRotation(storage?: RotationStorage): boolean {
+  try {
+    const ziel = storage ?? window.sessionStorage;
+    const pending = pendingRotationAus(ziel.getItem(UPLINK_ROTATION_PENDING_STORAGE_KEY));
+    if (pending) return true;
+    ziel.removeItem(UPLINK_ROTATION_PENDING_STORAGE_KEY);
+  } catch {
+    // Auch ein SecurityError beim Zugriff auf sessionStorage darf das Rendern nicht abbrechen.
+  }
+  return false;
+}
+
+/** Die UUID ist kein Schlüssel und wird nur für dieselbe authentifizierte Twitch-ID geladen. */
+export function ladePendingUplinkRotation(
+  twitchUserId: string | null | undefined,
+  storage?: RotationStorage,
+): string | null {
+  try {
+    const ziel = storage ?? window.sessionStorage;
+    const pending = pendingRotationAus(ziel.getItem(UPLINK_ROTATION_PENDING_STORAGE_KEY));
+    if (pending && twitchUserId?.trim() === pending.twitchUserId) return pending.idempotencyKey;
+    if (twitchUserId?.trim() && pending?.twitchUserId !== twitchUserId.trim()) {
+      ziel.removeItem(UPLINK_ROTATION_PENDING_STORAGE_KEY);
+    } else if (!pending) {
+      ziel.removeItem(UPLINK_ROTATION_PENDING_STORAGE_KEY);
+    }
+  } catch {
+    // Gesperrter Browser-Speicher darf die Seite nicht unbenutzbar machen.
+  }
+  return null;
+}
+
+export function speicherePendingUplinkRotation(
+  twitchUserId: string,
+  idempotencyKey: string,
+  storage?: RotationStorage,
+): void {
+  if (!twitchUserId.trim()) {
+    throw new Error('Die angemeldete Twitch-Identität fehlt. Lade die Seite neu.');
+  }
+  if (!UUID_V4.test(idempotencyKey)) {
+    throw new Error('Die sichere Rotationskennung ist ungültig. Lade die Seite neu.');
+  }
+  try {
+    const ziel = storage ?? window.sessionStorage;
+    ziel.setItem(
+      UPLINK_ROTATION_PENDING_STORAGE_KEY,
+      JSON.stringify({ twitchUserId: twitchUserId.trim(), idempotencyKey }),
+    );
+  } catch {
+    throw new Error('Der sichere Browser-Speicher ist gesperrt. Die Rotation wurde nicht gestartet.');
+  }
+}
+
+export function loeschePendingUplinkRotation(
+  twitchUserId: string,
+  idempotencyKey: string,
+  storage?: RotationStorage,
+): boolean {
+  try {
+    const ziel = storage ?? window.sessionStorage;
+    const pending = pendingRotationAus(ziel.getItem(UPLINK_ROTATION_PENDING_STORAGE_KEY));
+    if (
+      pending?.twitchUserId !== twitchUserId.trim() ||
+      pending.idempotencyKey !== idempotencyKey
+    ) {
+      return false;
+    }
+    ziel.removeItem(UPLINK_ROTATION_PENDING_STORAGE_KEY);
+    return true;
+  } catch {
+    // Der Aufrufer darf UI-Zustand trotzdem nur für seine eigene Generation ändern.
+    return false;
+  }
+}
+
+export function istPendingUplinkRotation(
+  twitchUserId: string,
+  idempotencyKey: string,
+  storage?: RotationStorage,
+): boolean {
+  try {
+    const ziel = storage ?? window.sessionStorage;
+    const pending = pendingRotationAus(ziel.getItem(UPLINK_ROTATION_PENDING_STORAGE_KEY));
+    return (
+      pending?.twitchUserId === twitchUserId.trim() &&
+      pending.idempotencyKey === idempotencyKey
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Exakte secret-bearing Form aus rs-relays `srt::caller_url`. */
 export function istVollstaendigeSrtObsAdresse(wert: string): boolean {
   if (!wert || /\s/.test(wert)) return false;
@@ -119,6 +246,7 @@ export function istVollstaendigeSrtObsAdresse(wert: string): boolean {
 export async function rotateUplinkIngestKey(
   csrfToken: string,
   idempotencyKey: string,
+  signal?: AbortSignal,
 ): Promise<UplinkKeyRotation> {
   if (!csrfToken.trim()) {
     throw new Error('Der Sicherheitstoken fehlt. Lade die Seite neu.');
@@ -138,6 +266,7 @@ export async function rotateUplinkIngestKey(
       },
       body: '{}',
       cache: 'no-store',
+      signal,
     }),
   );
   const srtHint = typeof antwort.srt_hint === 'string' ? antwort.srt_hint.trim() : '';
@@ -145,6 +274,21 @@ export async function rotateUplinkIngestKey(
     throw new Error('Der Server hat keine neue SRT-Adresse zurückgegeben.');
   }
   return { srt_hint: srtHint };
+}
+
+/**
+ * Schreibt erst, nachdem jeder ältere `uplink-me`-Abruf nachweislich
+ * abgebrochen ist. Damit kann eine verspätete GET-Antwort nie die nach der
+ * Rotation geladene Adresse im Query-Cache überholen.
+ */
+export async function rotateUplinkIngestKeyNachLeseabbruch(
+  csrfToken: string,
+  idempotencyKey: string,
+  leseabbruch: () => Promise<void>,
+  signal?: AbortSignal,
+): Promise<UplinkKeyRotation> {
+  await leseabbruch();
+  return rotateUplinkIngestKey(csrfToken, idempotencyKey, signal);
 }
 
 /**
@@ -376,11 +520,26 @@ export function dockAdressen(me: UplinkMe): DockAdresse[] {
   return liste;
 }
 
-export function fetchUplinkMe(): Promise<UplinkMe> {
+export function fetchUplinkMe(signal?: AbortSignal): Promise<UplinkMe> {
   return fetchJson<UplinkMe>(
     '/twitch/api/v2/uplink/me',
-    withCookieCredentials({ cache: 'no-store' }),
+    withCookieCredentials({ cache: 'no-store', signal }),
   );
+}
+
+/** Nur für nachweislich nicht-schreibende Fehler bzw. terminale 409-Barrieren. */
+export async function fetchAutoritativenUplinkStand(timeoutMs = 5_000): Promise<UplinkMe> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const stand = await fetchUplinkMe(controller.signal);
+    if (!istVollstaendigeSrtObsAdresse(stand.srt_hint?.trim() ?? '')) {
+      throw new Error('Uplink hat keine vollständige aktuelle OBS-Adresse geliefert.');
+    }
+    return stand;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export function joinUplinkWaitlist(): Promise<{ waitlisted: boolean }> {

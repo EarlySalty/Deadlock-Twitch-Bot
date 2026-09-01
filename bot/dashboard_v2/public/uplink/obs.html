@@ -77,7 +77,7 @@
     <ul>
       <li>Zielbitrate: 6000 Kbps</li>
       <li>Die Zielbitrate darf höchstens 80 Prozent vom gemessenen Upload belegen.</li>
-      <li>Bei 5 bis 8 Mbit realem Upload: 4000 Kbps und 30 fps.</li>
+      <li>Bei 5 bis unter 8 Mbit realem Upload: 4000 Kbps und 30 fps.</li>
     </ul>
 
     <h4 id="obs-amd-hqcbr">Welche Ratensteuerung bei welchem Encoder?</h4>
@@ -94,8 +94,8 @@
         <tr><th>Gemessener Upload</th><th>Konstante Zielbitrate</th><th>Bildrate</th></tr>
       </thead>
       <tbody>
-        <tr><td>5 bis 8 Mbit</td><td>4000 Kbps</td><td>30 fps</td></tr>
-        <tr><td>8 bis 12 Mbit</td><td>6000 Kbps</td><td>60 fps</td></tr>
+        <tr><td>5 bis unter 8 Mbit</td><td>4000 Kbps</td><td>30 fps</td></tr>
+        <tr><td>8 bis unter 12 Mbit</td><td>6000 Kbps</td><td>60 fps</td></tr>
         <tr><td>ab 12 Mbit</td><td>9000 Kbps, wenn du 2K weitersendest</td><td>60 fps</td></tr>
       </tbody>
     </table>
@@ -124,8 +124,8 @@
         <tr><th>Upload (gemessen)</th><th>Basis und Ausgabe</th><th>FPS</th><th>Kodierung</th></tr>
       </thead>
       <tbody>
-        <tr><td>5 bis 8 Mbit</td><td>1920×1080</td><td>30</td><td>HEVC, HQCBR/CBR 4000</td></tr>
-        <tr><td>8 bis 12 Mbit</td><td>1920×1080</td><td>60</td><td>HEVC, HQCBR/CBR 6000</td></tr>
+        <tr><td>5 bis unter 8 Mbit</td><td>1920×1080</td><td>30</td><td>HEVC, HQCBR/CBR 4000</td></tr>
+        <tr><td>8 bis unter 12 Mbit</td><td>1920×1080</td><td>60</td><td>HEVC, HQCBR/CBR 6000</td></tr>
         <tr><td>ab 8 Mbit, GPU hält 1440 ohne Drop</td><td>2560×1440</td><td>60</td><td>HEVC, HQCBR/CBR 6000</td></tr>
         <tr><td>ab 12 Mbit, wenn du 2K auch rausschicken willst</td><td>2560×1440</td><td>60</td><td>HEVC, HQCBR/CBR 9000</td></tr>
         <tr><td>GPU droppt oder Spiel ruckelt</td><td>eine Stufe kleiner oder 30 fps</td><td></td><td>gleicher Encoder, nicht auf Software wechseln</td></tr>

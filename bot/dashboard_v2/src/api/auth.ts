@@ -13,6 +13,8 @@ export interface AuthStatus {
   adminMode?: boolean;
   canViewAllStreamers: boolean;
   twitchLogin?: string | null;
+  /** Stabile, ausschließlich aus der authentifizierten Session gelieferte Twitch-ID. */
+  twitchUserId?: string | null;
   adminDefaultStreamer?: string | null;
   displayName?: string | null;
   partnerStatus?: 'active' | 'archived' | 'departnered' | 'non_partner' | 'token_error' | 'blocked' | null;
