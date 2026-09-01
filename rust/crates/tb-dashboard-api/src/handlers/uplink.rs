@@ -852,11 +852,11 @@ fn correlation_pfad(streamer_id: i64, query: &CorrelationQuery) -> Option<String
         (None, Some(von), Some(bis)) if von < bis => {
             parameter.append_pair(
                 "started_after",
-                &von.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                &von.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
             );
             parameter.append_pair(
                 "started_before",
-                &bis.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                &bis.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
             );
         }
         _ => return None,
@@ -2693,6 +2693,27 @@ mod tests {
             "/v1/me/correlation?streamer_id=4242&started_after=2026-09-01T10%3A00%3A00Z&started_before=2026-09-01T11%3A00%3A00Z"
         );
         assert_eq!(secret_name_fuer(&pfad), "RS_RELAY_API_SECRET");
+
+        let von_mit_bruchteil = "2026-09-01T10:00:00.100Z"
+            .parse()
+            .expect("Startzeit mit Millisekunden");
+        let bis_mit_bruchteil = "2026-09-01T10:00:00.900Z"
+            .parse()
+            .expect("Endzeit mit Millisekunden");
+        assert_eq!(
+            correlation_pfad(
+                4242,
+                &CorrelationQuery {
+                    session: None,
+                    started_after: Some(von_mit_bruchteil),
+                    started_before: Some(bis_mit_bruchteil),
+                },
+            )
+            .as_deref(),
+            Some(
+                "/v1/me/correlation?streamer_id=4242&started_after=2026-09-01T10%3A00%3A00.100Z&started_before=2026-09-01T10%3A00%3A00.900Z"
+            )
+        );
 
         assert_eq!(
             correlation_pfad(
