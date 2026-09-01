@@ -2,8 +2,7 @@
 //!
 //! Reihenfolge:
 //! 1. **Internal Admin** — gültiger `X-Internal-Token` über `ExpectedToken`.
-//!    Loopback-Requests werden nur in `promote_dashboard_admin_session` für
-//!    Admin-Router auf `AuthLevel::Admin` gebrückt (Python `localhost`/`admin`).
+//!    Eine Loopback-Adresse allein verleiht ausdrücklich keine Rechte.
 //! 2. **Partner/Twitch-Admin** — Cookie `twitch_dash_session` ist gültig in der DB
 //!    (Twitch-OAuth-Session, Typ `twitch`) UND in `twitch_partners` vorhanden
 //!    (gleiche WHERE-Bedingung wie Python `_is_partner_allowed`,
@@ -97,7 +96,7 @@ pub async fn promote_dashboard_admin_session(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    if auth.is_privileged() || is_local_request_from_request(&request) {
+    if auth.is_privileged() {
         request
             .extensions_mut()
             .insert(tb_http_core::AuthLevel::Admin);
@@ -190,10 +189,6 @@ fn is_local_headers_extensions(headers: &HeaderMap, extensions: &Extensions) -> 
 
 pub(crate) fn is_local_request(parts: &Parts) -> bool {
     is_local_headers_extensions(&parts.headers, &parts.extensions)
-}
-
-fn is_local_request_from_request(request: &Request<Body>) -> bool {
-    is_local_headers_extensions(request.headers(), request.extensions())
 }
 
 /// Liest alle gleichnamigen Cookie-Werte aus sämtlichen `Cookie`-Headern.
@@ -617,6 +612,61 @@ mod tests {
             "x-forwarded-host",
             "dash.example.com"
         )))));
+    }
+
+    #[tokio::test]
+    async fn loopback_wird_nur_mit_bestehendem_internen_token_admin() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Request, StatusCode},
+            middleware::from_fn,
+            routing::get,
+            Extension, Router,
+        };
+        use std::net::SocketAddr;
+        use tb_http_core::{AuthLevel, ExpectedToken};
+        use tower::ServiceExt;
+
+        async fn admin_only(auth: AuthLevel) -> StatusCode {
+            if auth.is_privileged() {
+                StatusCode::OK
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        }
+
+        let router = || {
+            Router::new()
+                .route("/", get(admin_only))
+                .layer(from_fn(promote_dashboard_admin_session))
+                .layer(Extension(ExpectedToken("bestehender-token".to_string())))
+        };
+        let request = |token: Option<&str>| {
+            let mut builder = Request::builder()
+                .uri("/")
+                .header("host", "127.0.0.1:8769")
+                .extension(ConnectInfo(
+                    "127.0.0.1:50000".parse::<SocketAddr>().unwrap(),
+                ));
+            if let Some(token) = token {
+                builder = builder.header("x-internal-token", token);
+            }
+            builder.body(Body::empty()).unwrap()
+        };
+
+        assert_eq!(
+            router().oneshot(request(None)).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            router()
+                .oneshot(request(Some("bestehender-token")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
     }
 
     #[test]

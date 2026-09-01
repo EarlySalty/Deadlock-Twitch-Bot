@@ -9,6 +9,8 @@
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 
+use crate::approval::{invalidate_clips_for_content_change, ContentMutationError};
+
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_TRANSCRIBING: &str = "transcribing";
 pub const STATUS_CORRECTING: &str = "correcting";
@@ -54,25 +56,21 @@ pub struct EnrichmentRecord {
     pub updated_at: Option<String>,
 }
 
-/// JSON-Text → Vec<Value> (Segmente; fehlertolerant).
-fn decode_array(raw: Option<String>) -> Vec<Value> {
-    raw.and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| {
-            if let Value::Array(a) = v {
-                Some(a)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default()
+/// JSON-Text → Vec<Value>. Eine beschädigte/falsch typisierte DB-Zeile darf
+/// nicht wie eine legitime leere Liste aussehen.
+fn decode_array(raw: Option<String>) -> Result<Vec<Value>, sqlx::Error> {
+    raw.map(|text| serde_json::from_str::<Vec<Value>>(&text))
+        .transpose()
+        .map(|values| values.unwrap_or_default())
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)))
 }
 
-/// JSON-Text → Vec<String> (detected_terms / hashtags; fehlertolerant).
-fn decode_strings(raw: Option<String>) -> Vec<String> {
-    decode_array(raw)
-        .into_iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect()
+/// JSON-Text → Vec<String>; Nicht-Strings sind ein sichtbarer Dekodierfehler.
+fn decode_strings(raw: Option<String>) -> Result<Vec<String>, sqlx::Error> {
+    raw.map(|text| serde_json::from_str::<Vec<String>>(&text))
+        .transpose()
+        .map(|values| values.unwrap_or_default())
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)))
 }
 
 /// Alle Spalten — JSONB als `::text`, Timestamps als `::text`.
@@ -85,46 +83,39 @@ const SELECT_SQL: &str = "SELECT clip_db_id, transcript_raw, transcript_correcte
     started_at::text, completed_at::text, edited_by, updated_at::text \
     FROM social_media_clip_enrichment WHERE clip_db_id = $1";
 
-fn row_to_record(row: &PgRow) -> EnrichmentRecord {
-    EnrichmentRecord {
-        clip_db_id: row.try_get("clip_db_id").unwrap_or(0),
-        transcript_raw: row.try_get("transcript_raw").unwrap_or(None),
-        transcript_corrected: row.try_get("transcript_corrected").unwrap_or(None),
-        transcript_segments: decode_array(row.try_get("transcript_segments").unwrap_or(None)),
-        transcript_lang: row.try_get("transcript_lang").unwrap_or(None),
-        detected_terms: decode_strings(row.try_get("detected_terms").unwrap_or(None)),
-        title_youtube: row.try_get("title_youtube").unwrap_or(None),
-        title_tiktok: row.try_get("title_tiktok").unwrap_or(None),
-        title_instagram: row.try_get("title_instagram").unwrap_or(None),
-        description_youtube: row.try_get("description_youtube").unwrap_or(None),
-        description_tiktok: row.try_get("description_tiktok").unwrap_or(None),
-        description_instagram: row.try_get("description_instagram").unwrap_or(None),
-        hashtags_youtube: decode_strings(row.try_get("hashtags_youtube").unwrap_or(None)),
-        hashtags_tiktok: decode_strings(row.try_get("hashtags_tiktok").unwrap_or(None)),
-        hashtags_instagram: decode_strings(row.try_get("hashtags_instagram").unwrap_or(None)),
-        llm_provider: row.try_get("llm_provider").unwrap_or(None),
-        llm_model: row.try_get("llm_model").unwrap_or(None),
-        cost_usd_estimate: row.try_get("cost_usd_estimate").unwrap_or(None),
-        status: row
-            .try_get::<Option<String>, _>("status")
-            .unwrap_or(None)
-            .unwrap_or_else(|| STATUS_PENDING.to_string()),
-        error_message: row.try_get("error_message").unwrap_or(None),
-        started_at: row.try_get("started_at").unwrap_or(None),
-        completed_at: row.try_get("completed_at").unwrap_or(None),
-        edited_by: row.try_get("edited_by").unwrap_or(None),
-        updated_at: row.try_get("updated_at").unwrap_or(None),
-    }
+fn row_to_record(row: &PgRow) -> Result<EnrichmentRecord, sqlx::Error> {
+    Ok(EnrichmentRecord {
+        clip_db_id: row.try_get("clip_db_id")?,
+        transcript_raw: row.try_get("transcript_raw")?,
+        transcript_corrected: row.try_get("transcript_corrected")?,
+        transcript_segments: decode_array(row.try_get("transcript_segments")?)?,
+        transcript_lang: row.try_get("transcript_lang")?,
+        detected_terms: decode_strings(row.try_get("detected_terms")?)?,
+        title_youtube: row.try_get("title_youtube")?,
+        title_tiktok: row.try_get("title_tiktok")?,
+        title_instagram: row.try_get("title_instagram")?,
+        description_youtube: row.try_get("description_youtube")?,
+        description_tiktok: row.try_get("description_tiktok")?,
+        description_instagram: row.try_get("description_instagram")?,
+        hashtags_youtube: decode_strings(row.try_get("hashtags_youtube")?)?,
+        hashtags_tiktok: decode_strings(row.try_get("hashtags_tiktok")?)?,
+        hashtags_instagram: decode_strings(row.try_get("hashtags_instagram")?)?,
+        llm_provider: row.try_get("llm_provider")?,
+        llm_model: row.try_get("llm_model")?,
+        cost_usd_estimate: row.try_get("cost_usd_estimate")?,
+        status: row.try_get("status")?,
+        error_message: row.try_get("error_message")?,
+        started_at: row.try_get("started_at")?,
+        completed_at: row.try_get("completed_at")?,
+        edited_by: row.try_get("edited_by")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// Lädt die Enrichment-Zeile eines Clips.
 pub async fn get_enrichment(pool: &PgPool, clip_db_id: i32) -> Option<EnrichmentRecord> {
-    match sqlx::query(SELECT_SQL)
-        .bind(clip_db_id)
-        .fetch_optional(pool)
-        .await
-    {
-        Ok(row) => row.as_ref().map(row_to_record),
+    match get_enrichment_checked(pool, clip_db_id).await {
+        Ok(record) => record,
         Err(error) => {
             tracing::warn!(
                 %error,
@@ -136,60 +127,80 @@ pub async fn get_enrichment(pool: &PgPool, clip_db_id: i32) -> Option<Enrichment
     }
 }
 
+/// Fehlertransparenter Lesepfad für Worker und HTTP-Handler. Nur eine wirklich
+/// fehlende Zeile wird zu `Ok(None)`; DB-/Dekodierfehler bleiben sichtbar.
+pub async fn get_enrichment_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<Option<EnrichmentRecord>, sqlx::Error> {
+    let row = sqlx::query(SELECT_SQL)
+        .bind(clip_db_id)
+        .fetch_optional(pool)
+        .await?;
+    row.as_ref().map(row_to_record).transpose()
+}
+
 /// Stellt sicher, dass eine (pending-)Zeile existiert; liefert sie.
 pub async fn ensure_enrichment_row(pool: &PgPool, clip_db_id: i32) -> EnrichmentRecord {
-    if let Some(existing) = get_enrichment(pool, clip_db_id).await {
-        return existing;
+    match ensure_enrichment_row_checked(pool, clip_db_id).await {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                clip_db_id,
+                "Social-Media-Enrichment: Pending-Zeile nicht ladbar, Fallback-Record"
+            );
+            fallback_record(clip_db_id)
+        }
     }
-    if let Err(error) = sqlx::query!(
+}
+
+pub async fn ensure_enrichment_row_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<EnrichmentRecord, sqlx::Error> {
+    if let Some(existing) = get_enrichment_checked(pool, clip_db_id).await? {
+        return Ok(existing);
+    }
+    sqlx::query!(
         "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at) \
          VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (clip_db_id) DO NOTHING",
         clip_db_id,
         STATUS_PENDING
     )
     .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            %error,
-            clip_db_id,
-            "Social-Media-Enrichment: Pending-Zeile konnte nicht sichergestellt werden"
-        );
-    }
-    match get_enrichment(pool, clip_db_id).await {
-        Some(record) => record,
-        None => {
-            tracing::warn!(
-                clip_db_id,
-                "Social-Media-Enrichment: Pending-Zeile nicht ladbar, Fallback-Record"
-            );
-            EnrichmentRecord {
-                clip_db_id,
-                transcript_raw: None,
-                transcript_corrected: None,
-                transcript_segments: Vec::new(),
-                transcript_lang: None,
-                detected_terms: Vec::new(),
-                title_youtube: None,
-                title_tiktok: None,
-                title_instagram: None,
-                description_youtube: None,
-                description_tiktok: None,
-                description_instagram: None,
-                hashtags_youtube: Vec::new(),
-                hashtags_tiktok: Vec::new(),
-                hashtags_instagram: Vec::new(),
-                llm_provider: None,
-                llm_model: None,
-                cost_usd_estimate: None,
-                status: STATUS_PENDING.to_string(),
-                error_message: None,
-                started_at: None,
-                completed_at: None,
-                edited_by: None,
-                updated_at: None,
-            }
-        }
+    .await?;
+    get_enrichment_checked(pool, clip_db_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+fn fallback_record(clip_db_id: i32) -> EnrichmentRecord {
+    EnrichmentRecord {
+        clip_db_id,
+        transcript_raw: None,
+        transcript_corrected: None,
+        transcript_segments: Vec::new(),
+        transcript_lang: None,
+        detected_terms: Vec::new(),
+        title_youtube: None,
+        title_tiktok: None,
+        title_instagram: None,
+        description_youtube: None,
+        description_tiktok: None,
+        description_instagram: None,
+        hashtags_youtube: Vec::new(),
+        hashtags_tiktok: Vec::new(),
+        hashtags_instagram: Vec::new(),
+        llm_provider: None,
+        llm_model: None,
+        cost_usd_estimate: None,
+        status: STATUS_PENDING.to_string(),
+        error_message: None,
+        started_at: None,
+        completed_at: None,
+        edited_by: None,
+        updated_at: None,
     }
 }
 
@@ -203,7 +214,7 @@ pub async fn update_enrichment_status(
     started_at: Option<Option<String>>,
     completed_at: Option<Option<String>>,
 ) -> Result<(), sqlx::Error> {
-    ensure_enrichment_row(pool, clip_db_id).await;
+    ensure_enrichment_row_checked(pool, clip_db_id).await?;
     let mut qb = QueryBuilder::<Postgres>::new("UPDATE social_media_clip_enrichment SET status = ");
     qb.push_bind(status.to_string())
         .push(", updated_at = CURRENT_TIMESTAMP");
@@ -283,36 +294,44 @@ pub async fn save_llm_output(
     provider: &str,
     model: Option<&str>,
     cost_usd_estimate: Option<f64>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), ContentMutationError> {
     let json_tags = |p: &PlatformEnrichment| {
         serde_json::to_string(&p.hashtags).unwrap_or_else(|_| "[]".to_string())
     };
     let youtube_tags = json_tags(youtube);
     let tiktok_tags = json_tags(tiktok);
     let instagram_tags = json_tags(instagram);
-    sqlx::query!(
+    let mut transaction = pool.begin().await?;
+    invalidate_clips_for_content_change(
+        transaction.as_mut(),
+        &[i64::from(clip_db_id)],
+        "enrichment_changed",
+    )
+    .await?;
+    sqlx::query(
         "UPDATE social_media_clip_enrichment SET \
             title_youtube = $1, title_tiktok = $2, title_instagram = $3, \
             description_youtube = $4, description_tiktok = $5, description_instagram = $6, \
             hashtags_youtube = $7::text::jsonb, hashtags_tiktok = $8::text::jsonb, hashtags_instagram = $9::text::jsonb, \
             llm_provider = $10, llm_model = $11, cost_usd_estimate = $12::double precision, updated_at = CURRENT_TIMESTAMP \
          WHERE clip_db_id = $13",
-        youtube.title.as_deref(),
-        tiktok.title.as_deref(),
-        instagram.title.as_deref(),
-        youtube.description.as_deref(),
-        tiktok.description.as_deref(),
-        instagram.description.as_deref(),
-        &youtube_tags,
-        &tiktok_tags,
-        &instagram_tags,
-        provider,
-        model,
-        cost_usd_estimate,
-        clip_db_id
     )
-    .execute(pool)
+    .bind(youtube.title.as_deref())
+    .bind(tiktok.title.as_deref())
+    .bind(instagram.title.as_deref())
+    .bind(youtube.description.as_deref())
+    .bind(tiktok.description.as_deref())
+    .bind(instagram.description.as_deref())
+    .bind(&youtube_tags)
+    .bind(&tiktok_tags)
+    .bind(&instagram_tags)
+    .bind(provider)
+    .bind(model)
+    .bind(cost_usd_estimate)
+    .bind(clip_db_id)
+    .execute(transaction.as_mut())
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -378,16 +397,23 @@ pub async fn update_manual_edit(
     hashtags_youtube: Option<&[String]>,
     hashtags_tiktok: Option<&[String]>,
     hashtags_instagram: Option<&[String]>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), ContentMutationError> {
+    let mut transaction = pool.begin().await?;
+    invalidate_clips_for_content_change(
+        transaction.as_mut(),
+        &[i64::from(clip_db_id)],
+        "enrichment_changed",
+    )
+    .await?;
     // Zeile sicherstellen.
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at, edited_by) \
          VALUES ($1, $2, CURRENT_TIMESTAMP, $3) ON CONFLICT (clip_db_id) DO NOTHING",
-        clip_db_id,
-        STATUS_PENDING,
-        edited_by
     )
-    .execute(pool)
+    .bind(clip_db_id)
+    .bind(STATUS_PENDING)
+    .bind(edited_by)
+    .execute(transaction.as_mut())
     .await?;
 
     let mut qb = QueryBuilder::<Postgres>::new(
@@ -424,7 +450,8 @@ pub async fn update_manual_edit(
     }
 
     qb.push(" WHERE clip_db_id = ").push_bind(clip_db_id);
-    qb.build().execute(pool).await?;
+    qb.build().execute(transaction.as_mut()).await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -459,6 +486,13 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_clips_social_media (id BIGINT PRIMARY KEY, status TEXT DEFAULT 'pending')",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT, last_attempt_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         // Minimaltabelle (Spalten wie schema.rs, ohne FK).
         sqlx::query(
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, \
@@ -528,6 +562,27 @@ mod tests {
         assert_eq!(got.hashtags_instagram, Vec::<String>::new());
         assert_eq!(got.llm_provider.as_deref(), Some("ollama"));
         assert_eq!(got.llm_model.as_deref(), Some("llama3"));
+    }
+
+    #[tokio::test]
+    async fn db_und_jsonfehler_werden_nicht_als_leeres_enrichment_getarnt() {
+        let Some(pool) = make_pool("t_sm_enrich_fail_closed").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment (clip_db_id, hashtags_youtube) \
+             VALUES (1, '{}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(get_enrichment_checked(&pool, 1).await.is_err());
+
+        sqlx::query("DROP TABLE social_media_clip_enrichment")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(ensure_enrichment_row_checked(&pool, 2).await.is_err());
     }
 
     #[tokio::test]

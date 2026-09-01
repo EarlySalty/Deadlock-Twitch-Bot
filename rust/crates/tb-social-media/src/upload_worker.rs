@@ -7,41 +7,37 @@
 //! ('approval_required'). An/Aus 1:1 — in Python dauerhaft an (kein Gate).
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
+use uuid::Uuid;
 
 use crate::approval::is_clip_approved_for;
-use crate::clip_queue::{
-    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
-};
+use crate::clip_queue::{get_upload_queue, update_upload_status, UploadQueueItem};
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
+use crate::posting_plan::acquire_release_lock;
+use crate::preparation::{
+    ClipPreparationService, IsolatedClipDownloader, PreparationError, VideoClipRenderer,
+};
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
-use crate::uploaders::{PlatformUploader, UploadError};
-use crate::video_processor::{VideoProcessor, VideoProcessorError};
+use crate::uploaders::PlatformUploader;
+#[cfg(test)]
+use crate::uploaders::UploadError;
+use crate::video_processor::VideoProcessor;
 
 const STALE_AFTER_SECS: i64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 10;
 const DEFAULT_INTERVAL_SECS: u64 = 60;
 const DEFAULT_MAX_PARALLEL: usize = 2;
-const TARGET_WIDTH: i64 = 1080;
-const TARGET_HEIGHT: i64 = 1920;
 
 #[derive(Debug, thiserror::Error)]
 enum WorkerError {
-    #[error("yt-dlp failed: {0}")]
-    Download(String),
     #[error(transparent)]
-    Convert(#[from] VideoProcessorError),
-    #[error(transparent)]
-    Upload(#[from] UploadError),
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
+    Prepare(#[from] PreparationError),
 }
 
 /// Baut den passenden Uploader aus den Credentials (mirror `_build_uploader`).
@@ -108,19 +104,6 @@ pub fn youtube_uploader(creds: &SocialMediaCredentials) -> YouTubeUploader {
     }
 }
 
-/// Maximale Clip-Länge je Plattform (Python: tiktok/youtube 60, instagram 90).
-fn max_duration_for(platform: &str) -> i64 {
-    match platform {
-        "instagram" => 90,
-        _ => 60,
-    }
-}
-
-/// Ausgabepfad der vertikalen Variante (mirror `input.replace(".mp4", ...)`).
-fn vertical_output_path(input_path: &str, platform: &str) -> String {
-    input_path.replace(".mp4", &format!("_{platform}_vertical.mp4"))
-}
-
 /// Parst die Queue-Hashtags (JSON-Array-String) in eine Liste.
 fn parse_hashtags(raw: Option<&str>) -> Vec<String> {
     raw.filter(|s| !s.is_empty())
@@ -128,19 +111,56 @@ fn parse_hashtags(raw: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Bindet kurze Provider-Endzustände an dieselbe Streamer-Sperre wie
+/// Provider-Start und Kill-Switch. Der Netzwerkaufruf ist zu diesem Zeitpunkt
+/// bereits beendet; die Transaktion umfasst ausschließlich den DB-Abschluss.
+async fn lock_provider_outcome(
+    connection: &mut PgConnection,
+    queue_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let streamer_login: Option<String> = sqlx::query_scalar(
+        "SELECT c.streamer_login FROM twitch_clips_upload_queue q \
+         JOIN twitch_clips_social_media c ON c.id = q.clip_id \
+         WHERE q.id = $1",
+    )
+    .bind(queue_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(streamer_login) = streamer_login else {
+        return Ok(false);
+    };
+    acquire_release_lock(connection, &streamer_login).await?;
+    Ok(true)
+}
+
 /// Cheap-clone-barer Verarbeitungskontext (für nebenläufige Uploads).
 #[derive(Clone)]
 struct UploadTask {
     pool: PgPool,
-    video_processor: VideoProcessor,
-    yt_dlp_path: String,
-    clips_dir: String,
+    preparation: ClipPreparationService,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadGate {
+    Live,
+    PrepareOnly,
+    Discarded,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TikTokConfirmationError {
+    Rejected,
+    Uncertain,
 }
 
 impl UploadTask {
     /// Verarbeitet einen Queue-Job; liefert `true` bei Erfolg.
     async fn process(&self, item: UploadQueueItem, uploader: Arc<dyn PlatformUploader>) -> bool {
         let clip_db_id = item.clip_db_id;
+        if !self.release_gate_allows_upload(&item).await {
+            return false;
+        }
         // Approval-Gate: ohne Freigabe direkt failed.
         match is_clip_approved_for(&self.pool, clip_db_id, &item.platform).await {
             Ok(true) => {}
@@ -157,13 +177,10 @@ impl UploadTask {
             }
             Err(e) => {
                 tracing::error!(queue_id = item.id, clip_db_id, %e, "approval check failed before upload");
-                let err = format!("approval_check_failed: {e}");
-                self.update_upload_status_logged(
+                self.park_claimed(
                     &item,
-                    "failed",
-                    None,
-                    Some(&err),
                     "approval_check_failed",
+                    chrono::Duration::minutes(15),
                 )
                 .await;
                 return false;
@@ -181,12 +198,11 @@ impl UploadTask {
                 .await
                 {
                     tracing::error!(queue_id = item.id, %e, "completed-write failed for existing uploaded clip");
-                    let err = format!("completed_write_failed: {e}");
                     self.update_upload_status_logged(
                         &item,
                         "failed",
                         None,
-                        Some(&err),
+                        Some("completed_write_failed"),
                         "completed_write_failed_existing",
                     )
                     .await;
@@ -196,13 +212,10 @@ impl UploadTask {
             Ok(None) => {}
             Err(e) => {
                 tracing::error!(queue_id = item.id, %e, "uploaded-flag check failed before upload");
-                let err = format!("uploaded_flag_check_failed: {e}");
-                self.update_upload_status_logged(
+                self.park_claimed(
                     &item,
-                    "failed",
-                    None,
-                    Some(&err),
                     "uploaded_flag_check_failed",
+                    chrono::Duration::minutes(15),
                 )
                 .await;
                 return false;
@@ -210,16 +223,68 @@ impl UploadTask {
         }
         match self.do_upload(&item).await {
             Ok(converted) => {
-                match uploader
+                if uploader.validate_video(&converted.path).is_err() {
+                    tracing::warn!(queue_id = item.id, platform = %item.platform, "Lokale Provider-Validierung ist fehlgeschlagen");
+                    self.update_upload_status_logged(
+                        &item,
+                        "failed",
+                        None,
+                        Some("video_validation_failed"),
+                        "video_validation_failed",
+                    )
+                    .await;
+                    return false;
+                }
+                // Kurze, commitbare Provider-Lease: Gate prüfen + eindeutigen
+                // Startmarker schreiben, dann erst nach COMMIT ins Netzwerk.
+                // Dadurch hält kein DB-Lock über dem Provider-Aufruf.
+                let provider_lease = match self.begin_provider_upload(&item, &converted).await {
+                    Ok(Some(lease)) => lease,
+                    Ok(None) => return false,
+                    Err(error) => {
+                        tracing::error!(%error, queue_id = item.id, "Provider-Start konnte nicht gesichert werden");
+                        self.park_claimed(
+                            &item,
+                            "release_gate_failed",
+                            chrono::Duration::minutes(15),
+                        )
+                        .await;
+                        return false;
+                    }
+                };
+                let upload_result = uploader
                     .upload_video(
                         &converted.path,
                         &converted.title,
                         &converted.description,
                         &converted.hashtags,
                     )
-                    .await
-                {
+                    .await;
+                match upload_result {
                     Ok(external_id) => {
+                        match self
+                            .record_provider_acceptance(&item, &provider_lease, &external_id)
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                tracing::error!(
+                                    queue_id = item.id,
+                                    "Provider-Annahme gehört nicht mehr zur aktuellen Lease"
+                                );
+                                return false;
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, queue_id = item.id, "Provider-Annahme konnte nicht als Abgleichanker gespeichert werden");
+                                self.mark_provider_reconciliation_required(
+                                    &item,
+                                    &provider_lease,
+                                    "provider_acceptance_write_uncertain",
+                                )
+                                .await;
+                                return false;
+                            }
+                        }
                         // TikTok liefert nur eine `publish_id`, also "zur
                         // Verarbeitung angenommen". Wer das als Erfolg verbucht,
                         // merkt nie, wenn TikTok den Post danach ablehnt.
@@ -229,51 +294,129 @@ impl UploadTask {
                                 .await
                             {
                                 Ok(id) => id,
-                                Err(e) => {
-                                    self.handle_upload_error(&item, &e, "tiktok_publish_failed")
-                                        .await;
+                                Err(TikTokConfirmationError::Rejected) => {
+                                    self.mark_provider_rejected(
+                                        &item,
+                                        &provider_lease,
+                                        "provider_rejected",
+                                    )
+                                    .await;
+                                    tracing::warn!(queue_id = item.id, platform = %item.platform, code = "provider_rejected", "TikTok hat die Veröffentlichung abgelehnt");
+                                    return false;
+                                }
+                                Err(TikTokConfirmationError::Uncertain) => {
+                                    self.mark_provider_reconciliation_required(
+                                        &item,
+                                        &provider_lease,
+                                        "tiktok_publish_uncertain",
+                                    )
+                                    .await;
+                                    tracing::warn!(queue_id = item.id, platform = %item.platform, "TikTok-Ergebnis ist unklar; kein automatischer Wiederholungsversuch");
                                     return false;
                                 }
                             }
                         } else {
                             external_id
                         };
-                        if let Err(e) = update_upload_status(
+                        // TikTok liefert nach dem Poll ggf. erst die echte
+                        // Post-ID. Sie wird vor dem Completion-Schritt erneut
+                        // lease-gebunden persistiert, damit ein Crash genau
+                        // zwischen Poll und Abschluss einen brauchbaren
+                        // Reconciliation-Anker hinterlässt.
+                        match self
+                            .record_provider_acceptance(&item, &provider_lease, &external_id)
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => return false,
+                            Err(error) => {
+                                tracing::error!(queue_id = item.id, code = "provider_acceptance_write_uncertain", error = %error, "Finale Provider-ID konnte nicht gespeichert werden");
+                                self.mark_provider_reconciliation_required(
+                                    &item,
+                                    &provider_lease,
+                                    "provider_acceptance_write_uncertain",
+                                )
+                                .await;
+                                return false;
+                            }
+                        }
+                        match crate::clip_queue::complete_provider_upload(
                             &self.pool,
                             item.id,
-                            "completed",
+                            &provider_lease,
                             Some(&external_id),
-                            None,
                         )
                         .await
                         {
-                            tracing::error!(queue_id = item.id, %e, "completed-write failed after successful upload");
-                            let err = format!("completed_write_failed: {e}");
-                            self.update_upload_status_logged(
-                                &item,
-                                "failed",
-                                None,
-                                Some(&err),
-                                "completed_write_failed_after_upload",
-                            )
-                            .await;
+                            Ok(true) => return true,
+                            Ok(false) => {
+                                tracing::error!(
+                                    queue_id = item.id,
+                                    "Provider-Erfolg gehört nicht mehr zur aktuellen Lease"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(queue_id = item.id, %e, "completed-write failed after successful upload");
+                                self.mark_provider_reconciliation_required(
+                                    &item,
+                                    &provider_lease,
+                                    "completed_write_uncertain",
+                                )
+                                .await;
+                            }
                         }
-                        true
+                        false
                     }
                     Err(e) => {
-                        self.handle_upload_error(&item, &e, "platform_upload_failed")
-                            .await;
+                        self.mark_provider_reconciliation_required(
+                            &item,
+                            &provider_lease,
+                            "provider_result_uncertain",
+                        )
+                        .await;
+                        let _ = e;
+                        tracing::warn!(queue_id = item.id, platform = %item.platform, "Provider-Ergebnis ist unklar; kein automatischer Wiederholungsversuch");
                         false
                     }
                 }
             }
-            Err(e) => {
-                let err = e.to_string();
+            Err(WorkerError::Prepare(PreparationError::Busy(_))) => {
+                self.park_claimed(&item, "preparation_busy", chrono::Duration::minutes(2))
+                    .await;
+                false
+            }
+            Err(WorkerError::Prepare(
+                error @ (PreparationError::Db(_)
+                | PreparationError::Io(_)
+                | PreparationError::Download(_)),
+            )) => {
+                tracing::warn!(
+                    queue_id = item.id,
+                    clip_db_id,
+                    code = error.code(),
+                    "Vorübergehende Clip-Aufbereitung fehlgeschlagen"
+                );
+                self.park_claimed(
+                    &item,
+                    "preparation_transient",
+                    chrono::Duration::minutes(15),
+                )
+                .await;
+                false
+            }
+            Err(WorkerError::Prepare(error)) => {
+                let code = error.code();
+                tracing::warn!(
+                    queue_id = item.id,
+                    clip_db_id,
+                    code,
+                    "Clip-Aufbereitung dauerhaft fehlgeschlagen"
+                );
                 self.update_upload_status_logged(
                     &item,
                     "failed",
                     None,
-                    Some(&err),
+                    Some(code),
                     "upload_worker_failed",
                 )
                 .await;
@@ -287,24 +430,24 @@ impl UploadTask {
         self.update_upload_status_logged(item, "processing", None, None, "processing_start")
             .await;
 
-        let mut local_path = item.local_file_path.clone().unwrap_or_default();
-        if local_path.is_empty() || !Path::new(&local_path).exists() {
-            local_path = self
-                .download_clip(item.clip_url.as_deref().unwrap_or(""), item.clip_db_id)
-                .await?;
-            self.update_upload_status_logged(
-                item,
-                "processing",
-                None,
-                None,
-                "processing_downloaded",
-            )
-            .await;
-        }
-
-        let converted_path = self
-            .convert_to_vertical(&local_path, &item.platform)
-            .await?;
+        let prepared = self.preparation.prepare(item.clip_db_id).await?;
+        let converted_path = prepared
+            .ready_path()
+            .ok_or_else(|| {
+                PreparationError::Renderer(
+                    "Aufbereitung meldet kein gespeichertes Ready-MP4".to_string(),
+                )
+            })?
+            .to_string();
+        let render_fingerprint = prepared
+            .render_fingerprint
+            .clone()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                PreparationError::Renderer(
+                    "Aufbereitung meldet keinen Render-Fingerprint".to_string(),
+                )
+            })?;
         self.update_upload_status_logged(item, "processing", None, None, "processing_converted")
             .await;
 
@@ -316,6 +459,7 @@ impl UploadTask {
             .unwrap_or_default();
         Ok(Converted {
             path: converted_path,
+            render_fingerprint,
             title,
             description: item.description.clone().unwrap_or_default(),
             hashtags: parse_hashtags(item.hashtags.as_deref()),
@@ -343,43 +487,386 @@ impl UploadTask {
         }))
     }
 
-    async fn download_clip(&self, clip_url: &str, clip_db_id: i64) -> Result<String, WorkerError> {
-        tokio::fs::create_dir_all(&self.clips_dir).await?;
-        let output_path = format!("{}/{}.mp4", self.clips_dir, clip_db_id);
-        if Path::new(&output_path).exists() {
-            return Ok(output_path);
-        }
-        let output = tokio::process::Command::new(&self.yt_dlp_path)
-            .args(["-f", "best", "-o", &output_path, clip_url])
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(WorkerError::Download(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
-        }
-        if !Path::new(&output_path).exists() {
-            return Err(WorkerError::Download(format!(
-                "Downloaded file not found: {output_path}"
-            )));
-        }
-        if let Err(error) = sqlx::query!(
-            "UPDATE twitch_clips_social_media SET local_file_path = $1, downloaded_at = $2::text::timestamptz WHERE id = $3",
-            &output_path,
-            Utc::now().to_rfc3339(),
-            clip_db_id
-        )
+    /// Reserviert genau einen externen Provider-Aufruf unter derselben kurzen
+    /// Streamer-Sperre wie der Kill-Switch. Nach dem Commit ist die Lease eine
+    /// absichtlich nicht zeitbasiert reclaimbare, möglicherweise bereits beim
+    /// Provider sichtbare Operation.
+    async fn begin_provider_upload(
+        &self,
+        item: &UploadQueueItem,
+        converted: &Converted,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let streamer_login = item
+            .streamer_login
+            .as_deref()
+            .map(str::trim)
+            .filter(|login| !login.is_empty());
+        let Some(streamer_login) = streamer_login else {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'streamer_missing', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
             .execute(&self.pool)
-            .await
-        {
-            tracing::warn!(
-                %error,
-                clip_db_id,
-                path = %output_path,
-                "Upload-Worker: lokaler Clip-Pfad konnte nicht gespeichert werden"
-            );
+            .await?;
+            return Ok(None);
+        };
+
+        let mut transaction = self.pool.begin().await?;
+        acquire_release_lock(transaction.as_mut(), streamer_login).await?;
+        let preparation: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT state, render_fingerprint, render_path \
+             FROM social_media_clip_preparation WHERE clip_db_id = $1 FOR UPDATE",
+        )
+        .bind(item.clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let gate = self
+            .release_gate_in(transaction.as_mut(), item.clip_db_id)
+            .await?;
+        let queue_locked: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM twitch_clips_upload_queue \
+             WHERE id = $1 AND clip_id = $2 AND platform = $3 \
+               AND status = 'processing' AND provider_started_at IS NULL FOR UPDATE",
+        )
+        .bind(item.id)
+        .bind(item.clip_db_id)
+        .bind(&item.platform)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        if queue_locked.is_none() {
+            transaction.commit().await?;
+            return Ok(None);
         }
-        Ok(output_path)
+        let provider_calls_enabled: bool = sqlx::query_scalar(
+            "SELECT COALESCE(( \
+                 SELECT a.provider_calls_enabled FROM social_media_platform_auth a \
+                  WHERE a.platform = $1 AND a.enabled = 1 AND ( \
+                        LOWER(a.streamer_login) = LOWER($2) OR a.streamer_login IS NULL) \
+                  ORDER BY CASE WHEN LOWER(a.streamer_login) = LOWER($2) THEN 1 ELSE 0 END DESC, \
+                           a.id DESC LIMIT 1 \
+             ), FALSE)",
+        )
+        .bind(&item.platform)
+        .bind(streamer_login)
+        .fetch_one(transaction.as_mut())
+        .await?;
+        // TikTok Direct Post bleibt unabhängig von OAuth, globalem Live-Modus
+        // und provider_calls_enabled gesperrt, bis eine explizite per-Clip-
+        // Consent-/Privacy-/Interaktions-UX gespeichert und hier geprüft wird.
+        if item.platform == "tiktok" {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'tiktok_consent_required', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        if !provider_calls_enabled {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'platform_release_blocked', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        let cadence_enabled: bool = sqlx::query_scalar(
+            "SELECT COALESCE((SELECT auto_post AND posts_per_week > 0 AND max_posts_per_day > 0 \
+                FROM social_media_platform_schedule \
+               WHERE LOWER(streamer_login) = LOWER($1) AND platform = $2), FALSE)",
+        )
+        .bind(streamer_login)
+        .bind(&item.platform)
+        .fetch_one(transaction.as_mut())
+        .await?;
+        if !cadence_enabled {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'platform_paused', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        if gate != UploadGate::Live {
+            let (status, error) = match gate {
+                UploadGate::PrepareOnly => ("pending", "release_disabled"),
+                UploadGate::Discarded => ("failed", "clip_discarded"),
+                UploadGate::Missing => ("failed", "clip_not_found"),
+                UploadGate::Live => unreachable!(),
+            };
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = $2, last_error = $3, \
+                 last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .bind(status)
+            .bind(error)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+
+        let approval: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT state, approved_platforms::text, approved_render_fingerprint \
+             FROM social_media_clip_approval WHERE clip_db_id = $1 FOR UPDATE",
+        )
+        .bind(item.clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let approved_for_render = match (preparation, approval) {
+            (
+                Some((preparation_state, Some(render_fingerprint), Some(render_path))),
+                Some((approval_state, approved_platforms, Some(approved_fingerprint))),
+            ) => {
+                let platforms = parse_hashtags(Some(&approved_platforms));
+                preparation_state == "preview_ready"
+                    && approval_state == "approved"
+                    && platforms.contains(&item.platform)
+                    && render_fingerprint == approved_fingerprint
+                    && render_fingerprint == converted.render_fingerprint
+                    && render_path == converted.path
+                    && crate::preparation::stored_file_is_regular_nonempty(&render_path)
+            }
+            _ => false,
+        };
+        if !approved_for_render {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'approval_or_preview_changed', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+
+        let lease_token = Uuid::new_v4().to_string();
+        let updated = sqlx::query(
+            "UPDATE twitch_clips_upload_queue q \
+             SET provider_started_at = CURRENT_TIMESTAMP, provider_lease_token = $2, \
+                 last_attempt_at = CURRENT_TIMESTAMP, last_error = NULL \
+             WHERE q.id = $1 AND q.status = 'processing' \
+               AND q.provider_started_at IS NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM twitch_clips_upload_queue other \
+                   WHERE other.clip_id = q.clip_id AND other.platform = q.platform \
+                     AND other.id <> q.id AND other.provider_started_at IS NOT NULL \
+                     AND other.status IN ('processing', 'reconciliation_required') \
+               )",
+        )
+        .bind(item.id)
+        .bind(&lease_token)
+        .execute(&mut *transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'failed', \
+                 last_error = 'provider_attempt_exists', last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+            )
+            .bind(item.id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        transaction.commit().await?;
+        Ok(Some(lease_token))
+    }
+
+    async fn mark_provider_reconciliation_required(
+        &self,
+        item: &UploadQueueItem,
+        provider_lease_token: &str,
+        error_code: &'static str,
+    ) {
+        let result = async {
+            let mut transaction = self.pool.begin().await?;
+            if !lock_provider_outcome(transaction.as_mut(), item.id).await? {
+                transaction.commit().await?;
+                return Ok::<(), sqlx::Error>(());
+            }
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue \
+                 SET status = 'reconciliation_required', last_error = $3, \
+                     last_attempt_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND provider_lease_token = $2 \
+                   AND provider_started_at IS NOT NULL AND status = 'processing'",
+            )
+            .bind(item.id)
+            .bind(provider_lease_token)
+            .bind(error_code)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::error!(%error, queue_id = item.id, error_code, "Unklarer Provider-Versuch konnte nicht geparkt werden");
+        }
+    }
+
+    async fn mark_provider_rejected(
+        &self,
+        item: &UploadQueueItem,
+        provider_lease_token: &str,
+        error_code: &'static str,
+    ) {
+        let result = async {
+            let mut transaction = self.pool.begin().await?;
+            if !lock_provider_outcome(transaction.as_mut(), item.id).await? {
+                transaction.commit().await?;
+                return Ok::<(), sqlx::Error>(());
+            }
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue \
+                 SET status = 'failed', last_error = $3, completed_at = clock_timestamp(), \
+                     last_attempt_at = clock_timestamp() \
+                 WHERE id = $1 AND provider_lease_token = $2 \
+                   AND provider_started_at IS NOT NULL AND status = 'processing'",
+            )
+            .bind(item.id)
+            .bind(provider_lease_token)
+            .bind(error_code)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::error!(%error, queue_id = item.id, error_code, "Provider-Ablehnung konnte nicht gespeichert werden");
+        }
+    }
+
+    async fn record_provider_acceptance(
+        &self,
+        item: &UploadQueueItem,
+        provider_lease_token: &str,
+        external_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        if !lock_provider_outcome(transaction.as_mut(), item.id).await? {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        let updated = sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET provider_external_id = $3, \
+             provider_accepted_at = CURRENT_TIMESTAMP \
+             WHERE id = $1 AND provider_lease_token = $2 \
+               AND provider_started_at IS NOT NULL AND status = 'processing'",
+        )
+        .bind(item.id)
+        .bind(provider_lease_token)
+        .bind(external_id)
+        .execute(transaction.as_mut())
+        .await?;
+        transaction.commit().await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    async fn release_gate(&self, clip_db_id: i64) -> Result<UploadGate, sqlx::Error> {
+        let row: Option<(bool, String)> = sqlx::query_as(
+            "SELECT c.discarded_at IS NOT NULL, COALESCE(s.release_mode, 'prepare_only') \
+               FROM twitch_clips_social_media c \
+               LEFT JOIN social_media_streamer_settings s \
+                 ON LOWER(s.streamer_login) = LOWER(c.streamer_login) \
+              WHERE c.id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match row {
+            None => UploadGate::Missing,
+            Some((true, _)) => UploadGate::Discarded,
+            Some((false, mode)) if mode == "live" => UploadGate::Live,
+            Some(_) => UploadGate::PrepareOnly,
+        })
+    }
+
+    async fn release_gate_in(
+        &self,
+        connection: &mut PgConnection,
+        clip_db_id: i64,
+    ) -> Result<UploadGate, sqlx::Error> {
+        let row: Option<(bool, String)> = sqlx::query_as(
+            "SELECT c.discarded_at IS NOT NULL, COALESCE(s.release_mode, 'prepare_only') \
+               FROM twitch_clips_social_media c \
+               LEFT JOIN social_media_streamer_settings s \
+                 ON LOWER(s.streamer_login) = LOWER(c.streamer_login) \
+              WHERE c.id = $1 FOR UPDATE OF c",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(&mut *connection)
+        .await?;
+        Ok(match row {
+            None => UploadGate::Missing,
+            Some((true, _)) => UploadGate::Discarded,
+            Some((false, mode)) if mode == "live" => UploadGate::Live,
+            Some(_) => UploadGate::PrepareOnly,
+        })
+    }
+
+    async fn release_gate_allows_upload(&self, item: &UploadQueueItem) -> bool {
+        let (allowed, status, error) = match self.release_gate(item.clip_db_id).await {
+            Ok(UploadGate::Live) => return true,
+            Ok(UploadGate::PrepareOnly) => (false, "pending", "release_disabled"),
+            Ok(UploadGate::Discarded) => (false, "failed", "clip_discarded"),
+            Ok(UploadGate::Missing) => (false, "failed", "clip_not_found"),
+            Err(error) => {
+                tracing::error!(%error, queue_id = item.id, "Release-Gate konnte nicht geprüft werden");
+                (false, "pending", "release_gate_failed")
+            }
+        };
+        if let Err(db_error) = sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET status = $2, last_error = $3, \
+             last_attempt_at = CURRENT_TIMESTAMP \
+             WHERE id = $1 AND status <> 'completed' AND provider_started_at IS NULL",
+        )
+        .bind(item.id)
+        .bind(status)
+        .bind(error)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%db_error, queue_id = item.id, "Release-Gate-Status konnte nicht gespeichert werden");
+        }
+        allowed
+    }
+
+    async fn park_claimed(&self, item: &UploadQueueItem, error: &str, delay: chrono::Duration) {
+        let scheduled_at = (Utc::now() + delay).to_rfc3339();
+        if let Err(db_error) = sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = $2, \
+             scheduled_at = $3::text::timestamptz, last_attempt_at = CURRENT_TIMESTAMP \
+             WHERE id = $1 AND status = 'processing' AND provider_started_at IS NULL",
+        )
+        .bind(item.id)
+        .bind(error)
+        .bind(scheduled_at)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%db_error, queue_id = item.id, error, "Geclaimter Upload konnte nicht zurückgestellt werden");
+        }
     }
 
     /// Wie lange auf die Veroeffentlichungsbestaetigung von TikTok gewartet
@@ -397,7 +884,7 @@ impl UploadTask {
         item: &UploadQueueItem,
         uploader: &dyn PlatformUploader,
         publish_id: &str,
-    ) -> Result<String, UploadError> {
+    ) -> Result<String, TikTokConfirmationError> {
         let start = std::time::Instant::now();
         loop {
             let status = uploader.get_video_status(publish_id).await;
@@ -420,13 +907,7 @@ impl UploadTask {
                     return Ok(post_id);
                 }
                 "FAILED" => {
-                    let grund = status
-                        .get("fail_reason")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unbekannt");
-                    return Err(UploadError::Api(format!(
-                        "TikTok hat den Post abgelehnt: {grund}"
-                    )));
+                    return Err(TikTokConfirmationError::Rejected);
                 }
                 _ => {}
             }
@@ -438,96 +919,9 @@ impl UploadTask {
                     "TikTok hat den Post im Zeitfenster nicht bestaetigt; \
                      Eintrag bleibt bei der publish_id, kein zweiter Upload"
                 );
-                return Ok(publish_id.to_string());
+                return Err(TikTokConfirmationError::Uncertain);
             }
             tokio::time::sleep(Self::TIKTOK_BESTAETIGUNG_ABSTAND).await;
-        }
-    }
-
-    /// Wie viele Anlaeufe ein Job bekommt, bevor er wirklich als kaputt gilt.
-    /// Ein erschoepftes Kontingent zaehlt nicht mit, dort geht es nur um den
-    /// Termin.
-    const MAX_VERSUCHE: i32 = 5;
-
-    /// Wie oft ein Job wegen vollem Tageskontingent vertagt werden darf.
-    ///
-    /// Eigenes, deutlich hoeheres Konto als [`Self::MAX_VERSUCHE`]: ein voller
-    /// Tag beim Anbieter ist Alltag und darf die Versuchsgrenze nicht anfassen.
-    /// Endlos vertagen darf sich ein Job aber auch nicht, sonst haengt ein
-    /// dauerhaft abgelehnter Upload (falsche Projekt-Quota, gesperrte App) fuer
-    /// immer in der Warteschlange. Bei 24 Stunden Abstand sind 30 Vertagungen
-    /// rund ein Monat; wer danach immer noch am Kontingent scheitert, hat kein
-    /// Tagesproblem.
-    const MAX_KONTINGENT_VERTAGUNGEN: i32 = 30;
-
-    /// Auf welches Konto die Vertagung dieses Fehlers geht.
-    fn konto_fuer(error: &UploadError) -> VertagungsKonto {
-        match error {
-            UploadError::QuotaExceeded(_) => VertagungsKonto::Kontingent,
-            _ => VertagungsKonto::Versuch,
-        }
-    }
-
-    /// `true`, wenn das zustaendige Konto mit dieser Vertagung voll waere.
-    /// Ohne IO, damit die Grenzen ohne Datenbank pruefbar bleiben.
-    fn konto_erschoepft(
-        konto: VertagungsKonto,
-        attempts: i32,
-        kontingent_vertagungen: i32,
-    ) -> bool {
-        match konto {
-            VertagungsKonto::Versuch => attempts + 1 >= Self::MAX_VERSUCHE,
-            VertagungsKonto::Kontingent => {
-                kontingent_vertagungen + 1 >= Self::MAX_KONTINGENT_VERTAGUNGEN
-            }
-        }
-    }
-
-    /// Trennt "kaputt" von "spaeter nochmal". Frueher landete jeder Fehler auf
-    /// `failed`, und `failed` holt die Warteschlange nie wieder ab: ein einziges
-    /// 502 oder ein volles Tageskontingent hat den Clip endgueltig verbrannt.
-    async fn handle_upload_error(
-        &self,
-        item: &UploadQueueItem,
-        error: &UploadError,
-        context: &'static str,
-    ) {
-        let text = error.to_string();
-        let verzoegerung = verzoegerung_fuer(error);
-        // Ein volles Tageskontingent sagt nichts ueber den Clip. Es darf
-        // deshalb das Versuchskonto weder pruefen noch verbrauchen: sonst
-        // haben vier Kontingent-Vertagungen den Clip so weit aufgezehrt, dass
-        // die erste voruebergehende Stoerung ihn endgueltig verbrennt.
-        // Umgekehrt bekommt es ein eigenes Konto, damit ein dauerhaft
-        // abgelehnter Job nicht ewig alle 24 Stunden wiederkehrt.
-        let konto = Self::konto_fuer(error);
-        let erschoepft = Self::konto_erschoepft(konto, item.attempts, item.quota_deferrals);
-        match verzoegerung {
-            Some(dauer) if !erschoepft => {
-                let naechster = (Utc::now() + dauer).to_rfc3339();
-                if let Err(db_error) =
-                    reschedule_upload(&self.pool, item.id, &naechster, Some(&text), konto).await
-                {
-                    tracing::warn!(
-                        error = %db_error,
-                        queue_id = item.id,
-                        platform = %item.platform,
-                        "Neuer Termin konnte nicht gesetzt werden"
-                    );
-                    return;
-                }
-                tracing::info!(
-                    queue_id = item.id,
-                    platform = %item.platform,
-                    naechster_versuch = %naechster,
-                    grund = %text,
-                    "Upload vertagt statt verworfen"
-                );
-            }
-            _ => {
-                self.update_upload_status_logged(item, "failed", None, Some(&text), context)
-                    .await;
-            }
         }
     }
 
@@ -559,31 +953,11 @@ impl UploadTask {
             );
         }
     }
-
-    async fn convert_to_vertical(
-        &self,
-        input_path: &str,
-        platform: &str,
-    ) -> Result<String, WorkerError> {
-        let output_path = vertical_output_path(input_path, platform);
-        if Path::new(&output_path).exists() {
-            return Ok(output_path);
-        }
-        self.video_processor
-            .convert_and_trim(
-                input_path,
-                &output_path,
-                max_duration_for(platform),
-                TARGET_WIDTH,
-                TARGET_HEIGHT,
-            )
-            .await?;
-        Ok(output_path)
-    }
 }
 
 struct Converted {
     path: String,
+    render_fingerprint: String,
     title: String,
     description: String,
     hashtags: Vec<String>,
@@ -605,10 +979,13 @@ impl UploadWorker {
     pub fn new(pool: PgPool, credentials: CredentialManager) -> Self {
         Self {
             task: UploadTask {
+                preparation: ClipPreparationService::new(pool.clone()).with_renderer(Arc::new(
+                    VideoClipRenderer::new(VideoProcessor::new(
+                        "/usr/bin/ffmpeg",
+                        "/usr/bin/ffprobe",
+                    )),
+                )),
                 pool,
-                video_processor: VideoProcessor::default(),
-                yt_dlp_path: "yt-dlp".to_string(),
-                clips_dir: "data/clips".to_string(),
             },
             credentials,
             max_parallel: DEFAULT_MAX_PARALLEL,
@@ -616,18 +993,26 @@ impl UploadWorker {
         }
     }
 
-    pub fn with_yt_dlp(mut self, path: impl Into<String>) -> Self {
-        self.task.yt_dlp_path = path.into();
+    pub fn with_isolated_downloader(mut self) -> Self {
+        self.task.preparation = self
+            .task
+            .preparation
+            .clone()
+            .with_downloader(Arc::new(IsolatedClipDownloader::new()));
         self
     }
 
     pub fn with_clips_dir(mut self, dir: impl Into<String>) -> Self {
-        self.task.clips_dir = dir.into();
+        self.task.preparation = self.task.preparation.clone().with_clips_dir(dir.into());
         self
     }
 
     pub fn with_video_processor(mut self, vp: VideoProcessor) -> Self {
-        self.task.video_processor = vp;
+        self.task.preparation = self
+            .task
+            .preparation
+            .clone()
+            .with_renderer(Arc::new(VideoClipRenderer::new(vp)));
         self
     }
 
@@ -654,16 +1039,31 @@ impl UploadWorker {
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
     /// hochladen.
     pub async fn run_once(&self) {
-        let scan_limit = (self.max_parallel * 10).max(self.max_parallel) as i64;
+        // `get_upload_queue` claimt atomar. Deshalb nie mehr Jobs holen als in
+        // diesem Lauf wirklich verarbeitet oder sichtbar zurückgestellt werden.
+        let scan_limit = self.max_parallel as i64;
         let stale_cutoff = (Utc::now() - chrono::Duration::seconds(STALE_AFTER_SECS)).to_rfc3339();
-        let queue = get_upload_queue(
+        let queue = match get_upload_queue(
             &self.task.pool,
             None,
             "pending",
             scan_limit,
             Some(&stale_cutoff),
         )
-        .await;
+        .await
+        {
+            Ok(queue) => queue,
+            Err(error) => {
+                tracing::error!(
+                    code = "upload_queue_claim_failed",
+                    database_code = ?error
+                        .as_database_error()
+                        .and_then(|database| database.code()),
+                    "Social-Media-Upload-Queue konnte nicht sicher geclaimt werden"
+                );
+                return;
+            }
+        };
         if queue.is_empty() {
             return;
         }
@@ -679,6 +1079,10 @@ impl UploadWorker {
                 if batch.len() >= self.max_parallel {
                     break;
                 }
+            } else {
+                self.task
+                    .park_claimed(&item, "credentials_missing", chrono::Duration::minutes(30))
+                    .await;
             }
         }
         if batch.is_empty() {
@@ -686,13 +1090,31 @@ impl UploadWorker {
         }
 
         let mut set = tokio::task::JoinSet::new();
+        let mut recovery = HashMap::new();
         for (item, uploader) in batch {
+            let recovery_item = item.clone();
             let task = self.task.clone();
-            set.spawn(async move { task.process(item, uploader).await });
+            let abort = set.spawn(async move { task.process(item, uploader).await });
+            recovery.insert(abort.id(), recovery_item);
         }
-        while let Some(result) = set.join_next().await {
-            if let Err(error) = result {
-                tracing::error!(%error, "Upload-Worker: Upload-Task fehlerhaft beendet");
+        while let Some(result) = set.join_next_with_id().await {
+            match result {
+                Ok((id, _)) => {
+                    recovery.remove(&id);
+                }
+                Err(error) => {
+                    let item = recovery.remove(&error.id());
+                    tracing::error!(%error, "Upload-Worker: Upload-Task fehlerhaft beendet");
+                    if let Some(item) = item {
+                        self.task
+                            .park_claimed(
+                                &item,
+                                "upload_task_panicked",
+                                chrono::Duration::minutes(15),
+                            )
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -708,60 +1130,8 @@ impl UploadWorker {
     }
 }
 
-/// Wartezeit bis zum naechsten Anlauf, oder `None`, wenn der Fehler beim
-/// naechsten Mal genauso auftritt. Bewusst als freie Funktion, damit die
-/// Einordnung ohne Datenbank pruefbar ist.
-fn verzoegerung_fuer(error: &UploadError) -> Option<chrono::Duration> {
-    match error {
-        // Kontingent voll: das heilt keine Wiederholung in fuenf Minuten, aber
-        // morgen ist es wieder da. Der Clip selbst ist in Ordnung.
-        UploadError::QuotaExceeded(_) => Some(chrono::Duration::hours(24)),
-        // Voruebergehende Stoerung der Gegenseite oder der Leitung.
-        UploadError::Request(_) => Some(chrono::Duration::minutes(15)),
-        // Abgelaufener Zugang: der Refresh-Worker laeuft alle fuenf Minuten,
-        // ein Anlauf spaeter kann also schon wieder gehen.
-        UploadError::NotAuthenticated => Some(chrono::Duration::minutes(30)),
-        // Validierung, API-Ablehnung, IO, nicht implementiert: bleibt kaputt.
-        UploadError::Validation(_)
-        | UploadError::Api(_)
-        | UploadError::NotImplemented(_)
-        | UploadError::Io(_) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn fehler_einordnung_trennt_vertagen_von_verwerfen() {
-        use super::verzoegerung_fuer;
-        use crate::uploaders::UploadError;
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::QuotaExceeded("voll".into())),
-            Some(chrono::Duration::hours(24))
-        );
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::Request("timeout".into())),
-            Some(chrono::Duration::minutes(15))
-        );
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::NotAuthenticated),
-            Some(chrono::Duration::minutes(30))
-        );
-        // Diese vier bleiben beim naechsten Anlauf genauso kaputt.
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::Validation("zu lang".into())),
-            None
-        );
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::Api("invalidTitle".into())),
-            None
-        );
-        assert_eq!(
-            verzoegerung_fuer(&UploadError::NotImplemented("kein Scope".into())),
-            None
-        );
-    }
-
     use super::*;
     use serde_json::Value;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -818,13 +1188,7 @@ mod tests {
 
     #[test]
     fn helper_funktionen() {
-        assert_eq!(max_duration_for("tiktok"), 60);
-        assert_eq!(max_duration_for("youtube"), 60);
-        assert_eq!(max_duration_for("instagram"), 90);
-        assert_eq!(
-            vertical_output_path("data/clips/5.mp4", "tiktok"),
-            "data/clips/5_tiktok_vertical.mp4"
-        );
+        assert_eq!(crate::preparation::PREPARATION_MAX_DURATION_SECS, 60);
         assert_eq!(
             parse_hashtags(Some("[\"a\",\"b\"]")),
             vec!["a".to_string(), "b".to_string()]
@@ -926,10 +1290,15 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1, provider_calls_enabled BOOLEAN NOT NULL DEFAULT TRUE)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, upload_local_path TEXT, converted_file_path TEXT, downloaded_at TIMESTAMPTZ, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, release_mode TEXT NOT NULL DEFAULT 'live')",
+            "INSERT INTO social_media_streamer_settings (streamer_login) VALUES ('nani')",
+            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT TRUE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (streamer_login, platform))",
+            "INSERT INTO social_media_platform_schedule (streamer_login, platform) VALUES ('nani','tiktok'),('nani','youtube'),('nani','instagram')",
+            "CREATE TABLE social_media_clip_preparation (clip_db_id BIGINT PRIMARY KEY REFERENCES twitch_clips_social_media(id), state TEXT NOT NULL DEFAULT 'pending', lease_token TEXT, source_fingerprint TEXT, render_fingerprint TEXT, render_path TEXT, error_code TEXT, error_message TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -964,9 +1333,12 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, upload_local_path TEXT, converted_file_path TEXT, downloaded_at TIMESTAMPTZ, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, release_mode TEXT NOT NULL DEFAULT 'live')",
+            "INSERT INTO social_media_streamer_settings (streamer_login) VALUES ('nani')",
+            "CREATE TABLE social_media_clip_preparation (clip_db_id BIGINT PRIMARY KEY REFERENCES twitch_clips_social_media(id), state TEXT NOT NULL DEFAULT 'pending', lease_token TEXT, source_fingerprint TEXT, render_fingerprint TEXT, render_path TEXT, error_code TEXT, error_message TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -984,12 +1356,33 @@ mod tests {
         .unwrap();
     }
 
+    struct CopyRenderer;
+
+    #[async_trait::async_trait]
+    impl crate::preparation::ClipRenderer for CopyRenderer {
+        async fn compose_and_trim(
+            &self,
+            source: &std::path::Path,
+            destination: &std::path::Path,
+            _layout: &crate::layout::StreamerLayout,
+            max_duration_secs: i64,
+        ) -> Result<(), PreparationError> {
+            assert_eq!(max_duration_secs, 60);
+            if let Some(parent) = destination.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::copy(source, destination).await?;
+            Ok(())
+        }
+    }
+
     fn task(pool: PgPool) -> UploadTask {
+        let clips_dir = unique_temp_dir("upload_task");
         UploadTask {
+            preparation: ClipPreparationService::new(pool.clone())
+                .with_clips_dir(clips_dir)
+                .with_renderer(Arc::new(CopyRenderer)),
             pool,
-            video_processor: VideoProcessor::default(),
-            yt_dlp_path: "yt-dlp".to_string(),
-            clips_dir: std::env::temp_dir().to_string_lossy().into_owned(),
         }
     }
 
@@ -1074,6 +1467,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credentials_missing_stellt_claim_sichtbar_und_verzoegert_zurueck() {
+        let Some(pool) = make_pool("t_sm_upload_credentials_missing").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('missing-creds', 'https://clips.twitch.tv/FancyClip', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let queue_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'tiktok', 'processing') RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let item = upload_item(queue_id, clip, None);
+
+        task(pool.clone())
+            .park_claimed(&item, "credentials_missing", chrono::Duration::minutes(30))
+            .await;
+
+        let (status, error, delayed): (String, Option<String>, bool) = sqlx::query_as(
+            "SELECT status, last_error, scheduled_at > CURRENT_TIMESTAMP \
+             FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
+        assert_eq!(error.as_deref(), Some("credentials_missing"));
+        assert!(delayed);
+    }
+
+    #[tokio::test]
+    async fn tiktok_providerstart_bleibt_trotz_live_und_providerfreigabe_gesperrt() {
+        let Some(pool) = make_pool("t_sm_upload_tiktok_consent_gate").await else {
+            return;
+        };
+        let dir = unique_temp_dir("tiktok_consent_gate");
+        let render = dir.join("render.mp4");
+        std::fs::write(&render, b"rendered").unwrap();
+        let render_path = render.to_string_lossy().into_owned();
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('consent-gate', 'https://clips.test/consent-gate', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_auth \
+             (platform, streamer_login, provider_calls_enabled) \
+             VALUES ('tiktok', 'nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation \
+             (clip_db_id, state, render_fingerprint, render_path) \
+             VALUES ($1, 'preview_ready', 'render-v1', $2)",
+        )
+        .bind(clip)
+        .bind(&render_path)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval \
+             (clip_db_id, state, approved_platforms, approved_render_fingerprint) \
+             VALUES ($1, 'approved', '[\"tiktok\"]'::jsonb, 'render-v1')",
+        )
+        .bind(i32::try_from(clip).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let queue_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'tiktok', 'processing') RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let item = upload_item(queue_id, clip, Some(render_path.clone()));
+        let converted = Converted {
+            path: render_path,
+            render_fingerprint: "render-v1".to_string(),
+            title: String::new(),
+            description: String::new(),
+            hashtags: Vec::new(),
+        };
+
+        assert!(task(pool.clone())
+            .begin_provider_upload(&item, &converted)
+            .await
+            .unwrap()
+            .is_none());
+        let (status, error, started): (String, Option<String>, bool) = sqlx::query_as(
+            "SELECT status, last_error, provider_started_at IS NOT NULL \
+             FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(error.as_deref(), Some("tiktok_consent_required"));
+        assert!(!started);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn completed_write_failure_after_success_marks_failed() {
         let Some(pool) = make_completed_write_error_pool("t_sm_upload_completed_write_fail").await
         else {
@@ -1130,185 +1641,6 @@ mod tests {
             .starts_with("completed_write_failed:"));
 
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// Ein erschoepftes Tageskontingent vertagt, verbraucht aber keinen
-    /// Anlauf. Vorher zaehlte jede Kontingent-Vertagung mit, und nach vier
-    /// davon hat die erste voruebergehende Stoerung den Clip endgueltig auf
-    /// `failed` gesetzt, obwohl er nie wirklich abgelehnt wurde.
-    #[tokio::test]
-    async fn kontingent_vertagt_ohne_versuch_zu_verbrauchen() {
-        let Some(pool) = make_pool("t_sm_upload_kontingent").await else {
-            return;
-        };
-        let clip: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
-             VALUES ('q1', 'https://clips.test/q1', 'nani') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let queue_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
-             VALUES ($1, 'youtube', 'processing') RETURNING id",
-        )
-        .bind(clip)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let task = task(pool.clone());
-        let mut item = upload_item(queue_id, clip, None);
-        for _ in 0..4 {
-            task.handle_upload_error(
-                &item,
-                &UploadError::QuotaExceeded("quotaExceeded".into()),
-                "test_quota",
-            )
-            .await;
-        }
-        let (status, attempts): (String, i32) = sqlx::query_as(
-            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
-        )
-        .bind(queue_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(status, "pending");
-        assert_eq!(
-            attempts, 0,
-            "ein volles Tageskontingent darf das Versuchskonto nicht aufzehren"
-        );
-
-        // Und danach steht der volle Vorrat fuer echte Stoerungen bereit.
-        item.attempts = attempts;
-        task.handle_upload_error(&item, &UploadError::Request("timeout".into()), "test_request")
-            .await;
-        let (status, attempts): (String, i32) = sqlx::query_as(
-            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
-        )
-        .bind(queue_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(status, "pending");
-        assert_eq!(attempts, 1);
-    }
-
-    /// Kontingent-Vertagungen haben ein eigenes Konto, und dieses Konto ist
-    /// endlich. Frueher vertagte sich ein dauerhaft abgelehnter Job alle 24
-    /// Stunden endlos, weil `erschoepft` fuer Kontingent-Fehler immer `false`
-    /// war.
-    #[test]
-    fn kontingent_hat_eigene_endliche_obergrenze() {
-        use super::UploadTask;
-        use crate::clip_queue::VertagungsKonto;
-        use crate::uploaders::UploadError;
-
-        let kontingent = UploadTask::konto_fuer(&UploadError::QuotaExceeded("voll".into()));
-        assert_eq!(kontingent, VertagungsKonto::Kontingent);
-        assert_eq!(
-            UploadTask::konto_fuer(&UploadError::Request("timeout".into())),
-            VertagungsKonto::Versuch
-        );
-
-        // Das Kontingent-Konto ist deutlich groesser als das Versuchskonto.
-        const { assert!(UploadTask::MAX_KONTINGENT_VERTAGUNGEN > UploadTask::MAX_VERSUCHE) };
-
-        // Viele Kontingent-Vertagungen lassen das Versuchskonto unberuehrt.
-        assert!(!UploadTask::konto_erschoepft(
-            VertagungsKonto::Kontingent,
-            UploadTask::MAX_VERSUCHE + 10,
-            0
-        ));
-
-        // Unterhalb der Grenze wird weiter vertagt.
-        assert!(!UploadTask::konto_erschoepft(
-            VertagungsKonto::Kontingent,
-            0,
-            UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 2
-        ));
-        // An der Grenze ist Schluss.
-        assert!(UploadTask::konto_erschoepft(
-            VertagungsKonto::Kontingent,
-            0,
-            UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1
-        ));
-
-        // Das Versuchskonto haengt weiter nur an `attempts`.
-        assert!(!UploadTask::konto_erschoepft(
-            VertagungsKonto::Versuch,
-            UploadTask::MAX_VERSUCHE - 2,
-            UploadTask::MAX_KONTINGENT_VERTAGUNGEN
-        ));
-        assert!(UploadTask::konto_erschoepft(
-            VertagungsKonto::Versuch,
-            UploadTask::MAX_VERSUCHE - 1,
-            0
-        ));
-    }
-
-    /// Der Weg durch die Datenbank: das Kontingent-Konto laeuft mit, und wenn es
-    /// voll ist, geht der Job auf `failed` statt sich weiter zu vertagen.
-    #[tokio::test]
-    async fn kontingent_konto_laeuft_voll_und_verwirft() {
-        let Some(pool) = make_pool("t_sm_upload_kontingent_grenze").await else {
-            return;
-        };
-        let clip: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
-             VALUES ('q2', 'https://clips.test/q2', 'nani') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let queue_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
-             VALUES ($1, 'youtube', 'processing') RETURNING id",
-        )
-        .bind(clip)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let task = task(pool.clone());
-        let mut item = upload_item(queue_id, clip, None);
-        item.platform = "youtube".to_string();
-        for _ in 0..UploadTask::MAX_KONTINGENT_VERTAGUNGEN {
-            task.handle_upload_error(
-                &item,
-                &UploadError::QuotaExceeded("quotaExceeded".into()),
-                "test_quota_grenze",
-            )
-            .await;
-            let (attempts, vertagungen): (i32, i32) = sqlx::query_as(
-                "SELECT attempts, quota_deferrals FROM twitch_clips_upload_queue WHERE id = $1",
-            )
-            .bind(queue_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            item.attempts = attempts;
-            item.quota_deferrals = vertagungen;
-        }
-
-        let (status, attempts, vertagungen): (String, i32, i32) = sqlx::query_as(
-            "SELECT status, attempts, quota_deferrals FROM twitch_clips_upload_queue WHERE id = $1",
-        )
-        .bind(queue_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            status, "failed",
-            "nach der Kontingent-Obergrenze darf sich der Job nicht weiter vertagen"
-        );
-        assert_eq!(
-            attempts, 1,
-            "nur das abschliessende Verwerfen zaehlt einen Versuch, \
-             die 29 Vertagungen davor nicht"
-        );
-        assert_eq!(vertagungen, UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1);
     }
 
     #[tokio::test]

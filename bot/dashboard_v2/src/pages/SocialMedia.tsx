@@ -25,6 +25,7 @@ import {
   Languages,
   DownloadCloud,
   CalendarClock,
+  LockKeyhole,
   XCircle,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
@@ -33,11 +34,19 @@ import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
+import { ClipPreparationWorkbench } from '@/components/socialmedia/ClipPreparationWorkbench';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
+import {
+  freigabeAktion,
+  pruefeManuellenUpload,
+  verwerfenWarnung,
+  type ManuellerUploadFehler,
+} from '@/components/socialmedia/clipVorbereitung';
 import {
   clipFehler,
   istGesperrt,
   istStandUnbekannt,
+  pruefeGanzeZahlImBereich,
   zeitplanFeldSchluessel,
   zeitplanFeldVerlassen,
   zeitplanFormularAbgleichen,
@@ -52,6 +61,7 @@ import {
   fetchClips,
   fetchTwitchClips,
   fetchVodArchiveSettings,
+  markClipPublished,
   fetchPlatformStatus,
   disconnectPlatform,
   oauthStartUrl,
@@ -84,6 +94,8 @@ import {
 import {
   type ApprovalMode,
   type ClipPoolForecast,
+  type ClipPreparation,
+  type DiscardClipResult,
   type PlatformScheduleEntry,
   type PostingPlan,
   DEFAULT_LAYOUT,
@@ -106,6 +118,13 @@ type Translate = (text: string, params?: Record<string, string | number>) => str
 
 /** Die drei Plattformen in der Reihenfolge, in der sie auf der Karte stehen. */
 const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
+
+/**
+ * TikTok Direct Post verlangt eine eigene Auswahl und ausdrückliche Zustimmung
+ * pro Clip. Bis diese Oberfläche existiert, darf die allgemeine Freigabe den
+ * Providerweg auch nicht scheinbar aktivieren.
+ */
+const DIREKTFREIGABE_GESPERRT = new Set<SocialPlatform>(['tiktok']);
 
 /**
  * Termin in der Zeitzone des Kanals. Eine kaputte Zeitzone aus der Datenbank
@@ -166,6 +185,20 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
   const [editingClip, setEditingClip] = useState<{ id: number; mode: EditMode } | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>('pool');
+  const [aktionsmeldung, setAktionsmeldung] = useState<{ id: number; text: string } | null>(null);
+  const aktionsmeldungRef = useRef<HTMLParagraphElement | null>(null);
+  const aktionsmeldungIdRef = useRef(0);
+
+  const meldeAktion = (text: string) => {
+    setAktionsmeldung({ id: ++aktionsmeldungIdRef.current, text });
+  };
+
+  // Der Status entsteht erst mit dem naechsten React-Render. Danach bekommt er
+  // bewusst den Fokus, damit Tastaturnutzende nach entfernten Karten nicht ins
+  // Dokument zurueckfallen und die abgeschlossene Aktion direkt hoeren.
+  useEffect(() => {
+    if (aktionsmeldung) aktionsmeldungRef.current?.focus();
+  }, [aktionsmeldung]);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
     queryKey: ['social-media', 'streamer-layout', streamer],
@@ -266,6 +299,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'streamer-layout', streamer] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'clip-preparation'] });
     },
   });
 
@@ -278,16 +312,23 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
 
   const discardMutation = useMutation({
     mutationFn: (clipDbId: number) => discardClip(clipDbId),
-    onSuccess: () => {
+    onSuccess: (_data, clipDbId) => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      queryClient.invalidateQueries({
+        queryKey: ['social-media', 'clip-preparation', clipDbId],
+      });
+      meldeAktion(t('Der Clip wurde verworfen.'));
     },
   });
 
   const overrideMutation = useMutation({
     mutationFn: ({ clipDbId, layout }: { clipDbId: number; layout: LayoutPayload | null }) =>
       setClipLayoutOverride(clipDbId, layout),
-    onSuccess: () => {
+    onSuccess: (_data, { clipDbId }) => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      queryClient.invalidateQueries({
+        queryKey: ['social-media', 'clip-preparation', clipDbId],
+      });
     },
   });
 
@@ -311,7 +352,12 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
       payload,
     }: {
       platform: SocialPlatform;
-      payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>;
+      payload: Partial<
+        Omit<
+          PlatformScheduleEntry,
+          'platform' | 'next_slot' | 'provider_release_blocked' | 'release_block_reason'
+        >
+      >;
     }) => savePlatformSchedule(streamer, platform, payload),
     onSuccess: uebernehmePlan,
   });
@@ -336,8 +382,11 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
 
   const disconnectMutation = useMutation({
     mutationFn: (platform: string) => disconnectPlatform(platform, streamer),
-    onSuccess: () => {
+    onSuccess: (_data, platform) => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', streamer] });
+      meldeAktion(t('{platform} wurde getrennt.', {
+        platform: PLATFORM_LABELS[platform] ?? platform,
+      }));
     },
   });
 
@@ -355,6 +404,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     mutationFn: (clipDbId: number) => cancelScheduledPost(clipDbId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      meldeAktion(t('Die geplante Veröffentlichung wurde gestoppt.'));
     },
   });
 
@@ -378,8 +428,13 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
       decision: 'approve' | 'skip' | 'edit';
       platforms: SocialPlatform[];
     }) => decideClipApproval({ clipDbId, decision, platforms }),
-    onSuccess: () => {
+    onSuccess: (_data, variablen) => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      if (variablen.decision === 'approve') {
+        meldeAktion(t('Der Clip wurde freigegeben.'));
+      } else if (variablen.decision === 'skip') {
+        meldeAktion(t('Der Clip wurde übersprungen.'));
+      }
     },
     // Kein window.alert mit roher Backend-Meldung. Der Fehler geht ueber
     // `clipFehler` als Zeile in den Fuss der betroffenen Clip-Karte, genau wie
@@ -389,16 +444,10 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const stats = useMemo(() => {
     const list = clipsQuery.data?.items ?? [];
     const total = clipsQuery.data?.total ?? list.length;
-    const publishedToday = list.filter((c) => {
-      if (c.status !== 'published_all') return false;
-      const created = new Date(c.created_at);
-      const now = new Date();
-      return (
-        created.getUTCFullYear() === now.getUTCFullYear() &&
-        created.getUTCMonth() === now.getUTCMonth() &&
-        created.getUTCDate() === now.getUTCDate()
-      );
-    }).length;
+    // Die Listen-API liefert derzeit keinen belastbaren Veröffentlichungszeitpunkt.
+    // `created_at` ist der Erfassungszeitpunkt des Clips und darf deshalb nicht
+    // als „heute veröffentlicht“ ausgegeben werden.
+    const publishedAll = list.filter((c) => c.status === 'published_all').length;
     const nextRetention = list
       .map((c) => (c.retention_until ? new Date(c.retention_until).getTime() : null))
       .filter((v): v is number => v !== null)
@@ -406,7 +455,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     const manualUploads = list.filter((c) => c.source_kind === 'manual_upload').length;
     return {
       total,
-      publishedToday,
+      publishedAll,
       nextRetention: nextRetention ? new Date(nextRetention).toISOString() : null,
       manualUploads,
     };
@@ -440,9 +489,40 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
 
   return (
     <div className="space-y-6">
-      <SocialHero streamer={streamer} isDefaultLayout={layoutQuery.data?.is_default ?? false} />
+      <SocialHero
+        streamer={streamer}
+        isDefaultLayout={layoutQuery.data?.is_default ?? false}
+        releaseEnabled={postingPlanQuery.data?.release_enabled ?? null}
+      />
 
-      <div className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5">
+      {postingPlanQuery.data?.release_enabled === false && <TestbetriebBanner />}
+
+      {postingPlanQuery.isError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 rounded-2xl border border-danger/35 bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <span className="font-semibold">
+            {t('Der Freigabemodus konnte nicht geladen werden. Freigaben bleiben gesperrt.')}
+          </span>
+          <button
+            type="button"
+            onClick={() => postingPlanQuery.refetch()}
+            disabled={postingPlanQuery.isFetching}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-danger/35 px-3 py-1.5 text-xs font-bold hover:bg-danger/10 disabled:opacity-50"
+          >
+            {postingPlanQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {t('Erneut versuchen')}
+          </button>
+        </div>
+      )}
+
+      <div
+        role="group"
+        aria-label={t('Social-Media-Bereich wählen')}
+        className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5"
+      >
         {SOCIAL_MEDIA_TABS.map(({ id, label }) => {
           const Icon = TAB_ICONS[id];
           const active = activeView === id;
@@ -450,6 +530,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             <button
               key={id}
               type="button"
+              aria-pressed={active}
               onClick={() => setActiveView(id)}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
                 active
@@ -463,6 +544,19 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
           );
         })}
       </div>
+
+      {aktionsmeldung && (
+        <p
+          key={aktionsmeldung.id}
+          ref={aktionsmeldungRef}
+          role="status"
+          aria-live="polite"
+          tabIndex={-1}
+          className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm font-semibold text-success focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success"
+        >
+          {aktionsmeldung.text}
+        </p>
+      )}
 
       {activeView === 'veroeffentlicht' ? (
         <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
@@ -538,6 +632,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             onClipsHolen={() => clipsHolenMutation.mutate()}
             isHolend={clipsHolenMutation.isPending}
           />
+          {!clipsQuery.isError && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <KpiCard
               title={t('Clips im Pool')}
@@ -551,11 +646,11 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
               }
             />
             <KpiCard
-              title={t('Heute veröffentlicht')}
-              value={stats.publishedToday}
+              title={t('Vollständig veröffentlicht')}
+              value={stats.publishedAll}
               icon={CheckCircle2}
               color="green"
-              subValue={t('über alle Plattformen')}
+              subValue={t('im geladenen Clip-Pool')}
             />
             <KpiCard
               title={t('Manuelle Uploads')}
@@ -565,19 +660,35 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
               subValue={t('MP4-Drops aus dem Editor')}
             />
             <KpiCard
-              title={t('Nächste Retention')}
+              title={t('Früheste Frist der geladenen Clips')}
               value={formatRetention(stats.nextRetention, t)}
               icon={Clock}
               color="blue"
-              subValue={t('14-Tage-Lifecycle')}
+              subValue={t('Offene Clips bleiben erhalten')}
             />
           </div>
+          )}
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
+          <div className="grid items-start grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
             <div className="space-y-4">
               {layoutQuery.isLoading ? (
-                <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
-                  <Loader2 className="w-6 h-6 text-orange animate-spin" />
+                <div role="status" aria-live="polite" className="panel-card rounded-2xl p-12 flex items-center justify-center gap-2 text-sm text-text-secondary">
+                  <Loader2 aria-hidden="true" className="w-6 h-6 text-orange animate-spin" />
+                  {t('Layout wird geladen…')}
+                </div>
+              ) : layoutQuery.isError ? (
+                <div role="alert" className="panel-card rounded-2xl border-danger/35 bg-danger/10 p-6 text-sm text-danger">
+                  <p className="font-bold">{t('Das gespeicherte Layout konnte nicht geladen werden.')}</p>
+                  <p className="mt-1">{fehlerText(layoutQuery.error, t)}</p>
+                  <button
+                    type="button"
+                    onClick={() => layoutQuery.refetch()}
+                    disabled={layoutQuery.isFetching}
+                    className="mt-3 inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-danger/35 px-3 py-1.5 text-xs font-bold hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger disabled:opacity-50"
+                  >
+                    {layoutQuery.isFetching && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+                    {t('Erneut versuchen')}
+                  </button>
                 </div>
               ) : (
                 <LayoutEditor
@@ -590,24 +701,28 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 />
               )}
               {saveLayoutMutation.isError && (
-                <div className="text-xs text-danger px-3">
+                <div role="alert" className="px-3 text-xs text-danger">
                   {t('Speichern fehlgeschlagen: {message}', {
                     message: fehlerText(saveLayoutMutation.error, t) ?? '',
                   })}
                 </div>
               )}
               {saveLayoutMutation.isSuccess && (
-                <div className="text-xs text-success px-3">{t('Layout gespeichert.')}</div>
+                <div role="status" aria-live="polite" className="px-3 text-xs text-success">
+                  {t('Layout gespeichert.')}
+                </div>
               )}
             </div>
 
-            <UploadCard
-              streamer={streamer}
-              onUpload={(file) => uploadMutation.mutate(file)}
-              isUploading={uploadMutation.isPending}
-              uploadError={uploadMutation.error as Error | null}
-              uploadSuccess={uploadMutation.isSuccess}
-            />
+            <div className="self-start">
+              <UploadCard
+                streamer={streamer}
+                onUpload={(file) => uploadMutation.mutate(file)}
+                isUploading={uploadMutation.isPending}
+                uploadError={uploadMutation.error as Error | null}
+                uploadSuccess={uploadMutation.isSuccess}
+              />
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -629,7 +744,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 )}
                 {t('Clips jetzt holen')}
               </button>
-              <div className="ml-auto text-xs text-text-secondary">
+              <div role="status" aria-live="polite" className="ml-auto text-xs text-text-secondary">
                 {clipsQuery.isFetching
                   ? t('Aktualisiere…')
                   : t('{count} Treffer', { count: clipsQuery.data?.items.length ?? 0 })}
@@ -637,10 +752,12 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             </div>
 
             {clipsHolenMutation.isError && (
-              <div className="text-xs text-danger">{fehlerText(clipsHolenMutation.error, t)}</div>
+              <div role="alert" className="text-xs text-danger">
+                {fehlerText(clipsHolenMutation.error, t)}
+              </div>
             )}
             {clipsHolenMutation.isSuccess && !clipsHolenMutation.isPending && (
-              <div className="text-xs text-success">
+              <div role="status" aria-live="polite" className="text-xs text-success">
                 {t('{count} Clips von Twitch geholt.', {
                   count: clipsHolenMutation.data?.clips_found ?? 0,
                 })}
@@ -648,8 +765,23 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             )}
 
             {clipsQuery.isLoading ? (
-              <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
-                <Loader2 className="w-6 h-6 text-orange animate-spin" />
+              <div role="status" aria-live="polite" className="panel-card rounded-2xl p-12 flex items-center justify-center gap-2 text-sm text-text-secondary">
+                <Loader2 aria-hidden="true" className="w-6 h-6 text-orange animate-spin" />
+                {t('Clips werden geladen…')}
+              </div>
+            ) : clipsQuery.isError ? (
+              <div role="alert" className="panel-card rounded-2xl border-danger/35 bg-danger/10 p-8 text-sm text-danger text-center">
+                <p className="font-bold">{t('Die Clip-Liste konnte nicht geladen werden.')}</p>
+                <p className="mt-1">{fehlerText(clipsQuery.error, t)}</p>
+                <button
+                  type="button"
+                  onClick={() => clipsQuery.refetch()}
+                  disabled={clipsQuery.isFetching}
+                  className="mt-3 inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-danger/35 px-3 py-1.5 text-xs font-bold hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger disabled:opacity-50"
+                >
+                  {clipsQuery.isFetching && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+                  {t('Erneut versuchen')}
+                </button>
               </div>
             ) : (clipsQuery.data?.items ?? []).length === 0 ? (
               <div className="panel-card rounded-2xl p-12 text-center">
@@ -671,6 +803,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                       key={clip.clip_db_id}
                       clip={clip}
                       timezone={postingPlanQuery.data?.timezone ?? 'Europe/Berlin'}
+                      releaseEnabled={postingPlanQuery.data?.release_enabled ?? null}
+                      canReconcile={isAdmin === true}
+                      onActionComplete={meldeAktion}
                       editingMode={editingMode}
                       onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
                       onCloseEditor={() => setEditingClip(null)}
@@ -679,12 +814,16 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                           discardMutation.mutate(clip.clip_db_id);
                         }
                       }}
-                      onSaveOverride={(layout) => {
-                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout });
-                      }}
-                      onResetOverride={() => {
-                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout: null });
-                      }}
+                      onSaveOverride={(layout) =>
+                        overrideMutation.mutateAsync({ clipDbId: clip.clip_db_id, layout }).then(() => undefined)
+                      }
+                      onResetOverride={() =>
+                        overrideMutation.mutateAsync({ clipDbId: clip.clip_db_id, layout: null }).then(() => undefined)
+                      }
+                      overridePending={
+                        overrideMutation.isPending &&
+                        overrideMutation.variables?.clipDbId === clip.clip_db_id
+                      }
                       onApprovalDecision={(decision, platforms) => {
                         approvalMutation.mutate({
                           clipDbId: clip.clip_db_id,
@@ -716,6 +855,12 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                           ? abbrechenMutation.data
                           : null
                       }
+                      discardResult={
+                        discardMutation.isSuccess &&
+                        discardMutation.variables === clip.clip_db_id
+                          ? discardMutation.data
+                          : null
+                      }
                       fehler={clipFehler(clip.clip_db_id, [
                         {
                           clipDbId: approvalMutation.variables?.clipDbId,
@@ -740,7 +885,15 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   );
 }
 
-function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefaultLayout: boolean }) {
+function SocialHero({
+  streamer,
+  isDefaultLayout,
+  releaseEnabled,
+}: {
+  streamer: string;
+  isDefaultLayout: boolean;
+  releaseEnabled: boolean | null;
+}) {
   const t = useT();
   return (
     <motion.div
@@ -753,7 +906,12 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
       <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-5">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-bold text-orange/90 px-2.5 py-1 rounded-full bg-orange/12 border border-orange/30">
-            <Sparkles className="w-3.5 h-3.5" /> {t('Clips automatisch posten')}
+            <Sparkles className="w-3.5 h-3.5" />{' '}
+            {releaseEnabled === true
+              ? t('Clips automatisch posten')
+              : releaseEnabled === false
+                ? t('Clips sicher vorbereiten')
+                : t('Clip-Pipeline')}
           </div>
           <h1 className="display-font font-extrabold text-white mt-3 text-3xl md:text-4xl tracking-tight">
             {t('Social Media für')}{' '}
@@ -763,7 +921,7 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
           </h1>
           <p className="text-text-secondary mt-2 max-w-2xl text-sm md:text-base">
             {t(
-              'Twitch-Clips werden automatisch eingesammelt, vertikal aufbereitet und für YT Shorts / TikTok / Reels vorbereitet. Layouts pro Streamer als Default, pro Clip override-bar, 14-Tage-Retention.',
+              'Twitch-Clips werden automatisch eingesammelt und als prüfbare 9:16-Vorschau für Shorts, TikTok und Reels aufbereitet. Streamer-Layouts gelten als Standard, einzelne Clips lassen sich anpassen.',
             )}
           </p>
         </div>
@@ -772,11 +930,31 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
             {isDefaultLayout ? t('Layout: Repo-Default aktiv') : t('Layout: Streamer-Default')}
           </HeroBadge>
           <HeroBadge tone="accent" icon={Calendar}>
-            {t('Phase 3 · Analytics + LLM-Reports')}
+            {t('Vorschau · Freigabe · Zeitplan')}
           </HeroBadge>
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function TestbetriebBanner() {
+  const t = useT();
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-2xl border border-primary/45 bg-[linear-gradient(120deg,rgba(197,160,89,0.2),rgba(197,160,89,0.06))] px-4 py-3 shadow-[0_12px_35px_-24px_rgba(197,160,89,0.8)]"
+    >
+      <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+      <div>
+        <div className="font-bold text-white">{t('Testbetrieb – Veröffentlichung pausiert')}</div>
+        <p className="mt-0.5 text-sm leading-relaxed text-text-secondary">
+          {t(
+            'Clips können vollständig aufbereitet, geprüft und für später freigegeben werden. Es wird nichts an Plattformen gesendet.',
+          )}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -807,13 +985,18 @@ function StatusFilter({
 }) {
   const t = useT();
   return (
-    <div className="inline-flex flex-wrap rounded-xl border border-border bg-bg/60 p-1 gap-1">
+    <div
+      role="group"
+      aria-label={t('Clipstatus filtern')}
+      className="inline-flex flex-wrap rounded-xl border border-border bg-bg/60 p-1 gap-1"
+    >
       {STATUS_FILTER_IDS.map((id) => {
         const active = id === value;
         return (
           <button
             key={id}
             type="button"
+            aria-pressed={active}
             onClick={() => onChange(id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
               active
@@ -841,19 +1024,26 @@ interface UploadCardProps {
 function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSuccess }: UploadCardProps) {
   const t = useT();
   const [dragActive, setDragActive] = useState(false);
+  const [lokalerFehler, setLokalerFehler] = useState<ManuellerUploadFehler>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
-    if (!file.type.startsWith('video/') && !file.name.toLowerCase().endsWith('.mp4')) {
-      alert(t('Bitte eine MP4-Datei wählen.'));
+    const fehler = pruefeManuellenUpload(file);
+    if (fehler === 'format') {
+      setLokalerFehler(fehler);
       return;
     }
+    if (fehler === 'zu_gross') {
+      setLokalerFehler(fehler);
+      return;
+    }
+    setLokalerFehler(null);
     onUpload(file);
   };
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
@@ -869,7 +1059,21 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
         </h3>
       </div>
 
-      <div
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/mp4,.mp4"
+        hidden
+        onChange={(event) => {
+          handleFiles(event.currentTarget.files);
+          event.currentTarget.value = '';
+        }}
+      />
+      <button
+        type="button"
+        disabled={isUploading}
+        aria-label={t('MP4 hier ablegen oder auswählen für {streamer}', { streamer })}
+        aria-describedby="social-media-upload-hinweis"
         onDragEnter={(e) => {
           e.preventDefault();
           setDragActive(true);
@@ -884,48 +1088,53 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
         }}
         onDrop={handleDrop}
         onClick={() => inputRef.current?.click()}
-        className={`relative cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition ${
+        className={`relative w-full cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition disabled:cursor-wait disabled:opacity-60 ${
           dragActive
             ? 'border-accent bg-accent/10'
             : 'border-border hover:border-accent/50 hover:bg-bg/40'
         }`}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="video/mp4,video/*"
-          className="hidden"
-          onChange={(e) => handleFiles(e.target.files)}
-        />
         <Film className="w-8 h-8 text-accent mx-auto mb-2" />
-        <p className="text-sm font-bold text-white">{t('MP4 hier ablegen')}</p>
-        <p className="text-xs text-text-secondary mt-1">
+        <span className="block text-sm font-bold text-white">{t('MP4 hier ablegen')}</span>
+        <span className="mt-1 block text-xs text-text-secondary">
           {t('oder klicken zum Auswählen · max 200 MB')}
-        </p>
-        <p className="text-[11px] text-text-secondary mt-3 leading-relaxed">
-          {t('Datei wird unter')}{' '}
-          <code className="font-mono text-orange">data/clips/uploads/{streamer}/</code>{' '}
-          {t('abgelegt und automatisch das Streamer-Default-Layout angewendet.')}
-        </p>
-      </div>
+        </span>
+        <span
+          id="social-media-upload-hinweis"
+          className="mt-3 block text-[11px] leading-relaxed text-text-secondary"
+        >
+          {t(
+            'Die Datei wird sicher gespeichert und anschließend mit dem Streamer-Default-Layout aufbereitet.',
+          )}
+        </span>
+      </button>
 
       {isUploading && (
-        <div className="flex items-center gap-2 text-xs text-accent">
+        <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-accent">
           <Loader2 className="w-4 h-4 animate-spin" /> {t('Upload läuft…')}
         </div>
       )}
+      {lokalerFehler && (
+        <div role="alert" className="text-xs text-danger">
+          {lokalerFehler === 'format'
+            ? t('Bitte eine MP4-Datei wählen.')
+            : t('Die MP4-Datei darf höchstens 200 MB groß sein.')}
+        </div>
+      )}
       {uploadError ? (
-        <div className="text-xs text-danger">{fehlerText(uploadError, t)}</div>
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(uploadError, t)}
+        </div>
       ) : null}
       {uploadSuccess && !isUploading && (
-        <div className="text-xs text-success inline-flex items-center gap-1.5">
+        <div role="status" className="text-xs text-success inline-flex items-center gap-1.5">
           <CheckCircle2 className="w-3.5 h-3.5" /> {t('Upload erfolgreich. Clip ist in der Pipeline.')}
         </div>
       )}
 
       <div className="border-t border-border pt-3 space-y-2 text-[11px] text-text-secondary">
         <div className="flex items-center gap-1.5">
-          <Calendar className="w-3 h-3" /> {t('Retention: 14 Tage ab Erstellung')}
+          <Calendar className="w-3 h-3" /> {t('Fristprüfung ab 14 Tagen; offene Clips bleiben erhalten')}
         </div>
         <div className="flex items-center gap-1.5">
           <Layers3 className="w-3 h-3" /> {t('Auto-Apply: Streamer-Default-Layout')}
@@ -978,35 +1187,47 @@ function ApprovalModeCard({
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
-      <div className="space-y-2">
+      <fieldset className="space-y-2" disabled={gesperrt}>
+        <legend className="sr-only">{t('Freigabemodus')}</legend>
         {modi.map((mode) => {
           const texte = APPROVAL_MODE_TEXTE[mode];
           if (!texte) return null;
           const active = aktiv === mode;
           return (
-            <button
+            <label
               key={mode}
-              type="button"
-              disabled={gesperrt}
-              onClick={() => onChange(mode)}
-              className={`w-full text-left rounded-xl border px-4 py-3 disabled:opacity-60 ${
+              className={`flex w-full cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60 ${
                 active
                   ? 'border-primary/60 bg-primary/10'
                   : 'border-border bg-bg/40 hover:border-border-hover'
               }`}
               style={{ transitionProperty: 'border-color, background-color' }}
             >
-              <div
-                className={`text-sm font-semibold ${active ? 'text-primary' : 'text-white'}`}
-              >
-                {t(texte.label)}
+              <input
+                type="radio"
+                name="social-media-approval-mode"
+                value={mode}
+                checked={active}
+                onChange={() => onChange(mode)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              />
+              <div className="min-w-0">
+                <div
+                  className={`text-sm font-semibold ${active ? 'text-primary' : 'text-white'}`}
+                >
+                  {t(texte.label)}
+                </div>
+                <div className="mt-0.5 text-xs text-text-secondary">{t(texte.hinweis)}</div>
               </div>
-              <div className="text-xs text-text-secondary mt-0.5">{t(texte.hinweis)}</div>
-            </button>
+            </label>
           );
         })}
-      </div>
-      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      </fieldset>
+      {error ? (
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(error, t)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1086,7 +1307,12 @@ function PostingScheduleCard({
   error: unknown;
   onChange: (
     platform: SocialPlatform,
-    payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
+    payload: Partial<
+      Omit<
+        PlatformScheduleEntry,
+        'platform' | 'next_slot' | 'provider_release_blocked' | 'release_block_reason'
+      >
+    >,
   ) => void;
   isZeitzoneSaving: boolean;
   zeitzoneError: unknown;
@@ -1192,7 +1418,7 @@ function PostingScheduleCard({
           value={zeitzone}
           disabled={zeitzoneGesperrt}
           onChange={(event) => onTimezoneChange(event.target.value)}
-          className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white disabled:opacity-60"
+          className="mt-1 w-full rounded-lg border border-[color:var(--color-border-strong)] bg-background/80 px-3 py-2 text-sm text-white disabled:opacity-60"
         >
           {zonen.map((zone) => (
             <option key={zone} value={zone}>
@@ -1205,22 +1431,32 @@ function PostingScheduleCard({
         {t('Zeiten gelten in {tz}.', { tz: zeitzone })}
       </p>
       {zeitzoneError ? (
-        <div className="text-xs text-danger">{fehlerText(zeitzoneError, t)}</div>
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(zeitzoneError, t)}
+        </div>
       ) : null}
 
       <div className="space-y-3">
         {(plan?.platforms ?? []).map((eintrag) => {
+          const platformLabel = PLATFORM_LABELS[eintrag.platform] ?? eintrag.platform;
           const termin = formatTermin(eintrag.next_slot, locale);
           const werte = formular[eintrag.platform] ?? {
             postsProWoche: String(eintrag.posts_per_week),
             maxProTag: String(eintrag.max_posts_per_day),
             zeiten: eintrag.post_times.join(', '),
           };
+          const wocheFehler = feldFehler[`${eintrag.platform}:woche`];
+          const tagFehler = feldFehler[`${eintrag.platform}:tag`];
           const zeitenFehler = feldFehler[`${eintrag.platform}:zeiten`];
+          const wocheFehlerId = `zeitplan-${eintrag.platform}-woche-fehler`;
+          const tagFehlerId = `zeitplan-${eintrag.platform}-tag-fehler`;
+          const zeitenFehlerId = `zeitplan-${eintrag.platform}-zeiten-fehler`;
+          const providerGesperrt = eintrag.provider_release_blocked;
+          const providerHinweisId = `zeitplan-${eintrag.platform}-provider-hinweis`;
+          const autoPostAktiv = eintrag.auto_post && !providerGesperrt;
           // Die Kadenz bleibt sichtbar und aenderbar, auch wenn Auto-Posting
           // aus ist: sonst laesst sie sich nicht vorbereiten und wirkt beim
           // naechsten Einschalten wie aus dem Nichts.
-          const gedaempft = eintrag.auto_post ? '' : 'opacity-60';
           return (
             <div
               key={eintrag.platform}
@@ -1228,17 +1464,20 @@ function PostingScheduleCard({
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-white">
-                  {PLATFORM_LABELS[eintrag.platform] ?? eintrag.platform}
+                  {platformLabel}
                 </span>
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={eintrag.auto_post}
-                  aria-label={t('Automatisch posten')}
-                  disabled={gesperrt}
+                  aria-checked={autoPostAktiv}
+                  aria-describedby={providerGesperrt ? providerHinweisId : undefined}
+                  aria-label={t('Automatisch auf {platform} posten', {
+                    platform: platformLabel,
+                  })}
+                  disabled={gesperrt || providerGesperrt}
                   onClick={() => onChange(eintrag.platform, { auto_post: !eintrag.auto_post })}
                   className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border disabled:opacity-60 ${
-                    eintrag.auto_post
+                    autoPostAktiv
                       ? 'border-primary/60 bg-primary/30'
                       : 'border-border bg-bg/60'
                   }`}
@@ -1246,15 +1485,24 @@ function PostingScheduleCard({
                 >
                   <span
                     className={`absolute top-1 h-5 w-5 rounded-full bg-white ${
-                      eintrag.auto_post ? 'translate-x-6' : 'translate-x-1'
+                      autoPostAktiv ? 'translate-x-6' : 'translate-x-1'
                     }`}
                     style={{ transitionProperty: 'transform' }}
                   />
                 </button>
               </div>
 
-              <div className={`space-y-3 ${gedaempft}`}>
-                {!eintrag.auto_post && (
+              {providerGesperrt && (
+                <p id={providerHinweisId} className="text-xs text-warning">
+                  {fehlerText(
+                    { code: eintrag.release_block_reason ?? 'platform_release_blocked' },
+                    t,
+                  )}
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {!autoPostAktiv && (
                   <p className="text-xs text-text-secondary">
                     {t('Gilt, sobald Auto-Posting an ist.')}
                   </p>
@@ -1266,31 +1514,48 @@ function PostingScheduleCard({
                       type="number"
                       min={0}
                       max={70}
+                      step={1}
                       value={werte.postsProWoche}
                       disabled={gesperrt}
+                      aria-label={t('Posts pro Woche für {platform}', {
+                        platform: platformLabel,
+                      })}
+                      aria-invalid={Boolean(wocheFehler)}
+                      aria-describedby={wocheFehler ? wocheFehlerId : undefined}
                       onChange={(event) =>
                         setzeFeld(eintrag.platform, 'postsProWoche', event.target.value)
                       }
                       onBlur={() => {
-                        const wert = Number(werte.postsProWoche);
-                        const gueltig =
-                          werte.postsProWoche.trim() !== '' && Number.isFinite(wert);
+                        const pruefung = pruefeGanzeZahlImBereich(
+                          werte.postsProWoche,
+                          0,
+                          70,
+                        );
                         const plan = zeitplanFeldVerlassen(
-                          gueltig
-                            ? { gueltig: true, unveraendert: wert === eintrag.posts_per_week }
-                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                          pruefung.gueltig
+                            ? {
+                                gueltig: true,
+                                unveraendert: pruefung.wert === eintrag.posts_per_week,
+                              }
+                            : {
+                                gueltig: false,
+                                fehler:
+                                  pruefung.grund === 'ausserhalb_bereich'
+                                    ? FELD_FEHLER.postsProWocheBereich
+                                    : FELD_FEHLER.ganzeZahl,
+                              },
                         );
                         setzeFehler(`${eintrag.platform}:woche`, plan.fehler);
                         feldAbgeschlossen(eintrag.platform, 'postsProWoche');
-                        if (plan.absenden) {
-                          onChange(eintrag.platform, { posts_per_week: wert });
+                        if (plan.absenden && pruefung.gueltig) {
+                          onChange(eintrag.platform, { posts_per_week: pruefung.wert });
                         }
                       }}
-                      className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                      className="mt-1 w-full rounded-lg border border-[color:var(--color-border-strong)] bg-background/80 px-3 py-2 text-sm text-white"
                     />
-                    {feldFehler[`${eintrag.platform}:woche`] && (
-                      <span className="mt-1 block text-xs text-danger">
-                        {t(feldFehler[`${eintrag.platform}:woche`])}
+                    {wocheFehler && (
+                      <span id={wocheFehlerId} role="alert" className="mt-1 block text-xs text-danger">
+                        {t(wocheFehler)}
                       </span>
                     )}
                   </label>
@@ -1300,30 +1565,44 @@ function PostingScheduleCard({
                       type="number"
                       min={0}
                       max={10}
+                      step={1}
                       value={werte.maxProTag}
                       disabled={gesperrt}
+                      aria-label={t('Höchstens pro Tag für {platform}', {
+                        platform: platformLabel,
+                      })}
+                      aria-invalid={Boolean(tagFehler)}
+                      aria-describedby={tagFehler ? tagFehlerId : undefined}
                       onChange={(event) =>
                         setzeFeld(eintrag.platform, 'maxProTag', event.target.value)
                       }
                       onBlur={() => {
-                        const wert = Number(werte.maxProTag);
-                        const gueltig = werte.maxProTag.trim() !== '' && Number.isFinite(wert);
+                        const pruefung = pruefeGanzeZahlImBereich(werte.maxProTag, 0, 10);
                         const plan = zeitplanFeldVerlassen(
-                          gueltig
-                            ? { gueltig: true, unveraendert: wert === eintrag.max_posts_per_day }
-                            : { gueltig: false, fehler: FELD_FEHLER.keineZahl },
+                          pruefung.gueltig
+                            ? {
+                                gueltig: true,
+                                unveraendert: pruefung.wert === eintrag.max_posts_per_day,
+                              }
+                            : {
+                                gueltig: false,
+                                fehler:
+                                  pruefung.grund === 'ausserhalb_bereich'
+                                    ? FELD_FEHLER.maxProTagBereich
+                                    : FELD_FEHLER.ganzeZahl,
+                              },
                         );
                         setzeFehler(`${eintrag.platform}:tag`, plan.fehler);
                         feldAbgeschlossen(eintrag.platform, 'maxProTag');
-                        if (plan.absenden) {
-                          onChange(eintrag.platform, { max_posts_per_day: wert });
+                        if (plan.absenden && pruefung.gueltig) {
+                          onChange(eintrag.platform, { max_posts_per_day: pruefung.wert });
                         }
                       }}
-                      className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white"
+                      className="mt-1 w-full rounded-lg border border-[color:var(--color-border-strong)] bg-background/80 px-3 py-2 text-sm text-white"
                     />
-                    {feldFehler[`${eintrag.platform}:tag`] && (
-                      <span className="mt-1 block text-xs text-danger">
-                        {t(feldFehler[`${eintrag.platform}:tag`])}
+                    {tagFehler && (
+                      <span id={tagFehlerId} role="alert" className="mt-1 block text-xs text-danger">
+                        {t(tagFehler)}
                       </span>
                     )}
                   </label>
@@ -1335,8 +1614,11 @@ function PostingScheduleCard({
                   <input
                     type="text"
                     value={werte.zeiten}
+                    aria-label={t('Uhrzeiten für {platform}', { platform: platformLabel })}
                     placeholder="18:00, 21:00"
                     disabled={gesperrt}
+                    aria-invalid={Boolean(zeitenFehler)}
+                    aria-describedby={zeitenFehler ? zeitenFehlerId : undefined}
                     onChange={(event) => setzeFeld(eintrag.platform, 'zeiten', event.target.value)}
                     onBlur={() => {
                       const ergebnis = pruefeZeiten(werte.zeiten);
@@ -1356,16 +1638,20 @@ function PostingScheduleCard({
                       }
                     }}
                     className={`mt-1 w-full rounded-lg border bg-background/80 px-3 py-2 text-sm text-white ${
-                      zeitenFehler ? 'border-danger' : 'border-border'
+                      zeitenFehler
+                        ? 'border-danger'
+                        : 'border-[color:var(--color-border-strong)]'
                     }`}
                   />
                   {zeitenFehler && (
-                    <span className="mt-1 block text-xs text-danger">{t(zeitenFehler)}</span>
+                    <span id={zeitenFehlerId} role="alert" className="mt-1 block text-xs text-danger">
+                      {t(zeitenFehler)}
+                    </span>
                   )}
                 </label>
               </div>
 
-              {termin && eintrag.auto_post && (
+              {termin && autoPostAktiv && (
                 <div className="text-xs text-text-secondary">
                   {t('Nächster Post: {termin}', { termin })}
                 </div>
@@ -1374,14 +1660,18 @@ function PostingScheduleCard({
           );
         })}
       </div>
-      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      {error ? (
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(error, t)}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 /**
- * Auto-Posting je Spielkategorie. Angereichert wird nur Deadlock; andere
- * Kategorien gehen ohne Titel- und Hashtag-Vorschlaege raus.
+ * Auto-Posting je Spielkategorie. Angereichert wird nur Deadlock; bei anderen
+ * Kategorien bleiben Titel und Hashtags manuell bearbeitbar.
  */
 function CategoryCard({
   plan,
@@ -1427,7 +1717,7 @@ function CategoryCard({
               <span className="block text-xs text-text-secondary mt-0.5">
                 {kategorie.enrichment_enabled
                   ? t('Mit Titel- und Hashtag-Vorschlägen.')
-                  : t('Ohne Vorschläge, Clip geht so raus.')}
+                  : t('Ohne automatische Vorschläge; Metadaten bleiben manuell bearbeitbar.')}
               </span>
             </span>
             <input
@@ -1440,7 +1730,11 @@ function CategoryCard({
           </label>
         ))}
       </div>
-      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      {error ? (
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(error, t)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1559,7 +1853,7 @@ function PlatformConnectionsCard({
   // Ohne Statusabruf ist jede Zeile geraten. Ein verbundener Kanal saehe dann
   // wie "nicht verbunden" aus und der Streamer startet einen ueberfluessigen
   // OAuth-Flow, deshalb verschwinden hier alle Knoepfe.
-  const standUnbekannt = istStandUnbekannt(ladeFehler);
+  const standUnbekannt = isLoading || istStandUnbekannt(ladeFehler);
   const gesperrt = istGesperrt({ isLoading, isSaving: isDisconnecting, ladeFehler });
   const rueckmeldung = leseOauthRueckmeldung();
 
@@ -1603,6 +1897,11 @@ function PlatformConnectionsCard({
           // ins Leere laeuft.
           const abgelaufen = connected && (status?.expired ?? false);
           const sammelverbindung = connected && !abgelaufen && (status?.uses_global_fallback ?? false);
+          const veröffentlichungGesperrt =
+            connected &&
+            !abgelaufen &&
+            (status?.provider_release_blocked ?? !(status?.provider_calls_enabled ?? false));
+          const sperrgrund = status?.release_block_reason;
           const ablauf = status?.expires_at
             ? new Date(status.expires_at).toLocaleDateString(locale, {
                 day: '2-digit',
@@ -1613,7 +1912,9 @@ function PlatformConnectionsCard({
 
           let zeile: string;
           let tonKlasse = 'text-text-secondary';
-          if (standUnbekannt) {
+          if (isLoading) {
+            zeile = t('Verbindungen werden geladen…');
+          } else if (standUnbekannt) {
             zeile = t('Zustand unbekannt');
             tonKlasse = 'text-danger';
           } else if (!connected) {
@@ -1637,7 +1938,14 @@ function PlatformConnectionsCard({
                 <div className="text-sm font-semibold text-white">
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
-                <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
+                <div className={`break-words text-xs ${tonKlasse}`}>{zeile}</div>
+                {!standUnbekannt && veröffentlichungGesperrt && (
+                  <div className="text-[11px] text-warning">
+                    {sperrgrund
+                      ? fehlerText({ code: sperrgrund }, t)
+                      : t('Veröffentlichung wartet auf Plattformfreigabe.')}
+                  </div>
+                )}
                 {!standUnbekannt && connected && !abgelaufen && ablauf && (
                   <div className="text-[11px] text-text-secondary">
                     {t('Zugang läuft am {datum} ab.', { datum: ablauf })}
@@ -1648,6 +1956,10 @@ function PlatformConnectionsCard({
                 <button
                   type="button"
                   disabled={gesperrt}
+                  aria-label={t('Trennen: {platform} für {streamer}', {
+                    platform: PLATFORM_LABELS[platform] ?? platform,
+                    streamer,
+                  })}
                   onClick={() => {
                     // Der Kanalname gehoert in die Frage: es gibt eine
                     // Sammelverbindung, und niemand soll aus Versehen alle
@@ -1670,6 +1982,17 @@ function PlatformConnectionsCard({
               ) : (
                 <a
                   href={oauthStartUrl(platform, streamer)}
+                  aria-label={
+                    abgelaufen
+                      ? t('Neu verbinden: {platform} für {streamer}', {
+                          platform: PLATFORM_LABELS[platform] ?? platform,
+                          streamer,
+                        })
+                      : t('Verbinden: {platform} für {streamer}', {
+                          platform: PLATFORM_LABELS[platform] ?? platform,
+                          streamer,
+                        })
+                  }
                   className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white shrink-0"
                 >
                   {abgelaufen ? t('Neu verbinden') : t('Verbinden')}
@@ -1680,7 +2003,11 @@ function PlatformConnectionsCard({
         })}
       </div>
 
-      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      {error ? (
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(error, t)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1755,6 +2082,7 @@ function VodArchiveCard({
             <button
               key={option}
               type="button"
+              aria-pressed={privacy === option}
               disabled={gesperrt || settings?.privacy_forced}
               onClick={() => onChange({ enabled, privacy: option })}
               className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
@@ -1769,7 +2097,11 @@ function VodArchiveCard({
         </div>
       </div>
 
-      {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      {error ? (
+        <div role="alert" className="text-xs text-danger">
+          {fehlerText(error, t)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1820,17 +2152,25 @@ interface ClipCardProps {
   clip: SocialClipMitPosting;
   /** Zeitzone des Kanals, damit geplante Termine nicht in UTC dastehen. */
   timezone: string;
+  /** `false` ist der harte Testbetrieb ohne Veröffentlichung. */
+  releaseEnabled: boolean | null;
+  /** Der manuelle Providerabgleich bestätigt eine externe Veröffentlichung. */
+  canReconcile: boolean;
+  /** Behält nach einer Aktion einen sinnvollen Fokus und kündigt den Erfolg an. */
+  onActionComplete: (message: string) => void;
   editingMode: EditMode | null;
   onOpenEditor: (mode: EditMode) => void;
   onCloseEditor: () => void;
   onDiscard: () => void;
-  onSaveOverride: (layout: LayoutPayload) => void;
-  onResetOverride: () => void;
+  onSaveOverride: (layout: LayoutPayload) => Promise<void>;
+  onResetOverride: () => Promise<void>;
+  overridePending: boolean;
   onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
   approvalPending: boolean;
   onCancelScheduled: () => void;
   cancelPending: boolean;
   cancelResult: { cancelled: number; already_running: number } | null;
+  discardResult: DiscardClipResult | null;
   /**
    * Plattformen, die die letzte Freigabe an diesem Clip ausgelassen hat, weil
    * dort die Kadenz auf null steht. Ohne diese Zeile quittiert die Oberflaeche
@@ -1844,17 +2184,22 @@ interface ClipCardProps {
 function ClipCard({
   clip,
   timezone,
+  releaseEnabled,
+  canReconcile,
+  onActionComplete,
   editingMode,
   onOpenEditor,
   onCloseEditor,
   onDiscard,
   onSaveOverride,
   onResetOverride,
+  overridePending,
   onApprovalDecision,
   approvalPending,
   onCancelScheduled,
   cancelPending,
   cancelResult,
+  discardResult,
   nichtEingeplant,
   fehler,
 }: ClipCardProps) {
@@ -1869,9 +2214,19 @@ function ClipCard({
   const uploadFehler = PLATTFORMEN.map((platform) => ({
     platform,
     text: clip.upload_errors?.[platform] ?? null,
-  })).filter((eintrag): eintrag is { platform: SocialPlatform; text: string } => !!eintrag.text);
-  const zeigeUploadFehler =
-    uploadFehler.length > 0 && (clip.status === 'failed' || clip.status === 'published_partial');
+    queueStatus: clip.upload_states?.[platform]?.status ?? null,
+  })).filter(
+    (eintrag): eintrag is {
+      platform: SocialPlatform;
+      text: string;
+      queueStatus: 'failed' | null;
+    } =>
+      Boolean(eintrag.text) &&
+      (eintrag.queueStatus === 'failed' ||
+        (eintrag.queueStatus === null &&
+          (clip.status === 'failed' || clip.status === 'published_partial'))),
+  );
+  const zeigeUploadFehler = uploadFehler.length > 0;
 
   const termine = PLATTFORMEN.map((platform) => ({
     platform,
@@ -1880,23 +2235,97 @@ function ClipCard({
   // Veto-Fenster: solange ein Termin in der Zukunft steht, laesst sich der Post
   // noch stoppen.
   const stoppbar = clip.status === 'approved' && termine.length > 0;
+  const unklareUploads = PLATTFORMEN.map((platform) => ({
+    platform,
+    stand: clip.upload_states?.[platform] ?? null,
+  })).filter(
+    (eintrag) =>
+      eintrag.stand?.reconciliation_required === true ||
+      eintrag.stand?.status === 'reconciliation_required',
+  );
+  const abgleichDaten = unklareUploads.flatMap(({ platform, stand }) =>
+    stand?.reconciliation_id && stand.provider_started_at
+      ? [
+          {
+            reconciliation_id: stand.reconciliation_id,
+            platform,
+            provider_started_at: stand.provider_started_at,
+            provider_external_id: stand.provider_external_id,
+          },
+        ]
+      : [],
+  );
+  const abgleichVollstaendig =
+    abgleichDaten.length > 0 && abgleichDaten.length === unklareUploads.length;
   const fehlerZeile = fehlerText(fehler, t);
+  const verwerfenHinweis = verwerfenWarnung(discardResult);
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
-    clip.approval?.approved_platforms ?? [],
+    (clip.approval?.approved_platforms ?? []).filter(
+      (platform) => !DIREKTFREIGABE_GESPERRT.has(platform),
+    ),
   );
   // Twitch raeumt Clip-Thumbnails irgendwann weg; eine 404-URL darf die Kachel
   // nicht mit Alt-Text fluten, sondern faellt auf das Ersatzbild zurueck.
   const [vorschauFehlt, setVorschauFehlt] = useState(false);
+  const [preparation, setPreparation] = useState<ClipPreparation | null>(null);
+  const editorAusloeserRef = useRef<HTMLButtonElement | null>(null);
+  const layoutPanelRef = useRef<HTMLDivElement | null>(null);
+  const enrichmentPanelRef = useRef<HTMLDivElement | null>(null);
+  const letzterEditorRef = useRef<EditMode | null>(null);
+  const layoutPanelId = `clip-${clip.clip_db_id}-layout-editor`;
+  const enrichmentPanelId = `clip-${clip.clip_db_id}-metadaten-editor`;
+  const queryClient = useQueryClient();
+  const abgleichMutation = useMutation({
+    mutationFn: () =>
+      markClipPublished({
+        clipDbId: clip.clip_db_id,
+        reconciliations: abgleichDaten,
+        streamer: clip.streamer_login,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+      onActionComplete(t('Der Plattformstand wurde abgeglichen.'));
+    },
+  });
+  const layoutFingerprint = JSON.stringify(clip.effective_layout);
+  const letzterLayoutFingerprint = useRef(layoutFingerprint);
   useEffect(() => {
     setVorschauFehlt(false);
   }, [clip.thumbnail_url]);
   const vorschauSichtbar = Boolean(clip.thumbnail_url) && !vorschauFehlt;
+  const freigabe = freigabeAktion(
+    releaseEnabled,
+    selectedPlatforms.length,
+    approvalPending,
+    preparation?.preview_ready === true && Boolean(preparation.preview_url),
+  );
+  const freigabeHinweisId = `clip-${clip.clip_db_id}-freigabe-hinweis`;
+  const tiktokHinweisId = `clip-${clip.clip_db_id}-tiktok-hinweis`;
 
   useEffect(() => {
-    setSelectedPlatforms(clip.approval?.approved_platforms ?? []);
+    setSelectedPlatforms(
+      (clip.approval?.approved_platforms ?? []).filter(
+        (platform) => !DIREKTFREIGABE_GESPERRT.has(platform),
+      ),
+    );
   }, [clip.approval?.approved_platforms, clip.clip_db_id]);
 
+  useEffect(() => {
+    if (letzterLayoutFingerprint.current === layoutFingerprint) return;
+    letzterLayoutFingerprint.current = layoutFingerprint;
+    setPreparation(null);
+  }, [layoutFingerprint]);
+
+  useEffect(() => {
+    const vorherigerEditor = letzterEditorRef.current;
+    if (editingMode === 'layout') layoutPanelRef.current?.focus();
+    if (editingMode === 'enrichment') enrichmentPanelRef.current?.focus();
+    if (!editingMode && vorherigerEditor) editorAusloeserRef.current?.focus();
+    letzterEditorRef.current = editingMode;
+  }, [editingMode]);
+
   const togglePlatform = (platform: SocialPlatform, checked: boolean) => {
+    if (DIREKTFREIGABE_GESPERRT.has(platform)) return;
     setSelectedPlatforms((current) => {
       const next = new Set(current);
       if (checked) next.add(platform);
@@ -1926,7 +2355,7 @@ function ClipCard({
           // Clip-Titel ueber die schwarze Kachel.
           <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-text-secondary">
             <Film className="w-8 h-8 opacity-40" />
-            <span className="text-[10px] uppercase tracking-[0.16em] opacity-60">
+            <span className="text-[10px] uppercase tracking-[0.16em]">
               {t('Keine Vorschau')}
             </span>
           </div>
@@ -1972,7 +2401,7 @@ function ClipCard({
           <h4 className="font-bold text-white line-clamp-2">{clip.title}</h4>
           <p className="text-xs text-text-secondary">
             {clip.streamer_login} ·{' '}
-            {t('{views} Views', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
+            {t('{views} Aufrufe', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
           </p>
           {clip.layout_override && (
             <p className="text-[11px] text-orange inline-flex items-center gap-1">
@@ -1994,16 +2423,89 @@ function ClipCard({
           </div>
         )}
 
+        <ClipPreparationWorkbench
+          clipDbId={clip.clip_db_id}
+          clipTitle={clip.title}
+          onPreparationChange={setPreparation}
+        />
+
         {zeigeUploadFehler && (
-          <div className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
+          <div role="alert" className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
             <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
             <div className="space-y-1 min-w-0">
               {uploadFehler.map(({ platform, text }) => (
                 <div key={platform} className="break-words">
                   <span className="font-bold">{PLATFORM_LABELS[platform] ?? platform}:</span>{' '}
-                  {text}
+                  {fehlerText({ code: text }, t)}
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {unklareUploads.length > 0 && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-warning/35 bg-warning/10 p-2.5 text-xs text-warning"
+          >
+            <ShieldAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <div className="min-w-0 space-y-2">
+              <div>
+                <p className="font-bold">{t('Ergebnis unklar')}</p>
+                <p className="mt-0.5 text-text-secondary">
+                  {t(
+                    'Der Plattformaufruf wurde gestartet, aber sein Ergebnis konnte nicht sicher bestätigt werden. Prüfe zuerst die Zielplattform.',
+                  )}
+                </p>
+              </div>
+              <div className="space-y-1">
+                {unklareUploads.map(({ platform, stand }) => (
+                  <div key={platform} className="break-all">
+                    <span className="font-bold">{PLATFORM_LABELS[platform] ?? platform}</span>
+                    {stand?.provider_external_id
+                      ? ` · ${t('Plattform-ID')}: ${stand.provider_external_id}`
+                      : null}
+                  </div>
+                ))}
+              </div>
+              {canReconcile ? (
+                <button
+                  type="button"
+                  disabled={abgleichMutation.isPending || !abgleichVollstaendig}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        t(
+                          'Hast du den Clip auf allen genannten Plattformen als veröffentlicht geprüft?',
+                        ),
+                      )
+                    ) {
+                      abgleichMutation.mutate();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning/15 px-2.5 py-1.5 font-bold text-warning hover:bg-warning/20 disabled:opacity-50"
+                >
+                  {abgleichMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                  )}
+                  {t('Nach Plattformprüfung bestätigen')}
+                </button>
+              ) : (
+                <p>{t('Nur die Verwaltung kann diesen Plattformstand bestätigen.')}</p>
+              )}
+              {canReconcile && !abgleichVollstaendig ? (
+                <p className="text-danger">
+                  {t('Die Abgleichdaten sind unvollständig. Lade die Clip-Liste neu.')}
+                </p>
+              ) : null}
+              {abgleichMutation.isError ? (
+                <p role="alert" className="text-danger">{fehlerText(abgleichMutation.error, t)}</p>
+              ) : null}
+              {abgleichMutation.isSuccess ? (
+                <p role="status" aria-live="polite" className="text-success">{t('Der Plattformstand wurde abgeglichen.')}</p>
+              ) : null}
             </div>
           </div>
         )}
@@ -2041,50 +2543,70 @@ function ClipCard({
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.14em] font-bold text-orange">
-                {t('Approval')}
+                {t('Freigabe')}
               </p>
               <p className="text-xs text-text-secondary">
                 {clip.approval?.state
                   ? t('Status: {state}', {
                       state: t(APPROVAL_STATE_LABELS[clip.approval.state] ?? clip.approval.state),
                     })
-                  : t('Wird nach abgeschlossenem Enrichment per DM freigegeben.')}
+                  : t('Bereit zur Prüfung, sobald die Metadaten abgeschlossen sind.')}
               </p>
             </div>
             {approvalPending && <Loader2 className="w-4 h-4 text-orange animate-spin" />}
           </div>
           <div className="grid grid-cols-3 gap-2">
-            {([
-              ['youtube', 'YT'],
-              ['tiktok', 'TT'],
-              ['instagram', 'IG'],
-            ] as const).map(([platform, label]) => (
-              <label
-                key={platform}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-bg/40 px-2 py-2 text-xs font-semibold text-white"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedPlatforms.includes(platform)}
-                  onChange={(event) => togglePlatform(platform, event.target.checked)}
-                  className="h-3.5 w-3.5 accent-orange"
-                />
-                {label}
-              </label>
-            ))}
+            {(['youtube', 'tiktok', 'instagram'] as const).map((platform) => {
+              const direktfreigabeGesperrt = DIREKTFREIGABE_GESPERRT.has(platform);
+              return (
+                <label
+                  key={platform}
+                  className={`inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-bg/40 px-2 py-2 text-xs font-semibold text-white ${
+                    direktfreigabeGesperrt ? 'cursor-not-allowed opacity-55' : ''
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    aria-describedby={direktfreigabeGesperrt ? tiktokHinweisId : undefined}
+                    checked={selectedPlatforms.includes(platform)}
+                    disabled={direktfreigabeGesperrt}
+                    onChange={(event) => togglePlatform(platform, event.target.checked)}
+                    className="h-3.5 w-3.5 accent-orange"
+                  />
+                  {PLATFORM_LABELS[platform] ?? platform}
+                  {direktfreigabeGesperrt && (
+                    <LockKeyhole aria-hidden="true" className="h-3.5 w-3.5 text-warning" />
+                  )}
+                </label>
+              );
+            })}
           </div>
+          <p id={tiktokHinweisId} className="text-[11px] text-text-secondary">
+            {t(
+              'TikTok bleibt gesperrt, bis Sichtbarkeit, Interaktionen und Zustimmung pro Clip gewählt werden können.',
+            )}
+          </p>
+          {freigabe.hinweis && (
+            <p id={freigabeHinweisId} className="text-[11px] text-warning">
+              {t(freigabe.hinweis)}
+            </p>
+          )}
           <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
+              aria-describedby={freigabe.hinweis ? freigabeHinweisId : undefined}
               onClick={() => onApprovalDecision('approve', selectedPlatforms)}
-              disabled={approvalPending}
+              disabled={freigabe.disabled}
               className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-success/15 text-success border border-success/30 hover:bg-success/20 disabled:opacity-50"
             >
-              <CheckCircle2 className="w-3.5 h-3.5" /> {t('Posten')}
+              <CheckCircle2 className="w-3.5 h-3.5" /> {t(freigabe.label)}
             </button>
             <button
               type="button"
-              onClick={() => {
+              aria-expanded={editingMode === 'enrichment'}
+              aria-controls={enrichmentPanelId}
+              onClick={(event) => {
+                editorAusloeserRef.current = event.currentTarget;
                 onApprovalDecision('edit', selectedPlatforms);
                 onOpenEditor('enrichment');
               }}
@@ -2099,18 +2621,18 @@ function ClipCard({
               disabled={approvalPending}
               className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-danger/12 text-danger border border-danger/30 hover:bg-danger/20 disabled:opacity-50"
             >
-              <Trash2 className="w-3.5 h-3.5" /> {t('Skip')}
+              <Trash2 className="w-3.5 h-3.5" /> {t('Überspringen')}
             </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 mt-auto pt-2">
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
           {clip.clip_url && (
             <a
               href={clip.clip_url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-white"
+              className="inline-flex min-h-6 items-center gap-1.5 text-xs text-text-secondary hover:text-white"
             >
               <ExternalLink className="w-3.5 h-3.5" /> {t('Original')}
             </a>
@@ -2125,7 +2647,12 @@ function ClipCard({
           </button>
           <button
             type="button"
-            onClick={() => onOpenEditor('enrichment')}
+            aria-expanded={editingMode === 'enrichment'}
+            aria-controls={enrichmentPanelId}
+            onClick={(event) => {
+              editorAusloeserRef.current = event.currentTarget;
+              onOpenEditor('enrichment');
+            }}
             className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition ${
               editingMode === 'enrichment'
                 ? 'bg-accent/25 text-accent border-accent/50'
@@ -2141,7 +2668,12 @@ function ClipCard({
           </button>
           <button
             type="button"
-            onClick={() => onOpenEditor('layout')}
+            aria-expanded={editingMode === 'layout'}
+            aria-controls={layoutPanelId}
+            onClick={(event) => {
+              editorAusloeserRef.current = event.currentTarget;
+              onOpenEditor('layout');
+            }}
             className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition ${
               editingMode === 'layout'
                 ? 'bg-orange/25 text-orange border-orange/50'
@@ -2155,7 +2687,7 @@ function ClipCard({
         {/* Steht ausserhalb der Terminliste: nach dem Stoppen verschwinden die
             Termine, die Rueckmeldung soll trotzdem stehen bleiben. */}
         {cancelResult && (
-          <div className="text-xs text-text-secondary border-t border-border pt-2">
+          <div role="status" aria-live="polite" className="text-xs text-text-secondary border-t border-border pt-2">
             {cancelResult.already_running > 0
               ? t('Gestoppt, aber {count} Plattform war schon durch.', {
                   count: cancelResult.already_running,
@@ -2168,24 +2700,44 @@ function ClipCard({
             quittiert, aber dort passiert nichts. Ohne diese Zeile merkt das
             niemand. */}
         {nichtEingeplant.length > 0 && (
-          <div className="text-xs text-orange border-t border-orange/20 pt-2">
+          <div role="status" aria-live="polite" className="text-xs text-orange border-t border-orange/20 pt-2">
             {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
               platforms: nichtEingeplant.map((plattform) => PLATFORM_LABELS[plattform] ?? plattform).join(', '),
             })}
           </div>
         )}
 
+        {verwerfenHinweis && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 border-t border-warning/25 pt-2 text-xs text-warning"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{t(verwerfenHinweis)}</span>
+          </div>
+        )}
+
         {fehlerZeile && (
-          <div className="text-xs text-danger border-t border-danger/20 pt-2">{fehlerZeile}</div>
+          <div role="alert" className="text-xs text-danger border-t border-danger/20 pt-2">
+            {fehlerZeile}
+          </div>
         )}
       </div>
 
       {editingMode === 'layout' && (
-        <div className="border-t border-border p-4 bg-bg/30">
+        <div
+          id={layoutPanelId}
+          ref={layoutPanelRef}
+          role="region"
+          tabIndex={-1}
+          aria-label={t('Layout für {title} bearbeiten', { title: clip.title })}
+          className="border-t border-border bg-bg/30 p-4"
+        >
           <LayoutEditor
             initialLayout={clip.effective_layout}
+            isSaving={overridePending}
             saveLabel={t('Override speichern')}
-            resetLabel={t('Schließen')}
+            cancelLabel={t('Schließen')}
             geltungHinweis={t('Gilt nur für diesen Clip.')}
             /* In der Karte ist die Vorschau genau dieser Clip, nichts zum Waehlen. */
             vorschauClips={
@@ -2193,23 +2745,38 @@ function ClipCard({
                 ? [{ id: String(clip.clip_db_id), titel: clip.title, bildUrl: clip.thumbnail_url }]
                 : []
             }
-            onSave={(layout) => {
-              onSaveOverride(layout);
-              onCloseEditor();
+            onSave={async (layout) => {
+              const vorherigeVorbereitung = preparation;
+              setPreparation(null);
+              try {
+                await onSaveOverride(layout);
+                onCloseEditor();
+              } catch {
+                setPreparation(vorherigeVorbereitung);
+                // Der Mutationsfehler bleibt sichtbar an genau dieser Clip-Karte.
+              }
             }}
-            onReset={onCloseEditor}
+            onCancel={onCloseEditor}
           />
           {clip.layout_override && (
             <div className="mt-3 flex justify-end">
               <button
                 type="button"
-                onClick={() => {
+                disabled={overridePending}
+                onClick={async () => {
                   if (window.confirm(t('Override entfernen und Streamer-Default verwenden?'))) {
-                    onResetOverride();
-                    onCloseEditor();
+                    const vorherigeVorbereitung = preparation;
+                    setPreparation(null);
+                    try {
+                      await onResetOverride();
+                      onCloseEditor();
+                    } catch {
+                      setPreparation(vorherigeVorbereitung);
+                      // Nicht schließen: der Nutzer soll den fehlgeschlagenen Stand sehen.
+                    }
                   }
                 }}
-                className="text-xs text-text-secondary hover:text-white"
+                className="text-xs text-text-secondary hover:text-white disabled:opacity-50"
               >
                 {t('Override entfernen → Streamer-Default')}
               </button>
@@ -2219,7 +2786,14 @@ function ClipCard({
       )}
 
       {editingMode === 'enrichment' && (
-        <div className="border-t border-border p-4 bg-bg/30">
+        <div
+          id={enrichmentPanelId}
+          ref={enrichmentPanelRef}
+          role="region"
+          tabIndex={-1}
+          aria-label={t('Metadaten für {title} bearbeiten', { title: clip.title })}
+          className="border-t border-border bg-bg/30 p-4"
+        >
           <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onCloseEditor} />
         </div>
       )}

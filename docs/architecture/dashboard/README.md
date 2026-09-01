@@ -7,7 +7,7 @@ The dashboard is organized by feature, not by role. Roles are documented in [ADM
 - `bot/dashboard/` stays part of the dashboard service.
 - `bot/dashboard/server_v2.py` remains the dashboard server entry surface.
 - `bot/dashboard/mixin.py` remains the main assembler used by the bot-side integration.
-- `bot/analytics/`, `bot/raid/`, and `bot/social_media/` stay outside this feature split.
+- `bot/analytics/`, `bot/raid/` und das Rust-Crate `tb-social-media` bleiben außerhalb dieses Feature-Splits.
 - New imports must not make the Twitch Bot require dashboard-only startup code, and must not make the Dashboard require bot runtime entrypoints.
 
 ## Root Files Kept In Place

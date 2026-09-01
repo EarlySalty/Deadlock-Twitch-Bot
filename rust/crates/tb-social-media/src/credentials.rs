@@ -45,6 +45,9 @@ pub struct PlatformStatus {
     pub expired: bool,
     pub scopes: Option<String>,
     pub uses_global_fallback: bool,
+    /// Separates an OAuth connection from explicit provider-call approval.
+    /// New and existing connections remain fail-closed until platform audit.
+    pub provider_calls_enabled: bool,
 }
 
 /// Lädt + entschlüsselt Plattform-Credentials.
@@ -149,6 +152,20 @@ impl CredentialManager {
     ) -> Vec<PlatformStatus> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
+            let provider_calls_enabled =
+                match self.provider_calls_enabled(platform, streamer_login).await {
+                    Ok(enabled) => enabled,
+                    Err(error) => {
+                        tracing::error!(
+                            platform = %sanitize(platform),
+                            streamer = %sanitize(streamer_login.unwrap_or("<none>")),
+                            code = "platform_release_gate_read_failed",
+                            %error,
+                            "Plattform-Freigabegate konnte nicht gelesen werden"
+                        );
+                        false
+                    }
+                };
             let status = match self.get_credentials(platform, streamer_login).await {
                 Some(creds) => {
                     let uses_global_fallback =
@@ -162,6 +179,7 @@ impl CredentialManager {
                         expired: token_expired(creds.expires_at.as_deref(), now_ts()),
                         scopes: creds.scopes.clone(),
                         uses_global_fallback,
+                        provider_calls_enabled,
                     }
                 }
                 None => PlatformStatus {
@@ -173,11 +191,35 @@ impl CredentialManager {
                     expired: false,
                     scopes: None,
                     uses_global_fallback: false,
+                    provider_calls_enabled: false,
                 },
             };
             out.push(status);
         }
         out
+    }
+
+    /// Liest den wirksamen Freigabeschalter mit derselben Priorität wie die
+    /// Credential-Auswahl: kanalbezogene Zeile vor globalem Fallback.
+    pub async fn provider_calls_enabled(
+        &self,
+        platform: &str,
+        streamer_login: Option<&str>,
+    ) -> Result<bool, sqlx::Error> {
+        let enabled: Option<bool> = sqlx::query_scalar(
+            "SELECT provider_calls_enabled FROM social_media_platform_auth \
+             WHERE platform = $1 AND enabled = 1 AND ( \
+                   streamer_login = $2 \
+                   OR ($2 IS NOT NULL AND streamer_login IS NULL) \
+                   OR ($2 IS NULL AND streamer_login IS NULL)) \
+             ORDER BY CASE WHEN streamer_login = $2 THEN 1 ELSE 0 END DESC, id DESC \
+             LIMIT 1",
+        )
+        .bind(platform)
+        .bind(streamer_login)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(enabled.unwrap_or(false))
     }
 
     /// True, wenn der Token abgelaufen ist oder binnen 1h abläuft.
@@ -273,7 +315,7 @@ mod tests {
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
-                enabled INTEGER DEFAULT 1)",
+                enabled INTEGER DEFAULT 1, provider_calls_enabled BOOLEAN NOT NULL DEFAULT FALSE)",
         )
         .execute(&pool)
         .await
@@ -334,6 +376,22 @@ mod tests {
         .await;
         seed(&pool, &c, "tiktok", Some("nani"), "nani-access", None).await;
         let mgr = CredentialManager::new(pool.clone(), c);
+
+        assert!(!mgr
+            .provider_calls_enabled("tiktok", Some("nani"))
+            .await
+            .unwrap());
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET provider_calls_enabled = TRUE \
+             WHERE platform = 'tiktok' AND streamer_login = 'nani'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(mgr
+            .provider_calls_enabled("tiktok", Some("nani"))
+            .await
+            .unwrap());
 
         // Exakter Streamer-Treffer bevorzugt.
         let creds = mgr.get_credentials("tiktok", Some("nani")).await.unwrap();

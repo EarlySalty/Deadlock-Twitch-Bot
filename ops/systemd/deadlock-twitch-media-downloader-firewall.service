@@ -1,0 +1,46 @@
+[Unit]
+Description=Deadlock Twitch Medien-Downloader Egress-Firewall
+After=local-fs.target
+Before=deadlock-twitch-media-downloader.socket
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=/usr/sbin/nft --check --file /opt/deadlock/twitch/current/ops/systemd/tb-media-downloader-egress.nft
+ExecStartPre=/opt/deadlock/twitch/current/ops/systemd/validate-tb-media-downloader-firewall.sh --before-load
+ExecStart=/usr/sbin/nft --file /opt/deadlock/twitch/current/ops/systemd/tb-media-downloader-egress.nft
+ExecStartPost=/opt/deadlock/twitch/current/ops/systemd/validate-tb-media-downloader-firewall.sh --after-load
+RemainAfterExit=yes
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=
+RestrictAddressFamilies=AF_NETLINK
+SystemCallArchitectures=native
+UMask=0077
+LimitCORE=0
+LimitNOFILE=64
+TasksMax=8
+
+[Install]
+RequiredBy=deadlock-twitch-media-downloader.socket

@@ -69,12 +69,9 @@ impl ClipRepository {
     /// Bei Konflikt (clip_id bereits vorhanden) wird die vorhandene ID zurückgegeben,
     /// `is_new` ist dann `false`.
     ///
-    /// Parität zu Python (`clip_manager.register_clip`): nach JEDEM Register —
-    /// sowohl bei bereits existierendem als auch bei neuem Clip — wird
-    /// `apply_default_layout` aufgerufen, damit `layout_override_json` mit dem
-    /// Streamer-Default vorbelegt wird (COALESCE schützt bestehende Overrides).
-    /// Der frühere Rust-Fetch-Pfad rief das nie auf → per-Fetch eingelesene Clips
-    /// hatten `layout_override_json = NULL` statt des Defaults (social_media-1).
+    /// Nach jedem Register stellt `apply_default_layout` die dynamische
+    /// Vererbung sicher: neue Clips bleiben ohne Snapshot-Override, echte
+    /// Individualanpassungen werden bewahrt.
     ///
     pub async fn register_clip(&self, rec: &ClipRecord) -> Result<(i64, bool), sqlx::Error> {
         let created_at = chrono::DateTime::parse_from_rfc3339(&rec.created_at)
@@ -133,8 +130,8 @@ impl ClipRepository {
         Ok((id, true))
     }
 
-    /// Belegt das Clip-Override mit dem Streamer-Default (best-effort, mirror
-    /// Python: Layout-Fehler brechen den Register-Pfad nicht ab).
+    /// Stellt dynamische Default-Vererbung her (best-effort; Layout-Fehler
+    /// brechen den Register-Pfad nicht ab).
     async fn apply_layout(&self, clip_db_id: i64, streamer_login: &str) {
         if let Err(e) = apply_default_layout(&self.pool, clip_db_id, streamer_login).await {
             tracing::warn!(
@@ -264,33 +261,23 @@ mod tests {
         .unwrap()
     }
 
-    // social_media-1: register_clip belegt layout_override_json sowohl für neue
-    // als auch für bereits existierende Clips (Python-Parität: apply_default_layout
-    // in beiden Zweigen).
     #[tokio::test]
-    async fn register_clip_belegt_default_layout_in_beiden_zweigen() {
+    async fn register_clip_vererbt_default_dynamisch_in_beiden_zweigen() {
         let Some(pool) = make_pool("t_sm_repo_layout").await else {
             return;
         };
         let repo = ClipRepository::new(pool.clone());
 
-        // Neuer Clip → layout_override gesetzt (Streamer ohne eigenes Layout → globaler Default).
+        // Neuer Clip bleibt ohne Snapshot und erbt dadurch dynamisch.
         let (id, is_new) = repo.register_clip(&rec("c1", "nani")).await.unwrap();
         assert!(is_new);
-        assert!(
-            layout_override(&pool, id).await.is_some(),
-            "neuer Clip muss layout_override haben"
-        );
+        assert!(layout_override(&pool, id).await.is_none());
 
-        // Existierender Clip → erneuter Register ruft apply_default_layout (COALESCE
-        // schützt bestehendes Override), Override bleibt gesetzt.
+        // Auch der erneute Register erzeugt keinen Snapshot.
         let (id2, is_new2) = repo.register_clip(&rec("c1", "nani")).await.unwrap();
         assert_eq!(id, id2);
         assert!(!is_new2);
-        assert!(
-            layout_override(&pool, id2).await.is_some(),
-            "existierender Clip behält layout_override"
-        );
+        assert!(layout_override(&pool, id2).await.is_none());
     }
 
     #[tokio::test]

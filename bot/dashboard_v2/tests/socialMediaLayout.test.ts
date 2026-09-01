@@ -8,6 +8,7 @@ import {
   TARGET_HEIGHT,
   TARGET_WIDTH,
   applyDrag,
+  adjustBoxWithKeyboard,
   cappedTileWidth,
   clampCamPositionToTarget,
   clampToFrame,
@@ -98,6 +99,36 @@ test('applyDrag verschiebt und skaliert an der gezogenen Ecke', () => {
   assert.deepEqual(applyDrag(start, 20, 10, 'resize-bl'), { x: 120, y: 100, w: 380, h: 310 });
   // Unterkante: nur die Hoehe.
   assert.deepEqual(applyDrag(start, 999, 60, 'resize-b'), { x: 100, y: 100, w: 400, h: 360 });
+});
+
+test('Tastatursteuerung verschiebt und skaliert dieselbe Layoutbox', () => {
+  const start = { x: 100, y: 100, w: 400, h: 300 };
+
+  assert.deepEqual(adjustBoxWithKeyboard(start, 'ArrowLeft', false, 10), {
+    x: 90,
+    y: 100,
+    w: 400,
+    h: 300,
+  });
+  assert.deepEqual(adjustBoxWithKeyboard(start, 'ArrowDown', false, 2), {
+    x: 100,
+    y: 102,
+    w: 400,
+    h: 300,
+  });
+  assert.deepEqual(adjustBoxWithKeyboard(start, 'ArrowRight', true, 10), {
+    x: 100,
+    y: 100,
+    w: 410,
+    h: 300,
+  });
+  assert.deepEqual(adjustBoxWithKeyboard(start, 'ArrowUp', true, 10), {
+    x: 100,
+    y: 100,
+    w: 400,
+    h: 290,
+  });
+  assert.equal(adjustBoxWithKeyboard(start, 'Enter', false, 10), null);
 });
 
 // Im Stacked-Modus zieht der Nutzer nur die Streifenhoehe. x/y/w bleiben stehen,

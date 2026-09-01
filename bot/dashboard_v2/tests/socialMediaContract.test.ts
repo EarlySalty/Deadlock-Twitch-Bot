@@ -67,6 +67,7 @@ const OBERFLAECHE = [
   'src/pages/SocialMedia.tsx',
   'src/pages/SocialMediaAdmin.tsx',
   'src/components/socialmedia/AnalyticsTab.tsx',
+  'src/components/socialmedia/ClipPreparationWorkbench.tsx',
   'src/components/socialmedia/EnrichmentPanel.tsx',
   'src/components/socialmedia/LayoutEditor.tsx',
   'src/components/socialmedia/LadeFehlerHinweis.tsx',
@@ -135,6 +136,150 @@ test('der Regex findet ueberhaupt Schluessel', () => {
   // Schutz gegen den stillen Ausfall: ein kaputter Regex laesst den Test oben
   // durchlaufen, ohne irgendetwas zu pruefen.
   assert.ok(schluesselAusDateien(OBERFLAECHE).size > 100);
+});
+
+test('jeder freigegebene Backend-Fehlercode hat einen verständlichen UI-Text', () => {
+  const backend = fs.readFileSync(
+    path.join(REPO, 'rust/crates/tb-dashboard-api/src/handlers/social_media.rs'),
+    'utf8',
+  );
+  const start = backend.indexOf('fn safe_upload_error_code(');
+  const ende = backend.indexOf('\nfn upload_states_value(', start);
+  assert.ok(start >= 0 && ende > start, 'safe_upload_error_code konnte nicht gelesen werden');
+
+  const codes = new Set<string>(['upload_failed']);
+  const arm = /"([a-z0-9_]+)"\s*=>/g;
+  let treffer: RegExpExecArray | null;
+  const funktion = backend.slice(start, ende);
+  while ((treffer = arm.exec(funktion))) codes.add(treffer[1]);
+
+  assert.ok(codes.size > 20, 'Die Backend-Allowlist wurde unerwartet leer gelesen');
+  const fehlend = [...codes].filter((code) => !(code in FEHLER_TEXTE)).sort();
+  assert.deepEqual(
+    fehlend,
+    [],
+    `Diese sicheren Backend-Codes würden im Dashboard nur generisch erscheinen: ${fehlend.join(', ')}`,
+  );
+});
+
+test('jeder Fehler des manuellen Multipart-Uploads hat einen verständlichen UI-Text', () => {
+  const backend = fs.readFileSync(
+    path.join(REPO, 'rust/crates/tb-dashboard-api/src/handlers/social_media.rs'),
+    'utf8',
+  );
+  const start = backend.indexOf('fn upload_error(');
+  const ende = backend.indexOf('\n/// `?streamer_login=`', start);
+  assert.ok(start >= 0 && ende > start, 'Multipart-Uploadpfad konnte nicht gelesen werden');
+
+  const codes = new Set<string>();
+  const aufruf = /upload_error\(\s*StatusCode::[A-Z_]+,\s*"([a-z0-9_]+)"/g;
+  let treffer: RegExpExecArray | null;
+  const uploadPfad = backend.slice(start, ende);
+  while ((treffer = aufruf.exec(uploadPfad))) codes.add(treffer[1]);
+
+  assert.ok(codes.size >= 15, 'Die Multipart-Fehlercodes wurden unerwartet leer gelesen');
+  const fehlend = [...codes].filter((code) => !(code in FEHLER_TEXTE)).sort();
+  assert.deepEqual(
+    fehlend,
+    [],
+    `Diese Upload-Codes würden im Dashboard nur generisch erscheinen: ${fehlend.join(', ')}`,
+  );
+});
+
+test('OAuth-Verbindung und Provider-Freigabe bleiben im Dashboard getrennt sichtbar', () => {
+  const backend = fs.readFileSync(
+    path.join(REPO, 'rust/crates/tb-dashboard-api/src/handlers/social_media.rs'),
+    'utf8',
+  );
+  const api = lies('src/api/socialMedia.ts');
+  const seite = lies('src/pages/SocialMedia.tsx');
+
+  assert.match(backend, /"provider_calls_enabled":\s*s\.provider_calls_enabled/);
+  assert.match(api, /provider_calls_enabled:\s*boolean/);
+  assert.match(api, /provider_release_blocked:\s*boolean/);
+  assert.match(api, /release_block_reason:/);
+  assert.match(seite, /status\?\.provider_calls_enabled/);
+  assert.match(seite, /status\?\.provider_release_blocked/);
+  assert.match(seite, /Veröffentlichung wartet auf Plattformfreigabe\./);
+});
+
+test('TikTok kann ohne Zustimmung pro Clip nicht über die allgemeine Freigabe gewählt werden', () => {
+  const seite = lies('src/pages/SocialMedia.tsx');
+
+  assert.match(seite, /DIREKTFREIGABE_GESPERRT[^;]+tiktok/s);
+  assert.match(seite, /disabled=\{direktfreigabeGesperrt\}/);
+  assert.match(seite, /disabled=\{gesperrt \|\| providerGesperrt\}/);
+  assert.match(
+    seite,
+    /TikTok bleibt gesperrt, bis Sichtbarkeit, Interaktionen und Zustimmung pro Clip gewählt werden können\./,
+  );
+});
+
+test('zentrale Social-Media-Interaktionen bleiben per Tastatur und Statussemantik bedienbar', () => {
+  const seite = lies('src/pages/SocialMedia.tsx');
+  const verwaltung = lies('src/pages/SocialMediaAdmin.tsx');
+  const analytics = lies('src/components/socialmedia/AnalyticsTab.tsx');
+  const vorbereitung = lies('src/components/socialmedia/ClipPreparationWorkbench.tsx');
+  const anreicherung = lies('src/components/socialmedia/EnrichmentPanel.tsx');
+  const layout = lies('src/components/socialmedia/LayoutEditor.tsx');
+
+  assert.match(seite, /<fieldset[^>]*disabled=\{gesperrt\}/);
+  assert.match(seite, /<input\s+type="radio"/);
+  assert.doesNotMatch(seite, /role="radio"/);
+  assert.match(seite, /const standUnbekannt = isLoading \|\| istStandUnbekannt/);
+  assert.match(seite, /aria-expanded=\{editingMode === 'enrichment'\}/);
+  assert.match(seite, /aria-controls=\{enrichmentPanelId\}/);
+  assert.match(seite, /role="status" aria-live="polite"/);
+  assert.match(seite, /role="alert"/);
+  assert.match(vorbereitung, /Clip-Aufbereitung für \{title\}/);
+  assert.match(vorbereitung, /aria-describedby=\{untertitelHinweisId\}/);
+  assert.match(anreicherung, /<label htmlFor=\{titleId\}/);
+  assert.match(anreicherung, /<label htmlFor=\{descriptionId\}/);
+  assert.match(anreicherung, /<label htmlFor=\{hashtagsId\}/);
+  assert.match(anreicherung, /aria-describedby=\{titleInvalid \?/);
+  assert.match(anreicherung, /titleErrorId/);
+  assert.match(anreicherung, /aria-describedby=\{describedBy\}/);
+  assert.match(anreicherung, /aria-invalid=\{titleInvalid\}/);
+  assert.match(anreicherung, /aria-invalid=\{invalid\}/);
+  assert.match(anreicherung, /disabled=\{!dirty \|\| isProcessing \|\| editInvalid\}/);
+  assert.match(anreicherung, /text-on-gold/);
+  assert.doesNotMatch(anreicherung, /ring-orange\/40/);
+  assert.doesNotMatch(anreicherung, /placeholder:text-text-secondary\/60/);
+  assert.match(anreicherung, /border-orange\/70/);
+  assert.match(anreicherung, /descriptionInvalid/);
+  assert.match(anreicherung, /hashtagLengthInvalid/);
+  assert.match(anreicherung, /descriptionLimit/);
+  assert.match(anreicherung, /hashtagLengthLimit/);
+  assert.match(anreicherung, /normalisiereHashtags/);
+  assert.match(anreicherung, /aria-pressed=\{active\}/);
+  assert.match(anreicherung, /min-h-8 min-w-8/);
+  assert.match(seite, /layoutQuery\.isError/);
+  assert.match(seite, /clipsQuery\.isError/);
+  assert.match(seite, /pruefeGanzeZahlImBereich/);
+  assert.match(seite, /ref=\{aktionsmeldungRef\}/);
+  assert.doesNotMatch(seite, /const gedaempft/);
+  assert.match(verwaltung, /htmlFor="social-media-admin-streamer"/);
+  assert.match(verwaltung, /accessListError/);
+  assert.match(verwaltung, /mutationStandKnown/);
+  assert.match(verwaltung, /overflow-x-hidden/);
+  assert.match(analytics, /htmlFor=\{`\$\{interfaceId\}-clip`\}/);
+  assert.match(analytics, /accessibilityLayer/);
+  assert.match(analytics, /<details/);
+  assert.match(analytics, /<table/);
+  assert.match(analytics, /analyticsQuery\.error/);
+  assert.match(analytics, /border-orange\/70/);
+  assert.match(layout, /adjustBoxWithKeyboard/);
+  assert.match(layout, /aria-keyshortcuts/);
+  assert.match(layout, /aria-live="polite" aria-atomic="true"/);
+  assert.match(layout, /formatBox\(spec\.box\)/);
+  assert.match(layout, /outline: '2px solid #140D0A'/);
+  assert.match(layout, /h-6 w-6/);
+  assert.match(layout, /htmlFor=\{vorschauSelectId\}/);
+  assert.match(layout, /aria-pressed=\{selectedBox === 'game_crop'\}/);
+  assert.match(layout, /aria-pressed=\{selectedBox === 'cam_crop'\}/);
+  assert.match(layout, /disabled=\{isSaving\}/);
+  assert.match(layout, /onClick=\{onCancel\}/);
+  assert.doesNotMatch(layout, /bg-orange text-white/);
 });
 
 // ── 2. Ein Text, eine Bedeutung ──────────────────────────────────────────────
@@ -253,7 +398,6 @@ const BEWUSST_OHNE_UI = new Set([
   '/social-media/api/last-hashtags',
   '/social-media/api/analytics',
   '/social-media/api/upload',
-  '/social-media/api/mark-uploaded',
   '/social-media/api/batch-upload',
   '/social-media/api/templates/global',
   '/social-media/api/templates/streamer',
@@ -401,12 +545,19 @@ test('Befund 5: die Verbindungskarte erfindet keinen Verbindungszustand', () => 
   );
   const rumpf = komponentenRumpf(quelle, 'PlatformConnectionsCard');
   assert.match(rumpf, /LadeFehlerHinweis fehler=\{ladeFehler\}/);
-  assert.match(rumpf, /const standUnbekannt = istStandUnbekannt\(ladeFehler\)/);
+  assert.match(
+    rumpf,
+    /const standUnbekannt = isLoading \|\| istStandUnbekannt\(ladeFehler\)/,
+  );
 
-  // Ohne Status darf keine Zeile "nicht verbunden" behaupten.
-  const unbekannt = rumpf.indexOf('if (standUnbekannt) {');
+  // Beim Laden oder ohne Status darf keine Zeile "nicht verbunden" behaupten.
+  const laden = rumpf.indexOf('if (isLoading) {');
+  const unbekannt = rumpf.indexOf('else if (standUnbekannt) {');
   const nichtVerbunden = rumpf.indexOf("t('nicht verbunden')");
-  assert.ok(unbekannt >= 0 && unbekannt < nichtVerbunden, 'Der unbekannte Stand wird nicht zuerst geprueft.');
+  assert.ok(
+    laden >= 0 && laden < unbekannt && unbekannt < nichtVerbunden,
+    'Lade- und Fehlerstand werden nicht vor „nicht verbunden“ geprüft.',
+  );
 
   // Und es darf kein Knopf dastehen, der einen ueberfluessigen OAuth-Flow startet.
   const sperre = rumpf.indexOf('{standUnbekannt ? null :');
@@ -525,4 +676,31 @@ test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
     (text, params) => translate('en', text, params),
   );
   assert.equal(satz, 'The decision could not be saved.');
+});
+
+test('Provider-Fehlercodes erscheinen nicht roh an der Clip-Karte', () => {
+  assert.equal(
+    fehlerText({ code: 'provider_rejected' }, (text, params) =>
+      translate('de', text, params),
+    ),
+    'Die Plattform hat die Veröffentlichung abgelehnt.',
+  );
+  assert.equal(
+    fehlerText({ code: 'video_validation_failed' }, (text, params) =>
+      translate('en', text, params),
+    ),
+    'The prepared video does not meet the platform rules.',
+  );
+
+  const quelle = lies(SEITE);
+  assert.match(
+    quelle,
+    /fehlerText\(\{ code: text \}, t\)/,
+    'Upload-Fehler werden sonst als interne Codes wie provider_rejected angezeigt.',
+  );
+  assert.match(
+    quelle,
+    /eintrag\.queueStatus === 'failed'/,
+    'Ein fehlgeschlagener Providerjob muss sichtbar sein, auch wenn der globale Clip-Status noch freigegeben lautet.',
+  );
 });

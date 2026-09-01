@@ -1,0 +1,115 @@
+[Unit]
+Description=Deadlock Twitch Medien-Downloader (%i)
+After=network-online.target
+Wants=network-online.target
+Requires=deadlock-twitch-media-downloader-firewall-refresh@%i.service
+After=deadlock-twitch-media-downloader-firewall-refresh@%i.service
+CollectMode=inactive-or-failed
+
+[Service]
+Type=exec
+User=twitchdownload
+Group=twitchdownload
+WorkingDirectory=/
+ExecStart=/opt/deadlock/twitch/current/rust/target/release/tb-media-downloader --stdio
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=deadlock-twitch-media-downloader
+Restart=no
+RuntimeMaxSec=35min
+TimeoutStopSec=10s
+KillMode=mixed
+OOMPolicy=kill
+
+# Der Dienst erhält weder Credentials/DB-Konfiguration noch Pfadrechte im
+# Medienbaum. Das vom Bot bereits sicher geöffnete leere Ausgabe-FD kommt
+# ausschließlich per SCM_RIGHTS über den aktivierten Unix-Socket.
+InaccessiblePaths=-/etc/credstore.encrypted
+InaccessiblePaths=-/etc/deadlock-twitch
+InaccessiblePaths=-/run/credentials
+InaccessiblePaths=-/var/lib/deadlock-twitch-media
+InaccessiblePaths=-/var/lib/deadlock-twitch-bot
+InaccessiblePaths=-/var/lib/deadlock-twitch-dashboard
+InaccessiblePaths=-/var/log/deadlock-twitch-bot
+InaccessiblePaths=-/var/log/deadlock-twitch-dashboard
+InaccessiblePaths=-/opt/deadlock/twitch/current/data
+InaccessiblePaths=/run
+BindReadOnlyPaths=/opt/deadlock/twitch/current/ops/systemd/tb-media-downloader-resolv.conf:/etc/resolv.conf
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+# Bubblewrap benötigt ausschließlich User-, Mount- und PID-Namespaces. Das
+# Netzwerk bleibt im Dienst-Namespace, damit die cgroup-Adressfilter auch für
+# yt-dlp unverändert greifen.
+RestrictNamespaces=user mnt pid
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+LimitCORE=0
+LimitNOFILE=128
+LimitFSIZE=536870912
+TasksMax=32
+MemoryHigh=2048M
+MemoryMax=2304M
+MemorySwapMax=0
+CPUQuota=200%
+
+# Kernel-seitige Egress-Grenze für den gesamten Instanz-cgroup, einschließlich
+# Bubblewrap und yt-dlp. Öffentliches Internet bleibt erreichbar; interne,
+# lokale, Metadaten-, Multicast-, reservierte und IPv4-gemappte Ziele nicht.
+IPAddressDeny=0.0.0.0/8
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=127.0.0.0/8
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.0.0.0/24
+IPAddressDeny=192.0.2.0/24
+IPAddressDeny=192.31.196.0/24
+IPAddressDeny=192.52.193.0/24
+IPAddressDeny=192.88.99.0/24
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=192.175.48.0/24
+IPAddressDeny=198.18.0.0/15
+IPAddressDeny=198.51.100.0/24
+IPAddressDeny=203.0.113.0/24
+IPAddressDeny=224.0.0.0/4
+IPAddressDeny=240.0.0.0/4
+IPAddressDeny=::/128
+IPAddressDeny=::1/128
+IPAddressDeny=::/96
+IPAddressDeny=::ffff:0:0/96
+IPAddressDeny=64:ff9b::/96
+IPAddressDeny=64:ff9b:1::/48
+IPAddressDeny=100::/64
+IPAddressDeny=100:0:0:1::/64
+IPAddressDeny=2001::/23
+IPAddressDeny=2001:db8::/32
+IPAddressDeny=2002::/16
+IPAddressDeny=2620:4f:8000::/48
+IPAddressDeny=3fff::/20
+IPAddressDeny=5f00::/16
+IPAddressDeny=fc00::/7
+IPAddressDeny=fec0::/10
+IPAddressDeny=fe80::/10
+IPAddressDeny=ff00::/8

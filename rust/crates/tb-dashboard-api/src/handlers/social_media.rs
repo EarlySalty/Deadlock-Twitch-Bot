@@ -14,14 +14,18 @@
 //! [`resolve_streamer_scope`]-Helfer.
 
 use axum::{
-    extract::{Multipart, Path, Query, State},
-    http::{StatusCode, Uri},
+    body::{Body, Bytes},
+    extract::{multipart::Field, Multipart, Path, Query, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::Path as FsPath;
+use std::sync::{Arc, OnceLock};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::Semaphore;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,12 +36,13 @@ use tb_social_media::analytics::{
     list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord,
 };
 use tb_social_media::approval::{
-    cancel_scheduled_uploads, get_approval_record, handle_decision, normalize_decision,
-    serialize_approval_record, ApprovalError, DECISION_APPROVE,
+    cancel_scheduled_uploads, get_approval_record, handle_decision, serialize_approval_record,
+    ApprovalError, ContentMutationError, DECISION_APPROVE,
 };
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::{
-    batch_upload_all_new, get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload,
+    batch_upload_all_new, get_clips_for_dashboard, reconcile_provider_uploads,
+    register_manual_upload_in_transaction, ManualReconciliationError, ManualReconciliationRequest,
     ManualUploadError,
 };
 use tb_social_media::clip_queue::queue_upload;
@@ -48,12 +53,13 @@ use tb_social_media::clip_templates::{
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::enrichment::{
-    ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord,
+    ensure_enrichment_row_checked, get_enrichment, get_enrichment_checked, update_manual_edit,
+    EnrichmentRecord,
 };
 use tb_social_media::forms::{submit_clip_form, FormKey, FormSubmissionOutcome};
 use tb_social_media::layout::{
-    default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
-    set_clip_layout_override, upsert_streamer_layout, StreamerLayout,
+    apply_default_layout, default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
+    set_clip_layout_override, upsert_streamer_layout, LayoutMutationError, StreamerLayout,
 };
 use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
@@ -61,14 +67,18 @@ use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
-    berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
-    load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
-    verfuegbare_clips, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
-    StreamerSettings, PLATFORMS,
+    berechne_vorrat, ensure_streamer_rows, load_categories_checked,
+    load_platform_schedules_checked, load_streamer_settings_checked, save_category_setting,
+    save_platform_schedule, save_streamer_settings, verfuegbare_clips, ApprovalMode,
+    CategoryOption, PlatformSchedule, PoolForecast, ReleaseMode, StreamerSettings,
+    StreamerSettingsSaveError, PLATFORMS,
+};
+use tb_social_media::preparation::{
+    ClipPreparationRecord, ClipPreparationService, PreparationError, DEFAULT_CLIPS_DIR,
 };
 use tb_social_media::rendering::{render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
-use tb_social_media::retention::mark_clip_discarded;
+use tb_social_media::retention::discard_clip;
 use tb_social_media::scheduler::{next_cadence_slot, next_free_slot};
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::settings::{coerce_bool, get_posting_schedule, PostingSchedule};
@@ -109,6 +119,15 @@ pub async fn privacy_handler() -> Html<String> {
 /// Twitch-Login-Redirect-Ziel der unauthentifizierten HTML-Index-Seite
 /// (B15-FIX-index-redirect / finding social_media-2).
 const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
+const SOCIAL_MEDIA_ADMIN_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media-admin";
+
+fn social_media_login_url(uri: &Uri) -> &'static str {
+    if uri.path().starts_with("/social-media-admin") {
+        SOCIAL_MEDIA_ADMIN_LOGIN_URL
+    } else {
+        SOCIAL_MEDIA_LOGIN_URL
+    }
+}
 
 /// `GET /social-media` — Dashboard-SPA (Auth erforderlich).
 ///
@@ -117,7 +136,7 @@ const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
 /// Python-Parität). Die JSON-Daten-Endpoints behalten ihr 401 (kein Redirect).
 pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
     if matches!(auth, DashboardAuthLevel::None) {
-        return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
+        return axum::response::Redirect::to(social_media_login_url(&uri)).into_response();
     }
     // Die alte HTML-Seite ist abgeloest. Bestehende Links landen auf der SPA,
     // statt ins Leere zu laufen.
@@ -133,6 +152,20 @@ pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
         }
         None => axum::response::Redirect::to("/social-media-admin").into_response(),
     }
+}
+
+/// Shell-Wrapper für den echten `/social-media-admin`-Einstieg. So behält der
+/// Login den ursprünglichen Rücksprung; authentifizierte Requests laufen durch
+/// den bestehenden SPA-/Host-Guard.
+pub async fn social_media_admin_index_handler(
+    headers: HeaderMap,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return axum::response::Redirect::to(SOCIAL_MEDIA_ADMIN_LOGIN_URL).into_response();
+    }
+    crate::handlers::spa::social_media_admin_handler(headers, auth, State(pool)).await
 }
 
 /// Parameter, die an die SPA weitergereicht werden. Mehr braucht der Umweg
@@ -759,6 +792,62 @@ fn parse_layout_request(payload: &Value) -> Result<StreamerLayout, Response> {
 
 const UPLOAD_MAX_BYTES: usize = 200 * 1024 * 1024;
 const UPLOAD_MAX_DURATION_SECONDS: f64 = 300.0;
+const UPLOAD_MAX_TEXT_BYTES: usize = 500;
+const UPLOAD_MAX_SLUG_BYTES: usize = 128;
+const UPLOAD_MAX_WIDTH: i64 = 3840;
+const UPLOAD_MAX_HEIGHT: i64 = 2160;
+const UPLOAD_MAX_FPS: f64 = 120.0;
+const UPLOAD_STAGING_WALLCLOCK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const UPLOAD_STAGING_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Clone, Copy)]
+struct UploadTiming {
+    wallclock: std::time::Duration,
+    idle: std::time::Duration,
+}
+
+#[derive(Clone, Copy)]
+struct UploadLimits {
+    file_bytes: usize,
+    text_bytes: usize,
+    slug_bytes: usize,
+}
+
+impl UploadLimits {
+    fn production() -> Self {
+        Self {
+            file_bytes: UPLOAD_MAX_BYTES,
+            text_bytes: UPLOAD_MAX_TEXT_BYTES,
+            slug_bytes: UPLOAD_MAX_SLUG_BYTES,
+        }
+    }
+}
+
+impl UploadTiming {
+    fn production() -> Self {
+        Self {
+            wallclock: UPLOAD_STAGING_WALLCLOCK,
+            idle: UPLOAD_STAGING_IDLE,
+        }
+    }
+
+    fn operation_deadline(self, total_deadline: tokio::time::Instant) -> tokio::time::Instant {
+        total_deadline.min(tokio::time::Instant::now() + self.idle)
+    }
+}
+
+fn upload_timeout_response() -> Response {
+    upload_error(
+        StatusCode::REQUEST_TIMEOUT,
+        "upload_timeout",
+        Some("Der Upload hat zu lange keine Daten geliefert."),
+    )
+}
+
+fn manual_upload_semaphore() -> &'static Semaphore {
+    static SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
 
 /// Echter MIME-Check über die ISO-BMFF-`ftyp`-Box (B15-FIX-mime).
 ///
@@ -799,198 +888,1039 @@ fn detect_mp4_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+fn plausible_ftyp_box(bytes: &[u8], file_len: u64) -> bool {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
+        return false;
+    }
+    let short_size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as u64;
+    let (box_size, minimum_size) = if short_size == 1 {
+        if bytes.len() < 20 {
+            return false;
+        }
+        (
+            u64::from_be_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]),
+            20,
+        )
+    } else {
+        (short_size, 16)
+    };
+    box_size >= minimum_size && box_size <= file_len
+}
+
 /// Python-Allowlist (`{video/mp4, application/mp4}`); QuickTime/andere → false.
 fn is_accepted_mp4_mime(mime: &str) -> bool {
     matches!(mime, "video/mp4" | "application/mp4")
 }
 
+struct SafeUploadDirectory {
+    handle: tokio::fs::File,
+    logical_path: std::path::PathBuf,
+}
+
+impl SafeUploadDirectory {
+    fn child_path(&self, name: &std::ffi::OsStr) -> std::path::PathBuf {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", self.handle.as_raw_fd()))
+                .join(name)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.logical_path.join(name)
+        }
+    }
+}
+
+async fn open_or_create_directory_chain(
+    path: &FsPath,
+    final_mode: u32,
+) -> std::io::Result<SafeUploadDirectory> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        const O_DIRECTORY: i32 = 0o200000;
+        const O_NOFOLLOW: i32 = 0o400000;
+        const O_NONBLOCK: i32 = 0o4000;
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
+        let mut current = if path.is_absolute() {
+            options.open("/").await?
+        } else {
+            options.open(".").await?
+        };
+        for component in path.components() {
+            let name = match component {
+                std::path::Component::RootDir | std::path::Component::CurDir => continue,
+                std::path::Component::Normal(name) => name,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Unsicherer Verzeichnispfad",
+                    ));
+                }
+            };
+            use std::os::fd::AsRawFd;
+            let child = std::path::PathBuf::from(format!(
+                "/proc/self/fd/{}/{}",
+                current.as_raw_fd(),
+                name.to_string_lossy()
+            ));
+            let next = match options.open(&child).await {
+                Ok(directory) => directory,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::fs::create_dir(&child).await?;
+                    options.open(&child).await?
+                }
+                Err(error) => return Err(error),
+            };
+            current = next;
+        }
+        current
+            .set_permissions(std::fs::Permissions::from_mode(final_mode))
+            .await?;
+        Ok(SafeUploadDirectory {
+            handle: current,
+            logical_path: path.to_path_buf(),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut current = std::path::PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::RootDir => current.push(FsPath::new("/")),
+                std::path::Component::CurDir => {}
+                std::path::Component::Normal(name) => {
+                    current.push(name);
+                    match tokio::fs::symlink_metadata(&current).await {
+                        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                        }
+                        Ok(_) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "Symlink-Komponente abgelehnt",
+                            ));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            tokio::fs::create_dir(&current).await?;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Unsicherer Verzeichnispfad",
+                    ));
+                }
+            }
+        }
+        tokio::fs::set_permissions(&current, std::fs::Permissions::from_mode(final_mode)).await?;
+        Ok(SafeUploadDirectory {
+            handle: tokio::fs::File::open(&current).await?,
+            logical_path: current,
+        })
+    }
+}
+
+async fn open_or_create_upload_streamer_directory(
+    base_dir: &FsPath,
+    streamer_login: &str,
+) -> std::io::Result<SafeUploadDirectory> {
+    let base = open_or_create_directory_chain(base_dir, 0o2770).await?;
+    let child = base.child_path(std::ffi::OsStr::new(streamer_login));
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+        const O_DIRECTORY: i32 = 0o200000;
+        const O_NOFOLLOW: i32 = 0o400000;
+        const O_NONBLOCK: i32 = 0o4000;
+        let mut options = tokio::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
+        let directory = match options.open(&child).await {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir(&child).await?;
+                options.open(&child).await?
+            }
+            Err(error) => return Err(error),
+        };
+        directory
+            .set_permissions(std::fs::Permissions::from_mode(0o2770))
+            .await?;
+        let logical_path = base.logical_path.join(streamer_login);
+        let _ = base.handle.as_raw_fd();
+        Ok(SafeUploadDirectory {
+            handle: directory,
+            logical_path,
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        open_or_create_directory_chain(&base.logical_path.join(streamer_login), 0o2770).await
+    }
+}
+
+async fn open_or_create_upload_work_directory(
+    base_dir: &FsPath,
+) -> std::io::Result<SafeUploadDirectory> {
+    let base = open_or_create_directory_chain(base_dir, 0o2770).await?;
+    let child = base.child_path(std::ffi::OsStr::new(".dashboard-work"));
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        const O_DIRECTORY: i32 = 0o200000;
+        const O_NOFOLLOW: i32 = 0o400000;
+        const O_NONBLOCK: i32 = 0o4000;
+        let mut options = tokio::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
+        let directory = match options.open(&child).await {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir(&child).await?;
+                options.open(&child).await?
+            }
+            Err(error) => return Err(error),
+        };
+        let metadata = directory.metadata().await?;
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        // Das Arbeitsverzeichnis enthält die von ffprobe geprüften Inodes und
+        // darf deshalb weder von einer anderen UID stammen noch gruppenweit
+        // beschreibbar sein.
+        if metadata.uid() != unsafe { geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Unsicheres Upload-Arbeitsverzeichnis",
+            ));
+        }
+        directory
+            .set_permissions(std::fs::Permissions::from_mode(0o700))
+            .await?;
+        Ok(SafeUploadDirectory {
+            handle: directory,
+            logical_path: base.logical_path.join(".dashboard-work"),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        open_or_create_directory_chain(&base.logical_path.join(".dashboard-work"), 0o700).await
+    }
+}
+
+struct StagedUpload {
+    work_directory: SafeUploadDirectory,
+    temp_name: String,
+    file: tokio::fs::File,
+    length: usize,
+}
+
+impl StagedUpload {
+    async fn create(base_dir: &FsPath) -> Result<Self, Response> {
+        let work_directory = open_or_create_upload_work_directory(base_dir)
+            .await
+            .map_err(|_| upload_error(StatusCode::INTERNAL_SERVER_ERROR, "upload_failed", None))?;
+        let temp_name = format!(".upload-{}.tmp.mp4", tb_crypto::random_hex_token(16));
+        let temp_path = work_directory.child_path(std::ffi::OsStr::new(&temp_name));
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(target_os = "linux")]
+        options.custom_flags(0o400000);
+        let file = options
+            .open(&temp_path)
+            .await
+            .map_err(|_| upload_error(StatusCode::INTERNAL_SERVER_ERROR, "upload_failed", None))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if file
+                .set_permissions(std::fs::Permissions::from_mode(0o640))
+                .await
+                .is_err()
+            {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                return Err(upload_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "upload_failed",
+                    None,
+                ));
+            }
+        }
+        Ok(Self {
+            work_directory,
+            temp_name,
+            file,
+            length: 0,
+        })
+    }
+
+    async fn cleanup(&self) {
+        if let Ok(metadata) = self.file.metadata().await {
+            remove_owned_upload_link(
+                &self.work_directory,
+                std::ffi::OsStr::new(&self.temp_name),
+                &metadata,
+            )
+            .await;
+        }
+    }
+}
+
+async fn validate_staged_upload_inode(
+    staged: &StagedUpload,
+) -> Result<std::fs::Metadata, Response> {
+    let metadata = staged
+        .file
+        .metadata()
+        .await
+        .map_err(|_| upload_error(StatusCode::INTERNAL_SERVER_ERROR, "upload_failed", None))?;
+    if !metadata.is_file()
+        || metadata.len() != staged.length as u64
+        || metadata.len() == 0
+        || metadata.len() > UPLOAD_MAX_BYTES as u64
+    {
+        return Err(upload_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_upload_inode",
+            None,
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        if metadata.nlink() != 1
+            || metadata.uid() != unsafe { geteuid() }
+            || metadata.mode() & 0o7777 != 0o640
+        {
+            return Err(upload_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "invalid_upload_inode",
+                None,
+            ));
+        }
+    }
+    Ok(metadata)
+}
+
+fn upload_error(status: StatusCode, code: &str, message: Option<&str>) -> Response {
+    let mut payload = json!({ "error": code });
+    if let Some(message) = message {
+        payload["message"] = Value::String(message.to_string());
+    }
+    (status, Json(payload)).into_response()
+}
+
+async fn read_limited_multipart_text(
+    mut field: Field<'_>,
+    max_bytes: usize,
+    total_deadline: tokio::time::Instant,
+    timing: UploadTiming,
+) -> Result<String, Response> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(512));
+    loop {
+        let chunk =
+            tokio::time::timeout_at(timing.operation_deadline(total_deadline), field.chunk())
+                .await
+                .map_err(|_| upload_timeout_response())?
+                .map_err(|_| {
+                    upload_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_multipart",
+                        Some("Die Formulardaten sind ungültig."),
+                    )
+                })?;
+        let Some(chunk) = chunk else {
+            break;
+        };
+        append_limited_metadata(&mut bytes, &chunk, max_bytes)?;
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        upload_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_metadata",
+            Some("Ein Textfeld enthält ungültige Zeichen."),
+        )
+    })
+}
+
+fn append_limited_metadata(
+    target: &mut Vec<u8>,
+    chunk: &[u8],
+    max_bytes: usize,
+) -> Result<(), Response> {
+    if target.len().saturating_add(chunk.len()) > max_bytes {
+        return Err(upload_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "metadata_too_large",
+            Some("Ein Textfeld ist zu groß."),
+        ));
+    }
+    target.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn write_staged_chunk(
+    staged: &mut StagedUpload,
+    chunk: &[u8],
+    max_bytes: usize,
+) -> Result<(), Response> {
+    if staged.length.saturating_add(chunk.len()) > max_bytes {
+        return Err(upload_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "upload_too_large",
+            Some("Die Datei ist zu groß."),
+        ));
+    }
+    staged
+        .file
+        .write_all(chunk)
+        .await
+        .map_err(|_| upload_error(StatusCode::INTERNAL_SERVER_ERROR, "upload_failed", None))?;
+    staged.length += chunk.len();
+    Ok(())
+}
+
+async fn stage_multipart_file(
+    mut field: Field<'_>,
+    base_dir: &FsPath,
+    total_deadline: tokio::time::Instant,
+    timing: UploadTiming,
+    max_bytes: usize,
+) -> Result<StagedUpload, Response> {
+    let mut staged = StagedUpload::create(base_dir).await?;
+    loop {
+        let chunk =
+            match tokio::time::timeout_at(timing.operation_deadline(total_deadline), field.chunk())
+                .await
+            {
+                Err(_) => {
+                    staged.cleanup().await;
+                    return Err(upload_timeout_response());
+                }
+                Ok(result) => match result {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        staged.cleanup().await;
+                        return Err(upload_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_multipart",
+                            Some("Die Upload-Daten sind unvollständig."),
+                        ));
+                    }
+                },
+            };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        if let Err(response) = write_staged_chunk(&mut staged, &chunk, max_bytes).await {
+            staged.cleanup().await;
+            return Err(response);
+        }
+    }
+    if staged.length == 0 || staged.file.sync_all().await.is_err() {
+        staged.cleanup().await;
+        return Err(upload_error(
+            StatusCode::BAD_REQUEST,
+            "empty_upload",
+            Some("Die Datei ist leer."),
+        ));
+    }
+    Ok(staged)
+}
+
+#[cfg(target_os = "linux")]
+fn opened_file_path(file: &tokio::fs::File) -> String {
+    use std::os::fd::AsRawFd;
+    format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn opened_file_path(_: &tokio::fs::File) -> String {
+    String::new()
+}
+
+#[cfg(target_os = "linux")]
+fn link_open_file_noreplace(
+    source: &tokio::fs::File,
+    destination: &SafeUploadDirectory,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    const AT_FDCWD: i32 = -100;
+    const AT_SYMLINK_FOLLOW: i32 = 0x400;
+    unsafe extern "C" {
+        fn linkat(
+            olddirfd: i32,
+            oldpath: *const std::os::raw::c_char,
+            newdirfd: i32,
+            newpath: *const std::os::raw::c_char,
+            flags: i32,
+        ) -> i32;
+    }
+
+    let source_path = CString::new(opened_file_path(source))
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let destination_name = CString::new(destination_name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // /proc/self/fd/<n> verweist auf genau den gehaltenen, bereits geprüften
+    // Inode. AT_SYMLINK_FOLLOW folgt nur diesem eigenen FD-Link; der Zielname
+    // wird relativ zum gehaltenen no-follow-Verzeichnis und ohne Ersetzen
+    // angelegt.
+    let result = unsafe {
+        linkat(
+            AT_FDCWD,
+            source_path.as_ptr(),
+            destination.handle.as_raw_fd(),
+            destination_name.as_ptr(),
+            AT_SYMLINK_FOLLOW,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn link_open_file_noreplace(
+    _: &tokio::fs::File,
+    _: &SafeUploadDirectory,
+    _: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Sichere Upload-Veröffentlichung wird auf diesem System nicht unterstützt",
+    ))
+}
+
+async fn remove_owned_upload_link(
+    directory: &SafeUploadDirectory,
+    name: &std::ffi::OsStr,
+    owned_metadata: &std::fs::Metadata,
+) {
+    let path = directory.child_path(name);
+    let Ok(current) = tokio::fs::symlink_metadata(&path).await else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if current.file_type().is_file()
+            && current.dev() == owned_metadata.dev()
+            && current.ino() == owned_metadata.ino()
+        {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if current.file_type().is_file() && current.len() == owned_metadata.len() {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+}
+
 /// Verarbeitet einen hochgeladenen Clip (Validierung + Speichern + Registrierung).
 /// `base_dir` injizierbar (Tests). Liefert die 201-Antwort oder eine Fehler-Response.
+#[cfg(test)]
 async fn process_uploaded_clip(
     pool: &PgPool,
     base_dir: &str,
     streamer_raw: Option<&str>,
-    clip_id_raw: Option<&str>,
+    _clip_id_raw: Option<&str>,
     title: Option<&str>,
     bytes: &[u8],
 ) -> Result<Value, Response> {
     if bytes.len() > UPLOAD_MAX_BYTES {
-        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Uploaded file too large").into_response());
+        return Err(upload_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "upload_too_large",
+            Some("Die Datei ist zu groß."),
+        ));
     }
-    let streamer_login = slug_message(streamer_raw, "streamer_login")
-        .map_err(|m| {
-            (
+    let mut staged = StagedUpload::create(FsPath::new(base_dir)).await?;
+    if staged.file.write_all(bytes).await.is_err() || staged.file.sync_all().await.is_err() {
+        staged.cleanup().await;
+        return Err(upload_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "upload_failed",
+            None,
+        ));
+    }
+    staged.length = bytes.len();
+    process_staged_uploaded_clip(pool, base_dir, streamer_raw, title, staged).await
+}
+
+async fn process_staged_uploaded_clip(
+    pool: &PgPool,
+    base_dir: &str,
+    streamer_raw: Option<&str>,
+    title: Option<&str>,
+    mut staged: StagedUpload,
+) -> Result<Value, Response> {
+    let streamer_login = match slug_message(streamer_raw, "streamer_login") {
+        Ok(login) if login.len() <= UPLOAD_MAX_SLUG_BYTES => login.to_lowercase(),
+        Ok(_) => {
+            staged.cleanup().await;
+            return Err(upload_error(
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "invalid_streamer_login", "message": m })),
-            )
-                .into_response()
-        })?
-        .to_lowercase();
+                "invalid_streamer_login",
+                Some("Der Kanalname ist zu lang."),
+            ));
+        }
+        Err(message) => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_streamer_login",
+                Some(&message),
+            ));
+        }
+    };
     if !ensure_streamer_exists(pool, &streamer_login).await {
-        return Err((
+        staged.cleanup().await;
+        return Err(upload_error(
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown_streamer" })),
-        )
-            .into_response());
+            "unknown_streamer",
+            None,
+        ));
     }
-    let clip_id = match clip_id_raw.filter(|s| !s.is_empty()) {
-        Some(raw) => normalize_safe_slug(Some(raw), "clip_id")?, // Slug-Fehler → Plaintext-400
-        None => tb_crypto::random_hex_token(16),
-    };
-    let upload_dir = format!("{base_dir}/{streamer_login}");
-    let final_path = format!("{upload_dir}/{clip_id}.mp4");
-    if std::path::Path::new(&final_path).exists() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "duplicate_clip_id" })),
-        )
-            .into_response());
+    let clip_id = format!("manual:{}", uuid::Uuid::new_v4());
+    if title.is_some_and(|value| value.len() > UPLOAD_MAX_TEXT_BYTES) {
+        staged.cleanup().await;
+        return Err(upload_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "metadata_too_large",
+            Some("Der Titel ist zu lang."),
+        ));
     }
-
-    if tokio::fs::create_dir_all(&upload_dir).await.is_err() {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upload_failed" })),
-        )
-            .into_response());
-    }
-    let temp_path = format!("{upload_dir}/{clip_id}.upload.tmp");
-    if tokio::fs::write(&temp_path, bytes).await.is_err() {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upload_failed" })),
-        )
-            .into_response());
-    }
-
-    // Validierung (B15-FIX: echter MIME-Check via ftyp-Box + ffprobe-Dauer).
-    let validation = async {
-        // libmagic-Parität: MIME aus der ftyp-Box ableiten, gegen die Allowlist
-        // {video/mp4, application/mp4} prüfen. Kein gültiges MP4-Brand → 415.
-        match detect_mp4_mime(bytes) {
-            Some(mime) if is_accepted_mp4_mime(mime) => {}
-            _ => {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "Only MP4 uploads are supported",
-                )
-                    .into_response());
-            }
-        }
-        let info = VideoProcessor::default()
-            .get_video_info(&temp_path)
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "Uploaded file is not a valid MP4 video",
-                )
-                    .into_response()
-            })?;
-        if info.duration <= 0.0 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Uploaded MP4 must have a positive duration",
-            )
-                .into_response());
-        }
-        if info.duration > UPLOAD_MAX_DURATION_SECONDS {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Uploaded MP4 must be 300 seconds or shorter",
-            )
-                .into_response());
-        }
-        Ok(info.duration)
-    }
-    .await;
-    let duration = match validation {
-        Ok(d) => d,
-        Err(resp) => {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err(resp);
+    let owned_metadata = match validate_staged_upload_inode(&staged).await {
+        Ok(metadata) => metadata,
+        Err(response) => {
+            staged.cleanup().await;
+            return Err(response);
         }
     };
 
-    if tokio::fs::rename(&temp_path, &final_path).await.is_err() {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err((
+    if staged.file.seek(std::io::SeekFrom::Start(0)).await.is_err() {
+        staged.cleanup().await;
+        return Err(upload_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upload_failed" })),
-        )
-            .into_response());
+            "upload_failed",
+            None,
+        ));
+    }
+    let mut header_bytes = [0u8; 20];
+    let read = match staged.file.read(&mut header_bytes).await {
+        Ok(read) => read,
+        Err(_) => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "upload_failed",
+                None,
+            ));
+        }
+    };
+    if !plausible_ftyp_box(&header_bytes[..read], staged.length as u64)
+        || !detect_mp4_mime(&header_bytes[..read]).is_some_and(is_accepted_mp4_mime)
+    {
+        staged.cleanup().await;
+        return Err(upload_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "mp4_required",
+            Some("Es werden nur MP4-Videos unterstützt."),
+        ));
     }
 
-    match register_manual_upload(
-        pool,
+    let probe_path = opened_file_path(&staged.file);
+    let info = VideoProcessor::new("/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        .get_video_info(&probe_path)
+        .await
+        .map_err(|_| {
+            upload_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "invalid_mp4",
+                Some("Die Datei ist kein gültiges MP4-Video."),
+            )
+        });
+    let duration = match info {
+        Ok(info)
+            if info.duration.is_finite()
+                && info.duration > 0.0
+                && info.duration <= UPLOAD_MAX_DURATION_SECONDS
+                && info.fps.is_finite()
+                && info.fps > 0.0
+                && info.fps <= UPLOAD_MAX_FPS
+                && info.width > 0
+                && info.height > 0
+                && info.width <= UPLOAD_MAX_WIDTH
+                && info.height <= UPLOAD_MAX_HEIGHT
+                && info.width.saturating_mul(info.height)
+                    <= UPLOAD_MAX_WIDTH.saturating_mul(UPLOAD_MAX_HEIGHT) =>
+        {
+            info.duration
+        }
+        Ok(info) if !info.duration.is_finite() || info.duration <= 0.0 => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_duration",
+                Some("Das Video muss eine positive Laufzeit haben."),
+            ));
+        }
+        Ok(info) if info.duration > UPLOAD_MAX_DURATION_SECONDS => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "video_too_long",
+                Some("Das Video darf höchstens 300 Sekunden lang sein."),
+            ));
+        }
+        Ok(info) if !info.fps.is_finite() || info.fps <= 0.0 || info.fps > UPLOAD_MAX_FPS => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_frame_rate",
+                Some("Die Bildrate des Videos wird nicht unterstützt."),
+            ));
+        }
+        Ok(_) => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_video_dimensions",
+                Some("Die Videoauflösung wird nicht unterstützt."),
+            ));
+        }
+        Err(response) => {
+            staged.cleanup().await;
+            return Err(response);
+        }
+    };
+
+    let upload_directory = match open_or_create_upload_streamer_directory(
+        FsPath::new(base_dir),
+        &streamer_login,
+    )
+    .await
+    {
+        Ok(directory) => directory,
+        Err(_) => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "upload_failed",
+                None,
+            ));
+        }
+    };
+    let final_name = format!("{clip_id}.mp4");
+
+    let final_path = upload_directory
+        .logical_path
+        .join(&final_name)
+        .to_string_lossy()
+        .into_owned();
+
+    // Der kurze DB-Abschnitt reserviert die Clip-ID, bevor derselbe geprüfte
+    // Inode no-clobber veröffentlicht wird. Der Commit folgt direkt danach;
+    // ffprobe und das Einlesen liegen ausdrücklich außerhalb dieser TX.
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => {
+            staged.cleanup().await;
+            return Err(upload_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_failed",
+                None,
+            ));
+        }
+    };
+    let registration = register_manual_upload_in_transaction(
+        transaction.as_mut(),
         &clip_id,
         &streamer_login,
         title,
         &final_path,
         duration,
     )
-    .await
-    {
-        Ok((clip_db_id, retention_until)) => Ok(
-            json!({ "clip_db_id": clip_db_id, "clip_id": clip_id, "retention_until": retention_until }),
-        ),
+    .await;
+    let (clip_db_id, retention_until) = match registration {
+        Ok(result) => result,
         Err(ManualUploadError::AlreadyExists) => {
-            let _ = tokio::fs::remove_file(&final_path).await;
-            Err((
-                StatusCode::CONFLICT,
-                Json(json!({ "error": "duplicate_clip_id" })),
+            let _ = transaction.rollback().await;
+            remove_owned_upload_link(
+                &staged.work_directory,
+                std::ffi::OsStr::new(&staged.temp_name),
+                &owned_metadata,
             )
-                .into_response())
+            .await;
+            return Err(upload_error(
+                StatusCode::CONFLICT,
+                "duplicate_clip_id",
+                None,
+            ));
         }
         Err(ManualUploadError::UnknownStreamer) => {
-            let _ = tokio::fs::remove_file(&final_path).await;
-            Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "unknown_streamer" })),
+            let _ = transaction.rollback().await;
+            remove_owned_upload_link(
+                &staged.work_directory,
+                std::ffi::OsStr::new(&staged.temp_name),
+                &owned_metadata,
             )
-                .into_response())
+            .await;
+            return Err(upload_error(
+                StatusCode::NOT_FOUND,
+                "unknown_streamer",
+                None,
+            ));
         }
         Err(ManualUploadError::Db(_)) => {
-            let _ = tokio::fs::remove_file(&final_path).await;
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "upload_failed" })),
+            let _ = transaction.rollback().await;
+            remove_owned_upload_link(
+                &staged.work_directory,
+                std::ffi::OsStr::new(&staged.temp_name),
+                &owned_metadata,
             )
-                .into_response())
+            .await;
+            return Err(upload_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_failed",
+                None,
+            ));
+        }
+    };
+
+    match link_open_file_noreplace(
+        &staged.file,
+        &upload_directory,
+        std::ffi::OsStr::new(&final_name),
+    ) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = transaction.rollback().await;
+            remove_owned_upload_link(
+                &staged.work_directory,
+                std::ffi::OsStr::new(&staged.temp_name),
+                &owned_metadata,
+            )
+            .await;
+            return Err(upload_error(
+                StatusCode::CONFLICT,
+                "duplicate_clip_id",
+                None,
+            ));
+        }
+        Err(_) => {
+            let _ = transaction.rollback().await;
+            remove_owned_upload_link(
+                &staged.work_directory,
+                std::ffi::OsStr::new(&staged.temp_name),
+                &owned_metadata,
+            )
+            .await;
+            return Err(upload_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "upload_failed",
+                None,
+            ));
         }
     }
+
+    if let Err(error) = transaction.commit().await {
+        // Ein Commit-Fehler kann nach dem Senden an PostgreSQL unklar sein.
+        // Deshalb hier weder Final-Link noch Temp-Inode löschen: So bleibt das
+        // Artefakt sichtbar und ein Gewinner wird niemals versehentlich
+        // entfernt. Retention/Operator können den Orphan später abgleichen.
+        tracing::error!(clip_db_id, code = "upload_commit_uncertain", error = %error, "Manueller Upload: Commit-Ausgang ist unklar");
+        return Err(upload_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "upload_commit_uncertain",
+            None,
+        ));
+    }
+    remove_owned_upload_link(
+        &staged.work_directory,
+        std::ffi::OsStr::new(&staged.temp_name),
+        &owned_metadata,
+    )
+    .await;
+    if let Err(error) = apply_default_layout(pool, clip_db_id, &streamer_login).await {
+        tracing::warn!(clip_db_id, code = "layout_inheritance_failed", error = %error, "Manueller Upload: Layout-Vererbung konnte nicht bestätigt werden");
+    }
+    Ok(json!({
+        "clip_db_id": clip_db_id,
+        "clip_id": clip_id,
+        "retention_until": retention_until,
+    }))
 }
 
 /// `POST /social-media/api/clips/upload` — Multipart-Datei-Upload (Admin).
 pub async fn upload_clip_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    multipart: Multipart,
+) -> Response {
+    upload_clip_handler_inner(
+        auth,
+        pool,
+        multipart,
+        "data/clips/uploads",
+        manual_upload_semaphore(),
+        UploadTiming::production(),
+        UploadLimits::production(),
+    )
+    .await
+}
+
+async fn upload_clip_handler_inner(
+    auth: DashboardAuthLevel,
+    pool: PgPool,
     mut multipart: Multipart,
+    base_dir: &str,
+    semaphore: &Semaphore,
+    timing: UploadTiming,
+    limits: UploadLimits,
 ) -> Response {
     let scope = match require_sm_access(&auth, &pool, None).await {
         Ok(s) => s,
         Err(e) => return e,
     };
-    let mut bytes: Option<Vec<u8>> = None;
+    let _permit = match semaphore.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return upload_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "upload_busy",
+                Some("Es wird bereits ein Video verarbeitet. Bitte versuche es gleich erneut."),
+            );
+        }
+    };
+    let total_deadline = tokio::time::Instant::now() + timing.wallclock;
+    let mut staged: Option<StagedUpload> = None;
     let mut streamer_login: Option<String> = None;
-    let mut clip_id: Option<String> = None;
     let mut title: Option<String> = None;
-    while let Ok(Some(field)) = multipart.next_field().await {
-        match field.name().map(str::to_string).as_deref() {
-            Some("file") => bytes = field.bytes().await.ok().map(|b| b.to_vec()),
-            Some("streamer_login") => streamer_login = field.text().await.ok(),
-            Some("clip_id") => clip_id = field.text().await.ok(),
-            Some("title") => title = field.text().await.ok(),
-            _ => {}
+    let mut seen_fields = HashSet::new();
+    loop {
+        let field = match tokio::time::timeout_at(
+            timing.operation_deadline(total_deadline),
+            multipart.next_field(),
+        )
+        .await
+        {
+            Err(_) => {
+                if let Some(upload) = staged.take() {
+                    upload.cleanup().await;
+                }
+                return upload_timeout_response();
+            }
+            Ok(result) => match result {
+                Ok(Some(field)) => field,
+                Ok(None) => break,
+                Err(_) => {
+                    if let Some(upload) = staged.take() {
+                        upload.cleanup().await;
+                    }
+                    return upload_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_multipart",
+                        Some("Die Formulardaten sind ungültig."),
+                    );
+                }
+            },
+        };
+        let Some(name) = field.name().map(str::to_string) else {
+            if let Some(upload) = staged.take() {
+                upload.cleanup().await;
+            }
+            return upload_error(StatusCode::BAD_REQUEST, "invalid_multipart", None);
+        };
+        if !seen_fields.insert(name.clone()) {
+            if let Some(upload) = staged.take() {
+                upload.cleanup().await;
+            }
+            return upload_error(
+                StatusCode::BAD_REQUEST,
+                "duplicate_field",
+                Some("Ein Formularfeld wurde mehrfach gesendet."),
+            );
+        }
+        let field_result = match name.as_str() {
+            "file" => {
+                match stage_multipart_file(
+                    field,
+                    FsPath::new(base_dir),
+                    total_deadline,
+                    timing,
+                    limits.file_bytes,
+                )
+                .await
+                {
+                    Ok(upload) => {
+                        staged = Some(upload);
+                        Ok(())
+                    }
+                    Err(response) => Err(response),
+                }
+            }
+            "streamer_login" => {
+                read_limited_multipart_text(field, limits.slug_bytes, total_deadline, timing)
+                    .await
+                    .map(|value| streamer_login = Some(value))
+            }
+            // Client-IDs werden bewusst nur begrenzt eingelesen und verworfen.
+            // Jede API-Anlage erhält serverseitig einen eigenen manual:-Namensraum.
+            "clip_id" => {
+                read_limited_multipart_text(field, limits.slug_bytes, total_deadline, timing)
+                    .await
+                    .map(|_| ())
+            }
+            "title" => {
+                read_limited_multipart_text(field, limits.text_bytes, total_deadline, timing)
+                    .await
+                    .map(|value| title = Some(value))
+            }
+            _ => Err(upload_error(
+                StatusCode::BAD_REQUEST,
+                "unknown_field",
+                Some("Das Formular enthält ein unbekanntes Feld."),
+            )),
+        };
+        if let Err(response) = field_result {
+            if let Some(upload) = staged.take() {
+                upload.cleanup().await;
+            }
+            return response;
         }
     }
-    let Some(bytes) = bytes else {
-        return (
+    let Some(staged) = staged else {
+        return upload_error(
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "file is required" })),
-        )
-            .into_response();
+            "file_required",
+            Some("Eine MP4-Datei fehlt."),
+        );
     };
     let title = title
         .map(|t| t.trim().to_string())
@@ -1003,6 +1933,7 @@ pub async fn upload_clip_handler(
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
     if let Some(ref login) = streamer_login {
         if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
+            staged.cleanup().await;
             return guard_response;
         }
     }
@@ -1010,15 +1941,15 @@ pub async fn upload_clip_handler(
     if let Err(resp) =
         clip_kontingent_guard(&pool, &auth, streamer_login.as_deref().unwrap_or("")).await
     {
+        staged.cleanup().await;
         return resp;
     }
-    match process_uploaded_clip(
+    match process_staged_uploaded_clip(
         &pool,
-        "data/clips/uploads",
+        base_dir,
         streamer_login.as_deref(),
-        clip_id.as_deref(),
         title.as_deref(),
-        &bytes,
+        staged,
     )
     .await
     {
@@ -1119,12 +2050,17 @@ pub async fn streamer_layout_put_handler(
     };
     // updated_by (B15-FIX): Session-Actor (Partner→twitch_user_id, sonst NULL).
     let actor = editor_user_id(&auth);
-    let _ = upsert_streamer_layout(&pool, &slug, &layout, actor.as_deref()).await;
+    let outcome = match upsert_streamer_layout(&pool, &slug, &layout, actor.as_deref()).await {
+        Ok(outcome) => outcome,
+        Err(error) => return layout_mutation_error_response(error),
+    };
     Json(json!({
         "streamer_login": slug,
         "layout": layout.to_override_json(),
         "cam_enabled": layout.cam_enabled,
         "mode": layout.mode,
+        "changed": outcome.changed,
+        "pending_stopped": outcome.pending_stopped,
     }))
     .into_response()
 }
@@ -1165,12 +2101,17 @@ pub async fn clip_layout_put_handler(
 
     // `layout` fehlt/null → Override löschen.
     let Some(layout_payload) = payload.get("layout").filter(|v| !v.is_null()) else {
-        let _ = set_clip_layout_override(&pool, clip_db_id, None).await;
+        let outcome = match set_clip_layout_override(&pool, clip_db_id, None).await {
+            Ok(outcome) => outcome,
+            Err(error) => return layout_mutation_error_response(error),
+        };
         let effective = get_clip_effective_layout(&pool, clip_db_id).await;
         return Json(json!({
             "clip_db_id": clip_db_id,
             "layout_override": Value::Null,
             "effective_layout": effective.to_override_json(),
+            "changed": outcome.changed,
+            "pending_stopped": outcome.pending_stopped,
         }))
         .into_response();
     };
@@ -1178,14 +2119,45 @@ pub async fn clip_layout_put_handler(
         Ok(l) => l,
         Err(e) => return invalid_layout(e.to_string()),
     };
-    let _ = set_clip_layout_override(&pool, clip_db_id, Some(&layout)).await;
+    let outcome = match set_clip_layout_override(&pool, clip_db_id, Some(&layout)).await {
+        Ok(outcome) => outcome,
+        Err(error) => return layout_mutation_error_response(error),
+    };
     let effective = get_clip_effective_layout(&pool, clip_db_id).await;
     Json(json!({
         "clip_db_id": clip_db_id,
         "layout_override": layout.to_override_json(),
         "effective_layout": effective.to_override_json(),
+        "changed": outcome.changed,
+        "pending_stopped": outcome.pending_stopped,
     }))
     .into_response()
+}
+
+fn layout_mutation_error_response(error: LayoutMutationError) -> Response {
+    match error {
+        LayoutMutationError::UploadRunning(already_running) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "upload_already_running",
+                "already_running": already_running,
+            })),
+        )
+            .into_response(),
+        LayoutMutationError::PreparationRunning => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "preparation_running" })),
+        )
+            .into_response(),
+        LayoutMutationError::Db(error) => {
+            tracing::error!(%error, "Layoutänderung konnte nicht gespeichert werden");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "save_failed" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// POST-Body von `…/api/upload` (Queue-Upload). `platforms` ist Array ODER
@@ -1536,8 +2508,16 @@ pub async fn batch_upload_handler(
 pub struct MarkUploadedBody {
     pub clip_id: Option<Value>,
     #[serde(default)]
-    pub platforms: Value,
+    pub reconciliations: Vec<MarkUploadedReconciliation>,
     pub streamer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MarkUploadedReconciliation {
+    pub reconciliation_id: String,
+    pub platform: String,
+    pub provider_started_at: DateTime<Utc>,
+    pub provider_external_id: Option<String>,
 }
 
 /// `POST /social-media/api/mark-uploaded` — Clip manuell als hochgeladen markieren.
@@ -1550,22 +2530,44 @@ pub async fn mark_uploaded_handler(
     if let Err(e) = require_auth(&auth) {
         return e;
     }
+    if !matches!(&auth, DashboardAuthLevel::Admin { .. }) {
+        return forbidden("Nur Admins dürfen unklare Provider-Versuche bestätigen.");
+    }
     let clip_id = normalize_id(body.clip_id.as_ref());
-    let platforms: Vec<String> = body
-        .platforms
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let (Some(clip_id), false) = (clip_id, platforms.is_empty()) else {
+    let (Some(clip_id), false) = (clip_id, body.reconciliations.is_empty()) else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "clip_id and platforms are required" })),
+            Json(json!({ "error": "reconciliations_required" })),
         )
             .into_response();
+    };
+    let attempts: Vec<ManualReconciliationRequest> = match body
+        .reconciliations
+        .into_iter()
+        .map(|attempt| {
+            let queue_id = attempt
+                .reconciliation_id
+                .parse::<i64>()
+                .ok()
+                .filter(|id| *id > 0)
+                .ok_or(())?;
+            Ok(ManualReconciliationRequest {
+                queue_id,
+                platform: attempt.platform,
+                provider_started_at: attempt.provider_started_at,
+                provider_external_id: attempt.provider_external_id,
+            })
+        })
+        .collect::<Result<Vec<_>, ()>>()
+    {
+        Ok(attempts) => attempts,
+        Err(()) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_reconciliation_id" })),
+            )
+                .into_response();
+        }
     };
     let requested = body.streamer.as_deref().or(q.streamer.as_deref());
     let scope = match resolve_streamer_scope(&auth, requested, false) {
@@ -1589,14 +2591,36 @@ pub async fn mark_uploaded_handler(
                 .into_response();
         }
     }
-    if mark_clip_uploaded(&pool, clip_id, &platforms, true).await {
-        Json(json!({ "success": true, "message": "Clip marked as uploaded" })).into_response()
-    } else {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "Failed to mark clip as uploaded" })),
+    match reconcile_provider_uploads(&pool, clip_id, &attempts).await {
+        Ok(outcome) => Json(json!({
+            "ok": true,
+            "message": "Clip manuell als veröffentlicht bestätigt",
+            "reconciled_platforms": outcome.reconciled_platforms,
+        }))
+        .into_response(),
+        Err(ManualReconciliationError::UnsupportedPlatform) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unsupported_platform" })),
         )
-            .into_response()
+            .into_response(),
+        Err(ManualReconciliationError::ClipNotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "clip_not_found" })),
+        )
+            .into_response(),
+        Err(ManualReconciliationError::NotReconciliable) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "reconciliation_required_not_found" })),
+        )
+            .into_response(),
+        Err(ManualReconciliationError::Db(error)) => {
+            tracing::error!(%error, clip_db_id = clip_id, "Provider-Abgleich konnte nicht gespeichert werden");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database_failed" })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1800,6 +2824,15 @@ fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
         "expires_at": s.expires_at,
         "expired": s.expired,
         "uses_global_fallback": s.uses_global_fallback,
+        "provider_calls_enabled": s.provider_calls_enabled,
+        "provider_release_blocked": s.platform == "tiktok" || !s.provider_calls_enabled,
+        "release_block_reason": if s.platform == "tiktok" {
+            Some("tiktok_consent_required")
+        } else if !s.provider_calls_enabled {
+            Some("platform_release_blocked")
+        } else {
+            None
+        },
     })
 }
 
@@ -1907,10 +2940,15 @@ async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>
 /// Stand einer Plattform-Zeile in `twitch_clips_upload_queue`.
 #[derive(Debug, Default, Clone)]
 struct UploadQueueEntry {
+    queue_id: i64,
+    status: Option<String>,
     /// Geplanter Termin (`scheduled_at`), RFC-3339.
     scheduled_at: Option<String>,
     /// Letzter Fehlergrund (`last_error`) aus `update_upload_status`.
     last_error: Option<String>,
+    provider_started_at: Option<String>,
+    provider_external_id: Option<String>,
+    provider_accepted_at: Option<String>,
 }
 
 /// Queue-Stand einer Clip-Seite: Clip-ID → Plattform → Zeile.
@@ -1922,51 +2960,134 @@ type UploadQueueInfo =
 /// Bewusst nicht je Clip einzeln: bei `page_size=100` wären das sonst hundert
 /// Rundreisen zur Datenbank. Je Clip und Plattform gewinnt die zuletzt angelegte
 /// Zeile (höchste `id`), das ist der aktuelle Versuch.
-async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueInfo {
+async fn load_upload_queue_info(
+    pool: &PgPool,
+    clip_ids: &[i64],
+) -> Result<UploadQueueInfo, sqlx::Error> {
     let mut info: UploadQueueInfo = std::collections::HashMap::new();
     if clip_ids.is_empty() {
-        return info;
+        return Ok(info);
     }
     let rows = sqlx::query(
-        "SELECT clip_id, platform, scheduled_at, last_error \
+        "SELECT id, clip_id, platform, status, scheduled_at, last_error, \
+                provider_started_at, provider_external_id, provider_accepted_at \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) ORDER BY id ASC",
     )
     .bind(clip_ids)
     .fetch_all(pool)
-    .await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) => {
-            // Ein fehlender Queue-Stand darf die Clip-Liste nicht abschießen;
-            // dann bleiben Termin und Fehlergrund eben leer.
-            tracing::warn!(error = %e, "failed to load social media upload queue info");
-            return info;
-        }
-    };
+    .await?;
     for r in &rows {
-        let (Ok(clip_id), Ok(platform)) = (
+        let (queue_id, clip_id, platform) = (
+            r.try_get::<i64, _>("id")?,
             r.try_get::<i64, _>("clip_id"),
             r.try_get::<String, _>("platform"),
-        ) else {
-            continue;
-        };
+        );
+        let clip_id = clip_id?;
+        let platform = platform?;
         let scheduled_at = r
-            .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")
-            .unwrap_or(None)
+            .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")?
             .map(|ts| ts.to_rfc3339());
+        let status = r
+            .try_get::<Option<String>, _>("status")?
+            .filter(|value| !value.trim().is_empty());
         let last_error = r
-            .try_get::<Option<String>, _>("last_error")
-            .unwrap_or(None)
-            .filter(|s| !s.trim().is_empty());
+            .try_get::<Option<String>, _>("last_error")?
+            .filter(|s| !s.trim().is_empty())
+            .map(|value| safe_upload_error_code(&value).to_string());
+        let provider_started_at = r
+            .try_get::<Option<DateTime<Utc>>, _>("provider_started_at")?
+            .map(|ts| ts.to_rfc3339());
+        let provider_external_id = r
+            .try_get::<Option<String>, _>("provider_external_id")?
+            .filter(|value| !value.trim().is_empty());
+        let provider_accepted_at = r
+            .try_get::<Option<DateTime<Utc>>, _>("provider_accepted_at")?
+            .map(|ts| ts.to_rfc3339());
         info.entry(clip_id).or_default().insert(
             platform.trim().to_lowercase(),
             UploadQueueEntry {
+                queue_id,
+                status,
                 scheduled_at,
                 last_error,
+                provider_started_at,
+                provider_external_id,
+                provider_accepted_at,
             },
         );
     }
-    info
+    Ok(info)
+}
+
+fn safe_upload_error_code(raw: &str) -> &'static str {
+    match raw.trim() {
+        "approval_required" => "approval_required",
+        "approval_check_failed" => "approval_check_failed",
+        "approval_or_preview_changed" => "approval_or_preview_changed",
+        "approval_changed" => "approval_changed",
+        "approval_skipped" => "approval_skipped",
+        "release_disabled" => "release_disabled",
+        "release_gate_failed" => "release_gate_failed",
+        "clip_discarded" => "clip_discarded",
+        "clip_not_found" => "clip_not_found",
+        "content_changed" => "content_changed",
+        "layout_changed" => "layout_changed",
+        "enrichment_changed" => "enrichment_changed",
+        "credentials_missing" => "credentials_missing",
+        "streamer_missing" => "streamer_missing",
+        "uploaded_flag_check_failed" => "uploaded_flag_check_failed",
+        "completed_write_failed" => "completed_write_failed",
+        "video_validation_failed" => "video_validation_failed",
+        "preparation_busy" => "preparation_busy",
+        "preparation_transient" => "preparation_transient",
+        "source_missing" => "source_missing",
+        "invalid_source_url" => "invalid_source_url",
+        "download_failed" => "download_failed",
+        "download_isolation_required" => "download_isolation_required",
+        "render_failed" => "render_failed",
+        "layout_invalid" => "layout_invalid",
+        "platform_paused" => "platform_paused",
+        "platform_release_blocked" => "platform_release_blocked",
+        "tiktok_consent_required" => "tiktok_consent_required",
+        "provider_attempt_exists" => "provider_attempt_exists",
+        "provider_rejected" => "provider_rejected",
+        "provider_result_uncertain" => "provider_result_uncertain",
+        "provider_result_unknown_after_restart" => "provider_result_unknown_after_restart",
+        "legacy_processing_requires_reconciliation" => "legacy_processing_requires_reconciliation",
+        "provider_acceptance_write_uncertain" => "provider_acceptance_write_uncertain",
+        "completed_write_uncertain" => "completed_write_uncertain",
+        "tiktok_publish_uncertain" => "tiktok_publish_uncertain",
+        "manually_reconciled" => "manually_reconciled",
+        _ => "upload_failed",
+    }
+}
+
+fn upload_states_value(
+    entries: Option<&std::collections::HashMap<String, UploadQueueEntry>>,
+) -> Value {
+    let mut out = serde_json::Map::with_capacity(PLATFORMS.len());
+    for platform in PLATFORMS {
+        let entry = entries.and_then(|values| values.get(platform));
+        out.insert(
+            platform.to_string(),
+            json!({
+                "reconciliation_id": entry
+                    .filter(|value| value.status.as_deref() == Some("reconciliation_required"))
+                    .map(|value| value.queue_id.to_string()),
+                "status": entry.and_then(|value| value.status.as_deref()),
+                "error_code": entry
+                    .and_then(|value| value.last_error.as_deref())
+                    .map(safe_upload_error_code),
+                "provider_started_at": entry.and_then(|value| value.provider_started_at.as_deref()),
+                "provider_external_id": entry.and_then(|value| value.provider_external_id.as_deref()),
+                "provider_accepted_at": entry.and_then(|value| value.provider_accepted_at.as_deref()),
+                "reconciliation_required": entry
+                    .and_then(|value| value.status.as_deref())
+                    == Some("reconciliation_required"),
+            }),
+        );
+    }
+    Value::Object(out)
 }
 
 /// Objekt mit einem Schlüssel je Plattform (`youtube`/`tiktok`/`instagram`);
@@ -1992,9 +3113,9 @@ fn platform_value_map<'a>(
 ///
 /// Für Einzelclips; die Listen-Endpoints holen den Queue-Stand einmal für die
 /// ganze Seite und rufen [`serialize_clip_record_with`] direkt auf.
-async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Value {
-    let queue = load_upload_queue_info(pool, &[row.id]).await;
-    serialize_clip_record_with(pool, row, queue.get(&row.id)).await
+async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Result<Value, sqlx::Error> {
+    let queue = load_upload_queue_info(pool, &[row.id]).await?;
+    Ok(serialize_clip_record_with(pool, row, queue.get(&row.id)).await)
 }
 
 /// Wie [`serialize_clip_record`], nur mit schon geladenem Queue-Stand.
@@ -2092,6 +3213,7 @@ async fn serialize_clip_record_with(
         // in den Zeitplan-Modi keinen Termin.
         "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
+        "upload_states": upload_states_value(queue),
     })
 }
 
@@ -2267,7 +3389,13 @@ pub async fn admin_clips_handler(
     // Termin und Fehlergrund einmal für die ganze Seite holen, nicht je Clip
     // (sonst N+1 bei page_size=100).
     let clip_ids: Vec<i64> = clips.iter().map(|c| c.id).collect();
-    let queue_info = load_upload_queue_info(&pool, &clip_ids).await;
+    let queue_info = match load_upload_queue_info(&pool, &clip_ids).await {
+        Ok(info) => info,
+        Err(error) => {
+            tracing::error!(code = "upload_queue_load_failed", error = %error, "Social-Media-Queue-Stand konnte nicht geladen werden");
+            return clip_load_failed();
+        }
+    };
     let mut items: Vec<Value> = Vec::with_capacity(clips.len());
     for clip in &clips {
         items.push(serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await);
@@ -2293,7 +3421,13 @@ pub async fn admin_clip_detail_handler(
         return e;
     }
     match load_clip_row(&pool, clip_db_id).await {
-        Ok(Some(clip)) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
+        Ok(Some(clip)) => match serialize_clip_record(&pool, &clip).await {
+            Ok(payload) => Json(payload).into_response(),
+            Err(error) => {
+                tracing::error!(clip_db_id, code = "upload_queue_load_failed", error = %error, "Social-Media-Queue-Stand konnte nicht geladen werden");
+                clip_load_failed()
+            }
+        },
         Ok(None) => clip_not_found(),
         Err(_) => clip_load_failed(),
     }
@@ -2319,14 +3453,424 @@ pub async fn admin_clip_discard_handler(
     if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
-    if !mark_clip_discarded(&pool, clip_db_id).await {
+    let outcome = match discard_clip(&pool, clip_db_id).await {
+        Ok(Some(outcome)) => outcome,
+        Ok(None) => return clip_not_found(),
+        Err(error) => {
+            tracing::error!(%error, clip_db_id, "Clip konnte nicht transaktional verworfen werden");
+            return clip_load_failed();
+        }
+    };
+    let mut payload = match load_clip_row(&pool, clip_db_id).await {
+        Ok(Some(clip)) => match serialize_clip_record(&pool, &clip).await {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!(clip_db_id, code = "upload_queue_load_failed", error = %error, "Social-Media-Queue-Stand konnte nicht geladen werden");
+                return clip_load_failed();
+            }
+        },
+        Ok(None) => json!({ "clip_db_id": clip_db_id, "discarded": true }),
+        Err(_) => return clip_load_failed(),
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("discarded".to_string(), json!(outcome.discarded));
+        object.insert(
+            "pending_stopped".to_string(),
+            json!(outcome.pending_stopped),
+        );
+        object.insert(
+            "already_running".to_string(),
+            json!(outcome.already_running),
+        );
+    }
+    if outcome.already_running > 0 {
+        (StatusCode::CONFLICT, Json(payload)).into_response()
+    } else {
+        Json(payload).into_response()
+    }
+}
+
+fn preparation_json(record: &ClipPreparationRecord) -> Value {
+    let media_url = format!(
+        "/social-media/api/admin/clips/{}/preparation/media",
+        record.clip_db_id
+    );
+    let preview_ready = record.preview_ready();
+    json!({
+        "clip_db_id": record.clip_db_id,
+        "state": record.state,
+        "source_ready": record.source_ready(),
+        "preview_ready": preview_ready,
+        "preview_url": preview_ready.then_some(media_url.clone()),
+        "download_url": preview_ready.then_some(format!("{media_url}?download=1")),
+        "error_code": record.error_code,
+        "error_message": safe_preparation_error_message(record.error_code.as_deref()),
+        "requested_at": record.requested_at,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+        "updated_at": record.updated_at,
+    })
+}
+
+fn safe_preparation_error_message(error_code: Option<&str>) -> Option<&'static str> {
+    match error_code {
+        Some("clip_not_found") => Some("Der Clip wurde nicht gefunden."),
+        Some("clip_discarded") => Some("Der Clip wurde verworfen."),
+        Some("source_missing") => Some("Die Clip-Quelle ist nicht verfügbar."),
+        Some("invalid_source_url") => Some("Die Clip-Quelle ist ungültig."),
+        Some("download_failed") => Some("Die Clip-Quelle konnte nicht geladen werden."),
+        Some("download_isolation_required") => {
+            Some("Der automatische Twitch-Download ist bis zur sicheren Netzwerkfreigabe gesperrt.")
+        }
+        Some("render_failed") => Some("Die Vorschau konnte nicht erstellt werden."),
+        Some("io_failed") | Some("database_failed") => {
+            Some("Die Aufbereitung ist vorübergehend fehlgeschlagen.")
+        }
+        Some("preparation_busy") => Some("Die Vorschau wird bereits erstellt."),
+        Some(_) | None => None,
+    }
+}
+
+async fn preparation_access(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    clip_db_id: i64,
+    write: bool,
+) -> Result<(), Response> {
+    let scope = require_sm_access(auth, pool, None).await?;
+    require_clip_in_scope(pool, clip_db_id, scope.as_deref()).await?;
+    if write {
+        if let Some(response) = guard_partner_access_for_clip(pool, auth, clip_db_id).await {
+            return Err(response);
+        }
+    }
+    Ok(())
+}
+
+/// `GET /social-media/api/admin/clips/:clip_db_id/preparation`.
+pub async fn clip_preparation_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+) -> Response {
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if let Err(response) = preparation_access(&auth, &pool, clip_db_id, false).await {
+        return response;
+    }
+    let service = ClipPreparationService::new(pool);
+    match service.get(clip_db_id).await {
+        Ok(Some(record)) => Json(preparation_json(&record)).into_response(),
+        Ok(None) => clip_not_found(),
+        Err(error) => preparation_error_response(error),
+    }
+}
+
+/// `POST /social-media/api/admin/clips/:clip_db_id/preparation` legt nur den
+/// Auftrag an. yt-dlp/FFmpeg laufen ausschließlich im Bot-Worker mit dessen
+/// gebündelten Binaries; der HTTP-Request blockiert nie auf Videoverarbeitung.
+pub async fn clip_preparation_post_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+) -> Response {
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if let Err(response) = preparation_access(&auth, &pool, clip_db_id, true).await {
+        return response;
+    }
+    let service = ClipPreparationService::new(pool);
+    match service.request(clip_db_id).await {
+        Ok(record) => (StatusCode::ACCEPTED, Json(preparation_json(&record))).into_response(),
+        Err(PreparationError::Busy(_)) => match service.get(clip_db_id).await {
+            Ok(Some(record)) => {
+                (StatusCode::ACCEPTED, Json(preparation_json(&record))).into_response()
+            }
+            Ok(None) => clip_not_found(),
+            Err(error) => preparation_error_response(error),
+        },
+        Err(error) => preparation_error_response(error),
+    }
+}
+
+fn preparation_error_response(error: PreparationError) -> Response {
+    match error {
+        PreparationError::ClipNotFound(_) => clip_not_found(),
+        PreparationError::Discarded(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "clip_discarded" })),
+        )
+            .into_response(),
+        PreparationError::Busy(_) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "error": "preparation_busy" })),
+        )
+            .into_response(),
+        other => {
+            tracing::error!(error = %other, "Clip-Aufbereitung fehlgeschlagen");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": other.code() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct PreparationMediaQuery {
+    download: Option<String>,
+}
+
+fn stored_render_path_is_safe(clip_db_id: i64, path: &FsPath) -> bool {
+    let rendered_dir = FsPath::new(DEFAULT_CLIPS_DIR).join("rendered");
+    let expected_prefix = format!("{clip_db_id}-");
+    path.parent() == Some(rendered_dir.as_path())
+        && path.extension().and_then(|value| value.to_str()) == Some("mp4")
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with(&expected_prefix))
+}
+
+fn parse_byte_range(raw: &str, length: u64) -> Result<(u64, u64), ()> {
+    if length == 0 || raw.contains(',') {
+        return Err(());
+    }
+    let value = raw.strip_prefix("bytes=").ok_or(())?;
+    let (start, end) = value.split_once('-').ok_or(())?;
+    if start.is_empty() {
+        let suffix = end.parse::<u64>().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        return Ok((length.saturating_sub(suffix.min(length)), length - 1));
+    }
+    let start = start.parse::<u64>().map_err(|_| ())?;
+    if start >= length {
+        return Err(());
+    }
+    let end = if end.is_empty() {
+        length - 1
+    } else {
+        end.parse::<u64>().map_err(|_| ())?.min(length - 1)
+    };
+    if start > end {
+        return Err(());
+    }
+    Ok((start, end))
+}
+
+fn harden_preparation_media_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+}
+
+async fn open_render_file_from_dir_no_follow(
+    rendered_dir: &FsPath,
+    file_name: &std::ffi::OsStr,
+) -> std::io::Result<tokio::fs::File> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        // Linux O_DIRECTORY/O_NOFOLLOW. Der gehaltene Dir-FD schließt auch den
+        // Austausch von `rendered` zwischen Prüfung und Datei-open; der zweite
+        // O_NOFOLLOW-Open lehnt einen finalen Datei-Symlink ab.
+        const O_DIRECTORY: i32 = 0o200000;
+        const O_NOFOLLOW: i32 = 0o400000;
+        const O_NONBLOCK: i32 = 0o4000;
+        let mut directory_options = tokio::fs::OpenOptions::new();
+        directory_options
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
+        // Jede Pfadkomponente wird relativ zum jeweils gehaltenen Dir-FD mit
+        // O_NOFOLLOW geöffnet. Ein Symlink in `data`, `clips` oder `rendered`
+        // kann den authentifizierten Medienpfad damit nicht aus dem Baum
+        // herauslenken.
+        let mut directory = if rendered_dir.is_absolute() {
+            directory_options.open("/").await?
+        } else {
+            directory_options.open(".").await?
+        };
+        for component in rendered_dir.components() {
+            let name = match component {
+                std::path::Component::RootDir | std::path::Component::CurDir => continue,
+                std::path::Component::Normal(name) => name,
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Unsicherer Renderpfad",
+                    ));
+                }
+            };
+            let held_path = std::path::PathBuf::from(format!(
+                "/proc/self/fd/{}/{}",
+                directory.as_raw_fd(),
+                name.to_string_lossy()
+            ));
+            directory = directory_options.open(held_path).await?;
+        }
+        let held_path =
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+                .join(file_name);
+        let mut file_options = tokio::fs::OpenOptions::new();
+        // O_NONBLOCK verhindert, dass ein vorgepflanztes FIFO schon beim
+        // Öffnen einen Tokio-Blocking-Thread festhält. fstat/metadata lehnt es
+        // direkt danach als Nicht-Regulärdatei ab.
+        file_options
+            .read(true)
+            .custom_flags(O_NOFOLLOW | O_NONBLOCK);
+        let file = file_options.open(held_path).await?;
+        drop(directory);
+        Ok(file)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Sicherer Fallback auf Plattformen ohne den hier bekannten Flag:
+        // finale Symlinks ablehnen und anschließend nur den geöffneten Handle
+        // für Metadaten/Streaming verwenden.
+        let directory_metadata = tokio::fs::symlink_metadata(rendered_dir).await?;
+        if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Symlink als Renderverzeichnis abgelehnt",
+            ));
+        }
+        let path = rendered_dir.join(file_name);
+        let metadata = tokio::fs::symlink_metadata(&path).await?;
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Symlink als Renderdatei abgelehnt",
+            ));
+        }
+        tokio::fs::File::open(path).await
+    }
+}
+
+async fn open_render_file_no_follow(path: &FsPath) -> std::io::Result<tokio::fs::File> {
+    let rendered_dir = FsPath::new(DEFAULT_CLIPS_DIR).join("rendered");
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Renderdateiname fehlt")
+    })?;
+    open_render_file_from_dir_no_follow(&rendered_dir, file_name).await
+}
+
+/// Streamt ausschließlich das serverseitig gespeicherte Ready-MP4. Clientseitig
+/// eingereichte Pfade werden nicht akzeptiert; Range unterstützt Browser-Scrub.
+pub async fn clip_preparation_media_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+    Query(query): Query<PreparationMediaQuery>,
+    request_headers: HeaderMap,
+) -> Response {
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if let Err(response) = preparation_access(&auth, &pool, clip_db_id, false).await {
+        return response;
+    }
+    let service = ClipPreparationService::new(pool);
+    let record = match service.get(clip_db_id).await {
+        Ok(Some(record)) if record.state == "preview_ready" => record,
+        Ok(Some(_)) | Ok(None) => return clip_not_found(),
+        Err(error) => return preparation_error_response(error),
+    };
+    let Some(path) = record.render_path.as_deref().map(FsPath::new) else {
+        return clip_not_found();
+    };
+    if !stored_render_path_is_safe(clip_db_id, path) {
         return clip_not_found();
     }
-    match load_clip_row(&pool, clip_db_id).await {
-        Ok(Some(clip)) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
-        Ok(None) => Json(json!({ "clip_db_id": clip_db_id, "discarded": true })).into_response(),
-        Err(_) => clip_load_failed(),
+    let mut file = match open_render_file_no_follow(path).await {
+        Ok(file) => file,
+        Err(_) => return clip_not_found(),
+    };
+    let opened_metadata = match file.metadata().await {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return clip_not_found(),
+    };
+    let total = opened_metadata.len();
+    if total == 0 {
+        return clip_not_found();
     }
+    let requested_range = request_headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok());
+    let (status, start, end) = match requested_range {
+        Some(raw_range) => match parse_byte_range(raw_range, total) {
+            Ok((start, end)) => (StatusCode::PARTIAL_CONTENT, start, end),
+            Err(()) => {
+                let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                let headers = response.headers_mut();
+                harden_preparation_media_headers(headers);
+                if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total}")) {
+                    headers.insert(header::CONTENT_RANGE, value);
+                }
+                return response;
+            }
+        },
+        None => (StatusCode::OK, 0, total - 1),
+    };
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+        return clip_not_found();
+    }
+    let remaining = end - start + 1;
+    let stream =
+        futures_util::stream::try_unfold((file, remaining), |(mut file, remaining)| async move {
+            if remaining == 0 {
+                return Ok::<_, std::io::Error>(None);
+            }
+            let mut chunk = vec![0_u8; remaining.min(64 * 1024) as usize];
+            let read = file.read(&mut chunk).await?;
+            if read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Ready-MP4 endete vor dem angekündigten Bereich",
+                ));
+            }
+            chunk.truncate(read);
+            Ok(Some((Bytes::from(chunk), (file, remaining - read as u64))))
+        });
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    harden_preparation_media_headers(headers);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("video/mp4"));
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Ok(value) = HeaderValue::from_str(&(end - start + 1).to_string()) {
+        headers.insert(header::CONTENT_LENGTH, value);
+    }
+    if status == StatusCode::PARTIAL_CONTENT {
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes {start}-{end}/{total}")) {
+            headers.insert(header::CONTENT_RANGE, value);
+        }
+    }
+    let disposition = if query.download.as_deref().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }) {
+        format!("attachment; filename=clip-{clip_db_id}.mp4")
+    } else {
+        format!("inline; filename=clip-{clip_db_id}.mp4")
+    };
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    response
 }
 
 fn invalid_payload() -> Response {
@@ -2406,12 +3950,16 @@ fn report_record_json(r: &SocialMediaReportRecord) -> Value {
 fn parse_string_field<'a>(
     payload: &'a Value,
     field: &str,
+    max_chars: usize,
 ) -> Result<Option<Option<&'a str>>, Response> {
     match payload.get(field) {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
         Some(Value::String(s)) => {
             let t = s.trim();
+            if t.chars().count() > max_chars {
+                return Err(enrichment_limit_response(field, max_chars));
+            }
             Ok(Some(if t.is_empty() { None } else { Some(t) }))
         }
         Some(_) => Err((
@@ -2425,17 +3973,29 @@ fn parse_string_field<'a>(
 /// Hashtag-Liste normalisieren (Python `_normalize_hashtag_list`): `#`-Präfix,
 /// dedupliziert (case-insensitiv), leere übersprungen. fehlt/null → `None`,
 /// nicht-Liste → 400.
-fn parse_hashtag_field(payload: &Value, field: &str) -> Result<Option<Vec<String>>, Response> {
+fn parse_hashtag_field(
+    payload: &Value,
+    field: &str,
+    max_count: usize,
+    max_chars: usize,
+) -> Result<Option<Vec<String>>, Response> {
     match payload.get(field) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Array(arr)) => {
+            if arr.len() > max_count {
+                return Err(enrichment_limit_response(field, max_count));
+            }
             let mut seen = std::collections::HashSet::new();
             let mut cleaned = Vec::new();
             for entry in arr {
-                let token = entry
-                    .as_str()
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
+                let Some(token) = entry.as_str() else {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "invalid_field", "field": field })),
+                    )
+                        .into_response());
+                };
+                let token = token.trim().to_string();
                 if token.is_empty() {
                     continue;
                 }
@@ -2444,16 +4004,33 @@ fn parse_hashtag_field(payload: &Value, field: &str) -> Result<Option<Vec<String
                 } else {
                     format!("#{}", token.trim_start_matches('#'))
                 };
+                if token.chars().count() > max_chars {
+                    return Err(enrichment_limit_response(field, max_chars));
+                }
                 if seen.insert(token.to_lowercase()) {
                     cleaned.push(token);
                 }
             }
             Ok(Some(cleaned))
         }
-        Some(_) => {
-            Err((StatusCode::BAD_REQUEST, format!("{field} must be a list")).into_response())
-        }
+        Some(_) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_field", "field": field })),
+        )
+            .into_response()),
     }
+}
+
+fn enrichment_limit_response(field: &str, max: usize) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "enrichment_limits_exceeded",
+            "field": field,
+            "max": max,
+        })),
+    )
+        .into_response()
 }
 
 /// `PUT /social-media/api/admin/clips/:clip_db_id/enrichment` — Edits speichern (Admin).
@@ -2489,31 +4066,31 @@ pub async fn enrichment_put_handler(
         return invalid_payload();
     }
     macro_rules! field {
-        ($name:literal) => {
-            match parse_string_field(&payload, $name) {
+        ($name:literal, $max:expr) => {
+            match parse_string_field(&payload, $name, $max) {
                 Ok(v) => v,
                 Err(e) => return e,
             }
         };
     }
     macro_rules! tags {
-        ($name:literal) => {
-            match parse_hashtag_field(&payload, $name) {
+        ($name:literal, $max:expr) => {
+            match parse_hashtag_field(&payload, $name, $max, 100) {
                 Ok(v) => v,
                 Err(e) => return e,
             }
         };
     }
     // Python-Reihenfolge: erst title/description (invalid_field), dann hashtags.
-    let ty = field!("title_youtube");
-    let tt = field!("title_tiktok");
-    let ti = field!("title_instagram");
-    let dy = field!("description_youtube");
-    let dt = field!("description_tiktok");
-    let di = field!("description_instagram");
-    let hy = tags!("hashtags_youtube");
-    let ht = tags!("hashtags_tiktok");
-    let hi = tags!("hashtags_instagram");
+    let ty = field!("title_youtube", 100);
+    let tt = field!("title_tiktok", 150);
+    let ti = field!("title_instagram", 125);
+    let dy = field!("description_youtube", 5_000);
+    let dt = field!("description_tiktok", 2_200);
+    let di = field!("description_instagram", 2_200);
+    let hy = tags!("hashtags_youtube", 10);
+    let ht = tags!("hashtags_tiktok", 12);
+    let hi = tags!("hashtags_instagram", 15);
     let result = update_manual_edit(
         &pool,
         child_clip_db_id,
@@ -2529,16 +4106,15 @@ pub async fn enrichment_put_handler(
         hi.as_deref(),
     )
     .await;
-    if result.is_err() {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "save_failed" })),
-        )
-            .into_response();
+    if let Err(error) = result {
+        return content_mutation_error_response(error);
     }
-    match get_enrichment(&pool, child_clip_db_id).await {
-        Some(r) => Json(enrichment_record_json(&r)).into_response(),
-        None => Json(json!({})).into_response(),
+    match get_enrichment_checked(&pool, child_clip_db_id).await {
+        Ok(Some(record)) => Json(enrichment_record_json(&record)).into_response(),
+        Ok(None) => enrichment_persistence_error("enrichment_missing_after_save", child_clip_db_id),
+        Err(_) => {
+            enrichment_persistence_error("enrichment_read_after_save_failed", child_clip_db_id)
+        }
     }
 }
 
@@ -2562,8 +4138,10 @@ pub async fn enrichment_get_handler(
         Ok(id) => id,
         Err(e) => return e,
     };
-    let record = ensure_enrichment_row(&pool, child_clip_db_id).await;
-    Json(enrichment_record_json(&record)).into_response()
+    match ensure_enrichment_row_checked(&pool, child_clip_db_id).await {
+        Ok(record) => Json(enrichment_record_json(&record)).into_response(),
+        Err(_) => enrichment_persistence_error("enrichment_ensure_failed", child_clip_db_id),
+    }
 }
 
 /// `POST /social-media/api/admin/clips/:clip_db_id/enrichment/run` — Enrichment
@@ -2607,11 +4185,36 @@ pub async fn enrichment_run_handler(
     let outcome = match pipeline.run(child_clip_db_id, None, &llm, force).await {
         Ok(o) => o,
         Err(PipelineError::ClipNotFound(_)) => return clip_not_found(),
+        Err(PipelineError::UploadRunning(already_running)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "upload_already_running",
+                    "already_running": already_running,
+                })),
+            )
+                .into_response();
+        }
+        Err(PipelineError::Persistence) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "save_failed" })),
+            )
+                .into_response();
+        }
     };
 
-    let enrichment = match get_enrichment(&pool, child_clip_db_id).await {
-        Some(r) => enrichment_record_json(&r),
-        None => json!({}),
+    let enrichment = match get_enrichment_checked(&pool, child_clip_db_id).await {
+        Ok(Some(record)) => enrichment_record_json(&record),
+        Ok(None) => {
+            return enrichment_persistence_error("enrichment_missing_after_run", child_clip_db_id)
+        }
+        Err(_) => {
+            return enrichment_persistence_error(
+                "enrichment_read_after_run_failed",
+                child_clip_db_id,
+            )
+        }
     };
     Json(json!({
         "clip_db_id": clip_db_id,
@@ -2624,6 +4227,40 @@ pub async fn enrichment_run_handler(
         "enrichment": enrichment,
     }))
     .into_response()
+}
+
+fn enrichment_persistence_error(code: &'static str, clip_db_id: i32) -> Response {
+    tracing::error!(
+        code,
+        clip_db_id,
+        "Social-Media-Enrichment konnte nicht vollständig gelesen oder gespeichert werden"
+    );
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "database_failed" })),
+    )
+        .into_response()
+}
+
+fn content_mutation_error_response(error: ContentMutationError) -> Response {
+    match error {
+        ContentMutationError::UploadRunning(already_running) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "upload_already_running",
+                "already_running": already_running,
+            })),
+        )
+            .into_response(),
+        ContentMutationError::Db(error) => {
+            tracing::error!(%error, "Clip-Inhalt konnte nicht sicher geändert werden");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "save_failed" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// `GET /social-media/api/admin/analytics/clips/:clip_db_id` — Analytics (Admin).
@@ -2861,12 +4498,24 @@ pub async fn approval_decision_handler(
     if !payload.is_object() {
         return invalid_payload();
     }
-    let decision = payload
+    let raw_decision = payload
         .get("decision")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
         .to_lowercase();
+    let decision = match raw_decision.as_str() {
+        "approve" | "approved" => "approve",
+        "skip" | "skipped" => "skip",
+        "edit" | "editing" => "edit",
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_decision" })),
+            )
+                .into_response();
+        }
+    };
     let platforms = match normalize_platform_list(payload.get("platforms")) {
         Ok(p) => p,
         Err(e) => return e,
@@ -2875,7 +4524,7 @@ pub async fn approval_decision_handler(
     // "approve" `ensure_queued_uploads` auf und schreibt damit selbst in
     // `twitch_clips_upload_queue`. Also dieselbe Pro-Sperre wie beim direkten
     // Einreihen. "skip" und "edit" reihen nichts ein und bleiben ab Free offen.
-    if normalize_decision(&decision) == DECISION_APPROVE {
+    if decision == DECISION_APPROVE {
         if let Some(resp) = auto_posting_guard(&pool, &auth).await {
             return resp;
         }
@@ -2885,7 +4534,7 @@ pub async fn approval_decision_handler(
     match handle_decision(
         &pool,
         child_clip_db_id,
-        &decision,
+        decision,
         &platforms,
         actor.as_deref(),
     )
@@ -2893,12 +4542,31 @@ pub async fn approval_decision_handler(
     {
         Ok(record) => {
             let clip = match load_clip_row(&pool, clip_db_id).await {
-                Ok(Some(c)) => serialize_clip_record(&pool, &c).await,
+                Ok(Some(c)) => match serialize_clip_record(&pool, &c).await {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        tracing::error!(clip_db_id, code = "upload_queue_load_failed", error = %error, "Social-Media-Queue-Stand konnte nicht geladen werden");
+                        return clip_load_failed();
+                    }
+                },
                 Ok(None) => Value::Null,
                 Err(_) => return clip_load_failed(),
             };
             Json(json!({ "clip_db_id": clip_db_id, "approval": serialize_approval_record(&record), "clip": clip })).into_response()
         }
+        Err(ApprovalError::UploadRunning(already_running)) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "upload_already_running",
+                "already_running": already_running,
+            })),
+        )
+            .into_response(),
+        Err(ApprovalError::PreviewNotReady) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "preview_not_ready" })),
+        )
+            .into_response(),
         Err(ApprovalError::Db(_)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "approval_decision_failed" })),
@@ -2911,6 +4579,11 @@ pub async fn approval_decision_handler(
         Err(ApprovalError::NurPausiertePlattformen(plattformen)) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "only_paused_platforms", "message": plattformen })),
+        )
+            .into_response(),
+        Err(ApprovalError::TikTokConsentRequired) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "tiktok_consent_required" })),
         )
             .into_response(),
         Err(e) => (
@@ -2978,6 +4651,7 @@ pub async fn approval_cancel_handler(
 
 /// Erlaubte Freigabe-Modi in Anzeigereihenfolge, von vorsichtig nach automatisch.
 const APPROVAL_MODES: [&str; 3] = ["manual", "veto_window", "full_auto"];
+const RELEASE_MODES: [&str; 2] = ["prepare_only", "live"];
 
 /// Obergrenzen der Kadenz. Mehr als zehn Posts am Tag ist kein Zeitplan mehr.
 const MAX_POSTS_PER_WEEK: i64 = 70;
@@ -2992,6 +4666,12 @@ fn platform_schedule_json(schedule: &PlatformSchedule, next_slot: Option<String>
         "max_posts_per_day": schedule.max_posts_per_day,
         "post_times": schedule.post_times,
         "next_slot": next_slot,
+        "provider_release_blocked": schedule.platform == "tiktok",
+        "release_block_reason": if schedule.platform == "tiktok" {
+            Some("tiktok_consent_required")
+        } else {
+            None
+        },
     })
 }
 
@@ -3024,7 +4704,7 @@ fn pool_forecast_json(forecast: &PoolForecast) -> Value {
 async fn belegte_termine_je_plattform(
     pool: &PgPool,
     streamer_login: &str,
-) -> HashMap<String, Vec<DateTime<Utc>>> {
+) -> Result<HashMap<String, Vec<DateTime<Utc>>>, sqlx::Error> {
     let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT q.platform, COALESCE(q.scheduled_at, q.completed_at) AS termin \
            FROM twitch_clips_upload_queue q \
@@ -3036,28 +4716,27 @@ async fn belegte_termine_je_plattform(
     )
     .bind(streamer_login.trim().to_lowercase())
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    .await?;
 
     let mut je_plattform: HashMap<String, Vec<DateTime<Utc>>> = HashMap::new();
     for (platform, termin) in rows {
         je_plattform.entry(platform).or_default().push(termin);
     }
-    je_plattform
+    Ok(je_plattform)
 }
 
 /// Baut die vollstaendige Antwort des Zeitplan-Endpoints.
-async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
+async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Result<Value, sqlx::Error> {
     // Feste Zahl an Abfragen, unabhaengig von der Zahl der Plattformen. Vorher
     // holte `plan_next_slot` je Plattform Zeitplan, Einstellungen und belegte
     // Termine erneut, und `pool_forecast` lud die Zeitplaene ein viertes Mal:
     // rund zehn Abfragen pro GET, und jede Zeitplan-Mutation gibt den
     // kompletten Plan zurueck.
-    let settings = load_streamer_settings(pool, streamer_login).await;
-    let schedules = load_platform_schedules(pool, streamer_login).await;
-    let categories = load_categories(pool, streamer_login).await;
-    let forecast = berechne_vorrat(verfuegbare_clips(pool, streamer_login).await, &schedules);
-    let belegt = belegte_termine_je_plattform(pool, streamer_login).await;
+    let settings = load_streamer_settings_checked(pool, streamer_login).await?;
+    let schedules = load_platform_schedules_checked(pool, streamer_login).await?;
+    let categories = load_categories_checked(pool, streamer_login).await?;
+    let forecast = berechne_vorrat(verfuegbare_clips(pool, streamer_login).await?, &schedules);
+    let belegt = belegte_termine_je_plattform(pool, streamer_login).await?;
     let now = chrono::Utc::now();
     let leer: Vec<DateTime<Utc>> = Vec::new();
 
@@ -3077,15 +4756,33 @@ async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
         platforms.push(platform_schedule_json(schedule, next_slot));
     }
 
-    json!({
+    Ok(json!({
         "streamer_login": streamer_login,
         "approval_mode": settings.approval_mode.as_str(),
         "approval_modes": APPROVAL_MODES,
+        "release_mode": settings.release_mode.as_str(),
+        "release_enabled": settings.release_mode.release_enabled(),
+        "release_modes": RELEASE_MODES,
         "timezone": settings.timezone,
         "platforms": platforms,
         "categories": categories.iter().map(category_json).collect::<Vec<_>>(),
         "pool": pool_forecast_json(&forecast),
-    })
+    }))
+}
+
+async fn posting_plan_response(pool: &PgPool, streamer_login: &str) -> Response {
+    match posting_plan_json(pool, streamer_login).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => {
+            tracing::error!(
+                %error,
+                streamer = %streamer_login,
+                code = "posting_plan_read_failed",
+                "Social-Media-Zeitplan konnte nicht vollständig gelesen werden"
+            );
+            upload_error(StatusCode::INTERNAL_SERVER_ERROR, "database_failed", None)
+        }
+    }
 }
 
 /// `GET /social-media/api/admin/settings/posting-plan?streamer_login=` —
@@ -3102,7 +4799,7 @@ pub async fn posting_plan_get_handler(
     if let Err(error) = ensure_streamer_rows(&pool, &slug).await {
         tracing::warn!(%error, streamer = %slug, "Zeitplan-Defaults konnten nicht angelegt werden");
     }
-    Json(posting_plan_json(&pool, &slug).await).into_response()
+    posting_plan_response(&pool, &slug).await
 }
 
 /// `PUT /social-media/api/admin/settings/posting-plan` — Freigabe-Modus und
@@ -3125,7 +4822,12 @@ pub async fn posting_plan_put_handler(
         return invalid_payload();
     }
 
-    let current = load_streamer_settings(&pool, &slug).await;
+    let current = match load_streamer_settings_checked(&pool, &slug).await {
+        Ok(settings) => settings,
+        Err(_) => {
+            return upload_error(StatusCode::INTERNAL_SERVER_ERROR, "database_failed", None);
+        }
+    };
     let approval_mode = match payload.get("approval_mode").and_then(Value::as_str) {
         Some(raw) => {
             if !APPROVAL_MODES.contains(&raw) {
@@ -3153,23 +4855,69 @@ pub async fn posting_plan_put_handler(
         }
         None => current.timezone,
     };
+    if payload.get("release_mode").is_some() && !matches!(auth, DashboardAuthLevel::Admin { .. }) {
+        return forbidden("Nur Admins dürfen Veröffentlichungen freischalten.");
+    }
+    let release_mode = match payload.get("release_mode").and_then(Value::as_str) {
+        Some(raw) => {
+            if !RELEASE_MODES.contains(&raw) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "unknown release_mode" })),
+                )
+                    .into_response();
+            }
+            ReleaseMode::parse(raw)
+        }
+        None => current.release_mode,
+    };
 
     let settings = StreamerSettings {
         approval_mode,
         timezone,
+        release_mode,
     };
     let actor = editor_user_id(&auth);
-    if save_streamer_settings(&pool, &slug, &settings, actor.as_deref())
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "db" })),
-        )
-            .into_response();
+    match save_streamer_settings(&pool, &slug, &settings, actor.as_deref()).await {
+        Ok(_) => {}
+        Err(StreamerSettingsSaveError::ProviderInFlight(jobs)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "provider_in_flight",
+                    "disabled": true,
+                    "release_mode": "prepare_only",
+                    "active_jobs": jobs.into_iter().map(|job| json!({
+                        "queue_id": job.queue_id,
+                        "platform": job.platform,
+                        "status": job.status,
+                        "provider_external_id": job.provider_external_id,
+                    })).collect::<Vec<_>>(),
+                })),
+            )
+                .into_response();
+        }
+        Err(StreamerSettingsSaveError::BacklogCannotBeScheduled { platform }) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "release_backlog_cannot_be_scheduled",
+                    "platform": platform,
+                    "release_mode": "prepare_only",
+                })),
+            )
+                .into_response();
+        }
+        Err(StreamerSettingsSaveError::Db(error)) => {
+            tracing::error!(%error, streamer_login = %slug, "Posting-Plan konnte nicht gespeichert werden");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db" })),
+            )
+                .into_response();
+        }
     }
-    Json(posting_plan_json(&pool, &slug).await).into_response()
+    posting_plan_response(&pool, &slug).await
 }
 
 /// Prueft eine Liste von Posting-Zeiten im Format `HH:MM`.
@@ -3229,10 +4977,14 @@ pub async fn posting_plan_platform_put_handler(
         return invalid_payload();
     }
 
-    let current = load_platform_schedules(&pool, &slug)
-        .await
-        .into_iter()
-        .find(|s| s.platform == platform);
+    let current = match load_platform_schedules_checked(&pool, &slug).await {
+        Ok(schedules) => schedules,
+        Err(_) => {
+            return upload_error(StatusCode::INTERNAL_SERVER_ERROR, "database_failed", None);
+        }
+    }
+    .into_iter()
+    .find(|s| s.platform == platform);
     let Some(current) = current else {
         return (
             StatusCode::BAD_REQUEST,
@@ -3290,12 +5042,20 @@ pub async fn posting_plan_platform_put_handler(
         None => current.post_times.clone(),
     };
 
+    let requested_auto_post = payload
+        .get("auto_post")
+        .map(coerce_bool)
+        .unwrap_or(current.auto_post);
+    if platform == "tiktok" && requested_auto_post {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "tiktok_consent_required" })),
+        )
+            .into_response();
+    }
     let schedule = PlatformSchedule {
         platform,
-        auto_post: payload
-            .get("auto_post")
-            .map(coerce_bool)
-            .unwrap_or(current.auto_post),
+        auto_post: requested_auto_post,
         posts_per_week,
         max_posts_per_day,
         post_times,
@@ -3311,7 +5071,7 @@ pub async fn posting_plan_platform_put_handler(
         )
             .into_response();
     }
-    Json(posting_plan_json(&pool, &slug).await).into_response()
+    posting_plan_response(&pool, &slug).await
 }
 
 /// `PUT /social-media/api/admin/settings/posting-plan/category/:category_key` —
@@ -3328,7 +5088,12 @@ pub async fn posting_plan_category_put_handler(
         Err(e) => return e,
     };
     let category_key = category_key.trim().to_lowercase();
-    let categories = load_categories(&pool, &slug).await;
+    let categories = match load_categories_checked(&pool, &slug).await {
+        Ok(categories) => categories,
+        Err(_) => {
+            return upload_error(StatusCode::INTERNAL_SERVER_ERROR, "database_failed", None);
+        }
+    };
     if !categories
         .iter()
         .any(|category| category.category_key == category_key)
@@ -3358,7 +5123,7 @@ pub async fn posting_plan_category_put_handler(
         )
             .into_response();
     }
-    Json(posting_plan_json(&pool, &slug).await).into_response()
+    posting_plan_response(&pool, &slug).await
 }
 
 /// Löst den Streamer eines Aufrufs auf, der genau einen Kanal braucht.
@@ -3792,7 +5557,57 @@ pub async fn check_partner_access_guard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::FromRequest;
+    use axum::http::Request;
+    use futures_util::StreamExt;
     use std::sync::Mutex;
+
+    #[test]
+    fn upload_error_allowlist_deckt_permanente_prepare_und_provider_codes_ab() {
+        for code in [
+            "source_missing",
+            "invalid_source_url",
+            "download_failed",
+            "render_failed",
+            "provider_rejected",
+        ] {
+            assert_eq!(safe_upload_error_code(code), code);
+        }
+        assert_eq!(
+            safe_upload_error_code("roher Providertext"),
+            "upload_failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn enrichment_grenzen_sind_serverseitig_fail_closed() {
+        let too_long_title = json!({ "title_youtube": "x".repeat(101) });
+        let response = parse_string_field(&too_long_title, "title_youtube", 100).unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(response).await;
+        assert_eq!(body["error"], "enrichment_limits_exceeded");
+        assert_eq!(body["field"], "title_youtube");
+        assert_eq!(body["max"], 100);
+
+        let too_many_tags = json!({
+            "hashtags_youtube": (0..11).map(|index| format!("tag{index}")).collect::<Vec<_>>()
+        });
+        let response =
+            parse_hashtag_field(&too_many_tags, "hashtags_youtube", 10, 100).unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await["error"],
+            "enrichment_limits_exceeded"
+        );
+
+        let too_long_tag = json!({ "hashtags_youtube": ["x".repeat(100)] });
+        let response = parse_hashtag_field(&too_long_tag, "hashtags_youtube", 10, 100).unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let wrong_type = json!({ "hashtags_youtube": ["ok", 7] });
+        let response = parse_hashtag_field(&wrong_type, "hashtags_youtube", 10, 100).unwrap_err();
+        assert_eq!(body_json(response).await["error"], "invalid_field");
+    }
 
     #[test]
     fn form_submission_response_maps_all_outcomes() {
@@ -3846,6 +5661,56 @@ mod tests {
         }
     }
 
+    fn lazy_test_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/tb_multipart_route_test")
+            .unwrap()
+    }
+
+    fn multipart_payload(parts: &[(&str, Option<&str>, &[u8])], boundary: &str) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (name, filename, value) in parts {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"").as_bytes(),
+            );
+            if let Some(filename) = filename {
+                body.extend_from_slice(format!("; filename=\"{filename}\"").as_bytes());
+            }
+            body.extend_from_slice(b"\r\n\r\n");
+            body.extend_from_slice(value);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        body
+    }
+
+    async fn extract_multipart(body: Body, boundary: &str) -> Multipart {
+        let request = Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .unwrap();
+        Multipart::from_request(request, &()).await.unwrap()
+    }
+
+    fn upload_test_root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "tb-dashboard-upload-{label}-{}",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    async fn upload_work_is_empty(root: &FsPath) -> bool {
+        let work = root.join(".dashboard-work");
+        let Ok(mut entries) = tokio::fs::read_dir(work).await else {
+            return true;
+        };
+        entries.next_entry().await.unwrap().is_none()
+    }
+
     #[test]
     fn mp4_mime_erkennung_und_allowlist() {
         // B15-FIX: ftyp-Box an Offset 4 + Major-Brand → MIME.
@@ -3869,6 +5734,301 @@ mod tests {
         // Zu kurz / Klartext → None.
         assert_eq!(detect_mp4_mime(b"not a video at all"), None);
         assert_eq!(detect_mp4_mime(b"short"), None);
+        assert!(!plausible_ftyp_box(mp4, mp4.len() as u64));
+        assert!(plausible_ftyp_box(b"\x00\x00\x00\x10ftypisom....", 16,));
+        assert!(!plausible_ftyp_box(
+            b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81webm....",
+            16,
+        ));
+    }
+
+    #[test]
+    fn upload_textfelder_und_parallelitaet_sind_hart_begrenzt() {
+        let mut target = Vec::new();
+        append_limited_metadata(&mut target, b"123", 5).unwrap();
+        assert_eq!(
+            append_limited_metadata(&mut target, b"456", 5)
+                .unwrap_err()
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        let permit = manual_upload_semaphore().try_acquire().unwrap();
+        assert!(manual_upload_semaphore().try_acquire().is_err());
+        drop(permit);
+        assert!(manual_upload_semaphore().try_acquire().is_ok());
+    }
+
+    #[tokio::test]
+    async fn upload_chunks_werden_direkt_in_den_gehaltenen_inode_begrenzt() {
+        let root = std::env::temp_dir().join(format!(
+            "tb-dashboard-upload-stream-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut staged = StagedUpload::create(&root).await.unwrap();
+        write_staged_chunk(&mut staged, b"123", 5).await.unwrap();
+        assert_eq!(
+            write_staged_chunk(&mut staged, b"456", 5)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(staged.length, 3);
+        staged.file.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+        let mut bytes = Vec::new();
+        staged.file.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"123");
+        staged.cleanup().await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_verzeichnisse_und_inodes_bleiben_no_clobber_und_hart_begrenzt() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = upload_test_root("inode-contract");
+        let destination = open_or_create_upload_streamer_directory(&root, "nani")
+            .await
+            .unwrap();
+        assert_eq!(
+            destination.handle.metadata().await.unwrap().mode() & 0o7777,
+            0o2770,
+            "Neue Streamer-Verzeichnisse müssen trotz UMask gruppenschreibbar und setgid sein"
+        );
+
+        let mut first = StagedUpload::create(&root).await.unwrap();
+        write_staged_chunk(&mut first, b"erster-inode", 1024)
+            .await
+            .unwrap();
+        first.file.sync_all().await.unwrap();
+        validate_staged_upload_inode(&first).await.unwrap();
+        let mut second = StagedUpload::create(&root).await.unwrap();
+        write_staged_chunk(&mut second, b"zweiter-inode", 1024)
+            .await
+            .unwrap();
+        second.file.sync_all().await.unwrap();
+        validate_staged_upload_inode(&second).await.unwrap();
+        let final_name = std::ffi::OsStr::new("manual:test.mp4");
+        link_open_file_noreplace(&first.file, &destination, final_name).unwrap();
+        assert_eq!(
+            link_open_file_noreplace(&second.file, &destination, final_name)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        first.cleanup().await;
+        second.cleanup().await;
+        assert_eq!(
+            tokio::fs::read(destination.logical_path.join(final_name))
+                .await
+                .unwrap(),
+            b"erster-inode"
+        );
+
+        let mut linked = StagedUpload::create(&root).await.unwrap();
+        write_staged_chunk(&mut linked, b"hardlink", 1024)
+            .await
+            .unwrap();
+        linked.file.sync_all().await.unwrap();
+        let extra_link = linked
+            .work_directory
+            .logical_path
+            .join("unerwarteter-hardlink.mp4");
+        std::fs::hard_link(
+            linked.work_directory.logical_path.join(&linked.temp_name),
+            &extra_link,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_staged_upload_inode(&linked)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(linked.file.metadata().await.unwrap().nlink(), 2);
+        linked.cleanup().await;
+        std::fs::remove_file(extra_link).unwrap();
+
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, b"unveraendert").unwrap();
+        let symlink_name = destination.logical_path.join("manual:symlink.mp4");
+        std::os::unix::fs::symlink(&outside, &symlink_name).unwrap();
+        let staged = StagedUpload::create(&root).await.unwrap();
+        assert_eq!(
+            link_open_file_noreplace(
+                &staged.file,
+                &destination,
+                std::ffi::OsStr::new("manual:symlink.mp4")
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"unveraendert");
+        staged.cleanup().await;
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn multipart_route_begrenzt_datei_metadaten_und_raeumt_partialdatei_auf() {
+        let pool = lazy_test_pool();
+        let semaphore = Semaphore::new(1);
+        let timing = UploadTiming {
+            wallclock: std::time::Duration::from_secs(2),
+            idle: std::time::Duration::from_secs(1),
+        };
+        let limits = UploadLimits {
+            file_bytes: 5,
+            text_bytes: 5,
+            slug_bytes: 16,
+        };
+
+        let root = upload_test_root("route-limit");
+        let boundary = "tb-limit-boundary";
+        let payload = multipart_payload(&[("file", Some("clip.mp4"), b"123456")], boundary);
+        let response = upload_clip_handler_inner(
+            DashboardAuthLevel::admin(),
+            pool.clone(),
+            extract_multipart(Body::from(payload), boundary).await,
+            root.to_str().unwrap(),
+            &semaphore,
+            timing,
+            limits,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(upload_work_is_empty(&root).await);
+
+        let boundary = "tb-metadata-boundary";
+        let payload = multipart_payload(&[("title", None, b"123456")], boundary);
+        let response = upload_clip_handler_inner(
+            DashboardAuthLevel::admin(),
+            pool,
+            extract_multipart(Body::from(payload), boundary).await,
+            root.to_str().unwrap(),
+            &semaphore,
+            timing,
+            limits,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(upload_work_is_empty(&root).await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn multipart_route_lehnt_unbekannte_und_doppelte_felder_ab() {
+        let pool = lazy_test_pool();
+        let semaphore = Semaphore::new(1);
+        let timing = UploadTiming::production();
+        let limits = UploadLimits::production();
+        let root = upload_test_root("route-fields");
+
+        let boundary = "tb-unknown-boundary";
+        let payload = multipart_payload(&[("unexpected", None, b"x")], boundary);
+        let response = upload_clip_handler_inner(
+            DashboardAuthLevel::admin(),
+            pool.clone(),
+            extract_multipart(Body::from(payload), boundary).await,
+            root.to_str().unwrap(),
+            &semaphore,
+            timing,
+            limits,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let boundary = "tb-duplicate-boundary";
+        let payload = multipart_payload(
+            &[
+                ("file", Some("clip.mp4"), b"abc"),
+                ("title", None, b"eins"),
+                ("title", None, b"zwei"),
+            ],
+            boundary,
+        );
+        let response = upload_clip_handler_inner(
+            DashboardAuthLevel::admin(),
+            pool,
+            extract_multipart(Body::from(payload), boundary).await,
+            root.to_str().unwrap(),
+            &semaphore,
+            timing,
+            limits,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(upload_work_is_empty(&root).await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn langsamer_multipart_upload_blockiert_nur_einen_slot_und_raeumt_auf() {
+        let pool = lazy_test_pool();
+        let semaphore = Arc::new(Semaphore::new(1));
+        let timing = UploadTiming {
+            wallclock: std::time::Duration::from_millis(250),
+            idle: std::time::Duration::from_millis(50),
+        };
+        let limits = UploadLimits::production();
+        let root = upload_test_root("route-timeout");
+        let boundary = "tb-slow-boundary";
+        let first_chunk = Bytes::from(format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"clip.mp4\"\r\n\r\nabc\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n"
+        ));
+        let closing = Bytes::from(format!("spaet\r\n--{boundary}--\r\n"));
+        let stream = futures_util::stream::once(async move {
+            Ok::<Bytes, std::convert::Infallible>(first_chunk)
+        })
+        .chain(futures_util::stream::once(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            Ok::<Bytes, std::convert::Infallible>(closing)
+        }));
+        let multipart = extract_multipart(Body::from_stream(stream), boundary).await;
+        let first_pool = pool.clone();
+        let first_semaphore = semaphore.clone();
+        let first_root = root.clone();
+        let first = tokio::spawn(async move {
+            upload_clip_handler_inner(
+                DashboardAuthLevel::admin(),
+                first_pool,
+                multipart,
+                first_root.to_str().unwrap(),
+                first_semaphore.as_ref(),
+                timing,
+                limits,
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while semaphore.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let second_boundary = "tb-busy-boundary";
+        let second_payload = multipart_payload(&[("unexpected", None, b"x")], second_boundary);
+        let second = upload_clip_handler_inner(
+            DashboardAuthLevel::admin(),
+            pool,
+            extract_multipart(Body::from(second_payload), second_boundary).await,
+            root.to_str().unwrap(),
+            semaphore.as_ref(),
+            timing,
+            limits,
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(first.await.unwrap().status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(semaphore.available_permits(), 1);
+        assert!(upload_work_is_empty(&root).await);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3932,6 +6092,79 @@ mod tests {
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
             SOCIAL_MEDIA_LOGIN_URL
         );
+
+        let legacy = index_handler(
+            DashboardAuthLevel::None,
+            "/social-media-admin".parse().unwrap(),
+        )
+        .await;
+        assert_eq!(
+            legacy.headers().get(axum::http::header::LOCATION).unwrap(),
+            SOCIAL_MEDIA_ADMIN_LOGIN_URL
+        );
+    }
+
+    #[test]
+    fn preparation_json_gibt_keine_rohen_subprozessdetails_aus() {
+        let record = ClipPreparationRecord {
+            clip_db_id: 7,
+            state: "failed".to_string(),
+            source_fingerprint: None,
+            render_fingerprint: None,
+            render_path: None,
+            error_code: Some("render_failed".to_string()),
+            error_message: Some("ffmpeg /srv/private/clip.mp4 token=geheim".to_string()),
+            requested_at: "2026-09-01T00:00:00Z".to_string(),
+            started_at: None,
+            completed_at: None,
+            updated_at: "2026-09-01T00:00:01Z".to_string(),
+        };
+        let payload = preparation_json(&record);
+        assert_eq!(
+            payload["error_message"],
+            "Die Vorschau konnte nicht erstellt werden."
+        );
+        assert!(!payload.to_string().contains("/srv/private"));
+        assert!(!payload.to_string().contains("geheim"));
+    }
+
+    #[test]
+    fn media_range_parser_deckt_206_und_416_faelle_ab() {
+        assert_eq!(parse_byte_range("bytes=0-3", 10), Ok((0, 3)));
+        assert_eq!(parse_byte_range("bytes=4-", 10), Ok((4, 9)));
+        assert_eq!(parse_byte_range("bytes=-4", 10), Ok((6, 9)));
+        assert!(parse_byte_range("bytes=10-", 10).is_err());
+        assert!(parse_byte_range("bytes=8-2", 10).is_err());
+        assert!(parse_byte_range("bytes=0-1,4-5", 10).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn media_open_lehnt_symlinkendes_renderverzeichnis_ab() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tb_sm_render_dir_{nonce}"));
+        let outside = std::env::temp_dir().join(format!("tb_sm_render_outside_{nonce}"));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        tokio::fs::write(outside.join("7-preview.mp4"), b"privat")
+            .await
+            .unwrap();
+        let rendered_link = root.join("rendered");
+        std::os::unix::fs::symlink(&outside, &rendered_link).unwrap();
+
+        let result = open_render_file_from_dir_no_follow(
+            &rendered_link,
+            std::ffi::OsStr::new("7-preview.mp4"),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_file(rendered_link);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     /// Der OAuth-Umweg endet auf `/social-media?oauth_success=…`. Faellt der
@@ -4035,8 +6268,8 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
             "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
@@ -4050,7 +6283,8 @@ mod tests {
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
-            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', release_mode TEXT NOT NULL DEFAULT 'prepare_only', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_clip_preparation (clip_db_id BIGINT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'pending', lease_token TEXT, source_fingerprint TEXT, render_fingerprint TEXT, render_path TEXT, error_code TEXT, error_message TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
             "CREATE TABLE social_media_category_settings (streamer_login TEXT NOT NULL, category_key TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, category_key))",
             "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
@@ -4058,6 +6292,222 @@ mod tests {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn preparation_api_und_range_media_bleiben_plattformfrei_und_gescopt() {
+        let Some(pool) = make_pool("t_dash_sm_preparation_api").await else {
+            return;
+        };
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('prepare-api', 'https://clips.twitch.tv/PrepareApi', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation (clip_db_id, state) VALUES ($1, 'pending')",
+        )
+        .bind(clip_db_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let get_response = clip_preparation_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let payload = body_json(get_response).await;
+        let keys: std::collections::HashSet<&str> = payload
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            std::collections::HashSet::from([
+                "clip_db_id",
+                "state",
+                "source_ready",
+                "preview_ready",
+                "preview_url",
+                "download_url",
+                "error_code",
+                "error_message",
+                "requested_at",
+                "started_at",
+                "completed_at",
+                "updated_at",
+            ])
+        );
+        assert_eq!(payload["state"], "pending");
+
+        let without_preparation: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) \
+             VALUES ('prepare-get-readonly', 'https://clips.twitch.tv/Readonly', 'nani') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let readonly_get = clip_preparation_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(without_preparation.to_string()),
+        )
+        .await;
+        assert_eq!(readonly_get.status(), StatusCode::NOT_FOUND);
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM social_media_clip_preparation WHERE clip_db_id = $1",
+        )
+        .bind(without_preparation)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "GET darf keine Preparation-Zeile anlegen");
+
+        let post_response = clip_preparation_post_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(post_response.status(), StatusCode::ACCEPTED);
+        assert_eq!(body_json(post_response).await["state"], "pending");
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let rendered_dir = FsPath::new(DEFAULT_CLIPS_DIR).join("rendered");
+        tokio::fs::create_dir_all(&rendered_dir).await.unwrap();
+        let media_path = rendered_dir.join(format!("{clip_db_id}-{nonce}.mp4"));
+        tokio::fs::write(&media_path, b"0123456789").await.unwrap();
+        sqlx::query(
+            "UPDATE social_media_clip_preparation SET state = 'preview_ready', \
+             source_fingerprint = 'source', render_fingerprint = 'render', render_path = $2, \
+             completed_at = NOW(), updated_at = NOW() WHERE clip_db_id = $1",
+        )
+        .bind(clip_db_id)
+        .bind(media_path.to_string_lossy().as_ref())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let unauthenticated = clip_preparation_media_handler(
+            DashboardAuthLevel::None,
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+            Query(PreparationMediaQuery::default()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        sqlx::query(
+            "INSERT INTO social_media_partner_access (streamer_login, granted) \
+             VALUES ('other', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out_of_scope = clip_preparation_media_handler(
+            sm_partner("other"),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+            Query(PreparationMediaQuery::default()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(out_of_scope.status(), StatusCode::FORBIDDEN);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
+        let response = clip_preparation_media_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+            Query(PreparationMediaQuery::default()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 2-5/10"
+        );
+        assert_eq!(
+            response.headers().get(header::ACCEPT_RANGES).unwrap(),
+            "bytes"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::X_CONTENT_TYPE_OPTIONS)
+                .unwrap(),
+            "nosniff"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 16)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"2345");
+
+        let mut invalid_headers = HeaderMap::new();
+        invalid_headers.insert(header::RANGE, HeaderValue::from_static("bytes=99-"));
+        let invalid = clip_preparation_media_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+            Query(PreparationMediaQuery::default()),
+            invalid_headers,
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            invalid.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes */10"
+        );
+        assert_eq!(
+            invalid.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!("tb_sm_outside_{nonce}.mp4"));
+            tokio::fs::write(&outside, b"outside").await.unwrap();
+            let link = rendered_dir.join(format!("{clip_db_id}-{nonce}-link.mp4"));
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            sqlx::query(
+                "UPDATE social_media_clip_preparation SET render_path = $2 WHERE clip_db_id = $1",
+            )
+            .bind(clip_db_id)
+            .bind(link.to_string_lossy().as_ref())
+            .execute(&pool)
+            .await
+            .unwrap();
+            let symlink_response = clip_preparation_media_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Path(clip_db_id.to_string()),
+                Query(PreparationMediaQuery::default()),
+                HeaderMap::new(),
+            )
+            .await;
+            assert_eq!(symlink_response.status(), StatusCode::NOT_FOUND);
+            let _ = std::fs::remove_file(link);
+            let _ = std::fs::remove_file(outside);
+        }
+        let _ = std::fs::remove_file(media_path);
     }
 
     async fn body_json(resp: Response) -> serde_json::Value {
@@ -4814,12 +7264,14 @@ mod tests {
             expired: false,
             scopes: None,
             uses_global_fallback: true,
+            provider_calls_enabled: false,
         };
         // Scope + globaler Fallback → maskiert.
         let v = platform_status_json(&status, true);
         assert!(v["username"].is_null());
         assert!(v["user_id"].is_null());
         assert_eq!(v["uses_global_fallback"], true);
+        assert_eq!(v["provider_calls_enabled"], false);
         // Scope, aber kein Fallback → sichtbar.
         let mut own = status.clone();
         own.uses_global_fallback = false;
@@ -5684,6 +8136,24 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Plattformgrenzen gelten im echten Schreibhandler und verändern den
+        // zuvor gespeicherten Datensatz bei einer Ablehnung nicht.
+        let resp = enrichment_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip.to_string()),
+            json!({ "title_youtube": "x".repeat(101) }).to_string(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(resp).await;
+        assert_eq!(error["error"], "enrichment_limits_exceeded");
+        let saved = get_enrichment(&pool, i32::try_from(clip).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(saved.title_youtube.as_deref(), Some("YT"));
+
         // nicht existierender Clip → 404.
         assert_eq!(
             enrichment_put_handler(
@@ -5952,11 +8422,27 @@ mod tests {
         );
     }
 
-    fn mark_body(clip_id: Option<i64>, platforms: Value) -> MarkUploadedBody {
+    fn mark_body(
+        clip_id: Option<i64>,
+        reconciliations: Vec<MarkUploadedReconciliation>,
+    ) -> MarkUploadedBody {
         MarkUploadedBody {
             clip_id: clip_id.map(|c| json!(c)),
-            platforms,
+            reconciliations,
             streamer: None,
+        }
+    }
+
+    fn reconciliation(
+        queue_id: i64,
+        provider_started_at: DateTime<Utc>,
+        external_id: Option<&str>,
+    ) -> MarkUploadedReconciliation {
+        MarkUploadedReconciliation {
+            reconciliation_id: queue_id.to_string(),
+            platform: "tiktok".into(),
+            provider_started_at,
+            provider_external_id: external_id.map(str::to_string),
         }
     }
 
@@ -5968,16 +8454,33 @@ mod tests {
         sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok', 'nani')").execute(&pool).await.unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
-        // Erfolg.
+        let (queue_id, provider_started_at): (i64, DateTime<Utc>) = sqlx::query_as(
+            "INSERT INTO twitch_clips_upload_queue \
+             (clip_id, platform, status, provider_started_at, provider_lease_token, provider_external_id) \
+             VALUES ($1, 'tiktok', 'reconciliation_required', NOW(), 'lease-a', 'video-42') \
+             RETURNING id, provider_started_at",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Erfolg: exakt die im Dashboard angezeigte Reconciliation-ID.
         let resp = mark_uploaded_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerQuery { streamer: None }),
-            Json(mark_body(Some(clip), json!(["tiktok"]))),
+            Json(mark_body(
+                Some(clip),
+                vec![reconciliation(
+                    queue_id,
+                    provider_started_at,
+                    Some("video-42"),
+                )],
+            )),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_json(resp).await["success"], true);
+        assert_eq!(body_json(resp).await["ok"], true);
         let up: bool = sqlx::query_scalar(
             "SELECT uploaded_tiktok FROM twitch_clips_social_media WHERE id = $1",
         )
@@ -5987,13 +8490,20 @@ mod tests {
         .unwrap();
         assert!(up);
 
-        // Fehlende clip_id → 400, leere platforms → 400.
+        // Fehlende clip_id → 400, leere Reconciliation-Liste → 400.
         assert_eq!(
             mark_uploaded_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Query(StreamerQuery { streamer: None }),
-                Json(mark_body(None, json!(["tiktok"])))
+                Json(mark_body(
+                    None,
+                    vec![reconciliation(
+                        queue_id,
+                        provider_started_at,
+                        Some("video-42")
+                    )]
+                ))
             )
             .await
             .status(),
@@ -6004,7 +8514,7 @@ mod tests {
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Query(StreamerQuery { streamer: None }),
-                Json(mark_body(Some(clip), json!([])))
+                Json(mark_body(Some(clip), vec![]))
             )
             .await
             .status(),
@@ -6016,7 +8526,14 @@ mod tests {
                 partner("other"),
                 State(pool.clone()),
                 Query(StreamerQuery { streamer: None }),
-                Json(mark_body(Some(clip), json!(["tiktok"])))
+                Json(mark_body(
+                    Some(clip),
+                    vec![reconciliation(
+                        queue_id,
+                        provider_started_at,
+                        Some("video-42")
+                    )]
+                ))
             )
             .await
             .status(),
@@ -6100,13 +8617,50 @@ mod tests {
             .await
             .unwrap();
             assert!(payload["clip_db_id"].as_i64().unwrap() > 0);
-            assert_eq!(payload["clip_id"], "good1");
-            assert!(std::path::Path::new(&format!("{base}/nani/good1.mp4")).exists());
-            // Duplikat → 409.
-            let resp = process_uploaded_clip(&pool, &base, Some("nani"), Some("good1"), None, &mp4)
-                .await
-                .unwrap_err();
-            assert_eq!(resp.status(), StatusCode::CONFLICT);
+            let first_id = payload["clip_id"].as_str().unwrap();
+            assert!(first_id.starts_with("manual:"));
+            assert!(std::path::Path::new(&format!("{base}/nani/{first_id}.mp4")).exists());
+
+            // Auch dieselbe frei gewählte Client-ID reserviert keinen globalen
+            // Twitch-Namen; jeder Request erhält einen neuen Server-Namensraum.
+            let second =
+                process_uploaded_clip(&pool, &base, Some("nani"), Some("good1"), None, &mp4)
+                    .await
+                    .unwrap();
+            let second_id = second["clip_id"].as_str().unwrap();
+            assert!(second_id.starts_with("manual:"));
+            assert_ne!(first_id, second_id);
+
+            // Der echte Multipart-Handler verarbeitet die UI-Reihenfolge
+            // (Datei vor Metadaten) streamend und ignoriert die globale
+            // Client-Clip-ID auch auf dem vollständigen DB-Pfad.
+            let boundary = "tb-real-upload-boundary";
+            let payload = multipart_payload(
+                &[
+                    ("file", Some("clip.mp4"), &mp4),
+                    ("streamer_login", None, b"nani"),
+                    ("clip_id", None, b"fremde-globale-twitch-id"),
+                    ("title", None, b"Mein Handler-Clip"),
+                ],
+                boundary,
+            );
+            let route_semaphore = Semaphore::new(1);
+            let response = upload_clip_handler_inner(
+                DashboardAuthLevel::admin(),
+                pool.clone(),
+                extract_multipart(Body::from(payload), boundary).await,
+                &base,
+                &route_semaphore,
+                UploadTiming::production(),
+                UploadLimits::production(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let route_payload = body_json(response).await;
+            let route_id = route_payload["clip_id"].as_str().unwrap();
+            assert!(route_id.starts_with("manual:"));
+            assert_ne!(route_id, "fremde-globale-twitch-id");
+            assert!(std::path::Path::new(&format!("{base}/nani/{route_id}.mp4")).exists());
         }
         let _ = std::fs::remove_dir_all(&base);
     }

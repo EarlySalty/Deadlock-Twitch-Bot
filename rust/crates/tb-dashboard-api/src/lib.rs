@@ -256,6 +256,15 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/api/admin/clips/:clip_db_id/layout",
             axum::routing::put(social_media::clip_layout_put_handler),
         )
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id/preparation",
+            get(social_media::clip_preparation_get_handler)
+                .post(social_media::clip_preparation_post_handler),
+        )
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id/preparation/media",
+            get(social_media::clip_preparation_media_handler),
+        )
         // Vocab-CRUD (Admin): Liste/Upsert, Löschen, Seed.
         .route(
             "/social-media/api/admin/vocab",
@@ -1516,10 +1525,13 @@ pub fn build_affiliate_portal_router() -> Router {
 /// `DashboardAuthLevel`-Extractor liest `DashboardAuthState` aus der globalen
 /// Extension, und der `PgPool`-State wird fuer Partner-Access-Checks benötigt.
 pub fn build_social_media_admin_router(pool: PgPool) -> Router {
-    use handlers::spa;
+    use handlers::{social_media, spa};
 
     Router::new()
-        .route("/social-media-admin", get(spa::social_media_admin_handler))
+        .route(
+            "/social-media-admin",
+            get(social_media::social_media_admin_index_handler),
+        )
         .route(
             "/social-media-admin/*path",
             get(spa::social_media_admin_assets_handler),

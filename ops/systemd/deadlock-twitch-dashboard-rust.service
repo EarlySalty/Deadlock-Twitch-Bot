@@ -54,7 +54,9 @@ ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
-RestrictNamespaces=yes
+# Der manuelle Upload prüft Medien im selben Bubblewrap-Parser wie der Bot.
+# Nur dessen Namespace-Typen bleiben erlaubt; IPC/UTS/cgroup sind gesperrt.
+RestrictNamespaces=user mnt pid net
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
@@ -65,8 +67,14 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-UMask=0007
+UMask=0027
 LimitCORE=0
+TasksMax=64
+MemoryAccounting=yes
+MemoryHigh=2G
+MemoryMax=3G
+CPUAccounting=yes
+CPUQuota=200%
 
 [Install]
 WantedBy=multi-user.target

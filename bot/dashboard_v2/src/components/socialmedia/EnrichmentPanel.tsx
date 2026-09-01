@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -23,19 +23,52 @@ import {
 } from '@/api/socialMedia';
 import type { ClipEnrichment, SocialPlatform } from '@/types/socialMedia';
 import { useT } from '@/context/LanguageContext';
-import { STATUS_META, TONE_BADGE as TONE } from './labels';
+import { fehlerText, STATUS_META, TONE_BADGE as TONE } from './labels';
 
 const PLATFORMS: Array<{
   id: SocialPlatform;
   label: string;
-  Icon: React.ComponentType<{ className?: string }>;
+  Icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   tone: string;
   titleLimit: number;
+  descriptionLimit: number;
   hashtagTarget: string;
+  hashtagLimit: number;
+  hashtagLengthLimit: number;
 }> = [
-  { id: 'youtube', label: 'YouTube Shorts', Icon: Video, tone: 'text-[#FF5A3C]', titleLimit: 100, hashtagTarget: '5–10' },
-  { id: 'tiktok', label: 'TikTok', Icon: Music2, tone: 'text-[#00D9FF]', titleLimit: 150, hashtagTarget: '8–12' },
-  { id: 'instagram', label: 'Instagram Reels', Icon: Camera, tone: 'text-[#FF5A3C]', titleLimit: 125, hashtagTarget: '8–15' },
+  {
+    id: 'youtube',
+    label: 'YouTube Shorts',
+    Icon: Video,
+    tone: 'text-[#FF5A3C]',
+    titleLimit: 100,
+    descriptionLimit: 5000,
+    hashtagTarget: '5–10',
+    hashtagLimit: 10,
+    hashtagLengthLimit: 100,
+  },
+  {
+    id: 'tiktok',
+    label: 'TikTok',
+    Icon: Music2,
+    tone: 'text-[#00D9FF]',
+    titleLimit: 150,
+    descriptionLimit: 2200,
+    hashtagTarget: '8–12',
+    hashtagLimit: 12,
+    hashtagLengthLimit: 100,
+  },
+  {
+    id: 'instagram',
+    label: 'Instagram Reels',
+    Icon: Camera,
+    tone: 'text-[#FF5A3C]',
+    titleLimit: 125,
+    descriptionLimit: 2200,
+    hashtagTarget: '8–15',
+    hashtagLimit: 15,
+    hashtagLengthLimit: 100,
+  },
 ];
 
 interface EnrichmentPanelProps {
@@ -55,24 +88,17 @@ interface EditState {
   hashtags_instagram: string[];
 }
 
-/**
- * Ein Satz mit einer hervorgehobenen Stelle in der Mitte, aber nur einem
- * Uebersetzungsschluessel. Vorher war der Satz auf zwei Schluessel aufgeteilt
- * ('... gesetzt ist (' und '). Setze einen Key ...'); eine Sprache mit anderer
- * Wortstellung konnte ihn damit nicht uebersetzen. Die Marke sagt jetzt nur,
- * wo der hervorgehobene Teil landet, und darf in jeder Sprache anderswo
- * stehen.
- */
-function mitEinschub(satz: string, marke: string, einschub: ReactNode): ReactNode {
-  const teile = satz.split(marke);
-  if (teile.length < 2) return satz;
-  return (
-    <>
-      {teile[0]}
-      {einschub}
-      {teile.slice(1).join(marke)}
-    </>
-  );
+function normalisiereHashtags(hashtags: string[] | null | undefined): string[] {
+  const gesehen = new Set<string>();
+  const ergebnis: string[] = [];
+  for (const hashtag of hashtags ?? []) {
+    const wert = hashtag.trim().replace(/^#+/, '').replace(/\s+/g, '').toLowerCase();
+    if (wert && !gesehen.has(wert)) {
+      gesehen.add(wert);
+      ergebnis.push(wert);
+    }
+  }
+  return ergebnis;
 }
 
 function fromEnrichment(e: ClipEnrichment): EditState {
@@ -83,9 +109,9 @@ function fromEnrichment(e: ClipEnrichment): EditState {
     description_youtube: e.description_youtube ?? '',
     description_tiktok: e.description_tiktok ?? '',
     description_instagram: e.description_instagram ?? '',
-    hashtags_youtube: e.hashtags_youtube ?? [],
-    hashtags_tiktok: e.hashtags_tiktok ?? [],
-    hashtags_instagram: e.hashtags_instagram ?? [],
+    hashtags_youtube: normalisiereHashtags(e.hashtags_youtube),
+    hashtags_tiktok: normalisiereHashtags(e.hashtags_tiktok),
+    hashtags_instagram: normalisiereHashtags(e.hashtags_instagram),
   };
 }
 
@@ -97,17 +123,47 @@ function toPayload(initial: ClipEnrichment, edit: EditState): EnrichmentEditPayl
   if (edit.description_youtube !== (initial.description_youtube ?? '')) payload.description_youtube = edit.description_youtube || null;
   if (edit.description_tiktok !== (initial.description_tiktok ?? '')) payload.description_tiktok = edit.description_tiktok || null;
   if (edit.description_instagram !== (initial.description_instagram ?? '')) payload.description_instagram = edit.description_instagram || null;
-  if (JSON.stringify(edit.hashtags_youtube) !== JSON.stringify(initial.hashtags_youtube ?? [])) payload.hashtags_youtube = edit.hashtags_youtube;
-  if (JSON.stringify(edit.hashtags_tiktok) !== JSON.stringify(initial.hashtags_tiktok ?? [])) payload.hashtags_tiktok = edit.hashtags_tiktok;
-  if (JSON.stringify(edit.hashtags_instagram) !== JSON.stringify(initial.hashtags_instagram ?? [])) payload.hashtags_instagram = edit.hashtags_instagram;
+  if (JSON.stringify(edit.hashtags_youtube) !== JSON.stringify(normalisiereHashtags(initial.hashtags_youtube))) payload.hashtags_youtube = edit.hashtags_youtube;
+  if (JSON.stringify(edit.hashtags_tiktok) !== JSON.stringify(normalisiereHashtags(initial.hashtags_tiktok))) payload.hashtags_tiktok = edit.hashtags_tiktok;
+  if (JSON.stringify(edit.hashtags_instagram) !== JSON.stringify(normalisiereHashtags(initial.hashtags_instagram))) payload.hashtags_instagram = edit.hashtags_instagram;
   return payload;
+}
+
+const zeichenAnzahl = (wert: string): number => Array.from(wert).length;
+const hashtagZeichenAnzahl = (wert: string): number =>
+  zeichenAnzahl(`#${wert.replace(/^#+/, '')}`);
+
+function hatPlattformGrenzfehler(edit: EditState): boolean {
+  return PLATFORMS.some(({
+    id,
+    titleLimit,
+    descriptionLimit,
+    hashtagLimit,
+    hashtagLengthLimit,
+  }) => {
+    const title = edit[`title_${id}` as keyof EditState];
+    const description = edit[`description_${id}` as keyof EditState];
+    const hashtags = edit[`hashtags_${id}` as keyof EditState];
+    return (
+      (typeof title === 'string' && zeichenAnzahl(title) > titleLimit) ||
+      (typeof description === 'string' && zeichenAnzahl(description) > descriptionLimit) ||
+      (Array.isArray(hashtags) && (
+        hashtags.length > hashtagLimit ||
+        hashtags.some((hashtag) => hashtagZeichenAnzahl(hashtag) > hashtagLengthLimit)
+      ))
+    );
+  });
 }
 
 export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
   const t = useT();
   const queryClient = useQueryClient();
+  const instanceId = useId();
   const [edit, setEdit] = useState<EditState | null>(null);
   const [activePlatform, setActivePlatform] = useState<SocialPlatform>('youtube');
+  const headingId = `${instanceId}-heading`;
+  const editorId = `${instanceId}-platform-editor`;
+  const activePlatformButtonId = `${instanceId}-${activePlatform}-platform`;
 
   const enrichmentQuery = useQuery({
     queryKey: ['social-media', 'enrichment', clipDbId],
@@ -146,10 +202,53 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
     },
   });
 
-  if (enrichmentQuery.isLoading || !edit) {
+  if (enrichmentQuery.isError) {
     return (
-      <div className="flex items-center justify-center py-10">
-        <Loader2 className="w-5 h-5 text-orange animate-spin" />
+      <div
+        role="region"
+        aria-label={t('Metadaten')}
+        tabIndex={-1}
+        className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70"
+      >
+        <div role="alert" className="flex items-start gap-3 rounded-xl border border-danger/35 bg-danger/10 p-4 text-sm text-danger">
+          <AlertCircle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-bold">{t('Metadaten konnten nicht geladen werden.')}</p>
+            <p className="mt-1 break-words text-xs text-text-secondary">
+              {fehlerText(enrichmentQuery.error, t)}
+            </p>
+            <button
+              type="button"
+              onClick={() => enrichmentQuery.refetch()}
+              disabled={enrichmentQuery.isFetching}
+              className="mt-3 inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-danger/35 px-3 py-1.5 text-xs font-bold hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/70 disabled:opacity-50"
+            >
+              {enrichmentQuery.isFetching ? (
+                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+              {t('Erneut versuchen')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (enrichmentQuery.isLoading || !enrichmentQuery.data || !edit) {
+    return (
+      <div
+        role="region"
+        aria-label={t('Metadaten')}
+        aria-busy="true"
+        tabIndex={-1}
+        className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70"
+      >
+        <div role="status" aria-live="polite" aria-atomic="true" className="flex items-center justify-center gap-2 py-10 text-sm text-text-secondary">
+          <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-orange" />
+          <span>{t('Metadaten werden geladen…')}</span>
+        </div>
       </div>
     );
   }
@@ -157,24 +256,42 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
   const enrichment = enrichmentQuery.data!;
   const status = STATUS_META[enrichment.status] ?? STATUS_META.pending;
   const dirty = JSON.stringify(toPayload(enrichment, edit)) !== '{}';
+  const editInvalid = hatPlattformGrenzfehler(edit);
+  const grenzfehlerId = `${instanceId}-grenzfehler`;
   const isProcessing =
     enrichment.status === 'transcribing' ||
     enrichment.status === 'correcting' ||
     enrichment.status === 'llm' ||
-    runMutation.isPending;
+    runMutation.isPending ||
+    saveMutation.isPending;
 
   return (
-    <div className="space-y-5">
+    <div
+      role="region"
+      aria-labelledby={headingId}
+      aria-busy={isProcessing}
+      tabIndex={-1}
+      className="min-w-0 space-y-5 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70"
+    >
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-2">
-          <Wand2 className="w-4 h-4 text-orange" />
-          <h4 className="text-sm font-bold uppercase tracking-[0.16em] text-white">{t('Metadaten')}</h4>
+          <Wand2 aria-hidden="true" className="h-4 w-4 text-orange" />
+          <h4 id={headingId} className="text-sm font-bold uppercase tracking-[0.16em] text-white">{t('Metadaten')}</h4>
         </div>
-        <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${TONE[status.tone]}`}>
-          {t(status.label)}
+        <span
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={`rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${TONE[status.tone]}`}
+        >
+          {saveMutation.isPending
+            ? t('Speichert…')
+            : runMutation.isPending
+              ? t('Neu generieren')
+              : t(status.label)}
         </span>
         {enrichment.llm_provider && (
-          <span className="text-[10px] font-mono text-text-secondary bg-bg/60 px-2 py-1 rounded-md border border-border">
+          <span className="max-w-full break-all rounded-md border border-border bg-bg/60 px-2 py-1 font-mono text-[10px] text-text-secondary">
             {enrichment.llm_provider}
             {enrichment.llm_model ? ` · ${enrichment.llm_model}` : ''}
           </span>
@@ -184,47 +301,44 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             ≈ ${enrichment.cost_usd_estimate.toFixed(4)}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:ml-auto sm:w-auto">
           <button
             type="button"
-            disabled={isProcessing}
-            onClick={() => runMutation.mutate(true)}
-            className="text-xs font-semibold text-text-secondary hover:text-white inline-flex items-center gap-1.5 disabled:opacity-40"
+            disabled={isProcessing || dirty}
+            title={dirty ? t('Speichere oder verwirf zuerst deine Änderungen.') : undefined}
+            onClick={() => {
+              saveMutation.reset();
+              runMutation.mutate(true);
+            }}
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-text-secondary hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70 disabled:opacity-40"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${runMutation.isPending ? 'animate-spin' : ''}`} />
+            <RefreshCw aria-hidden="true" className={`h-3.5 w-3.5 ${runMutation.isPending ? 'animate-spin' : ''}`} />
             {t('Neu generieren')}
           </button>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-bg/60 text-text-secondary hover:text-white"
+              className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-lg p-1.5 text-text-secondary hover:bg-bg/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70"
               aria-label={t('Enrichment-Panel schließen')}
             >
-              <X className="w-4 h-4" />
+              <X aria-hidden="true" className="h-4 w-4" />
             </button>
           )}
         </div>
       </div>
 
       {enrichment.error_message && (
-        <div className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
-          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>{enrichment.error_message}</span>
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 p-2.5 text-xs text-danger">
+          <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span className="min-w-0 break-words">{enrichment.error_message}</span>
         </div>
       )}
 
       {enrichment.status === 'skipped_no_key' && (
-        <div className="text-xs text-text-secondary bg-bg/40 border border-border rounded-lg p-3 leading-relaxed">
-          {mitEinschub(
-            t(
-              'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist ({keys}). Setze einen Key und drücke „Neu generieren".',
-            ),
-            '{keys}',
-            <>
-              <code className="font-mono text-orange">MINIMAX_API_KEY</code> /{' '}
-              <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
-            </>,
+        <div role="status" aria-live="polite" className="rounded-lg border border-border bg-bg/40 p-3 text-xs leading-relaxed text-text-secondary">
+          {t(
+            'Die automatische Anreicherung ist für diesen Kanal noch nicht verfügbar. Du kannst die Metadaten manuell bearbeiten oder es später erneut versuchen.',
           )}
         </div>
       )}
@@ -233,7 +347,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       {enrichment.detected_terms.length > 0 && (
         <div className="space-y-2">
           <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-accent" /> {t('Erkannte Begriffe')}
+            <Sparkles aria-hidden="true" className="h-3 w-3 text-accent" /> {t('Erkannte Begriffe')}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {enrichment.detected_terms.map((term) => (
@@ -249,21 +363,24 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       )}
 
       {/* Platform tabs */}
-      <div className="flex flex-wrap gap-1.5">
+      <div role="group" aria-label={t('Metadaten')} className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
         {PLATFORMS.map(({ id, label, Icon, tone }) => {
           const active = activePlatform === id;
           return (
             <button
               key={id}
+              id={`${instanceId}-${id}-platform`}
               type="button"
               onClick={() => setActivePlatform(id)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              aria-pressed={active}
+              aria-controls={editorId}
+              className={`inline-flex min-h-8 w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70 ${
                 active
                   ? 'bg-orange/15 text-orange border-orange/40 shadow-[0_4px_18px_-8px_rgba(201, 168, 106, 0.5)]'
                   : 'bg-bg/40 text-text-secondary border-border hover:text-white'
               }`}
             >
-              <Icon className={`w-3.5 h-3.5 ${active ? 'text-orange' : tone}`} />
+              <Icon aria-hidden={true} className={`h-3.5 w-3.5 ${active ? 'text-orange' : tone}`} />
               {t(label)}
             </button>
           );
@@ -271,51 +388,70 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
       </div>
 
       <PlatformEditor
+        id={editorId}
+        labelledBy={activePlatformButtonId}
+        fieldIdPrefix={instanceId}
         platform={activePlatform}
         edit={edit}
         onChange={setEdit}
       />
 
+      {editInvalid && (
+        <div id={grenzfehlerId} role="alert" className="rounded-lg border border-danger/30 bg-danger/10 p-2.5 text-xs text-danger">
+          {t('Korrigiere die markierten Plattformgrenzen, bevor du speicherst.')}
+        </div>
+      )}
+
       {/* Transcript collapsible */}
       {enrichment.transcript_corrected && (
         <details className="rounded-xl border border-border bg-bg/40 p-3">
-          <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <ScrollText className="w-3 h-3" /> {t('Transkript anzeigen')}
+          <summary className="inline-flex min-h-6 cursor-pointer items-center gap-1.5 rounded text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70">
+            <ScrollText aria-hidden="true" className="h-3 w-3" /> {t('Transkript anzeigen')}
           </summary>
-          <div className="text-xs text-text-secondary leading-relaxed mt-3 whitespace-pre-wrap font-mono">
+          <div className="mt-3 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-text-secondary">
             {enrichment.transcript_corrected}
           </div>
         </details>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-3 border-t border-border pt-3">
+      <div className="flex flex-col items-stretch gap-3 border-t border-border pt-3 sm:flex-row sm:items-center">
         <div className="text-[11px] text-text-secondary">
           {dirty ? t('Ungesicherte Änderungen') : t('Synchron mit Server')}
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto">
           <button
             type="button"
-            disabled={!dirty || saveMutation.isPending}
+            disabled={!dirty || isProcessing}
             onClick={() => setEdit(fromEnrichment(enrichment))}
-            className="px-3 py-2 rounded-xl text-xs font-semibold text-text-secondary border border-border hover:text-white disabled:opacity-40"
+            className="min-h-9 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70 disabled:opacity-40"
           >
             {t('Zurücksetzen')}
           </button>
           <button
             type="button"
-            disabled={!dirty || saveMutation.isPending}
-            onClick={() => saveMutation.mutate(toPayload(enrichment, edit))}
-            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!dirty || isProcessing || editInvalid}
+            aria-describedby={editInvalid ? grenzfehlerId : undefined}
+            onClick={() => {
+              runMutation.reset();
+              saveMutation.mutate(toPayload(enrichment, edit));
+            }}
+            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl bg-orange px-4 py-2 text-xs font-bold text-on-gold shadow-[0_8px_22px_-8px_rgba(201,168,106,0.6)] transition hover:bg-orange-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {saveMutation.isPending ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}
             {t('Speichern')}
           </button>
         </div>
       </div>
       {saveMutation.isSuccess && !dirty && (
-        <div className="text-xs text-success inline-flex items-center gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5" /> {t('Gespeichert.')}
+        <div role="status" aria-live="polite" aria-atomic="true" className="inline-flex items-center gap-1.5 text-xs text-success">
+          <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" /> {t('Gespeichert.')}
+        </div>
+      )}
+      {(saveMutation.isError || runMutation.isError) && (
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 p-2.5 text-xs text-danger">
+          <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span className="min-w-0 break-words">{fehlerText(saveMutation.error ?? runMutation.error, t)}</span>
         </div>
       )}
     </div>
@@ -323,12 +459,15 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
 }
 
 interface PlatformEditorProps {
+  id: string;
+  labelledBy: string;
+  fieldIdPrefix: string;
   platform: SocialPlatform;
   edit: EditState;
   onChange: (next: EditState) => void;
 }
 
-function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
+function PlatformEditor({ id, labelledBy, fieldIdPrefix, platform, edit, onChange }: PlatformEditorProps) {
   const t = useT();
   const config = PLATFORMS.find((p) => p.id === platform)!;
   const titleKey = `title_${platform}` as const;
@@ -338,60 +477,137 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
   const title = edit[titleKey];
   const desc = edit[descKey];
   const tags = edit[tagsKey];
-  const titleLen = title.length;
+  const titleLen = zeichenAnzahl(title);
+  const descriptionLen = zeichenAnzahl(desc);
+  const titleInvalid = titleLen > config.titleLimit;
+  const descriptionInvalid = descriptionLen > config.descriptionLimit;
+  const hashtagCountInvalid = tags.length > config.hashtagLimit;
+  const hashtagLengthInvalid = tags.some(
+    (hashtag) => hashtagZeichenAnzahl(hashtag) > config.hashtagLengthLimit,
+  );
+  const hashtagsInvalid = hashtagCountInvalid || hashtagLengthInvalid;
+  const titleId = `${fieldIdPrefix}-${platform}-title`;
+  const titleHintId = `${titleId}-hint`;
+  const titleErrorId = `${titleId}-error`;
+  const descriptionId = `${fieldIdPrefix}-${platform}-description`;
+  const descriptionHintId = `${descriptionId}-hint`;
+  const descriptionErrorId = `${descriptionId}-error`;
+  const hashtagsId = `${fieldIdPrefix}-${platform}-hashtags`;
+  const hashtagsHintId = `${hashtagsId}-hint`;
+  const hashtagsCountErrorId = `${hashtagsId}-count-error`;
+  const hashtagsLengthErrorId = `${hashtagsId}-length-error`;
 
   return (
-    <div className="space-y-4">
+    <div id={id} role="group" aria-labelledby={labelledBy} className="min-w-0 space-y-4">
       <div>
-        <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5">
-          {t('Titel')}
-          <span className={`ml-2 font-mono ${titleLen > config.titleLimit ? 'text-danger' : 'text-text-secondary'}`}>
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <label htmlFor={titleId} className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
+            {t('Titel')}
+          </label>
+          <span id={titleHintId} className={`font-mono text-[11px] font-bold uppercase tracking-[0.14em] ${titleInvalid ? 'text-danger' : 'text-text-secondary'}`}>
             {titleLen}/{config.titleLimit}
           </span>
-        </label>
+        </div>
         <input
+          id={titleId}
           type="text"
           value={title}
           onChange={(e) => onChange({ ...edit, [titleKey]: e.target.value })}
           maxLength={config.titleLimit + 20}
+          aria-describedby={titleInvalid ? `${titleHintId} ${titleErrorId}` : titleHintId}
+          aria-invalid={titleInvalid}
           placeholder={t('{platform}-Title…', { platform: config.label })}
-          className="w-full px-3 py-2 rounded-xl bg-bg/60 border border-border focus:border-orange/60 focus:outline-none text-sm text-white placeholder:text-text-secondary/60"
+          className={`w-full rounded-xl border bg-bg/60 px-3 py-2 text-sm text-white placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-orange ${titleInvalid ? 'border-danger/60' : 'border-orange/70 focus:border-orange'}`}
         />
+        {titleInvalid && (
+          <p id={titleErrorId} role="alert" className="mt-1 text-xs text-danger">
+            {t('Der Titel darf höchstens {count} Zeichen lang sein.', {
+              count: config.titleLimit,
+            })}
+          </p>
+        )}
       </div>
 
       <div>
-        <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5">
-          {t('Beschreibung')}
-        </label>
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <label htmlFor={descriptionId} className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
+            {t('Beschreibung')}
+          </label>
+          <span id={descriptionHintId} className={`font-mono text-[11px] font-bold uppercase tracking-[0.14em] ${descriptionInvalid ? 'text-danger' : 'text-text-secondary'}`}>
+            {descriptionLen}/{config.descriptionLimit}
+          </span>
+        </div>
         <textarea
+          id={descriptionId}
           value={desc}
           onChange={(e) => onChange({ ...edit, [descKey]: e.target.value })}
+          aria-invalid={descriptionInvalid}
+          aria-describedby={descriptionInvalid ? `${descriptionHintId} ${descriptionErrorId}` : descriptionHintId}
           rows={3}
           placeholder={t('Kurze Beschreibung für {platform}…', { platform: config.label })}
-          className="w-full px-3 py-2 rounded-xl bg-bg/60 border border-border focus:border-orange/60 focus:outline-none text-sm text-white placeholder:text-text-secondary/60 resize-y leading-relaxed"
+          className={`w-full resize-y rounded-xl border bg-bg/60 px-3 py-2 text-sm leading-relaxed text-white placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-orange ${descriptionInvalid ? 'border-danger/60' : 'border-orange/70 focus:border-orange'}`}
         />
+        {descriptionInvalid && (
+          <p id={descriptionErrorId} role="alert" className="mt-1 text-xs text-danger">
+            {t('Die Beschreibung darf höchstens {count} Zeichen lang sein.', {
+              count: config.descriptionLimit,
+            })}
+          </p>
+        )}
       </div>
 
       <div>
-        <label className="block text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary mb-1.5 inline-flex items-center gap-1.5">
-          <Hash className="w-3 h-3" /> {t('Hashtags')}
-          <span className="ml-1 font-mono text-text-secondary">
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <label htmlFor={hashtagsId} className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
+            <Hash aria-hidden="true" className="h-3 w-3" /> {t('Hashtags')}
+          </label>
+          <span id={hashtagsHintId} className={`font-mono text-[11px] font-bold uppercase tracking-[0.14em] ${hashtagsInvalid ? 'text-danger' : 'text-text-secondary'}`}>
             {t('{count} · Ziel {target}', { count: tags.length, target: config.hashtagTarget })}
+            <span className="sr-only"> {t('Hashtag eingeben + Enter…')}</span>
           </span>
-        </label>
+        </div>
         <HashtagsEditor
+          key={platform}
+          id={hashtagsId}
+          describedBy={[
+            hashtagsHintId,
+            hashtagCountInvalid ? hashtagsCountErrorId : null,
+            hashtagLengthInvalid ? hashtagsLengthErrorId : null,
+          ].filter(Boolean).join(' ')}
+          invalid={hashtagsInvalid}
           tags={tags}
           onChange={(next) => onChange({ ...edit, [tagsKey]: next })}
         />
+        {hashtagCountInvalid && (
+          <p id={hashtagsCountErrorId} role="alert" className="mt-1 text-xs text-danger">
+            {t('Für {platform} sind höchstens {count} Hashtags erlaubt.', {
+              platform: config.label,
+              count: config.hashtagLimit,
+            })}
+          </p>
+        )}
+        {hashtagLengthInvalid && (
+          <p id={hashtagsLengthErrorId} role="alert" className="mt-1 text-xs text-danger">
+            {t('Ein Hashtag darf höchstens {count} Zeichen lang sein.', {
+              count: config.hashtagLengthLimit,
+            })}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 function HashtagsEditor({
+  id,
+  describedBy,
+  invalid,
   tags,
   onChange,
 }: {
+  id: string;
+  describedBy: string;
+  invalid: boolean;
   tags: string[];
   onChange: (next: string[]) => void;
 }) {
@@ -424,7 +640,7 @@ function HashtagsEditor({
   };
 
   return (
-    <div className="rounded-xl border border-border bg-bg/60 p-2 flex flex-wrap items-center gap-1.5">
+    <div className={`flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl border bg-bg/60 p-2 focus-within:ring-2 focus-within:ring-orange ${invalid ? 'border-danger/60' : 'border-orange/70 focus-within:border-orange'}`}>
       {tags.map((tag) => (
         <span
           key={tag}
@@ -434,18 +650,21 @@ function HashtagsEditor({
           <button
             type="button"
             onClick={() => removeTag(tag)}
-            className="hover:text-white"
+            className="inline-flex min-h-6 min-w-6 items-center justify-center rounded hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/70"
             aria-label={t('Hashtag #{tag} entfernen', { tag })}
           >
-            <X className="w-3 h-3" />
+            <X aria-hidden="true" className="h-3 w-3" />
           </button>
         </span>
       ))}
       <input
+        id={id}
         type="text"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={handleKey}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
         onBlur={() => {
           if (input.trim()) {
             addTag(input);
@@ -453,7 +672,7 @@ function HashtagsEditor({
           }
         }}
         placeholder={tags.length === 0 ? t('Hashtag eingeben + Enter…') : ''}
-        className="flex-1 min-w-[120px] bg-transparent text-sm text-white placeholder:text-text-secondary/60 outline-none px-2 py-1"
+        className="min-h-6 min-w-[120px] flex-[1_1_120px] bg-transparent px-2 py-1 text-sm text-white outline-none placeholder:text-text-secondary"
       />
     </div>
   );

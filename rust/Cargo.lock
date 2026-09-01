@@ -2207,12 +2207,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.7",
 ]
@@ -3101,6 +3103,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-media-downloader"
+version = "0.1.0"
+dependencies = [
+ "tb-social-media",
+ "tokio",
+]
+
+[[package]]
 name = "tb-monitoring"
 version = "0.1.0"
 dependencies = [
@@ -3184,6 +3194,8 @@ dependencies = [
  "base64",
  "chrono",
  "chrono-tz",
+ "futures-util",
+ "libc",
  "regex",
  "reqwest",
  "serde",
@@ -3197,6 +3209,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "uuid",
  "wiremock",
 ]
 
@@ -3842,6 +3855,19 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

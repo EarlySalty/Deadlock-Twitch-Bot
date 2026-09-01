@@ -16,7 +16,7 @@ Zielgruppe sind vor allem **kleinere und mittlere Streamer**. Der Bot verspricht
 - **Scam-Warnungen** — warnt vorsichtig vor gefälschten „offiziellen" Servern und verdächtigen Fremd-Angeboten im Chat. → [scam-warnung.md](scam-warnung.md)
 - **AI-Chat-Engagement** — eine ruhige Plauder-KI, die sich an laufende Gespräche andockt (aktuell im beobachtenden Shadow-Modus). → [chat-ai-engagement.md](chat-ai-engagement.md)
 - **Community-Funktionen** — Streamer-Leaderboard, Partner-Recruiting und Voice-Reaction. → [community-features.md](community-features.md)
-- **Highlight-Clipper & Social-Media** — schneidet automatisch gute Spielmomente und macht daraus nach Freigabe Kurzvideos für TikTok/Instagram/YouTube. → [highlight-clipper.md](highlight-clipper.md), [social-media-uploads.md](social-media-uploads.md)
+- **Highlight-Clipper & Social-Media** — erkennt derzeit vor allem Kill-Momente; vorhandene Twitch-Clips werden getrennt davon zu prüfbaren Kurzvideos für TikTok, Instagram und YouTube aufbereitet. → [highlight-clipper.md](highlight-clipper.md), [social-media-uploads.md](social-media-uploads.md)
 - **KI-Titelgenerator** — schlägt Stream-Titel auf Basis der eigenen Historie vor. → [titel-generator.md](titel-generator.md)
 - **Analyse-Dashboard** — übersetzt die gesammelten Stream-Daten in Kennzahlen, Diagramme und konkrete Coaching-Empfehlungen. → [analytics-und-dashboard.md](analytics-und-dashboard.md)
 - **Pläne & Abrechnung** — kostenlose Basis plus optionale bezahlte Zusatz-Features und ein Empfehlungs-Programm. → [plaene-und-billing.md](plaene-und-billing.md)

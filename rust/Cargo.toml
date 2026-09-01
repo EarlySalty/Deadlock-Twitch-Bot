@@ -29,6 +29,7 @@ members = [
     "bin/tb-stream-audit",
     "bin/tb-dashboard",
     "bin/tb-bot",
+    "bin/tb-media-downloader",
 ]
 
 [workspace.package]
@@ -103,6 +104,7 @@ regex = "1"
 unicode-normalization = "0.1"
 dashmap = "6"
 strsim = "0.11"
+libc = "0.2"
 
 # Produktions-Optimierungsprofil für den Dauerlauf-Server.
 # lto = "thin": Thin-LTO statt Fat-LTO — nahezu gleiche Größen-/Laufzeitwirkung,

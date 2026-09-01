@@ -1,9 +1,14 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Startet den Rust-tb-bot (interne API 8776 + Monitoring + Raid) als Service.
 # Secrets kommen aus Infisical; Nicht-Secret-Konfiguration wird hier explizit gesetzt.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+YT_DLP_BIN="$ROOT_DIR/rust/target/release/yt-dlp"
+if [[ -L "$YT_DLP_BIN" || ! -f "$YT_DLP_BIN" || ! -x "$YT_DLP_BIN" ]]; then
+  echo "Gebündeltes yt-dlp fehlt oder ist nicht ausführbar: $YT_DLP_BIN" >&2
+  exit 1
+fi
 SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-bot-rust.service'
 if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
   CREDENTIALS_DIRECTORY="$SYSTEMD_CREDENTIAL_DIR"

@@ -1,79 +1,162 @@
-# Social-Media-Clips & Uploads
+# Social-Media-Clips und Uploads
 
 ## Worum es geht
 
-Der Bot nimmt Highlight-Clips von Twitch und macht daraus fertige Kurzvideos für TikTok, Instagram Reels und YouTube Shorts. Er holt die Clips, schreibt automatisch passende Titel, Beschreibungen und Hashtags, bringt das Video ins Hochkant-Format und lädt es nach Freigabe auf die verbundenen Konten hoch. Ziel ist, die Reichweite von Clips über Twitch hinaus zu verlängern, ohne dass jemand jeden Clip von Hand schneiden und posten muss.
+Das Social-Media-Dashboard sammelt Twitch-Clips ein und bereitet daraus fertige
+9:16-Videos vor. Man kann den echten Render ansehen, Texte bearbeiten,
+Plattformen wählen und einen Veröffentlichungsplan vorbereiten. Solange der
+Kanal im Testbetrieb steht, wird dabei nichts an TikTok, Instagram oder YouTube
+gesendet.
 
-## Was der Bot tut
+Die Pipeline ist absichtlich in zwei Bereiche getrennt:
 
-- **Clips einsammeln:** Er zieht regelmäßig neue Twitch-Clips der aktiven Partner-Streamer ein und übernimmt zusätzlich Clips, die der Highlight-Clipper als gute Momente erkannt hat.
-- **Transkribieren:** Er hört den Ton des Clips ab und wandelt ihn in Text um. Dabei korrigiert er Deadlock-spezifische Begriffe (Heldennamen, Items), die normale Spracherkennung oft verschreibt — damit Untertitel und Beschreibungen stimmen.
-- **Anreichern:** Aus dem Clip-Inhalt erzeugt er pro Plattform einen eigenen Vorschlag für Titel, Beschreibung und Hashtags. Jede Plattform bekommt eine zugeschnittene Variante, weil sich Format und Publikum unterscheiden.
-- **Zur Freigabe vorlegen:** Bevor irgendetwas online geht, legt der Bot den Clip mit den fertigen Texten zur Review vor (siehe unten).
-- **Plattformgerecht rendern:** Er bringt das Video ins richtige Seitenverhältnis und in die erlaubte Länge für die jeweilige Plattform und kann Untertitel einblenden.
-- **Hochladen:** Nach Freigabe lädt er das Video auf die freigegebenen Plattformen hoch und übernimmt dabei den vorbereiteten Titel, die Beschreibung und die Hashtags.
-- **Auswertung einsammeln:** Nach der Veröffentlichung holt er sich in Abständen die Plattform-Statistiken (z. B. Aufrufe) und erstellt daraus Reports.
-- **Aufräumen:** Alte Clips und Dateien werden nach einer Aufbewahrungsfrist automatisch entfernt, wenn sie nicht mehr gebraucht werden.
+- **Vorbereiten:** funktioniert ohne freigeschaltete Social-Media-Plattform.
+- **Veröffentlichen:** wird erst später je Kanal bewusst eingeschaltet und
+  braucht zusätzlich eine Clip-Freigabe, ein verbundenes Plattformkonto und
+  die getrennte Freischaltung genau dieses Providerwegs.
 
-## Wann es passiert
+## Was bereits funktioniert
 
-- **Automatisches Einsammeln:** Der Bot prüft in regelmäßigen Abständen (mehrmals täglich) auf neue Clips der letzten Tage. Pro Streamer wird dabei nur eine begrenzte Zahl der neuesten Clips eingelesen. Berücksichtigt werden ausschließlich aktive, verifizierte Partner — reine Beobachtungs-Kanäle und abgemeldete Streamer bleiben außen vor.
-- **Verarbeitung:** Sobald ein Clip eingelesen ist, durchläuft er die Schritte Transkription, Korrektur und Texterzeugung von selbst im Hintergrund.
-- **Freigabe-Anfrage:** Erst wenn die Texte fertig sind, geht der Clip in den Freigabe-Zustand und es wird eine Freigabe-Nachricht ausgelöst.
-- **Upload:** Der Upload startet erst nach der Freigabe — entweder durch eine manuelle Entscheidung oder, falls aktiviert, automatisch für die voreingestellten Plattformen.
-- **Statistik-Abruf:** Die Auswertung wird nach der Veröffentlichung wiederholt nachgezogen, weil Aufrufzahlen erst über die Zeit wachsen.
+- **Clips einsammeln:** Neue Twitch-Clips aktiver Partner werden mehrmals täglich
+  übernommen. Manuelle Video-Uploads nutzen dieselbe Pipeline.
+- **Quelle sichern:** Der Bot lädt den Twitch-Clip lokal herunter oder verwendet
+  die bereits hochgeladene Datei.
+- **Video aufbereiten:** Das gespeicherte Streamer-/Clip-Layout wird auf ein
+  1080×1920-Video mit höchstens 60 Sekunden angewendet.
+- **Echte Vorschau:** Im Dashboard lässt sich genau die MP4 prüfen und
+  herunterladen, die später für den Upload vorgesehen ist.
+- **Änderungen nachziehen:** Wird das Layout geändert, kann ein neuer Render
+  angefordert werden. Unveränderte Ergebnisse werden nicht unnötig neu gebaut.
+- **Texte vorbereiten:** Titel, Beschreibungen und Hashtags können vorgeschlagen
+  und vor der Freigabe bearbeitet werden. Externe KI läuft nur mit gespeicherter
+  Zustimmung über den freigegebenen zentralen KI-Pfad.
+- **Freigabe und Planung:** Pro Clip lassen sich Ziele und Terminplan festlegen.
+- **Upload-Strecke:** Adapter für TikTok, Instagram und YouTube, sichere
+  Wiederholungen vor dem eigentlichen Plattformaufruf sowie Statusspeicherung
+  sind vorhanden.
+- **Aufräumen und Auswertung:** Veröffentlichte oder bewusst verworfene Clips
+  werden nach der Frist aufgeräumt; verfügbare Plattformmetriken werden später
+  nachgezogen.
 
-## Was Streamer/Viewer sehen
+## So läuft ein Clip durch die Strecke
 
-- **Im Chat/öffentlich:** Während der Verarbeitung ist nichts sichtbar. Sichtbar wird erst das fertige Kurzvideo auf TikTok, Instagram oder YouTube, nachdem es freigegeben und hochgeladen wurde.
-- **Im Freigabe-Schritt:** Die zuständige Person bekommt eine Nachricht mit einer Vorschau des Clips — Titel, Streamer, Aufrufzahl und Thumbnail — sowie die fertig vorgeschlagenen Titel und Hashtags je Plattform (YouTube, TikTok, Instagram).
-- **Auswahl-Buttons:** Zu jeder Freigabe gehören eine Plattform-Auswahl (YouTube Shorts, TikTok, Instagram Reels) und drei Aktionen: **Posten**, **Bearbeiten** und **Skip**. Nach einer Entscheidung wechselt die Anzeige die Farbe (grün = freigegeben, rot = übersprungen, gelb = in Bearbeitung) und zeigt, wer wann entschieden hat.
-- **Im Admin-Dashboard:** Es gibt eine Social-Media-Übersicht mit der Clip-Liste, dem aktuellen Status jedes Clips, den Freigabe-Optionen und der Verknüpfung der Plattform-Konten.
+1. Der Clip erscheint in der Übersicht.
+2. Die Aufbereitung lädt die Quelle und rendert die Hochkant-Version.
+3. Im Clip steht anschließend die echte Videovorschau bereit.
+4. Titel, Beschreibung, Hashtags und Layout können geprüft oder geändert werden.
+5. Mindestens eine Zielplattform wird gewählt.
+6. Die Freigabe legt den Clip in den Zeitplan.
+7. Im Testbetrieb bleibt er dort sicher liegen.
+8. Erst im Livebetrieb, mit gültigem Plattformzugang und freigeschaltetem
+   Providerweg wird er zum Termin hochgeladen.
 
-## Was Streamer einstellen können
+## Testbetrieb als Standard
 
-- **Plattform-Konten verbinden:** TikTok, Instagram und YouTube werden über einen Anmelde-/Verbindungs-Flow mit dem Bot gekoppelt. Nur verbundene und aktive Plattformen kommen als Upload-Ziel infrage.
-- **Plattformen pro Clip wählen:** Im Freigabe-Schritt lässt sich einzeln auswählen, auf welche der drei Plattformen ein bestimmter Clip gehen soll — auch nur auf eine Teilmenge.
-- **Texte bearbeiten:** Über **Bearbeiten** bzw. das Dashboard lassen sich die automatisch erzeugten Titel, Beschreibungen und Hashtags vor dem Upload anpassen. Manuelle Änderungen überschreiben den Bot-Vorschlag.
-- **Automatische Freigabe je Plattform:** Pro Plattform kann hinterlegt werden, dass Clips ohne manuelle Bestätigung dorthin gehen. Ist das für eine Plattform aktiv, wird sie bei einer Freigabe automatisch mit aufgenommen. Standardmäßig ist diese Auto-Freigabe aus, d. h. der Default ist die manuelle Review.
-- **Externe-KI-Zustimmung:** Es gibt einen ausdrücklichen Schalter dafür, ob Clip-Inhalte zur Texterzeugung an einen externen KI-Dienst gehen dürfen. Ohne diese Zustimmung wird nichts nach außen geschickt; der Bot nutzt dann nur eine lokale Variante oder lässt die automatischen Texte aus, sodass sie manuell ergänzt werden müssen.
+Jeder Kanal startet in **„Nur vorbereiten“**. Dieser Modus lässt die ganze
+Aufbereitung laufen, sperrt aber den letzten Provider-Aufruf. Auch eine
+automatische Clip-Freigabe oder ein bereits erreichter Termin kann diese Sperre
+nicht umgehen.
 
-## Grenzen & Sonderfälle
+Der Livebetrieb und der einzelne Providerweg werden erst nach Plattform-Audit
+und kontrolliertem Test bewusst eingeschaltet. Ein echter öffentlicher Post
+gehört nicht zum normalen Pipeline-Test. YouTube startet privat; Instagram wird
+über ein isoliertes Testkonto geprüft. TikTok bleibt vollständig gesperrt, bis
+die von TikTok verlangte Auswahl und Zustimmung pro Clip im Dashboard vorhanden
+und der App-Weg freigegeben ist.
 
-- **Freigabe ist Pflicht (Default):** Ohne Freigabe wird nichts veröffentlicht. Automatischer Upload passiert nur dort, wo die Auto-Freigabe bewusst eingeschaltet wurde.
-- **Nur verbundene Plattformen:** Eine Plattform, deren Konto nicht verbunden oder deaktiviert ist, wird beim Upload nicht bedient — auch wenn sie im Freigabe-Dialog angehakt wurde.
-- **Konto-Verbindung kann ablaufen:** Die Anmeldung an den Plattformen muss im Hintergrund gültig gehalten werden. Läuft sie ab, schlagen Uploads mit Anmeldefehlern fehl, obwohl das Konto im Dashboard noch als „verbunden" angezeigt wird — dann ist eine erneute Verbindung nötig.
-- **Format- und Längenregeln je Plattform:** Jede Plattform hat eigene Vorgaben zu Seitenverhältnis und Videolänge. Clips, die sich nicht plattformgerecht aufbereiten lassen, werden vor dem Upload aussortiert statt fehlerhaft hochgeladen.
-- **Stecken gebliebene Clips:** Die Verarbeitung läuft in einer festen Reihenfolge von Stufen. Ein Clip, der „nicht weitergeht", hängt in der Regel in genau einer Stufe fest (z. B. Transkription oder Texterzeugung) und nicht an einem einzelnen verlorenen Versuch.
-- **Ohne Tonspur/Datei:** Liegt für einen Clip keine verwertbare Videodatei vor, wird die Transkription übersprungen; der Clip kann trotzdem mit manuell ergänzten Texten weiterlaufen.
-- **Skip ist endgültig für diesen Clip:** Wird ein Clip übersprungen, geht er nicht online; er bleibt aber als übersprungen vermerkt.
-- **Mehrfach-Upload wird verhindert:** Ist ein Clip auf einer Plattform bereits hochgeladen oder schon eingereiht, wird er dort nicht erneut gepostet.
+## Was im Dashboard sichtbar ist
+
+- Quelle und Renderfortschritt;
+- echte Videovorschau und Download;
+- verständlicher Fehler mit erneutem Aufbereitungsversuch;
+- Clip-Metadaten und bearbeitbare Texte;
+- Zielplattformen und Freigabestatus;
+- Kadenz und nächste Termine;
+- Status verbundener Plattformkonten;
+- getrennten Freigabestatus des jeweiligen Providerwegs;
+- verfügbare Upload- und Aufrufdaten.
+
+Die Oberfläche darf eine Freigabe erst annehmen, wenn die Vorschau fertig, eine
+Plattform gewählt und der Test-/Livezustand sicher geladen ist.
+
+## Verhalten bei Fehlern
+
+- **Download oder Render fehlgeschlagen:** Der Clip zeigt die betroffene Stufe
+  an und kann erneut aufbereitet werden.
+- **Aufbereitung läuft bereits:** Es startet kein paralleler zweiter Lauf; der
+  vorhandene Auftrag arbeitet weiter und bleibt sichtbar.
+- **Plattformzugang fehlt:** Der Queue-Eintrag wird sichtbar zurückgestellt und
+  nicht still verloren.
+- **Fehler vor dem Plattformaufruf:** Der nächste sichere Versuch wird mit
+  Abstand geplant.
+- **Ergebnis nach gestartetem Plattformaufruf unklar:** Es gibt keine blinde
+  Wiederholung. Die Karte zeigt „Ergebnis unklar“, damit der Clip zuerst auf
+  der Plattform geprüft und danach von der Verwaltung bewusst bestätigt wird.
+- **Clip verworfen:** Offene Freigaben und noch nicht gestartete Uploads werden
+  beendet. War ein Provider-Aufruf bereits im Gang, meldet die Oberfläche das
+  ausdrücklich.
+- **Bot-Neustart:** Vorbereitungs- und Queuezustände liegen dauerhaft in der
+  Datenbank und werden danach weiterverarbeitet.
+- **Doppelter Worker:** Queue-Jobs werden atomar übernommen, damit derselbe Clip
+  nicht durch zwei Worker gleichzeitig gepostet wird.
+
+## Aktuelle Grenzen
+
+- Die produktive Rust-Strecke transkribiert Clips noch nicht und erzeugt noch
+  keine Untertitel.
+- Der Auto-Clipper erkennt bislang überwiegend Kills; gute Fails und lustige
+  Momente sind noch ein eigener Ausbau.
+- TikTok-Analytics fehlen. YouTube- und Instagram-Auswertungen sind auf die
+  wirklich freigegebenen API-Metriken begrenzt.
+- Die Plattformadapter sind gebaut, aber ein Plattformweg gilt erst nach Audit,
+  Kontofreischaltung und einem passenden privaten oder isolierten End-to-End-Test
+  als vollständig bestätigt.
+- TikTok kann nicht über die allgemeinen Automatikmodi freigegeben werden. Vor
+  jedem Direct Post braucht es eine eigene Auswahl der Sichtbarkeit und
+  Interaktionen sowie die ausdrückliche Zustimmung für genau diesen Clip.
+- Ein ausgebauter Redaktionskalender und belastbare Wirkungs-KPIs sind noch Teil
+  der Roadmap.
+
+## Geplante Qualitätsstufen
+
+Die Aufbereitung soll kontrolliert statt blind erweitert werden:
+
+1. saubere Quelle und zuverlässiges 9:16-Layout;
+2. Schnitt und richtige maximale Länge;
+3. Untertitel und Deadlock-Begriffe;
+4. Hook, Titel, Beschreibung und Hashtags;
+5. mehrere Varianten im Test vergleichen;
+6. erst nach stabilen Ergebnissen automatisch bevorzugen und veröffentlichen.
+
+So können wir jeden Schritt mit echten Vorschauen bewerten, ohne dafür schon
+einen öffentlichen Social-Media-Post riskieren zu müssen.
 
 ## Häufige Fragen
 
-**F: Lädt der Bot meine Clips automatisch und ungefragt hoch?**
-A: Nein. Standardmäßig muss jeder Clip vor der Veröffentlichung freigegeben werden. Automatisch hochgeladen wird nur, wenn die automatische Freigabe für eine Plattform ausdrücklich eingeschaltet wurde.
+**Wird jetzt automatisch etwas veröffentlicht?**
 
-**F: Auf welche Plattformen kann der Bot posten?**
-A: Auf TikTok, Instagram Reels und YouTube Shorts. Für jeden Clip kann einzeln gewählt werden, welche dieser Plattformen bedient werden sollen.
+Nein. Der Standard ist „Nur vorbereiten“. Für einen Provider-Aufruf braucht es
+zusätzlich Livebetrieb, Freigabe, Zielplattform, erreichten Termin und gültigen
+Zugang. Außerdem muss der jeweilige Providerweg separat freigeschaltet sein.
 
-**F: Woher kommen Titel und Hashtags?**
-A: Der Bot erzeugt sie automatisch aus dem Inhalt des Clips — pro Plattform eine eigene Variante. Diese Vorschläge lassen sich vor dem Upload von Hand anpassen.
+**Kann die Pipeline schon ohne Plattformfreischaltung getestet werden?**
 
-**F: Kann ich die vorgeschlagenen Texte ändern?**
-A: Ja. Über die Bearbeiten-Aktion bzw. das Dashboard lassen sich Titel, Beschreibung und Hashtags vor dem Upload überschreiben. Die manuelle Version hat dann Vorrang.
+Ja. Einsammeln, Download, Render, Vorschau, Textbearbeitung, Freigabe und
+Zeitplanung sind davon getrennt.
 
-**F: Welche Clips werden überhaupt eingesammelt?**
-A: Neue Twitch-Clips aktiver, verifizierter Partner-Streamer aus den letzten Tagen sowie Clips, die der Highlight-Clipper als gute Momente erkannt hat. Reine Beobachtungs-Kanäle werden nicht einbezogen.
+**Ist die Vorschau nur ein Thumbnail?**
 
-**F: Warum ist mein Clip nicht online gegangen?**
-A: Mögliche Gründe: Er wurde noch nicht freigegeben oder beim Skip übersprungen, das Plattform-Konto ist nicht verbunden bzw. die Anmeldung ist abgelaufen, oder der Clip erfüllt die Format-/Längenvorgaben der Plattform nicht und wurde aussortiert.
+Nein. Sie zeigt das gespeicherte Render-MP4, das der Upload-Worker später
+wiederverwendet.
 
-**F: Werden meine Clips zur Texterzeugung an einen externen Dienst geschickt?**
-A: Nur wenn die ausdrückliche Zustimmung für externe KI gesetzt ist. Ohne diese Zustimmung verlässt nichts den Bot; die Texte werden dann lokal oder gar nicht erzeugt und können manuell ergänzt werden.
+**Gibt es schon automatische Untertitel?**
 
-**F: Wie sieht das fertige Video aus?**
-A: Hochkant im Plattformformat, in erlaubter Länge, optional mit eingeblendeten Untertiteln — also als typisches Short/Reel/TikTok, nicht als roher Twitch-Clip.
+Nein. Transkription und Untertitel stehen offen und werden erst als vorhanden
+beschrieben, wenn sie im produktiven Rust-Pfad verdrahtet und getestet sind.
 
-**F: Bekomme ich mit, wie die Videos laufen?**
-A: Ja. Der Bot holt nach der Veröffentlichung wiederholt die Plattform-Statistiken (z. B. Aufrufe) und fasst sie in Reports zusammen.
+**Was fehlt bis zum ersten echten Release?**
+
+Die jeweilige Plattformfreischaltung, ein passender privater oder isolierter
+End-to-End-Test, eine Sichtprüfung des Ergebnisses und die bewusste Umschaltung
+des betroffenen Kanals auf Livebetrieb. TikTok braucht vorher zusätzlich seine
+Auswahl- und Zustimmungsoberfläche pro Clip.

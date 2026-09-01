@@ -124,6 +124,28 @@ export function applyDrag(
 }
 
 /**
+ * Tastatur-Gegenstück zum Ziehen: Pfeiltasten verschieben, mit Umschalttaste
+ * skalieren sie über die rechte beziehungsweise untere Kante. Damit ist jede
+ * per Pointer erreichbare Geometrie auch ohne Zeigegerät einstellbar.
+ */
+export function adjustBoxWithKeyboard(
+  box: LayoutBox,
+  key: string,
+  resize: boolean,
+  step: number,
+): LayoutBox | null {
+  const delta = Math.max(1, Math.round(step));
+  let dx = 0;
+  let dy = 0;
+  if (key === 'ArrowLeft') dx = -delta;
+  else if (key === 'ArrowRight') dx = delta;
+  else if (key === 'ArrowUp') dy = -delta;
+  else if (key === 'ArrowDown') dy = delta;
+  else return null;
+  return applyDrag(box, dx, dy, resize ? 'resize-br' : 'move');
+}
+
+/**
  * Setzt nur die Höhe des Cam-Streifens (Stacked-Modus). x und w bleiben stehen,
  * weil der Renderer sie im Streifen-Modus ignoriert und der Nutzer sie beim
  * Wechsel zurück nach PiP wiederhaben will. Die Höhe darf bis [`MAX_BAND_HEIGHT`]

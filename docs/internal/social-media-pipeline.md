@@ -1,49 +1,150 @@
 # Social-Media-Pipeline
 
-## Zielbild
+## Ziel und Sicherheitsgrenze
 
-Die Social-Media-Strecke ist keine einzelne Route, sondern eine Worker-Kette:
+Die produktive Pipeline lebt in Rust unter `rust/crates/tb-social-media/` und
+wird vom `tb-bot` gestartet. Sie trennt zwei Abschnitte bewusst voneinander:
 
-1. Clip-Fetch
-2. Enrichment
-3. Approval
-4. Upload
-5. Retention
-6. Analytics/Reports
+1. **Aufbereiten:** Clips einsammeln, lokal materialisieren, layouten, als
+   9:16-MP4 rendern, im Dashboard prüfen und Texte vorbereiten.
+2. **Veröffentlichen:** nach Freigabe und Zeitplan über ein verbundenes
+   Plattformkonto hochladen.
 
-Das Ganze lebt unter `bot/social_media/` und wird ueber mehrere Cogs im Hintergrund gefahren.
+`social_media_streamer_settings.release_mode` ist die kanalweite harte Grenze:
 
-## 1. Clip-Fetch
+- `prepare_only` ist der ausfallsichere Standard. Die komplette Vorbereitung
+  läuft, aber kein Provider-Aufruf darf stattfinden.
+- `live` erlaubt dem Upload-Worker den Provider-Aufruf, sofern außerdem
+  Clip-Freigabe, Zielplattform, Termin und Zugang gültig sind.
+- Unbekannte oder fehlende Werte werden wie `prepare_only` behandelt.
 
-`ClipFetcher` laeuft standardmaessig alle `6 Stunden`. Er liest alle aktiven Partner-Streamer und zieht pro Streamer bis zu `20` Clips aus den letzten `7` Tagen.
+Der Upload-Worker prüft die Grenze beim Claim und erneut unmittelbar vor dem
+Provider-Aufruf. Die Migration schaltet bestehende Kanäle nicht automatisch
+live.
+
+Unabhängig davon hat jede verwendete Auth-Zeile die zweite Schranke
+`provider_calls_enabled`. Sie ist standardmäßig `false`, wird durch OAuth weder
+beim ersten Verbinden noch beim erneuten Verbinden gesetzt und wird beim Claim
+und unmittelbar vor dem Netzaufruf erneut geprüft. Erst beide Schranken zusammen
+können einen Provideraufruf ermöglichen.
+
+## Datenfluss
+
+```text
+Twitch Helix / manueller Upload
+            |
+            v
+    Clip registrieren
+            |
+            +--------> Quelle materialisieren
+            |                   |
+            |                   v
+            |          Layout + 60-s-Render
+            |                   |
+            |                   v
+            |          echte Vorschau/Download
+            |
+            +--------> optionale Textanreicherung
+                                |
+                                v
+                    Freigabe + Plattformwahl
+                                |
+                                v
+                       Zeitplan / Queue
+                                |
+                       release_mode = live?
+                         |              |
+                       nein             ja
+                         |              |
+                    bleibt liegen   Providerweg freigegeben?
+                                      |              |
+                                    nein             ja
+                                      |              |
+                                 bleibt liegen   Provider-Upload
+                                                        |
+                                                        v
+                                               Analytics / Retention
+```
+
+## 1. Eingang
+
+`ClipFetchTask` startet mit verfügbarem Helix-Client nach 60 Sekunden und läuft
+danach alle sechs Stunden. Pro aktivem Partner werden höchstens 20 Twitch-Clips
+aus einem 14-Tage-Fenster gelesen. Bereits bekannte Twitch-Clip-IDs werden nicht
+doppelt angelegt.
+
+Manuelle Uploads nutzen denselben Clip-Datensatz, aber `source_kind =
+'manual_upload'` und einen kontrolliert gespeicherten lokalen Quellpfad.
 
 Wichtige Tabellen:
 
 - `twitch_clips_social_media`
 - `clip_fetch_history`
+- `social_media_clip_preparation`
 
-Neue Clips werden mit `status='pending'` registriert. Zusaetzlich wird bereits ein Default-Layout angewendet und ein `retention_until` gesetzt.
+Ein Trigger legt für jeden neuen Clip einen Vorbereitungsauftrag an. Bei der
+Migration werden vorhandene Clips ebenfalls als offene Aufträge erfasst.
 
-## 2. Enrichment
+## 2. Plattformfreie Aufbereitung
 
-`SocialMediaEnrichmentWorker` laeuft alle `90 Sekunden` mit Batch-Groesse `3`. Die Pipeline arbeitet clipweise und hat eine eigene Status-Maschine in `social_media_clip_enrichment`:
+`ClipPreparationWorker` verarbeitet alle 30 Sekunden bis zu zwei Clips. Der
+Schreibpfad ist unabhängig von TikTok, Instagram und YouTube:
+
+1. vorhandene manuelle oder lokale Quelle wiederverwenden;
+2. Twitch-Clips andernfalls über den isolierten Downloader-Helfer mit dem
+   release-lokal gebündelten `yt-dlp` herunterladen;
+3. Quelldatei mit SHA-256 fingerprinten;
+4. wirksames Streamer-/Clip-Layout laden;
+5. höchstens 60 Sekunden als 1080×1920 MP4 rendern;
+6. Render-Fingerprint, Pfad und Zustand speichern.
+
+Erlaubte Zustände:
 
 - `pending`
-- `transcribing`
-- `correcting`
-- `llm`
-- `done`
+- `materializing`
+- `source_ready`
+- `rendering`
+- `preview_ready`
 - `failed`
-- `skipped_no_key`
 
-Gespeichert werden unter anderem:
+Quelle, Layout und Renderer-Version gehen in den Fingerprint ein. Ein
+unverändertes fertiges Artefakt wird wiederverwendet; nach einer Layoutänderung
+entsteht ein neues Artefakt. Erst nach atomarem Umbenennen wird es als bereit
+markiert. Der spätere Upload verwendet genau dieses geprüfte MP4.
 
-- Rohtranskript
-- korrigiertes Transkript
-- Segmentdaten
-- erkannte Deadlock-Terme
-- Titel/Beschreibung/Hashtags je Plattform
-- LLM-Provider, Modell und Kostenschaetzung
+Für Twitch-Downloads sind ausschließlich HTTPS-Adressen auf den Twitch-Hosts
+zugelassen. `yt-dlp` wird als exakt versioniertes Release-Artefakt installiert;
+weder der Bot noch der Helfer raten über `PATH` oder Benutzerverzeichnisse einen
+Binary-Pfad. Der Bot öffnet die neue Quelldatei selbst und übergibt dem
+socketaktivierten Helfer nur diesen gehaltenen Dateideskriptor. Der eigene
+Helfer-Nutzer hat keinen Zugriff auf Bot-Secrets, Datenbank oder Medienpfade.
+Bubblewrap begrenzt Prozess und Dateisicht, nftables erlaubt diesem Nutzer nur
+festes DNS sowie öffentliche HTTP-/HTTPS-Ziele und sperrt Loopback, private,
+link-lokale und reservierte Netze. Anschließend prüft der Bot denselben offenen
+Inode mit einem netzlosen, begrenzten `ffprobe`, bevor die Quelle verwendbar ist.
+
+Dashboard-API:
+
+- `GET /social-media/api/admin/clips/:id/preparation`
+- `POST /social-media/api/admin/clips/:id/preparation`
+- die in der Statusantwort gelieferten Vorschau-/Download-Adressen
+
+Der Medienpfad liefert ausschließlich den in der Vorbereitungszeile
+referenzierten Render aus dem erlaubten Render-Verzeichnis und nutzt dieselbe
+sessiongebundene Kanalberechtigung wie die übrigen Social-Media-Routen.
+
+## 3. Textanreicherung
+
+`EnrichmentWorker` läuft alle 90 Sekunden mit Batchgröße 3. Er ist nur für
+Kategorien aktiv, bei denen `enrichment_enabled` gesetzt ist. Die externe
+Texterzeugung ist durch den gespeicherten Consent gegatet und läuft zentral über
+`tb-llm` mit dem freigegebenen Deepseek-V4-Flash-Pfad.
+
+Der aktuelle produktive Rust-Pfad hat **keine Transkription und keine
+Untertitel-Erzeugung**. Der Transcriber ist nicht verdrahtet. Titel,
+Beschreibungen und Hashtags können deshalb aus vorhandenen Clip-Metadaten
+entstehen oder im Dashboard manuell gepflegt werden; sie sind nicht als
+vollständige Inhaltsanalyse zu bewerben.
 
 Wichtige Tabellen:
 
@@ -51,275 +152,150 @@ Wichtige Tabellen:
 - `deadlock_vocab`
 - `social_media_settings`
 
-Sobald ein Clip fertig angereichert ist, wird er fuer Approval vorbereitet.
-
-## 3. Approval
-
-`SocialMediaApprovalWorker` laeuft jede `60 Sekunden`. Er macht zwei Dinge:
-
-- DMs fuer Clips versenden, die Freigabe brauchen
-- bereits freigegebene Clips in die Upload-Queue ueberfuehren
-
-Approval-State lebt in `social_media_clip_approval`. Gueltige States:
-
-- `awaiting_approval`
-- `approved`
-- `skipped`
-- `editing`
-
-Gespeichert werden auch:
-
-- `approved_platforms`
-- `approver_user_id`
-- `decided_at`
-- `dm_message_id`
-- `dm_channel_id`
-- `last_sent_at`
-
-Die Plattformfreigabe ist explizit pro Clip und pro Zielnetzwerk. Ein Clip kann also fuer YouTube freigegeben sein, aber fuer TikTok nicht.
-
-### Freigabe-Modi (pro Streamer)
-
-Der Modus steht in `social_media_streamer_settings.approval_mode`:
-
-- `manual`: jeder Clip braucht eine ausdrueckliche Freigabe (Default)
-- `veto_window`: Clip wird eingeplant und geht raus, wenn bis zum Termin niemand
-  widerspricht. Der Widerspruch laeuft ueber
-  `POST /social-media/api/approval/:clip_db_id/cancel`: die Route raeumt die noch
-  nicht angefassten Queue-Zeilen ab und setzt den Clip zurueck auf
-  `awaiting_approval`. Zeilen, die schon in `processing` oder `completed` stehen,
-  bleiben unangetastet und werden in der Antwort als `already_running` gemeldet,
-  damit die Oberflaeche ehrlich sagen kann, dass eine Plattform schon durch war.
-  Der geplante Termin je Plattform steht am Clip in `scheduled_at`, der letzte
-  Fehlgrund in `upload_errors`.
-- `full_auto`: Clip wird ohne Sichtung eingeplant
-
-Unbekannte Werte fallen auf `manual` zurueck.
-
-Die frueheren Key/Value-Settings `auto_approve_youtube` / `_tiktok` / `_instagram` in
-`social_media_settings` sind entfallen (Migration `20260815120000`). Sie galten global
-fuer die ganze Instanz, liessen sich von jedem freigegebenen Partner umschalten und
-loesten ausserdem nie eine Freigabe aus: sie mischten sich nur additiv in eine manuelle
-Entscheidung und ueberschrieben damit still die Auswahl des Nutzers.
-
-Automatisch eingeplant wird nur, wenn beides zusammenkommt: der Modus laesst es zu
-**und** die Kategorie des Clips ist eingeschaltet
-(`social_media_category_settings.auto_post`). Einstiegspunkt ist
-`approval::auto_approve_if_allowed`, aufgerufen am Ende der Enrichment-Pipeline und
-im `ApprovalWorker`.
-
-## 3b. Zeitplan
-
-Freigegeben heisst nicht mehr „sofort raus". `approval::ensure_queued_uploads` setzt
-beim Einreihen `twitch_clips_upload_queue.scheduled_at` auf den naechsten freien
-Termin aus `posting_plan::plan_next_slot`. Der Upload-Worker zieht ohnehin nur
-Zeilen, deren `scheduled_at` NULL oder erreicht ist.
-
-Kadenz je Streamer und Plattform in `social_media_platform_schedule`:
-
-| Spalte | Default | Bedeutung |
-|---|---|---|
-| `auto_post` | `false` | Plattform postet automatisch |
-| `posts_per_week` | `4` | Obergrenze im rollierenden Sieben-Tage-Fenster |
-| `max_posts_per_day` | `1` | Obergrenze pro lokalem Kalendertag |
-| `post_times` | `["18:00"]` | Tageszeiten in der Zeitzone des Kanals |
-
-Die Defaults kommen aus der Kadenz-Recherche: hoechstens ein Post pro Tag und
-Plattform, rund drei bis fuenf pro Woche.
-
-Gerechnet wird in `scheduler::next_cadence_slot`, rein funktional ohne IO und ohne
-Systemzeit. Steht eine Kadenz auf null, gibt es keinen Termin und die Plattform
-zaehlt nicht als aktiv. Der Suchhorizont betraegt 180 Tage.
-
-## 3c. Kategorien
-
-Clips tragen `game_id` (aus Helix) und `category_key`. Der Katalog steht in
-`social_media_category`:
-
-- `deadlock`: `enrichment_enabled = true`
-- `other`: Fallback, ohne Anreicherung
-
-Zugeordnet wird beim Registrieren des Clips ueber `posting_plan::resolve_category`:
-die `twitch_game_id` schlaegt den Abgleich ueber `match_game_names`, ohne Treffer
-landet der Clip in `other`.
-
-Das Kategorie-Gate haengt an zwei Stellen:
-
-- `enrichment::iter_pending_enrichments` nimmt nur Kategorien mit `enrichment_enabled`.
-- `approval::iter_clips_ohne_enrichment` holt die uebrigen ab und schleust sie in den
-  Approval-Workflow. Ohne diesen zweiten Pfad wuerden Clips anderer Spiele nie
-  auftauchen, denn `awaiting_approval` setzt sonst erst das Ende der
-  Enrichment-Pipeline.
-
-## 3d. Vorratswarnung
-
-`posting_plan::pool_forecast` rechnet aus Pool-Bestand und Kadenz aus, fuer wie viele
-Posts der Vorrat reicht. Gezaehlt werden Clips des Kanals, die nicht verworfen und
-nicht schon ueberall veroeffentlicht sind und in einer eingeschalteten Kategorie
-liegen. Ein Clip ergibt einen Post je aktiver Plattform. Traegt der Vorrat keine
-volle Woche mehr, setzt die Rechnung `warnung`, und das Dashboard zeigt eine eigene
-betonte Zeile ueber Clip-Pool und Zeitplan.
-
-Clip-Nachschub ist Sache der Streamer; die Plattform warnt nur.
-
-## 4. Upload
-
-`UploadWorker` laeuft ebenfalls alle `60 Sekunden`, mit `max_parallel=2`. Quelle ist `twitch_clips_upload_queue`.
-
-Ein Queue-Item repraesentiert effektiv `clip x platform`. Der Worker:
-
-1. prueft Approval
-2. markiert die Queue-Zeile als `processing`
-3. laedt den Clip herunter, falls lokal nichts vorliegt
-4. rendert/konvertiert das Video vertikal
-5. laedt auf TikTok, YouTube oder Instagram hoch
-6. schreibt Queue- und Clip-Status zurueck
-
-Wichtige Tabellen:
-
-- `twitch_clips_upload_queue`
-- `social_media_platform_auth`
-- `social_media_streamer_layout`
-- `twitch_clips_social_media`
-
-Auf Clip-Ebene tauchen spaeter im UI typischerweise diese Status auf:
-
-- `pending`
-- `awaiting_approval`
-- `approved`
-- `publishing`
-- `published_partial`
-- `published_all`
-- `discarded`
-- `failed`
-
-### Plattform-Anbindungen: was gilt, wo es klemmt
-
-**TikTok.** Direct Post ueber die Content Posting API v2. Ablauf: Creator-Info
-abfragen (Pflicht, liefert die erlaubten Sichtbarkeiten und die Kommentar-,
-Duett- und Stitch-Sperren des Kanals), dann `/post/publish/video/init/` mit
-`post_info` und `source_info`, dann die Chunks per `PUT` gegen die von init
-gelieferte `upload_url`. Einen eigenen Publish-Aufruf gibt es nicht, TikTok
-startet nach dem letzten Chunk selbst.
-
-Solange die TikTok-App nicht auditiert ist, laesst TikTok nur `SELF_ONLY` zu und
-blockt jeden oeffentlichen Post schon beim init mit
-`unaudited_client_can_only_post_to_private_accounts`. Der Default im Uploader ist
-deshalb `SELF_ONLY`. Nach dem Audit umstellen, nicht vorher.
-
-Der Upload liefert nur eine `publish_id`, also "zur Verarbeitung angenommen".
-Der Upload-Worker fragt danach bis zu drei Minuten lang
-`/post/publish/status/fetch/` ab: `PUBLISH_COMPLETE` liefert die echte Post-ID,
-`FAILED` den Grund. Bleibt die Antwort im Zeitfenster unentschieden, bleibt es
-bei der `publish_id` und es wird nichts erneut hochgeladen; ein doppelter Post
-waere schlimmer als eine fehlende Bestaetigung.
-
-TikTok-Analytics sind nicht angebunden. `/v2/video/query/` gehoert zur Display
-API, braucht den Scope `video.list` und eine echte Video-ID. Der Uploader meldet
-deshalb `NotImplemented`, statt Nullen als Messung in die Datenbank zu schreiben.
-
-**Instagram.** Weg ist Instagram Login gegen `graph.instagram.com`, nicht
-Facebook Login gegen `graph.facebook.com`. Damit braucht der Streamer keine
-Facebook-Seite. Die Scopes heissen entsprechend `instagram_business_basic` und
-`instagram_business_content_publish`; die Facebook-Namen `instagram_basic` und
-`instagram_content_publish` werden am Instagram-Authorize-Endpunkt mit "Invalid
-scope" abgewiesen.
-
-Das Video geht per resumable Upload direkt an `rupload.facebook.com`, es braucht
-also keinen oeffentlichen Media-Host. Reels werden dreistufig veroeffentlicht:
-Container anlegen, auf `status_code = FINISHED` warten, erst dann
-`media_publish`. Wer den Wartepunkt ueberspringt, bekommt bei laengeren Clips
-verlaesslich einen 400er.
-
-Der Code-Tausch liefert ein Token mit EINER Stunde Laufzeit. Es wird sofort per
-`ig_exchange_token` gegen ein 60-Tage-Token getauscht. Instagram hat keinen
-Refresh-Token: das Langzeit-Token verlaengert sich per `ig_refresh_token` selbst,
-solange es noch gueltig ist. Der Refresh-Worker holt Instagram deshalb sieben
-Tage vor Ablauf, nicht wie die Stundentoken der anderen Plattformen eine Stunde
-vorher.
-
-**YouTube.** Uploads laufen ueber das resumable Protokoll mit Wiederaufnahme
-nach Abbruch. `snippet.tags` ist ein Zeichenlimit von 500, keine Anzahl. Der
-Scope `yt-analytics.readonly` wird bewusst nicht angefragt, damit das
-Google-Audit nicht ueber einen Bereich stolpert, der im Demo-Video nicht in
-Benutzung zu sehen ist. Folge: `watch_time_seconds` und `ctr_percent` bleiben fuer
-YouTube leer, und `shares` gibt es in der Data API gar nicht.
-
-Die Google-Zugangsdaten liest der Code in der Reihenfolge `GOOGLE_OAUTH_ID`,
-`GOOGLE_CLIENT_ID`, `YOUTUBE_CLIENT_ID`. Unter dem letzten Namen liegt teils noch
-ein alter Client, der sonst den aktuellen ueberstimmt.
-
-### Fehler sind nicht gleich Fehler
-
-Ein fehlgeschlagener Upload landete frueher immer auf `status = failed`, und
-`failed` holt die Warteschlange nie wieder ab. Ein einzelnes 502 oder ein volles
-Tageskontingent hat den Clip damit endgueltig verbrannt.
-`upload_worker::verzoegerung_fuer` trennt das jetzt:
-
-| Fehler | Verhalten |
-|---|---|
-| `QuotaExceeded` | neuer Termin in 24 Stunden, zaehlt nicht gegen die Versuchsgrenze |
-| `Request` (Netz, 5xx) | neuer Termin in 15 Minuten |
-| `NotAuthenticated` | neuer Termin in 30 Minuten, der Refresh-Worker laeuft alle 5 Minuten |
-| `Validation`, `Api`, `NotImplemented`, `Io` | `failed`, das bleibt beim naechsten Mal kaputt |
-
-Nach fuenf Anlaeufen gilt ein Job als kaputt. Ein erschoepftes Kontingent zaehlt
-dabei nicht mit, denn der Clip ist in Ordnung.
-
-### Tote Zugaenge werden sichtbar
-
-Scheitert ein Token-Refresh mit `invalid_grant` (Zugriff entzogen, Token zu lange
-ungenutzt, Passwortwechsel), setzt der Refresh-Worker `token_expires_at` auf
-jetzt. Das Dashboard zeigt den Zugang dadurch als abgelaufen an, statt weiter
-gruen zu melden, waehrend jeder Upload ins Leere laeuft. Der Eintrag bleibt
-`enabled = 1`, damit ein erneutes Verbinden dieselbe Zeile aktualisiert.
-
-Der Insights-Worker faellt nicht mehr auf die Sammelverbindung zurueck. Ohne
-eigene Plattform-Verbindung wird ein Kanal uebersprungen, statt sein privates
-oder ungelistetes Video mit dem Betreiber-Token abzufragen und die leere
-Trefferliste als "0 Views" zu speichern. Aus demselben Grund schreibt ein
-gescheiterter Abruf nur noch den naechsten Termin, nicht mehr Nullen ueber
-bestehende Messwerte.
-
-## 5. Retention
-
-`SocialMediaRetentionWorker` laeuft alle `30 Minuten`. Die Retention ist absichtlich einfach:
-
-- Standardfrist: `14 Tage ab created_at`
-- geloescht wird nur, wenn der Clip entweder auf allen aktiven Plattformen veroeffentlicht oder bewusst verworfen wurde
-
-Der Worker entfernt zuerst lokale Dateien und danach den DB-Eintrag. Relevante Felder in `twitch_clips_social_media`:
-
-- `retention_until`
-- `discarded_at`
-- `upload_local_path`
-- `local_file_path`
-- `uploaded_tiktok`
-- `uploaded_youtube`
-- `uploaded_instagram`
-
-## 6. Analytics und Reports
-
-Nach erfolgreichem Upload uebernimmt `SocialMediaInsightsWorker`. Er pollt Plattformmetriken in den Buckets `24h`, `7d` und `30d`.
-
-Tabelle:
-
-- `twitch_clips_social_analytics`
-
-Reports werden separat in `social_media_reports` geschrieben. Report-Arten:
-
-- `streamer`
-- `cross`
-- `admin`
-
-## Wichtige operative Konsequenzen
-
-- Die Pipeline ist asynchron; "Clip registriert" heisst nicht "Clip schon gepostet".
-- Approval ist der haerteste Gatekeeper vor dem Upload.
-- Freigegeben heisst "eingeplant", nicht "gepostet": zwischen Freigabe und Upload
-  liegt der Termin aus der Kadenz.
-- Zeitplan, Freigabe-Modus und Kategorie-Schalter haengen am Kanal, nicht an der
-  Instanz. Das Partner-Scoping aus `social_media_partner_access` gilt unveraendert:
-  ein Partner sieht und setzt nur den eigenen Kanal.
-- Analytics bauen auf erfolgreich veroeffentlichten Plattform-IDs auf; ohne Video-ID kein Polling.
-- Retention ist keine Archivierungsfunktion, sondern Cleanup fuer Produktionsmaterial.
+## 4. Prüfung, Freigabe und Zeitplan
+
+Die Prüfung findet im Social-Media-Dashboard statt. Es gibt derzeit keinen
+produktiven Discord-DM-Freigabepfad.
+
+Eine manuelle Freigabe ist nur möglich, wenn:
+
+- die echte Render-Vorschau bereit ist,
+- mindestens eine Zielplattform gewählt wurde,
+- der Veröffentlichungsmodus erfolgreich geladen wurde.
+
+Die Freigabe speichert Plattformen clipweise in
+`social_media_clip_approval`. Der `ApprovalWorker` reiht freigegebene Clips alle
+60 Sekunden in `twitch_clips_upload_queue` ein. Ein Queue-Eintrag entspricht
+`Clip × Plattform`.
+
+Zusätzlich speichert die Freigabe den Fingerprint genau der geprüften
+Render-Vorschau. Layoutänderung, neue Aufbereitung oder eine Bearbeitung setzen
+die Freigabe zurück; ein alter Queue-Eintrag darf danach nicht zum Provider.
+Bei `veto_window` und `full_auto` versucht der Worker die Freigabe erneut,
+sobald sowohl Aufbereitung als auch Metadaten fertig sind. Damit ist die
+Reihenfolge der beiden Worker unerheblich und es entsteht trotzdem nur eine
+Queue-Zeile je Clip und Plattform.
+
+TikTok ist davon ausdrücklich ausgenommen: Die allgemeinen Automatikmodi dürfen
+keine TikTok-Freigabe und keinen TikTok-Queue-Claim erzeugen. Direct Post braucht
+vorher persistierte, explizite Einstellungen und Zustimmung für genau diesen
+Clip; diese Oberfläche ist noch nicht gebaut.
+
+Der Termin wird aus der Streamer-Zeitzone und der Plattformkadenz berechnet.
+`posts_per_week`, `max_posts_per_day` und `post_times` begrenzen den Plan. Eine
+Plattform mit null Kadenz wird nicht eingeplant.
+
+`approval_mode` steuert, wie die fachliche Clip-Freigabe entsteht (`manual`,
+`veto_window`, `full_auto`). Das hebt `release_mode` nicht auf: Selbst ein
+vollautomatisch freigegebener Clip bleibt im Testbetrieb vor dem Provider
+stehen.
+
+## 5. Upload
+
+`UploadWorker` läuft jede Minute mit höchstens zwei parallelen Jobs. Pending-Jobs
+werden atomar per `FOR UPDATE ... SKIP LOCKED` geclaimt, sodass parallele
+Worker-Durchläufe denselben Eintrag nicht doppelt posten.
+
+Vor einem Provider-Aufruf müssen alle Gates grün sein:
+
+1. Clip existiert und wurde nicht verworfen;
+2. Kanal steht auf `release_mode = live`;
+3. Clip ist für diese Plattform freigegeben;
+4. Termin ist erreicht;
+5. Plattformzugang ist vorhanden;
+6. der konkrete Providerweg ist über `provider_calls_enabled` freigeschaltet;
+7. das vorbereitete Render ist bereit;
+8. bei TikTok liegt die vorgeschriebene Zustimmung samt Einstellungen für genau
+   diesen Clip vor.
+
+Fehlende Zugänge, ein noch laufendes Render und andere Fehler vor dem
+Provideraufruf werden mit stabilem Fehlercode und neuem Termin zurückgestellt.
+Lokale Videoprüfung und Vorbereitung passieren vor der Provider-Lease.
+
+Unmittelbar vor dem externen Aufruf wird unter Streamer-Lock erneut geprüft,
+dass Release-Modus, Zielplattform, Freigabe und der freigegebene
+Render-Fingerprint zusammenpassen und der Providerweg noch freigeschaltet ist.
+Danach wird eine eindeutige Provider-Lease
+gespeichert und die Datenbanktransaktion vor dem Netzaufruf beendet. Erfolg und
+Fehler dürfen nur mit genau diesem Lease-Token abgeschlossen werden.
+
+Ist der Provideraufruf bereits gestartet und sein Ausgang wegen Timeout,
+Prozessabbruch oder unvollständiger Providerantwort nicht sicher, wird der Job
+`reconciliation_required`. Er wird nicht automatisch erneut gesendet. Eine
+vom Provider erhaltene externe ID wird sofort gespeichert. Dashboard und API
+zeigen den unklaren Zustand, bis jemand das Ergebnis auf der Zielplattform
+prüft und die Verwaltung den Queue-Eintrag ausdrücklich als abgeglichen
+bestätigt. Diese Aktion akzeptiert nur bereits gestartete Zeilen im Zustand
+`reconciliation_required`; normale wartende oder laufende Jobs kann sie nicht
+als Erfolg abkürzen.
+
+Provider:
+
+- **TikTok:** Direct Post API technisch angebunden, aktuell aber hart gesperrt.
+  Vor App-Audit und einer vorgeschriebenen Auswahl-/Zustimmungsoberfläche pro
+  Clip gibt es keinen Provideraufruf. TikTok-Analytics sind noch nicht
+  angebunden.
+- **Instagram:** Instagram Login, resumable Upload, Container-Statusprüfung vor
+  `media_publish`, Verlängerung des Langzeittokens.
+- **YouTube:** resumable Upload mit Wiederaufnahme und privater
+  Standardsichtbarkeit. Analytics sind auf die freigegebenen Data-API-Metriken
+  begrenzt.
+
+Die technische Adapterstrecke ist vorhanden. Ein echter Plattform-Release gilt
+erst nach Freischaltung/Audit des jeweiligen Kontos und einem bewusst
+freigegebenen Sandbox-/Testpost als validiert.
+
+## 6. Verwerfen und Retention
+
+Beim Verwerfen werden Clip, Freigabe und noch nicht gestartete Queue-Zeilen
+gemeinsam stillgelegt. Bereits laufende Provider-Aufrufe werden in der Antwort
+ehrlich als `already_running` gemeldet; die Oberfläche darf in diesem Fall
+nicht behaupten, dass garantiert nichts mehr veröffentlicht wird.
+
+Beim Wechsel von `prepare_only` zu `live` werden überfällige, noch nicht
+gestartete Queue-Zeilen neu auf zukünftige Kadenzplätze verteilt. Ein alter
+Vorbereitungsvorrat darf deshalb nicht als Upload-Spitze sofort anlaufen. Beim
+Zurückschalten wird `prepare_only` zuerst dauerhaft gespeichert; bereits
+begonnene oder unklare Providerjobs werden anschließend als Warnung gemeldet.
+
+`RetentionWorker` läuft alle 30 Minuten. Nach der 14-Tage-Frist löscht er nur,
+wenn ein Clip bewusst verworfen oder auf allen tatsächlich aktiven Plattformen
+veröffentlicht wurde. Ohne aktive Plattform bleibt ein vorbereiteter Vorrat
+erhalten. Abgeleitete Render werden ausschließlich im erlaubten
+`data/clips/rendered`-Verzeichnis entfernt.
+
+## 7. Analytics und Reports
+
+`SocialMediaInsightsWorker` zieht nach erfolgreichen Uploads unterstützte
+Provider-Metriken in 24h-, 7d- und 30d-Buckets nach. Fehlende oder nicht
+freigeschaltete API-Funktionen bleiben leer; sie werden nicht als gemessene Null
+ausgegeben. Reports liegen in `social_media_reports`.
+
+## Testreihenfolge vor dem ersten echten Release
+
+1. Pipeline im `prepare_only`-Modus mit lokalen Fixtures und einem Twitch-Clip
+   durchlaufen lassen.
+2. Quelle, 9:16-Render, Layoutänderung, erneutes Rendern, Vorschau und Download
+   prüfen.
+3. Manuelle Texte, Freigabe, Plattformwahl und Zeitplan prüfen; Queue muss vor
+   dem Provider-Gate liegen bleiben.
+4. Fehlerfälle prüfen: ungültige Quelle, defektes Video, paralleles Render,
+   fehlender Zugang, Verwerfen und Neustart.
+5. Den jeweiligen Providerweg erst für den kontrollierten Test separat
+   freischalten: YouTube privat, Instagram auf einem isolierten Testkonto;
+   TikTok erst nach App-Audit und eigener Auswahl-/Zustimmungsoberfläche.
+6. Erst nach erfolgreicher Prüfung `release_mode` für den gewünschten Kanal
+   bewusst auf `live` setzen und die doppelte Sperre unmittelbar vor dem
+   Provideraufruf erneut nachweisen.
+
+## Roadmap
+
+- echte Transkription und Untertitel mit einem freigegebenen, zentralen Pfad;
+- automatische Erkennung guter Fails und lustiger Momente im Highlight-Clipper;
+- Plattform-Audits/Freischaltungen und je ein dokumentierter Sandbox-End-to-End-Test;
+- TikTok-Auswahl und ausdrückliche Zustimmung pro Clip gemäß Direct-Post-Vorgaben;
+- TikTok-Analytics und weitere nur tatsächlich verfügbare Plattformmetriken;
+- ausgebauter Redaktionskalender, Filter/Pagination und belastbare Dashboard-KPIs;
+- beobachtbare Qualitätsstufen für Schnitt, Untertitel, Hook und Textvarianten;
+- kontrollierte A/B-Auswertung, bevor eine Aufbereitungsvariante automatisch
+  bevorzugt wird.

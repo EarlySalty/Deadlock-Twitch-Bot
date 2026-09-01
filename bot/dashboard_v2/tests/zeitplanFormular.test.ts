@@ -11,11 +11,37 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  pruefeGanzeZahlImBereich,
   zeitplanFeldSchluessel,
   zeitplanFeldVerlassen,
   zeitplanFormularAbgleichen,
   type ZeitplanFormular,
 } from '../src/components/socialmedia/kartenZustand';
+
+test('Kadenz akzeptiert nur ganze Zahlen innerhalb der Plattformgrenzen', () => {
+  assert.deepEqual(pruefeGanzeZahlImBereich('4', 0, 70), { gueltig: true, wert: 4 });
+  assert.deepEqual(pruefeGanzeZahlImBereich('0', 0, 10), { gueltig: true, wert: 0 });
+  assert.deepEqual(pruefeGanzeZahlImBereich('70', 0, 70), { gueltig: true, wert: 70 });
+});
+
+test('Kadenz weist leere, gebrochene und zu große Werte vor der Mutation ab', () => {
+  assert.deepEqual(pruefeGanzeZahlImBereich('', 0, 70), {
+    gueltig: false,
+    grund: 'keine_ganze_zahl',
+  });
+  assert.deepEqual(pruefeGanzeZahlImBereich('1.5', 0, 70), {
+    gueltig: false,
+    grund: 'keine_ganze_zahl',
+  });
+  assert.deepEqual(pruefeGanzeZahlImBereich('999', 0, 70), {
+    gueltig: false,
+    grund: 'ausserhalb_bereich',
+  });
+  assert.deepEqual(pruefeGanzeZahlImBereich('-1', 0, 10), {
+    gueltig: false,
+    grund: 'ausserhalb_bereich',
+  });
+});
 
 function formular(
   postsProWoche: string,

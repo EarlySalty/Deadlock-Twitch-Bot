@@ -5,7 +5,16 @@ import type {
 } from '@/api/home';
 import type { AuthStatus } from '@/api/auth';
 import type { AdManagerResponse } from '@/api/adManager';
+import type { SocialClipMitPosting } from '@/api/socialMedia';
 import type { CatalogPlan } from '@/types/billing';
+import {
+  DEFAULT_LAYOUT,
+  type ClipEnrichment,
+  type ClipPreparation,
+  type PostingPlan,
+  type StreamerLayoutResponse,
+  type VodArchiveSettings,
+} from '../types/socialMedia';
 
 const NOW_ISO = '2026-04-22T09:30:00Z';
 
@@ -358,6 +367,7 @@ export function getPreviewApiFixture(
   if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;
+  if (endpoint === '/streamers') return [{ login: 'midcore_live', isPartner: true }];
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;
   if (endpoint === '/ads-schedule') return ADS_SCHEDULE_FIXTURE;
   if (endpoint === '/chat-hype-timeline') return CHAT_HYPE_TIMELINE_FIXTURE;
@@ -508,6 +518,310 @@ export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/admin/waitlist') return UPLINK_ADMIN_WAITLIST_FIXTURE;
+  return undefined;
+}
+
+const SOCIAL_MEDIA_PREVIEW_THUMBNAIL =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 640 360'%3E%3Crect width='640' height='360' fill='%231b1720'/%3E%3Ccircle cx='520' cy='70' r='150' fill='%23c5a059' fill-opacity='.22'/%3E%3Cpath d='M70 270 210 115l110 100 90-70 160 125Z' fill='%23c5a059' fill-opacity='.7'/%3E%3C/svg%3E";
+
+const SOCIAL_MEDIA_CLIPS_FIXTURE: SocialClipMitPosting[] = [
+  {
+    clip_db_id: 301,
+    clip_id: 'preview-teamfight',
+    clip_url: null,
+    title: 'Teamfight gedreht – Vorschau bereit',
+    thumbnail_url: SOCIAL_MEDIA_PREVIEW_THUMBNAIL,
+    streamer_login: 'midcore_live',
+    created_at: '2026-04-22T08:50:00Z',
+    duration_seconds: 31,
+    view_count: 428,
+    game_name: 'Deadlock',
+    status: 'pending',
+    source_kind: 'twitch',
+    upload_local_path: null,
+    retention_until: '2026-05-06T08:50:00Z',
+    discarded_at: null,
+    platform_status: { youtube: false, tiktok: false, instagram: false },
+    layout_override: null,
+    effective_layout: DEFAULT_LAYOUT,
+    enrichment_status: 'done',
+    enrichment_summary: { top_hashtags: ['deadlock', 'teamfight'], provider: 'preview' },
+    approval: null,
+  },
+  {
+    clip_db_id: 302,
+    clip_id: 'preview-render-fehler',
+    clip_url: null,
+    title: 'Manueller Upload – Fehlerzustand testen',
+    thumbnail_url: SOCIAL_MEDIA_PREVIEW_THUMBNAIL,
+    streamer_login: 'midcore_live',
+    created_at: '2026-04-22T08:20:00Z',
+    duration_seconds: 44,
+    view_count: 0,
+    game_name: 'Deadlock',
+    status: 'pending',
+    source_kind: 'manual_upload',
+    upload_local_path: null,
+    retention_until: '2026-05-06T08:20:00Z',
+    discarded_at: null,
+    platform_status: { youtube: false, tiktok: false, instagram: false },
+    layout_override: null,
+    effective_layout: DEFAULT_LAYOUT,
+    enrichment_status: 'skipped_no_key',
+    enrichment_summary: null,
+    approval: null,
+    upload_states: {
+      instagram: {
+        reconciliation_id: '9302',
+        status: 'reconciliation_required',
+        error_code: 'provider_result_unknown',
+        provider_started_at: '2026-04-22T09:07:00Z',
+        provider_external_id: 'preview-container-302',
+        provider_accepted_at: '2026-04-22T09:07:04Z',
+        reconciliation_required: true,
+      },
+    },
+  },
+];
+
+const SOCIAL_MEDIA_PLAN_FIXTURE: PostingPlan = {
+  streamer_login: 'midcore_live',
+  release_enabled: false,
+  approval_mode: 'manual',
+  approval_modes: ['manual', 'veto_window', 'full_auto'],
+  timezone: 'Europe/Berlin',
+  platforms: [
+    {
+      platform: 'youtube',
+      auto_post: false,
+      provider_release_blocked: false,
+      release_block_reason: null,
+      posts_per_week: 4,
+      max_posts_per_day: 1,
+      post_times: ['18:00'],
+      next_slot: null,
+    },
+    {
+      platform: 'tiktok',
+      auto_post: false,
+      provider_release_blocked: true,
+      release_block_reason: 'tiktok_consent_required',
+      posts_per_week: 4,
+      max_posts_per_day: 1,
+      post_times: ['19:00'],
+      next_slot: null,
+    },
+    {
+      platform: 'instagram',
+      auto_post: false,
+      provider_release_blocked: false,
+      release_block_reason: null,
+      posts_per_week: 3,
+      max_posts_per_day: 1,
+      post_times: ['20:00'],
+      next_slot: null,
+    },
+  ],
+  categories: [
+    {
+      category_key: 'deadlock',
+      display_name: 'Deadlock',
+      enrichment_enabled: true,
+      auto_post: false,
+    },
+  ],
+  pool: {
+    verfuegbare_clips: SOCIAL_MEDIA_CLIPS_FIXTURE.length,
+    aktive_plattformen: 0,
+    reicht_fuer_posts: 0,
+    posts_pro_woche: 0,
+    reicht_fuer_tage: null,
+    warnung: false,
+  },
+};
+
+const SOCIAL_MEDIA_LAYOUT_FIXTURE: StreamerLayoutResponse = {
+  streamer_login: 'midcore_live',
+  layout: DEFAULT_LAYOUT,
+  cam_enabled: DEFAULT_LAYOUT.cam_enabled,
+  mode: DEFAULT_LAYOUT.mode,
+  is_default: false,
+  updated_at: NOW_ISO,
+  updated_by: 'local-preview',
+};
+
+const SOCIAL_MEDIA_VOD_FIXTURE: VodArchiveSettings = {
+  streamer_login: 'midcore_live',
+  enabled: false,
+  privacy: 'private',
+  privacy_options: ['private', 'unlisted', 'public'],
+  privacy_forced: true,
+};
+
+const SOCIAL_MEDIA_ENRICHMENT_FIXTURE: ClipEnrichment = {
+  clip_db_id: 301,
+  transcript_raw: 'Wir drehen den Fight noch, geh auf den Patron!',
+  transcript_corrected: 'Wir drehen den Fight noch – geh auf den Patron!',
+  transcript_segments: null,
+  transcript_lang: 'de',
+  detected_terms: ['Patron'],
+  title_youtube: 'Dieser Deadlock-Teamfight war schon verloren',
+  title_tiktok: 'Wie wir diesen Fight noch drehen',
+  title_instagram: 'Deadlock Comeback im letzten Moment',
+  description_youtube: 'Ein Teamfight, der erst im letzten Moment kippt.',
+  description_tiktok: 'Nicht aufgeben – dieser Fight dreht sich komplett.',
+  description_instagram: 'Das knappste Comeback des Abends.',
+  hashtags_youtube: ['deadlock', 'gaming'],
+  hashtags_tiktok: ['deadlock', 'gaming', 'teamfight'],
+  hashtags_instagram: ['deadlock', 'gaming', 'reels'],
+  llm_provider: 'preview',
+  llm_model: null,
+  cost_usd_estimate: null,
+  status: 'done',
+  error_message: null,
+  started_at: '2026-04-22T09:00:00Z',
+  completed_at: '2026-04-22T09:00:05Z',
+  edited_by: null,
+  updated_at: '2026-04-22T09:00:05Z',
+};
+
+const SOCIAL_MEDIA_PREVIEW_VIDEO =
+  'data:video/mp4;base64,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';
+const preparationStarted = new Map<number, number>();
+
+function previewPreparation(clipDbId: number): ClipPreparation {
+  const gestartet = preparationStarted.get(clipDbId);
+  if (gestartet !== undefined) {
+    const fertig = Date.now() - gestartet > 1800;
+    return {
+      clip_db_id: clipDbId,
+      state: fertig ? 'preview_ready' : 'rendering',
+      source_ready: true,
+      preview_ready: fertig,
+      preview_url: fertig ? SOCIAL_MEDIA_PREVIEW_VIDEO : null,
+      download_url: fertig ? SOCIAL_MEDIA_PREVIEW_VIDEO : null,
+      error_code: null,
+      error_message: null,
+      requested_at: new Date(gestartet).toISOString(),
+      started_at: new Date(gestartet).toISOString(),
+      completed_at: fertig ? new Date(gestartet + 1800).toISOString() : null,
+      updated_at: new Date(fertig ? gestartet + 1800 : Date.now()).toISOString(),
+    };
+  }
+
+  if (clipDbId === 302) {
+    return {
+      clip_db_id: clipDbId,
+      state: 'failed',
+      source_ready: true,
+      preview_ready: false,
+      preview_url: null,
+      download_url: null,
+      error_code: 'render_failed',
+      error_message: 'Preview-Fehlerzustand',
+      requested_at: '2026-04-22T09:05:00Z',
+      started_at: '2026-04-22T09:05:01Z',
+      completed_at: '2026-04-22T09:05:03Z',
+      updated_at: '2026-04-22T09:05:03Z',
+    };
+  }
+
+  return {
+    clip_db_id: clipDbId,
+    state: 'preview_ready',
+    source_ready: true,
+    preview_ready: true,
+    preview_url: SOCIAL_MEDIA_PREVIEW_VIDEO,
+    download_url: SOCIAL_MEDIA_PREVIEW_VIDEO,
+    error_code: null,
+    error_message: null,
+    requested_at: '2026-04-22T09:00:00Z',
+    started_at: '2026-04-22T09:00:01Z',
+    completed_at: '2026-04-22T09:00:05Z',
+    updated_at: '2026-04-22T09:00:05Z',
+  };
+}
+
+/**
+ * Vollständiger lokaler Social-Media-Lesestand plus eine simulierte
+ * Preparation-Mutation. Sie berührt weder Plattformkonten noch Produktivdaten.
+ */
+export function getSocialMediaPreviewFixture(
+  pathWithQuery: string,
+  method = 'GET',
+): unknown | undefined {
+  const url = new URL(pathWithQuery, 'http://preview.local');
+  const pathname = url.pathname;
+  const requestMethod = method.toUpperCase();
+
+  if (requestMethod === 'GET' && pathname === '/social-media/api/access/me') {
+    return { allowed: true, streamer: 'midcore_live', isAdmin: true };
+  }
+  if (requestMethod === 'GET' && pathname === '/social-media/api/access') {
+    return { items: [{ streamer_login: 'midcore_live', granted: true }] };
+  }
+  if (requestMethod === 'POST' && pathname === '/social-media/api/mark-uploaded') {
+    return {
+      ok: false,
+      error: 'preview_read_only',
+      message: 'preview_read_only',
+    };
+  }
+  if (requestMethod === 'GET' && pathname === '/social-media/api/admin/streamer-layout') {
+    return SOCIAL_MEDIA_LAYOUT_FIXTURE;
+  }
+  if (requestMethod === 'GET' && pathname === '/social-media/api/admin/clips') {
+    const status = url.searchParams.get('status');
+    const items = status
+      ? SOCIAL_MEDIA_CLIPS_FIXTURE.filter((clip) => clip.status === status)
+      : SOCIAL_MEDIA_CLIPS_FIXTURE;
+    return { items, total: items.length, page: 1, page_size: 24 };
+  }
+  if (
+    requestMethod === 'GET' &&
+    pathname === '/social-media/api/admin/settings/posting-plan'
+  ) {
+    return SOCIAL_MEDIA_PLAN_FIXTURE;
+  }
+  if (
+    requestMethod === 'GET' &&
+    pathname === '/social-media/api/admin/settings/vod-archive'
+  ) {
+    return SOCIAL_MEDIA_VOD_FIXTURE;
+  }
+  if (requestMethod === 'GET' && pathname === '/social-media/api/platforms/status') {
+    return {
+      platforms: ['youtube', 'tiktok', 'instagram'].map((platform) => ({
+        platform,
+        connected: false,
+        provider_calls_enabled: false,
+        provider_release_blocked: true,
+        release_block_reason:
+          platform === 'tiktok' ? 'tiktok_consent_required' : 'platform_release_blocked',
+        username: null,
+        expired: false,
+        expires_at: null,
+        uses_global_fallback: false,
+      })),
+    };
+  }
+
+  const enrichmentMatch = pathname.match(
+    /^\/social-media\/api\/admin\/clips\/(\d+)\/enrichment$/,
+  );
+  if (requestMethod === 'GET' && enrichmentMatch) {
+    return { ...SOCIAL_MEDIA_ENRICHMENT_FIXTURE, clip_db_id: Number(enrichmentMatch[1]) };
+  }
+
+  const preparationMatch = pathname.match(
+    /^\/social-media\/api\/admin\/clips\/(\d+)\/preparation$/,
+  );
+  if (preparationMatch) {
+    const clipDbId = Number(preparationMatch[1]);
+    if (requestMethod === 'POST') preparationStarted.set(clipDbId, Date.now());
+    if (requestMethod === 'GET' || requestMethod === 'POST') return previewPreparation(clipDbId);
+  }
+
   return undefined;
 }
 

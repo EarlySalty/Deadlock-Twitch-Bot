@@ -492,13 +492,13 @@ impl OAuthManager {
                 .await
                 .map_err(|e| OAuthError::Exchange {
                     platform,
-                    detail: e.to_string(),
+                    detail: e.without_url().to_string(),
                 })?;
         resp.json::<serde_json::Value>()
             .await
             .map_err(|e| OAuthError::Exchange {
                 platform,
-                detail: e.to_string(),
+                detail: e.without_url().to_string(),
             })
     }
 
@@ -518,13 +518,13 @@ impl OAuthManager {
                 .await
                 .map_err(|e| OAuthError::Exchange {
                     platform,
-                    detail: e.to_string(),
+                    detail: e.without_url().to_string(),
                 })?;
         resp.json::<serde_json::Value>()
             .await
             .map_err(|e| OAuthError::Exchange {
                 platform,
-                detail: e.to_string(),
+                detail: e.without_url().to_string(),
             })
     }
 
@@ -897,8 +897,14 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use std::sync::{Mutex as StdMutex, OnceLock};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn env_lock() -> &'static StdMutex<()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+    }
 
     fn test_cipher() -> Arc<FieldCipher> {
         Arc::new(FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap())
@@ -929,6 +935,7 @@ mod tests {
     }
 
     fn with_env<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         for (k, v) in vars {
             std::env::set_var(k, v);
         }
@@ -1104,10 +1111,12 @@ mod tests {
     }
 
     /// Wie `with_env`, aber fuer einen await-Punkt zwischen Setzen und Aufraeumen.
+    #[allow(clippy::await_holding_lock)]
     async fn with_env_async<T>(
         vars: &[(&str, &str)],
         future: impl std::future::Future<Output = T>,
     ) -> T {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         for (k, v) in vars {
             std::env::set_var(k, v);
         }
@@ -1120,6 +1129,7 @@ mod tests {
 
     #[test]
     fn instagram_url_ohne_config_ist_fehler() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         std::env::remove_var("INSTAGRAM_CLIENT_ID");
         assert!(matches!(
             instagram_auth_url("st", "https://cb"),
@@ -1182,7 +1192,8 @@ mod tests {
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
-                last_refreshed_at TEXT, enabled INTEGER DEFAULT 1)",
+                last_refreshed_at TEXT, enabled INTEGER DEFAULT 1, \
+                provider_calls_enabled BOOLEAN NOT NULL DEFAULT FALSE)",
         )
         .execute(&pool)
         .await
@@ -1220,10 +1231,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn generate_auth_url_persistiert_state() {
         let Some(pool) = make_pool("t_sm_oauth_state").await else {
             return;
         };
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         std::env::set_var("YOUTUBE_CLIENT_ID", "yt-cid");
         let mgr = OAuthManager::new(pool.clone(), test_cipher());
         let url = mgr
@@ -1365,6 +1378,17 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(scopes.as_deref(), Some("youtube.upload"));
+        let provider_calls_enabled: bool = sqlx::query_scalar(
+            "SELECT provider_calls_enabled FROM social_media_platform_auth \
+             WHERE platform='youtube' AND streamer_login='nani'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !provider_calls_enabled,
+            "OAuth allein darf Provider-Aufrufe nicht freischalten"
+        );
 
         // Zweiter Callback (neuer State, kein refresh_token in Antwort) → UPSERT,
         // refresh_token bleibt via COALESCE erhalten.
@@ -1397,5 +1421,16 @@ mod tests {
         )
         .fetch_one(&pool).await.unwrap();
         assert!(refresh_present, "refresh_token via COALESCE erhalten");
+        let provider_calls_enabled: bool = sqlx::query_scalar(
+            "SELECT provider_calls_enabled FROM social_media_platform_auth \
+             WHERE platform='youtube' AND streamer_login='nani'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !provider_calls_enabled,
+            "Reconnect darf die separate Release-Sperre nicht öffnen"
+        );
     }
 }

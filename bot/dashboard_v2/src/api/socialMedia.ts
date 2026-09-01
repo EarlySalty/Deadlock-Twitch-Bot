@@ -1,11 +1,15 @@
 import { withCookieCredentials } from './core';
+import { getSocialMediaPreviewFixture } from '../preview/fixtures';
+import { isPreviewLocalhost } from '../preview/routes';
 import type {
   ApprovalMode,
   ClipAnalyticsResponse,
   ClipApprovalRecord,
   ClipEnrichment,
   ClipListResponse,
+  ClipPreparation,
   ClipStatus,
+  DiscardClipResult,
   LayoutPayload,
   PlatformScheduleEntry,
   PostingPlan,
@@ -48,12 +52,20 @@ export class SocialMediaForbiddenError extends SocialMediaApiError {
   }
 }
 
-async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function fetchJson<T>(
+  path: string,
+  init: RequestInit = {},
+  erlaubteStatus: readonly number[] = [],
+): Promise<T> {
+  if (isPreviewLocalhost()) {
+    const fixture = getSocialMediaPreviewFixture(path, init.method ?? 'GET');
+    if (fixture !== undefined) return structuredClone(fixture) as T;
+  }
   const response = await fetch(path, withCookieCredentials(init));
   if (response.status === 403 || response.status === 401) {
     throw new SocialMediaForbiddenError('admin_required', response.status);
   }
-  if (!response.ok) {
+  if (!response.ok && !erlaubteStatus.includes(response.status)) {
     let code = `http_${response.status}`;
     let message: string | undefined;
     try {
@@ -149,6 +161,31 @@ export interface ClipListParams {
 export type PlattformFehler = Partial<Record<SocialPlatform, string | null>>;
 export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
 
+export type UploadQueueStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'reconciliation_required';
+
+/**
+ * Sichtbarer, aber absichtlich tokenfreier Providerstand. Sobald der
+ * Provideraufruf begonnen hat, darf ein unklarer Ausgang nicht als normaler
+ * Wiederholungsfehler aussehen.
+ */
+export interface PlattformUploadStand {
+  reconciliation_id: string | null;
+  status: UploadQueueStatus | null;
+  error_code: string | null;
+  provider_started_at: string | null;
+  provider_external_id: string | null;
+  provider_accepted_at: string | null;
+  reconciliation_required: boolean;
+}
+
+export type PlattformUploadStaende = Partial<Record<SocialPlatform, PlattformUploadStand>>;
+
 /**
  * Was das Backend zusaetzlich am Clip liefert: der Grund eines fehlgeschlagenen
  * Uploads und der geplante Termin je Plattform. Steht hier und nicht in
@@ -157,6 +194,7 @@ export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
 export interface ClipPostingInfo {
   upload_errors?: PlattformFehler | null;
   scheduled_at?: PlattformTermine | null;
+  upload_states?: PlattformUploadStaende | null;
 }
 
 export type SocialClipMitPosting = SocialClip & ClipPostingInfo;
@@ -179,6 +217,26 @@ export async function fetchClip(clipDbId: number): Promise<SocialClip> {
   return fetchJson<SocialClip>(`${ADMIN_PREFIX}/clips/${clipDbId}`);
 }
 
+export async function fetchClipPreparation(
+  clipDbId: number,
+  signal?: AbortSignal,
+): Promise<ClipPreparation> {
+  return fetchJson<ClipPreparation>(`${ADMIN_PREFIX}/clips/${clipDbId}/preparation`, { signal });
+}
+
+/** Fordert die erste Aufbereitung oder ein erneutes Rendern mit dem aktuellen Layout an. */
+export async function requestClipPreparation(clipDbId: number): Promise<ClipPreparation> {
+  return fetchJson<ClipPreparation>(`${ADMIN_PREFIX}/clips/${clipDbId}/preparation`, {
+    method: 'POST',
+  });
+}
+
+/** Stabile lokale Media-Route als Fallback für ältere oder unvollständige Antworten. */
+export function clipPreparationMediaUrl(clipDbId: number, download = false): string {
+  const path = `${ADMIN_PREFIX}/clips/${clipDbId}/preparation/media`;
+  return download ? `${path}?download=1` : path;
+}
+
 export interface ClipLayoutOverrideResponse {
   clip_db_id: number;
   layout_override: LayoutPayload | null;
@@ -196,11 +254,32 @@ export async function setClipLayoutOverride(
   });
 }
 
-export async function discardClip(clipDbId: number): Promise<SocialClip | { clip_db_id: number; discarded: boolean }> {
-  return fetchJson<SocialClip | { clip_db_id: number; discarded: boolean }>(
+function istDiscardClipResult(
+  value: unknown,
+  clipDbId: number,
+): value is DiscardClipResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Partial<DiscardClipResult>;
+  return (
+    result.clip_db_id === clipDbId &&
+    result.discarded === true &&
+    Number.isInteger(result.pending_stopped) &&
+    Number(result.pending_stopped) >= 0 &&
+    Number.isInteger(result.already_running) &&
+    Number(result.already_running) >= 0
+  );
+}
+
+export async function discardClip(clipDbId: number): Promise<DiscardClipResult> {
+  const result = await fetchJson<unknown>(
     `${ADMIN_PREFIX}/clips/${clipDbId}/discard`,
     { method: 'POST' },
+    [409],
   );
+  if (!istDiscardClipResult(result, clipDbId)) {
+    throw new SocialMediaApiError('discard_conflict_invalid');
+  }
+  return result;
 }
 
 export async function fetchClipEnrichment(clipDbId: number): Promise<ClipEnrichment> {
@@ -310,6 +389,47 @@ export async function cancelScheduledPost(
   );
 }
 
+export interface MarkClipPublishedResult {
+  ok: true;
+  message: string;
+  reconciled_platforms: SocialPlatform[];
+}
+
+/**
+ * Schließt nur den ausdrücklich auf der Zielplattform geprüften, unklaren
+ * Uploadstand. Das ist keine normale Erfolgsabkürzung, sondern der manuelle
+ * Abgleich nach einem bereits begonnenen Provideraufruf.
+ */
+export async function markClipPublished(input: {
+  clipDbId: number;
+  reconciliations: Array<{
+    reconciliation_id: string;
+    platform: SocialPlatform;
+    provider_started_at: string;
+    provider_external_id: string | null;
+  }>;
+  streamer: string;
+}): Promise<MarkClipPublishedResult> {
+  const result = await fetchJson<
+    MarkClipPublishedResult | { ok: false; error?: string; message?: string }
+  >('/social-media/api/mark-uploaded', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clip_id: input.clipDbId,
+      reconciliations: input.reconciliations,
+      streamer: input.streamer,
+    }),
+  });
+  if (!result.ok) {
+    throw new SocialMediaApiError(
+      result.error ?? 'reconciliation_failed',
+      result.message,
+    );
+  }
+  return result;
+}
+
 /**
  * Neue Twitch-Clips einsammeln. Der Weg, den die Vorratswarnung meint: ohne
  * Nachschub hoert das Posting irgendwann auf, ohne dass jemand es merkt.
@@ -353,7 +473,12 @@ export async function savePostingPlanSettings(
 export async function savePlatformSchedule(
   streamerLogin: string,
   platform: SocialPlatform,
-  payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
+  payload: Partial<
+    Omit<
+      PlatformScheduleEntry,
+      'platform' | 'next_slot' | 'provider_release_blocked' | 'release_block_reason'
+    >
+  >,
 ): Promise<PostingPlan> {
   const qs = buildQuery({ streamer_login: streamerLogin });
   return fetchJson<PostingPlan>(
@@ -442,13 +567,11 @@ export async function uploadClip(input: {
   file: File;
   streamer_login: string;
   title?: string;
-  clip_id?: string;
 }): Promise<UploadResponse> {
   const form = new FormData();
-  form.append('file', input.file);
   form.append('streamer_login', input.streamer_login);
   if (input.title) form.append('title', input.title);
-  if (input.clip_id) form.append('clip_id', input.clip_id);
+  form.append('file', input.file);
 
   const response = await fetch(
     UPLOAD_PATH,
@@ -478,6 +601,13 @@ export async function uploadClip(input: {
 export interface PlatformStatus {
   platform: string;
   connected: boolean;
+  /**
+   * Zweite, bewusst getrennte Schranke: OAuth allein darf noch keinen echten
+   * Provider-Aufruf auslösen. Sie bleibt bis zur Plattformfreigabe aus.
+   */
+  provider_calls_enabled: boolean;
+  provider_release_blocked: boolean;
+  release_block_reason: 'platform_release_blocked' | 'tiktok_consent_required' | null;
   username: string | null;
   user_id?: string | null;
   expired: boolean;

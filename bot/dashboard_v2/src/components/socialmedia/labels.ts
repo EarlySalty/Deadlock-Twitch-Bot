@@ -84,7 +84,8 @@ export const APPROVAL_MODE_TEXTE: Record<ApprovalMode, { label: string; hinweis:
   },
   full_auto: {
     label: 'Vollautomatik',
-    hinweis: 'Clips gehen ohne Sichtung raus.',
+    hinweis:
+      'Clips werden ohne Sichtung freigegeben; Veröffentlichung folgt Betriebsmodus und Zeitplan.',
   },
 };
 
@@ -96,7 +97,7 @@ export const STATUS_META: Record<EnrichmentStatus, { label: string; tone: LabelT
   llm: { label: 'LLM-Hashtags', tone: 'messing' },
   done: { label: 'Fertig', tone: 'success' },
   failed: { label: 'Fehler', tone: 'danger' },
-  skipped_no_key: { label: 'API-Key fehlt', tone: 'muted' },
+  skipped_no_key: { label: 'Automatik nicht verfügbar', tone: 'muted' },
 };
 
 /**
@@ -159,6 +160,9 @@ export const FELD_FEHLER = {
   zeitFormat: 'Uhrzeiten im Format 18:00 angeben.',
   zeitUngueltig: 'Diese Uhrzeit gibt es nicht.',
   keineZahl: 'Bitte eine Zahl angeben.',
+  ganzeZahl: 'Bitte eine ganze Zahl angeben.',
+  postsProWocheBereich: 'Zwischen 0 und 70 Posts pro Woche angeben.',
+  maxProTagBereich: 'Zwischen 0 und 10 Posts pro Tag angeben.',
 } as const;
 
 /**
@@ -204,7 +208,80 @@ export const FEHLER_TEXTE: Record<string, string> = {
   upload_wrong_format: 'Falsches Dateiformat, bitte eine MP4 wählen.',
   upload_duplicate: 'Dieser Clip liegt schon im Pool.',
   duplicate_clip_id: 'Dieser Clip liegt schon im Pool.',
+  upload_busy: 'Ein anderes Video wird gerade verarbeitet. Bitte versuche es gleich erneut.',
+  invalid_multipart: 'Die Upload-Daten sind unvollständig oder ungültig.',
+  invalid_metadata: 'Ein Textfeld enthält ungültige Zeichen.',
+  metadata_too_large: 'Ein Textfeld ist zu lang.',
+  empty_upload: 'Die MP4-Datei ist leer.',
+  file_required: 'Bitte wähle eine MP4-Datei aus.',
+  duplicate_field: 'Ein Formularfeld wurde mehrfach gesendet.',
+  unknown_field: 'Das Formular enthält ein unbekanntes Feld.',
+  mp4_required: 'Es werden nur MP4-Videos unterstützt.',
+  invalid_mp4: 'Die Datei ist kein gültiges MP4-Video.',
+  invalid_duration: 'Das Video muss eine positive Laufzeit haben.',
+  video_too_long: 'Das Video darf höchstens 300 Sekunden lang sein.',
+  invalid_frame_rate: 'Die Bildrate des Videos wird nicht unterstützt.',
+  invalid_video_dimensions: 'Die Videoauflösung wird nicht unterstützt.',
+  invalid_streamer_login: 'Der Kanalname ist ungültig.',
+  database_failed: 'Der Upload konnte nicht sicher gespeichert werden.',
+  upload_commit_uncertain:
+    'Der Speicherstand des Uploads ist unklar. Bitte nicht erneut hochladen und zuerst den Clip-Pool prüfen.',
   upload_failed: 'Der Upload ist fehlgeschlagen.',
+  approval_required: 'Für diese Plattform fehlt die Clip-Freigabe.',
+  approval_check_failed: 'Die Clip-Freigabe konnte nicht sicher geprüft werden.',
+  approval_or_preview_changed:
+    'Der Clip wurde seit der Freigabe geändert. Bitte Vorschau erneut prüfen und freigeben.',
+  approval_changed:
+    'Der Clip wurde seit der Freigabe geändert. Bitte Vorschau erneut prüfen und freigeben.',
+  content_changed:
+    'Der Clip wurde seit der Freigabe geändert. Bitte Vorschau erneut prüfen und freigeben.',
+  layout_changed:
+    'Der Clip wurde seit der Freigabe geändert. Bitte Vorschau erneut prüfen und freigeben.',
+  enrichment_changed:
+    'Der Clip wurde seit der Freigabe geändert. Bitte Vorschau erneut prüfen und freigeben.',
+  approval_skipped: 'Dieser Clip wurde nicht zur Veröffentlichung freigegeben.',
+  release_disabled: 'Veröffentlichungen sind im Testbetrieb ausgeschaltet.',
+  release_gate_failed: 'Der Freigabemodus konnte nicht sicher geprüft werden.',
+  platform_release_blocked:
+    'Die Veröffentlichung auf dieser Plattform ist noch nicht freigeschaltet.',
+  tiktok_consent_required:
+    'TikTok braucht für diesen Clip eigene Veröffentlichungseinstellungen und eine ausdrückliche Zustimmung.',
+  video_validation_failed: 'Das vorbereitete Video erfüllt die Plattformregeln nicht.',
+  provider_rejected: 'Die Plattform hat die Veröffentlichung abgelehnt.',
+  provider_attempt_exists:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  provider_result_uncertain:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  provider_result_unknown_after_restart:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  provider_acceptance_write_uncertain:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  completed_write_uncertain:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  tiktok_publish_uncertain:
+    'Die Plattform hat den Clip möglicherweise schon angenommen. Erst abgleichen, nicht erneut veröffentlichen.',
+  legacy_processing_requires_reconciliation:
+    'Dieser ältere Uploadversuch muss vor einem neuen Versuch manuell abgeglichen werden.',
+  manually_reconciled: 'Der Plattformstand wurde manuell abgeglichen.',
+  completed_write_failed:
+    'Der vorhandene Plattformstand konnte nicht sicher übernommen werden.',
+  clip_discarded: 'Der Clip wurde verworfen.',
+  credentials_missing: 'Für diese Plattform fehlt eine gültige Verbindung.',
+  streamer_missing: 'Der zum Clip gehörende Kanal fehlt.',
+  uploaded_flag_check_failed:
+    'Der bisherige Veröffentlichungsstand konnte nicht sicher geprüft werden.',
+  preparation_busy: 'Die Aufbereitung ist gerade belegt. Bitte später erneut versuchen.',
+  preparation_transient: 'Die Aufbereitung ist gerade belegt. Bitte später erneut versuchen.',
+  source_missing: 'Die Clip-Quelle ist nicht mehr verfügbar.',
+  invalid_source_url: 'Die gespeicherte Clip-Adresse ist ungültig.',
+  download_failed: 'Die Clip-Quelle konnte nicht geladen werden.',
+  download_isolation_required:
+    'Der automatische Abruf ist sicherheitshalber gesperrt. Bitte später erneut versuchen.',
+  render_failed: 'Die Hochformat-Vorschau konnte nicht erstellt werden.',
+  layout_invalid: 'Das gespeicherte Clip-Layout ist ungültig.',
+  platform_paused: 'Diese Plattform ist im Zeitplan pausiert.',
+  reconciliation_failed: 'Der Plattformstand konnte nicht abgeglichen werden.',
+  preview_read_only: 'Die lokale Vorschau verändert keinen Plattformstand.',
   // Letzte Zuflucht
   unbekannt: 'Das hat nicht geklappt.',
 };

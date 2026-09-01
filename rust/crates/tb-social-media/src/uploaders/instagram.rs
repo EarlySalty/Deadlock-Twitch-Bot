@@ -19,7 +19,9 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures_util::stream;
 use serde_json::{json, Value};
+use tokio::io::AsyncReadExt;
 
 use super::{
     as_count, truncate_chars, validate_local_file, AnalyticsSnapshot, PlatformUploader, UploadError,
@@ -72,8 +74,6 @@ struct GraphFailure {
     status: u16,
     code: Option<i64>,
     subcode: Option<i64>,
-    message: String,
-    body: String,
 }
 
 impl GraphFailure {
@@ -82,12 +82,12 @@ impl GraphFailure {
     /// versuchen), Code 190 heisst "Token hinueber".
     fn into_error(self, ctx: &str) -> UploadError {
         if self.code == Some(4) || self.subcode == Some(2207051) || self.status == 429 {
-            return UploadError::QuotaExceeded(format!("{ctx}: {} ({})", self.message, self.body));
+            return UploadError::QuotaExceeded(format!("{ctx}: instagram_quota_exceeded"));
         }
         if self.code == Some(190) {
             return UploadError::NotAuthenticated;
         }
-        UploadError::Api(format!("{ctx} failed: {} {}", self.status, self.body))
+        UploadError::Api(format!("{ctx}: instagram_api_failed_{}", self.status))
     }
 }
 
@@ -106,12 +106,14 @@ async fn read_graph_json(resp: reqwest::Response) -> Result<Value, GraphFailure>
         status: status.as_u16(),
         code: parsed["error"]["code"].as_i64(),
         subcode: parsed["error"]["error_subcode"].as_i64(),
-        message: parsed["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        body,
     })
+}
+
+/// `reqwest::Error` enthält standardmäßig die vollständige URL. Da Instagram
+/// das Access-Token als Query-Parameter verlangt, darf der Fehler weder in DB
+/// noch Logs gelangen. Die Ursache bleibt als stabiler Code sichtbar.
+fn instagram_request_error(_: reqwest::Error) -> UploadError {
+    UploadError::Request("instagram_request_failed".to_string())
 }
 
 /// Wie `read_graph_json`, nur direkt als `UploadError`.
@@ -208,7 +210,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         graph_json(resp, "Instagram auth check").await
     }
 
@@ -228,7 +230,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let data = match graph_json(resp, "Instagram publishing limit").await {
             Ok(v) => v,
             // Kontingent- und Token-Fehler zählen, alles andere darf den Upload
@@ -237,8 +239,11 @@ impl InstagramUploader {
             Err(e @ (UploadError::QuotaExceeded(_) | UploadError::NotAuthenticated)) => {
                 return Err(e)
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "Instagram: Kontingent-Abfrage fehlgeschlagen, Upload läuft trotzdem weiter");
+            Err(_) => {
+                tracing::warn!(
+                    code = "instagram_quota_check_failed",
+                    "Instagram: Kontingent-Abfrage fehlgeschlagen, Upload läuft trotzdem weiter"
+                );
                 return Ok(());
             }
         };
@@ -281,7 +286,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let data = graph_json(resp, "Instagram create container").await?;
         data["id"]
             .as_str()
@@ -314,7 +319,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let data = graph_json(resp, "Instagram create container").await?;
         let id = data["id"]
             .as_str()
@@ -338,8 +343,23 @@ impl InstagramUploader {
         upload_uri: &str,
         video_path: &str,
     ) -> Result<(), UploadError> {
-        let bytes = tokio::fs::read(video_path).await?;
-        let file_size = bytes.len();
+        let file = tokio::fs::File::open(video_path).await?;
+        let file_size = file.metadata().await?.len();
+        if file_size == 0 || file_size > (MAX_FILE_MB * 1024.0 * 1024.0) as u64 {
+            return Err(UploadError::Validation(
+                "instagram_file_size_invalid".to_string(),
+            ));
+        }
+        let body_stream = stream::try_unfold(file, |mut file| async move {
+            let mut chunk = vec![0_u8; 64 * 1024];
+            let read = file.read(&mut chunk).await?;
+            if read == 0 {
+                Ok::<_, std::io::Error>(None)
+            } else {
+                chunk.truncate(read);
+                Ok(Some((chunk, file)))
+            }
+        });
         let resp = self
             .http
             .post(upload_uri)
@@ -349,11 +369,12 @@ impl InstagramUploader {
             )
             .header("offset", "0")
             .header("file_size", file_size.to_string())
+            .header(reqwest::header::CONTENT_LENGTH, file_size)
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            .body(bytes)
+            .body(reqwest::Body::wrap_stream(body_stream))
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         graph_json(resp, "Instagram resumable upload").await?;
         Ok(())
     }
@@ -369,7 +390,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         graph_json(resp, "Instagram container status").await
     }
 
@@ -418,7 +439,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let data = graph_json(resp, "Instagram publish").await?;
         data["id"]
             .as_str()
@@ -522,7 +543,7 @@ impl PlatformUploader for InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let media = graph_json(media_resp, "Instagram analytics").await?;
 
         // Insights sind best-effort, aber nicht mehr still: ein Fehlschlag wird
@@ -538,7 +559,7 @@ impl PlatformUploader for InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(instagram_request_error)?;
         let insights = match read_graph_json(insights_resp).await {
             Ok(v) => v,
             Err(f) if f.code == Some(190) => return Err(UploadError::NotAuthenticated),
@@ -548,7 +569,7 @@ impl PlatformUploader for InstagramUploader {
                     status = f.status,
                     graph_code = ?f.code,
                     graph_subcode = ?f.subcode,
-                    message = %f.message,
+                    code = "instagram_insights_failed",
                     "Instagram Insights nicht abrufbar, Snapshot ohne Insights-Werte"
                 );
                 json!({})

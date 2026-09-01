@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Camera, Image as ImageIcon, Layers, Maximize2, Save, RotateCcw, EyeOff, Eye } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
@@ -9,6 +9,7 @@ import {
   MAX_BAND_HEIGHT,
   TARGET_HEIGHT,
   TARGET_WIDTH,
+  adjustBoxWithKeyboard,
   applyDrag,
   ausschnittRahmen,
   grossesStandbild,
@@ -99,6 +100,8 @@ function EditableFrame({
   const t = useT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const tastaturHilfeId = useId();
+  const bandTastaturHilfeId = useId();
 
   const handlePointerDown = (e: React.PointerEvent, boxId: BoxId, mode: DragMode) => {
     const container = containerRef.current;
@@ -135,6 +138,26 @@ function EditableFrame({
     if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent, spec: FrameBox) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSelectBox(spec.id);
+      return;
+    }
+    const isBand = spec.interaction === 'band';
+    if (isBand && e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const next = adjustBoxWithKeyboard(
+      spec.box,
+      e.key,
+      isBand || e.shiftKey,
+      e.altKey ? 2 : 10,
+    );
+    if (!next) return;
+    e.preventDefault();
+    onSelectBox(spec.id);
+    onBoxChange(spec.id, clampToFrame(next, frameWidth, frameHeight));
+  };
+
   return (
     <div
       ref={containerRef}
@@ -151,7 +174,14 @@ function EditableFrame({
     >
       {background}
 
-      <div className="absolute top-2 left-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/60 px-2 py-1 rounded-md bg-black/45 backdrop-blur-md z-30">
+      <p id={tastaturHilfeId} className="sr-only">
+        {t('Pfeiltasten verschieben. Umschalttaste plus Pfeiltasten ändert die Größe. Alt macht kleine Schritte.')}
+      </p>
+      <p id={bandTastaturHilfeId} className="sr-only">
+        {t('Pfeil hoch und runter ändert die Höhe. Alt macht kleine Schritte.')}
+      </p>
+
+      <div className="absolute top-2 left-2 z-30 rounded-md bg-black/85 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">
         {caption}
       </div>
 
@@ -159,11 +189,25 @@ function EditableFrame({
         const { border, fill, dashed } = BOX_COLORS[spec.color];
         const isSelected = selectedBox === spec.id;
         const isBand = spec.interaction === 'band';
+        const wertId = `${tastaturHilfeId}-${spec.id}-wert`;
         return (
+          <Fragment key={spec.id}>
+          <span id={wertId} aria-live="polite" aria-atomic="true" className="sr-only">
+            {isBand
+              ? t('Höhe {height}', { height: Math.round(spec.box.h) })
+              : formatBox(spec.box)}
+          </span>
           <div
-            key={spec.id}
+            role="button"
+            tabIndex={0}
+            aria-label={spec.label}
+            aria-pressed={isSelected}
+            aria-describedby={`${isBand ? bandTastaturHilfeId : tastaturHilfeId} ${wertId}`}
+            aria-keyshortcuts={isBand ? 'ArrowUp ArrowDown' : 'ArrowUp ArrowDown ArrowLeft ArrowRight'}
+            onClick={() => onSelectBox(spec.id)}
+            onKeyDown={(e) => handleKeyDown(e, spec)}
             onPointerDown={(e) => handlePointerDown(e, spec.id, 'move')}
-            className={`absolute select-none ${isBand ? '' : 'cursor-move'} ${
+            className={`absolute select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${isBand ? '' : 'cursor-move'} ${
               isSelected ? 'z-20' : 'z-10'
             }`}
             style={{
@@ -172,29 +216,31 @@ function EditableFrame({
               width: `${(spec.box.w / frameWidth) * 100}%`,
               height: `${(spec.box.h / frameHeight) * 100}%`,
               border: `2px ${dashed ? 'dashed' : 'solid'} ${border}`,
+              outline: '2px solid #140D0A',
+              outlineOffset: '1px',
               background: spec.aufBild ? 'transparent' : fill,
               boxShadow: isSelected
-                ? `0 0 0 3px ${border}, 0 8px 24px rgba(0,0,0,0.45)`
-                : '0 4px 14px rgba(0,0,0,0.3)',
+                ? `inset 0 0 0 2px #140D0A, 0 0 0 3px ${border}, 0 8px 24px rgba(0,0,0,0.45)`
+                : 'inset 0 0 0 2px #140D0A, 0 4px 14px rgba(0,0,0,0.3)',
               backdropFilter: spec.aufBild ? undefined : 'blur(2px)',
             }}
           >
             {spec.content}
             <div
-              className="absolute top-1 left-1 text-[9px] font-bold uppercase tracking-[0.12em] px-1.5 py-0.5 rounded z-10"
+              className="pointer-events-none absolute top-1 left-1 z-10 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em]"
               style={{ background: border, color: AUF_METALL }}
             >
               {spec.label}
             </div>
-            <div className="absolute bottom-1 right-1 text-[9px] font-mono text-white/85 bg-black/55 px-1 py-0.5 rounded">
+            <div className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/85 px-1 py-0.5 font-mono text-[9px] text-white">
               {isBand ? t('Höhe {height}', { height: Math.round(spec.box.h) }) : formatBox(spec.box)}
             </div>
 
             {isBand ? (
               <div
                 onPointerDown={(e) => handlePointerDown(e, spec.id, 'resize-b')}
-                className="absolute left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center"
-                style={{ bottom: -6 }}
+                className="absolute left-0 right-0 flex h-6 cursor-ns-resize items-center justify-center"
+                style={{ bottom: 0 }}
               >
                 <div
                   style={{
@@ -218,21 +264,24 @@ function EditableFrame({
                   <div
                     key={mode}
                     onPointerDown={(e) => handlePointerDown(e, spec.id, mode)}
-                    className={`absolute w-3.5 h-3.5 ${cursor}`}
+                    className={`absolute flex h-6 w-6 items-center justify-center ${cursor}`}
                     style={{
-                      top: isTop ? -7 : 'auto',
-                      bottom: !isTop ? -7 : 'auto',
-                      left: isLeft ? -7 : 'auto',
-                      right: !isLeft ? -7 : 'auto',
-                      background: border,
-                      borderRadius: 4,
-                      border: '2px solid #140D0A',
+                      top: isTop ? 0 : 'auto',
+                      bottom: !isTop ? 0 : 'auto',
+                      left: isLeft ? 0 : 'auto',
+                      right: !isLeft ? 0 : 'auto',
                     }}
-                  />
+                  >
+                    <span
+                      className="block h-3.5 w-3.5 rounded"
+                      style={{ background: border, border: '2px solid #140D0A' }}
+                    />
+                  </div>
                 );
               })
             )}
           </div>
+          </Fragment>
         );
       })}
     </div>
@@ -437,8 +486,10 @@ interface LayoutEditorProps {
   isSaving?: boolean;
   onSave: (layout: LayoutPayload) => void;
   onReset?: () => void;
+  onCancel?: () => void;
   saveLabel?: string;
   resetLabel?: string;
+  cancelLabel?: string;
   /**
    * Echte Clips als Vorschau. Ohne die Liste zeigt der Editor wie bisher nur
    * Muster; an einem Muster laesst sich ein Ausschnitt aber nicht beurteilen.
@@ -466,12 +517,15 @@ export function LayoutEditor({
   isSaving,
   onSave,
   onReset,
+  onCancel,
   saveLabel,
   resetLabel,
+  cancelLabel,
   vorschauClips = [],
   geltungHinweis,
 }: LayoutEditorProps) {
   const t = useT();
+  const vorschauSelectId = useId();
   const base = useMemo(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT), [initialLayout]);
   const [layout, setLayout] = useState<LayoutPayload>(base);
   const camEnabled = layout.cam_enabled;
@@ -563,8 +617,9 @@ export function LayoutEditor({
             <button
               type="button"
               onClick={() => setMode('pip')}
-              className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'pip' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+              aria-pressed={mode === 'pip'}
+              className={`min-h-11 px-3 py-1.5 rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange ${
+                mode === 'pip' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -574,8 +629,9 @@ export function LayoutEditor({
             <button
               type="button"
               onClick={() => setMode('stacked')}
-              className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'stacked' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+              aria-pressed={mode === 'stacked'}
+              className={`min-h-11 px-3 py-1.5 rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange ${
+                mode === 'stacked' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -588,7 +644,8 @@ export function LayoutEditor({
           <button
             type="button"
             onClick={() => setCamEnabled(!camEnabled)}
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition ${
+            aria-pressed={camEnabled}
+            className={`inline-flex min-h-11 items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange ${
               camEnabled
                 ? 'bg-accent/15 text-accent border-accent/40'
                 : 'bg-bg/60 text-text-secondary border-border hover:text-white'
@@ -603,17 +660,18 @@ export function LayoutEditor({
       {/* Vorschauclip: an einem echten Bild sieht man den Ausschnitt, am Muster nicht. */}
       {vorschauClips.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-bg/40 px-3 py-2">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
+          <label htmlFor={vorschauSelectId} className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
             <ImageIcon className="w-3.5 h-3.5 text-accent" /> {t('Vorschau-Clip')}
-          </span>
+          </label>
           <select
+            id={vorschauSelectId}
             value={ohneBild ? '' : gewaehlterClip?.id ?? ''}
             onChange={(event) => {
               const wert = event.target.value;
               setOhneBild(wert === '');
               setVorschauId(wert === '' ? null : wert);
             }}
-            className="min-w-0 flex-1 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 text-xs font-medium text-white outline-none transition-colors focus:border-border-hover"
+            className="min-h-11 min-w-0 flex-1 rounded-lg border border-orange/70 bg-background/80 px-2.5 py-1.5 text-xs font-medium text-white transition-colors focus-visible:border-orange focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange"
           >
             {vorschauClips.map((clip) => (
               <option key={clip.id} value={clip.id}>
@@ -653,7 +711,8 @@ export function LayoutEditor({
             <button
               type="button"
               onClick={() => setSelectedBox('game_crop')}
-              className={`px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] ${
+              aria-pressed={selectedBox === 'game_crop'}
+              className={`min-h-11 px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange ${
                 selectedBox === 'game_crop'
                   ? 'border-orange/70 text-orange bg-orange/10'
                   : 'border-border text-text-secondary hover:text-white'
@@ -665,7 +724,8 @@ export function LayoutEditor({
               type="button"
               disabled={!camEnabled}
               onClick={() => setSelectedBox('cam_crop')}
-              className={`px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] ${
+              aria-pressed={selectedBox === 'cam_crop'}
+              className={`min-h-11 px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange ${
                 selectedBox === 'cam_crop'
                   ? 'border-accent/70 text-accent bg-accent/10'
                   : 'border-border text-text-secondary hover:text-white'
@@ -714,29 +774,44 @@ export function LayoutEditor({
         </div>
       </div>
 
+      <p className="rounded-xl border border-border bg-bg/35 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+        {t('Tastatur: Rahmen fokussieren, mit Pfeiltasten verschieben und mit Umschalttaste plus Pfeiltasten skalieren.')}
+      </p>
+
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border">
         <button
           type="button"
           onClick={handleResetToDefault}
-          className="text-xs font-semibold text-text-secondary hover:text-white inline-flex items-center gap-1.5"
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-text-secondary hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange"
         >
           <RotateCcw className="w-3.5 h-3.5" /> {t('Auf Default zurücksetzen')}
         </button>
         <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!isDirty || isSaving}
-            onClick={handleReset}
-            className="px-3 py-2 rounded-xl text-xs font-semibold text-text-secondary border border-border hover:text-white disabled:opacity-40"
-          >
-            {resetLabel ?? t('Zurücksetzen')}
-          </button>
+          {onCancel ? (
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={onCancel}
+              className="min-h-11 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange disabled:opacity-40"
+            >
+              {cancelLabel ?? t('Schließen')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={!isDirty || isSaving}
+              onClick={handleReset}
+              className="min-h-11 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange disabled:opacity-40"
+            >
+              {resetLabel ?? t('Zurücksetzen')}
+            </button>
+          )}
           <button
             type="button"
             disabled={!isDirty || isSaving}
             onClick={() => onSave(layout)}
-            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-orange px-4 py-2 text-xs font-bold text-on-gold shadow-[0_8px_22px_-8px_rgba(201, 168, 106,0.6)] transition hover:bg-orange-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Save className="w-3.5 h-3.5" />
             {isSaving ? t('Speichert…') : (saveLabel ?? t('Als Standard speichern'))}

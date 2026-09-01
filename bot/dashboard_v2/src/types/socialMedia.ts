@@ -77,6 +77,17 @@ export interface SocialClip {
   approval?: ClipApprovalRecord | null;
 }
 
+/**
+ * Ergebnis eines verworfenen Clips. Das Backend liefert zusätzlich den
+ * aktualisierten Clip, diese vier Felder steuern aber die sichere UI-Reaktion.
+ */
+export interface DiscardClipResult {
+  clip_db_id: number;
+  discarded: boolean;
+  pending_stopped: number;
+  already_running: number;
+}
+
 export type EnrichmentStatus =
   | 'pending'
   | 'transcribing'
@@ -121,6 +132,9 @@ export type ApprovalMode = 'manual' | 'veto_window' | 'full_auto';
 export interface PlatformScheduleEntry {
   platform: SocialPlatform;
   auto_post: boolean;
+  /** Providerweg ist trotz vorbereitbarer Kadenz noch nicht nutzbar. */
+  provider_release_blocked: boolean;
+  release_block_reason: 'tiktok_consent_required' | null;
   posts_per_week: number;
   max_posts_per_day: number;
   /** Tageszeiten im Format HH:MM, in der Zeitzone des Kanals. */
@@ -152,12 +166,41 @@ export interface ClipPoolForecast {
 /** Alles, was die Zeitplan-Ansicht eines Kanals braucht. */
 export interface PostingPlan {
   streamer_login: string;
+  /** Harte Veröffentlichungssperre. `false` hält den Kanal im sicheren Testbetrieb. */
+  release_enabled: boolean;
   approval_mode: ApprovalMode;
   approval_modes: ApprovalMode[];
   timezone: string;
   platforms: PlatformScheduleEntry[];
   categories: PostingPlanCategory[];
   pool: ClipPoolForecast;
+}
+
+export type ClipPreparationState =
+  | 'pending'
+  | 'materializing'
+  | 'source_ready'
+  | 'rendering'
+  | 'preview_ready'
+  | 'failed';
+
+/**
+ * Plattformfreier Aufbereitungsstand eines Clips. Die URLs zeigen auf das
+ * tatsächlich gerenderte Artefakt, nicht auf das Twitch-Thumbnail.
+ */
+export interface ClipPreparation {
+  clip_db_id: number;
+  state: ClipPreparationState;
+  source_ready: boolean;
+  preview_ready: boolean;
+  preview_url: string | null;
+  download_url: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  requested_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string | null;
 }
 
 export type VodArchivePrivacy = 'private' | 'unlisted' | 'public';

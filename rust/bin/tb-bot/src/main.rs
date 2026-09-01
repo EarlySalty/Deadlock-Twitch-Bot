@@ -25,10 +25,6 @@
 //!                                   interne-API-Routen werden dorthin
 //!                                   geproxyt, leer = 404 wie bisher
 //!   PORT                          — optional, default 8776
-//!   TB_HIGHLIGHT_CLIPPER_ENABLED  — "1" startet die Highlight-Erstellung
-//!                                   (default aus; benötigt Helix-Client)
-//!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task
-//!                                   (default aus; benötigt Helix-Client)
 //!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
 //!                                   (default aus; benötigt Helix-Client)
 //!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
@@ -113,52 +109,25 @@ fn opt_in_enabled(name: &str) -> bool {
     optional_env_bool(name, false)
 }
 
-/// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
-/// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
-///
-/// Der Pfad war fest aus dem Arbeitsverzeichnis plus `.venv/bin/yt-dlp` gebaut. Der
-/// Deploy-Baum hat kein venv mehr, also zeigte er ins Leere und jeder Aufruf starb mit
-/// "No such file or directory" statt auf ein installiertes yt-dlp auszuweichen.
-fn resolve_yt_dlp_path(
-    env_override: Option<String>,
-    cwd: &std::path::Path,
-    home: Option<&std::path::Path>,
-) -> std::path::PathBuf {
-    if let Some(pfad) = env_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|wert| !wert.is_empty())
-    {
-        return std::path::PathBuf::from(pfad);
-    }
-    [
-        Some(cwd.join(".venv/bin/yt-dlp")),
-        home.map(|home| home.join(".local/bin/yt-dlp")),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|kandidat| ist_ausfuehrbar(kandidat))
-    // systemd-PATH enthält ~/.local/bin nicht, deshalb erst die beiden festen Orte.
-    .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp"))
-}
-
-/// Ein Rest-venv kann eine yt-dlp-Datei ohne x-Bit hinterlassen. Die würde sonst
-/// gegen ein funktionierendes `~/.local/bin/yt-dlp` gewinnen und denselben
-/// Startfehler erzeugen, den diese Suche beheben soll.
-fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(pfad)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+/// Das Release bündelt yt-dlp direkt neben `tb-bot`. Damit hängt der Worker
+/// weder von HOME/PATH noch von einem nicht mit ausgelieferten venv ab.
+fn bundled_yt_dlp_path(tb_bot_executable: &std::path::Path) -> std::path::PathBuf {
+    tb_bot_executable
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("yt-dlp")
 }
 
 fn yt_dlp_path() -> std::path::PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let pfad = resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref());
-    // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
-    // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
-    tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgeloest");
+    let pfad = std::env::current_exe()
+        .map(|tb_bot| bundled_yt_dlp_path(&tb_bot))
+        // Sollte der Kernel den Executable-Pfad nicht liefern, bleibt der Pfad
+        // auf den produktiven Release-Link festgelegt und fällt nie auf CWD,
+        // HOME oder PATH zurück.
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from("/opt/deadlock/twitch/current/rust/target/release/yt-dlp")
+        });
+    tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgelöst");
     pfad
 }
 
@@ -1557,46 +1526,43 @@ async fn main() {
         None => tracing::error!("Werbemanager wurde nicht gestartet: Helix-Client fehlt"),
     }
 
-    // Highlight-Erstellung bleibt nach Grillme Block 15/20 standardmäßig AUS.
-    // Der Port bleibt testbar und kann später bewusst per Opt-in aktiviert werden.
-    if opt_in_enabled("TB_HIGHLIGHT_CLIPPER_ENABLED") {
-        if let Some(helix_client) = helix.as_ref().clone() {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
-                cwd.join("tools/boon"),
-                yt_dlp_path(),
-            );
-            let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
-                pool.clone(),
-                Arc::new(HelixVodSource {
-                    helix: helix_client,
-                }),
-                hc_config,
-            );
-            supervisor.spawn("highlight_clipper", async move {
-                loop {
-                    hc_worker.run_once().await;
-                    tokio::time::sleep(std::time::Duration::from_secs(
-                        tb_highlight::config::POLL_INTERVAL_SECONDS,
-                    ))
-                    .await;
-                }
-            });
-        } else {
-            tracing::warn!("HighlightClipper: aktiviert, aber kein HelixClient verfügbar");
-        }
-    } else {
-        tracing::info!("HighlightClipper deaktiviert (TB_HIGHLIGHT_CLIPPER_ENABLED != 1)");
-    }
+    // Highlight-Clips benötigen VOD-Sektionsdownloads. Der isolierte
+    // Downloader-Dienst akzeptiert absichtlich ausschließlich kurze Twitch-
+    // Clip-URLs (maximal 180 Sekunden). Bis ein getrenntes, ebenso enges
+    // VOD-Protokoll existiert, wird der alte direkte yt-dlp-Pfad nicht mehr
+    // verdrahtet und kann auch nicht per Laufzeit-Schalter reaktiviert werden.
+    tracing::info!("HighlightClipper deaktiviert: isolierter VOD-Downloader fehlt");
 
-    // Social-Media-Posting-Pipeline (Port von bot/social_media): sieben
+    // Social-Media-Posting-Pipeline: Vorbereitung, Freigabe, Upload und Nachlauf.
     // Hintergrund-Worker. In Python (bootstrap) bedingungslos instanziiert
     // (`if services.api`) → hier ebenso bedingungslos gespawnt; jeder Worker hat
     // ein eigenes Intervall + Initial-Delay und ist still, solange keine Arbeit
-    // ansteht (keine onboardeten Plattformen / keine pending Clips). An/Aus wird
-    // datengetrieben über `social_media_settings` gesteuert (Consent +
-    // Auto-Approve je Plattform) — identisch zu Python.
+    // ansteht. Externe KI bleibt über den gespeicherten Consent gegatet;
+    // Veröffentlichungen zusätzlich pro Kanal über `release_mode`.
     {
+        // Plattformfreie Vorbereitung: Twitch-Quelle materialisieren und mit
+        // dem gespeicherten Layout als prüfbare 9:16-MP4 rendern. Dieser Worker
+        // benötigt keine Plattform-Zugangsdaten und überschreitet niemals die
+        // Veröffentlichungsgrenze.
+        let preparation_service =
+            tb_social_media::preparation::ClipPreparationService::new(pool.clone())
+                .with_downloader(Arc::new(
+                    tb_social_media::preparation::IsolatedClipDownloader::new(),
+                ))
+                .with_renderer(Arc::new(
+                    tb_social_media::preparation::VideoClipRenderer::new(
+                        tb_social_media::video_processor::VideoProcessor::new(
+                            "/usr/bin/ffmpeg",
+                            "/usr/bin/ffprobe",
+                        ),
+                    ),
+                ));
+        let preparation =
+            tb_social_media::preparation::ClipPreparationWorker::new(preparation_service);
+        supervisor.spawn("social_clip_preparation_worker", async move {
+            preparation.run().await
+        });
+
         // Cipher-freie Worker: Retention-Cleanup, Approval-Queue, Report-Dispatcher.
         let retention = tb_social_media::retention_worker::RetentionWorker::new(pool.clone());
         supervisor.spawn(
@@ -1639,11 +1605,11 @@ async fn main() {
                     pool.clone(),
                     cipher.clone(),
                 );
-                // yt-dlp wie beim Highlight-Clipper über resolve_yt_dlp_path;
-                // clips_dir = Python-Default data/clips.
+                // Quellmaterial kommt ausschließlich über den socket-
+                // aktivierten Downloader-Dienst unter eigener UID.
                 let upload =
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
-                        .with_yt_dlp(yt_dlp_path().to_string_lossy().into_owned());
+                        .with_isolated_downloader();
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
 
                 let refresh_oauth =
@@ -1683,11 +1649,8 @@ async fn main() {
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path();
-                let vod_archive = tb_vod_archive::VodArchiveWorker::new(
-                    pool.clone(),
-                    vod_config,
-                    vod_creds,
-                );
+                let vod_archive =
+                    tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {
@@ -1696,7 +1659,9 @@ async fn main() {
                 );
             }
         }
-        tracing::info!("Social-Media-Pipeline-Worker gestartet (8 Loops inkl. VOD-Archiv)");
+        tracing::info!(
+            "Social-Media-Pipeline-Worker gestartet (9 Loops inkl. Vorbereitung und VOD-Archiv)"
+        );
     }
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
@@ -1812,17 +1777,14 @@ async fn main() {
         None
     };
 
-    // Auch der Twitch-Clip-Fetch bleibt vorerst deaktiviert. Der reparierte
-    // Datenpfad kann später mit explizitem Opt-in wieder aufgenommen werden.
-    if opt_in_enabled("TB_CLIP_FETCHER_ENABLED") {
-        if let Some(ref h) = *helix {
-            tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
-                .start();
-        } else {
-            tracing::warn!("clip_fetch: aktiviert, aber kein HelixClient verfügbar");
-        }
+    // Der Twitch-Fetch ist der reguläre Eingang der Social-Media-Pipeline. Die
+    // Veröffentlichung bleibt unabhängig davon über `release_mode` hart aus,
+    // bis ein Kanal bewusst vom Testbetrieb auf Live gestellt wird.
+    if let Some(ref h) = *helix {
+        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
+            .start();
     } else {
-        tracing::info!("clip_fetch deaktiviert (TB_CLIP_FETCHER_ENABLED != 1)");
+        tracing::warn!("clip_fetch: kein HelixClient verfügbar");
     }
 
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.
@@ -2344,85 +2306,85 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
-    fn temp_bin(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tb-ytdlp-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("Testverzeichnis");
-        dir
-    }
-
-    fn lege_datei_an(pfad: &Path) {
-        lege_datei_an_mit_modus(pfad, 0o755);
-    }
-
-    fn lege_datei_an_mit_modus(pfad: &Path, modus: u32) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(pfad.parent().expect("Elternpfad")).expect("Elternverzeichnis");
-        std::fs::write(pfad, b"#!/bin/sh\n").expect("Testdatei");
-        std::fs::set_permissions(pfad, std::fs::Permissions::from_mode(modus)).expect("Testrechte");
-    }
-
     #[test]
-    fn yt_dlp_pfad_bevorzugt_env_ueber_alles() {
-        let cwd = temp_bin("env-cwd");
-        lege_datei_an(&cwd.join(".venv/bin/yt-dlp"));
+    fn gebuendeltes_yt_dlp_liegt_neben_tb_bot() {
+        let tb_bot =
+            Path::new("/opt/deadlock/twitch/releases/0123456789abcdef/rust/target/release/tb-bot");
 
-        let pfad = super::resolve_yt_dlp_path(Some("/opt/yt-dlp".to_string()), &cwd, None);
-
-        assert_eq!(pfad, PathBuf::from("/opt/yt-dlp"));
-    }
-
-    #[test]
-    fn yt_dlp_pfad_nimmt_venv_nur_wenn_die_datei_existiert() {
-        let mit_venv = temp_bin("venv-da");
-        lege_datei_an(&mit_venv.join(".venv/bin/yt-dlp"));
-        let ohne_venv = temp_bin("venv-weg");
-        std::fs::create_dir_all(&ohne_venv).expect("leeres cwd");
+        let pfad = super::bundled_yt_dlp_path(tb_bot);
 
         assert_eq!(
-            super::resolve_yt_dlp_path(None, &mit_venv, None),
-            mit_venv.join(".venv/bin/yt-dlp")
-        );
-        // Der Deploy-Baum hat kein venv: hier darf kein toter Pfad entstehen.
-        assert_eq!(
-            super::resolve_yt_dlp_path(None, &ohne_venv, None),
-            PathBuf::from("yt-dlp")
+            pfad,
+            PathBuf::from(
+                "/opt/deadlock/twitch/releases/0123456789abcdef/rust/target/release/yt-dlp"
+            )
         );
     }
 
     #[test]
-    fn yt_dlp_pfad_faellt_auf_home_local_bin_zurueck() {
-        let cwd = temp_bin("home-cwd");
-        std::fs::create_dir_all(&cwd).expect("leeres cwd");
-        let home = temp_bin("home-dir");
-        lege_datei_an(&home.join(".local/bin/yt-dlp"));
+    fn prepare_only_worker_hat_downloader_und_renderer() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("let preparation_service =")
+            .expect("Preparation-Service muss im Composition-Root verdrahtet sein");
+        let end = source[start..]
+            .find("let preparation =")
+            .map(|offset| start + offset)
+            .expect("Preparation-Worker muss den gebauten Service erhalten");
+        let wiring = &source[start..end];
 
-        let pfad = super::resolve_yt_dlp_path(None, &cwd, Some(&home));
-
-        assert_eq!(pfad, home.join(".local/bin/yt-dlp"));
+        for required in [
+            ".with_downloader",
+            "IsolatedClipDownloader::new",
+            ".with_renderer",
+            "VideoClipRenderer::new",
+            "VideoProcessor::new",
+            "\"/usr/bin/ffmpeg\"",
+            "\"/usr/bin/ffprobe\"",
+        ] {
+            assert!(
+                wiring.contains(required),
+                "Prepare-only-Wiring fehlt: {required}"
+            );
+        }
     }
 
     #[test]
-    fn yt_dlp_pfad_ueberspringt_datei_ohne_x_bit() {
-        // Ein Rest-venv mit nicht ausführbarer Datei darf das installierte
-        // yt-dlp nicht verdrängen — sonst bleibt der Startfehler derselbe.
-        let cwd = temp_bin("kein-x-cwd");
-        lege_datei_an_mit_modus(&cwd.join(".venv/bin/yt-dlp"), 0o644);
-        let home = temp_bin("kein-x-home");
-        lege_datei_an(&home.join(".local/bin/yt-dlp"));
+    fn social_pipeline_und_highlight_starten_keinen_yt_dlp_prozess_im_bot() {
+        let source = include_str!("main.rs");
+        let preparation_start = source
+            .find("let preparation_service =")
+            .expect("Preparation-Composition-Root fehlt");
+        let preparation_end = source[preparation_start..]
+            .find("let preparation =")
+            .map(|offset| preparation_start + offset)
+            .expect("Preparation-Wiring endet nicht eindeutig");
+        let preparation_wiring = &source[preparation_start..preparation_end];
+        assert!(preparation_wiring.contains("IsolatedClipDownloader"));
+        assert!(!preparation_wiring.contains("yt_dlp_path()"));
 
-        let pfad = super::resolve_yt_dlp_path(None, &cwd, Some(&home));
+        let upload_start = source
+            .find("let upload =")
+            .expect("Upload-Composition-Root fehlt");
+        let upload_end = source[upload_start..]
+            .find("supervisor.spawn(\"social_upload_worker\"")
+            .map(|offset| upload_start + offset)
+            .expect("Upload-Wiring endet nicht eindeutig");
+        let upload_wiring = &source[upload_start..upload_end];
+        assert!(upload_wiring.contains("with_isolated_downloader"));
+        assert!(!upload_wiring.contains("with_yt_dlp"));
+        assert!(!upload_wiring.contains("yt_dlp_path()"));
 
-        assert_eq!(pfad, home.join(".local/bin/yt-dlp"));
-    }
-
-    #[test]
-    fn yt_dlp_pfad_ignoriert_leeres_env() {
-        let cwd = temp_bin("leer-cwd");
-        std::fs::create_dir_all(&cwd).expect("leeres cwd");
-
-        let pfad = super::resolve_yt_dlp_path(Some("   ".to_string()), &cwd, None);
-
-        assert_eq!(pfad, PathBuf::from("yt-dlp"));
+        let highlight_start = source
+            .find("Highlight-Clips benötigen VOD-Sektionsdownloads")
+            .expect("Fail-closed-Hinweis für HighlightClipper fehlt");
+        let highlight_end = source[highlight_start..]
+            .find("// Social-Media-Posting-Pipeline")
+            .map(|offset| highlight_start + offset)
+            .expect("Ende des Highlight-Blocks fehlt");
+        let highlight_wiring = &source[highlight_start..highlight_end];
+        assert!(!highlight_wiring.contains("HighlightClipperWorker::new"));
+        assert!(!highlight_wiring.contains("yt_dlp_path()"));
     }
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};

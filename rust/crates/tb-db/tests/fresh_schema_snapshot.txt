@@ -222,6 +222,7 @@ social_media_category|match_game_names|ARRAY|NO|'{}'::text[]
 social_media_category|sort_order|integer|NO|100
 social_media_category|twitch_game_id|text|YES|
 social_media_clip_approval|approved_platforms|jsonb|NO|'[]'::jsonb
+social_media_clip_approval|approved_render_fingerprint|text|YES|
 social_media_clip_approval|approver_user_id|text|YES|
 social_media_clip_approval|clip_db_id|integer|NO|
 social_media_clip_approval|decided_at|timestamp with time zone|YES|
@@ -254,6 +255,22 @@ social_media_clip_enrichment|transcript_lang|text|YES|
 social_media_clip_enrichment|transcript_raw|text|YES|
 social_media_clip_enrichment|transcript_segments|jsonb|YES|
 social_media_clip_enrichment|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_clip_preparation|clip_db_id|bigint|NO|
+social_media_clip_preparation|completed_at|timestamp with time zone|YES|
+social_media_clip_preparation|error_code|text|YES|
+social_media_clip_preparation|error_message|text|YES|
+social_media_clip_preparation|lease_token|text|YES|
+social_media_clip_preparation|render_fingerprint|text|YES|
+social_media_clip_preparation|render_path|text|YES|
+social_media_clip_preparation|requested_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_clip_preparation|source_fingerprint|text|YES|
+social_media_clip_preparation|started_at|timestamp with time zone|YES|
+social_media_clip_preparation|state|text|NO|'pending'::text
+social_media_clip_preparation|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_layout_override_migration_backup_20260901|backed_up_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_layout_override_migration_backup_20260901|clip_db_id|bigint|NO|
+social_media_layout_override_migration_backup_20260901|layout_override_json|jsonb|NO|
+social_media_layout_override_migration_backup_20260901|reason|text|NO|
 social_media_partner_access|granted_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_partner_access|granted_by|text|YES|
 social_media_partner_access|granted|boolean|NO|false
@@ -270,6 +287,7 @@ social_media_platform_auth|last_refreshed_at|text|YES|
 social_media_platform_auth|platform_user_id|text|YES|
 social_media_platform_auth|platform_username|text|YES|
 social_media_platform_auth|platform|text|NO|
+social_media_platform_auth|provider_calls_enabled|boolean|NO|false
 social_media_platform_auth|refresh_token_enc|bytea|YES|
 social_media_platform_auth|scopes|text|YES|
 social_media_platform_auth|streamer_login|text|YES|
@@ -309,6 +327,7 @@ social_media_streamer_layout|twitch_user_id|text|YES|
 social_media_streamer_layout|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_layout|updated_by|text|YES|
 social_media_streamer_settings|approval_mode|text|NO|'manual'::text
+social_media_streamer_settings|release_mode|text|NO|'prepare_only'::text
 social_media_streamer_settings|streamer_login|text|NO|
 social_media_streamer_settings|timezone|text|NO|'Europe/Berlin'::text
 social_media_streamer_settings|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
@@ -673,6 +692,10 @@ twitch_clips_upload_queue|last_attempt_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|last_error|text|YES|
 twitch_clips_upload_queue|platform|text|NO|
 twitch_clips_upload_queue|priority|integer|YES|0
+twitch_clips_upload_queue|provider_accepted_at|timestamp with time zone|YES|
+twitch_clips_upload_queue|provider_external_id|text|YES|
+twitch_clips_upload_queue|provider_lease_token|text|YES|
+twitch_clips_upload_queue|provider_started_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|quota_deferrals|integer|NO|0
 twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text

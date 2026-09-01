@@ -124,6 +124,33 @@ export function zeitplanFeldVerlassen(pruefung: ZeitplanFeldPruefung): FeldVerla
   };
 }
 
+/** Stabiles Ergebnis der Bereichsprüfung für die beiden Kadenzfelder. */
+export type GanzeZahlPruefung =
+  | { gueltig: true; wert: number }
+  | { gueltig: false; grund: 'keine_ganze_zahl' | 'ausserhalb_bereich' };
+
+/**
+ * Native `min`-/`max`-Attribute verhindern das Absenden in einem React-
+ * `onBlur` nicht. Deshalb wird derselbe Vertrag vor jeder Mutation explizit
+ * geprüft: nicht leer, endlich, ganzzahlig und innerhalb beider Grenzen.
+ */
+export function pruefeGanzeZahlImBereich(
+  eingabe: string,
+  minimum: number,
+  maximum: number,
+): GanzeZahlPruefung {
+  const text = eingabe.trim();
+  if (!text) return { gueltig: false, grund: 'keine_ganze_zahl' };
+  const wert = Number(text);
+  if (!Number.isFinite(wert) || !Number.isInteger(wert)) {
+    return { gueltig: false, grund: 'keine_ganze_zahl' };
+  }
+  if (wert < minimum || wert > maximum) {
+    return { gueltig: false, grund: 'ausserhalb_bereich' };
+  }
+  return { gueltig: true, wert };
+}
+
 /**
  * Gleicht das Zeitplan-Formular mit einer Serverantwort ab, ohne Eingaben zu
  * verlieren, die noch niemand abgeschickt hat.

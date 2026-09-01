@@ -1,0 +1,21 @@
+[Unit]
+Description=Deadlock Twitch Medien-Downloader-Socket
+Requires=deadlock-twitch-media-downloader-firewall.service
+After=deadlock-twitch-media-downloader-firewall.service
+
+[Socket]
+ListenSequentialPacket=/run/deadlock-twitch-media-downloader/control.sock
+Accept=yes
+PassCredentials=yes
+SocketUser=root
+SocketGroup=twitchbot
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+FlushPending=yes
+MaxConnections=2
+TriggerLimitIntervalSec=60s
+TriggerLimitBurst=20
+
+[Install]
+WantedBy=sockets.target

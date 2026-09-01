@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use reqwest::header::{CONTENT_TYPE, LOCATION, RETRY_AFTER};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
@@ -38,7 +38,7 @@ use super::{
     as_count, expect_ok_json, truncate_chars, validate_local_file, AnalyticsSnapshot,
     PlatformUploader, UploadError,
 };
-use crate::video_processor::format_hashtags;
+use crate::video_processor::{format_hashtags, VideoProcessor};
 
 /// Beschreibungsgrenze. YouTube zaehlt hier Bytes, nicht Zeichen; ein Text aus
 /// lauter Umlauten und Emoji ist frueher am Limit, als die Zeichenzahl vermuten
@@ -60,7 +60,10 @@ const TAGS_MAX_CHARS: usize = 500;
 const SHORTS_SUFFIX: &str = "\n\n#Shorts";
 
 const CATEGORY_GAMING: &str = "20";
-const DEFAULT_PRIVACY: &str = "public";
+// Ein neues Testkonto darf beim ersten echten E2E-Lauf niemals versehentlich
+// öffentlich posten. Öffentlich ist ein späterer, bewusst freizugebender
+// Plattformschritt; bis dahin bleibt jede Annahme privat.
+const DEFAULT_PRIVACY: &str = "private";
 const DEFAULT_UPLOAD_BASE: &str = "https://www.googleapis.com/upload/youtube/v3";
 const DEFAULT_API_BASE: &str = "https://www.googleapis.com/youtube/v3";
 
@@ -195,7 +198,9 @@ pub struct YouTubeUploader {
     fortschritt: Option<FortschrittSink>,
     upload_base: String,
     api_base: String,
-    ffprobe: String,
+    video_processor: VideoProcessor,
+    #[cfg(test)]
+    skip_video_probe_for_test: bool,
     versuche: u32,
     backoff_basis: Duration,
     http: reqwest::Client,
@@ -210,7 +215,9 @@ impl YouTubeUploader {
             fortschritt: None,
             upload_base: DEFAULT_UPLOAD_BASE.to_string(),
             api_base: DEFAULT_API_BASE.to_string(),
-            ffprobe: "ffprobe".to_string(),
+            video_processor: VideoProcessor::default(),
+            #[cfg(test)]
+            skip_video_probe_for_test: false,
             versuche: DEFAULT_VERSUCHE,
             backoff_basis: DEFAULT_BACKOFF_BASIS,
             http: reqwest::Client::new(),
@@ -256,9 +263,12 @@ impl YouTubeUploader {
         self
     }
 
-    /// Pfad zum ffprobe-Binary (Tests und abweichende Installationen).
-    pub fn with_ffprobe(mut self, ffprobe: impl Into<String>) -> Self {
-        self.ffprobe = ffprobe.into();
+    /// Nur für HTTP-Unit-Tests mit absichtlich unechten Video-Bytes. Der
+    /// Produktionsbuild enthält diesen Abzweig nicht; dort ist die gemeinsame
+    /// Bubblewrap-/FD-Probe zwingend und fail-closed.
+    #[cfg(test)]
+    fn without_video_probe_for_test(mut self) -> Self {
+        self.skip_video_probe_for_test = true;
         self
     }
 
@@ -452,10 +462,7 @@ impl YouTubeUploader {
     /// Fragt den Zustand eines Videos ab. `None`, wenn YouTube die Video-ID
     /// nicht mehr kennt — das Video wurde also entfernt oder abgelehnt und
     /// aus der Liste geworfen.
-    pub async fn video_status(
-        &self,
-        video_id: &str,
-    ) -> Result<Option<VideoZustand>, UploadError> {
+    pub async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
         let resp = self.get_videos("status", video_id).await?;
         if !resp.status().is_success() {
             return Err(fehler_aus_antwort(resp, "YouTube videos.list").await);
@@ -514,6 +521,10 @@ impl YouTubeUploader {
                     .put(session_url)
                     .bearer_auth(token)
                     .header(CONTENT_TYPE, "video/*")
+                    // YouTube verlangt bei der leeren Resume-Abfrage den
+                    // Header ausdrücklich; ein implizit leerer Body reicht
+                    // nicht und wird mit 411 Length Required abgewiesen.
+                    .header(CONTENT_LENGTH, "0")
                     .header("Content-Range", format!("bytes */{size_bytes}"))
                     .body(Vec::new())
             })
@@ -676,76 +687,44 @@ impl YouTubeUploader {
         }
     }
 
-    /// Prueft per ffprobe, ob die Datei ueberhaupt als Short taugt: hoechstens
-    /// drei Minuten und hochkant. Laesst sich das nicht feststellen (ffprobe
-    /// fehlt, Datei unlesbar), bleibt es bei einer Warnung; ein fehlendes
-    /// Werkzeug darf keinen Upload verhindern.
+    /// Prüft über den gemeinsamen, netzlosen Bubblewrap-/FD-Pfad, ob die Datei
+    /// als Short taugt: höchstens drei Minuten und hochkant. Jede fehlende oder
+    /// unlesbare Metadatenangabe blockiert den Provider-Aufruf fail-closed.
     async fn pruefe_shorts_eignung(&self, video_path: &str) -> Result<(), UploadError> {
-        let ausgabe = tokio::process::Command::new(&self.ffprobe)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height,duration:format=duration",
-                "-of",
-                "json",
-                video_path,
-            ])
-            .output()
-            .await;
-        let daten = match ausgabe {
-            Ok(out) if out.status.success() => match serde_json::from_slice::<Value>(&out.stdout) {
-                Ok(v) => v,
-                Err(fehler) => {
-                    tracing::warn!(video_path, %fehler, "ffprobe-Ausgabe unlesbar, Shorts-Pruefung uebersprungen");
-                    return Ok(());
-                }
-            },
-            Ok(out) => {
-                tracing::warn!(
-                    video_path,
-                    meldung = %String::from_utf8_lossy(&out.stderr).trim(),
-                    "ffprobe meldet einen Fehler, Shorts-Pruefung uebersprungen"
-                );
-                return Ok(());
-            }
-            Err(fehler) => {
-                tracing::warn!(video_path, %fehler, "ffprobe nicht ausfuehrbar, Shorts-Pruefung uebersprungen");
-                return Ok(());
-            }
-        };
-
-        let stream = daten
-            .pointer("/streams/0")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        let dauer = zahl(stream.get("duration"))
-            .or_else(|| zahl(daten.pointer("/format/duration")))
-            .unwrap_or(0.0);
-        if dauer > SHORTS_MAX_DAUER_SEKUNDEN {
+        #[cfg(test)]
+        if self.skip_video_probe_for_test {
+            return Ok(());
+        }
+        let info = self
+            .video_processor
+            .get_video_info(video_path)
+            .await
+            .map_err(|_| UploadError::Validation("video_probe_failed".to_string()))?;
+        if !info.duration.is_finite()
+            || info.duration <= 0.0
+            || !info.fps.is_finite()
+            || info.fps <= 0.0
+            || info.width <= 0
+            || info.height <= 0
+        {
+            return Err(UploadError::Validation("video_probe_failed".to_string()));
+        }
+        if info.duration > SHORTS_MAX_DAUER_SEKUNDEN {
             return Err(UploadError::Validation(format!(
-                "Video ist {dauer:.0} s lang, Shorts duerfen hoechstens {SHORTS_MAX_DAUER_SEKUNDEN:.0} s haben"
+                "video_too_long:{:.0}",
+                info.duration
             )));
         }
-        let breite = zahl(stream.get("width")).unwrap_or(0.0);
-        let hoehe = zahl(stream.get("height")).unwrap_or(0.0);
-        if breite > 0.0 && hoehe > 0.0 {
-            let verhaeltnis = breite / hoehe;
-            if verhaeltnis > 1.0 {
-                return Err(UploadError::Validation(format!(
-                    "Video ist im Querformat ({breite:.0}x{hoehe:.0}), Shorts brauchen Hochformat (9:16)"
-                )));
-            }
-            if (verhaeltnis - SHORTS_ZIEL_VERHAELTNIS).abs() > 0.05 {
-                tracing::warn!(
-                    video_path,
-                    breite,
-                    hoehe,
-                    "Seitenverhaeltnis weicht von 9:16 ab, YouTube fuellt die Raender auf"
-                );
-            }
+        if info.aspect_ratio > 1.0 {
+            return Err(UploadError::Validation("video_not_portrait".to_string()));
+        }
+        if (info.aspect_ratio - SHORTS_ZIEL_VERHAELTNIS).abs() > 0.05 {
+            tracing::warn!(
+                width = info.width,
+                height = info.height,
+                code = "video_aspect_ratio_nonstandard",
+                "YouTube-Short weicht vom Zielverhältnis ab"
+            );
         }
         Ok(())
     }
@@ -843,14 +822,6 @@ fn truncate_bytes(s: &str, max: usize) -> &str {
         ende -= 1;
     }
     &s[..ende]
-}
-
-/// Liest eine Zahl, die ffprobe je nach Feld als Zahl oder als String liefert.
-fn zahl(value: Option<&Value>) -> Option<f64> {
-    value.and_then(|v| {
-        v.as_f64()
-            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-    })
 }
 
 /// Bis zu einem Viertel der Wartezeit als Zufallsanteil, gespeist aus der
@@ -1024,7 +995,7 @@ impl PlatformUploader for YouTubeUploader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Uploader ohne echte Wartezeiten (Backoff-Basis null).
@@ -1032,10 +1003,12 @@ mod tests {
         YouTubeUploader::new("tok")
             .with_bases(server.uri(), server.uri())
             .with_retry(3, Duration::ZERO)
+            .without_video_probe_for_test()
     }
 
     async fn temp_video() -> String {
-        let p = std::env::temp_dir().join("tb_youtube_test_clip.mp4");
+        let p =
+            std::env::temp_dir().join(format!("tb_youtube_test_clip_{}.mp4", uuid::Uuid::new_v4()));
         tokio::fs::write(&p, b"fake-video-bytes").await.unwrap();
         p.to_string_lossy().into_owned()
     }
@@ -1545,6 +1518,27 @@ mod tests {
         ));
     }
 
+    // Die echte YouTube-API beantwortet eine Resume-Abfrage ohne explizite
+    // Laenge des leeren PUT-Bodys mit 411 Length Required.
+    #[tokio::test]
+    async fn resume_offset_sendet_content_length_null() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/header"))
+            .and(header("content-length", "0"))
+            .and(header("content-range", "bytes */500"))
+            .respond_with(ResponseTemplate::new(308))
+            .mount(&server)
+            .await;
+
+        let stand = uploader(&server)
+            .resumable_offset(&format!("{}/header", server.uri()), 500)
+            .await
+            .unwrap();
+
+        assert_eq!(stand, ResumeStand::Offset(0));
+    }
+
     #[tokio::test]
     async fn status_mapping() {
         let server = MockServer::start().await;
@@ -1653,7 +1647,9 @@ mod tests {
     async fn leerer_titel_erreicht_die_api_nicht() {
         // Kein Mock noetig: der Fehler faellt vor dem ersten HTTP-Aufruf.
         let video = temp_video().await;
-        let up = YouTubeUploader::new("tok").with_bases("http://127.0.0.1:1", "http://127.0.0.1:1");
+        let up = YouTubeUploader::new("tok")
+            .with_bases("http://127.0.0.1:1", "http://127.0.0.1:1")
+            .without_video_probe_for_test();
         assert!(matches!(
             up.upload_video(&video, "<>", "d", &[]).await,
             Err(UploadError::Validation(_))
@@ -1664,6 +1660,7 @@ mod tests {
     fn snippet_laesst_leere_tags_weg() {
         let ohne = baue_snippet("Titel", "Desc", &[]).unwrap();
         assert!(ohne["snippet"].get("tags").is_none());
+        assert_eq!(ohne["status"]["privacyStatus"], "private");
         let mit = baue_snippet("Titel", "Desc", &["deadlock".into()]).unwrap();
         assert_eq!(mit["snippet"]["tags"], json!(["deadlock"]));
     }

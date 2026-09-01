@@ -26,6 +26,7 @@ ALTER ROLE twitchdash PASSWORD NULL;
 ALTER ROLE twitchbot RESET ALL;
 ALTER ROLE twitchdash RESET ALL;
 ALTER ROLE twitchlegacy NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE twitchlegacy PASSWORD NULL;
 ALTER ROLE twitchlegacy RESET ALL;
 
 DO $keine_rollenerbschaft$
@@ -53,6 +54,10 @@ ALTER ROLE twitchdash IN DATABASE twitch_analytics SET search_path = public, pg_
 ALTER ROLE twitchlegacy IN DATABASE twitch_analytics SET search_path = public, pg_catalog;
 
 GRANT CONNECT ON DATABASE twitch_analytics TO twitchbot, twitchdash, twitchlegacy;
+-- Auf älteren bzw. übernommenen PostgreSQL-Clustern kann PUBLIC noch das vor
+-- PostgreSQL 15 übliche CREATE-Recht besitzen. Ein direkter REVOKE nur von den
+-- drei Rollen würde dieses geerbte Recht nicht neutralisieren.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO twitchbot, twitchdash, twitchlegacy;
 REVOKE CREATE ON SCHEMA public FROM twitchbot, twitchdash, twitchlegacy;
 
@@ -141,6 +146,10 @@ BEGIN
     END IF;
     IF to_regclass('public.twitch_stream_sessions_duration_repair_backup') IS NOT NULL THEN
         REVOKE ALL ON TABLE public.twitch_stream_sessions_duration_repair_backup
+            FROM twitchbot, twitchdash, twitchlegacy;
+    END IF;
+    IF to_regclass('public.social_media_layout_override_migration_backup_20260901') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.social_media_layout_override_migration_backup_20260901
             FROM twitchbot, twitchdash, twitchlegacy;
     END IF;
 END

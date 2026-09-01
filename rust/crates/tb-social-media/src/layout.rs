@@ -32,6 +32,8 @@
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+use crate::approval::{invalidate_clips_for_content_change, ContentMutationError};
+
 /// Breite des fertigen Hochformat-Frames (9:16).
 pub const TARGET_WIDTH: i64 = 1080;
 /// Höhe des fertigen Hochformat-Frames (9:16).
@@ -54,6 +56,43 @@ pub const DEFAULT_PIP_TILE: LayoutBox = LayoutBox {
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct LayoutValidationError(pub String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutMutationOutcome {
+    pub changed: bool,
+    pub pending_stopped: i64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LayoutMutationError {
+    #[error("{0} Upload(s) laufen bereits")]
+    UploadRunning(i64),
+    #[error("Eine betroffene Vorschau wird gerade erstellt")]
+    PreparationRunning,
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EffectiveLayoutError {
+    #[error("Clip wurde nicht gefunden")]
+    ClipNotFound,
+    #[error("Gespeichertes Clip-Layout ist ungültig")]
+    InvalidClipLayout,
+    #[error("Gespeichertes Kanal-Layout ist ungültig")]
+    InvalidStreamerLayout,
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+impl From<ContentMutationError> for LayoutMutationError {
+    fn from(error: ContentMutationError) -> Self {
+        match error {
+            ContentMutationError::UploadRunning(count) => Self::UploadRunning(count),
+            ContentMutationError::Db(error) => Self::Db(error),
+        }
+    }
+}
 
 fn err(msg: impl Into<String>) -> LayoutValidationError {
     LayoutValidationError(msg.into())
@@ -303,10 +342,18 @@ impl StreamerLayout {
 
     fn validate(&self) -> Result<(), LayoutValidationError> {
         // Crops liegen im Twitch-Bild ...
-        self.game_crop
-            .validate_within(self.source.width, self.source.height, "game_crop", "source")?;
-        self.cam_crop
-            .validate_within(self.source.width, self.source.height, "cam_crop", "source")?;
+        self.game_crop.validate_within(
+            self.source.width,
+            self.source.height,
+            "game_crop",
+            "source",
+        )?;
+        self.cam_crop.validate_within(
+            self.source.width,
+            self.source.height,
+            "cam_crop",
+            "source",
+        )?;
         // ... cam_position dagegen im fertigen Hochformat-Frame.
         self.cam_position
             .validate_within(TARGET_WIDTH, TARGET_HEIGHT, "cam_position", "target")?;
@@ -410,28 +457,80 @@ pub async fn upsert_streamer_layout(
     login: &str,
     layout: &StreamerLayout,
     updated_by: Option<&str>,
-) -> Result<(), sqlx::Error> {
+) -> Result<LayoutMutationOutcome, LayoutMutationError> {
     let normalized = login.trim().to_lowercase();
     if normalized.is_empty() {
-        return Ok(());
+        return Ok(LayoutMutationOutcome {
+            changed: false,
+            pending_stopped: 0,
+        });
     }
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
-    sqlx::query!(
+    let payload =
+        serde_json::to_string(&layout.to_layout_json()).unwrap_or_else(|_| "{}".to_string());
+    let mut transaction = pool.begin().await?;
+    // Auch beim ersten INSERT serialisiert das Advisory-Lock konkurrierende
+    // Änderungen desselben Streamers; dort existiert noch keine Zeile für ein
+    // normales FOR UPDATE.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(&normalized)
+        .execute(transaction.as_mut())
+        .await?;
+    let unchanged: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_media_streamer_layout \
+         WHERE LOWER(streamer_login) = LOWER($1) \
+           AND layout_json IS NOT DISTINCT FROM $2::text::jsonb \
+           AND cam_enabled IS NOT DISTINCT FROM $3 \
+           AND mode IS NOT DISTINCT FROM $4 FOR UPDATE)",
+    )
+    .bind(&normalized)
+    .bind(&payload)
+    .bind(layout.cam_enabled)
+    .bind(&layout.mode)
+    .fetch_one(transaction.as_mut())
+    .await?;
+    if unchanged {
+        transaction.commit().await?;
+        return Ok(LayoutMutationOutcome {
+            changed: false,
+            pending_stopped: 0,
+        });
+    }
+
+    let affected: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM twitch_clips_social_media \
+         WHERE LOWER(streamer_login) = LOWER($1) AND layout_override_json IS NULL \
+         ORDER BY id",
+    )
+    .bind(&normalized)
+    .fetch_all(transaction.as_mut())
+    .await?;
+    ensure_no_active_preparation(transaction.as_mut(), &affected).await?;
+    let invalidated =
+        invalidate_clips_for_content_change(transaction.as_mut(), &affected, "layout_changed")
+            .await?;
+
+    sqlx::query(
         "INSERT INTO social_media_streamer_layout \
             (streamer_login, layout_json, cam_enabled, mode, updated_at, updated_by) \
          VALUES ($1, $2::text::jsonb, $3, $4, CURRENT_TIMESTAMP, $5) \
          ON CONFLICT (streamer_login) DO UPDATE \
             SET layout_json = EXCLUDED.layout_json, cam_enabled = EXCLUDED.cam_enabled, \
                 mode = EXCLUDED.mode, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
-        &normalized,
-        serde_json::to_string(&layout.to_layout_json()).unwrap_or_else(|_| "{}".to_string()),
-        layout.cam_enabled,
-        &layout.mode,
-        updated_by
     )
-    .execute(pool)
+    .bind(&normalized)
+    .bind(&payload)
+    .bind(layout.cam_enabled)
+    .bind(&layout.mode)
+    .bind(updated_by)
+    .execute(transaction.as_mut())
     .await?;
-    Ok(())
+    reset_preparations_after_layout_change(transaction.as_mut(), &affected).await?;
+    transaction.commit().await?;
+    Ok(LayoutMutationOutcome {
+        changed: true,
+        pending_stopped: invalidated.pending_stopped,
+    })
 }
 
 /// Effektives Layout eines Clips: Override > Streamer-Default > globaler Default.
@@ -440,45 +539,70 @@ pub async fn get_clip_effective_layout(
     clip_db_id: impl Into<i64>,
 ) -> StreamerLayout {
     let clip_db_id = clip_db_id.into();
-    let row = sqlx::query!(
+    match get_clip_effective_layout_checked(pool, clip_db_id).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::warn!(
+                clip_db_id,
+                error_kind = match error {
+                    EffectiveLayoutError::ClipNotFound => "clip_not_found",
+                    EffectiveLayoutError::InvalidClipLayout => "invalid_clip_layout",
+                    EffectiveLayoutError::InvalidStreamerLayout => "invalid_streamer_layout",
+                    EffectiveLayoutError::Db(_) => "database_failed",
+                },
+                "Effektives Clip-Layout konnte nicht geladen werden"
+            );
+            default_streamer_layout()
+        }
+    }
+}
+
+/// Fail-closed-Variante für alle rendernden Pfade. Ein DB-Ausfall oder ein
+/// beschädigtes gespeichertes Layout darf nie still den globalen Standard
+/// rendern und anschließend als geprüft freigabefähig werden.
+pub async fn get_clip_effective_layout_checked(
+    pool: &PgPool,
+    clip_db_id: impl Into<i64>,
+) -> Result<StreamerLayout, EffectiveLayoutError> {
+    let clip_db_id = clip_db_id.into();
+    type EffectiveLayoutRow = (
+        Option<String>,
+        String,
+        Option<String>,
+        Option<bool>,
+        Option<String>,
+    );
+    let row: Option<EffectiveLayoutRow> = sqlx::query_as(
         "SELECT c.layout_override_json::text AS override_json, c.streamer_login, \
-                l.layout_json::text AS streamer_layout_json, l.cam_enabled AS \"cam_enabled?\", l.mode AS \"mode?\" \
+                l.layout_json::text AS streamer_layout_json, l.cam_enabled, l.mode \
            FROM twitch_clips_social_media c \
            LEFT JOIN social_media_streamer_layout l \
              ON LOWER(l.streamer_login) = LOWER(c.streamer_login) \
           WHERE c.id = $1 LIMIT 1",
-        clip_db_id
     )
+    .bind(clip_db_id)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
 
     let Some(row) = row else {
-        return default_streamer_layout();
+        return Err(EffectiveLayoutError::ClipNotFound);
     };
-    let override_json = row.override_json;
-    let streamer_json = row.streamer_layout_json;
-    let streamer_cam = row.cam_enabled;
-    let streamer_mode = row.mode;
+    let (override_json, _streamer_login, streamer_json, streamer_cam, streamer_mode) = row;
 
     if let Some(raw) = override_json.filter(|s| !s.is_empty()) {
-        if let Some(payload) = decode_layout_json(&raw) {
-            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, None, None) {
-                return layout;
-            }
-        }
+        let payload = decode_layout_json(&raw).ok_or(EffectiveLayoutError::InvalidClipLayout)?;
+        return StreamerLayout::from_stored_value(&payload, None, None)
+            .map_err(|_| EffectiveLayoutError::InvalidClipLayout);
     }
     if let Some(raw) = streamer_json.filter(|s| !s.is_empty()) {
-        if let Some(payload) = decode_layout_json(&raw) {
-            let cam = streamer_cam.unwrap_or(true);
-            let mode = streamer_mode.as_deref().unwrap_or("pip");
-            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, Some(cam), Some(mode)) {
-                return layout;
-            }
-        }
+        let payload =
+            decode_layout_json(&raw).ok_or(EffectiveLayoutError::InvalidStreamerLayout)?;
+        let cam = streamer_cam.unwrap_or(true);
+        let mode = streamer_mode.as_deref().unwrap_or("pip");
+        return StreamerLayout::from_stored_value(&payload, Some(cam), Some(mode))
+            .map_err(|_| EffectiveLayoutError::InvalidStreamerLayout);
     }
-    default_streamer_layout()
+    Ok(default_streamer_layout())
 }
 
 /// Setzt (oder löscht mit `None`) das Clip-spezifische Layout-Override.
@@ -486,22 +610,108 @@ pub async fn set_clip_layout_override(
     pool: &PgPool,
     clip_db_id: impl Into<i64>,
     layout: Option<&StreamerLayout>,
-) -> Result<(), sqlx::Error> {
+) -> Result<LayoutMutationOutcome, LayoutMutationError> {
     let clip_db_id = clip_db_id.into();
     let payload = layout
         .map(|l| serde_json::to_string(&l.to_override_json()).unwrap_or_else(|_| "{}".to_string()));
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media SET layout_override_json = $1::text::jsonb WHERE id = $2",
-        payload.as_deref(),
-        clip_db_id
+    let mut transaction = pool.begin().await?;
+    let unchanged: Option<bool> = sqlx::query_scalar(
+        "SELECT layout_override_json IS NOT DISTINCT FROM $2::text::jsonb \
+         FROM twitch_clips_social_media WHERE id = $1",
     )
-    .execute(pool)
+    .bind(clip_db_id)
+    .bind(payload.as_deref())
+    .fetch_optional(transaction.as_mut())
+    .await?;
+    if unchanged.unwrap_or(true) {
+        transaction.commit().await?;
+        return Ok(LayoutMutationOutcome {
+            changed: false,
+            pending_stopped: 0,
+        });
+    }
+
+    ensure_no_active_preparation(transaction.as_mut(), &[clip_db_id]).await?;
+    let unchanged_after_lock: Option<bool> = sqlx::query_scalar(
+        "SELECT layout_override_json IS NOT DISTINCT FROM $2::text::jsonb \
+         FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
+    )
+    .bind(clip_db_id)
+    .bind(payload.as_deref())
+    .fetch_optional(transaction.as_mut())
+    .await?;
+    if unchanged_after_lock.unwrap_or(true) {
+        transaction.commit().await?;
+        return Ok(LayoutMutationOutcome {
+            changed: false,
+            pending_stopped: 0,
+        });
+    }
+    let invalidated =
+        invalidate_clips_for_content_change(transaction.as_mut(), &[clip_db_id], "layout_changed")
+            .await?;
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET layout_override_json = $2::text::jsonb WHERE id = $1",
+    )
+    .bind(clip_db_id)
+    .bind(payload.as_deref())
+    .execute(transaction.as_mut())
+    .await?;
+    reset_preparations_after_layout_change(transaction.as_mut(), &[clip_db_id]).await?;
+    transaction.commit().await?;
+    Ok(LayoutMutationOutcome {
+        changed: true,
+        pending_stopped: invalidated.pending_stopped,
+    })
+}
+
+async fn ensure_no_active_preparation(
+    connection: &mut sqlx::PgConnection,
+    clip_db_ids: &[i64],
+) -> Result<(), LayoutMutationError> {
+    if clip_db_ids.is_empty() {
+        return Ok(());
+    }
+    let active: Vec<i64> = sqlx::query_scalar(
+        "SELECT clip_db_id FROM social_media_clip_preparation \
+         WHERE clip_db_id = ANY($1) AND state IN ('materializing', 'rendering') \
+           AND updated_at >= CURRENT_TIMESTAMP - INTERVAL '30 minutes' \
+         ORDER BY clip_db_id FOR UPDATE",
+    )
+    .bind(clip_db_ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    if active.is_empty() {
+        Ok(())
+    } else {
+        Err(LayoutMutationError::PreparationRunning)
+    }
+}
+
+async fn reset_preparations_after_layout_change(
+    connection: &mut sqlx::PgConnection,
+    clip_db_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    if clip_db_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE social_media_clip_preparation SET state = 'pending', \
+         lease_token = NULL, \
+         error_code = NULL, error_message = NULL, completed_at = NULL, \
+         requested_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+         WHERE clip_db_id = ANY($1)",
+    )
+    .bind(clip_db_ids)
+    .execute(&mut *connection)
     .await?;
     Ok(())
 }
 
-/// Belegt das Clip-Override mit dem Streamer-Default (nur falls noch keins
-/// gesetzt — `COALESCE`). Wird beim Registrieren eines Clips aufgerufen.
+/// Stellt dynamische Vererbung des Streamer-Defaults sicher. Neue Clips bleiben
+/// bewusst ohne Override; ein alter automatisch kopierter Snapshot wird nur
+/// dann entfernt, wenn er dem aktuellen Streamer-Default exakt entspricht.
+/// Davon abweichende, echte Individualanpassungen bleiben erhalten.
 pub async fn apply_default_layout(
     pool: &PgPool,
     clip_db_id: impl Into<i64>,
@@ -514,12 +724,13 @@ pub async fn apply_default_layout(
     };
     let payload =
         serde_json::to_string(&layout.to_override_json()).unwrap_or_else(|_| "{}".to_string());
-    sqlx::query!(
+    sqlx::query(
         "UPDATE twitch_clips_social_media \
-            SET layout_override_json = COALESCE(layout_override_json, $1::text::jsonb) WHERE id = $2",
-        &payload,
-        clip_db_id
+            SET layout_override_json = NULL \
+          WHERE id = $2 AND layout_override_json = $1::text::jsonb",
     )
+    .bind(&payload)
+    .bind(clip_db_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -601,17 +812,41 @@ mod tests {
         let mut stacked = live_altlayout();
         stacked["mode"] = json!("stacked");
         let layout = StreamerLayout::from_stored_value(&stacked, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
 
         // Ein echter, schmaler PiP-Wert kommt unveraendert durch.
         let mut echt = live_altlayout();
         echt["cam_position"] = json!({"x": 40, "y": 900, "w": 300, "h": 300});
         let layout = StreamerLayout::from_stored_value(&echt, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 40, y: 900, w: 300, h: 300 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 40,
+                y: 900,
+                w: 300,
+                h: 300
+            }
+        );
 
         // Der strenge Pfad (neue Eingaben) fasst nichts an.
         let layout = StreamerLayout::from_value(&live_altlayout(), None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
     }
 
     #[test]
@@ -619,8 +854,19 @@ mod tests {
         // yuv420p vertraegt keine ungeraden Chroma-Maße: scale=421:561 laesst
         // libx264 abbrechen.
         assert_eq!(
-            LayoutBox { x: 100, y: 100, w: 321, h: 201 }.clamped_to_target(),
-            LayoutBox { x: 100, y: 100, w: 320, h: 200 }
+            LayoutBox {
+                x: 100,
+                y: 100,
+                w: 321,
+                h: 201
+            }
+            .clamped_to_target(),
+            LayoutBox {
+                x: 100,
+                y: 100,
+                w: 320,
+                h: 200
+            }
         );
         // Gerade Werte bleiben, wie sie sind.
         assert_eq!(DEFAULT_PIP_TILE.clamped_to_target(), DEFAULT_PIP_TILE);
@@ -646,16 +892,48 @@ mod tests {
         // (Stacked, damit hier das Clampen greift und nicht die PiP-Altlast-Regel.)
         let layout = StreamerLayout::from_stored_value(&alt, None, Some("stacked"))
             .expect("gespeichertes Altlayout bleibt lesbar");
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 700, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 700,
+                w: 1080,
+                h: 540
+            }
+        );
         // Die Crops bleiben unberuehrt.
-        assert_eq!(layout.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
-        assert_eq!(layout.cam_crop, LayoutBox { x: 1500, y: 50, w: 380, h: 380 });
+        assert_eq!(
+            layout.game_crop,
+            LayoutBox {
+                x: 420,
+                y: 0,
+                w: 1080,
+                h: 1080
+            }
+        );
+        assert_eq!(
+            layout.cam_crop,
+            LayoutBox {
+                x: 1500,
+                y: 50,
+                w: 380,
+                h: 380
+            }
+        );
 
         // Auch zu hohe Werte werden gestutzt statt abgelehnt.
         let mut zu_hoch = alt.clone();
         zu_hoch["cam_position"] = json!({"x": 900, "y": 1800, "w": 600, "h": 400});
         let layout = StreamerLayout::from_stored_value(&zu_hoch, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 480, y: 1520, w: 600, h: 400 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 480,
+                y: 1520,
+                w: 600,
+                h: 400
+            }
+        );
 
         // Kaputte Struktur bleibt ein Fehler, auch beim Lesen.
         let mut kaputt = alt.clone();
@@ -727,8 +1005,11 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, status TEXT DEFAULT 'pending', layout_override_json JSONB)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
+            "CREATE TABLE social_media_clip_preparation (clip_db_id BIGINT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'pending', lease_token TEXT, error_code TEXT, error_message TEXT, completed_at TIMESTAMPTZ, requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT, last_attempt_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -763,7 +1044,7 @@ mod tests {
                 .cam_enabled
         );
 
-        // Clip ohne Override → apply_default belegt mit Streamer-Default.
+        // Clip ohne Override erbt den Streamer-Default dynamisch.
         let clip: i32 = sqlx::query_scalar(
             "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
         )
@@ -772,16 +1053,25 @@ mod tests {
         .unwrap();
         apply_default_layout(&pool, clip, "nani").await.unwrap();
         let eff = get_clip_effective_layout(&pool, clip).await;
-        assert_eq!(eff.mode, "pip"); // Streamer-Default (überschrieben)
+        assert_eq!(eff.mode, "pip");
+        let stored_override: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT layout_override_json FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(stored_override.is_none());
 
-        // Zweiter apply_default ändert NICHTS (COALESCE schützt bestehendes Override).
+        // Eine spätere Kanaländerung wirkt sofort, solange kein echtes
+        // Clip-Override gesetzt wurde.
         let mut other = default_streamer_layout();
         other.mode = "stacked".into();
         upsert_streamer_layout(&pool, "nani", &other, None)
             .await
             .unwrap();
         apply_default_layout(&pool, clip, "nani").await.unwrap();
-        assert_eq!(get_clip_effective_layout(&pool, clip).await.mode, "pip");
+        assert_eq!(get_clip_effective_layout(&pool, clip).await.mode, "stacked");
 
         // Explizites Override schlägt Streamer-Layout.
         let mut ov = default_streamer_layout();
@@ -797,6 +1087,136 @@ mod tests {
         // Override löschen → fällt auf Streamer-Layout (stacked) zurück.
         set_clip_layout_override(&pool, clip, None).await.unwrap();
         assert_eq!(get_clip_effective_layout(&pool, clip).await.mode, "stacked");
+    }
+
+    #[tokio::test]
+    async fn layoutaenderung_invalidiert_vorschau_freigabe_und_wartende_queue() {
+        let Some(pool) = make_pool("t_sm_layout_invalidation").await else {
+            return;
+        };
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login, status) \
+             VALUES ('nani', 'approved') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation (clip_db_id, state) \
+             VALUES ($1, 'preview_ready')",
+        )
+        .bind(i64::from(clip))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) \
+             VALUES ($1, 'approved', '[\"tiktok\"]'::jsonb)",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, status) VALUES ($1, 'pending')",
+        )
+        .bind(i64::from(clip))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut changed_layout = default_streamer_layout();
+        changed_layout.mode = "stacked".to_string();
+        let outcome = set_clip_layout_override(&pool, clip, Some(&changed_layout))
+            .await
+            .unwrap();
+        assert!(outcome.changed);
+        assert_eq!(outcome.pending_stopped, 1);
+        let preparation: String = sqlx::query_scalar(
+            "SELECT state FROM social_media_clip_preparation WHERE clip_db_id = $1",
+        )
+        .bind(i64::from(clip))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let approval: (String, serde_json::Value) = sqlx::query_as(
+            "SELECT state, approved_platforms FROM social_media_clip_approval WHERE clip_db_id = $1",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let queue: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, last_error FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(i64::from(clip))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(preparation, "pending");
+        assert_eq!(approval.0, "editing");
+        assert_eq!(approval.1, json!([]));
+        assert_eq!(queue.0, "failed");
+        assert_eq!(queue.1.as_deref(), Some("layout_changed"));
+
+        let unchanged = set_clip_layout_override(&pool, clip, Some(&changed_layout))
+            .await
+            .unwrap();
+        assert!(!unchanged.changed);
+        assert_eq!(unchanged.pending_stopped, 0);
+    }
+
+    #[tokio::test]
+    async fn layoutaenderung_lehnt_aktive_vorbereitung_und_upload_ab() {
+        let Some(pool) = make_pool("t_sm_layout_active_conflicts").await else {
+            return;
+        };
+        let clip_rendering: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation (clip_db_id, state) \
+             VALUES ($1, 'rendering')",
+        )
+        .bind(i64::from(clip_rendering))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut changed_layout = default_streamer_layout();
+        changed_layout.mode = "stacked".to_string();
+        assert!(matches!(
+            set_clip_layout_override(&pool, clip_rendering, Some(&changed_layout)).await,
+            Err(LayoutMutationError::PreparationRunning)
+        ));
+        let stored: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT layout_override_json FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip_rendering)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(stored.is_none());
+
+        let clip_uploading: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, status) VALUES ($1, 'processing')",
+        )
+        .bind(i64::from(clip_uploading))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            set_clip_layout_override(&pool, clip_uploading, Some(&changed_layout)).await,
+            Err(LayoutMutationError::UploadRunning(1))
+        ));
     }
 
     #[tokio::test]
@@ -824,8 +1244,24 @@ mod tests {
             .await
             .expect("Altlayout muss lesbar bleiben, nicht auf den Default kippen");
         assert_eq!(got.mode, "stacked");
-        assert_eq!(got.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
-        assert_eq!(got.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            got.game_crop,
+            LayoutBox {
+                x: 420,
+                y: 0,
+                w: 1080,
+                h: 1080
+            }
+        );
+        assert_eq!(
+            got.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
 
         // Auch der Clip-Pfad (Override) darf daran nicht scheitern.
         let clip: i32 = sqlx::query_scalar(
@@ -835,7 +1271,15 @@ mod tests {
         .await
         .unwrap();
         let eff = get_clip_effective_layout(&pool, clip).await;
-        assert_eq!(eff.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            eff.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
         assert_ne!(eff, default_streamer_layout());
     }
 

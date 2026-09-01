@@ -11,9 +11,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
 
+use crate::approval::{invalidate_clip_for_content_change, ContentMutationError};
 use crate::correction::{correct_transcript, CorrectionResult};
 use crate::enrichment::{
-    ensure_enrichment_row, save_corrected, save_llm_output, save_transcript,
+    ensure_enrichment_row_checked, save_corrected, save_llm_output, save_transcript,
     update_enrichment_status, STATUS_CORRECTING, STATUS_DONE, STATUS_FAILED, STATUS_LLM,
     STATUS_SKIPPED_NO_KEY, STATUS_TRANSCRIBING,
 };
@@ -94,6 +95,10 @@ pub struct EnrichmentOutcome {
 pub enum PipelineError {
     #[error("clip_db_id {0} not found")]
     ClipNotFound(i32),
+    #[error("{0} Upload(s) laufen bereits")]
+    UploadRunning(i64),
+    #[error("Enrichment konnte nicht sicher vorbereitet werden")]
+    Persistence,
 }
 
 fn now_iso() -> String {
@@ -101,7 +106,10 @@ fn now_iso() -> String {
 }
 
 /// Lädt den Clip-Kontext aus `twitch_clips_social_media`.
-async fn load_clip_context(pool: &PgPool, clip_db_id: i32) -> Option<ClipContext> {
+async fn load_clip_context(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<Option<ClipContext>, sqlx::Error> {
     let row = sqlx::query!(
         "SELECT id AS \"id!\", clip_id AS \"clip_id!\", streamer_login AS \"streamer_login!\", \
                     clip_title, duration_seconds, game_name, \
@@ -110,10 +118,8 @@ async fn load_clip_context(pool: &PgPool, clip_db_id: i32) -> Option<ClipContext
         clip_db_id as i64
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.and_then(|r| {
+    .await?;
+    Ok(row.and_then(|r| {
         let Ok(id) = i32::try_from(r.id) else {
             return None;
         };
@@ -127,7 +133,7 @@ async fn load_clip_context(pool: &PgPool, clip_db_id: i32) -> Option<ClipContext
             upload_local_path: r.upload_local_path,
             local_file_path: r.local_file_path,
         })
-    })
+    }))
 }
 
 /// Orchestriert die Clip-Enrichment.
@@ -191,14 +197,44 @@ impl ClipEnrichmentPipeline {
     ) -> Result<EnrichmentOutcome, PipelineError> {
         let ctx = load_clip_context(&self.pool, clip_db_id)
             .await
+            .map_err(|error| {
+                tracing::error!(
+                    %error,
+                    clip_db_id,
+                    code = "enrichment_clip_context_read_failed",
+                    "Clip-Kontext für Enrichment konnte nicht gelesen werden"
+                );
+                PipelineError::Persistence
+            })?
             .ok_or(PipelineError::ClipNotFound(clip_db_id))?;
-        let existing = ensure_enrichment_row(&self.pool, clip_db_id).await;
+        let existing = ensure_enrichment_row_checked(&self.pool, clip_db_id)
+            .await
+            .map_err(|error| {
+                tracing::error!(
+                    %error,
+                    clip_db_id,
+                    code = "enrichment_row_ensure_failed",
+                    "Enrichment-Zeile konnte nicht sichergestellt werden"
+                );
+                PipelineError::Persistence
+            })?;
         if existing.status == STATUS_DONE && !force {
             return Ok(Self::done_outcome(
                 clip_db_id,
                 existing.llm_provider,
                 existing.llm_model,
             ));
+        }
+        match invalidate_clip_for_content_change(&self.pool, clip_db_id, "enrichment_changed").await
+        {
+            Ok(_) => {}
+            Err(ContentMutationError::UploadRunning(count)) => {
+                return Err(PipelineError::UploadRunning(count));
+            }
+            Err(ContentMutationError::Db(error)) => {
+                tracing::error!(%error, clip_db_id, "Enrichment-Freigabe konnte nicht invalidiert werden");
+                return Err(PipelineError::Persistence);
+            }
         }
 
         // ---- Transcribe ----
@@ -344,13 +380,21 @@ impl ClipEnrichmentPipeline {
         )
         .await
         {
-            tracing::warn!(
-                %error,
-                clip_db_id,
-                provider = %response.provider,
-                model = %response.model,
-                "Clip-Enrichment: LLM-Ausgabe konnte nicht gespeichert werden"
-            );
+            return match error {
+                ContentMutationError::UploadRunning(count) => {
+                    Err(PipelineError::UploadRunning(count))
+                }
+                ContentMutationError::Db(error) => {
+                    tracing::error!(
+                        %error,
+                        clip_db_id,
+                        provider = %response.provider,
+                        model = %response.model,
+                        "Clip-Enrichment: LLM-Ausgabe konnte nicht gespeichert werden"
+                    );
+                    Err(PipelineError::Persistence)
+                }
+            };
         }
         if let Err(error) = update_enrichment_status(
             &self.pool,
@@ -456,7 +500,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, clip_title TEXT, duration_seconds DOUBLE PRECISION, game_name TEXT, upload_local_path TEXT, local_file_path TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT NOT NULL DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -539,6 +583,23 @@ mod tests {
         assert!(matches!(
             pipe.run(999, None, &llm, false).await,
             Err(PipelineError::ClipNotFound(999))
+        ));
+    }
+
+    #[tokio::test]
+    async fn db_fehler_wird_nicht_als_fehlender_clip_getarnt() {
+        let Some(pool) = make_pool("t_sm_pipe_db_error").await else {
+            return;
+        };
+        sqlx::query("DROP TABLE twitch_clips_social_media")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let pipe = ClipEnrichmentPipeline::new(pool);
+        let llm = MockLlm { response: None };
+        assert!(matches!(
+            pipe.run(1, None, &llm, false).await,
+            Err(PipelineError::Persistence)
         ));
     }
 }
