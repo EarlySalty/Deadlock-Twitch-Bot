@@ -9,6 +9,7 @@ import {
 test('nimmt den Tab aus dem Hash, damit Deeplinks und Reload halten', () => {
   assert.equal(resolveVerwaltungTab('#chat'), 'chat');
   assert.equal(resolveVerwaltungTab('#bot'), 'bot');
+  assert.equal(resolveVerwaltungTab('#werbung'), 'werbung');
 });
 
 test('kommt auch ohne führendes # klar', () => {
@@ -27,6 +28,6 @@ test('fällt bei unbekanntem oder leerem Hash auf den ersten Tab zurück', () =>
 });
 
 test('jede Sektion liegt in genau einem Tab', () => {
-  assert.deepEqual(VERWALTUNG_TAB_IDS, ['konto', 'chat', 'bot', 'overlay']);
+  assert.deepEqual(VERWALTUNG_TAB_IDS, ['konto', 'chat', 'bot', 'overlay', 'werbung']);
   assert.equal(new Set(VERWALTUNG_TAB_IDS).size, VERWALTUNG_TAB_IDS.length);
 });

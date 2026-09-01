@@ -4,6 +4,7 @@ import type {
   InternalHomeData,
 } from '@/api/home';
 import type { AuthStatus } from '@/api/auth';
+import type { AdManagerResponse } from '@/api/adManager';
 import type { CatalogPlan } from '@/types/billing';
 
 const NOW_ISO = '2026-04-22T09:30:00Z';
@@ -456,6 +457,42 @@ const UPLINK_ADMIN_WAITLIST_FIXTURE = {
   ],
 };
 
+const AD_MANAGER_FIXTURE: AdManagerResponse = {
+  settings: {
+    enabled: true,
+    strategy: 'smart',
+    adDurationSeconds: 90,
+    minIntervalMinutes: 45,
+    startupDelayMinutes: 20,
+    quietWindowMinutes: 5,
+    actionLeadSeconds: 60,
+    updatedAt: '2026-04-22T09:24:00Z',
+  },
+  status: {
+    isLive: true,
+    nextAdAt: '2026-04-22T09:42:00Z',
+    lastAdAt: '2026-04-22T08:55:00Z',
+    durationSeconds: 90,
+    prerollFreeSeconds: 1_380,
+    snoozeCount: 2,
+    snoozeRefreshAt: '2026-04-22T10:30:00Z',
+    observedAt: NOW_ISO,
+    workerHealthy: true,
+    workerHeartbeatAt: NOW_ISO,
+    lastAction: {
+      kind: 'snooze',
+      outcome: 'succeeded',
+      detail: 'Nächste Werbung um fünf Minuten verschoben.',
+      at: '2026-04-22T09:27:00Z',
+    },
+    scopes: {
+      read: true,
+      snooze: true,
+      commercial: true,
+    },
+  },
+};
+
 /**
  * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
  * Aufruf geht wie sonst ins Netz.
@@ -466,6 +503,7 @@ const UPLINK_ADMIN_WAITLIST_FIXTURE = {
  * nirgends gibt.
  */
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;

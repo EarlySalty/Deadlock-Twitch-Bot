@@ -19,8 +19,8 @@ pub use clips::HelixClip;
 pub use eventsub::{CreateOutcome, EventSubCreateError, EventSubSubscription};
 pub use moderation::{AddModeratorOutcome, RemoveModeratorOutcome};
 pub use streams::{
-    AdSchedule, BroadcasterSubscriptions, FollowersTotalFetch, HelixChannelInfo, HelixStream,
-    Subscription,
+    AdSchedule, BroadcasterSubscriptions, CommercialOutcome, FollowersTotalFetch, HelixChannelInfo,
+    HelixStream, SnoozeOutcome, Subscription,
 };
 pub use token::{AppToken, AppTokenManager, TokenError};
 pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};

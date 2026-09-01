@@ -513,7 +513,7 @@ mod tests {
             assert!(url.contains(&kodiert), "{scope} fehlt in {url}");
         }
         assert!(url.contains("force_verify=true"));
-        // Der Raid-Reauth-Weg bleibt bei zehn Rechten.
+        // Der Raid-Reauth-Weg nutzt den bewusst erweiterten Satz mit zwölf Rechten.
         let raid = build_authorize_url(
             "cid",
             "https://x.test/callback/twitch",

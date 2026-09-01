@@ -52,6 +52,7 @@
 //!                                   und wie sichtbar, steht dagegen je
 //!                                   Streamer im Dashboard, nicht hier
 
+mod ad_manager_wiring;
 mod auto_raid;
 mod chat_wiring;
 mod chatters_wiring;
@@ -1538,6 +1539,22 @@ async fn main() {
                 }
             });
         }
+    }
+
+    match helix.as_ref().clone() {
+        Some(helix_client) => match build_telemetry_sub_auth(pool.clone(), helix_client.clone()) {
+            Some((token_provider, raid_auth)) => ad_manager_wiring::spawn(
+                &supervisor,
+                pool.clone(),
+                helix_client,
+                token_provider,
+                raid_auth,
+            ),
+            None => tracing::error!(
+                "Werbemanager wurde nicht gestartet: Broadcaster-Tokenzugriff fehlt"
+            ),
+        },
+        None => tracing::error!("Werbemanager wurde nicht gestartet: Helix-Client fehlt"),
     }
 
     // Highlight-Erstellung bleibt nach Grillme Block 15/20 standardmäßig AUS.

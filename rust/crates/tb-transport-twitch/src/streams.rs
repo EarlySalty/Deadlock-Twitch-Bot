@@ -2,7 +2,7 @@
 //! `/streams` (Login-Batches + Kategorie-Pagination), `/search/categories`,
 //! `/channels` und `/channels/followers`. Semantik wie der Python-`TwitchAPI`-Wrapper.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::client::{check_status_and_json, HelixClient, HelixError};
 
@@ -412,6 +412,82 @@ impl HelixClient {
         let body: AdScheduleResponse = check_status_and_json(resp).await?;
         Ok(body.data.into_iter().next())
     }
+
+    /// Verschiebt die nächste geplante Werbung exakt einmal um fünf Minuten.
+    /// Nicht-idempotenter Helix-POST: bewusst ohne `send_with_retry`.
+    pub async fn snooze_next_ad(
+        &self,
+        broadcaster_id: &str,
+        user_token: &str,
+    ) -> Result<SnoozeOutcome, HelixError> {
+        let response = self
+            .post_with_user_token("/channels/ads/schedule/snooze", user_token)
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .send()
+            .await?;
+        let body: SnoozeResponse = check_status_and_json(response).await?;
+        let outcome = body
+            .data
+            .into_iter()
+            .next()
+            .ok_or(HelixError::AmbiguousOutcome {
+                reason: "leere Snooze-Erfolgsantwort",
+            })?;
+        if outcome.snooze_count < 0
+            || !valid_ad_timestamp(outcome.next_ad_at.as_deref())
+            || outcome
+                .snooze_refresh_at
+                .as_deref()
+                .is_some_and(|value| !valid_ad_timestamp(Some(value)))
+        {
+            return Err(HelixError::AmbiguousOutcome {
+                reason: "unvollständige oder unplausible Snooze-Erfolgsantwort",
+            });
+        }
+        Ok(outcome)
+    }
+
+    /// Startet einen Commercial exakt einmal. Ein Timeout ist ein unbekanntes
+    /// Ergebnis und darf vom Aufrufer nicht blind wiederholt werden.
+    pub async fn start_commercial(
+        &self,
+        broadcaster_id: &str,
+        length: i64,
+        user_token: &str,
+    ) -> Result<CommercialOutcome, HelixError> {
+        #[derive(Serialize)]
+        struct Request<'a> {
+            broadcaster_id: &'a str,
+            length: i64,
+        }
+        let response = self
+            .post_with_user_token("/channels/commercial", user_token)
+            .json(&Request {
+                broadcaster_id,
+                length,
+            })
+            .send()
+            .await?;
+        let body: CommercialResponse = check_status_and_json(response).await?;
+        let outcome = body
+            .data
+            .into_iter()
+            .next()
+            .ok_or(HelixError::AmbiguousOutcome {
+                reason: "leere Commercial-Erfolgsantwort",
+            })?;
+        const SUPPORTED_LENGTHS: [i64; 6] = [30, 60, 90, 120, 150, 180];
+        if !SUPPORTED_LENGTHS.contains(&length)
+            || outcome.length != length
+            || outcome.message.trim().is_empty()
+            || outcome.retry_after < 0
+        {
+            return Err(HelixError::AmbiguousOutcome {
+                reason: "unvollständige oder unplausible Commercial-Erfolgsantwort",
+            });
+        }
+        Ok(outcome)
+    }
 }
 
 /// Ein Archiv-VOD (Teilmenge der Helix-`/videos`-Felder).
@@ -466,19 +542,58 @@ pub struct BroadcasterSubscriptions {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AdSchedule {
     /// Sekunden bis zur nächsten geplanten Werbung.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
     pub duration: i64,
     #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub next_ad_at: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub last_ad_at: Option<String>,
     /// Verbleibende Preroll-freie Zeit in Sekunden.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
     pub preroll_free_time: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
     pub snooze_count: i64,
     #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub snooze_refresh_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct SnoozeOutcome {
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
+    pub snooze_count: i64,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub snooze_refresh_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub next_ad_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct CommercialOutcome {
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
+    pub length: i64,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default, deserialize_with = "deserialize_i64_string_or_number")]
+    pub retry_after: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnoozeResponse {
+    #[serde(default)]
+    data: Vec<SnoozeOutcome>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommercialResponse {
+    #[serde(default)]
+    data: Vec<CommercialOutcome>,
+}
+
+fn valid_ad_timestamp(value: Option<&str>) -> bool {
+    value
+        .and_then(normalize_ad_time)
+        .and_then(|normalized| chrono::DateTime::parse_from_rfc3339(&normalized).ok())
+        .is_some()
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,6 +623,22 @@ where
         Some(Value::Number(n)) => Some(n.to_string()),
         Some(other) => Some(other.to_string()),
     })
+}
+
+fn deserialize_i64_string_or_number<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    use serde_json::Value;
+    match Option::<Value>::deserialize(deserializer)? {
+        None | Some(Value::Null) => Ok(0),
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .ok_or_else(|| D::Error::custom("ungültige Ganzzahl")),
+        Some(Value::String(value)) => value.trim().parse::<i64>().map_err(D::Error::custom),
+        Some(_) => Err(D::Error::custom("Ganzzahl oder Zahlenstring erwartet")),
+    }
 }
 
 /// Normalisiert ein Ad-Schedule-Zeitfeld auf ISO-8601 (UTC), wie der Python-Poller

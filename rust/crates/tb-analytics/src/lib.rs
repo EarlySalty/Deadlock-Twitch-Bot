@@ -5,6 +5,7 @@
 // Für große json!-Antworten (chat-analytics ~40 Felder + verschachteltes dataQuality).
 #![recursion_limit = "256"]
 
+pub mod ad_manager;
 pub mod admin_affiliate;
 pub mod admin_billing;
 pub mod affiliate_claim_window;

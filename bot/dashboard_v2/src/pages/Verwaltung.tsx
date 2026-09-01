@@ -6,6 +6,7 @@ import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
 import { ClipCommandSection } from '@/components/verwaltung/ClipCommandSection';
 import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
@@ -18,6 +19,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  FlaskConical,
   Gamepad2,
   Loader2,
   MessageSquare,
@@ -48,13 +50,6 @@ export function VerwaltungPage() {
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
-
-  const selectTab = (next: VerwaltungTabId) => {
-    setTab(next);
-    if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', `#${next}`);
-    }
-  };
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['internal-home', null],
@@ -397,11 +392,14 @@ export function VerwaltungPage() {
     </motion.section>
   );
 
+  const werbungTab = <AdManagerSection reconnectUrl={reconnectUrl} />;
+
   const tabs: VerwaltungTabDef[] = [
     { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },
     { id: 'chat', label: 'Chat-Befehle', icon: Terminal, render: () => chatTab },
     { id: 'bot', label: 'Bot & Schutz', icon: Bot, render: () => botTab },
     { id: 'overlay', label: 'Overlay', icon: Monitor, render: () => overlayTab },
+    { id: 'werbung', label: 'Werbung (Experimentell)', icon: FlaskConical, render: () => werbungTab },
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0];
 
@@ -469,7 +467,7 @@ export function VerwaltungPage() {
                 verwalten
               </h1>
               <p className="max-w-2xl text-sm text-text-secondary md:text-base">
-                Verbindungen, Chat-Befehle, Bot-Verhalten und Overlay — nach Bereichen getrennt.
+                Verbindungen, Chat-Befehle, Bot-Verhalten, Overlay und Werbung — nach Bereichen getrennt.
               </p>
             </div>
             <a
@@ -483,23 +481,22 @@ export function VerwaltungPage() {
         </Rise>
 
         {/* Bereichswechsel. Sticky, damit er auch nach langem Scrollen erreichbar bleibt. */}
-        <nav className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
+        <nav aria-label="Verwaltungsbereiche" className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
           {tabs.map((item) => {
             const Icon = item.icon;
             const isActive = item.id === activeTab.id;
             return (
-              <button
+              <a
                 key={item.id}
-                type="button"
-                onClick={() => selectTab(item.id)}
+                href={`#${item.id}`}
                 aria-current={isActive ? 'page' : undefined}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors ${
+                className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors ${
                   isActive ? 'bg-primary/85 text-bg' : 'text-text-secondary hover:text-white'
                 }`}
               >
                 <Icon className="h-4 w-4" />
                 {item.label}
-              </button>
+              </a>
             );
           })}
         </nav>

@@ -162,7 +162,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
     use handlers::scam_guard_enforce;
     use handlers::{
-        ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
+        ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
@@ -714,6 +714,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/ads-schedule",
             get(ads_schedule::ads_schedule_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/ad-manager",
+            get(ad_manager::get_handler).post(ad_manager::save_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/ad-manager/action",
+            post(ad_manager::action_handler),
         )
         .route(
             "/twitch/api/v2/retention-curve",

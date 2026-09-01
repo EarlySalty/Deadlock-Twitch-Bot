@@ -19,7 +19,7 @@ pub const AUTO_SCOPE_PROFILE: &str = "auto";
 ///
 /// Bewusst ein eigenes Profil statt einer Erweiterung von
 /// [`FULL_STREAMER_SCOPES`]: die Re-Autorisierung über Discord läuft mit
-/// `dashboard_reauth` und soll weiterhin genau zehn Rechte anfragen. Wer den
+/// `dashboard_reauth` und soll weiterhin nur die bewusst erweiterten Rechte anfragen. Wer den
 /// Uplink verbindet, sagt bewusst Ja zu mehr.
 pub const UPLINK_SCOPE_PROFILE: &str = "uplink";
 
@@ -44,6 +44,8 @@ pub const DASHBOARD_UPGRADE_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    "channel:manage:ads",
+    "channel:edit:commercial",
 ];
 
 /// Vollständiger Satz = Basis + Dashboard-Upgrade
@@ -59,6 +61,8 @@ pub const FULL_STREAMER_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    "channel:manage:ads",
+    "channel:edit:commercial",
 ];
 
 /// Kritische Basis-Scopes, deren Fehlen den Bot-Betrieb verhindert
@@ -98,6 +102,8 @@ pub const UPLINK_SCOPES: &[&str] = &[
     "channel:read:subscriptions",
     "channel:read:hype_train",
     "channel:manage:broadcast",
+    "channel:manage:ads",
+    "channel:edit:commercial",
     "user:read:chat",
     "user:write:chat",
     "channel:read:stream_key",
@@ -306,9 +312,10 @@ mod tests {
                 );
             }
         }
-        // Und die Zahlen bleiben, wo sie waren: sieben und zehn.
+        // Das Basisprofil bleibt absichtlich klein; Schreibrechte gibt es nur
+        // nach der bewussten Dashboard-Re-Autorisierung.
         assert_eq!(scopes_for_profile("base").len(), 7);
-        assert_eq!(scopes_for_profile("dashboard_reauth").len(), 10);
+        assert_eq!(scopes_for_profile("dashboard_reauth").len(), 12);
         assert_eq!(scopes_for_profile("auto").len(), 7);
     }
 

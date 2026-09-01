@@ -58,6 +58,11 @@ pub enum HelixError {
     Http(#[from] reqwest::Error),
     #[error("Helix-Status {status}")]
     Status { status: u16 },
+    /// Twitch bestätigte den nicht-idempotenten POST mit 2xx, lieferte aber
+    /// kein auswertbares Ergebnis. Die Aktion könnte bereits erfolgt sein und
+    /// darf deshalb nicht wiederholt werden.
+    #[error("Helix-Ergebnis der nicht-idempotenten Aktion ist unbekannt: {reason}")]
+    AmbiguousOutcome { reason: &'static str },
     /// 403 auf `/chat/chatters` — der angefragte Account ist kein Moderator
     /// (bzw. der Token hat `moderator:read:chatters` nicht). Eigener Zweig,
     /// damit der Poller einen Mod-Self-Heal anstoßen kann (Block-6).

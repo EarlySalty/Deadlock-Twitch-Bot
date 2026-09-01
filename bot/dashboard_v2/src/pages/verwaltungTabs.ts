@@ -3,7 +3,7 @@
  * Fallback ohne DOM testen lassen — das JSX pro Tab liegt in Verwaltung.tsx.
  */
 
-export const VERWALTUNG_TAB_IDS = ['konto', 'chat', 'bot', 'overlay'] as const;
+export const VERWALTUNG_TAB_IDS = ['konto', 'chat', 'bot', 'overlay', 'werbung'] as const;
 
 export type VerwaltungTabId = (typeof VERWALTUNG_TAB_IDS)[number];
 

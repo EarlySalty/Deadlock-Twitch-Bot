@@ -395,6 +395,63 @@ twitch_ad_break_events|is_automatic|boolean|YES|false
 twitch_ad_break_events|session_id|bigint|YES|
 twitch_ad_break_events|started_at|timestamp with time zone|NO|now()
 twitch_ad_break_events|twitch_user_id|text|NO|
+twitch_ad_manager_actions|action|text|NO|
+twitch_ad_manager_actions|attempt_count|integer|NO|0
+twitch_ad_manager_actions|completed_at|timestamp with time zone|YES|
+twitch_ad_manager_actions|completion_token|text|YES|
+twitch_ad_manager_actions|created_at|timestamp with time zone|NO|now()
+twitch_ad_manager_actions|due_at|timestamp with time zone|NO|now()
+twitch_ad_manager_actions|duration_seconds|integer|YES|
+twitch_ad_manager_actions|id|bigint|NO|nextval('twitch_ad_manager_actions_id_seq'::regclass)
+twitch_ad_manager_actions|idempotency_key|text|NO|
+twitch_ad_manager_actions|lease_token|text|YES|
+twitch_ad_manager_actions|lease_until|timestamp with time zone|YES|
+twitch_ad_manager_actions|marked_unknown_at|timestamp with time zone|YES|
+twitch_ad_manager_actions|outcome_detail|text|YES|
+twitch_ad_manager_actions|preflight_last_ad_at|timestamp with time zone|YES|
+twitch_ad_manager_actions|preflight_next_ad_at|timestamp with time zone|YES|
+twitch_ad_manager_actions|preflight_snooze_count|integer|YES|
+twitch_ad_manager_actions|requested_by_twitch_user_id|text|YES|
+twitch_ad_manager_actions|retry_after_seconds|integer|YES|
+twitch_ad_manager_actions|source|text|NO|'manual'::text
+twitch_ad_manager_actions|status|text|NO|'pending'::text
+twitch_ad_manager_actions|twitch_login|text|NO|
+twitch_ad_manager_actions|twitch_user_id|text|NO|
+twitch_ad_manager_actions|updated_at|timestamp with time zone|NO|now()
+twitch_ad_manager_settings|action_lead_seconds|integer|NO|60
+twitch_ad_manager_settings|ad_duration_seconds|integer|NO|90
+twitch_ad_manager_settings|created_at|timestamp with time zone|NO|now()
+twitch_ad_manager_settings|enabled|boolean|NO|false
+twitch_ad_manager_settings|min_interval_minutes|integer|NO|30
+twitch_ad_manager_settings|quiet_window_minutes|integer|NO|5
+twitch_ad_manager_settings|startup_delay_minutes|integer|NO|15
+twitch_ad_manager_settings|strategy|text|NO|'monitor'::text
+twitch_ad_manager_settings|twitch_login|text|NO|
+twitch_ad_manager_settings|twitch_user_id|text|NO|
+twitch_ad_manager_settings|updated_at|timestamp with time zone|NO|now()
+twitch_ad_manager_settings|worker_lease_token|text|YES|
+twitch_ad_manager_settings|worker_lease_until|timestamp with time zone|YES|
+twitch_ad_manager_state|active_session_id|bigint|YES|
+twitch_ad_manager_state|duration_seconds|integer|YES|
+twitch_ad_manager_state|is_live|boolean|NO|false
+twitch_ad_manager_state|last_action_at|timestamp with time zone|YES|
+twitch_ad_manager_state|last_action_detail|text|YES|
+twitch_ad_manager_state|last_action_kind|text|YES|
+twitch_ad_manager_state|last_action_outcome|text|YES|
+twitch_ad_manager_state|last_ad_at|timestamp with time zone|YES|
+twitch_ad_manager_state|last_decision|text|YES|
+twitch_ad_manager_state|last_decision_reason|text|YES|
+twitch_ad_manager_state|last_history_at|timestamp with time zone|YES|
+twitch_ad_manager_state|next_ad_at|timestamp with time zone|YES|
+twitch_ad_manager_state|observed_at|timestamp with time zone|YES|
+twitch_ad_manager_state|preroll_free_seconds|integer|YES|
+twitch_ad_manager_state|snooze_count|integer|YES|
+twitch_ad_manager_state|snooze_refresh_at|timestamp with time zone|YES|
+twitch_ad_manager_state|stream_started_at|timestamp with time zone|YES|
+twitch_ad_manager_state|twitch_login|text|NO|
+twitch_ad_manager_state|twitch_user_id|text|NO|
+twitch_ad_manager_state|updated_at|timestamp with time zone|NO|now()
+twitch_ad_manager_state|worker_heartbeat_at|timestamp with time zone|YES|
 twitch_admin_roles|granted_at|timestamp with time zone|NO|now()
 twitch_admin_roles|role|text|NO|
 twitch_admin_roles|twitch_user_id|text|NO|
@@ -1220,6 +1277,7 @@ twitch_raw_chat_ingest_health|last_raw_chat_error|text|YES|
 twitch_raw_chat_ingest_health|last_raw_chat_insert_error_at|text|YES|
 twitch_raw_chat_ingest_health|last_raw_chat_insert_ok_at|text|YES|
 twitch_raw_chat_ingest_health|last_raw_chat_message_at|text|YES|
+twitch_raw_chat_ingest_health|last_subscription_ok_at|timestamp with time zone|YES|
 twitch_raw_chat_ingest_health|raw_chat_lag_seconds|integer|YES|
 twitch_raw_chat_ingest_health|streamer_login|text|NO|
 twitch_raw_chat_ingest_health|twitch_user_id|text|YES|

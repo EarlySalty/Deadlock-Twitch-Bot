@@ -1151,7 +1151,13 @@ async fn reconcile_chat_subscriptions(
             .ensure_chat_subscriptions(broadcaster_id, bot_user_id, login)
             .await
         {
-            ok += 1;
+            match mark_chat_subscription_ok(pool, broadcaster_id, login).await {
+                Ok(()) => ok += 1,
+                Err(error) => {
+                    failed += 1;
+                    tracing::warn!(%error, %login, twitch_user_id=%broadcaster_id, "chat-sub-reconcile: Erfolgs-Heartbeat konnte nicht gespeichert werden");
+                }
+            }
         } else if manager.chat_subscriptions_permanently_blocked(broadcaster_id) {
             blocked += 1;
         } else {
@@ -1243,6 +1249,19 @@ async fn reconcile_chat_subscriptions(
         mod_telemetry,
         "Bot-Token-Sub-Reconcile abgeschlossen"
     );
+}
+
+async fn mark_chat_subscription_ok(
+    pool: &PgPool,
+    broadcaster_id: &str,
+    login: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO twitch_raw_chat_ingest_health(streamer_login,twitch_user_id,last_subscription_ok_at,updated_at) VALUES($1,$2,NOW(),NOW()::text) ON CONFLICT(streamer_login) DO UPDATE SET twitch_user_id=EXCLUDED.twitch_user_id,last_subscription_ok_at=NOW(),updated_at=NOW()::text")
+        .bind(login)
+        .bind(broadcaster_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2904,11 +2923,13 @@ mod chat_notification_tests {
             )",
             "CREATE TABLE twitch_raw_chat_ingest_health (
                 streamer_login TEXT PRIMARY KEY,
+                twitch_user_id TEXT,
                 last_raw_chat_message_at TEXT,
                 last_raw_chat_insert_ok_at TEXT,
                 last_raw_chat_insert_error_at TEXT,
                 last_raw_chat_error TEXT,
                 raw_chat_lag_seconds INTEGER,
+                last_subscription_ok_at TIMESTAMPTZ,
                 updated_at TEXT
             )",
         ] {
