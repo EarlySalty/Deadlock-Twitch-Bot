@@ -10,12 +10,14 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use futures_util::FutureExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{
     collections::HashMap,
     future::Future,
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -59,35 +61,7 @@ struct RotationZustand {
     schluessel: Option<uuid::Uuid>,
     terminal: Option<Instant>,
     antwort: Option<Value>,
-}
-
-struct RotationAbschluss<'a> {
-    zustand: &'a mut RotationZustand,
-    jetzt: Arc<dyn Fn() -> Instant + Send + Sync>,
-    abgeschlossen: bool,
-}
-
-impl RotationAbschluss<'_> {
-    fn abschliessen(&mut self, ergebnis: &Result<Value, Response>) {
-        self.zustand.terminal = Some((self.jetzt)());
-        if let Ok(antwort) = ergebnis {
-            self.zustand.antwort = Some(antwort.clone());
-        }
-        self.abgeschlossen = true;
-    }
-}
-
-impl Drop for RotationAbschluss<'_> {
-    fn drop(&mut self) {
-        if self.abgeschlossen {
-            return;
-        }
-        // Ein abgebrochener HTTP-Request droppt die äußere Handler-Future an
-        // jedem Await. Der unbekannte Ausgang bleibt deshalb für die normale
-        // Sperrfrist fail-closed, aber niemals für die gesamte Prozesslaufzeit.
-        self.zustand.terminal = Some((self.jetzt)());
-        self.zustand.antwort = None;
-    }
+    abgeschlossen: Arc<tokio::sync::Notify>,
 }
 
 impl Default for IngestRotationCoordinator {
@@ -124,8 +98,8 @@ impl IngestRotationCoordinator {
         operation: F,
     ) -> Result<Value, Response>
     where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Value, Response>>,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Value, Response>> + Send + 'static,
     {
         let sperre = self.fuer_streamer(streamer_id);
         let mut zustand = sperre.lock().await;
@@ -151,20 +125,76 @@ impl IngestRotationCoordinator {
             return Err(rotation_gesperrt_antwort());
         }
 
-        // Vor dem externen Schreibaufruf markieren. Bleibt dessen Ausgang
-        // unklar, darf weder derselbe noch ein zweiter Tab sofort erneut
-        // rotieren; ein lesender GET liefert stattdessen den aktuellen Stand.
+        // Vor dem externen Schreibaufruf markieren. Der eigentliche Aufruf
+        // lebt in einem eigenen Task weiter, falls Browser oder Axum die
+        // wartende Handler-Future abbrechen. Sonst koennte ein direkt danach
+        // gestarteter GET noch den alten Key sehen und die Oberflaeche
+        // entsperren, waehrend das Relay den neuen Key erst danach festschreibt.
         zustand.schluessel = Some(idempotenz);
         zustand.terminal = None;
         zustand.antwort = None;
-        let mut abschluss = RotationAbschluss {
-            zustand: &mut zustand,
-            jetzt: Arc::clone(&self.jetzt),
-            abgeschlossen: false,
-        };
-        let ergebnis = operation().await;
-        abschluss.abschliessen(&ergebnis);
-        ergebnis
+        let abgeschlossen = Arc::clone(&zustand.abgeschlossen);
+        drop(zustand);
+
+        let task_sperre = Arc::clone(&sperre);
+        let task_jetzt = Arc::clone(&self.jetzt);
+        let (ergebnis_tx, ergebnis_rx) = tokio::sync::oneshot::channel();
+        let _task = tokio::spawn(async move {
+            // Auch ein Panic beim Erzeugen der Operation-Future muss den
+            // Zustand terminal machen und wartende GETs wecken.
+            let ergebnis = match AssertUnwindSafe(async move { operation().await })
+                .catch_unwind()
+                .await
+            {
+                Ok(ergebnis) => ergebnis,
+                Err(_) => {
+                    tracing::error!(streamer_id, "Uplink-Schlüsselrotation ist abgestürzt");
+                    Err(rotation_intern_fehler_antwort())
+                }
+            };
+            {
+                let mut zustand = task_sperre.lock().await;
+                zustand.terminal = Some((task_jetzt)());
+                if let Ok(antwort) = &ergebnis {
+                    zustand.antwort = Some(antwort.clone());
+                }
+            }
+            abgeschlossen.notify_waiters();
+            if ergebnis_tx.send(ergebnis).is_err() {
+                // Erwarteter Weg, wenn der Browser die wartende Anfrage
+                // geschlossen hat. Der terminale Zustand oben bleibt erhalten.
+                tracing::debug!(
+                    streamer_id,
+                    "Rotationsantwort hatte keinen wartenden Client mehr"
+                );
+            }
+        });
+
+        ergebnis_rx
+            .await
+            .unwrap_or_else(|_| Err(rotation_intern_fehler_antwort()))
+    }
+
+    /// Ein GET, der nach einer Rotation beginnt, darf den Relay-Stand erst
+    /// lesen, wenn der bereits gestartete Schreibaufruf terminal ist. Das ist
+    /// die Barriere zwischen einem abgebrochenen Browser-POST und dem
+    /// anschliessenden Sicherheitsabruf.
+    async fn vor_lesen_warten(&self, streamer_id: i64) {
+        let sperre = self.fuer_streamer(streamer_id);
+        loop {
+            let zustand = sperre.lock().await;
+            if zustand.schluessel.is_none() || zustand.terminal.is_some() {
+                return;
+            }
+            // `notify_waiters` speichert kein Permit. Deshalb die Future noch
+            // unter derselben Zustandssperre aktivieren, die der Schreibtask
+            // vor seinem Notify braucht; so gibt es keine verlorene Weckkante.
+            let mut benachrichtigung =
+                Box::pin(Arc::clone(&zustand.abgeschlossen).notified_owned());
+            benachrichtigung.as_mut().enable();
+            drop(zustand);
+            benachrichtigung.await;
+        }
     }
 }
 
@@ -174,6 +204,14 @@ fn rotation_gesperrt_antwort() -> Response {
         Json(json!({
             "error": "Der Stream-Schlüssel wurde gerade rotiert. Lade die aktuelle OBS-Adresse neu."
         })),
+    )
+        .into_response()
+}
+
+fn rotation_intern_fehler_antwort() -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({ "error": "Die Schlüsselrotation konnte nicht sicher abgeschlossen werden." })),
     )
         .into_response()
 }
@@ -527,6 +565,7 @@ pub async fn me_handler(
 ) -> Result<Response, Response> {
     let config = config.map(|Extension(c)| c);
     let id = partner_id(&pool, &auth).await?;
+    ingest_rotation_coordinator().vor_lesen_warten(id).await;
     let mut wert = relay_json(
         reqwest::Method::GET,
         &format!("/v1/me?streamer_id={id}"),
@@ -677,7 +716,7 @@ pub async fn ingest_key_rotate_handler(
     let idempotenz = idempotenz_schluessel(&headers)?;
     let pfad = ingest_key_rotate_pfad(id);
     let antwort = ingest_rotation_coordinator()
-        .ausfuehren(id, idempotenz, || async {
+        .ausfuehren(id, idempotenz, move || async move {
             let wert = relay_json(reqwest::Method::POST, &pfad, None).await?;
             ingest_key_rotate_antwort(wert).ok_or_else(|| {
                 tracing::warn!(
@@ -701,10 +740,73 @@ fn ingest_key_rotate_pfad(streamer_id: i64) -> String {
 
 fn ingest_key_rotate_antwort(wert: Value) -> Option<Value> {
     let srt_hint = wert.get("srt_hint")?.as_str()?.trim();
-    if srt_hint.is_empty() {
+    if !vollstaendige_srt_obs_adresse(srt_hint) {
         return None;
     }
     Some(json!({ "srt_hint": srt_hint }))
+}
+
+/// Die Form, die rs-relay mit `srt::caller_url` fuer OBS erzeugt. Nur ein
+/// `srt://`-Host ist keine Zugangsdaten-Antwort: der geheime Stream-Key und
+/// die bei jeder Rotation ebenfalls erneuerte Passphrase muessen enthalten
+/// sein. Es werden ausschliesslich Dummy-Werte in Tests verwendet.
+fn vollstaendige_srt_obs_adresse(wert: &str) -> bool {
+    if wert.is_empty() || wert.bytes().any(|zeichen| zeichen.is_ascii_whitespace()) {
+        return false;
+    }
+    let Ok(adresse) = url::Url::parse(wert) else {
+        return false;
+    };
+    if adresse.scheme() != "srt"
+        || adresse.host_str().is_none()
+        || !adresse.port().is_some_and(|port| port > 0)
+        || !adresse.username().is_empty()
+        || adresse.password().is_some()
+        || adresse.fragment().is_some()
+        || !matches!(adresse.path(), "" | "/")
+    {
+        return false;
+    }
+
+    let mut mode = None;
+    let mut latency = None;
+    let mut streamid = None;
+    let mut passphrase = None;
+    let mut pbkeylen = None;
+    for (name, inhalt) in adresse.query_pairs() {
+        let ziel = match name.as_ref() {
+            "mode" => &mut mode,
+            "latency" => &mut latency,
+            "streamid" => &mut streamid,
+            "passphrase" => &mut passphrase,
+            "pbkeylen" => &mut pbkeylen,
+            _ => return false,
+        };
+        if ziel.replace(inhalt.into_owned()).is_some() {
+            return false;
+        }
+    }
+
+    mode.as_deref() == Some("caller")
+        && latency.as_deref().is_some_and(|latency| {
+            !latency.is_empty()
+                && !latency.starts_with('0')
+                && latency.bytes().all(|zeichen| zeichen.is_ascii_digit())
+        })
+        && streamid.as_deref().is_some_and(|key| {
+            key.len() == 36
+                && key.starts_with("rsr_")
+                && key[4..]
+                    .bytes()
+                    .all(|zeichen| zeichen.is_ascii_digit() || (b'a'..=b'f').contains(&zeichen))
+        })
+        && passphrase.as_deref().is_some_and(|passphrase| {
+            passphrase.len() == 32
+                && passphrase
+                    .bytes()
+                    .all(|zeichen| zeichen.is_ascii_digit() || (b'a'..=b'f').contains(&zeichen))
+        })
+        && pbkeylen.as_deref() == Some("32")
 }
 
 #[derive(Deserialize)]
@@ -1783,6 +1885,8 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
 
+    const DUMMY_SRT_OBS_ADRESSE: &str = "srt://relay.invalid:8899?mode=caller&latency=4000&streamid=rsr_0123456789abcdef0123456789abcdef&passphrase=fedcba9876543210fedcba9876543210&pbkeylen=32";
+
     #[test]
     fn bekannte_profile_loesen_auf() {
         assert_eq!(profil_aufloesen("1080p60"), Some((1920, 1080, 60, 6000)));
@@ -2338,17 +2442,25 @@ mod tests {
         let antwort = ingest_key_rotate_antwort(json!({
             "streamer_id": 4242,
             "ingest_key": "darf-nicht-separat-zum-browser",
-            "srt_hint": "srt://relay.invalid:8899?streamid=dummy"
+            "srt_hint": DUMMY_SRT_OBS_ADRESSE
         }))
         .expect("vollstaendige Relay-Antwort");
-        assert_eq!(
-            antwort,
-            json!({ "srt_hint": "srt://relay.invalid:8899?streamid=dummy" })
-        );
+        assert_eq!(antwort, json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }));
         assert!(antwort.get("ingest_key").is_none());
         assert!(antwort.get("streamer_id").is_none());
 
         assert!(ingest_key_rotate_antwort(json!({ "srt_hint": "" })).is_none());
+        assert!(
+            ingest_key_rotate_antwort(json!({ "srt_hint": "srt://example.invalid" })).is_none()
+        );
+        assert!(
+            ingest_key_rotate_antwort(json!({ "srt_hint": "srt://example.invalid:8899" }))
+                .is_none()
+        );
+        assert!(ingest_key_rotate_antwort(json!({
+            "srt_hint": "srt://example.invalid:8899?mode=caller&latency=4000"
+        }))
+        .is_none());
         assert!(ingest_key_rotate_antwort(json!({})).is_none());
     }
 
@@ -2396,6 +2508,7 @@ mod tests {
 
         let erster_start = Arc::clone(&start);
         let erster_aufrufe = Arc::clone(&aufrufe);
+        let zweiter_aufrufe = Arc::clone(&aufrufe);
         let erster = coordinator.ausfuehren(42, erster_key, move || async move {
             erster_aufrufe.fetch_add(1, Ordering::SeqCst);
             erster_start.wait().await;
@@ -2404,8 +2517,8 @@ mod tests {
         let zweiter = async {
             start.wait().await;
             coordinator
-                .ausfuehren(42, zweiter_key, || async {
-                    aufrufe.fetch_add(1, Ordering::SeqCst);
+                .ausfuehren(42, zweiter_key, move || async move {
+                    zweiter_aufrufe.fetch_add(1, Ordering::SeqCst);
                     Ok(json!({ "srt_hint": "srt://relay.invalid/veraltet" }))
                 })
                 .await
@@ -2428,19 +2541,21 @@ mod tests {
             eintraege: Arc::new(Mutex::new(HashMap::new())),
             jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
         };
-        let aufrufe = AtomicUsize::new(0);
+        let aufrufe = Arc::new(AtomicUsize::new(0));
         let key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let erste_aufrufe = Arc::clone(&aufrufe);
         let erste = coordinator
-            .ausfuehren(42, key, || async {
-                aufrufe.fetch_add(1, Ordering::SeqCst);
+            .ausfuehren(42, key, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
             })
             .await
             .unwrap();
         *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
+        let zweite_aufrufe = Arc::clone(&aufrufe);
         let zweite = coordinator
-            .ausfuehren(42, key, || async {
-                aufrufe.fetch_add(1, Ordering::SeqCst);
+            .ausfuehren(42, key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
             })
             .await
@@ -2461,22 +2576,24 @@ mod tests {
             eintraege: Arc::new(Mutex::new(HashMap::new())),
             jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
         };
-        let aufrufe = AtomicUsize::new(0);
+        let aufrufe = Arc::new(AtomicUsize::new(0));
         let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
         let lange_uhr = Arc::clone(&uhr);
+        let erste_aufrufe = Arc::clone(&aufrufe);
 
         coordinator
-            .ausfuehren(42, erster_key, || async {
-                aufrufe.fetch_add(1, Ordering::SeqCst);
+            .ausfuehren(42, erster_key, move || async move {
+                erste_aufrufe.fetch_add(1, Ordering::SeqCst);
                 *lange_uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
             })
             .await
             .unwrap();
+        let zweite_aufrufe = Arc::clone(&aufrufe);
         let zweiter = coordinator
-            .ausfuehren(42, zweiter_key, || async {
-                aufrufe.fetch_add(1, Ordering::SeqCst);
+            .ausfuehren(42, zweiter_key, move || async move {
+                zweite_aufrufe.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
             })
             .await;
@@ -2486,7 +2603,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abgebrochener_schreibaufruf_sperrt_fail_closed_aber_nicht_fuer_immer() {
+    async fn get_wartet_nach_post_abbruch_bis_der_key_nicht_mehr_spaeter_wirksam_werden_kann() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let basis = Instant::now();
@@ -2497,18 +2614,23 @@ mod tests {
             jetzt: Arc::new(move || *test_uhr.lock().unwrap()),
         };
         let aufrufe = Arc::new(AtomicUsize::new(0));
+        let aktueller_key = Arc::new(Mutex::new("alter-dummy-key".to_string()));
         let erster_key = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let zweiter_key = uuid::Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
         let (gestartet_tx, gestartet_rx) = tokio::sync::oneshot::channel();
+        let (freigabe_tx, freigabe_rx) = tokio::sync::oneshot::channel();
         let erster_coordinator = coordinator.clone();
         let erster_aufrufe = Arc::clone(&aufrufe);
+        let schreib_key = Arc::clone(&aktueller_key);
 
         let erster = tokio::spawn(async move {
             erster_coordinator
-                .ausfuehren(42, erster_key, || async move {
+                .ausfuehren(42, erster_key, move || async move {
                     erster_aufrufe.fetch_add(1, Ordering::SeqCst);
                     gestartet_tx.send(()).expect("Startbarriere melden");
-                    std::future::pending::<Result<Value, Response>>().await
+                    freigabe_rx.await.expect("Schreibabschluss freigeben");
+                    *schreib_key.lock().unwrap() = "neuer-dummy-key".to_string();
+                    Ok(json!({ "srt_hint": DUMMY_SRT_OBS_ADRESSE }))
                 })
                 .await
         });
@@ -2516,9 +2638,19 @@ mod tests {
         erster.abort();
         assert!(erster.await.unwrap_err().is_cancelled());
 
+        // Der Sicherheits-GET ist bereits gestartet, darf aber den alten
+        // Stand nicht lesen. Direktes Pollen statt Sleep/Yield macht genau
+        // diese Kante deterministisch.
+        let mut lesen = Box::pin(coordinator.vor_lesen_warten(42));
+        assert!(matches!(
+            futures_util::poll!(lesen.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(*aktueller_key.lock().unwrap(), "alter-dummy-key");
+
         let zweiter_aufrufe = Arc::clone(&aufrufe);
         let zweiter = coordinator
-            .ausfuehren(42, zweiter_key, || async move {
+            .ausfuehren(42, zweiter_key, move || async move {
                 zweiter_aufrufe.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/falsch" }))
             })
@@ -2526,15 +2658,19 @@ mod tests {
         assert_eq!(zweiter.unwrap_err().status(), StatusCode::CONFLICT);
         assert_eq!(aufrufe.load(Ordering::SeqCst), 1);
 
+        freigabe_tx.send(()).expect("Schreibabschluss ausloesen");
+        lesen.await;
+        assert_eq!(*aktueller_key.lock().unwrap(), "neuer-dummy-key");
+
         *uhr.lock().unwrap() = basis + ROTATIONS_SPERRE + Duration::from_secs(1);
         let dritter_aufrufe = Arc::clone(&aufrufe);
         let dritter = coordinator
-            .ausfuehren(42, zweiter_key, || async move {
+            .ausfuehren(42, zweiter_key, move || async move {
                 dritter_aufrufe.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "srt_hint": "srt://relay.invalid/neu" }))
             })
             .await
-            .expect("nach terminalem Abbruch und Sperrfrist wieder freigeben");
+            .expect("nach terminalem Schreibabschluss und Sperrfrist wieder freigeben");
         assert_eq!(dritter["srt_hint"], "srt://relay.invalid/neu");
         assert_eq!(aufrufe.load(Ordering::SeqCst), 2);
     }

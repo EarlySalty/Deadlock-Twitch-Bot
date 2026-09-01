@@ -8,12 +8,14 @@ const globalState = globalThis as typeof globalThis & {
 };
 const vorherigesFenster = globalState.window;
 globalState.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
-const { rotateUplinkIngestKey } = await import('../src/api/uplink');
+const { istVollstaendigeSrtObsAdresse, rotateUplinkIngestKey } = await import('../src/api/uplink');
 globalState.window = vorherigesFenster;
 
 const DASHBOARD_ROOT = join(import.meta.dirname, '..');
 const UPLINK_PAGE = readFileSync(join(DASHBOARD_ROOT, 'src', 'pages', 'Uplink.tsx'), 'utf8');
 const UPLINK_API = readFileSync(join(DASHBOARD_ROOT, 'src', 'api', 'uplink.ts'), 'utf8');
+const DUMMY_SRT_OBS_ADRESSE =
+  'srt://example.invalid:8899?mode=caller&latency=4000&streamid=rsr_0123456789abcdef0123456789abcdef&passphrase=fedcba9876543210fedcba9876543210&pbkeylen=32';
 
 test('Schlüsselrotation sendet Cookie, CSRF und genau einen leeren JSON-Rumpf', async () => {
   const vorher = globalThis.fetch;
@@ -22,14 +24,14 @@ test('Schlüsselrotation sendet Cookie, CSRF und genau einen leeren JSON-Rumpf',
   globalThis.fetch = async (input, init) => {
     aufrufe += 1;
     aufruf = { input, init };
-    return new Response(JSON.stringify({ srt_hint: 'srt://example.invalid:8899?streamid=dummy' }), {
+    return new Response(JSON.stringify({ srt_hint: DUMMY_SRT_OBS_ADRESSE }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   };
   try {
     const antwort = await rotateUplinkIngestKey('csrf-dummy', '11111111-1111-4111-8111-111111111111');
-    assert.equal(antwort.srt_hint, 'srt://example.invalid:8899?streamid=dummy');
+    assert.equal(antwort.srt_hint, DUMMY_SRT_OBS_ADRESSE);
     assert.equal(aufrufe, 1);
     assert.equal(String(aufruf?.input), '/twitch/api/v2/uplink/key/rotate');
     assert.equal(aufruf?.init?.method, 'POST');
@@ -79,6 +81,34 @@ test('Schlüsselrotation akzeptiert nur eine vollständige SRT-Adresse', async (
   } finally {
     globalThis.fetch = vorher;
   }
+});
+
+test('Schlüsselrotation lehnt eine schlüssellose SRT-Adresse ab', async () => {
+  const vorher = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ srt_hint: 'srt://example.invalid' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  try {
+    await assert.rejects(
+      () => rotateUplinkIngestKey('csrf-dummy', '11111111-1111-4111-8111-111111111111'),
+      /keine neue SRT-Adresse/i,
+    );
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
+test('Schlüsselrotation verlangt StreamID, Passphrase und Verschlüsselungsparameter', async () => {
+  for (const adresse of [
+    'srt://example.invalid:8899?mode=caller&latency=4000',
+    'srt://example.invalid:8899?mode=caller&latency=4000&streamid=rsr_0123456789abcdef0123456789abcdef',
+    'srt://example.invalid:8899?mode=caller&latency=4000&streamid=rsr_0123456789abcdef0123456789abcdef&passphrase=fedcba9876543210fedcba9876543210',
+  ]) {
+    assert.equal(istVollstaendigeSrtObsAdresse(adresse), false);
+  }
+  assert.equal(istVollstaendigeSrtObsAdresse(DUMMY_SRT_OBS_ADRESSE), true);
 });
 
 test('Schlüsselrotation sendet ohne CSRF-Token keinen Request', async () => {
@@ -132,11 +162,13 @@ test('Rotation erklärt die Folgen und behandelt einen unklaren Ausgang ohne Wie
   assert.match(UPLINK_PAGE, /alte Adresse kann sich danach nicht neu verbinden/);
   assert.match(UPLINK_PAGE, /neue Adresse danach in OBS eintragen/);
   assert.match(UPLINK_PAGE, /retry:\s*false/);
-  assert.match(UPLINK_PAGE, /onError:[\s\S]*?srt_hint: ''[\s\S]*?refetchQueries\([\s\S]*?throwOnError: true/);
+  assert.match(UPLINK_PAGE, /onError:[\s\S]*?srt_hint: ''[\s\S]*?fetchUplinkMe\(\)[\s\S]*?istVollstaendigeSrtObsAdresse/);
   assert.match(UPLINK_PAGE, /setRotationUnklar\(true\)/);
   assert.match(UPLINK_PAGE, /disabled=\{!csrfToken \|\| rotationUnklar\}/);
   assert.match(UPLINK_PAGE, /Ergebnis ist unklar/);
   assert.match(UPLINK_PAGE, /role="status"/);
+  const fehlerPfad = UPLINK_PAGE.match(/onError:[\s\S]*?\n\s*},\n\s*}\);/)?.[0] ?? '';
+  assert.equal(fehlerPfad.match(/fetchUplinkMe\(\)/g)?.length, 1);
 });
 
 test('nach erfolgreicher Rotation wird nur srt_hint im Query-Cache ersetzt', () => {

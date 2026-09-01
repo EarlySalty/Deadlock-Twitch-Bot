@@ -72,6 +72,41 @@ export interface UplinkKeyRotation {
   srt_hint: string;
 }
 
+/** Exakte secret-bearing Form aus rs-relays `srt::caller_url`. */
+export function istVollstaendigeSrtObsAdresse(wert: string): boolean {
+  if (!wert || /\s/.test(wert)) return false;
+  try {
+    const adresse = new URL(wert);
+    const parameter = adresse.searchParams;
+    const genauEinmal = (name: string) => parameter.getAll(name).length === 1;
+    const erlaubteParameter = ['mode', 'latency', 'streamid', 'passphrase', 'pbkeylen'];
+    const nurErlaubteParameter = Array.from(parameter.keys()).every((name) =>
+      erlaubteParameter.includes(name),
+    );
+    const port = Number(adresse.port);
+    return (
+      adresse.protocol === 'srt:' &&
+      Boolean(adresse.hostname) &&
+      Number.isInteger(port) &&
+      port > 0 &&
+      port <= 65_535 &&
+      !adresse.username &&
+      !adresse.password &&
+      !adresse.hash &&
+      (adresse.pathname === '' || adresse.pathname === '/') &&
+      nurErlaubteParameter &&
+      erlaubteParameter.every(genauEinmal) &&
+      parameter.get('mode') === 'caller' &&
+      /^[1-9][0-9]*$/.test(parameter.get('latency') ?? '') &&
+      /^rsr_[0-9a-f]{32}$/.test(parameter.get('streamid') ?? '') &&
+      /^[0-9a-f]{32}$/.test(parameter.get('passphrase') ?? '') &&
+      parameter.get('pbkeylen') === '32'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ersetzt den Uplink-Eingangsschlüssel und liefert ausschließlich die neue,
  * bereits vollständige SRT-Adresse zurück.
@@ -106,21 +141,7 @@ export async function rotateUplinkIngestKey(
     }),
   );
   const srtHint = typeof antwort.srt_hint === 'string' ? antwort.srt_hint.trim() : '';
-  const gueltig = (() => {
-    try {
-      const adresse = new URL(srtHint);
-      return (
-        adresse.protocol === 'srt:' &&
-        Boolean(adresse.hostname) &&
-        !adresse.username &&
-        !adresse.password &&
-        !/\s/.test(srtHint)
-      );
-    } catch {
-      return false;
-    }
-  })();
-  if (!gueltig) {
+  if (!istVollstaendigeSrtObsAdresse(srtHint)) {
     throw new Error('Der Server hat keine neue SRT-Adresse zurückgegeben.');
   }
   return { srt_hint: srtHint };

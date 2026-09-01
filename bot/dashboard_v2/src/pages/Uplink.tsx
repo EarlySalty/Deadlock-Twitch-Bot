@@ -29,6 +29,7 @@ import {
   fetchUplinkCaps,
   fetchUplinkDestinations,
   fetchUplinkMe,
+  istVollstaendigeSrtObsAdresse,
   joinUplinkWaitlist,
   reconnectWaitEingabe,
   plattformVerbindungen,
@@ -567,9 +568,14 @@ function IngestKeyRotation({ csrfToken }: { csrfToken: string | null }) {
       queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
         alt ? { ...alt, srt_hint: '' } : alt
       );
-      void queryClient
-        .refetchQueries({ queryKey: ['uplink-me'], type: 'active' }, { throwOnError: true })
-        .then(() => setRotationUnklar(false))
+      void fetchUplinkMe()
+        .then((aktuell) => {
+          if (!istVollstaendigeSrtObsAdresse(aktuell.srt_hint?.trim() ?? '')) {
+            throw new Error('Der aktuelle Uplink-Zugang ist noch nicht sicher geladen.');
+          }
+          queryClient.setQueryData(['uplink-me'], aktuell);
+          setRotationUnklar(false);
+        })
         .catch(() => {
           // Die dauerhafte Warnung bleibt sichtbar. Erst ein bestätigter GET
           // oder ein vollständiges Neuladen darf sie entfernen.
