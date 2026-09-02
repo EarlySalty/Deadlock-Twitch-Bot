@@ -28,3 +28,4 @@ worktree: /home/nathanael/.worktrees/tb-streamer-v2-partner
 - 2026-09-02 M1 Hero, Nav, CTAs, Bühnen-Stempel gesetzt (REQ-01 bis REQ-04).
 - 2026-09-02 M2 Reihenfolge umgestellt, ChannelReport raus, Preise als Hauptkarte plus gedimmte Extras, Stempel vereinheitlicht (REQ-05 bis REQ-07).
 - 2026-09-02 M3 streamerV2.test.mjs um Nav-Reihenfolge, Knopftext-Verbot und Hero-Headline ergänzt; Rot-Gegenproben je pass 0/fail 1, danach 23 passed, `npm run build` grün.
+- 2026-09-02 M4 Nachbesserung: Free-cta in networkPage.ts auf "Jetzt Partner werden", Knopftext-Test scannt jetzt auch src/data/networkPage.ts (Rot-Gegenprobe pass 0/fail 1); Hero-Beweiszeile auf "zeigt Clips aus dem Netzwerk"; Hero-Headline bei 1440 auf zwei Zeilen (clamp-Obergrenze 3.5rem, breiterer Textcontainer, Gradient-Span als eigene Zeile), Bühne über der Hälfte sichtbar. 23 passed, Build grün. Screenshots partner2-fold.png/partner2-mobile.png.

@@ -57,7 +57,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
   return (
     <section className="relative overflow-hidden pt-28 pb-10 sm:pt-32 sm:pb-16">
       <div className="relative mx-auto max-w-[84rem] px-6">
-        <div className="mx-auto max-w-3xl text-center">
+        <div className="mx-auto max-w-4xl text-center">
           <motion.span
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -72,11 +72,11 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.08 }}
-            className="mt-6 text-[clamp(2.7rem,6vw,4.6rem)] font-extrabold leading-[0.95] tracking-[-0.02em] text-[var(--color-text-primary)]"
+            className="mt-5 text-[clamp(2.3rem,4.8vw,3.5rem)] font-extrabold leading-[1.03] tracking-[-0.02em] text-[var(--color-text-primary)]"
           >
-            Werde Partner der deutschen{" "}
+            Werde Partner der deutschen
             <span
-              className="bg-clip-text text-transparent"
+              className="block bg-clip-text text-transparent"
               style={{ backgroundImage: "var(--gradient-brand)" }}
             >
               Deadlock-Community.
@@ -98,7 +98,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.3 }}
-          className="relative mx-auto mt-10 max-w-[1400px]"
+          className="relative mx-auto mt-7 max-w-[1400px]"
         >
           <NetworkRaidDemo partners={metrics.partnerList} />
         </motion.div>
@@ -153,7 +153,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             settled={metrics.settled}
           />
           <p className="w-full text-center text-xs text-[rgba(183,170,145,0.5)]">
-            Die Kennzahlen kommen live aus dem laufenden Betrieb, die Bühne darüber ist ein Beispielablauf.
+            Die Kennzahlen kommen live aus dem laufenden Betrieb, die Bühne darüber zeigt Clips aus dem Netzwerk.
           </p>
         </motion.div>
       </div>

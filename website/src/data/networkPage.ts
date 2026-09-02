@@ -113,7 +113,7 @@ export const plans: Plan[] = [
     yearly: null,
     anchor: "Vollwertig, ohne Ablaufdatum",
     featured: false,
-    cta: "Kostenlos verbinden",
+    cta: "Jetzt Partner werden",
     ctaHref: "AUTH",
     features: [
       { label: "Auto-Raid-Netzwerk in beide Richtungen", included: true },
