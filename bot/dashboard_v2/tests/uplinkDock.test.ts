@@ -98,6 +98,8 @@ test('keine_twitch_popouts_mehr', () => {
 });
 
 test('verbindenButton_nur_fuer_twitch_aktiv', () => {
+  // Der Fallback ohne verbindbar-Signal bleibt twitch-only, damit ein aelterer
+  // Server keinen Knopf anbietet, den er noch nicht bedienen kann.
   assert.equal(verbindenAktiv('twitch'), true);
   assert.equal(verbindenAktiv('kick'), false);
   assert.equal(verbindenAktiv('youtube'), false);
@@ -106,8 +108,9 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   const zeilen = plattformVerbindungen({
     ...BASIS,
     verbindungen: [
-      { platform: 'twitch', status: 'verbunden', stream_key_vorhanden: true },
-      { platform: 'kick', status: 'getrennt' },
+      { platform: 'twitch', status: 'verbunden', stream_key_vorhanden: true, verbindbar: true },
+      { platform: 'kick', status: 'getrennt', verbindbar: true },
+      { platform: 'youtube', status: 'getrennt', verbindbar: false },
     ],
   });
   assert.equal(zeilen.length, 4);
@@ -119,43 +122,67 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(zeilen[0].streamKeyVorhanden, true);
   assert.equal(zeilen[0].trennenMoeglich, true);
 
+  // Kick ist auf dieser Instanz eingerichtet: der Knopf ist aktiv.
+  const kick = zeilen.find((z) => z.id === 'kick')!;
+  assert.equal(kick.aktiv, true);
+  assert.equal(kick.statusText, 'Nicht verbunden');
+  assert.equal(kick.knopfText, 'Mit Kick verbinden');
+  assert.equal(kick.trennenMoeglich, false);
+
+  // YouTube ohne Secrets: ausgegraut mit klarem Grund, kein Knopf.
+  const youtube = zeilen.find((z) => z.id === 'youtube')!;
+  assert.equal(youtube.aktiv, false);
+  assert.equal(youtube.statusText, 'YouTube ist auf dieser Instanz noch nicht eingerichtet');
+  assert.equal(youtube.knopfText, null);
+  assert.equal(youtube.trennenMoeglich, false);
+
+  // TikTok bleibt beim schlichten Ausblick, ohne Einrichtungssatz.
+  const tiktok = zeilen.find((z) => z.id === 'tiktok')!;
+  assert.equal(tiktok.aktiv, false);
+  assert.equal(tiktok.statusText, 'Folgt später');
+  assert.equal(tiktok.knopfText, null);
+
   // Der Grant steht, aber im Uplink liegt kein Schluessel: es geht noch kein
-  // Bild raus. Ein blankes "Verbunden" waere hier die Falschaussage, die den
-  // Streamer am Sendetag suchen laesst.
+  // Bild raus.
   const ohneKey = plattformVerbindungen({
     ...BASIS,
-    verbindungen: [{ platform: 'twitch', status: 'verbunden', stream_key_vorhanden: false }],
+    verbindungen: [
+      { platform: 'twitch', status: 'verbunden', stream_key_vorhanden: false, verbindbar: true },
+    ],
   });
   assert.equal(ohneKey[0].statusText, 'Verbunden, Schlüssel fehlt');
   assert.equal(ohneKey[0].streamKeyVorhanden, false);
   assert.equal(ohneKey[0].trennenMoeglich, true);
-  assert.ok(zeilen.slice(1).every((z) => !z.aktiv));
-  assert.ok(zeilen.slice(1).every((z) => z.status === 'getrennt'));
-  assert.ok(zeilen.slice(1).every((z) => z.statusText === 'Folgt später'));
-  assert.ok(zeilen.slice(1).every((z) => z.knopfText === null));
-  assert.ok(zeilen.slice(1).every((z) => !z.trennenMoeglich));
+
+  // Ein verbundenes Kick-Ziel laesst sich trennen.
+  const kickVerbunden = plattformVerbindungen({
+    ...BASIS,
+    verbindungen: [
+      { platform: 'kick', status: 'verbunden', stream_key_vorhanden: true, verbindbar: true },
+    ],
+  }).find((z) => z.id === 'kick')!;
+  assert.equal(kickVerbunden.statusText, 'Verbunden');
+  assert.equal(kickVerbunden.knopfText, 'Neu verbinden');
+  assert.equal(kickVerbunden.trennenMoeglich, true);
 
   const neu = plattformVerbindungen({
     ...BASIS,
-    verbindungen: [{ platform: 'twitch', status: 'neu_verbinden' }],
+    verbindungen: [{ platform: 'twitch', status: 'neu_verbinden', verbindbar: true }],
   });
   assert.equal(neu[0].statusText, 'Zugang abgelaufen');
-  // Status und Knopf sagen Verschiedenes: Zustand und Handlung.
   assert.notEqual(neu[0].statusText, neu[0].knopfText);
   assert.equal(neu[0].knopfText, 'Neu verbinden');
-  // Ein abgelaufener Zugang laesst sich trennen: die Tokens liegen noch da.
   assert.equal(neu[0].trennenMoeglich, true);
   assert.equal(neu[0].streamKeyVorhanden, false);
 
   assert.equal(plattformVerbindungen(BASIS)[0].statusText, 'Nicht verbunden');
   assert.equal(plattformVerbindungen(BASIS)[0].knopfText, 'Mit Twitch verbinden');
-  // Was nie verbunden war, hat auch nichts zu trennen.
   assert.equal(plattformVerbindungen(BASIS)[0].trennenMoeglich, false);
 
-  // Verbinden laeuft ueber den bestehenden Streamer-OAuth mit dem
-  // Uplink-Scope-Profil; einen eigenen Connect-Pfad gibt es nicht mehr.
   assert.equal(uplinkConnectUrl('twitch'), '/twitch/raid/auth?scope_profile=uplink');
-  assert.equal(uplinkConnectUrl('kick'), '');
+  assert.equal(uplinkConnectUrl('kick'), '/twitch/uplink/connect/kick');
+  assert.equal(uplinkConnectUrl('youtube'), '/twitch/uplink/connect/youtube');
+  assert.equal(uplinkConnectUrl('tiktok'), '');
 });
 
 test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {

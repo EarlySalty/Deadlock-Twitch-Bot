@@ -52,6 +52,8 @@ export interface UplinkVerbindung {
   status: UplinkVerbindungStatus;
   /** Ob im Uplink schon ein Ziel fuer diese Plattform liegt. */
   stream_key_vorhanden?: boolean;
+  /** Ob diese Plattform auf dieser Instanz verbunden werden kann (Secrets da). */
+  verbindbar?: boolean;
 }
 
 /**
@@ -107,8 +109,10 @@ export async function rotateUplinkDockToken(): Promise<DockUrls> {
  * der falsche war.
  */
 export function uplinkConnectUrl(platform: UplinkPlattform): string {
-  if (platform !== 'twitch') return '';
-  return '/twitch/raid/auth?scope_profile=uplink';
+  if (platform === 'twitch') return '/twitch/raid/auth?scope_profile=uplink';
+  if (platform === 'kick') return '/twitch/uplink/connect/kick';
+  if (platform === 'youtube') return '/twitch/uplink/connect/youtube';
+  return '';
 }
 
 /**
@@ -218,7 +222,7 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
   return UPLINK_PLATTFORMEN.map((p) => {
     const eintrag = me.verbindungen?.find((v) => v.platform === p.id);
     const status = eintrag?.status ?? 'getrennt';
-    const aktiv = verbindenAktiv(p.id);
+    const aktiv = eintrag?.verbindbar ?? verbindenAktiv(p.id);
     // Verbinden holt jetzt alles auf einmal: Chat lesen und schreiben, den
     // Stream-Key und die Rechte fuer Aktivitaet und Kanalpunkte. Deshalb steht
     // in den Texten nicht mehr nur "Chat".
@@ -230,6 +234,9 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
     // Streamer am Sendetag suchen laesst.
     let statusText = 'Folgt später';
     let knopfText: string | null = null;
+    if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
+      statusText = `${p.label} ist auf dieser Instanz noch nicht eingerichtet`;
+    }
     if (aktiv) {
       if (status === 'verbunden') {
         statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';

@@ -818,16 +818,32 @@ function useRueckkehrVomVerbinden(
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('verbunden') !== 'twitch') return;
+    const verbunden = params.get('verbunden');
+    const fehler = params.get('verbinden_fehler');
+    if (!verbunden && !fehler) return;
     params.delete('verbunden');
+    params.delete('verbinden_fehler');
     const rest = params.toString();
     window.history.replaceState(
       null,
       '',
       window.location.pathname + (rest ? `?${rest}` : '')
     );
-    setAusstehend(true);
-  }, []);
+    if (fehler) {
+      setMeldung(
+        'Das Verbinden hat gerade nicht geklappt. Bitte versuch es noch einmal.'
+      );
+      return;
+    }
+    if (verbunden === 'twitch') {
+      setAusstehend(true);
+      return;
+    }
+    // Kick und YouTube: Zugang und Stream-Ziel stehen schon aus dem Callback,
+    // hier wird nur der Anzeigestand aufgefrischt.
+    queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+    queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+  }, [queryClient]);
 
   useEffect(() => {
     if (!ausstehend || !authGeladen || gestartet.current) return;
