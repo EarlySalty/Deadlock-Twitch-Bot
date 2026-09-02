@@ -4,6 +4,8 @@ import { ArrowUpRight, ChevronDown, Users } from "lucide-react";
 import { ProtocolSection } from "@/components/v2/NetworkChrome";
 import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
 
+const COLLAPSED_TILES = 8;
+
 /**
  * Impact eines Partners: 50 % Deadlock-Stream-Häufigkeit, 50 % Schnitt-
  * Zuschauer, beides der letzten 30 Tage und je auf das Maximum im Netzwerk
@@ -366,7 +368,7 @@ export function PartnerGrid({
     return impact(b) - impact(a);
   });
 
-  const showMarquee = sorted.length > 8;
+  const showMarquee = sorted.length > COLLAPSED_TILES;
   const marqueeItems = [...sorted, ...sorted];
 
   return (

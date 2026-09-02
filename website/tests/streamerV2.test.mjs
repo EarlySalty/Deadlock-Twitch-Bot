@@ -47,6 +47,21 @@ function v2Files() {
   return walk(root);
 }
 
+test("der Clip-Pool trägt keine erfundenen Zuschauerzahlen und der Zähler hängt an sample", () => {
+  const block = demoSrc.match(/const CLIP_POOL[^=]*=\s*\[([\s\S]*?)\];/);
+  assert.ok(block, "CLIP_POOL-Block nicht gefunden");
+  const viewers = [...block[1].matchAll(/viewers:\s*(\d+)/g)].map((m) => Number(m[1]));
+  assert.ok(viewers.length >= 6, `zu wenige Clip-Eintraege: ${viewers.length}`);
+  for (const v of viewers) {
+    assert.equal(v, 0, `Clip-Karte trägt eine erfundene Zuschauerzahl: ${v}`);
+  }
+  assert.match(
+    demoSrc,
+    /if\s*\(!\w+\.sample\)\s*\{[\s\S]*?animateCounter\([\s\S]*?counterNumRef/,
+    "der Zähler animiert auch für Clip-Karten (nicht an sample gebunden)",
+  );
+});
+
 test("die Nav führt in der Partner-Reihenfolge", () => {
   const nav = readFileSync(
     join(websiteRoot, "src/components/v2/NetworkChrome.tsx"),

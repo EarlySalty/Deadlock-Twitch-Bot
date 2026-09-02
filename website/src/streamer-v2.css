@@ -126,7 +126,7 @@
 
 @keyframes v2-marquee {
   from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
+  to   { transform: translateX(calc(-50% - 0.375rem)); }
 }
 
 .v2-marquee-mask {
@@ -632,6 +632,7 @@
 
 .v2-rd-play {
   z-index:1;
+  pointer-events:none;
   display:none;
   align-items:center;
   justify-content:center;

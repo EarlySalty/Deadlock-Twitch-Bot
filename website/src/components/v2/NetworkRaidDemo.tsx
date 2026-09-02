@@ -16,12 +16,12 @@ interface DemoChannel {
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const CLIP_POOL: DemoChannel[] = [
-  { login: "miracleghost9", displayName: "miracleghost9", viewers: 247, video: `${BASE}/clips/miracleghost9.mp4`, poster: `${BASE}/clips/poster/miracleghost9.jpg`, pfp: `${BASE}/clips/pfp/miracleghost9.png`, sample: true },
-  { login: "whysolowkey", displayName: "whysolowkey", viewers: 183, video: `${BASE}/clips/whysolowkey.mp4`, poster: `${BASE}/clips/poster/whysolowkey.jpg`, pfp: `${BASE}/clips/pfp/whysolowkey.png`, sample: true },
-  { login: "kdenos", displayName: "kdenos", viewers: 312, video: `${BASE}/clips/kdenos.mp4`, poster: `${BASE}/clips/poster/kdenos.jpg`, pfp: `${BASE}/clips/pfp/kdenos.png`, sample: true },
-  { login: "johnnyblazedx", displayName: "johnnyblazedx", viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4`, poster: `${BASE}/clips/poster/johnnyblazedx.jpg`, pfp: `${BASE}/clips/pfp/johnnyblazedx.png`, sample: true },
-  { login: "coolysdl", displayName: "coolysdl", viewers: 158, video: `${BASE}/clips/coolysdl.mp4`, poster: `${BASE}/clips/poster/coolysdl.jpg`, pfp: `${BASE}/clips/pfp/coolysdl.png`, sample: true },
-  { login: "duzzel", displayName: "duzzel", viewers: 534, video: `${BASE}/clips/duzzel.mp4`, poster: `${BASE}/clips/poster/duzzel.jpg`, pfp: `${BASE}/clips/pfp/duzzel.png`, sample: true },
+  { login: "miracleghost9", displayName: "miracleghost9", viewers: 0, video: `${BASE}/clips/miracleghost9.mp4`, poster: `${BASE}/clips/poster/miracleghost9.jpg`, pfp: `${BASE}/clips/pfp/miracleghost9.png`, sample: true },
+  { login: "whysolowkey", displayName: "whysolowkey", viewers: 0, video: `${BASE}/clips/whysolowkey.mp4`, poster: `${BASE}/clips/poster/whysolowkey.jpg`, pfp: `${BASE}/clips/pfp/whysolowkey.png`, sample: true },
+  { login: "kdenos", displayName: "kdenos", viewers: 0, video: `${BASE}/clips/kdenos.mp4`, poster: `${BASE}/clips/poster/kdenos.jpg`, pfp: `${BASE}/clips/pfp/kdenos.png`, sample: true },
+  { login: "johnnyblazedx", displayName: "johnnyblazedx", viewers: 0, video: `${BASE}/clips/johnnyblazedx.mp4`, poster: `${BASE}/clips/poster/johnnyblazedx.jpg`, pfp: `${BASE}/clips/pfp/johnnyblazedx.png`, sample: true },
+  { login: "coolysdl", displayName: "coolysdl", viewers: 0, video: `${BASE}/clips/coolysdl.mp4`, poster: `${BASE}/clips/poster/coolysdl.jpg`, pfp: `${BASE}/clips/pfp/coolysdl.png`, sample: true },
+  { login: "duzzel", displayName: "duzzel", viewers: 0, video: `${BASE}/clips/duzzel.mp4`, poster: `${BASE}/clips/poster/duzzel.jpg`, pfp: `${BASE}/clips/pfp/duzzel.png`, sample: true },
 ];
 
 const STEPS: { time: string; label: string }[] = [
@@ -491,9 +491,11 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         lineRef.current.style.opacity = "1";
         lineRef.current.textContent = `zu ${tgt.displayName}`;
       }
-      if (counterRef.current) counterRef.current.style.opacity = "1";
-      if (counterNumRef.current)
-        animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
+      if (!src.sample) {
+        if (counterRef.current) counterRef.current.style.opacity = "1";
+        if (counterNumRef.current)
+          animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
+      }
       setBeam("forward");
       spawnParticles(34, 1400);
       await sleep(1650);
@@ -553,6 +555,14 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function requestPlay(videoEl: HTMLVideoElement | null, screenEl: HTMLDivElement | null) {
+    if (!videoEl) return;
+    const clear = () => screenEl?.classList.remove("v2-rd-screen-paused");
+    const p = videoEl.play();
+    if (p && typeof p.then === "function") p.then(clear).catch(() => {});
+    else clear();
+  }
+
   return (
     <div className="v2-stage">
       <div className="v2-rd">
@@ -568,7 +578,11 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
           <div className="v2-rd-stage">
             <div className="v2-rd-cards">
               <div className="v2-rd-card v2-rd-card-src" ref={srcCardRef}>
-                <div className="v2-rd-screen" ref={srcScreenRef}>
+                <div
+                  className="v2-rd-screen"
+                  ref={srcScreenRef}
+                  onClick={() => requestPlay(srcVideoRef.current, srcScreenRef.current)}
+                >
                   <video
                     className="v2-rd-video"
                     ref={srcVideoRef}
@@ -627,7 +641,11 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
               </div>
 
               <div className="v2-rd-card v2-rd-card-tgt v2-rd-card-dim" ref={tgtCardRef}>
-                <div className="v2-rd-screen" ref={tgtScreenRef}>
+                <div
+                  className="v2-rd-screen"
+                  ref={tgtScreenRef}
+                  onClick={() => requestPlay(tgtVideoRef.current, tgtScreenRef.current)}
+                >
                   <video
                     className="v2-rd-video"
                     ref={tgtVideoRef}
