@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
+import { GradientText } from "@/components/ui/GradientText";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 const NAV_ITEMS = [
@@ -42,8 +43,13 @@ export function NetworkNav() {
             height={30}
             className="rounded-md"
           />
-          <span className="hidden font-semibold tracking-tight text-[var(--color-text-primary)] sm:block">
-            Deadlock Netzwerk
+          <span className="hidden flex-col leading-tight sm:flex">
+            <GradientText className="font-semibold tracking-tight">
+              Deutsche Deadlock Community
+            </GradientText>
+            <span className="text-[0.7rem] font-medium tracking-wide text-[var(--color-text-secondary)]">
+              Streamer-Netzwerk
+            </span>
           </span>
         </a>
 
