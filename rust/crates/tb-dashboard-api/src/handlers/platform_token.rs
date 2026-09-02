@@ -387,12 +387,14 @@ pub async fn platform_token_antwort(
     })
 }
 
-/// Kick, YouTube, TikTok: der plattformneutrale Speicher.
-///
-/// Heute leer, also immer 404. Kein Refresh: der gehoert zu dem Verbinden-Weg,
-/// den es fuer diese Plattformen noch nicht gibt, und ein Refresh-Job fuer
-/// eine leere Tabelle waere ein Job, der nie etwas tut und beim ersten echten
-/// Eintrag ungeprueft losliefe.
+fn plattform_client_konfiguriert(config: &PlatformTokenConfig, platform: &str) -> bool {
+    match platform {
+        "kick" => config.kick.is_some(),
+        "youtube" => config.youtube.is_some(),
+        _ => false,
+    }
+}
+
 async fn fremde_plattform_antwort(
     pool: &PgPool,
     config: &PlatformTokenConfig,
@@ -415,6 +417,18 @@ async fn fremde_plattform_antwort(
     }
 
     if refresh_faellig(Some(verbindung.expires_at), jetzt) {
+        if !plattform_client_konfiguriert(config, platform) {
+            if abgelaufen(Some(verbindung.expires_at), jetzt) {
+                return Err(TokenFehler::NeuVerbinden);
+            }
+            return Ok(PlatformTokenAntwort {
+                access_token: verbindung.access_token,
+                expires_at: verbindung.expires_at,
+                platform_user_id: verbindung.platform_user_id,
+                platform_login: verbindung.platform_login,
+                scopes: verbindung.scopes,
+            });
+        }
         plattform_refresh(&store, config, streamer_id, platform, jetzt).await?;
         let frisch = match store.load(streamer_id, platform).await {
             Ok(Some(v)) => v,
@@ -1193,6 +1207,30 @@ mod tests {
         .await
         .unwrap();
         assert!(reauth);
+    }
+
+    #[tokio::test]
+    async fn kick_ohne_client_und_abgelaufen_meldet_neu_verbinden() {
+        let pool = pool_oder_ende!();
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        kick_zeile_anlegen(&pool, &config.cipher, 5203, jetzt - Duration::minutes(1)).await;
+        assert_eq!(
+            platform_token_antwort(&pool, &config, 5203, "kick", jetzt).await,
+            Err(TokenFehler::NeuVerbinden)
+        );
+    }
+
+    #[tokio::test]
+    async fn kick_ohne_client_aber_gueltig_liefert_den_token() {
+        let pool = pool_oder_ende!();
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        kick_zeile_anlegen(&pool, &config.cipher, 5204, jetzt + Duration::minutes(2)).await;
+        let antwort = platform_token_antwort(&pool, &config, 5204, "kick", jetzt)
+            .await
+            .expect("gueltiger Token muss kommen");
+        assert_eq!(antwort.access_token, "kick-alt");
     }
 
     /// Und wenn dort etwas liegt, kommt es auch heraus, ohne Refresh-Token.
