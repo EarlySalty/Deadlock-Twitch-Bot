@@ -25,6 +25,8 @@ use crate::auth::session::DashboardAuthState;
 const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/verwaltung",
     "/twitch/uplink",
+    "/twitch/uplink/connect/kick",
+    "/twitch/uplink/connect/youtube",
     "/twitch/pricing",
     "/twitch/abbo",
     "/twitch/abbo/bezahlen",
@@ -54,6 +56,8 @@ const PASSIVE_ALLOWED_PREFIXES: &[&str] = &[
     "/twitch/auth/",
     "/callback/twitch",
     "/callback/discord",
+    "/callback/kick",
+    "/callback/youtube",
     "/twitch/api/v2/internal-home",
     "/twitch/api/v2/auth-status",
     "/twitch/api/v2/uplink/",
@@ -228,6 +232,10 @@ mod tests {
     fn passive_allowed_exact_und_prefix() {
         assert!(path_matches_passive_allowed("/twitch/verwaltung"));
         assert!(path_matches_passive_allowed("/twitch/uplink"));
+        assert!(path_matches_passive_allowed("/twitch/uplink/connect/kick"));
+        assert!(path_matches_passive_allowed("/twitch/uplink/connect/youtube"));
+        assert!(path_matches_passive_allowed("/callback/kick"));
+        assert!(path_matches_passive_allowed("/callback/youtube"));
         assert!(path_matches_passive_allowed("/twitch/api/v2/uplink/me"));
         assert!(path_matches_passive_allowed("/twitch/abbo/kündigen"));
         assert!(path_matches_passive_allowed("/twitch/api/billing/trial/start"));
