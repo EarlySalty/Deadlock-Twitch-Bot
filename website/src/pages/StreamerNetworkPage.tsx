@@ -10,10 +10,7 @@ import {
   PlanSection,
   VoidSection,
 } from "@/components/v2/NetworkStory";
-import {
-  ChannelReportSection,
-  OpenMetricsSection,
-} from "@/components/v2/NetworkProof";
+import { OpenMetricsSection } from "@/components/v2/NetworkProof";
 import {
   NetworkCta,
   ObjectionsSection,
@@ -21,14 +18,6 @@ import {
 } from "@/components/v2/NetworkOffer";
 import { useNetworkMetrics } from "@/hooks/useNetworkMetrics";
 
-/**
- * Streamer-Landing V2 unter /streamer/v2/.
- *
- * Aufbau folgt dem Wireframe aus docs/strategie/31: Hero mit Beweiszeile,
- * das Problem, der Plan, die Leistungen, offene Zahlen, Lead-Magnet, Preise,
- * Einwaende, Abschluss. Die Metriken werden einmal oben geladen und nach
- * unten gereicht, damit Hero und Zahlen-Block denselben Stand zeigen.
- */
 export function StreamerNetworkPage() {
   const metrics = useNetworkMetrics();
 
@@ -47,12 +36,11 @@ export function StreamerNetworkPage() {
         />
         <VoidSection />
         <PlanSection />
-        <PillarsSection />
         <NetworkSecuritySection />
         <OpenMetricsSection metrics={metrics} />
-        <ChannelReportSection />
-        <PricingSection />
         <ObjectionsSection />
+        <PillarsSection />
+        <PricingSection />
         <NetworkCta partners={metrics.partnerList} />
       </main>
       <div className="relative z-10 mx-auto max-w-[84rem] px-6">

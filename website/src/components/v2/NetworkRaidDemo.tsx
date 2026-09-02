@@ -557,10 +557,10 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
     <div className="v2-stage">
       <div className="v2-rd">
         <div className="v2-rd-head">
-          <span className="v2-stamp">Übergabe im Netzwerk · Beispielablauf</span>
+          <span className="v2-stamp">Wenn einer endet, übernimmt der nächste Partner.</span>
           <span className="v2-rd-head-live">
             <span className="v2-pulse h-2 w-2 rounded-full bg-[var(--color-success)]" />
-            Netzwerk aktiv
+            Netzwerk aktiv · Beispiel
           </span>
         </div>
 

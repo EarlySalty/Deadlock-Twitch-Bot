@@ -237,7 +237,7 @@ export function PartnersSection({
     <ProtocolSection
       id="partner"
       ambientSide="right"
-      stamp="01 · Entdecke unsere Partner"
+      stamp="Entdecke unsere Partner"
       headline={
         !settled
           ? "Wer ist gerade live?"

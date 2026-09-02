@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -34,6 +34,58 @@ test("die Bühne fällt auf den echten Clip-Pool zurück, nicht auf ausgedachte 
     assert.ok(!demoSrc.includes(name), `ausgedachter Kanalname noch im Code: ${name}`);
   }
   assert.ok(/CLIP_POOL/.test(demoSrc), "CLIP_POOL als Rückfallebene fehlt");
+});
+
+function v2Files() {
+  const root = join(websiteRoot, "src/components/v2");
+  const walk = (dir) =>
+    readdirSync(dir).flatMap((entry) => {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) return walk(path);
+      return /\.tsx?$/.test(entry) ? [path] : [];
+    });
+  return walk(root);
+}
+
+test("die Nav führt in der Partner-Reihenfolge", () => {
+  const nav = readFileSync(
+    join(websiteRoot, "src/components/v2/NetworkChrome.tsx"),
+    "utf8",
+  );
+  const block = nav.match(/const NAV_ITEMS\s*=\s*\[([\s\S]*?)\];/);
+  assert.ok(block, "NAV_ITEMS nicht gefunden");
+  const labels = [...block[1].matchAll(/label:\s*"([^"]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(labels, [
+    "Partner",
+    "So funktioniert's",
+    "Zahlen",
+    "Sicherheit",
+    "FAQ",
+  ]);
+});
+
+test("kein Verbinden- oder Report-Knopftext mehr in v2", () => {
+  for (const file of v2Files()) {
+    const text = readFileSync(file, "utf8");
+    for (const banned of ["Kostenlos verbinden", "Kanal-Report holen"]) {
+      assert.ok(!text.includes(banned), `${banned} steht noch in ${file}`);
+    }
+  }
+});
+
+test("die Hero-Headline macht aus dem Besucher einen Partner", () => {
+  const hero = readFileSync(
+    join(websiteRoot, "src/components/v2/NetworkHero.tsx"),
+    "utf8",
+  );
+  assert.ok(
+    hero.includes("Werde Partner der deutschen"),
+    "Hero-Headline nennt die Partnerschaft nicht",
+  );
+  assert.ok(
+    hero.includes("Deadlock-Community."),
+    "Hero-Headline nennt die Community nicht",
+  );
 });
 
 test("die Streamer-Landing v2 trägt den Community-Markennamen", () => {

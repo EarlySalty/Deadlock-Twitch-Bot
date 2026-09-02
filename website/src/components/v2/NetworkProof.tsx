@@ -62,7 +62,7 @@ export function OpenMetricsSection({ metrics }: { metrics: NetworkMetrics }) {
       id="zahlen"
       ambient="teal"
       ambientSide="left"
-      stamp="06 · Offene Zahlen"
+      stamp="Offene Zahlen"
       headline="Wir behaupten nichts, was wir nicht zeigen können."
       intro="Diese Werte kommen direkt aus dem laufenden Betrieb und ändern sich, während du hier liest."
     >

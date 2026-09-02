@@ -123,7 +123,7 @@ export function NetworkSecuritySection() {
   return (
     <ProtocolSection
       id="sicherheit"
-      stamp="05 · Vertrauen"
+      stamp="Vertrauen"
       ambient="teal"
       ambientSide="left"
       headline="Du behältst die Kontrolle. Immer."

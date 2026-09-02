@@ -155,6 +155,18 @@
   pointer-events: none;
 }
 
+.v2-extra-card {
+  background: rgba(18, 18, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  opacity: 0.68;
+  transition: opacity 0.25s ease, border-color 0.25s ease;
+}
+
+.v2-extra-card:hover {
+  opacity: 1;
+  border-color: rgba(239, 212, 157, 0.28);
+}
+
 .v2-live-embed {
   background:
     linear-gradient(0deg, rgba(201, 168, 106, 0.06), rgba(201, 168, 106, 0.06)),

@@ -1,6 +1,9 @@
 import { motion } from "framer-motion";
 import { ArrowRight, Radio, ShieldCheck, Users } from "lucide-react";
-import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
+import {
+  DISCORD_INVITE_URL,
+  buildTwitchBotAuthUrl,
+} from "@/data/externalLinks";
 import { NetworkRaidDemo } from "@/components/v2/NetworkRaidDemo";
 import type { NetworkMetrics } from "@/hooks/useNetworkMetrics";
 
@@ -62,7 +65,7 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             className="v2-chip inline-flex items-center gap-2"
           >
             <Radio size={13} />
-            Für deutschsprachige Deadlock-Streamer
+            Das Partner-Netzwerk der deutschen Deadlock-Community
           </motion.span>
 
           <motion.h1
@@ -71,12 +74,12 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             transition={{ duration: 0.6, delay: 0.08 }}
             className="mt-6 text-[clamp(2.7rem,6vw,4.6rem)] font-extrabold leading-[0.95] tracking-[-0.02em] text-[var(--color-text-primary)]"
           >
-            Kein Stream endet im{" "}
+            Werde Partner der deutschen{" "}
             <span
               className="bg-clip-text text-transparent"
               style={{ backgroundImage: "var(--gradient-brand)" }}
             >
-              Leeren.
+              Deadlock-Community.
             </span>
           </motion.h1>
 
@@ -86,8 +89,8 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             transition={{ duration: 0.6, delay: 0.16 }}
             className="mx-auto mt-5 max-w-xl text-lg leading-relaxed text-[var(--color-text-secondary)]"
           >
-            Gehst du offline, übergibt das Netzwerk deine Zuschauer an einen
-            anderen deutschen Deadlock-Stream.
+            Der Bot ist nur der Schlüssel. Ab dem Moment bist du Partner, deine
+            Viewer bleiben im Kreislauf.
           </motion.p>
         </div>
 
@@ -110,14 +113,16 @@ export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
             href={buildTwitchBotAuthUrl()}
             className="gradient-accent inline-flex w-full items-center justify-center gap-2 rounded-xl px-6 py-3.5 font-semibold no-underline transition-all hover:brightness-110 hover:shadow-[0_0_28px_4px_rgba(201,168,106,0.28)] sm:w-auto"
           >
-            Jetzt kostenlos verbinden
+            Jetzt Partner werden
             <ArrowRight size={18} />
           </a>
           <a
-            href="#report"
+            href={DISCORD_INVITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[rgba(255,255,255,0.14)] px-6 py-3.5 font-semibold text-[var(--color-text-primary)] no-underline transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:w-auto"
           >
-            Kanal-Report holen
+            Community-Discord beitreten
           </a>
         </motion.div>
 

@@ -23,7 +23,7 @@ export function VoidSection() {
       id="leere"
       ambient="teal"
       ambientSide="left"
-      stamp="02 · Der Moment, um den es geht"
+      stamp="Der Moment, um den es geht"
       headline={
         <>
           Du klickst auf „Stream beenden“.{" "}
@@ -103,7 +103,7 @@ export function PlanSection() {
   return (
     <ProtocolSection
       id="ablauf"
-      stamp="03 · So kommst du rein"
+      stamp="So kommst du rein"
       headline="Drei Schritte, dann läuft es ohne dich."
       intro="Kein Setup-Wochenende, keine Konfigurationsdatei. Du verbindest deinen Kanal und entscheidest, was an sein soll."
     >
@@ -187,7 +187,7 @@ export function PillarsSection() {
     <ProtocolSection
       id="leistungen"
       ambientSide="left"
-      stamp="04 · Was du bekommst"
+      stamp="Optional mehr Tools"
       headline="Vier Dinge, die du sonst selbst machen müsstest."
       intro="Der eigentliche Wert liegt darin, dass hinter deinem Kanal andere Kanäle stehen."
     >

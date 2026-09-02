@@ -27,69 +27,93 @@ function resolveHref(key: string): string {
   }
 }
 
-/** Drei Stufen statt acht Plaene, die empfohlene in der Mitte. */
 export function PricingSection() {
+  const [free, ...extras] = plans;
+
   return (
     <ProtocolSection
       id="preise"
       ambientSide="left"
-      stamp="08 · Preise"
-      headline="Kostenlos bleibt kostenlos."
-      intro="Das Netzwerk und der Schutz kosten nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht."
+      stamp="Optional mehr Tools"
+      headline="Kostenlos Partner werden."
+      intro="Die Partnerschaft kostet nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht."
     >
-      <div className="grid gap-6 lg:grid-cols-3">
-        {plans.map((plan, i) => (
-          <motion.div
-            key={plan.id}
-            initial={{ opacity: 0, y: 26 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-70px" }}
-            transition={{ duration: 0.55, delay: i * 0.09 }}
-            className={`panel-card flex flex-col rounded-2xl p-8 ${
-              plan.featured ? "v2-plan-featured lg:-mt-4 lg:mb-4" : ""
-            }`}
-          >
-            {plan.featured ? (
-              <span className="gradient-accent mb-5 self-start rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider">
-                Empfohlen
-              </span>
-            ) : null}
-
-            <h3 className="text-lg font-bold text-[var(--color-text-primary)]">
-              {plan.name}
+      <div className="panel-card v2-plan-featured rounded-2xl p-8 lg:p-10">
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div>
+            <h3 className="text-2xl font-bold text-[var(--color-text-primary)]">
+              {free.name}
             </h3>
-            {/* Feste Hoehe, damit der Preis in allen drei Karten auf einer
-                Linie steht, auch wenn der Anker zweizeilig umbricht. */}
-            <p className="mt-1.5 min-h-[2.6rem] text-sm leading-snug text-[rgba(183,170,145,0.62)]">
-              {plan.anchor}
+            <p className="mt-2 text-sm leading-snug text-[rgba(183,170,145,0.62)]">
+              {free.anchor}
             </p>
-
             <div className="mt-6 flex items-baseline gap-2">
               <span
                 className="text-5xl font-extrabold leading-none bg-clip-text text-transparent"
                 style={{ backgroundImage: "var(--gradient-brand)" }}
               >
-                {plan.price}
+                {free.price}
               </span>
               <span className="text-sm text-[var(--color-text-secondary)]">
-                {plan.period}
+                {free.period}
               </span>
             </div>
-            {plan.yearly ? (
-              <p className="mt-2 text-sm text-[var(--color-accent)]">
-                {plan.yearly}
-              </p>
-            ) : (
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                keine Karte, keine Laufzeit
-              </p>
-            )}
+            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
+              keine Karte, keine Laufzeit
+            </p>
+          </div>
+          <a
+            href={buildTwitchBotAuthUrl()}
+            className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 font-semibold no-underline transition-all hover:brightness-110"
+          >
+            Jetzt Partner werden
+            <ArrowRight size={18} />
+          </a>
+        </div>
+        <ul className="mt-8 grid gap-3 sm:grid-cols-2">
+          {free.features.map((feature) => (
+            <li
+              key={feature.label}
+              className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
+            >
+              <Check
+                size={16}
+                className="mt-0.5 shrink-0 text-[var(--color-primary)]"
+              />
+              <span>{feature.label}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
-            <ul className="mt-7 flex-1 space-y-3">
+      <p className="v2-stamp mt-10">Optionale Extras</p>
+      <div className="mt-4 grid gap-5 sm:grid-cols-2">
+        {extras.map((plan) => (
+          <div
+            key={plan.id}
+            className="v2-extra-card flex flex-col rounded-2xl p-6"
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <h4 className="text-base font-bold text-[var(--color-text-primary)]">
+                {plan.name}
+              </h4>
+              <span className="flex items-baseline gap-1">
+                <span className="text-2xl font-extrabold text-[var(--color-text-primary)]">
+                  {plan.price}
+                </span>
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  {plan.period}
+                </span>
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-[rgba(183,170,145,0.62)]">
+              {plan.anchor}
+            </p>
+            <ul className="mt-4 flex-1 space-y-2">
               {plan.features.map((feature) => (
                 <li
                   key={feature.label}
-                  className={`flex gap-3 text-sm ${
+                  className={`flex gap-2.5 text-sm ${
                     feature.included
                       ? "text-[var(--color-text-secondary)]"
                       : "text-[rgba(183,170,145,0.42)]"
@@ -97,54 +121,29 @@ export function PricingSection() {
                 >
                   {feature.included ? (
                     <Check
-                      size={16}
+                      size={15}
                       className="mt-0.5 shrink-0 text-[var(--color-primary)]"
                     />
                   ) : (
-                    <Minus size={16} className="mt-0.5 shrink-0" />
+                    <Minus size={15} className="mt-0.5 shrink-0" />
                   )}
                   <span>{feature.label}</span>
                 </li>
               ))}
             </ul>
-
             {plan.note ? (
-              <p className="mt-6 rounded-lg border border-[var(--color-border)] bg-black/25 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--color-text-secondary)]">
+              <p className="mt-5 rounded-lg border border-[var(--color-border)] bg-black/25 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--color-text-secondary)]">
                 {plan.note}
               </p>
             ) : null}
-
             <a
               href={resolveHref(plan.ctaHref)}
-              className={`mt-6 inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 font-semibold no-underline transition-all ${
-                plan.featured
-                  ? "gradient-accent hover:brightness-110"
-                  : "border border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-border-hover)] hover:bg-white/5"
-              }`}
+              className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--color-border)] px-5 py-2.5 text-sm font-semibold text-[var(--color-text-primary)] no-underline transition-all hover:border-[var(--color-border-hover)] hover:bg-white/5"
             >
               {plan.cta}
             </a>
-          </motion.div>
+          </div>
         ))}
-      </div>
-
-      {/* Preiswürde statt Entschuldigung: warum überhaupt Geld verlangt wird. */}
-      <div className="panel-card mt-8 rounded-2xl p-8">
-        <h3 className="text-xl font-bold text-[var(--color-text-primary)]">
-          Warum kostet überhaupt etwas Geld?
-        </h3>
-        <p className="mt-4 max-w-3xl leading-relaxed text-[var(--color-text-secondary)]">
-          Server laufen rund um die Uhr, das Schneiden und Hochladen von Clips
-          verbraucht Rechenzeit, und die Weiterentwicklung passiert neben dem
-          Studium und der Arbeit. Wer zahlt, finanziert genau das mit. Wer nicht
-          zahlt, macht das Netzwerk trotzdem größer und ist deshalb genauso
-          erwünscht.
-        </p>
-        <p className="mt-4 max-w-3xl leading-relaxed text-[var(--color-text-secondary)]">
-          Wir rabattieren nicht. Günstiger wird es nur gegen eine Gegenleistung,
-          etwa eine Empfehlung, die ankommt, oder einen Erfahrungsbericht mit
-          echten Zahlen.
-        </p>
       </div>
     </ProtocolSection>
   );
@@ -156,7 +155,7 @@ export function ObjectionsSection() {
     <ProtocolSection
       id="einwaende"
       ambient="none"
-      stamp="09 · Was du dich wahrscheinlich fragst"
+      stamp="Was du dich wahrscheinlich fragst"
       headline="Die unangenehmen Fragen zuerst."
       intro="Wenn dir eine Antwort nicht reicht, frag im Discord nach. Dort antworten Menschen, keine Vorlage."
     >
@@ -263,16 +262,15 @@ export function NetworkCta({ partners }: { partners: PartnerChannel[] }) {
       id="start"
       ambient="teal"
       ambientSide="right"
-      stamp="10 · Der nächste Stream"
+      stamp="Der nächste Stream"
       headline={
         <>
-          Dein nächster Stream endet sowieso.
-          <br />
+          Dein nächster Stream endet bei einem{" "}
           <span
             className="bg-clip-text text-transparent"
             style={{ backgroundImage: "var(--gradient-brand)" }}
           >
-            Die Frage ist nur, wohin.
+            Partner.
           </span>
         </>
       }
@@ -284,7 +282,7 @@ export function NetworkCta({ partners }: { partners: PartnerChannel[] }) {
           href={buildTwitchBotAuthUrl()}
           className="gradient-accent inline-flex w-full items-center justify-center gap-2 rounded-xl px-8 py-4 text-lg font-semibold no-underline transition-all hover:brightness-110 hover:shadow-[0_0_30px_5px_rgba(201,168,106,0.28)] sm:w-auto"
         >
-          Jetzt kostenlos verbinden
+          Jetzt Partner werden
           <ArrowRight size={19} />
         </a>
         <a
@@ -293,7 +291,7 @@ export function NetworkCta({ partners }: { partners: PartnerChannel[] }) {
           rel="noopener noreferrer"
           className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[rgba(255,255,255,0.14)] px-8 py-4 text-lg font-semibold text-[var(--color-text-primary)] no-underline transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:w-auto"
         >
-          Erst im Discord fragen
+          Community-Discord beitreten
         </a>
       </div>
       <p className="mt-6 max-w-2xl text-sm leading-relaxed text-[var(--color-text-secondary)]">

@@ -6,18 +6,12 @@ import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 const NAV_ITEMS = [
   { href: "#partner", label: "Partner" },
-  { href: "#leere", label: "Das Problem" },
-  { href: "#ablauf", label: "Ablauf" },
-  { href: "#leistungen", label: "Leistungen" },
+  { href: "#ablauf", label: "So funktioniert's" },
   { href: "#zahlen", label: "Zahlen" },
-  { href: "#preise", label: "Preise" },
-  { href: "#einwaende", label: "Fragen" },
+  { href: "#sicherheit", label: "Sicherheit" },
+  { href: "#einwaende", label: "FAQ" },
 ];
 
-/**
- * Kopfleiste der Landing V2. Bewusst schmaler als die produktive Navbar:
- * Wortmarke links, Ankerpunkte mittig, ein einziger goldener Knopf rechts.
- */
 export function NetworkNav() {
   const [scrolled, setScrolled] = useState(false);
 
@@ -69,7 +63,7 @@ export function NetworkNav() {
           href={buildTwitchBotAuthUrl()}
           className="gradient-accent ml-auto rounded-lg px-4 py-2 text-sm font-semibold no-underline transition-all hover:brightness-110 lg:ml-0"
         >
-          Kostenlos verbinden
+          Jetzt Partner werden
         </a>
       </div>
     </header>
