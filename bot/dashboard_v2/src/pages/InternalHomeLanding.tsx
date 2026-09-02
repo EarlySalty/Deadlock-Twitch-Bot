@@ -917,11 +917,11 @@ export function InternalHomeLanding() {
                           strokeWidth="8"
                           strokeLinecap="round"
                           strokeDasharray={`${(score / 100) * 264} 264`}
-                          className={`${gaugeStrokeClass} score-ring-glow`}
+                          className={gaugeStrokeClass}
                         />
                       </svg>
                       <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className={`kpi-number text-3xl font-bold ${scoreColorClass} kpi-value-glow`}>{score}</span>
+                        <span className={`kpi-number text-3xl font-bold ${scoreColorClass}`}>{score}</span>
                         <span className="text-xs text-white/45">/ 100</span>
                       </div>
                     </div>

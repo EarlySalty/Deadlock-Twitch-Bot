@@ -501,16 +501,6 @@ svg.icon-duotone {
   box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 50%, transparent);
 }
 
-/* KPI value glow */
-.kpi-value-glow {
-  text-shadow: 0 0 22px color-mix(in srgb, var(--color-primary) 35%, transparent);
-}
-
-/* Score ring glow */
-.score-ring-glow {
-  filter: drop-shadow(0 0 14px color-mix(in srgb, currentColor 60%, transparent));
-}
-
 .metric-highlight {
   box-shadow:
     0 0 0 1px rgba(197, 160, 89, 0.24),
