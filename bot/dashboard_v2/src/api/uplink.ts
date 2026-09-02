@@ -223,33 +223,20 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
     const eintrag = me.verbindungen?.find((v) => v.platform === p.id);
     const status = eintrag?.status ?? 'getrennt';
     const aktiv = eintrag?.verbindbar ?? verbindenAktiv(p.id);
-    // Verbinden holt jetzt alles auf einmal: Chat lesen und schreiben, den
-    // Stream-Key und die Rechte fuer Aktivitaet und Kanalpunkte. Deshalb steht
-    // in den Texten nicht mehr nur "Chat".
     const streamKeyVorhanden = eintrag?.stream_key_vorhanden ?? false;
-    // Drei Stufen, nicht zwei. "Verbunden" heisst: der Grant traegt alle
-    // noetigen Rechte UND der Stream-Schluessel liegt im Uplink. Fehlt der
-    // Schluessel, ist der Zugang zwar da, aber es geht noch kein Bild raus,
-    // und ein blankes "Verbunden" waere genau die Falschaussage, die den
-    // Streamer am Sendetag suchen laesst.
     let statusText = 'Folgt später';
     let knopfText: string | null = null;
-    if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
+    if (status === 'verbunden') {
+      statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
+    } else if (status === 'neu_verbinden') {
+      statusText = 'Zugang abgelaufen';
+    } else if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
       statusText = `${p.label} ist auf dieser Instanz noch nicht eingerichtet`;
+    } else if (aktiv) {
+      statusText = 'Nicht verbunden';
     }
     if (aktiv) {
-      if (status === 'verbunden') {
-        statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
-      } else if (status === 'neu_verbinden') {
-        // Nicht wortgleich mit dem Knopf daneben: der Status sagt den Zustand,
-        // der Knopf die Handlung. Zweimal "Neu verbinden" nebeneinander liest
-        // sich wie zwei Knoepfe.
-        statusText = 'Zugang abgelaufen';
-      } else {
-        statusText = 'Nicht verbunden';
-      }
-      knopfText =
-        status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
+      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
     }
     return {
       id: p.id,
@@ -259,7 +246,7 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
       statusText,
       knopfText,
       streamKeyVorhanden,
-      trennenMoeglich: aktiv && status !== 'getrennt',
+      trennenMoeglich: status !== 'getrennt',
     };
   });
 }

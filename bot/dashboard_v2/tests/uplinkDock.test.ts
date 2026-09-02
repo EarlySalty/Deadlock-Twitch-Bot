@@ -177,6 +177,27 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(uplinkConnectUrl('tiktok'), '');
 });
 
+test('trennen_bleibt_bei_entzogenem_secret', () => {
+  const zeile = plattformVerbindungen({
+    ...BASIS,
+    verbindungen: [
+      { platform: 'kick', status: 'verbunden', stream_key_vorhanden: true, verbindbar: false },
+    ],
+  }).find((z) => z.id === 'kick')!;
+  assert.equal(zeile.aktiv, false);
+  assert.equal(zeile.status, 'verbunden');
+  assert.equal(zeile.statusText, 'Verbunden');
+  assert.equal(zeile.knopfText, null);
+  assert.equal(zeile.trennenMoeglich, true);
+
+  const abgelaufen = plattformVerbindungen({
+    ...BASIS,
+    verbindungen: [{ platform: 'youtube', status: 'neu_verbinden', verbindbar: false }],
+  }).find((z) => z.id === 'youtube')!;
+  assert.equal(abgelaufen.statusText, 'Zugang abgelaufen');
+  assert.equal(abgelaufen.trennenMoeglich, true);
+});
+
 test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {
   // Beide Fassungen schicken den Streamer an die Stelle, an der die Adressen
   // wirklich stehen. Zeigen sie auf eine Karte, die es nicht mehr gibt, sucht
