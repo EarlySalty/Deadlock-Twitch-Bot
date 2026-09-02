@@ -209,6 +209,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         if (video.current) {
           video.current.style.display = "none";
           video.current.removeAttribute("src");
+          video.current.load();
         }
         if (art.current)
           art.current.style.backgroundImage = ch.avatarUrl ? `url("${ch.avatarUrl}")` : "none";

@@ -119,7 +119,8 @@
   animation: v2-marquee 42s linear infinite;
 }
 
-.v2-marquee:hover {
+.v2-marquee:hover,
+.v2-marquee:focus-within {
   animation-play-state: paused;
 }
 

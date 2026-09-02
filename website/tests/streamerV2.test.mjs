@@ -43,5 +43,9 @@ test("die Streamer-Landing v2 trägt den Community-Markennamen", () => {
   );
   const html = readFileSync(join(websiteRoot, "v2/index.html"), "utf8");
   assert.ok(nav.includes("Deutsche Deadlock Community"), "Nav nennt die Community nicht");
-  assert.ok(html.includes("Deutsche Deadlock Community"), "v2/index.html nennt die Community nicht");
+  assert.match(
+    html,
+    /<title>[^<]*Deutsche Deadlock Community[^<]*<\/title>/,
+    "der Seitentitel nennt die Community nicht",
+  );
 });
