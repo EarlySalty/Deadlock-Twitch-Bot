@@ -56,3 +56,9 @@ Ziel und Anforderungen stehen im Contract. Reihenfolge nach Nutzer-Priorität.
 
 - 2026-09-02 M0 Baseline (Orchestrator): `npm ci` exit 0, `npm test` 17 passed / 0 failed, `npm run build` exit 0 auf origin/main e27f2c16. Keine rote Baseline.
 - Screenshots vorher: `/tmp/streamer-shots/v1-fold.png`, `v1-full.png`, `v2-fold.png`, `v2-full.png` (live, 1440 breit).
+- 2026-09-02 M1 (Implementierer): Hero zentriert, Bühne in voller Breite mit echten Clip-Videos plus Poster/Play-Zustand, FALLBACK_CHANNELS raus. Build grün, Screenshot `final-fold.png`.
+- 2026-09-02 M2: Live-Embeds zweispaltig mit Gold-Glow, Offline-Partner als Avatar-Marquee mit Aufklapp-Knopf. Build grün.
+- 2026-09-02 M3: NetworkAmbient (zwei driftende Lichtinseln, Partikel) fix hinter der Seite; kein Horizontal-Scroll (1440: sw 1430, 390: sw 390). Build grün.
+- 2026-09-02 M4: Sektions-Intros auf einen Satz, Aufzählungslisten der Leistungskarten raus, Visuals grösser, Preiskarten höchstens vier Häkchenzeilen. Build grün.
+- 2026-09-02 M5: Nav und Titel auf "Deutsche Deadlock Community"; neuer Test `streamerV2.test.mjs` (3 Tests, Rot-Gegenprobe je Test bestätigt). `npm test` 20 passed / 0 failed, `npm run build` exit 0.
+- Screenshots nachher: `/tmp/streamer-shots/final-fold.png`, `final-full.png`, `final-mobile.png`, `final-reduced.png`, `final-preise2.png`.
