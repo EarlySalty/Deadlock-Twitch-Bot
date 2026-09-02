@@ -1,6 +1,6 @@
 # Contract: Streamer-Landing v2 bekommt die visuelle Kraft von v1 zurück
 
-status: aktiv
+status: erledigt
 datum: 2026-09-02
 klasse: mittel
 repo: Deadlock-Twitch-Bot (website/)

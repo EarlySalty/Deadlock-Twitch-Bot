@@ -1,6 +1,6 @@
 # Plan: Streamer-Landing v2 Atmosphäre
 
-status: aktiv
+status: erledigt
 datum: 2026-09-02
 contract: CONTRACT.md
 branch: feat/streamer-v2-atmosphaere
