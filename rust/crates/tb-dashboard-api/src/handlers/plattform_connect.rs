@@ -576,7 +576,8 @@ pub async fn callback_kick_handler(
     let Some(client) = KickOAuth::aus_umgebung() else {
         return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet");
     };
-    let state = match consume_connect_state(&pool, &config.cipher, "kick", state_token, Utc::now()).await {
+    let state =
+        match consume_connect_state(&pool, &config.cipher, "kick", state_token, Utc::now()).await {
         Ok(Some(s)) => s,
         Ok(None) => return zurueck_zum_dashboard("verbinden_fehler=kick"),
         Err(error) => {
@@ -621,7 +622,15 @@ pub async fn callback_youtube_handler(
     let Some(client) = GoogleOAuth::aus_umgebung() else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
     };
-    let state = match consume_connect_state(&pool, &config.cipher, "youtube", state_token, Utc::now()).await {
+    let state = match consume_connect_state(
+        &pool,
+        &config.cipher,
+        "youtube",
+        state_token,
+        Utc::now(),
+    )
+    .await
+    {
         Ok(Some(s)) => s,
         Ok(None) => return zurueck_zum_dashboard("verbinden_fehler=youtube"),
         Err(error) => {
