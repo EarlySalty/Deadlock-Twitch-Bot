@@ -79,6 +79,8 @@ pub mod partner_login;
 pub mod pause_loop;
 pub mod platform_store;
 pub mod platform_token;
+pub mod plattform_connect;
+pub mod plattform_oauth;
 pub mod performance;
 pub mod raid_analytics;
 pub mod raid_history;
