@@ -133,15 +133,6 @@ function StreamKeyKnopf({
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     },
   });
-  // Kick und YouTube holen den Schlüssel beim Verbinden, nicht über den
-  // Twitch-Weg. Der erneute Anlauf ist deshalb ein erneutes Verbinden.
-  if (platform !== 'twitch') {
-    return (
-      <a href={uplinkConnectUrl(platform)} className={klasse}>
-        {beschriftung}
-      </a>
-    );
-  }
   return (
     <>
       <button

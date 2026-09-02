@@ -1,5 +1,3 @@
-#![allow(clippy::result_large_err)]
-
 use async_trait::async_trait;
 use serde::de::{self, Deserializer};
 use serde::Deserialize;
@@ -64,6 +62,7 @@ pub trait KickApi: Send + Sync {
     async fn refresh(&self, refresh_token: &str) -> Result<OAuthToken, OAuthFehler>;
     async fn revoke(&self, access_token: &str) -> Result<(), OAuthFehler>;
     async fn konto(&self, access_token: &str) -> Result<KickKonto, OAuthFehler>;
+    async fn event_subscriptions_loeschen(&self, access_token: &str) -> Result<(), OAuthFehler>;
 }
 
 #[async_trait]
@@ -268,6 +267,31 @@ impl KickApi for KickOAuth {
             stream_key: channel.stream.key,
         })
     }
+
+    async fn event_subscriptions_loeschen(&self, access_token: &str) -> Result<(), OAuthFehler> {
+        let list_url = format!("{}/public/v1/events/subscriptions", self.api_base);
+        let liste: KickSubsAntwort = api_get(&list_url, access_token).await?;
+        let del_url = format!("{}/public/v1/events/subscriptions", self.api_base);
+        for sub in liste.data {
+            if sub.id.trim().is_empty() {
+                continue;
+            }
+            let antwort = reqwest::Client::new()
+                .delete(&del_url)
+                .bearer_auth(access_token)
+                .query(&[("id", sub.id.as_str())])
+                .send()
+                .await
+                .map_err(|e| OAuthFehler::Other(format!("request failed: {e}")))?;
+            let status = antwort.status().as_u16();
+            if status != 200 && status != 204 {
+                return Err(OAuthFehler::Other(format!(
+                    "delete subscription HTTP {status}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 async fn api_get<T: for<'de> Deserialize<'de>>(
@@ -344,6 +368,18 @@ struct KickStream {
     url: String,
     #[serde(default)]
     key: String,
+}
+
+#[derive(Deserialize)]
+struct KickSubsAntwort {
+    #[serde(default)]
+    data: Vec<KickSub>,
+}
+
+#[derive(Deserialize)]
+struct KickSub {
+    #[serde(default, deserialize_with = "id_feld")]
+    id: String,
 }
 
 pub struct GoogleOAuth {
@@ -708,5 +744,34 @@ mod tests {
             .await;
         let client = GoogleOAuth::fuer_test(&server.uri(), &server.uri());
         assert_eq!(client.konto("tot").await.unwrap_err(), OAuthFehler::InvalidGrant);
+    }
+
+    #[tokio::test]
+    async fn kick_event_subscriptions_werden_geloescht() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/public/v1/events/subscriptions"))
+            .and(header("Authorization", "Bearer kacc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{ "id": "sub-a" }, { "id": "sub-b" }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/public/v1/events/subscriptions"))
+            .and(query_param("id", "sub-a"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/public/v1/events/subscriptions"))
+            .and(query_param("id", "sub-b"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = KickOAuth::fuer_test(&server.uri(), &server.uri());
+        client.event_subscriptions_loeschen("kacc").await.unwrap();
     }
 }

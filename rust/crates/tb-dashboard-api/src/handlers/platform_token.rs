@@ -329,9 +329,6 @@ pub async fn gueltiger_twitch_token(
     Ok((frisch, scopes))
 }
 
-/// Erneuert alle faelligen Kick- und YouTube-Tokens im Voraus, damit ein Token
-/// nicht mitten in einer laufenden Chat-Verbindung ablaeuft. Gibt die Zahl der
-/// angefassten Zeilen zurueck.
 pub async fn plattform_refresh_all_due(
     pool: &PgPool,
     config: &PlatformTokenConfig,
@@ -451,9 +448,6 @@ async fn fremde_plattform_antwort(
     })
 }
 
-/// Erneuert einen faelligen Kick- oder YouTube-Token unter Advisory-Lock und
-/// schreibt ihn zurueck. Ohne konfigurierten Client bleibt der Token stehen und
-/// wird erst als abgelaufen abgewiesen.
 pub async fn plattform_refresh(
     store: &super::platform_store::PlatformConnectionStore,
     config: &PlatformTokenConfig,
@@ -1119,6 +1113,12 @@ mod tests {
         ) -> Result<super::super::plattform_oauth::KickKonto, super::super::plattform_oauth::OAuthFehler>
         {
             unreachable!("kein konto in diesem test")
+        }
+        async fn event_subscriptions_loeschen(
+            &self,
+            _access_token: &str,
+        ) -> Result<(), super::super::plattform_oauth::OAuthFehler> {
+            Ok(())
         }
     }
 

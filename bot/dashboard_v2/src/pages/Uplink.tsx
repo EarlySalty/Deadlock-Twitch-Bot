@@ -820,9 +820,13 @@ function useRueckkehrVomVerbinden(
     const params = new URLSearchParams(window.location.search);
     const verbunden = params.get('verbunden');
     const fehler = params.get('verbinden_fehler');
+    const zielOffen = params.get('ziel_offen') === '1';
+    const neuVerbinden = params.get('neu_verbinden') === '1';
     if (!verbunden && !fehler) return;
     params.delete('verbunden');
     params.delete('verbinden_fehler');
+    params.delete('ziel_offen');
+    params.delete('neu_verbinden');
     const rest = params.toString();
     window.history.replaceState(
       null,
@@ -839,10 +843,17 @@ function useRueckkehrVomVerbinden(
       setAusstehend(true);
       return;
     }
-    // Kick und YouTube: Zugang und Stream-Ziel stehen schon aus dem Callback,
-    // hier wird nur der Anzeigestand aufgefrischt.
     queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+    if (neuVerbinden) {
+      setMeldung(
+        'Fast geschafft. Bitte verbinde dich noch einmal, damit der Zugang dauerhaft hält.'
+      );
+    } else if (zielOffen) {
+      setMeldung(
+        "Verbunden, aber der Stream-Key konnte noch nicht übernommen werden. Bitte 'Stream-Key erneut holen' drücken."
+      );
+    }
   }, [queryClient]);
 
   useEffect(() => {

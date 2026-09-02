@@ -1,20 +1,3 @@
-//! Der plattformneutrale Token-Speicher `platform_connections`.
-//!
-//! Twitch liegt hier nicht mehr: dafuer gibt es den Streamer-OAuth und
-//! `twitch_raid_auth` (siehe `platform_token.rs`). Zwei Token-Staende fuer
-//! dasselbe Konto hiessen, dass einer irgendwann der falsche ist.
-//!
-//! Fuer Kick, YouTube und TikTok bleibt dieser Speicher stehen. Die haben
-//! keinen Raid-Bot, an dessen Grant sich ein Chat-Zugang anhaengen liesse, und
-//! wenn sie drankommen, ist die verschluesselte Ablage samt AAD schon gebaut
-//! und geprueft. Heute ist die Tabelle leer; die Lesepfade liefern deshalb
-//! ueberall "getrennt" beziehungsweise 404.
-//!
-//! Was hier steht, hat einen Aufrufer. Der Verbinden-Flow, der eigene Callback
-//! und der Refresh-Job sind weg, und mit ihnen die Schreibseite: sie kommt
-//! zurueck, wenn die erste dieser Plattformen gebaut wird, und steht bis dahin
-//! in der Git-Historie statt als toter Code im Baum.
-
 use std::future::Future;
 use std::sync::Arc;
 
@@ -23,12 +6,6 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tb_crypto::FieldCipher;
 
-// ───────────────────────────────────────────────────────────────────────────
-// Speicher
-// ───────────────────────────────────────────────────────────────────────────
-
-/// Eine gespeicherte Verbindung, entschluesselt. Der Refresh-Token bleibt
-/// absichtlich in diesem Typ und wandert nie in eine HTTP-Antwort.
 #[derive(Debug, Clone)]
 pub struct PlatformConnection {
     pub streamer_id: i64,
@@ -50,7 +27,6 @@ pub enum StoreFehler {
     Crypto(String),
 }
 
-/// Zugriff auf `platform_connections` samt Feldverschluesselung.
 #[derive(Clone)]
 pub struct PlatformConnectionStore {
     pool: PgPool,
@@ -79,9 +55,6 @@ impl PlatformConnectionStore {
         Self { pool, cipher }
     }
 
-    /// Zusatzdaten der Verschluesselung: bindet den Blob an Streamer und
-    /// Plattform, damit ein umkopierter Blob in einer anderen Zeile nicht
-    /// aufgeht.
     pub fn aad(streamer_id: i64, platform: &str) -> String {
         format!("platform_connections:{streamer_id}:{platform}")
     }
@@ -118,8 +91,6 @@ impl PlatformConnectionStore {
             .await
     }
 
-    /// Wie [`Self::load`], auf einem Executor; mit `sperren` haelt die
-    /// umgebende Transaktion die Zeile per `FOR UPDATE`, bis sie endet.
     async fn load_mit<'e, E>(
         &self,
         exec: E,
@@ -141,9 +112,6 @@ impl PlatformConnectionStore {
         zeile.map(|z| self.entschluesseln(z)).transpose()
     }
 
-    /// Verbindungen eines Streamers als (Plattform, Status). Status ist
-    /// `verbunden` oder `neu_verbinden`; was nicht in der Tabelle steht, ist
-    /// `getrennt` und wird vom Aufrufer ergaenzt.
     pub async fn status_liste(
         &self,
         streamer_id: i64,

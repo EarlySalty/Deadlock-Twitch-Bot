@@ -179,7 +179,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
     // Changelog-POST). Bucket "internal_home", 60 Requests/60 s pro Client-IP.
     let internal_home_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "internal_home", 60, 60);
-    // Verbinden-Flow wie der Login: 30 Aufrufe pro Minute und Client-IP.
+    let uplink_connect_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
     Router::new()
         .route(
@@ -530,19 +530,36 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route(
             "/twitch/uplink/connect/kick",
-            get(plattform_connect::connect_kick_start_handler),
+            get(plattform_connect::connect_kick_start_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    uplink_connect_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
         )
         .route(
             "/twitch/uplink/connect/youtube",
-            get(plattform_connect::connect_youtube_start_handler),
+            get(plattform_connect::connect_youtube_start_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    uplink_connect_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
         )
         .route(
             "/callback/kick",
-            get(plattform_connect::callback_kick_handler),
+            get(plattform_connect::callback_kick_handler).layer(
+                axum::middleware::from_fn_with_state(
+                    uplink_connect_rl.clone(),
+                    rate_limit_middleware,
+                ),
+            ),
         )
         .route(
             "/callback/youtube",
-            get(plattform_connect::callback_youtube_handler),
+            get(plattform_connect::callback_youtube_handler).layer(
+                axum::middleware::from_fn_with_state(uplink_connect_rl, rate_limit_middleware),
+            ),
         )
         .route(
             "/twitch/api/v2/uplink/dock-token/rotate",

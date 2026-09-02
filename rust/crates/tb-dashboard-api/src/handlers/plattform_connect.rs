@@ -1,5 +1,3 @@
-#![allow(clippy::result_large_err)]
-
 use axum::{
     extract::{Extension, Query, State},
     http::StatusCode,
@@ -14,12 +12,12 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use super::platform_store::{PlatformConnection, PlatformConnectionStore};
-use super::platform_token::PlatformTokenConfig;
+use super::platform_token::{platform_token_antwort, PlatformTokenConfig, TokenFehler};
 use super::plattform_oauth::{
     google_client_id, GoogleOAuth, KickApi, KickOAuth, OAuthFehler, YouTubeApi, KICK_SCOPES,
     YOUTUBE_SCOPE,
 };
-use super::uplink::{partner_id, HttpRelayZiele, RelayZiele};
+use super::uplink::{partner_id, HttpRelayZiele, RelayZiele, StreamKeyStand};
 use crate::auth::level::DashboardAuthLevel;
 
 const STATE_TTL_SECONDS: i64 = 600;
@@ -49,7 +47,7 @@ pub fn kick_konfiguriert() -> bool {
 }
 
 pub fn youtube_konfiguriert() -> bool {
-    google_client_id().is_some()
+    GoogleOAuth::aus_umgebung().is_some()
 }
 
 fn pkce_verifier() -> String {
@@ -216,6 +214,9 @@ pub async fn connect_youtube_start_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
 ) -> Response {
+    let Some(_client) = GoogleOAuth::aus_umgebung() else {
+        return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
+    };
     let Some(client_id) = google_client_id() else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
     };
@@ -246,6 +247,42 @@ fn oauth_expires_at(jetzt: DateTime<Utc>, expires_in: i64) -> DateTime<Utc> {
     jetzt + Duration::seconds(expires_in.max(0))
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct KonnektErgebnis {
+    pub neu_verbinden: bool,
+    pub ziel_offen: bool,
+}
+
+pub fn ingest_url_ok(rtmp_url: &str) -> bool {
+    let getrimmt = rtmp_url.trim();
+    if !(getrimmt.starts_with("rtmp://") || getrimmt.starts_with("rtmps://")) {
+        return false;
+    }
+    url::Url::parse(getrimmt)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| !h.is_empty()))
+        .unwrap_or(false)
+}
+
+async fn ziel_setzen_falls_moeglich(
+    relay: &dyn RelayZiele,
+    streamer_id: i64,
+    platform: &str,
+    rtmp_url: &str,
+    stream_key: &str,
+) -> bool {
+    if stream_key.trim().is_empty() || !ingest_url_ok(rtmp_url) {
+        return false;
+    }
+    match relay.ziel_setzen(streamer_id, platform, rtmp_url, stream_key).await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(streamer_id, platform, %error, "connect: Uplink-Ziel nicht gesetzt");
+            false
+        }
+    }
+}
+
 pub async fn kick_callback_kern(
     pool: &PgPool,
     config: &PlatformTokenConfig,
@@ -254,7 +291,7 @@ pub async fn kick_callback_kern(
     state: ConnectState,
     code: &str,
     jetzt: DateTime<Utc>,
-) -> Result<(), String> {
+) -> Result<KonnektErgebnis, String> {
     let token = client
         .exchange_code(code, &state.redirect_uri, &state.verifier)
         .await
@@ -264,6 +301,7 @@ pub async fn kick_callback_kern(
         .await
         .map_err(|e| format!("konto: {}", fehlertext(e)))?;
 
+    let neu_verbinden = token.refresh_token.is_none();
     let verbindung = PlatformConnection {
         streamer_id: state.streamer_id,
         platform: "kick".to_string(),
@@ -273,7 +311,7 @@ pub async fn kick_callback_kern(
         refresh_token: token.refresh_token.unwrap_or_default(),
         scopes: token.scopes,
         expires_at: oauth_expires_at(jetzt, token.expires_in),
-        needs_reauth: false,
+        needs_reauth: neu_verbinden,
     };
     let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
     store
@@ -281,15 +319,18 @@ pub async fn kick_callback_kern(
         .await
         .map_err(|e| format!("speichern: {e}"))?;
 
-    if !konto.rtmp_url.trim().is_empty() && !konto.stream_key.trim().is_empty() {
-        if let Err(error) = relay
-            .ziel_setzen(state.streamer_id, "kick", &konto.rtmp_url, &konto.stream_key)
-            .await
-        {
-            tracing::warn!(streamer_id = state.streamer_id, %error, "kick-connect: Uplink-Ziel nicht gesetzt");
-        }
-    }
-    Ok(())
+    let ziel_gesetzt = ziel_setzen_falls_moeglich(
+        relay,
+        state.streamer_id,
+        "kick",
+        &konto.rtmp_url,
+        &konto.stream_key,
+    )
+    .await;
+    Ok(KonnektErgebnis {
+        neu_verbinden,
+        ziel_offen: !ziel_gesetzt,
+    })
 }
 
 pub async fn youtube_callback_kern(
@@ -300,7 +341,7 @@ pub async fn youtube_callback_kern(
     state: ConnectState,
     code: &str,
     jetzt: DateTime<Utc>,
-) -> Result<(), String> {
+) -> Result<KonnektErgebnis, String> {
     let token = client
         .exchange_code(code, &state.redirect_uri)
         .await
@@ -309,21 +350,18 @@ pub async fn youtube_callback_kern(
         .konto(&token.access_token)
         .await
         .map_err(|e| format!("konto: {}", fehlertext(e)))?;
-    let ziel = client.ziel(&token.access_token).await.unwrap_or_else(|error| {
-        tracing::warn!(streamer_id = state.streamer_id, error = %fehlertext(error), "youtube-connect: Stream-Ziel nicht abrufbar");
-        None
-    });
 
+    let neu_verbinden = token.refresh_token.is_none();
     let verbindung = PlatformConnection {
         streamer_id: state.streamer_id,
         platform: "youtube".to_string(),
         platform_user_id: konto.channel_id.clone(),
         platform_login: konto.titel,
-        access_token: token.access_token,
+        access_token: token.access_token.clone(),
         refresh_token: token.refresh_token.unwrap_or_default(),
         scopes: token.scopes,
         expires_at: oauth_expires_at(jetzt, token.expires_in),
-        needs_reauth: false,
+        needs_reauth: neu_verbinden,
     };
     let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
     store
@@ -331,15 +369,100 @@ pub async fn youtube_callback_kern(
         .await
         .map_err(|e| format!("speichern: {e}"))?;
 
-    if let Some(ziel) = ziel {
-        if let Err(error) = relay
-            .ziel_setzen(state.streamer_id, "youtube", &ziel.rtmp_url, &ziel.stream_key)
+    let ziel_gesetzt = match client.ziel(&verbindung.access_token).await {
+        Ok(Some(ziel)) => {
+            ziel_setzen_falls_moeglich(
+                relay,
+                state.streamer_id,
+                "youtube",
+                &ziel.rtmp_url,
+                &ziel.stream_key,
+            )
             .await
-        {
-            tracing::warn!(streamer_id = state.streamer_id, %error, "youtube-connect: Uplink-Ziel nicht gesetzt");
+        }
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(streamer_id = state.streamer_id, error = %fehlertext(error), "youtube-connect: Stream-Ziel nicht abrufbar");
+            false
+        }
+    };
+    Ok(KonnektErgebnis {
+        neu_verbinden,
+        ziel_offen: !ziel_gesetzt,
+    })
+}
+
+fn connect_query(platform: &str, erg: &KonnektErgebnis) -> String {
+    let mut query = format!("verbunden={platform}");
+    if erg.neu_verbinden {
+        query.push_str("&neu_verbinden=1");
+    }
+    if erg.ziel_offen {
+        query.push_str("&ziel_offen=1");
+    }
+    query
+}
+
+pub async fn plattform_stream_key_hinterlegen(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    relay: &dyn RelayZiele,
+    streamer_id: i64,
+    platform: &str,
+    jetzt: DateTime<Utc>,
+) -> StreamKeyStand {
+    let access_token = match platform_token_antwort(pool, config, streamer_id, platform, jetzt).await
+    {
+        Ok(antwort) => antwort.access_token,
+        Err(TokenFehler::KeineVerbindung) | Err(TokenFehler::NeuVerbinden) => {
+            return StreamKeyStand::KeineVerbindung
+        }
+        Err(TokenFehler::NichtLieferbar) => return StreamKeyStand::Fehlgeschlagen,
+    };
+    let ziel = match platform {
+        "kick" => {
+            let Some(client) = config.kick.as_ref() else {
+                return StreamKeyStand::KeineVerbindung;
+            };
+            match client.konto(&access_token).await {
+                Ok(konto) => Some((konto.rtmp_url, konto.stream_key)),
+                Err(error) => {
+                    tracing::warn!(streamer_id, platform, error = %fehlertext(error), "streamkey: Konto nicht abrufbar");
+                    return StreamKeyStand::Fehlgeschlagen;
+                }
+            }
+        }
+        "youtube" => {
+            let Some(client) = config.youtube.as_ref() else {
+                return StreamKeyStand::KeineVerbindung;
+            };
+            match client.ziel(&access_token).await {
+                Ok(Some(ziel)) => Some((ziel.rtmp_url, ziel.stream_key)),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(streamer_id, platform, error = %fehlertext(error), "streamkey: Stream-Ziel nicht abrufbar");
+                    return StreamKeyStand::Fehlgeschlagen;
+                }
+            }
+        }
+        _ => return StreamKeyStand::KeineVerbindung,
+    };
+    let Some((rtmp_url, stream_key)) = ziel else {
+        return StreamKeyStand::Fehlgeschlagen;
+    };
+    if stream_key.trim().is_empty() || !ingest_url_ok(&rtmp_url) {
+        return StreamKeyStand::Fehlgeschlagen;
+    }
+    match relay
+        .ziel_setzen(streamer_id, platform, &rtmp_url, &stream_key)
+        .await
+    {
+        Ok(()) => StreamKeyStand::Hinterlegt,
+        Err(error) => {
+            tracing::warn!(streamer_id, platform, %error, "streamkey: Uplink-Ziel nicht gespeichert");
+            StreamKeyStand::Fehlgeschlagen
         }
     }
-    Ok(())
 }
 
 fn fehlertext(fehler: OAuthFehler) -> String {
@@ -386,7 +509,7 @@ pub async fn callback_kick_handler(
     )
     .await
     {
-        Ok(()) => zurueck_zum_dashboard("verbunden=kick"),
+        Ok(erg) => zurueck_zum_dashboard(&connect_query("kick", &erg)),
         Err(error) => {
             tracing::warn!(%error, "kick-callback: Verbinden fehlgeschlagen");
             zurueck_zum_dashboard("verbinden_fehler=kick")
@@ -431,7 +554,7 @@ pub async fn callback_youtube_handler(
     )
     .await
     {
-        Ok(()) => zurueck_zum_dashboard("verbunden=youtube"),
+        Ok(erg) => zurueck_zum_dashboard(&connect_query("youtube", &erg)),
         Err(error) => {
             tracing::warn!(%error, "youtube-callback: Verbinden fehlgeschlagen");
             zurueck_zum_dashboard("verbinden_fehler=youtube")
@@ -477,7 +600,12 @@ pub async fn plattform_trennen(
     }
     let widerruf = match platform {
         "kick" => match kick {
-            Some(c) => c.revoke(&verbindung.access_token).await.err(),
+            Some(c) => {
+                if let Err(error) = c.event_subscriptions_loeschen(&verbindung.access_token).await {
+                    tracing::warn!(streamer_id, platform, error = %fehlertext(error), "trennen: Kick-Abos nicht loeschbar");
+                }
+                c.revoke(&verbindung.access_token).await.err()
+            }
             None => None,
         },
         "youtube" => match youtube {
@@ -698,6 +826,12 @@ mod tests {
                 stream_key: "sk_geheim".into(),
             })
         }
+        async fn event_subscriptions_loeschen(
+            &self,
+            _access_token: &str,
+        ) -> Result<(), OAuthFehler> {
+            Ok(())
+        }
     }
 
     struct FakeRelay {
@@ -784,6 +918,220 @@ mod tests {
         assert_eq!(gespeichert.access_token, "kick-acc");
         assert_eq!(gespeichert.platform_user_id, "4242");
         assert_eq!(gespeichert.platform_login, "streamerin");
+        let gesetzt = relay.gesetzt.lock().unwrap();
+        assert_eq!(gesetzt.len(), 1);
+        assert_eq!(gesetzt[0].1, "kick");
+        assert_eq!(gesetzt[0].3, "sk_geheim");
+    }
+
+    #[test]
+    fn ingest_url_wird_geprueft() {
+        assert!(ingest_url_ok("rtmp://live.twitch.tv/app"));
+        assert!(ingest_url_ok("rtmps://fa723.global-contribute.live-video.net"));
+        assert!(!ingest_url_ok(""));
+        assert!(!ingest_url_ok("https://example.test/app"));
+        assert!(!ingest_url_ok("rtmp://"));
+        assert!(!ingest_url_ok("live.twitch.tv/app"));
+    }
+
+    struct FakeKickKontoLeer;
+
+    #[async_trait::async_trait]
+    impl KickApi for FakeKickKontoLeer {
+        async fn exchange_code(
+            &self,
+            _code: &str,
+            _redirect_uri: &str,
+            _verifier: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            Ok(super::super::plattform_oauth::OAuthToken {
+                access_token: "kick-acc".into(),
+                refresh_token: Some("kick-ref".into()),
+                expires_in: 7200,
+                scopes: vec!["chat:write".into()],
+            })
+        }
+        async fn refresh(
+            &self,
+            _refresh_token: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            unreachable!()
+        }
+        async fn revoke(&self, _access_token: &str) -> Result<(), OAuthFehler> {
+            Ok(())
+        }
+        async fn konto(
+            &self,
+            _access_token: &str,
+        ) -> Result<super::super::plattform_oauth::KickKonto, OAuthFehler> {
+            Ok(super::super::plattform_oauth::KickKonto {
+                user_id: "4242".into(),
+                slug: "streamerin".into(),
+                rtmp_url: String::new(),
+                stream_key: String::new(),
+            })
+        }
+        async fn event_subscriptions_loeschen(
+            &self,
+            _access_token: &str,
+        ) -> Result<(), OAuthFehler> {
+            Ok(())
+        }
+    }
+
+    struct FakeKickOhneRefresh;
+
+    #[async_trait::async_trait]
+    impl KickApi for FakeKickOhneRefresh {
+        async fn exchange_code(
+            &self,
+            _code: &str,
+            _redirect_uri: &str,
+            _verifier: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            Ok(super::super::plattform_oauth::OAuthToken {
+                access_token: "kick-acc".into(),
+                refresh_token: None,
+                expires_in: 7200,
+                scopes: vec!["chat:write".into()],
+            })
+        }
+        async fn refresh(
+            &self,
+            _refresh_token: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            unreachable!()
+        }
+        async fn revoke(&self, _access_token: &str) -> Result<(), OAuthFehler> {
+            Ok(())
+        }
+        async fn konto(
+            &self,
+            _access_token: &str,
+        ) -> Result<super::super::plattform_oauth::KickKonto, OAuthFehler> {
+            Ok(super::super::plattform_oauth::KickKonto {
+                user_id: "4242".into(),
+                slug: "streamerin".into(),
+                rtmp_url: "rtmps://kick/app".into(),
+                stream_key: "sk_geheim".into(),
+            })
+        }
+        async fn event_subscriptions_loeschen(
+            &self,
+            _access_token: &str,
+        ) -> Result<(), OAuthFehler> {
+            Ok(())
+        }
+    }
+
+    struct FakeRelayFehler;
+
+    #[async_trait::async_trait]
+    impl RelayZiele for FakeRelayFehler {
+        async fn ziel_setzen(
+            &self,
+            _streamer_id: i64,
+            _platform: &str,
+            _rtmp_url: &str,
+            _stream_key: &str,
+        ) -> Result<(), String> {
+            Err("relay HTTP 502".into())
+        }
+        async fn ziel_loeschen(&self, _streamer_id: i64, _platform: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    #[tokio::test]
+    async fn kick_callback_kern_ohne_key_meldet_ziel_offen() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        let relay = FakeRelay {
+            gesetzt: std::sync::Mutex::new(Vec::new()),
+        };
+        let jetzt = zeit("2026-09-02T10:00:00Z");
+        let state = ConnectState {
+            streamer_id: 9110,
+            redirect_uri: "https://x.test/callback/kick".into(),
+            verifier: "verf".into(),
+        };
+        let erg = kick_callback_kern(&pool, &config, &FakeKickKontoLeer, &relay, state, "code", jetzt)
+            .await
+            .unwrap();
+        assert!(erg.ziel_offen);
+        assert!(!erg.neu_verbinden);
+        assert!(relay.gesetzt.lock().unwrap().is_empty());
+        let store = PlatformConnectionStore::new(pool, config.cipher.clone());
+        assert!(store.load(9110, "kick").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn kick_callback_kern_bei_relay_fehler_meldet_ziel_offen() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        let jetzt = zeit("2026-09-02T10:00:00Z");
+        let state = ConnectState {
+            streamer_id: 9111,
+            redirect_uri: "https://x.test/callback/kick".into(),
+            verifier: "verf".into(),
+        };
+        let erg = kick_callback_kern(&pool, &config, &FakeKick, &FakeRelayFehler, state, "code", jetzt)
+            .await
+            .unwrap();
+        assert!(erg.ziel_offen);
+        assert!(!erg.neu_verbinden);
+    }
+
+    #[tokio::test]
+    async fn kick_callback_kern_ohne_refresh_token_meldet_neu_verbinden() {
+        let pool = pool_oder_ende!();
+        let config = config();
+        let relay = FakeRelay {
+            gesetzt: std::sync::Mutex::new(Vec::new()),
+        };
+        let jetzt = zeit("2026-09-02T10:00:00Z");
+        let state = ConnectState {
+            streamer_id: 9112,
+            redirect_uri: "https://x.test/callback/kick".into(),
+            verifier: "verf".into(),
+        };
+        let erg =
+            kick_callback_kern(&pool, &config, &FakeKickOhneRefresh, &relay, state, "code", jetzt)
+                .await
+                .unwrap();
+        assert!(erg.neu_verbinden);
+        let store = PlatformConnectionStore::new(pool, config.cipher.clone());
+        let gespeichert = store.load(9112, "kick").await.unwrap().unwrap();
+        assert!(gespeichert.needs_reauth);
+    }
+
+    #[tokio::test]
+    async fn streamkey_fuer_kick_setzt_ziel() {
+        let pool = pool_oder_ende!();
+        let mut config = config();
+        config.kick = Some(std::sync::Arc::new(FakeKick) as std::sync::Arc<dyn KickApi>);
+        let jetzt = zeit("2026-09-02T10:00:00Z");
+        let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+        store
+            .upsert(&PlatformConnection {
+                streamer_id: 9120,
+                platform: "kick".to_string(),
+                platform_user_id: "4242".into(),
+                platform_login: "streamerin".into(),
+                access_token: "kick-acc".into(),
+                refresh_token: "kick-ref".into(),
+                scopes: vec!["chat:write".into()],
+                expires_at: jetzt + Duration::hours(2),
+                needs_reauth: false,
+            })
+            .await
+            .unwrap();
+        let relay = FakeRelay {
+            gesetzt: std::sync::Mutex::new(Vec::new()),
+        };
+        let stand =
+            plattform_stream_key_hinterlegen(&pool, &config, &relay, 9120, "kick", jetzt).await;
+        assert_eq!(stand, StreamKeyStand::Hinterlegt);
         let gesetzt = relay.gesetzt.lock().unwrap();
         assert_eq!(gesetzt.len(), 1);
         assert_eq!(gesetzt[0].1, "kick");

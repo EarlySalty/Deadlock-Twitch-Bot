@@ -98,8 +98,6 @@ test('keine_twitch_popouts_mehr', () => {
 });
 
 test('verbindenButton_nur_fuer_twitch_aktiv', () => {
-  // Der Fallback ohne verbindbar-Signal bleibt twitch-only, damit ein aelterer
-  // Server keinen Knopf anbietet, den er noch nicht bedienen kann.
   assert.equal(verbindenAktiv('twitch'), true);
   assert.equal(verbindenAktiv('kick'), false);
   assert.equal(verbindenAktiv('youtube'), false);
@@ -122,28 +120,23 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(zeilen[0].streamKeyVorhanden, true);
   assert.equal(zeilen[0].trennenMoeglich, true);
 
-  // Kick ist auf dieser Instanz eingerichtet: der Knopf ist aktiv.
   const kick = zeilen.find((z) => z.id === 'kick')!;
   assert.equal(kick.aktiv, true);
   assert.equal(kick.statusText, 'Nicht verbunden');
   assert.equal(kick.knopfText, 'Mit Kick verbinden');
   assert.equal(kick.trennenMoeglich, false);
 
-  // YouTube ohne Secrets: ausgegraut mit klarem Grund, kein Knopf.
   const youtube = zeilen.find((z) => z.id === 'youtube')!;
   assert.equal(youtube.aktiv, false);
   assert.equal(youtube.statusText, 'YouTube ist auf dieser Instanz noch nicht eingerichtet');
   assert.equal(youtube.knopfText, null);
   assert.equal(youtube.trennenMoeglich, false);
 
-  // TikTok bleibt beim schlichten Ausblick, ohne Einrichtungssatz.
   const tiktok = zeilen.find((z) => z.id === 'tiktok')!;
   assert.equal(tiktok.aktiv, false);
   assert.equal(tiktok.statusText, 'Folgt später');
   assert.equal(tiktok.knopfText, null);
 
-  // Der Grant steht, aber im Uplink liegt kein Schluessel: es geht noch kein
-  // Bild raus.
   const ohneKey = plattformVerbindungen({
     ...BASIS,
     verbindungen: [
@@ -154,7 +147,6 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
   assert.equal(ohneKey[0].streamKeyVorhanden, false);
   assert.equal(ohneKey[0].trennenMoeglich, true);
 
-  // Ein verbundenes Kick-Ziel laesst sich trennen.
   const kickVerbunden = plattformVerbindungen({
     ...BASIS,
     verbindungen: [

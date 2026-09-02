@@ -1519,23 +1519,40 @@ pub async fn streamkey_handler(
     let Some(Extension(config)) = config else {
         return nicht_eingerichtet();
     };
-    let Some(konto) = HelixKonto::aus_umgebung() else {
-        return nicht_eingerichtet();
-    };
     let id = match partner_id(&pool, &auth).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    match stream_key_hinterlegen(
-        &pool,
-        &config,
-        &konto,
-        &HttpRelayZiele::default(),
-        id,
-        &platform,
+    if platform == "kick" || platform == "youtube" {
+        let stand = super::plattform_connect::plattform_stream_key_hinterlegen(
+            &pool,
+            &config,
+            &HttpRelayZiele::default(),
+            id,
+            &platform,
+            chrono::Utc::now(),
+        )
+        .await;
+        return streamkey_antwort(stand);
+    }
+    let Some(konto) = HelixKonto::aus_umgebung() else {
+        return nicht_eingerichtet();
+    };
+    streamkey_antwort(
+        stream_key_hinterlegen(
+            &pool,
+            &config,
+            &konto,
+            &HttpRelayZiele::default(),
+            id,
+            &platform,
+        )
+        .await,
     )
-    .await
-    {
+}
+
+fn streamkey_antwort(stand: StreamKeyStand) -> Response {
+    match stand {
         StreamKeyStand::Hinterlegt => Json(json!({ "ok": true })).into_response(),
         StreamKeyStand::KeineVerbindung => fehler(
             StatusCode::CONFLICT,
