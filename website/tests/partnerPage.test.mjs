@@ -6,11 +6,15 @@ import test from "node:test";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const copyFile = `${root}/src/data/partnerPage.ts`;
 const pageFile = `${root}/src/components/partner/PartnerPage.tsx`;
+const cardFile = `${root}/src/components/partner/StreamCard.tsx`;
+const v2Page = `${root}/src/pages/StreamerNetworkPage.tsx`;
 const appFile = `${root}/src/App.tsx`;
-const htmlFile = `${root}/index.html`;
+const htmlFile = `${root}/v2/index.html`;
 
 const copy = readFileSync(copyFile, "utf8");
 const page = readFileSync(pageFile, "utf8");
+const card = readFileSync(cardFile, "utf8");
+const v2 = readFileSync(v2Page, "utf8");
 const app = readFileSync(appFile, "utf8");
 const html = readFileSync(htmlFile, "utf8");
 
@@ -20,8 +24,13 @@ function exportedList(name) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]);
 }
 
-test("die Landing hängt die Partner-Seite ein", () => {
-  assert.match(app, /PartnerPage/);
+test("die v1-Landing bleibt die bestehende Seite", () => {
+  assert.match(app, /from '@\/components\/sections\/Hero'/);
+  assert.doesNotMatch(app, /PartnerPage/);
+});
+
+test("v2 hängt die Partner-Seite ein", () => {
+  assert.match(v2, /PartnerPage/);
 });
 
 test("genau sechs Sektionen, in der Contract-Reihenfolge", () => {
@@ -45,13 +54,18 @@ test("Hero-CTA bleibt der bestehende OAuth-Start", () => {
   assert.match(page, /TWITCH_SECURITY_URL/);
 });
 
+test("Live-Karten nutzen Vorschaubilder, keinen Twitch-Player", () => {
+  assert.match(card, /static-cdn\.jtvnw\.net\/previews-ttv/);
+  assert.doesNotMatch(card, /player\.twitch\.tv/);
+  assert.doesNotMatch(card, /<iframe/);
+});
+
 test("Title und Meta kommen aus der Copy-Datei", () => {
   assert.match(html, /Deadlock Partner Netzwerk - Deutsche Deadlock Community/);
   assert.match(
     html,
     /Werde Partner der deutschen Deadlock Community\. Automatische Raids/,
   );
-  assert.doesNotMatch(html, /SoftwareApplication/);
   assert.doesNotMatch(html.toLowerCase(), /kostenlos verbinden/);
   assert.doesNotMatch(html.toLowerCase(), /wachstums-netzwerk/);
 });

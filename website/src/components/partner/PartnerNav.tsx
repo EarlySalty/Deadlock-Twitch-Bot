@@ -23,7 +23,7 @@ export function PartnerNav() {
       className={`pn-nav${scrolled ? " is-scrolled" : ""}${open ? " is-open" : ""}`}
     >
       <div className="pn-wrap pn-nav-inner">
-        <a className="pn-brand" href="/streamer/">
+        <a className="pn-brand" href="/streamer/v2/">
           <img src="/brand/logo/logo-192.png" alt="" width={32} height={32} />
           <span>{PARTNER_COPY.brand}</span>
         </a>

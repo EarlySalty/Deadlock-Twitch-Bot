@@ -15,9 +15,9 @@ import {
 import { PartnerFooter } from "@/components/partner/PartnerFooter";
 import { PartnerNav } from "@/components/partner/PartnerNav";
 import {
-  avatarColor,
+  Avatar,
   clipPartners,
-  initials,
+  livePreviewUrl,
   StreamCard,
 } from "@/components/partner/StreamCard";
 import "./partner.css";
@@ -80,19 +80,19 @@ function PartnerTile({ channel }: { channel: PartnerChannel }) {
       target="_blank"
       rel="noopener noreferrer"
     >
-      <span className="pn-avatar" style={{ background: avatarColor(channel.login) }}>
-        {initials(channel.login)}
-        {channel.avatarUrl ? (
+      {channel.liveDeadlock ? (
+        <span className="pn-tile-shot">
           <img
-            src={channel.avatarUrl}
+            src={livePreviewUrl(channel.login)}
             alt=""
             onError={(event) => {
               event.currentTarget.style.display = "none";
             }}
           />
-        ) : null}
-      </span>
-      <span className="min-w-0">
+        </span>
+      ) : null}
+      <Avatar login={channel.login} avatarUrl={channel.avatarUrl} size={72} />
+      <span className="pn-tile-meta">
         <strong>{channel.displayName}</strong>
         <small>
           {channel.liveDeadlock
@@ -201,7 +201,6 @@ export function PartnerPage() {
                     live={channel.liveDeadlock}
                     viewers={channel.liveDeadlock ? channel.viewers : undefined}
                     avatarUrl={channel.avatarUrl}
-                    embed={channel.liveDeadlock}
                   />
                 ))}
               </div>

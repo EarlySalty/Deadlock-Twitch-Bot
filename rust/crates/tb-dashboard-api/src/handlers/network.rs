@@ -4,7 +4,12 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tb_analytics::network::{network_streamers, NetworkStreamerRow};
+use tb_transport_twitch::{HelixClient, HelixConfig};
+use tokio::sync::Mutex;
 
 /// JSON-Repräsentation eines Streamers im Netzwerk.
 ///
@@ -13,6 +18,10 @@ use tb_analytics::network::{network_streamers, NetworkStreamerRow};
 #[derive(Serialize)]
 pub struct NetworkStreamerJson {
     pub login: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
     pub is_partner: bool,
     pub is_live: bool,
     pub viewer_count: i32,
@@ -41,6 +50,8 @@ impl NetworkStreamerJson {
         }
         Some(Self {
             login,
+            display_name: None,
+            avatar_url: None,
             is_partner: true,
             is_live: r.is_live != 0,
             viewer_count: r.viewer_count,
@@ -73,16 +84,84 @@ fn ist_fehlende_relation(e: &sqlx::Error) -> bool {
         .unwrap_or(false)
 }
 
+struct ProfileCache {
+    at: Instant,
+    by_login: HashMap<String, (Option<String>, Option<String>)>,
+}
+
+const PROFILE_TTL: Duration = Duration::from_secs(3600);
+
+fn helix_client() -> Option<&'static HelixClient> {
+    static HELIX: OnceLock<Option<HelixClient>> = OnceLock::new();
+    HELIX
+        .get_or_init(|| {
+            let client_id = std::env::var("TWITCH_CLIENT_ID")
+                .ok()
+                .filter(|value| !value.is_empty())?;
+            let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+                .ok()
+                .filter(|value| !value.is_empty())?;
+            HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()
+        })
+        .as_ref()
+}
+
+async fn enrich_profiles(streamers: &mut [NetworkStreamerJson]) {
+    if streamers.is_empty() {
+        return;
+    }
+    let Some(helix) = helix_client() else {
+        return;
+    };
+    static CACHE: Mutex<Option<ProfileCache>> = Mutex::const_new(None);
+    let logins: Vec<String> = streamers.iter().map(|s| s.login.clone()).collect();
+    {
+        let cache = CACHE.lock().await;
+        if let Some(hit) = cache.as_ref() {
+            if hit.at.elapsed() < PROFILE_TTL {
+                for streamer in streamers.iter_mut() {
+                    if let Some((display, avatar)) = hit.by_login.get(&streamer.login) {
+                        streamer.display_name = display.clone();
+                        streamer.avatar_url = avatar.clone();
+                    }
+                }
+                return;
+            }
+        }
+    }
+    let refs: Vec<&str> = logins.iter().map(String::as_str).collect();
+    let Ok(users) = helix.get_users(&refs).await else {
+        return;
+    };
+    let mut by_login = HashMap::new();
+    for streamer in streamers.iter_mut() {
+        if let Some(user) = users.get(&streamer.login) {
+            let display = Some(user.display_name.clone()).filter(|name| !name.is_empty());
+            let avatar = user
+                .profile_image_url
+                .clone()
+                .filter(|url| !url.trim().is_empty());
+            streamer.display_name = display.clone();
+            streamer.avatar_url = avatar.clone();
+            by_login.insert(streamer.login.clone(), (display, avatar));
+        }
+    }
+    *CACHE.lock().await = Some(ProfileCache {
+        at: Instant::now(),
+        by_login,
+    });
+}
+
 /// `GET /twitch/api/v2/public/network`
 pub async fn network_handler(State(pool): State<PgPool>) -> impl IntoResponse {
     match network_streamers(&pool).await {
         Ok(rows) => {
-            let resp = NetworkResponse {
-                streamers: rows
-                    .into_iter()
-                    .filter_map(NetworkStreamerJson::from_row)
-                    .collect(),
-            };
+            let mut streamers: Vec<NetworkStreamerJson> = rows
+                .into_iter()
+                .filter_map(NetworkStreamerJson::from_row)
+                .collect();
+            enrich_profiles(&mut streamers).await;
+            let resp = NetworkResponse { streamers };
             (StatusCode::OK, Json(resp)).into_response()
         }
         // Fehlende View/Tabelle → graceful leeres Ergebnis (Python-Parität):

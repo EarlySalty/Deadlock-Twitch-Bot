@@ -1,9 +1,4 @@
-import {
-  clipPfp,
-  clipSrc,
-  NETWORK_CLIPS,
-  twitchUrl,
-} from "@/data/partnerPage";
+import { clipPfp, clipSrc, NETWORK_CLIPS, twitchUrl } from "@/data/partnerPage";
 import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
 
 const AVATAR_COLORS = [
@@ -27,15 +22,48 @@ export function initials(login: string): string {
   return login.replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "DL";
 }
 
-export function twitchParent(): string {
-  if (typeof window !== "undefined" && window.location.hostname) {
-    return window.location.hostname;
-  }
-  return "deutsche-deadlock-community.de";
-}
-
 export function knownClip(login: string): boolean {
   return NETWORK_CLIPS.some((clip) => clip.login === login);
+}
+
+export function livePreviewUrl(login: string): string {
+  const tick = Math.floor(Date.now() / 60_000);
+  return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(login)}-1280x720.jpg?t=${tick}`;
+}
+
+export function Avatar({
+  login,
+  avatarUrl,
+  size = 40,
+}: {
+  login: string;
+  avatarUrl?: string;
+  size?: number;
+}) {
+  const local = knownClip(login) ? clipPfp(login) : undefined;
+  const src = avatarUrl || local;
+  return (
+    <span
+      className="pn-avatar"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.38,
+        background: avatarColor(login),
+      }}
+    >
+      {initials(login)}
+      {src ? (
+        <img
+          src={src}
+          alt=""
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      ) : null}
+    </span>
+  );
 }
 
 type StreamCardProps = {
@@ -46,7 +74,6 @@ type StreamCardProps = {
   avatarUrl?: string;
   ended?: boolean;
   dim?: boolean;
-  embed?: boolean;
 };
 
 export function StreamCard({
@@ -57,35 +84,30 @@ export function StreamCard({
   avatarUrl,
   ended = false,
   dim = false,
-  embed = false,
 }: StreamCardProps) {
   const hasClip = knownClip(login);
-  const pfp = clipPfp(login);
-  const showEmbed = embed && live;
 
   return (
-    <article className={`pn-card${dim ? " is-dim" : ""}`}>
+    <a
+      className={`pn-card${dim ? " is-dim" : ""}`}
+      href={twitchUrl(login)}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
       <div className="pn-player">
-        {showEmbed ? (
-          <iframe
-            title={`Live-Stream von ${displayName}`}
-            src={`https://player.twitch.tv/?channel=${encodeURIComponent(login)}&parent=${twitchParent()}&muted=true&autoplay=true`}
-            allow="autoplay; fullscreen"
-            allowFullScreen
-          />
-        ) : hasClip ? (
-          <video src={clipSrc(login)} muted autoPlay loop playsInline />
-        ) : avatarUrl ? (
+        {live && !ended ? (
           <img
-            src={avatarUrl}
+            src={livePreviewUrl(login)}
             alt=""
             onError={(event) => {
               event.currentTarget.style.display = "none";
             }}
           />
+        ) : hasClip ? (
+          <video src={clipSrc(login)} muted autoPlay loop playsInline />
         ) : null}
         <div className="pn-scrim" />
-        {live && !ended && !showEmbed ? (
+        {live && !ended ? (
           <span className="pn-live">
             <i />
             Live
@@ -98,26 +120,8 @@ export function StreamCard({
           </div>
         ) : null}
       </div>
-      <a
-        className="pn-bar"
-        href={twitchUrl(login)}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        <span className="pn-avatar" style={{ background: avatarColor(login) }}>
-          {initials(login)}
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt=""
-              onError={(event) => {
-                event.currentTarget.style.display = "none";
-              }}
-            />
-          ) : hasClip ? (
-            <img src={pfp} alt="" />
-          ) : null}
-        </span>
+      <span className="pn-bar">
+        <Avatar login={login} avatarUrl={avatarUrl} size={36} />
         <span>
           <strong>{displayName}</strong>
           <small>
@@ -126,8 +130,8 @@ export function StreamCard({
               : "Deadlock"}
           </small>
         </span>
-      </a>
-    </article>
+      </span>
+    </a>
   );
 }
 
