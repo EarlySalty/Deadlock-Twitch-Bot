@@ -210,6 +210,37 @@
   }
 }
 
+.v2-ambient-field {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.v2-particle {
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(239, 212, 157, 0.6);
+  box-shadow: 0 0 8px rgba(201, 168, 106, 0.75);
+  opacity: 0;
+  animation-name: v2-float;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.v2-particle-teal {
+  background: rgba(85, 151, 143, 0.6);
+  box-shadow: 0 0 8px rgba(85, 151, 143, 0.75);
+}
+
+@keyframes v2-float {
+  0% { transform: translateY(24px); opacity: 0; }
+  22% { opacity: 0.85; }
+  78% { opacity: 0.7; }
+  100% { transform: translateY(-64px); opacity: 0; }
+}
+
 .v2-ambient {
   pointer-events:none;
   filter:blur(100px);
@@ -1373,6 +1404,7 @@
   .v2-marquee,
   .v2-pulse,
   .v2-ambient,
+  .v2-particle,
   .v2-screen-sheen,
   .v2-node-live::after,
   .v2-hub-live::after,

@@ -52,30 +52,7 @@ function ProofItem({
  */
 export function NetworkHero({ metrics }: { metrics: NetworkMetrics }) {
   return (
-    <section className="relative overflow-hidden pt-32 pb-10 sm:pt-40 sm:pb-16">
-      {/* Lichtinseln hinter der Komposition */}
-      <div
-        className="v2-ambient v2-ambient-gold"
-        style={{
-          top: "-14%",
-          right: "-10%",
-          width: "min(52rem, 82vw)",
-          height: "min(52rem, 82vw)",
-        }}
-        aria-hidden="true"
-      />
-      <div
-        className="v2-ambient v2-ambient-teal"
-        style={{
-          bottom: "-24%",
-          left: "-14%",
-          width: "min(40rem, 70vw)",
-          height: "min(40rem, 70vw)",
-          animationDelay: "-7s",
-        }}
-        aria-hidden="true"
-      />
-
+    <section className="relative overflow-hidden pt-28 pb-10 sm:pt-32 sm:pb-16">
       <div className="relative mx-auto max-w-[84rem] px-6">
         <div className="mx-auto max-w-3xl text-center">
           <motion.span

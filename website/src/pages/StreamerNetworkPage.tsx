@@ -1,4 +1,5 @@
 import { Footer } from "@/components/layout/Footer";
+import { NetworkAmbient } from "@/components/v2/NetworkAmbient";
 import { NetworkNav } from "@/components/v2/NetworkChrome";
 import { NetworkHero } from "@/components/v2/NetworkHero";
 import { PartnersSection } from "@/components/v2/NetworkLive";
@@ -33,9 +34,8 @@ export function StreamerNetworkPage() {
   return (
     <>
       <NetworkNav />
-      {/* overflow-x-clip: die Lichtinseln ragen absichtlich ueber die
-          Textkante hinaus und duerfen dabei keine Seitenscrollleiste erzeugen. */}
-      <main className="relative overflow-x-clip">
+      <NetworkAmbient />
+      <main className="relative z-10 overflow-x-clip">
         <NetworkHero metrics={metrics} />
         <PartnersSection
           partners={metrics.partnerList}
@@ -54,15 +54,15 @@ export function StreamerNetworkPage() {
         <ObjectionsSection />
         <NetworkCta partners={metrics.partnerList} />
       </main>
-      {/* Gleiche Textkante wie die Abschnitte, damit der Hinweis nicht auf
-          der Leitung klebt. */}
-      <div className="mx-auto max-w-[84rem] px-6">
+      <div className="relative z-10 mx-auto max-w-[84rem] px-6">
         <p className="pb-10 pl-6 text-xs text-[rgba(183,170,145,0.45)] sm:pl-12">
           Vorschau der neuen Streamer-Seite. Die aktive Seite liegt weiterhin
           unter /streamer/.
         </p>
       </div>
-      <Footer />
+      <div className="relative z-10">
+        <Footer />
+      </div>
     </>
   );
 }
