@@ -63,7 +63,6 @@ function heroStage(live: PartnerChannel[], clips: PartnerChannel[]) {
         live={featured.liveDeadlock}
         viewers={featured.liveDeadlock ? featured.viewers : undefined}
         avatarUrl={featured.avatarUrl}
-        embed={featured.liveDeadlock}
       />
       <p className="pn-stage-caption">
         {featured.liveDeadlock ? PARTNER_COPY.stageLive : PARTNER_COPY.stageRaid}
