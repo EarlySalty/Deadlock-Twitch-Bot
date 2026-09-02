@@ -1489,9 +1489,7 @@ async fn plattform_trennen_antwort(
     )
     .await;
     match ergebnis {
-        PlattformTrennenErgebnis::Getrennt | PlattformTrennenErgebnis::KeineVerbindung => {
-            Json(json!({ "ok": true })).into_response()
-        }
+        PlattformTrennenErgebnis::Getrennt => Json(json!({ "ok": true })).into_response(),
         PlattformTrennenErgebnis::RelayFehler => fehler(
             StatusCode::BAD_GATEWAY,
             "Der Uplink hat das Ziel nicht entfernt. Bitte noch einmal versuchen.",
