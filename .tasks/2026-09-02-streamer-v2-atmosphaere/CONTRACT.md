@@ -137,3 +137,5 @@ lebender Charakter von v1, konsequenter und moderner.
 
 ## Amendments
 
+- 2026-09-02: Erlaubter Änderungsbereich alt -> neu unverändert, nur Formathinweis: diff-policy.py liest je Listenzeile genau einen Pfad ohne Zusatztext, deshalb meldet es die Zeilen mit Backtick-Listen, Klammern und Globs (website/src/streamer-v2.css, website/src/data/networkPage.ts, website/tests/streamerV2.test.mjs, website/public/clips/poster/*.jpg) als P4, obwohl sie oben ausdrücklich erlaubt sind; keine Scope-Erweiterung, Grund: Parser-Format, künftig ein Pfad je Zeile ohne Zusatz, entschieden von Orchestrator
+
