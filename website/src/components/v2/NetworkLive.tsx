@@ -366,8 +366,8 @@ export function PartnerGrid({
     return impact(b) - impact(a);
   });
 
-  const marqueeItems =
-    sorted.length > 6 ? [...sorted, ...sorted] : sorted;
+  const showMarquee = sorted.length > 8;
+  const marqueeItems = [...sorted, ...sorted];
 
   return (
     <div className="panel-card rounded-2xl p-6 sm:p-7">
@@ -383,7 +383,7 @@ export function PartnerGrid({
         </span>
       </div>
 
-      {expanded ? (
+      {expanded || !showMarquee ? (
         <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
           {sorted.map((channel, i) => (
             <PartnerTile key={channel.login} channel={channel} index={i} />
@@ -392,38 +392,45 @@ export function PartnerGrid({
       ) : (
         <div className="v2-marquee-mask mt-6 overflow-hidden py-1">
           <div className="v2-marquee gap-3">
-            {marqueeItems.map((channel, i) => (
-              <a
-                key={`${channel.login}-${i}`}
-                href={twitchUrl(channel.login)}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={channel.displayName}
-                className={`relative shrink-0 no-underline transition-opacity ${
-                  channel.liveDeadlock ? "opacity-100" : "opacity-45 hover:opacity-90"
-                }`}
-              >
-                <Avatar login={channel.login} avatarUrl={channel.avatarUrl} size={40} />
-                {channel.liveDeadlock ? (
-                  <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-card,#17130c)]" />
-                ) : null}
-              </a>
-            ))}
+            {marqueeItems.map((channel, i) => {
+              const clone = i >= sorted.length;
+              return (
+                <a
+                  key={`${channel.login}-${i}`}
+                  href={twitchUrl(channel.login)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={channel.displayName}
+                  aria-hidden={clone ? true : undefined}
+                  tabIndex={clone ? -1 : undefined}
+                  className={`relative shrink-0 no-underline transition-opacity ${
+                    channel.liveDeadlock ? "opacity-100" : "opacity-45 hover:opacity-90"
+                  }`}
+                >
+                  <Avatar login={channel.login} avatarUrl={channel.avatarUrl} size={40} />
+                  {channel.liveDeadlock ? (
+                    <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-card,#17130c)]" />
+                  ) : null}
+                </a>
+              );
+            })}
           </div>
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--color-border)] py-3 text-sm font-semibold text-[var(--color-text-primary)] transition-all hover:border-[var(--color-border-hover)] hover:bg-white/5"
-      >
-        {expanded ? "Weniger anzeigen" : `Alle ${sorted.length} Partner anzeigen`}
-        <ChevronDown
-          size={16}
-          className={`transition-transform ${expanded ? "rotate-180" : ""}`}
-        />
-      </button>
+      {showMarquee ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--color-border)] py-3 text-sm font-semibold text-[var(--color-text-primary)] transition-all hover:border-[var(--color-border-hover)] hover:bg-white/5"
+        >
+          {expanded ? "Weniger anzeigen" : `Alle ${sorted.length} Partner anzeigen`}
+          <ChevronDown
+            size={16}
+            className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+          />
+        </button>
+      ) : null}
     </div>
   );
 }

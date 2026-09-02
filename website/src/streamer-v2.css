@@ -697,6 +697,15 @@
   }
 }
 
+.v2-rd-clip {
+  background:#efd49d;
+  color:#0b0b0b;
+}
+
+.v2-rd-clip .v2-rd-live-dot {
+  background:#0b0b0b;
+}
+
 .v2-rd-duration {
   color:#fff;
   font-variant-numeric:tabular-nums;

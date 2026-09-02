@@ -124,6 +124,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const srcMetaRef = useRef<HTMLSpanElement>(null);
   const srcDurRef = useRef<HTMLSpanElement>(null);
   const srcLiveRef = useRef<HTMLSpanElement>(null);
+  const srcBadgeTextRef = useRef<HTMLSpanElement>(null);
   const srcOfflineRef = useRef<HTMLDivElement>(null);
 
   const tgtScreenRef = useRef<HTMLDivElement>(null);
@@ -136,6 +137,8 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const tgtViewersRef = useRef<HTMLSpanElement>(null);
   const tgtMetaRef = useRef<HTMLSpanElement>(null);
   const tgtDurRef = useRef<HTMLSpanElement>(null);
+  const tgtLiveRef = useRef<HTMLSpanElement>(null);
+  const tgtBadgeTextRef = useRef<HTMLSpanElement>(null);
 
   const stampRef = useRef<HTMLSpanElement>(null);
   const lineRef = useRef<HTMLDivElement>(null);
@@ -180,6 +183,8 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       const view = side === "src" ? srcViewersRef : tgtViewersRef;
       const meta = side === "src" ? srcMetaRef : tgtMetaRef;
       const dur = side === "src" ? srcDurRef : tgtDurRef;
+      const live = side === "src" ? srcLiveRef : tgtLiveRef;
+      const badgeText = side === "src" ? srcBadgeTextRef : tgtBadgeTextRef;
 
       if (ch.video && video.current) {
         if (art.current) art.current.style.backgroundImage = "none";
@@ -219,13 +224,15 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       if (name.current) name.current.textContent = ch.displayName;
       if (barName.current) {
         barName.current.textContent = ch.displayName;
-        if (ch.login) barName.current.href = `https://twitch.tv/${ch.login}`;
+        if (!ch.sample && ch.login) barName.current.href = `https://twitch.tv/${ch.login}`;
         else barName.current.removeAttribute("href");
       }
       if (barSub.current)
         barSub.current.textContent = ch.sample
-          ? "Spielt Deadlock"
+          ? "Clip aus dem Netzwerk"
           : "Partner im Netzwerk";
+      if (live.current) live.current.classList.toggle("v2-rd-clip", ch.sample);
+      if (badgeText.current) badgeText.current.textContent = ch.sample ? "CLIP" : "LIVE";
       if (view.current) view.current.textContent = ch.sample ? "" : String(viewers);
       if (meta.current) meta.current.textContent = ch.sample ? "Deadlock" : "Zuschauer · Deadlock";
       if (dur.current) dur.current.textContent = fmtDuration(durationSecs);
@@ -588,7 +595,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                     <div className="v2-rd-ui-top">
                       <span className="v2-rd-live" ref={srcLiveRef}>
                         <span className="v2-rd-live-dot" />
-                        LIVE
+                        <span ref={srcBadgeTextRef}>LIVE</span>
                       </span>
                       <span className="v2-rd-duration" ref={srcDurRef}>
                         2:14:07
@@ -645,9 +652,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                   </span>
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
-                      <span className="v2-rd-live">
+                      <span className="v2-rd-live" ref={tgtLiveRef}>
                         <span className="v2-rd-live-dot" />
-                        LIVE
+                        <span ref={tgtBadgeTextRef}>LIVE</span>
                       </span>
                       <span className="v2-rd-duration" ref={tgtDurRef}>
                         0:41:22
