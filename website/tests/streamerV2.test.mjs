@@ -41,8 +41,13 @@ test("die Streamer-Landing v2 trägt den Community-Markennamen", () => {
     join(websiteRoot, "src/components/v2/NetworkChrome.tsx"),
     "utf8",
   );
+  const partnerNav = readFileSync(
+    join(websiteRoot, "src/components/partner/PartnerNav.tsx"),
+    "utf8",
+  );
   const html = readFileSync(join(websiteRoot, "v2/index.html"), "utf8");
   assert.ok(nav.includes("Deutsche Deadlock Community"), "Nav nennt die Community nicht");
+  assert.ok(partnerNav.includes("PARTNER_COPY.brand"), "Partner-Nav hängt die Marke nicht ein");
   assert.match(
     html,
     /<title>[^<]*Deutsche Deadlock Community[^<]*<\/title>/,
