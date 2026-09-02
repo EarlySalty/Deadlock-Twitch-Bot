@@ -64,7 +64,7 @@ export function OpenMetricsSection({ metrics }: { metrics: NetworkMetrics }) {
       ambientSide="left"
       stamp="06 · Offene Zahlen"
       headline="Wir behaupten nichts, was wir nicht zeigen können."
-      intro="Diese Werte kommen direkt aus dem laufenden Betrieb und ändern sich, während du hier liest. Wenn eine Zahl schlecht aussieht, steht sie trotzdem da."
+      intro="Diese Werte kommen direkt aus dem laufenden Betrieb und ändern sich, während du hier liest."
     >
       <div className="grid gap-5 sm:grid-cols-3">
         <MetricTile

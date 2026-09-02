@@ -18,7 +18,7 @@ import { Check, Radio, Scissors } from "lucide-react";
 /** ① Auto-Raid: dein Kanal in der Mitte, Partner rundherum. */
 function RaidVisual() {
   return (
-    <div className="v2-visual flex h-[15rem] items-center justify-center p-6">
+    <div className="v2-visual flex h-[17rem] items-center justify-center p-6">
       <div className="relative grid w-full max-w-[19rem] grid-cols-3 place-items-center gap-y-7">
         {/* Verbindungen liegen unter den Knoten */}
         <div className="v2-link v2-link-h" style={{ top: "50%" }} aria-hidden="true" />
@@ -61,7 +61,7 @@ function ProtectionVisual() {
   ];
 
   return (
-    <div className="v2-visual relative flex h-[15rem] flex-col justify-center gap-3 p-6">
+    <div className="v2-visual relative flex h-[17rem] flex-col justify-center gap-3 p-6">
       <span className="v2-stamp v2-stamp-dim absolute right-4 top-3">Beispiel</span>
       {rows.map((row) => (
         <div key={row.who} className="v2-feed-row">
@@ -102,7 +102,7 @@ function InsightVisual() {
   const peak = bars.indexOf(Math.max(...bars));
 
   return (
-    <div className="v2-visual flex h-[15rem] flex-col justify-end p-6">
+    <div className="v2-visual flex h-[17rem] flex-col justify-end p-6">
       <div className="relative flex h-[7.5rem] items-end gap-[3px]">
         {bars.map((value, i) => (
           <span
@@ -144,7 +144,7 @@ function ClipVisual() {
   ];
 
   return (
-    <div className="v2-visual relative flex h-[15rem] flex-col justify-center gap-4 p-6">
+    <div className="v2-visual relative flex h-[17rem] flex-col justify-center gap-4 p-6">
       <span className="v2-stamp v2-stamp-dim absolute right-4 top-3">Beispiel</span>
       <div className="grid grid-cols-3 gap-3">
         {clips.map((clip) => (

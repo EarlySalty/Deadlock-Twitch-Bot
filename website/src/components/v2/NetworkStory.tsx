@@ -1,11 +1,5 @@
 import { motion } from "framer-motion";
-import {
-  Clapperboard,
-  Check,
-  ShieldCheck,
-  Sparkles,
-  Swords,
-} from "lucide-react";
+import { Clapperboard, ShieldCheck, Sparkles, Swords } from "lucide-react";
 import { ProtocolSection } from "@/components/v2/NetworkChrome";
 import { PillarVisual } from "@/components/v2/NetworkPillarVisuals";
 import { planSteps, valuePillars } from "@/data/networkPage";
@@ -38,13 +32,7 @@ export function VoidSection() {
           </span>
         </>
       }
-      intro={
-        <>
-          Für die meisten kleinen Kanäle ist das der teuerste Moment des Abends.
-          Die Leute, die gerade noch da waren, sind weg. Beim nächsten Mal
-          fängst du wieder von vorne an.
-        </>
-      }
+      intro="Für die meisten kleinen Kanäle ist das der teuerste Moment des Abends."
     >
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Ohne Netzwerk */}
@@ -61,8 +49,6 @@ export function VoidSection() {
           </h3>
           <p className="mt-3 text-[var(--color-text-secondary)]">
             Der Kanal geht offline, die Zuschauer verteilen sich irgendwohin.
-            Was du an einem Abend aufgebaut hast, ist am nächsten Abend nicht
-            mehr da.
           </p>
           <div className="mt-8 flex h-16 items-center gap-2.5">
             {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
@@ -89,8 +75,7 @@ export function VoidSection() {
           </h3>
           <p className="mt-3 text-[var(--color-text-secondary)]">
             Dein Publikum landet bei einem anderen deutschen Deadlock-Stream,
-            der gerade läuft. Es bleibt in der Community. Und wenn dort Schluss
-            ist, kommt es zu dir oder zum nächsten Partner.
+            der gerade läuft.
           </p>
           <div className="relative mt-8 h-16">
             <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-[rgba(201,168,106,0.45)] to-[rgba(85,151,143,0.45)]" />
@@ -191,22 +176,6 @@ function PillarCard({ pillar, index }: { pillar: ValuePillar; index: number }) {
         <p className="mt-5 leading-relaxed text-[var(--color-text-secondary)]">
           {pillar.body}
         </p>
-
-        <ul className="mt-6 space-y-2.5">
-          {pillar.points.map((point) => (
-            <li
-              key={point}
-              className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
-            >
-              <Check
-                size={16}
-                className="mt-0.5 shrink-0"
-                style={{ color: accent }}
-              />
-              <span>{point}</span>
-            </li>
-          ))}
-        </ul>
       </div>
     </motion.article>
   );
@@ -220,7 +189,7 @@ export function PillarsSection() {
       ambientSide="left"
       stamp="04 · Was du bekommst"
       headline="Vier Dinge, die du sonst selbst machen müsstest."
-      intro="Der Bot ist der Liefermechanismus. Der eigentliche Wert liegt darin, dass hinter deinem Kanal andere Kanäle stehen."
+      intro="Der eigentliche Wert liegt darin, dass hinter deinem Kanal andere Kanäle stehen."
     >
       <div className="grid gap-6 lg:grid-cols-2">
         {valuePillars.map((pillar, i) => (

@@ -23,13 +23,13 @@ export const planSteps: PlanStep[] = [
   {
     index: "01",
     title: "Twitch verbinden",
-    body: "Ein Klick auf Twitch, Freigabe erteilen, fertig. Wir fragen nur die Rechte ab, die das jeweilige Feature wirklich braucht.",
+    body: "Ein Klick auf Twitch, Freigabe erteilen, fertig.",
     duration: "ca. 2 Minuten",
   },
   {
     index: "02",
     title: "Netzwerk aktivieren",
-    body: "Du wählst, ob dein Stream am Ende automatisch weitergibt und wen du empfangen willst. Beides lässt sich jederzeit abschalten.",
+    body: "Du wählst, ob dein Stream am Ende automatisch weitergibt und wen du empfangen willst.",
     duration: "einmalig",
   },
   {
@@ -46,7 +46,6 @@ export interface ValuePillar {
   kicker: string;
   title: string;
   body: string;
-  points: string[];
   tone: "primary" | "accent";
 }
 
@@ -57,12 +56,7 @@ export const valuePillars: ValuePillar[] = [
     icon: "Swords",
     kicker: "Der Kern",
     title: "Auto-Raid-Netzwerk",
-    body: "Wenn dein Stream endet, geht deine Community nicht offline, sondern zum nächsten deutschen Deadlock-Streamer, der gerade live ist. Umgekehrt bekommst du Zuschauer, wenn andere aufhören.",
-    points: [
-      "Passende Partner statt Zufall: Sprache, Spiel und Größe entscheiden",
-      "Manueller Raid bleibt jederzeit möglich",
-      "Ausschalten geht mit einem Klick im Dashboard",
-    ],
+    body: "Wenn dein Stream endet, geht deine Community nicht offline, sondern zum nächsten deutschen Deadlock-Streamer, der gerade live ist.",
     tone: "primary",
   },
   {
@@ -70,12 +64,7 @@ export const valuePillars: ValuePillar[] = [
     icon: "ShieldCheck",
     kicker: "Die Grundlage",
     title: "Schutz im Chat",
-    body: "Follow-Bots, Viewbot-Werbung und Selbstpromo laufen bei uns gegen eine gemeinsame Liste. Was in einem Partner-Chat auffällt, ist in allen anderen schon bekannt.",
-    points: [
-      "Gemeinsame Spam-Erkennung über alle Partner-Kanäle",
-      "Wortfilter und Timeouts nach deinen Regeln",
-      "Bleibt kostenlos, in jeder Stufe",
-    ],
+    body: "Follow-Bots, Viewbot-Werbung und Selbstpromo laufen bei uns gegen eine gemeinsame Liste über alle Partner-Kanäle.",
     tone: "accent",
   },
   {
@@ -83,12 +72,7 @@ export const valuePillars: ValuePillar[] = [
     icon: "Sparkles",
     kicker: "Nach dem Stream",
     title: "Auswertung und Coaching",
-    body: "Das Dashboard zeigt, wann Zuschauer gekommen und gegangen sind, wie der Chat lief und was deine besten Momente waren. Dazu ein Wochenreport, der die Zahlen einordnet statt sie nur zu zeigen.",
-    points: [
-      "Zuschauerverlauf, Chat-Aktivität und Wachstum in einer Ansicht",
-      "Wochenreport mit konkreten nächsten Schritten",
-      "Vergleich mit deinen eigenen Vorwochen, nicht mit fremden Kanälen",
-    ],
+    body: "Das Dashboard zeigt, wann Zuschauer gekommen und gegangen sind, wie der Chat lief und was deine besten Momente waren.",
     tone: "primary",
   },
   {
@@ -96,12 +80,7 @@ export const valuePillars: ValuePillar[] = [
     icon: "Clapperboard",
     kicker: "Zwischen den Streams",
     title: "Clips per Befehl im Chat",
-    body: "Wer !clip in den Chat schreibt, hält den Moment als Twitch-Clip fest. Mehr ist es heute noch nicht: Zuschnitt, Hochkant-Format und automatisches Posten sind in Arbeit.",
-    points: [
-      "!clip im Chat legt den Moment sofort als Twitch-Clip an",
-      "Der Befehl gehört zu Free und kostet nichts",
-      "Zuschnitt, Hochkant-Format und Posten kommen später",
-    ],
+    body: "Wer !clip in den Chat schreibt, hält den Moment als Twitch-Clip fest.",
     tone: "accent",
   },
 ];
@@ -141,8 +120,6 @@ export const plans: Plan[] = [
       { label: "Kompletter Chat-Schutz", included: true },
       { label: "Go-Live-Post im Community-Discord", included: true },
       { label: "Dashboard mit Grundauswertung", included: true },
-      { label: "Werbefreier Chat", included: false },
-      { label: "Wochenreport und volle Auswertung", included: false },
     ],
   },
   {
@@ -160,7 +137,6 @@ export const plans: Plan[] = [
       { label: "Bevorzugte Platzierung im Raid-Netzwerk", included: true },
       { label: "Werbefreier Chat", included: true },
       { label: "Volle Auswertung und KI-Wochenreport", included: true },
-      { label: "Lurker-Erinnerung im Chat", included: true },
     ],
     note: "Startet mit dem Netzwerk-Update. Bestehende Abos werden übernommen.",
   },

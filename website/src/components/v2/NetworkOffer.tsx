@@ -35,7 +35,7 @@ export function PricingSection() {
       ambientSide="left"
       stamp="08 · Preise"
       headline="Kostenlos bleibt kostenlos."
-      intro="Das Netzwerk und der Schutz kosten nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht. Bezahlt wird nur, was Rechenzeit oder Bevorzugung verbraucht."
+      intro="Das Netzwerk und der Schutz kosten nichts, weil jeder zusätzliche Kanal das Netzwerk für alle besser macht."
     >
       <div className="grid gap-6 lg:grid-cols-3">
         {plans.map((plan, i) => (
