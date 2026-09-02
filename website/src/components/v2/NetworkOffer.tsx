@@ -28,7 +28,8 @@ function resolveHref(key: string): string {
 }
 
 export function PricingSection() {
-  const [free, ...extras] = plans;
+  const free = plans.find((plan) => plan.id === "free") ?? plans[0];
+  const extras = plans.filter((plan) => plan !== free);
 
   return (
     <ProtocolSection
@@ -117,6 +118,11 @@ export function PricingSection() {
             <p className="mt-1 text-sm text-[rgba(183,170,145,0.62)]">
               {plan.anchor}
             </p>
+            {plan.yearly ? (
+              <p className="mt-1 text-xs text-[var(--color-accent)]">
+                {plan.yearly}
+              </p>
+            ) : null}
             <ul className="mt-4 flex-1 space-y-2">
               {plan.features.map((feature) => (
                 <li

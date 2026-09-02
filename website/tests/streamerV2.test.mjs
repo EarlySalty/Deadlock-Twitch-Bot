@@ -68,7 +68,7 @@ test("kein Verbinden- oder Report-Knopftext mehr in v2 und den Plandaten", () =>
   const scanned = [...v2Files(), join(websiteRoot, "src/data/networkPage.ts")];
   for (const file of scanned) {
     const text = readFileSync(file, "utf8");
-    for (const banned of ["Kostenlos verbinden", "Kanal-Report holen"]) {
+    for (const banned of ["Kostenlos verbinden", "Jetzt kostenlos verbinden", "Kanal-Report holen"]) {
       assert.ok(!text.includes(banned), `${banned} steht noch in ${file}`);
     }
   }
