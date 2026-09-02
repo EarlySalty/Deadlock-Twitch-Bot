@@ -163,7 +163,7 @@ export function ChannelReportSection() {
     <ProtocolSection
       id="report"
       ambientSide="right"
-      stamp="07 · Vor der Entscheidung"
+      stamp="Vor der Entscheidung"
       headline="Erst der Blick auf deinen Kanal, dann der Rest."
       intro="Du musst nichts verbinden, um etwas zu bekommen. Sag uns deinen Kanal und du bekommst eine Einschätzung: wann deine Zuschauer abspringen, wie deine Streamzeiten zu den Deadlock-Spitzen liegen und welche Stellen sich als Clip lohnen."
     >

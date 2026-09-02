@@ -74,12 +74,20 @@ export function PricingSection() {
           {free.features.map((feature) => (
             <li
               key={feature.label}
-              className="flex gap-3 text-sm text-[var(--color-text-secondary)]"
+              className={`flex gap-3 text-sm ${
+                feature.included
+                  ? "text-[var(--color-text-secondary)]"
+                  : "text-[rgba(183,170,145,0.42)]"
+              }`}
             >
-              <Check
-                size={16}
-                className="mt-0.5 shrink-0 text-[var(--color-primary)]"
-              />
+              {feature.included ? (
+                <Check
+                  size={16}
+                  className="mt-0.5 shrink-0 text-[var(--color-primary)]"
+                />
+              ) : (
+                <Minus size={16} className="mt-0.5 shrink-0" />
+              )}
               <span>{feature.label}</span>
             </li>
           ))}

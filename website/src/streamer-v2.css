@@ -162,7 +162,8 @@
   transition: opacity 0.25s ease, border-color 0.25s ease;
 }
 
-.v2-extra-card:hover {
+.v2-extra-card:hover,
+.v2-extra-card:focus-within {
   opacity: 1;
   border-color: rgba(239, 212, 157, 0.28);
 }
