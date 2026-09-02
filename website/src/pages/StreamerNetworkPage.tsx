@@ -1,3 +1,4 @@
+import { MotionConfig } from "framer-motion";
 import { Footer } from "@/components/layout/Footer";
 import { NetworkAmbient } from "@/components/v2/NetworkAmbient";
 import { NetworkNav } from "@/components/v2/NetworkChrome";
@@ -32,7 +33,7 @@ export function StreamerNetworkPage() {
   const metrics = useNetworkMetrics();
 
   return (
-    <>
+    <MotionConfig reducedMotion="user">
       <NetworkNav />
       <NetworkAmbient />
       <main className="relative z-10 overflow-x-clip">
@@ -63,6 +64,6 @@ export function StreamerNetworkPage() {
       <div className="relative z-10">
         <Footer />
       </div>
-    </>
+    </MotionConfig>
   );
 }

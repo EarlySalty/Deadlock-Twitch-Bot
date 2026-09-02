@@ -564,15 +564,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         </div>
 
         <div className="v2-stage-body">
-          <ol className="v2-rd-steps">
-            {STEPS.map((step, i) => (
-              <li key={step.time} className="v2-rd-step v2-rd-step-idle" ref={stepRefs[i]}>
-                <span className="v2-rd-step-time">{step.time}</span>
-                <span className="v2-rd-step-label">{step.label}</span>
-              </li>
-            ))}
-          </ol>
-
           <div className="v2-rd-stage">
             <div className="v2-rd-cards">
               <div className="v2-rd-card v2-rd-card-src" ref={srcCardRef}>
@@ -593,9 +584,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                   </span>
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
-                      <span className="v2-rd-live" ref={srcLiveRef}>
+                      <span className="v2-rd-live v2-rd-clip" ref={srcLiveRef}>
                         <span className="v2-rd-live-dot" />
-                        <span ref={srcBadgeTextRef}>LIVE</span>
+                        <span ref={srcBadgeTextRef}>CLIP</span>
                       </span>
                       <span className="v2-rd-duration" ref={srcDurRef}>
                         2:14:07
@@ -652,9 +643,9 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                   </span>
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
-                      <span className="v2-rd-live" ref={tgtLiveRef}>
+                      <span className="v2-rd-live v2-rd-clip" ref={tgtLiveRef}>
                         <span className="v2-rd-live-dot" />
-                        <span ref={tgtBadgeTextRef}>LIVE</span>
+                        <span ref={tgtBadgeTextRef}>CLIP</span>
                       </span>
                       <span className="v2-rd-duration" ref={tgtDurRef}>
                         0:41:22
@@ -695,6 +686,15 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
             <div className="v2-rd-mid" ref={midRef} aria-hidden="true" />
           </div>
         </div>
+
+        <ol className="v2-rd-steps">
+          {STEPS.map((step, i) => (
+            <li key={step.time} className="v2-rd-step v2-rd-step-idle" ref={stepRefs[i]}>
+              <span className="v2-rd-step-time">{step.time}</span>
+              <span className="v2-rd-step-label">{step.label}</span>
+            </li>
+          ))}
+        </ol>
 
         <div className="v2-stage-status">
           <span className="v2-rd-stamp v2-rd-stamp-gold" ref={stampRef} />
