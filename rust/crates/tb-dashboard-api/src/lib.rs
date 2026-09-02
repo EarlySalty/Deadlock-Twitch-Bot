@@ -168,8 +168,9 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
         engagement_mode, engagement_settings, exp_analytics, follower_funnel, greeting_settings,
         internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
-        lurker_tax_settings, monetization, onboarding, overview, performance, raid_analytics,
-        raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings,
+        lurker_tax_settings, monetization, onboarding, overview, performance, plattform_connect,
+        raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        scam_guard_settings,
         session_detail, silent_settings, social_media, spa, stream_report, streamer_disconnect,
         streamers, tag_analysis, tip_settings, title, title_performance, uplink, viewer_timeline,
         viewers, watch_time,
@@ -526,6 +527,22 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/uplink/connect/:platform/streamkey",
             post(uplink::streamkey_handler),
+        )
+        .route(
+            "/twitch/uplink/connect/kick",
+            get(plattform_connect::connect_kick_start_handler),
+        )
+        .route(
+            "/twitch/uplink/connect/youtube",
+            get(plattform_connect::connect_youtube_start_handler),
+        )
+        .route(
+            "/callback/kick",
+            get(plattform_connect::callback_kick_handler),
+        )
+        .route(
+            "/callback/youtube",
+            get(plattform_connect::callback_youtube_handler),
         )
         .route(
             "/twitch/api/v2/uplink/dock-token/rotate",
@@ -1697,6 +1714,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
     // leerem Key — die Hit-Rows sind trotzdem konsistent verschlüsselt; bei
     // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
+    let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
     let pause_loop_router = match helix {
         Some(helix) => build_pause_loop_router(pool.clone(), helix),
@@ -1766,12 +1784,31 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         )
         .layer(CompressionLayer::new());
 
-    // Uplink Multi-Chat: Token-Lesepfad fuer rs-relay, Stream-Key-Nachlauf und
-    // Trennen. Kein eigener Refresh-Job mehr: erneuert wird ueber denselben
-    // Schreibpfad wie beim Raid-Bot, sonst streiten sich zwei Jobs um denselben
-    // Refresh-Token. Ohne Config (Client-ID/Secret, Feldschluessel) bleiben die
-    // Routen mit 503 zu und /uplink/me meldet alle Plattformen als getrennt.
     if let Some(config) = handlers::platform_token::platform_token_config_from_env() {
+        let refresh_config = config.clone();
+        let refresh_pool = uplink_refresh_pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                match handlers::platform_token::plattform_refresh_all_due(
+                    &refresh_pool,
+                    &refresh_config,
+                    chrono::Utc::now(),
+                )
+                .await
+                {
+                    Ok(anzahl) if anzahl > 0 => {
+                        tracing::info!(anzahl, "Kick/YouTube-Token proaktiv erneuert")
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "Kick/YouTube-Token-Refresh fehlgeschlagen")
+                    }
+                }
+            }
+        });
         app = app.layer(Extension(config));
         tracing::info!("Uplink Multi-Chat: Twitch-Token-Weg aktiv");
     }

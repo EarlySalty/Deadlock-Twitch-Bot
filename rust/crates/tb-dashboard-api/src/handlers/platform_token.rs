@@ -68,6 +68,8 @@ pub const REFRESH_VORLAUF: Duration = Duration::minutes(10);
 pub struct PlatformTokenConfig {
     pub cipher: Arc<FieldCipher>,
     pub token_client: Arc<dyn TwitchTokenClient>,
+    pub kick: Option<Arc<dyn super::plattform_oauth::KickApi>>,
+    pub youtube: Option<Arc<dyn super::plattform_oauth::YouTubeApi>>,
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -98,9 +100,15 @@ pub fn platform_token_config_from_env() -> Option<PlatformTokenConfig> {
             return None;
         }
     };
+    let kick = super::plattform_oauth::KickOAuth::aus_umgebung()
+        .map(|c| Arc::new(c) as Arc<dyn super::plattform_oauth::KickApi>);
+    let youtube = super::plattform_oauth::GoogleOAuth::aus_umgebung()
+        .map(|c| Arc::new(c) as Arc<dyn super::plattform_oauth::YouTubeApi>);
     Some(PlatformTokenConfig {
         cipher,
         token_client: Arc::new(HelixRefreshClient { helix }),
+        kick,
+        youtube,
     })
 }
 
@@ -321,6 +329,32 @@ pub async fn gueltiger_twitch_token(
     Ok((frisch, scopes))
 }
 
+/// Erneuert alle faelligen Kick- und YouTube-Tokens im Voraus, damit ein Token
+/// nicht mitten in einer laufenden Chat-Verbindung ablaeuft. Gibt die Zahl der
+/// angefassten Zeilen zurueck.
+pub async fn plattform_refresh_all_due(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    jetzt: DateTime<Utc>,
+) -> Result<usize, super::platform_store::StoreFehler> {
+    let store =
+        super::platform_store::PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+    let faellige = store.faellige(REFRESH_VORLAUF, jetzt).await?;
+    let mut erneuert = 0usize;
+    for (streamer_id, platform) in faellige {
+        if platform != "kick" && platform != "youtube" {
+            continue;
+        }
+        if plattform_refresh(&store, config, streamer_id, &platform, jetzt)
+            .await
+            .is_ok()
+        {
+            erneuert += 1;
+        }
+    }
+    Ok(erneuert)
+}
+
 /// Der Kern der Route: Auth ist schon geprueft.
 ///
 /// Verzweigt nach Plattform. Twitch liegt in `twitch_raid_auth`, weil der
@@ -382,9 +416,32 @@ async fn fremde_plattform_antwort(
     if verbindung.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
-    if abgelaufen(Some(verbindung.expires_at), jetzt) {
-        return Err(TokenFehler::NeuVerbinden);
+
+    if refresh_faellig(Some(verbindung.expires_at), jetzt) {
+        plattform_refresh(&store, config, streamer_id, platform, jetzt).await?;
+        let frisch = match store.load(streamer_id, platform).await {
+            Ok(Some(v)) => v,
+            Ok(None) => return Err(TokenFehler::KeineVerbindung),
+            Err(e) => {
+                tracing::warn!(streamer_id, platform, error = %e, "platform_token: Verbindung nach Refresh nicht lesbar");
+                return Err(TokenFehler::NichtLieferbar);
+            }
+        };
+        if frisch.needs_reauth {
+            return Err(TokenFehler::NeuVerbinden);
+        }
+        if abgelaufen(Some(frisch.expires_at), jetzt) {
+            return Err(TokenFehler::NichtLieferbar);
+        }
+        return Ok(PlatformTokenAntwort {
+            access_token: frisch.access_token,
+            expires_at: frisch.expires_at,
+            platform_user_id: frisch.platform_user_id,
+            platform_login: frisch.platform_login,
+            scopes: frisch.scopes,
+        });
     }
+
     Ok(PlatformTokenAntwort {
         access_token: verbindung.access_token,
         expires_at: verbindung.expires_at,
@@ -392,6 +449,76 @@ async fn fremde_plattform_antwort(
         platform_login: verbindung.platform_login,
         scopes: verbindung.scopes,
     })
+}
+
+/// Erneuert einen faelligen Kick- oder YouTube-Token unter Advisory-Lock und
+/// schreibt ihn zurueck. Ohne konfigurierten Client bleibt der Token stehen und
+/// wird erst als abgelaufen abgewiesen.
+pub async fn plattform_refresh(
+    store: &super::platform_store::PlatformConnectionStore,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+    platform: &str,
+    jetzt: DateTime<Utc>,
+) -> Result<(), TokenFehler> {
+    use super::platform_store::{NeuerToken, RefreshAbbruch, RefreshAusgang};
+    use super::plattform_oauth::{OAuthFehler, OAuthToken};
+
+    fn in_neuer_token(token: OAuthToken, jetzt: DateTime<Utc>) -> NeuerToken {
+        NeuerToken {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            expires_at: jetzt + Duration::seconds(token.expires_in.max(0)),
+            scopes: token.scopes,
+        }
+    }
+    fn in_abbruch(fehler: OAuthFehler) -> RefreshAbbruch {
+        match fehler {
+            OAuthFehler::InvalidGrant => RefreshAbbruch::NeuAnmeldung,
+            OAuthFehler::Other(_) => RefreshAbbruch::Fehler,
+        }
+    }
+
+    let ausgang = match platform {
+        "kick" => {
+            let Some(client) = config.kick.clone() else {
+                return Ok(());
+            };
+            store
+                .refresh_and_store(streamer_id, platform, REFRESH_VORLAUF, jetzt, |rt| async move {
+                    client
+                        .refresh(&rt)
+                        .await
+                        .map(|t| in_neuer_token(t, jetzt))
+                        .map_err(in_abbruch)
+                })
+                .await
+        }
+        "youtube" => {
+            let Some(client) = config.youtube.clone() else {
+                return Ok(());
+            };
+            store
+                .refresh_and_store(streamer_id, platform, REFRESH_VORLAUF, jetzt, |rt| async move {
+                    client
+                        .refresh(&rt)
+                        .await
+                        .map(|t| in_neuer_token(t, jetzt))
+                        .map_err(in_abbruch)
+                })
+                .await
+        }
+        _ => return Ok(()),
+    };
+    match ausgang {
+        Ok(RefreshAusgang::Erneuert) | Ok(RefreshAusgang::NichtNoetig) => Ok(()),
+        Ok(RefreshAusgang::NeuAnmeldungNoetig) => Err(TokenFehler::NeuVerbinden),
+        Ok(RefreshAusgang::Fehlgeschlagen) => Err(TokenFehler::NichtLieferbar),
+        Err(e) => {
+            tracing::warn!(streamer_id, platform, error = %e, "platform_token: Plattform-Refresh fehlgeschlagen");
+            Err(TokenFehler::NichtLieferbar)
+        }
+    }
 }
 
 fn fehler_antwort(fehler: TokenFehler) -> Response {
@@ -735,6 +862,8 @@ mod tests {
         PlatformTokenConfig {
             cipher: cipher(),
             token_client: client,
+            kick: None,
+            youtube: None,
         }
     }
 
@@ -951,6 +1080,119 @@ mod tests {
             platform_token_antwort(&pool, &config, 5109, "kick", jetzt).await,
             Err(TokenFehler::KeineVerbindung)
         );
+    }
+
+    struct FakeKick {
+        ergebnis: std::sync::Mutex<Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>>,
+    }
+
+    #[async_trait::async_trait]
+    impl super::super::plattform_oauth::KickApi for FakeKick {
+        async fn exchange_code(
+            &self,
+            _code: &str,
+            _redirect_uri: &str,
+            _verifier: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>
+        {
+            unreachable!("kein exchange in diesem test")
+        }
+        async fn refresh(
+            &self,
+            _refresh_token: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>
+        {
+            match &*self.ergebnis.lock().unwrap() {
+                Ok(t) => Ok(t.clone()),
+                Err(e) => Err(e.clone()),
+            }
+        }
+        async fn revoke(
+            &self,
+            _access_token: &str,
+        ) -> Result<(), super::super::plattform_oauth::OAuthFehler> {
+            unreachable!("kein revoke in diesem test")
+        }
+        async fn konto(
+            &self,
+            _access_token: &str,
+        ) -> Result<super::super::plattform_oauth::KickKonto, super::super::plattform_oauth::OAuthFehler>
+        {
+            unreachable!("kein konto in diesem test")
+        }
+    }
+
+    async fn kick_zeile_anlegen(
+        pool: &PgPool,
+        cipher: &FieldCipher,
+        streamer_id: i64,
+        expires_at: DateTime<Utc>,
+    ) {
+        let aad = super::super::platform_store::PlatformConnectionStore::aad(streamer_id, "kick");
+        let access = cipher.encrypt_field("kick-alt", &aad).unwrap();
+        let refresh = cipher.encrypt_field("kick-ref-alt", &aad).unwrap();
+        sqlx::query(
+            "INSERT INTO platform_connections \
+             (streamer_id, platform, platform_user_id, platform_login, \
+              access_token_enc, refresh_token_enc, scopes, expires_at) \
+             VALUES ($1, 'kick', 'k-1', 'streamerin', $2, $3, $4, $5)",
+        )
+        .bind(streamer_id)
+        .bind(&access)
+        .bind(&refresh)
+        .bind(vec!["chat:write".to_string()])
+        .bind(expires_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn kick_token_wird_bei_ablauf_erneuert() {
+        let pool = pool_oder_ende!();
+        let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
+        config.kick = Some(Arc::new(FakeKick {
+            ergebnis: std::sync::Mutex::new(Ok(super::super::plattform_oauth::OAuthToken {
+                access_token: "kick-frisch".into(),
+                refresh_token: Some("kick-ref-frisch".into()),
+                expires_in: 7200,
+                scopes: vec!["chat:write".into()],
+            })),
+        }));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        kick_zeile_anlegen(&pool, &config.cipher, 5201, jetzt + Duration::minutes(2)).await;
+
+        let antwort = platform_token_antwort(&pool, &config, 5201, "kick", jetzt)
+            .await
+            .expect("frischer Token muss kommen");
+        assert_eq!(antwort.access_token, "kick-frisch");
+        let json = serde_json::to_value(&antwort).unwrap();
+        assert!(!json.to_string().contains("kick-ref"));
+    }
+
+    #[tokio::test]
+    async fn kick_invalid_grant_setzt_needs_reauth() {
+        let pool = pool_oder_ende!();
+        let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
+        config.kick = Some(Arc::new(FakeKick {
+            ergebnis: std::sync::Mutex::new(Err(
+                super::super::plattform_oauth::OAuthFehler::InvalidGrant,
+            )),
+        }));
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        kick_zeile_anlegen(&pool, &config.cipher, 5202, jetzt + Duration::minutes(2)).await;
+
+        assert_eq!(
+            platform_token_antwort(&pool, &config, 5202, "kick", jetzt).await,
+            Err(TokenFehler::NeuVerbinden)
+        );
+        let reauth: bool = sqlx::query_scalar(
+            "SELECT needs_reauth FROM platform_connections WHERE streamer_id = 5202",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(reauth);
     }
 
     /// Und wenn dort etwas liegt, kommt es auch heraus, ohne Refresh-Token.

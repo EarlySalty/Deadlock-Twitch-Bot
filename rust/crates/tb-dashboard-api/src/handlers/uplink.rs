@@ -89,7 +89,7 @@ fn twitch_identitaet(auth: &DashboardAuthLevel) -> Result<(&str, &str), Response
 /// Streamer-ID für das Relay. Bringt die Session keine numerische User-ID mit,
 /// wird sie über den Login aus der Datenbank aufgelöst (`tb_twitch_user_id`,
 /// dieselbe Quelle wie im übrigen Dashboard).
-async fn partner_id(pool: &PgPool, auth: &DashboardAuthLevel) -> Result<i64, Response> {
+pub(crate) async fn partner_id(pool: &PgPool, auth: &DashboardAuthLevel) -> Result<i64, Response> {
     let (login, roh) = twitch_identitaet(auth)?;
     if let Ok(id) = roh.trim().parse::<i64>() {
         return Ok(id);
@@ -379,7 +379,14 @@ pub async fn me_handler(
         Ok(wert) => ziel_plattformen(&wert),
         Err(_) => Vec::new(),
     };
-    me_anreichern(&mut wert, live, &verbindungen, &ziele);
+    let mut verbindbar: Vec<&str> = vec!["twitch"];
+    if super::plattform_connect::kick_konfiguriert() {
+        verbindbar.push("kick");
+    }
+    if super::plattform_connect::youtube_konfiguriert() {
+        verbindbar.push("youtube");
+    }
+    me_anreichern(&mut wert, live, &verbindungen, &ziele, &verbindbar);
     Ok(Json(wert))
 }
 
@@ -410,6 +417,7 @@ fn me_anreichern(
     live: &str,
     verbindungen: &[(String, &'static str)],
     ziele: &[String],
+    verbindbar: &[&str],
 ) {
     let Some(objekt) = wert.as_object_mut() else {
         return;
@@ -460,6 +468,7 @@ fn me_anreichern(
                 "platform": plattform,
                 "status": status,
                 "stream_key_vorhanden": stream_key_vorhanden,
+                "verbindbar": verbindbar.contains(plattform),
             })
         })
         .collect();
@@ -1429,6 +1438,9 @@ pub async fn disconnect_handler(
         Ok(v) => v,
         Err(r) => return r,
     };
+    if platform == "kick" || platform == "youtube" {
+        return plattform_trennen_antwort(&pool, &config, id, &platform).await;
+    }
     match trennen(
         &pool,
         &config,
@@ -1449,6 +1461,42 @@ pub async fn disconnect_handler(
             "Der Uplink hat das Ziel nicht entfernt. Bitte noch einmal versuchen.",
         ),
         TrennenErgebnis::SpeicherFehler => fehler(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die Verbindung konnte nicht getrennt werden. Bitte später noch einmal versuchen.",
+        ),
+    }
+}
+
+async fn plattform_trennen_antwort(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+    platform: &str,
+) -> Response {
+    use super::plattform_connect::{plattform_trennen, PlattformTrennenErgebnis};
+    use super::plattform_oauth::{GoogleOAuth, KickApi, KickOAuth, YouTubeApi};
+
+    let kick = KickOAuth::aus_umgebung();
+    let youtube = GoogleOAuth::aus_umgebung();
+    let ergebnis = plattform_trennen(
+        pool,
+        config,
+        &HttpRelayZiele::default(),
+        kick.as_ref().map(|c| c as &dyn KickApi),
+        youtube.as_ref().map(|c| c as &dyn YouTubeApi),
+        streamer_id,
+        platform,
+    )
+    .await;
+    match ergebnis {
+        PlattformTrennenErgebnis::Getrennt | PlattformTrennenErgebnis::KeineVerbindung => {
+            Json(json!({ "ok": true })).into_response()
+        }
+        PlattformTrennenErgebnis::RelayFehler => fehler(
+            StatusCode::BAD_GATEWAY,
+            "Der Uplink hat das Ziel nicht entfernt. Bitte noch einmal versuchen.",
+        ),
+        PlattformTrennenErgebnis::SpeicherFehler => fehler(
             StatusCode::SERVICE_UNAVAILABLE,
             "Die Verbindung konnte nicht getrennt werden. Bitte später noch einmal versuchen.",
         ),
@@ -1977,6 +2025,7 @@ mod tests {
             "live",
             &[("twitch".to_string(), "verbunden")],
             &["twitch".to_string()],
+            &["twitch", "kick"],
         );
         assert_eq!(wert["live_status"], "live");
         assert_eq!(wert["dock_url_vorhanden"], true);
@@ -1992,12 +2041,16 @@ mod tests {
         assert_eq!(liste.len(), PLATTFORMEN.len());
         assert_eq!(
             liste[0],
-            json!({ "platform": "twitch", "status": "verbunden", "stream_key_vorhanden": true })
+            json!({ "platform": "twitch", "status": "verbunden", "stream_key_vorhanden": true, "verbindbar": true })
         );
         assert!(liste[1..].iter().all(|e| e["status"] == "getrennt"));
         assert!(liste[1..]
             .iter()
             .all(|e| e["stream_key_vorhanden"] == false));
+        let kick = liste.iter().find(|e| e["platform"] == "kick").unwrap();
+        assert_eq!(kick["verbindbar"], true);
+        let youtube = liste.iter().find(|e| e["platform"] == "youtube").unwrap();
+        assert_eq!(youtube["verbindbar"], false);
     }
 
     #[test]
@@ -2013,7 +2066,7 @@ mod tests {
     #[test]
     fn me_ohne_dock_url_meldet_keine_adresse() {
         let mut wert = json!({ "freigeschaltet": false });
-        me_anreichern(&mut wert, "unbekannt", &[], &[]);
+        me_anreichern(&mut wert, "unbekannt", &[], &[], &[]);
         assert_eq!(wert["dock_url_vorhanden"], false);
         // `null`, nicht "Feld fehlt": die Oberflaeche soll einen aelteren
         // Relay nicht von einem Streamer ohne Adressen unterscheiden muessen.
@@ -2026,13 +2079,13 @@ mod tests {
             .all(|e| e["status"] == "getrennt"));
 
         let mut nein = json!({ "dock_url_vorhanden": false });
-        me_anreichern(&mut nein, "aus", &[], &[]);
+        me_anreichern(&mut nein, "aus", &[], &[], &[]);
         assert_eq!(nein["dock_url_vorhanden"], false);
 
         // Ein Zugang, den das Relay nur als Fingerabdruck kennt: vorhanden,
         // aber nicht anzeigbar. Beides muss nebeneinander stehen bleiben.
         let mut ohne_enc = json!({ "dock_url_vorhanden": true, "dock_urls": Value::Null });
-        me_anreichern(&mut ohne_enc, "aus", &[], &[]);
+        me_anreichern(&mut ohne_enc, "aus", &[], &[], &[]);
         assert_eq!(ohne_enc["dock_url_vorhanden"], true);
         assert_eq!(ohne_enc["dock_urls"], Value::Null);
 
@@ -2041,7 +2094,7 @@ mod tests {
         // Meldung "vorhanden", ohne dass irgendwo stuende, warum.
         for kaputt in [json!("https://relay.test/dock/chat"), json!([]), json!(7)] {
             let mut wert = json!({ "dock_url_vorhanden": true, "dock_urls": kaputt });
-            me_anreichern(&mut wert, "aus", &[], &[]);
+            me_anreichern(&mut wert, "aus", &[], &[], &[]);
             assert_eq!(wert["dock_urls"], Value::Null);
         }
     }
@@ -2307,6 +2360,8 @@ mod tests {
                 tb_crypto::FieldCipher::from_hex_key(TEST_KEY_HEX, "v1").unwrap(),
             ),
             token_client: std::sync::Arc::new(StummerRefresh),
+            kick: None,
+            youtube: None,
         }
     }
 
