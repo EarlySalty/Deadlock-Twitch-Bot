@@ -564,6 +564,40 @@
   inset:0;
 }
 
+.v2-rd-video {
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  background:#0a0a0a;
+  z-index:0;
+}
+
+.v2-rd-play {
+  z-index:1;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  width:2.75rem;
+  height:2.75rem;
+  margin:auto;
+  color:#0b0b0b;
+  background:radial-gradient(circle at 50% 45%, #efd49d, #c9a86a);
+  border-radius:999px;
+  box-shadow:0 0 0 1px #efd49d80, 0 0 34px -4px #c9a86ae6;
+  position:absolute;
+  inset:0;
+}
+
+.v2-rd-screen-paused .v2-rd-play {
+  display:flex;
+}
+
+.v2-rd-screen-paused:after {
+  box-shadow:inset 0 0 90px -18px rgba(201, 168, 106, 0.7);
+}
+
 .v2-rd-ui {
   z-index:2;
   flex-direction:column;

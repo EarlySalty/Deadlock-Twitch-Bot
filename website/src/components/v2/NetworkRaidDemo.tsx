@@ -1,66 +1,35 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Eye } from "lucide-react";
+import { Eye, Play } from "lucide-react";
 import type { PartnerChannel } from "@/hooks/useNetworkMetrics";
-
-/**
- * Das Hero-Visual der Landing V2: zwei Stream-Karten und die Übergabe dazwischen.
- *
- * Übernommen aus der produktiven Landing (`components/sections/RaidDemo`), aber
- * in drei Punkten anders:
- *
- * 1. Die Karten zeigen echte Partnernamen und Profilbilder aus
- *    `useNetworkMetrics`, sobald die API beides liefert. Solange sie das
- *    nicht tut (Stand heute: kein `avatar_url`), laeuft die Buehne mit
- *    erkennbar ausgedachten Kanaelen ohne Zuschauerzahl und ohne Link.
- * 2. Statt Video-Clips (die auf Produktion nicht ausgeliefert werden) tragen
- *    die Karten eine stilisierte Fläche aus dem unscharf gezogenen Profilbild.
- *    Nichts kann hier ins Leere laufen.
- * 3. Der Beispielablauf steht mit Zeitstempeln direkt in der Animation, nicht
- *    als Textliste daneben. Vier Schritte, der vierte ist die Gegenleistung.
- *
- * Bei `prefers-reduced-motion: reduce` läuft nichts: die Animation setzt sich
- * einmal in den Endzustand und bleibt stehen.
- */
 
 interface DemoChannel {
   login: string;
   displayName: string;
   viewers: number;
   avatarUrl?: string;
-  /**
-   * true = ausgedachter Kanal fuer die Vorfuehrung. Solche Karten werden
-   * NICHT verlinkt und tragen keine Zuschauerzahl, damit niemand sie fuer
-   * gemessene Werte haelt.
-   */
+  video?: string;
+  poster?: string;
+  pfp?: string;
   sample: boolean;
 }
 
-/**
- * Rueckfallebene, solange die Netzwerk-API keine verwertbaren Kanaele
- * liefert.
- *
- * Bewusst ausgedachte Namen statt echter Partnerlogins: die Buehne zeigt ein
- * rotes LIVE-Abzeichen und eine laufende Uhr. Stuenden dort echte Kanaele,
- * behauptete die Seite, diese Leute seien in diesem Moment live in Deadlock,
- * ohne das zu wissen. Diese Karten bekommen deshalb auch keine
- * Zuschauerzahl und keinen Twitch-Link.
- */
-const FALLBACK_CHANNELS: DemoChannel[] = [
-  { login: "", displayName: "dein_kanal", viewers: 0, sample: true },
-  { login: "", displayName: "partnerkanal", viewers: 0, sample: true },
-  { login: "", displayName: "ein_anderer_stream", viewers: 0, sample: true },
-  { login: "", displayName: "naechster_partner", viewers: 0, sample: true },
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const CLIP_POOL: DemoChannel[] = [
+  { login: "miracleghost9", displayName: "miracleghost9", viewers: 247, video: `${BASE}/clips/miracleghost9.mp4`, poster: `${BASE}/clips/poster/miracleghost9.jpg`, pfp: `${BASE}/clips/pfp/miracleghost9.png`, sample: true },
+  { login: "whysolowkey", displayName: "whysolowkey", viewers: 183, video: `${BASE}/clips/whysolowkey.mp4`, poster: `${BASE}/clips/poster/whysolowkey.jpg`, pfp: `${BASE}/clips/pfp/whysolowkey.png`, sample: true },
+  { login: "kdenos", displayName: "kdenos", viewers: 312, video: `${BASE}/clips/kdenos.mp4`, poster: `${BASE}/clips/poster/kdenos.jpg`, pfp: `${BASE}/clips/pfp/kdenos.png`, sample: true },
+  { login: "johnnyblazedx", displayName: "johnnyblazedx", viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4`, poster: `${BASE}/clips/poster/johnnyblazedx.jpg`, pfp: `${BASE}/clips/pfp/johnnyblazedx.png`, sample: true },
+  { login: "coolysdl", displayName: "coolysdl", viewers: 158, video: `${BASE}/clips/coolysdl.mp4`, poster: `${BASE}/clips/poster/coolysdl.jpg`, pfp: `${BASE}/clips/pfp/coolysdl.png`, sample: true },
+  { login: "duzzel", displayName: "duzzel", viewers: 534, video: `${BASE}/clips/duzzel.mp4`, poster: `${BASE}/clips/poster/duzzel.jpg`, pfp: `${BASE}/clips/pfp/duzzel.png`, sample: true },
 ];
 
-/** Die vier Schritte des Ablaufs, so wie sie unter der Bühne stehen. */
 const STEPS: { time: string; label: string }[] = [
   { time: "23:47:00", label: "Dein Stream endet" },
   { time: "23:47:01", label: "Partner wird gesucht" },
   { time: "23:47:03", label: "Zuschauer wandern rüber" },
   { time: "morgen", label: "Sie kommen zurück" },
 ];
-
-// ── kleine Helfer ───────────────────────────────────────────────────────────
 
 function fmtDuration(secs: number): string {
   const h = Math.floor(secs / 3600);
@@ -73,7 +42,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Begrenzt den Fortschritt auf 0..1, auch wenn die Uhr springt. */
 function clamp01(t: number): number {
   return t < 0 ? 0 : t > 1 ? 1 : t;
 }
@@ -86,7 +54,6 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-/** Schreibt Text zeichenweise, bricht ab, sobald die Komponente weg ist. */
 async function typewriter(
   el: HTMLElement,
   text: string,
@@ -118,18 +85,7 @@ function animateCounter(
   requestAnimationFrame(tick);
 }
 
-/**
- * Wandelt die Partnerliste in Buehnen-Kanäle um. Es kommen nur Kanäle infrage,
- * die gerade live in Deadlock sind und ein Profilbild haben; sonst laeuft die
- * Buehne mit den ausgedachten Beispielkanälen. Kanäle ohne brauchbare
- * Zuschauerzahl bekommen den 30-Tage-Schnitt, damit die Karte nie „0
- * Zuschauer" zeigt.
- */
 function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
-  // Nur Kanaele, die tatsaechlich gerade live in Deadlock sind: die Karte
-  // traegt ein rotes LIVE-Abzeichen und eine laufende Uhr. Ein offliner
-  // Kanal an dieser Stelle waere dieselbe falsche Behauptung wie zuvor die
-  // erfundenen Zuschauerzahlen.
   const usable = partners
     .filter((p) => p.avatarUrl && p.liveDeadlock && p.viewers > 0)
     .sort((a, b) => {
@@ -140,22 +96,16 @@ function toDemoChannels(partners: PartnerChannel[]): DemoChannel[] {
     .map((p) => ({
       login: p.login,
       displayName: p.displayName || p.login,
-      // Echte Karte, echte Zahl: keine Untergrenze und kein 30-Tage-Ersatz.
-      // Kanaele ohne gemessene Zuschauer kommen oben schon nicht durch.
       viewers: p.viewers,
       avatarUrl: p.avatarUrl as string,
       sample: false,
     }));
 
-  return usable.length >= 2 ? usable : FALLBACK_CHANNELS;
+  return usable.length >= 2 ? usable : CLIP_POOL;
 }
-
-// ── Komponente ──────────────────────────────────────────────────────────────
 
 export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const pool = useMemo(() => toDemoChannels(partners), [partners]);
-  // Der Loop liest den Pool über eine Ref, damit ein nachgeladener Partner-
-  // Stand nicht den laufenden Durchgang neu startet.
   const poolRef = useRef(pool);
   poolRef.current = pool;
 
@@ -163,20 +113,28 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
   const srcCardRef = useRef<HTMLDivElement>(null);
   const tgtCardRef = useRef<HTMLDivElement>(null);
 
+  const srcScreenRef = useRef<HTMLDivElement>(null);
+  const srcVideoRef = useRef<HTMLVideoElement>(null);
   const srcArtRef = useRef<HTMLDivElement>(null);
   const srcNameRef = useRef<HTMLSpanElement>(null);
   const srcBarNameRef = useRef<HTMLAnchorElement>(null);
+  const srcBarSubRef = useRef<HTMLSpanElement>(null);
   const srcAvatarRef = useRef<HTMLSpanElement>(null);
   const srcViewersRef = useRef<HTMLSpanElement>(null);
+  const srcMetaRef = useRef<HTMLSpanElement>(null);
   const srcDurRef = useRef<HTMLSpanElement>(null);
   const srcLiveRef = useRef<HTMLSpanElement>(null);
   const srcOfflineRef = useRef<HTMLDivElement>(null);
 
+  const tgtScreenRef = useRef<HTMLDivElement>(null);
+  const tgtVideoRef = useRef<HTMLVideoElement>(null);
   const tgtArtRef = useRef<HTMLDivElement>(null);
   const tgtNameRef = useRef<HTMLSpanElement>(null);
   const tgtBarNameRef = useRef<HTMLAnchorElement>(null);
+  const tgtBarSubRef = useRef<HTMLSpanElement>(null);
   const tgtAvatarRef = useRef<HTMLSpanElement>(null);
   const tgtViewersRef = useRef<HTMLSpanElement>(null);
+  const tgtMetaRef = useRef<HTMLSpanElement>(null);
   const tgtDurRef = useRef<HTMLSpanElement>(null);
 
   const stampRef = useRef<HTMLSpanElement>(null);
@@ -202,39 +160,74 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // ── Karten befüllen ───────────────────────────────────────────────────
+    function markPaused(side: "src" | "tgt", paused: boolean) {
+      const screen = side === "src" ? srcScreenRef : tgtScreenRef;
+      if (screen.current) screen.current.classList.toggle("v2-rd-screen-paused", paused);
+    }
+
     function paintCard(
       side: "src" | "tgt",
       ch: DemoChannel,
       viewers: number,
       durationSecs: number,
     ) {
+      const video = side === "src" ? srcVideoRef : tgtVideoRef;
       const art = side === "src" ? srcArtRef : tgtArtRef;
       const name = side === "src" ? srcNameRef : tgtNameRef;
       const barName = side === "src" ? srcBarNameRef : tgtBarNameRef;
+      const barSub = side === "src" ? srcBarSubRef : tgtBarSubRef;
       const avatar = side === "src" ? srcAvatarRef : tgtAvatarRef;
       const view = side === "src" ? srcViewersRef : tgtViewersRef;
+      const meta = side === "src" ? srcMetaRef : tgtMetaRef;
       const dur = side === "src" ? srcDurRef : tgtDurRef;
 
-      // Ohne Profilbild bleibt die Flaeche ein neutraler Verlauf statt einer
-      // kaputten Bild-URL.
-      const art_bg = ch.avatarUrl ? `url("${ch.avatarUrl}")` : "none";
-      if (art.current) art.current.style.backgroundImage = art_bg;
-      if (avatar.current) avatar.current.style.backgroundImage = art_bg;
+      if (ch.video && video.current) {
+        if (art.current) art.current.style.backgroundImage = "none";
+        const v = video.current;
+        v.style.display = "";
+        if (v.getAttribute("src") !== ch.video) {
+          if (ch.poster) v.poster = ch.poster;
+          v.src = ch.video;
+          v.load();
+        }
+        if (reduced) {
+          markPaused(side, true);
+        } else {
+          const p = v.play();
+          if (p && typeof p.then === "function") {
+            p.then(() => markPaused(side, false)).catch(() => markPaused(side, true));
+          } else {
+            markPaused(side, false);
+          }
+        }
+      } else {
+        if (video.current) {
+          video.current.style.display = "none";
+          video.current.removeAttribute("src");
+        }
+        if (art.current)
+          art.current.style.backgroundImage = ch.avatarUrl ? `url("${ch.avatarUrl}")` : "none";
+        markPaused(side, false);
+      }
+
+      const avatarBg = ch.avatarUrl
+        ? `url("${ch.avatarUrl}")`
+        : ch.pfp
+          ? `url("${ch.pfp}")`
+          : "none";
+      if (avatar.current) avatar.current.style.backgroundImage = avatarBg;
       if (name.current) name.current.textContent = ch.displayName;
       if (barName.current) {
         barName.current.textContent = ch.displayName;
-        if (ch.sample || !ch.login) {
-          // Beispielkanal: nirgendwohin verlinken.
-          barName.current.removeAttribute("href");
-        } else {
-          barName.current.href = `https://twitch.tv/${ch.login}`;
-        }
+        if (ch.login) barName.current.href = `https://twitch.tv/${ch.login}`;
+        else barName.current.removeAttribute("href");
       }
-      // Beispielkarten tragen keine Zahl, sonst laese sie sich als Messwert.
-      if (view.current) {
-        view.current.textContent = ch.sample ? "–" : String(viewers);
-      }
+      if (barSub.current)
+        barSub.current.textContent = ch.sample
+          ? "Spielt Deadlock"
+          : "Partner im Netzwerk";
+      if (view.current) view.current.textContent = ch.sample ? "" : String(viewers);
+      if (meta.current) meta.current.textContent = ch.sample ? "Deadlock" : "Zuschauer · Deadlock";
       if (dur.current) dur.current.textContent = fmtDuration(durationSecs);
     }
 
@@ -252,7 +245,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       }, 1000);
     }
 
-    // ── Schritt-Leiste ────────────────────────────────────────────────────
     function setStep(i: number, state: "idle" | "active" | "done") {
       const el = stepRefs[i].current;
       if (el) el.className = `v2-rd-step v2-rd-step-${state}`;
@@ -261,7 +253,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       for (let i = 0; i < stepRefs.length; i++) setStep(i, "idle");
     }
 
-    // ── Partikel und Konfetti ─────────────────────────────────────────────
     function spawnParticles(count: number, duration: number, back = false) {
       const container = midRef.current;
       const from = (back ? tgtCardRef : srcCardRef).current;
@@ -298,7 +289,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
             const t = clamp01((now - start) / duration);
             const e = easeOutCubic(t);
             p.style.left = `${lerp(sx, ex, e)}px`;
-            // Leichter Bogen, damit der Strom nicht wie ein Lineal aussieht.
             p.style.top = `${lerp(sy, ey, e) - Math.sin(e * Math.PI) * 26}px`;
             p.style.opacity = String(t < 0.12 ? t * 8 : t > 0.82 ? (1 - t) * 5.5 : 1);
             if (t < 1) requestAnimationFrame(step);
@@ -353,7 +343,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       }
     }
 
-    // ── Mittelzone ────────────────────────────────────────────────────────
     function setStamp(time: string, label: string, tone: "gold" | "teal" | "good") {
       if (!stampRef.current) return;
       stampRef.current.className = `v2-rd-stamp v2-rd-stamp-${tone}`;
@@ -384,21 +373,13 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       el.style.transition = "none";
       el.style.width = "0";
       el.style.opacity = "1";
-      // Erzwingt einen Layout-Schritt, damit der Übergang wirklich läuft.
       void el.offsetWidth;
       el.style.transition = "width 1.4s cubic-bezier(0.4,0,0.2,1)";
       el.style.width = "100%";
     }
 
-    // ── Ausgangslage eines Durchgangs ─────────────────────────────────────
     function pickPair(): [DemoChannel, DemoChannel] {
       const list = poolRef.current;
-      // Beim Beispiel-Pool steht "dein_kanal" fest auf der linken Karte
-      // ("an dieser Stelle stehst du") und nie auf der rechten.
-      if (list[0]?.sample) {
-        const b = 1 + Math.floor(Math.random() * (list.length - 1));
-        return [list[0], list[b]];
-      }
       const a = Math.floor(Math.random() * list.length);
       let b = Math.floor(Math.random() * list.length);
       if (b === a) b = (a + 1) % list.length;
@@ -406,8 +387,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
     }
 
     function setupRound(src: DemoChannel, tgt: DemoChannel) {
-      // Einmal wuerfeln und beides damit speisen: sonst zeigt paintCard eine
-      // andere Uhrzeit als der Sekundentakt eine Sekunde spaeter.
       const srcSecs = 3600 + Math.floor(Math.random() * 7200);
       const tgtSecs = 900 + Math.floor(Math.random() * 3600);
       paintCard("src", src, src.viewers, srcSecs);
@@ -426,7 +405,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       startDurations(srcSecs, tgtSecs);
     }
 
-    // ── Endzustand ohne Bewegung ──────────────────────────────────────────
     if (reduced) {
       const [src, tgt] = [poolRef.current[0], poolRef.current[1]];
       paintCard("src", src, src.viewers, 8123);
@@ -447,7 +425,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       };
     }
 
-    // ── Durchgang ─────────────────────────────────────────────────────────
     async function runRound() {
       if (!running) return;
       const [src, tgt] = pickPair();
@@ -455,7 +432,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       await sleep(1400);
       if (!running) return;
 
-      // ① Stream endet
       setStep(0, "active");
       setStamp(STEPS[0].time, STEPS[0].label, "gold");
       if (lineRef.current) {
@@ -472,7 +448,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       if (!running) return;
       setStep(0, "done");
 
-      // ② Partner suchen
       setStep(1, "active");
       setStamp(STEPS[1].time, STEPS[1].label, "gold");
       clearLines();
@@ -501,7 +476,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       if (!running) return;
       setStep(1, "done");
 
-      // ③ Zuschauer wandern
       setStep(2, "active");
       setStamp(STEPS[2].time, STEPS[2].label, "teal");
       clearLines();
@@ -509,21 +483,16 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         lineRef.current.style.opacity = "1";
         lineRef.current.textContent = `zu ${tgt.displayName}`;
       }
-      // Der Zaehler laeuft nur mit, wenn die Zahl aus der API stammt.
-      if (!src.sample) {
-        if (counterRef.current) counterRef.current.style.opacity = "1";
-        if (counterNumRef.current)
-          animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
-      }
+      if (counterRef.current) counterRef.current.style.opacity = "1";
+      if (counterNumRef.current)
+        animateCounter(0, src.viewers, 1400, counterNumRef.current, alive);
       setBeam("forward");
       spawnParticles(34, 1400);
       await sleep(1650);
       if (!running) return;
       setBeam("off");
-      if (tgtViewersRef.current) {
-        tgtViewersRef.current.textContent = tgt.sample
-          ? "–"
-          : String(tgt.viewers + src.viewers);
+      if (tgtViewersRef.current && !tgt.sample) {
+        tgtViewersRef.current.textContent = String(tgt.viewers + src.viewers);
       }
       if (tgtCardRef.current) tgtCardRef.current.className = "v2-rd-card v2-rd-card-tgt";
       if (counterRef.current) counterRef.current.style.opacity = "0";
@@ -541,7 +510,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       setStep(2, "done");
       if (lineRef.current) lineRef.current.classList.remove("v2-rd-line-good");
 
-      // ④ Und zurück
       setStep(3, "active");
       setStamp(STEPS[3].time, STEPS[3].label, "teal");
       clearLines();
@@ -561,13 +529,19 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
       runRound();
     }
 
+    const onSrcError = () => markPaused("src", true);
+    const onTgtError = () => markPaused("tgt", true);
+    srcVideoRef.current?.addEventListener("error", onSrcError, true);
+    tgtVideoRef.current?.addEventListener("error", onTgtError, true);
+
     runRound();
 
     return () => {
       running = false;
       if (durationTimer) clearInterval(durationTimer);
+      srcVideoRef.current?.removeEventListener("error", onSrcError, true);
+      tgtVideoRef.current?.removeEventListener("error", onTgtError, true);
     };
-    // Absichtlich einmalig: der Loop liest den Partner-Stand über poolRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -583,7 +557,6 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
         </div>
 
         <div className="v2-stage-body">
-          {/* Zeitachse: laeuft als Leitung neben der Buehne mit, nicht darunter. */}
           <ol className="v2-rd-steps">
             {STEPS.map((step, i) => (
               <li key={step.time} className="v2-rd-step v2-rd-step-idle" ref={stepRefs[i]}>
@@ -595,11 +568,22 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
 
           <div className="v2-rd-stage">
             <div className="v2-rd-cards">
-              {/* Quelle: der Kanal, der gleich offline geht */}
               <div className="v2-rd-card v2-rd-card-src" ref={srcCardRef}>
-                <div className="v2-rd-screen">
+                <div className="v2-rd-screen" ref={srcScreenRef}>
+                  <video
+                    className="v2-rd-video"
+                    ref={srcVideoRef}
+                    muted
+                    loop
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                  />
                   <div className="v2-rd-art" ref={srcArtRef} aria-hidden="true" />
                   <div className="v2-screen-sheen" aria-hidden="true" />
+                  <span className="v2-rd-play" aria-hidden="true">
+                    <Play size={20} fill="currentColor" />
+                  </span>
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
                       <span className="v2-rd-live" ref={srcLiveRef}>
@@ -616,7 +600,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                       </span>
                       <span className="v2-rd-screen-meta">
                         <Eye size={12} />
-                        <span ref={srcViewersRef}>0</span> Zuschauer · Deadlock
+                        <span ref={srcViewersRef} /> <span ref={srcMetaRef}>Deadlock</span>
                       </span>
                     </div>
                   </div>
@@ -631,22 +615,34 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                     <a
                       className="v2-rd-bar-name"
                       ref={srcBarNameRef}
-                      href="https://twitch.tv/"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       …
                     </a>
-                    <span className="v2-rd-bar-sub">an dieser Stelle stehst du</span>
+                    <span className="v2-rd-bar-sub" ref={srcBarSubRef}>
+                      Spielt Deadlock
+                    </span>
                   </span>
                 </div>
               </div>
 
-              {/* Ziel: der Partner, der die Zuschauer aufnimmt */}
               <div className="v2-rd-card v2-rd-card-tgt v2-rd-card-dim" ref={tgtCardRef}>
-                <div className="v2-rd-screen">
+                <div className="v2-rd-screen" ref={tgtScreenRef}>
+                  <video
+                    className="v2-rd-video"
+                    ref={tgtVideoRef}
+                    muted
+                    loop
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                  />
                   <div className="v2-rd-art" ref={tgtArtRef} aria-hidden="true" />
                   <div className="v2-screen-sheen" aria-hidden="true" />
+                  <span className="v2-rd-play" aria-hidden="true">
+                    <Play size={20} fill="currentColor" />
+                  </span>
                   <div className="v2-rd-ui">
                     <div className="v2-rd-ui-top">
                       <span className="v2-rd-live">
@@ -663,7 +659,7 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                       </span>
                       <span className="v2-rd-screen-meta">
                         <Eye size={12} />
-                        <span ref={tgtViewersRef}>0</span> Zuschauer · Deadlock
+                        <span ref={tgtViewersRef} /> <span ref={tgtMetaRef}>Deadlock</span>
                       </span>
                     </div>
                   </div>
@@ -674,27 +670,25 @@ export function NetworkRaidDemo({ partners }: { partners: PartnerChannel[] }) {
                     <a
                       className="v2-rd-bar-name"
                       ref={tgtBarNameRef}
-                      href="https://twitch.tv/"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       …
                     </a>
-                    <span className="v2-rd-bar-sub">Partner im Netzwerk</span>
+                    <span className="v2-rd-bar-sub" ref={tgtBarSubRef}>
+                      Partner im Netzwerk
+                    </span>
                   </span>
                 </div>
               </div>
 
-              {/* Kurze Strecke zwischen den Karten statt weiter Leerraum. */}
               <div className="v2-rd-fuse" aria-hidden="true" />
             </div>
 
-            {/* Flaeche fuer Partikel und Konfetti, selbst unsichtbar. */}
             <div className="v2-rd-mid" ref={midRef} aria-hidden="true" />
           </div>
         </div>
 
-        {/* Konsolenzeile: sagt, was gerade passiert, ohne die Karten zu verdecken. */}
         <div className="v2-stage-status">
           <span className="v2-rd-stamp v2-rd-stamp-gold" ref={stampRef} />
           <span className="v2-stage-status-text">
