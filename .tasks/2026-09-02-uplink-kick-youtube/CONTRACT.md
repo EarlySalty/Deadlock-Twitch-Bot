@@ -60,3 +60,5 @@ Keine. Betreiber-Voraussetzungen (Kick-App mit Redirect- und Webhook-URL, Secret
 
 ## Amendments
 - A1 (2026-09-02, entschieden von Orchestrator): rs-relay darf zusätzlich `src/main.rs` (nur Wiring der Fabrik und des Kick-Drehkreuzes in den AppState) und `Cargo.lock` (Folge der Crate-Ergänzung) ändern.
+- A2 (2026-09-02, entschieden von Orchestrator): Der Hintergrund-Refresh für platform_connections (REQ-05) läuft im Dashboard-Prozess (`tb-dashboard-api/src/lib.rs`), nicht in `tb-bot/src/main.rs`, weil Clients, Config und Route dort leben; `tb-bot/main.rs` bleibt unangetastet.
+- A3 (2026-09-02, entschieden von Orchestrator): `bot/dashboard_v2/tests/uplinkDock.test.ts` darf den Test `verbindenButton_nur_fuer_twitch_aktiv` auf das neue Verhalten umschreiben; er schrieb den alten Nur-Twitch-Zustand fest, den REQ-08 ersetzt.
