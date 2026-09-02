@@ -286,15 +286,17 @@ export function PartnersSection({
                   : "Gerade live, anderes Spiel"}
             </span>
           </div>
-          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {featured.map((channel) => (
+          <div className="grid gap-5 lg:grid-cols-2">
+            {featured.map((channel, i) => (
               <motion.div
                 key={channel.login}
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-60px" }}
-                transition={{ duration: 0.5 }}
-                className="panel-card overflow-hidden rounded-2xl"
+                transition={{ duration: 0.5, delay: i * 0.08 }}
+                className={`v2-live-embed overflow-hidden rounded-2xl ${
+                  featured.length === 3 && i === 2 ? "lg:col-span-2" : ""
+                }`}
               >
                 <TwitchEmbed login={channel.login} />
                 <ChannelBar channel={channel} />
@@ -325,9 +327,6 @@ export function PartnersSection({
  * Vollstaendiges Grid aller Partnerkanaele, live zuerst und hervorgehoben,
  * jede Kachel als Link zu Twitch.
  */
-/** Zwei Reihen im breitesten Raster (4 Spalten) = 8 Kacheln eingeklappt. */
-const COLLAPSED_TILES = 8;
-
 export function PartnerGrid({
   partners,
   liveNow,
@@ -367,9 +366,8 @@ export function PartnerGrid({
     return impact(b) - impact(a);
   });
 
-  const collapsible = sorted.length > COLLAPSED_TILES;
-  const shown = expanded ? sorted : sorted.slice(0, COLLAPSED_TILES);
-  const hiddenCount = sorted.length - shown.length;
+  const marqueeItems =
+    sorted.length > 6 ? [...sorted, ...sorted] : sorted;
 
   return (
     <div className="panel-card rounded-2xl p-6 sm:p-7">
@@ -385,32 +383,47 @@ export function PartnerGrid({
         </span>
       </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
-        {shown.map((channel, i) => (
-          <PartnerTile key={channel.login} channel={channel} index={i} />
-        ))}
-      </div>
+      {expanded ? (
+        <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+          {sorted.map((channel, i) => (
+            <PartnerTile key={channel.login} channel={channel} index={i} />
+          ))}
+        </div>
+      ) : (
+        <div className="v2-marquee-mask mt-6 overflow-hidden py-1">
+          <div className="v2-marquee gap-3">
+            {marqueeItems.map((channel, i) => (
+              <a
+                key={`${channel.login}-${i}`}
+                href={twitchUrl(channel.login)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={channel.displayName}
+                className={`relative shrink-0 no-underline transition-opacity ${
+                  channel.liveDeadlock ? "opacity-100" : "opacity-45 hover:opacity-90"
+                }`}
+              >
+                <Avatar login={channel.login} avatarUrl={channel.avatarUrl} size={40} />
+                {channel.liveDeadlock ? (
+                  <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-card,#17130c)]" />
+                ) : null}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
-      {collapsible ? (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--color-border)] py-3 text-sm font-semibold text-[var(--color-text-primary)] transition-all hover:border-[var(--color-border-hover)] hover:bg-white/5"
-        >
-          {expanded
-            ? "Weniger anzeigen"
-            : `Alle ${sorted.length} Partner anzeigen`}
-          <ChevronDown
-            size={16}
-            className={`transition-transform ${expanded ? "rotate-180" : ""}`}
-          />
-          {!expanded && hiddenCount > 0 ? (
-            <span className="text-[var(--color-text-secondary)]">
-              (+{hiddenCount})
-            </span>
-          ) : null}
-        </button>
-      ) : null}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--color-border)] py-3 text-sm font-semibold text-[var(--color-text-primary)] transition-all hover:border-[var(--color-border-hover)] hover:bg-white/5"
+      >
+        {expanded ? "Weniger anzeigen" : `Alle ${sorted.length} Partner anzeigen`}
+        <ChevronDown
+          size={16}
+          className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+        />
+      </button>
     </div>
   );
 }

@@ -154,6 +154,18 @@
   pointer-events: none;
 }
 
+/* ── Live-Embed: grosser Partnerkanal mit Gold-Glow-Rahmen ──────────────── */
+.v2-live-embed {
+  background:
+    linear-gradient(0deg, rgba(201, 168, 106, 0.06), rgba(201, 168, 106, 0.06)),
+    rgba(18, 18, 18, 0.9);
+  border: 1px solid rgba(239, 212, 157, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(239, 212, 157, 0.12),
+    0 24px 60px -20px rgba(0, 0, 0, 0.7),
+    0 0 66px -24px rgba(201, 168, 106, 0.85);
+}
+
 /* ── Puls fuer Live-Indikatoren ─────────────────────────────────────────── */
 .v2-pulse {
   animation: v2-pulse 2.4s ease-in-out infinite;
