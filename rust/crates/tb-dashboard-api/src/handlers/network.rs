@@ -92,7 +92,7 @@ struct ProfileCache {
 struct CacheState {
     good: Option<ProfileCache>,
     last_failure: Option<Instant>,
-    in_flight: bool,
+    in_flight: Option<Instant>,
 }
 
 impl CacheState {
@@ -100,10 +100,12 @@ impl CacheState {
         Self {
             good: None,
             last_failure: None,
-            in_flight: false,
+            in_flight: None,
         }
     }
 }
+
+const IN_FLIGHT_TOLERANZ: Duration = Duration::from_secs(1);
 
 struct EnrichConfig {
     profile_ttl: Duration,
@@ -175,13 +177,17 @@ async fn enrich_with(
             .last_failure
             .map(|t| t.elapsed() < cfg.negative_ttl)
             .unwrap_or(false);
-        if negativ_gesperrt || guard.in_flight {
+        let in_flight_aktiv = guard
+            .in_flight
+            .map(|start| start.elapsed() < cfg.budget + IN_FLIGHT_TOLERANZ)
+            .unwrap_or(false);
+        if negativ_gesperrt || in_flight_aktiv {
             if let Some(good) = guard.good.as_ref() {
                 apply_cached(streamers, &good.by_login);
             }
             return;
         }
-        guard.in_flight = true;
+        guard.in_flight = Some(Instant::now());
         guard.good.as_ref().map(|g| g.by_login.clone())
     };
 
@@ -210,7 +216,7 @@ async fn enrich_with(
                 by_login,
             });
             guard.last_failure = None;
-            guard.in_flight = false;
+            guard.in_flight = None;
         }
         _ => {
             if let Some(stale) = stale_snapshot.as_ref() {
@@ -218,7 +224,7 @@ async fn enrich_with(
             }
             let mut guard = cache.lock().await;
             guard.last_failure = Some(Instant::now());
-            guard.in_flight = false;
+            guard.in_flight = None;
         }
     }
 }
@@ -742,6 +748,86 @@ mod enrich_tests {
         let mut rows2 = vec![streamer("nani")];
         enrich_with(&mut rows2, &helix, &cache, &cfg).await;
 
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn enrich_veralteter_in_flight_heilt_sich() {
+        let server = MockServer::start().await;
+        let helix = mock_helix(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id":"1","login":"nani","display_name":"Nani","profile_image_url":"http://x/a.png"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg = EnrichConfig {
+            profile_ttl: Duration::from_millis(0),
+            negative_ttl: Duration::from_millis(0),
+            budget: Duration::from_millis(150),
+        };
+        let cache = Mutex::new(CacheState::empty());
+        {
+            let mut guard = cache.lock().await;
+            guard.in_flight = Some(Instant::now() - Duration::from_secs(30));
+        }
+
+        let mut rows = vec![streamer("nani")];
+        enrich_with(&mut rows, &helix, &cache, &cfg).await;
+
+        assert_eq!(
+            rows[0].display_name.as_deref(),
+            Some("Nani"),
+            "ein veralteter in_flight-Slot muss als frei gelten und einen Refresh starten"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn enrich_frischer_in_flight_serviert_stale_ohne_call() {
+        let server = MockServer::start().await;
+        let helix = mock_helix(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let cfg = EnrichConfig {
+            profile_ttl: Duration::from_millis(0),
+            negative_ttl: Duration::from_millis(0),
+            budget: Duration::from_secs(5),
+        };
+        let cache = Mutex::new(CacheState::empty());
+        {
+            let mut guard = cache.lock().await;
+            let mut by_login = HashMap::new();
+            by_login.insert(
+                "nani".to_string(),
+                (
+                    Some("Nani".to_string()),
+                    Some("http://x/a.png".to_string()),
+                ),
+            );
+            guard.good = Some(ProfileCache {
+                at: Instant::now(),
+                by_login,
+            });
+            guard.in_flight = Some(Instant::now());
+        }
+
+        let mut rows = vec![streamer("nani")];
+        enrich_with(&mut rows, &helix, &cache, &cfg).await;
+
+        assert_eq!(
+            rows[0].display_name.as_deref(),
+            Some("Nani"),
+            "ein frischer in_flight-Slot blockt den Zweitzugriff und liefert stale"
+        );
         server.verify().await;
     }
 }
