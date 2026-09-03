@@ -16,6 +16,11 @@ use crate::auth::session::{
 
 const DASHBOARD_PATH: &str = "/twitch/dashboard";
 
+const MAX_CONCURRENT_VERIFY: usize = 4;
+
+static VERIFY_SLOTS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_VERIFY));
+
 pub struct DemoLoginConfig {
     pub username: String,
     pub password_hash: String,
@@ -138,10 +143,24 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
 
     let user_ok =
         tb_crypto::constant_time_eq(username.trim().as_bytes(), config.username.as_bytes());
+    let permit = match VERIFY_SLOTS.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!("AUDIT demo login throttled (Verify-Slots erschoepft)");
+            return no_store(
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Zu viele Anfragen. Bitte spaeter erneut versuchen.",
+                )
+                    .into_response(),
+            );
+        }
+    };
     let password_hash = config.password_hash.clone();
     let pass_ok = tokio::task::spawn_blocking(move || verify_password(&password, &password_hash))
         .await
         .unwrap_or(false);
+    drop(permit);
     if !(user_ok && pass_ok) {
         warn!("AUDIT demo login failed (Nutzername oder Passwort falsch)");
         return no_store((StatusCode::UNAUTHORIZED, "Anmeldung fehlgeschlagen.").into_response());
@@ -910,6 +929,38 @@ mod route_tests {
         clear_secrets();
 
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(resp.headers().get(SET_COOKIE).is_none());
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dashboard_sessions WHERE session_type = 'twitch'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn erschoepfte_verify_slots_ergeben_429() {
+        let Some(pool) = make_pool("t_demo_slots").await else {
+            return;
+        };
+        let _guard = ENV_LOCK.lock().await;
+        set_secrets();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        let mut permits = Vec::new();
+        for _ in 0..super::MAX_CONCURRENT_VERIFY {
+            permits.push(super::VERIFY_SLOTS.try_acquire().unwrap());
+        }
+
+        let resp = app(pool.clone(), state, 100)
+            .oneshot(post_req(login_body(TEST_USER, &TEST_PASSWORD)))
+            .await
+            .unwrap();
+        drop(permits);
+        clear_secrets();
+
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(resp.headers().get(SET_COOKIE).is_none());
         let rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM dashboard_sessions WHERE session_type = 'twitch'",
