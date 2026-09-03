@@ -3504,7 +3504,7 @@ mod tests {
                 Arc::clone(&moderation),
             )),
             spam_filter: Arc::new(SpamFilter::new(Default::default())),
-            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
