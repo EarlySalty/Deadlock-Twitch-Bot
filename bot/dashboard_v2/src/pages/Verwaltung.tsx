@@ -13,6 +13,7 @@ import { GreetingSection } from '@/components/verwaltung/GreetingSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
+import { ModerationSection } from '@/components/verwaltung/ModerationSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
@@ -356,6 +357,7 @@ export function VerwaltungPage() {
   const botTab = (
     <>
       <AIEngagementSection />
+      <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />
       <DisconnectBotSection login={selfLogin} />

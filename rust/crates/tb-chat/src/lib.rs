@@ -38,6 +38,7 @@ pub mod lfg_pitch;
 pub mod lurker_policy;
 pub mod mention_scoring;
 pub mod moderation;
+pub mod moderation_settings;
 pub mod pipeline;
 pub mod promos;
 pub mod safe_list;
@@ -88,6 +89,7 @@ pub use lurker_policy::{
     PASSIVE_LURKER_STATE,
 };
 pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
+pub use moderation_settings::{ModerationSettings, ModerationSettingsCache};
 pub use moderation::{
     AutoBanRequest, ChannelGuardPort, HelixChatClient, ModerationEngine, OutboundSuppressionCheck,
     OutboundSuppressionStore, TimeoutGuard,

@@ -61,6 +61,7 @@ use crate::moderation::{
     AutoBanRequest, BAN_REASON_GLOBAL, BAN_REASON_SPAM, ModerationEngine, ModerationEvidence,
     NOTICE_GLOBAL_BAN,
 };
+use crate::moderation_settings::ModerationSettingsCache;
 use crate::promos::PromoEngine;
 use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
@@ -753,6 +754,7 @@ pub struct ChatPipeline {
     spam_meta_reply_index: Arc<std::sync::atomic::AtomicUsize>,
     /// Zuletzt verarbeitete Nachrichten-IDs (nach Shared-Chat-Normalisierung).
     seen_messages: Arc<SeenMessages>,
+    moderation_settings: Arc<ModerationSettingsCache>,
 }
 
 impl ChatPipeline {
@@ -770,12 +772,14 @@ impl ChatPipeline {
             )
             .with_crew_review_trigger(parts.crew_review_trigger.clone()),
         );
+        let moderation_settings = Arc::new(ModerationSettingsCache::new(parts.pool.clone()));
         Self {
             parts,
             crew_guard,
             spam_meta_cooldowns: Arc::new(DashMap::new()),
             spam_meta_reply_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             seen_messages: Arc::new(SeenMessages::default()),
+            moderation_settings,
         }
     }
 
@@ -915,6 +919,11 @@ impl ChatPipeline {
             );
         }
 
+        let mod_settings = self
+            .moderation_settings
+            .settings(&event.broadcaster_user_id)
+            .await;
+
         // Jede Partner-Nachricht ist archiviert, bevor ein Moderationspfad sie
         // löschen oder die Pipeline mit einem frühen Return verlassen kann.
         let tracker = Arc::clone(&p.tracker);
@@ -930,6 +939,7 @@ impl ChatPipeline {
 
         // Schritt 5: Global-Chatter-Ban (Z. 1589–1595) — Aktion über die
         // ModerationEngine, exakt wie Python via _auto_ban_and_cleanup.
+        if mod_settings.global_ban_enabled {
         let global_ban = Arc::clone(&p.global_ban);
         let event_for_step = event.clone();
         let Some(global_ban_reason) =
@@ -982,10 +992,12 @@ impl ChatPipeline {
             // Ban nicht durchsetzbar (z. B. Chatter ist Mod) → Pipeline läuft
             // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
         }
+        }
 
         // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
         // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
         // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
+        if mod_settings.scam_pitch_enabled {
         let scam_pitch = Arc::clone(&p.scam_pitch);
         let event_for_step = event.clone();
         let pitch = run_pipeline_step("scam_pitch", &channel_login, &chatter_login, async move {
@@ -1040,8 +1052,10 @@ impl ChatPipeline {
             }
             PitchDecision::Hint | PitchDecision::None => {}
         }
+        }
 
         // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
+        if mod_settings.spam_autoban_enabled {
         let pipeline = self.clone();
         let event_for_step = event.clone();
         let spam_channel = channel_login.clone();
@@ -1064,10 +1078,13 @@ impl ChatPipeline {
         if spam_handled {
             return false;
         }
+        }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
-        self.handle_sus_invite(event, &channel_login, &chatter_login)
-            .await;
+        if mod_settings.sus_invite_enabled {
+            self.handle_sus_invite(event, &channel_login, &chatter_login)
+                .await;
+        }
 
         // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
         // nur live). Trifft eine, entfallen die Deadlock-Detektoren.
@@ -2562,6 +2579,7 @@ mod tests {
             "CREATE TABLE twitch_ban_events (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, event_type TEXT NOT NULL, target_login TEXT, target_id TEXT, reason TEXT, received_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT PRIMARY KEY, chatter_id TEXT, reason TEXT, added_by TEXT, added_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE twitch_chatter_global_ban_applied (chatter_login TEXT NOT NULL, broadcaster_id TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (chatter_login, broadcaster_id))",
+            "CREATE TABLE twitch_moderation_settings (channel_user_id TEXT PRIMARY KEY, global_ban_enabled BOOLEAN NOT NULL DEFAULT TRUE, scam_pitch_enabled BOOLEAN NOT NULL DEFAULT TRUE, spam_autoban_enabled BOOLEAN NOT NULL DEFAULT TRUE, sus_invite_enabled BOOLEAN NOT NULL DEFAULT TRUE)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -3425,6 +3443,283 @@ mod tests {
             SCAM_PITCH_TIMEOUT_REASON, PYTHON_REASON,
             "Rust-Reason ist die akzeptierte, klarere Variante (Grillme-Entscheidung) \
              und darf NICHT auf den Python-Wortlaut zurückgesetzt werden",
+        );
+    }
+
+    struct MockNewAccountAge;
+
+    #[async_trait::async_trait]
+    impl AccountAgePort for MockNewAccountAge {
+        async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
+            Some(10)
+        }
+    }
+
+    async fn set_moderation_flags(
+        pool: &PgPool,
+        channel_user_id: &str,
+        global_ban: bool,
+        scam_pitch: bool,
+        spam_autoban: bool,
+        sus_invite: bool,
+    ) {
+        sqlx::query(
+            "INSERT INTO twitch_moderation_settings \
+                 (channel_user_id, global_ban_enabled, scam_pitch_enabled, spam_autoban_enabled, sus_invite_enabled) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(channel_user_id)
+        .bind(global_ban)
+        .bind(scam_pitch)
+        .bind(spam_autoban)
+        .bind(sus_invite)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn pipeline_for_scam_pitch(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+        let api_trait: Arc<dyn ChatApi> = api;
+        let http = reqwest::Client::new();
+        let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api_trait), pool.clone()));
+        ChatPipeline::new(ChatPipelineParts {
+            bot_user_id: "bot-id".to_string(),
+            api: Arc::clone(&api_trait),
+            pool: pool.clone(),
+            classifier: Arc::new(ChannelClassifier::new(pool.clone())),
+            tracker: Arc::new(ChatterTracker::new(pool.clone())),
+            global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
+            scam_pitch: Arc::new(ScamPitchDetector::new(
+                Arc::clone(&api_trait),
+                Arc::new(MockNewAccountAge),
+                pool.clone(),
+            )),
+            conversation_scam: Arc::new(ConversationScamGuard::new(
+                pool.clone(),
+                "bot-id".to_string(),
+                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                Arc::clone(&api_trait),
+                Arc::clone(&moderation),
+            )),
+            spam_filter: Arc::new(SpamFilter::new(Default::default())),
+            ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
+            moderation,
+            sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopDiscordLink),
+                Arc::new(crate::invite_question::PgInviteQuestionStore::new(pool.clone())),
+                Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
+                    EngagementMinimaxClient::new(None, None, None, None),
+                )),
+                None,
+                None,
+            )),
+            lfg_pitch: Arc::new(crate::lfg_pitch::LfgPitchResponder::new(
+                Arc::clone(&api_trait),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopLfgJudge),
+                true,
+                None,
+                None,
+            )),
+            promos: Arc::new(PromoEngine::new(
+                pool.clone(),
+                Arc::clone(&api_trait),
+                Arc::new(NoopSuppression),
+            )),
+            commands: Arc::new(CommandEngine::new(
+                pool,
+                Arc::clone(&api_trait),
+                Arc::new(NoopRaid),
+                Arc::new(NoopDiscordLink),
+                Arc::new(NoopInvite),
+                Arc::new(NoopSuperMod),
+                Arc::new(NoopAutoban),
+            )),
+            mention_resolver: Arc::new(NoopMentionResolver),
+            review_log: Arc::new(ReviewLog::new(std::env::temp_dir())),
+            alerter: Arc::new(ModAlerter::with_endpoint(
+                http,
+                "http://127.0.0.1:1/changelog",
+            )),
+            account_age: Arc::new(NoopAccountAge),
+            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
+            crew_centroid: Arc::new(crate::style_score::Centroid::default()),
+            crew_review_trigger: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn global_ban_flag_false_unterdrueckt_ban() {
+        let Some(pool) = moderation_test_pool("pipeline_modtoggle_global_off").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason) \
+             VALUES ('seller', 'chatter-id', 'Viewerbot-Netzwerk')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        set_moderation_flags(&pool, "broadcaster-id", false, true, true, true).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool.clone());
+
+        pipeline.handle(&strong_timeout_event()).await;
+        assert!(
+            !api.calls().iter().any(|c| c.starts_with("ban:")),
+            "{:?}",
+            api.calls()
+        );
+
+        let Some(pool2) = moderation_test_pool("pipeline_modtoggle_global_on").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool2).await;
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason) \
+             VALUES ('seller', 'chatter-id', 'Viewerbot-Netzwerk')",
+        )
+        .execute(&pool2)
+        .await
+        .unwrap();
+        let api2 = Arc::new(RecordingChatApi::default());
+        let pipeline2 = pipeline_for_non_partner(Arc::clone(&api2), pool2.clone());
+
+        pipeline2.handle(&strong_timeout_event()).await;
+        assert!(
+            api2.calls().iter().any(|c| c.starts_with("ban:")),
+            "{:?}",
+            api2.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn spam_autoban_flag_false_unterdrueckt_ban() {
+        let Some(pool) = moderation_test_pool("pipeline_modtoggle_spam_off").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        set_moderation_flags(&pool, "broadcaster-id", true, true, false, true).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool.clone());
+        let mut event = strong_timeout_event();
+        event.message_id = "modtoggle-spam-off".to_string();
+        event.message.text = "Best viewers streamboo.com".to_string();
+
+        pipeline.handle(&event).await;
+        assert!(
+            !api.calls().iter().any(|c| c.starts_with("ban:")),
+            "{:?}",
+            api.calls()
+        );
+        assert!(
+            !api.calls().iter().any(|c| c.starts_with("delete:")),
+            "{:?}",
+            api.calls()
+        );
+
+        let Some(pool2) = moderation_test_pool("pipeline_modtoggle_spam_on").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool2).await;
+        let api2 = Arc::new(RecordingChatApi::default());
+        let pipeline2 = pipeline_for_non_partner(Arc::clone(&api2), pool2.clone());
+        let mut event2 = strong_timeout_event();
+        event2.message_id = "modtoggle-spam-on".to_string();
+        event2.message.text = "Best viewers streamboo.com".to_string();
+
+        pipeline2.handle(&event2).await;
+        assert!(
+            api2.calls().iter().any(|c| c.starts_with("ban:")),
+            "{:?}",
+            api2.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn sus_invite_flag_false_unterdrueckt_timeout() {
+        let Some(pool) = moderation_test_pool("pipeline_modtoggle_sus_off").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        set_moderation_flags(&pool, "broadcaster-id", true, true, true, false).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(Arc::clone(&api), pool.clone());
+        let mut event = strong_timeout_event();
+        event.message_id = "modtoggle-sus-off".to_string();
+        event.message.text = "discord.gg/fremd123".to_string();
+
+        pipeline.handle(&event).await;
+        assert!(
+            !api.calls().iter().any(|c| c.starts_with("timeout:")),
+            "{:?}",
+            api.calls()
+        );
+
+        let Some(pool2) = moderation_test_pool("pipeline_modtoggle_sus_on").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool2).await;
+        let api2 = Arc::new(RecordingChatApi::default());
+        let pipeline2 = pipeline_for_non_partner(Arc::clone(&api2), pool2.clone());
+        let mut event2 = strong_timeout_event();
+        event2.message_id = "modtoggle-sus-on".to_string();
+        event2.message.text = "discord.gg/fremd123".to_string();
+
+        pipeline2.handle(&event2).await;
+        assert!(
+            api2.calls().iter().any(|c| c.starts_with("timeout:")),
+            "{:?}",
+            api2.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn scam_pitch_flag_false_unterdrueckt_warnung() {
+        let Some(pool) = moderation_test_pool("pipeline_modtoggle_scam_off").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        set_moderation_flags(&pool, "broadcaster-id", true, false, true, true).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_scam_pitch(Arc::clone(&api), pool.clone());
+        let mut event = strong_timeout_event();
+        event.chatter_user_id = "spammer-id".to_string();
+        event.chatter_user_login = "spammer".to_string();
+        event.message_id = "modtoggle-scam-off".to_string();
+        event.message.text = "ima pull up with my crew bro".to_string();
+
+        pipeline.handle(&event).await;
+        assert!(
+            !api.calls().iter().any(|c| c.starts_with("send:")),
+            "{:?}",
+            api.calls()
+        );
+
+        let Some(pool2) = moderation_test_pool("pipeline_modtoggle_scam_on").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool2).await;
+        let api2 = Arc::new(RecordingChatApi::default());
+        let pipeline2 = pipeline_for_scam_pitch(Arc::clone(&api2), pool2.clone());
+        let mut event2 = strong_timeout_event();
+        event2.chatter_user_id = "spammer-id".to_string();
+        event2.chatter_user_login = "spammer".to_string();
+        event2.message_id = "modtoggle-scam-on".to_string();
+        event2.message.text = "ima pull up with my crew bro".to_string();
+
+        pipeline2.handle(&event2).await;
+        assert!(
+            api2.calls().iter().any(|c| c.starts_with("send:")),
+            "{:?}",
+            api2.calls()
         );
     }
 }

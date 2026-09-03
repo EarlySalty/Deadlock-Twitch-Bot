@@ -168,8 +168,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
         engagement_mode, engagement_settings, exp_analytics, follower_funnel, greeting_settings,
         internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
-        lurker_tax_settings, monetization, onboarding, overview, performance, plattform_connect,
-        raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        lurker_tax_settings, moderation_settings, monetization, onboarding, overview, performance,
+        plattform_connect, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
         scam_guard_settings,
         session_detail, silent_settings, social_media, spa, stream_report, streamer_disconnect,
         streamers, tag_analysis, tip_settings, title, title_performance, uplink, viewer_timeline,
@@ -389,6 +389,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/scam-guard/settings",
             get(scam_guard_settings::get_handler).post(scam_guard_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: einzelne Moderationsaufgaben des Bots an- und
+        // ausschalten (Global-Ban, Scam-Pitch, Spam-Auto-Ban, Sus-Invite).
+        .route(
+            "/twitch/api/v2/streamer/moderation/settings",
+            get(moderation_settings::get_handler).post(moderation_settings::post_handler),
         )
         // Scam-Guard: Vorschlags-Queue lesen, Verdict-Detail, Vorschlag verwerfen.
         .route(

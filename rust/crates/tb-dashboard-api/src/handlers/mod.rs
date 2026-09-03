@@ -68,6 +68,7 @@ pub mod lurk_command_settings;
 pub mod lurker_analysis;
 pub mod lurker_tax_settings;
 pub mod market;
+pub mod moderation_settings;
 pub mod monetization;
 pub mod network;
 pub mod network_stats;
