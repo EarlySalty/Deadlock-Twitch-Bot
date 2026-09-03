@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Extension,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::auth::session::{
     build_session_cookie, DashboardAuthState, SameSite, PARTNER_COOKIE_NAME,
@@ -118,6 +118,7 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
         .await
         .unwrap_or(false);
     if !(user_ok && pass_ok) {
+        warn!("AUDIT demo login failed (Nutzername oder Passwort falsch)");
         return no_store((StatusCode::UNAUTHORIZED, "Anmeldung fehlgeschlagen.").into_response());
     }
 
@@ -203,7 +204,7 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
         }
     };
 
-    warn!(
+    info!(
         twitch_login = %partner.twitch_login,
         twitch_user_id = %partner.twitch_user_id,
         "AUDIT demo login success"
