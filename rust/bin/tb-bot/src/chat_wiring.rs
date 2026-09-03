@@ -2498,6 +2498,31 @@ impl PartnerRoster for DbPartnerRoster {
             }
         }
     }
+
+    async fn streamer_global_ban_enabled(&self, broadcaster_id: &str) -> bool {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT global_ban_enabled \
+             FROM twitch_moderation_settings \
+             WHERE channel_user_id = $1",
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(enabled)) => enabled,
+            Ok(None) => true,
+            Err(error) => {
+                tracing::warn!(
+                    broadcaster_id,
+                    %error,
+                    urteil = "anwenden",
+                    grund = "streamer_global_ban_query_failed_default_enabled",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                true
+            }
+        }
+    }
 }
 
 // ===========================================================================

@@ -73,6 +73,12 @@ pub trait PartnerRoster: Send + Sync {
 
     /// `true` (Default) wendet globale Bans im Kanal an; `false` ist Opt-out.
     async fn global_ban_enforcement_enabled(&self, login: &str) -> bool;
+
+    /// Streamer-Schalter aus `twitch_moderation_settings.global_ban_enabled`.
+    /// `true` (Default, auch bei fehlender Zeile) lässt den Sweep zu; `false`
+    /// überspringt den Kanal. Gilt zusätzlich zum Admin-Enforcement: gebannt wird
+    /// nur, wenn beide Schalter an sind.
+    async fn streamer_global_ban_enabled(&self, broadcaster_id: &str) -> bool;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,18 +86,22 @@ enum ChannelDecision {
     Apply,
     SkipNotOperational,
     SkipGlobalBanOptout,
+    SkipStreamerOptout,
     SkipLive,
 }
 
 fn decide_channel_enforcement(
     operational: bool,
     enforcement_enabled: bool,
+    streamer_enabled: bool,
     live: bool,
 ) -> ChannelDecision {
     if !operational {
         ChannelDecision::SkipNotOperational
     } else if !enforcement_enabled {
         ChannelDecision::SkipGlobalBanOptout
+    } else if !streamer_enabled {
+        ChannelDecision::SkipStreamerOptout
     } else if live {
         ChannelDecision::SkipLive
     } else {
@@ -273,11 +283,17 @@ impl GlobalBanSweeper {
         } else {
             true
         };
+        let streamer_enabled = if operational && enforcement_enabled {
+            roster.streamer_global_ban_enabled(broadcaster_id).await
+        } else {
+            true
+        };
         let live = operational
             && enforcement_enabled
+            && streamer_enabled
             && roster.live_broadcaster_ids().await.contains(broadcaster_id);
 
-        match decide_channel_enforcement(operational, enforcement_enabled, live) {
+        match decide_channel_enforcement(operational, enforcement_enabled, streamer_enabled, live) {
             ChannelDecision::Apply => tracing::info!(
                 channel = broadcaster_login,
                 urteil = "anwenden",
@@ -298,6 +314,15 @@ impl GlobalBanSweeper {
                     channel = broadcaster_login,
                     urteil = "übersprungen",
                     grund = "global_ban_optout",
+                    "GlobalBanSweep Kanalentscheidung"
+                );
+                return 0;
+            }
+            ChannelDecision::SkipStreamerOptout => {
+                tracing::info!(
+                    channel = broadcaster_login,
+                    urteil = "übersprungen",
+                    grund = "streamer_global_ban_disabled",
                     "GlobalBanSweep Kanalentscheidung"
                 );
                 return 0;
@@ -904,6 +929,7 @@ mod tests {
         valid_auth: HashSet<String>,
         operational: HashSet<String>,
         enforcement_disabled: HashSet<String>,
+        streamer_ban_disabled: HashSet<String>,
     }
 
     impl MockRoster {
@@ -922,11 +948,17 @@ mod tests {
                 valid_auth: valid_auth.into_iter().map(str::to_string).collect(),
                 operational: operational.into_iter().map(str::to_string).collect(),
                 enforcement_disabled: HashSet::new(),
+                streamer_ban_disabled: HashSet::new(),
             }
         }
 
         fn with_enforcement_disabled(mut self, channels: Vec<&str>) -> Self {
             self.enforcement_disabled = channels.into_iter().map(str::to_string).collect();
+            self
+        }
+
+        fn with_streamer_ban_disabled(mut self, broadcaster_ids: Vec<&str>) -> Self {
+            self.streamer_ban_disabled = broadcaster_ids.into_iter().map(str::to_string).collect();
             self
         }
     }
@@ -947,6 +979,9 @@ mod tests {
         }
         async fn global_ban_enforcement_enabled(&self, login: &str) -> bool {
             !self.enforcement_disabled.contains(login)
+        }
+        async fn streamer_global_ban_enabled(&self, broadcaster_id: &str) -> bool {
+            !self.streamer_ban_disabled.contains(broadcaster_id)
         }
     }
 
@@ -977,12 +1012,16 @@ mod tests {
     #[test]
     fn kanalentscheidung_respektiert_optout_und_default() {
         assert_eq!(
-            decide_channel_enforcement(true, true, false),
+            decide_channel_enforcement(true, true, true, false),
             ChannelDecision::Apply
         );
         assert_eq!(
-            decide_channel_enforcement(true, false, false),
+            decide_channel_enforcement(true, false, true, false),
             ChannelDecision::SkipGlobalBanOptout
+        );
+        assert_eq!(
+            decide_channel_enforcement(true, true, false, false),
+            ChannelDecision::SkipStreamerOptout
         );
     }
 
@@ -1112,6 +1151,44 @@ mod tests {
 
         assert_eq!(count, 0);
         assert!(api.ban_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweeper_respektiert_streamer_global_ban_schalter() {
+        let pool = pool_or_skip!("gbs_streamer_toggle");
+        sqlx::query(
+            "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+             VALUES ('boser_user', 'uid_boser')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api_off = Arc::new(MockApi::default());
+        let roster_off =
+            MockRoster::new(vec![("kanal", "bid1")], vec![], vec!["bid1"], vec!["kanal"])
+                .with_streamer_ban_disabled(vec!["bid1"]);
+        let sw_off = sweeper(pool.clone(), api_off.clone());
+        let mut applied_off = load_applied_pairs(&pool).await;
+        let count_off = sw_off
+            .apply_bans_to_channel("kanal", "bid1", &roster_off, &mut applied_off)
+            .await;
+        assert_eq!(count_off, 0, "Streamer-Schalter aus → kein Ban");
+        assert!(api_off.ban_calls.lock().unwrap().is_empty());
+
+        let api_on = Arc::new(MockApi::default());
+        let roster_on = MockRoster::new(
+            vec![("kanal2", "bid2")],
+            vec![],
+            vec!["bid2"],
+            vec!["kanal2"],
+        );
+        let sw_on = sweeper(pool.clone(), api_on.clone());
+        let mut applied_on = load_applied_pairs(&pool).await;
+        let count_on = sw_on
+            .apply_bans_to_channel("kanal2", "bid2", &roster_on, &mut applied_on)
+            .await;
+        assert_eq!(count_on, 1, "Schalter an bzw. fehlende Zeile → Ban");
     }
 
     #[tokio::test]
