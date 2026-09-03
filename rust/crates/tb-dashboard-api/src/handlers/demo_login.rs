@@ -18,8 +18,10 @@ const DASHBOARD_PATH: &str = "/twitch/dashboard";
 
 const MAX_CONCURRENT_VERIFY: usize = 4;
 
-static VERIFY_SLOTS: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_VERIFY));
+static VERIFY_SLOTS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_VERIFY))
+    });
 
 pub struct DemoLoginConfig {
     pub username: String,
@@ -143,7 +145,7 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
 
     let user_ok =
         tb_crypto::constant_time_eq(username.trim().as_bytes(), config.username.as_bytes());
-    let permit = match VERIFY_SLOTS.try_acquire() {
+    let permit = match VERIFY_SLOTS.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
             warn!("AUDIT demo login throttled (Verify-Slots erschoepft)");
@@ -157,10 +159,12 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
         }
     };
     let password_hash = config.password_hash.clone();
-    let pass_ok = tokio::task::spawn_blocking(move || verify_password(&password, &password_hash))
-        .await
-        .unwrap_or(false);
-    drop(permit);
+    let pass_ok = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_password(&password, &password_hash)
+    })
+    .await
+    .unwrap_or(false);
     if !(user_ok && pass_ok) {
         warn!("AUDIT demo login failed (Nutzername oder Passwort falsch)");
         return no_store((StatusCode::UNAUTHORIZED, "Anmeldung fehlgeschlagen.").into_response());
