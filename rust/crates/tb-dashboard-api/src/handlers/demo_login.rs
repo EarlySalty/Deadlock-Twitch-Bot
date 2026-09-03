@@ -56,8 +56,13 @@ fn no_store(mut response: Response) -> Response {
 
 fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
     let mut response = Redirect::to(location).into_response();
-    if let Ok(value) = HeaderValue::from_str(cookie) {
-        response.headers_mut().append(SET_COOKIE, value);
+    match HeaderValue::from_str(cookie) {
+        Ok(value) => {
+            response.headers_mut().append(SET_COOKIE, value);
+        }
+        Err(error) => {
+            warn!(%error, "Demo-Login: Session-Cookie konnte nicht gesetzt werden");
+        }
     }
     no_store(response)
 }
@@ -87,7 +92,7 @@ fn verify_password(password: &str, phc_hash: &str) -> bool {
 
 pub async fn get_handler() -> Response {
     if demo_login_config_from_env().is_none() {
-        return StatusCode::NOT_FOUND.into_response();
+        return no_store(StatusCode::NOT_FOUND.into_response());
     }
     no_store(
         (
@@ -100,7 +105,7 @@ pub async fn get_handler() -> Response {
 
 pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: Bytes) -> Response {
     let Some(config) = demo_login_config_from_env() else {
-        return StatusCode::NOT_FOUND.into_response();
+        return no_store(StatusCode::NOT_FOUND.into_response());
     };
 
     let username = form_value(&body, "username").unwrap_or_default();
@@ -484,7 +489,6 @@ mod route_tests {
         std::env::set_var("TWITCH_DEMO_LOGIN_USER", TEST_USER);
         std::env::set_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH", make_hash(TEST_PASSWORD));
         std::env::set_var("TWITCH_DEMO_LOGIN_TWITCH_USER_ID", TEST_USER_ID);
-        std::env::set_var("TB_DASHBOARD_COOKIE_INSECURE", "1");
     }
 
     fn clear_secrets() {
@@ -492,7 +496,6 @@ mod route_tests {
         std::env::remove_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH");
         std::env::remove_var("TWITCH_DEMO_LOGIN_TWITCH_USER_ID");
         std::env::remove_var("TWITCH_DEMO_LOGIN_DISPLAY_NAME");
-        std::env::remove_var("TB_DASHBOARD_COOKIE_INSECURE");
     }
 
     fn app(pool: PgPool, state: DashboardAuthState, max_requests: u32) -> Router {

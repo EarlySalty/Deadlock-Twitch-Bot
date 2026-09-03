@@ -1145,12 +1145,9 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         )
         .route(
             "/twitch/auth/google",
-            get(demo_login::get_handler)
-                .post(demo_login::post_handler)
-                .layer(axum::middleware::from_fn_with_state(
-                    demo_login_rl,
-                    rate_limit_middleware,
-                )),
+            get(demo_login::get_handler).merge(post(demo_login::post_handler).layer(
+                axum::middleware::from_fn_with_state(demo_login_rl, rate_limit_middleware),
+            )),
         )
 }
 
