@@ -1068,6 +1068,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
     use auth::discord_admin_login;
     use handlers::auth_login;
+    use handlers::demo_login;
 
     // P2.138: Login-Bucket (30/60 s). P2.140: Callback-Bucket (30/60 s) — die
     // beiden Callback-Routen teilen sich denselben Bucket. Layer pro Route, damit
@@ -1077,7 +1078,8 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
     let discord_login_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_login", 10, 60);
     let discord_callback_rl =
-        RateLimitLayerConfig::new(rate_limiter, "discord_admin_callback", 20, 60);
+        RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_callback", 20, 60);
+    let demo_login_rl = RateLimitLayerConfig::new(rate_limiter, "demo_login", 10, 60);
 
     Router::new()
         .route(
@@ -1140,6 +1142,15 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
             "/twitch/auth/fingerprint",
             get(discord_admin_login::fingerprint_page_handler)
                 .post(discord_admin_login::fingerprint_submit_handler),
+        )
+        .route(
+            "/twitch/auth/google",
+            get(demo_login::get_handler)
+                .post(demo_login::post_handler)
+                .layer(axum::middleware::from_fn_with_state(
+                    demo_login_rl,
+                    rate_limit_middleware,
+                )),
         )
 }
 
