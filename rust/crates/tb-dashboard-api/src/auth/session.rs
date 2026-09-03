@@ -433,6 +433,9 @@ pub struct DashboardAuthState {
     admin_cache: Arc<Mutex<TimedCache<bool>>>,
     /// Cache für Partner-Sessions (twitch).
     partner_cache: Arc<Mutex<TimedCache<PartnerSession>>>,
+    /// Cache für die aus `twitch_partners` aufgelöste `twitch_user_id` eines
+    /// Admin-Logins (Owner-/Master-Session), keyed auf den kleingeschriebenen Login.
+    admin_user_id_cache: Arc<Mutex<TimedCache<String>>>,
 }
 
 impl DashboardAuthState {
@@ -445,7 +448,49 @@ impl DashboardAuthState {
             fernet_key,
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
+            admin_user_id_cache: Arc::new(Mutex::new(TimedCache::default())),
         }
+    }
+
+    /// Löst die `twitch_user_id` eines aktiven Partners für den gegebenen Login auf.
+    ///
+    /// Dient der Owner-/Master-Session, die aus dem Discord-Admin-Cookie entsteht
+    /// und keine eigene Twitch-Identität trägt. Handler, die auf die Twitch-User-ID
+    /// schlüsseln, bekommen so die echte ID statt einer leeren. Ergebnis wird mit
+    /// `CACHE_TTL_SECS` gecacht, damit nicht jeder Request eine DB-Abfrage auslöst.
+    /// Kein Treffer oder DB-Fehler → leerer String (fail-open wie bisher).
+    pub async fn resolve_admin_user_id(&self, login: &str) -> String {
+        let login = login.trim().to_lowercase();
+        if login.is_empty() {
+            return String::new();
+        }
+        let now = unix_now();
+        {
+            let cache = self.admin_user_id_cache.lock().await;
+            if let Some(user_id) = cache.get(&login, now) {
+                return user_id.clone();
+            }
+        }
+        let resolved: Option<String> = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM twitch_partners \
+             WHERE LOWER(twitch_login) = $1 AND COALESCE(status, '') = 'active' \
+             ORDER BY COALESCE(departnered_at, admin_archived_at, partnered_at) DESC \
+             LIMIT 1",
+        )
+        .bind(&login)
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, login = %login, "Admin-user_id-Lookup fehlgeschlagen");
+            None
+        });
+        let user_id = resolved.unwrap_or_default();
+        {
+            let mut cache = self.admin_user_id_cache.lock().await;
+            cache.prune(now);
+            cache.insert(login, user_id.clone(), CACHE_TTL_SECS, now);
+        }
+        user_id
     }
 
     /// Referenz auf den DB-Pool (für Resolver, die ihn brauchen, z. B. der

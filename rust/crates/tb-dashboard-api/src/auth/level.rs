@@ -400,7 +400,18 @@ where
                 parts
                     .extensions
                     .insert(AuthenticatedAdminSessionId(session_id));
-                return Ok(master_session_auth(admin_dashboard, admin_mode_active));
+                let mut auth = master_session_auth(admin_dashboard, admin_mode_active);
+                if let DashboardAuthLevel::Partner {
+                    twitch_login,
+                    twitch_user_id,
+                    ..
+                } = &mut auth
+                {
+                    if twitch_user_id.is_empty() {
+                        *twitch_user_id = state.resolve_admin_user_id(twitch_login).await;
+                    }
+                }
+                return Ok(auth);
             }
         }
 
@@ -929,6 +940,47 @@ mod tests {
             .await
             .unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE id = 9062305")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn master_session_traegt_aufgeloeste_admin_user_id() {
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
+        ensure_partner(&pool, 1186925760, "earlysalty", "1186925760").await;
+        let admin = state
+            .create_admin_session("discord-owner-uid", "Discord Admin")
+            .await
+            .unwrap();
+        let auth = extract_auth(
+            request_parts(Some(format!(
+                "{}={}",
+                crate::auth::session::ADMIN_COOKIE_NAME,
+                admin.session_id
+            ))),
+            state.clone(),
+        )
+        .await;
+        match auth {
+            DashboardAuthLevel::Partner {
+                twitch_login,
+                twitch_user_id,
+                ..
+            } => {
+                assert_eq!(twitch_login, "earlysalty");
+                assert_eq!(twitch_user_id, "1186925760");
+            }
+            other => panic!("erwartete Partner-Master-Session, war {other:?}"),
+        }
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key(&admin.session_id))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 1186925760")
             .execute(&pool)
             .await
             .unwrap();
