@@ -212,21 +212,6 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
             }
         };
 
-    if partner.twitch_user_id.trim() != config.twitch_user_id.trim() {
-        warn!(
-            konfiguriert = %config.twitch_user_id,
-            aufgeloest = %partner.twitch_user_id,
-            "AUDIT demo login denied (aufgeloeste User-ID weicht ab)"
-        );
-        return no_store(
-            (
-                StatusCode::FORBIDDEN,
-                "Kein Zugriff: Das Konto ist nicht als Streamer-Partner freigegeben.",
-            )
-                .into_response(),
-        );
-    }
-
     let display_name = if config.display_name.is_empty() {
         partner.twitch_login.clone()
     } else {
@@ -778,7 +763,7 @@ mod route_tests {
     }
 
     #[tokio::test]
-    async fn abweichende_aufgeloeste_user_id_wird_abgelehnt() {
+    async fn keine_aktive_partnerzeile_fuer_konfigurierte_id_ergibt_403() {
         let Some(pool) = make_pool("t_demo_poison").await else {
             return;
         };
