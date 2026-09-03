@@ -940,44 +940,140 @@ impl ChatPipeline {
         // Schritt 5: Global-Chatter-Ban (Z. 1589–1595) — Aktion über die
         // ModerationEngine, exakt wie Python via _auto_ban_and_cleanup.
         if mod_settings.global_ban_enabled {
-        let global_ban = Arc::clone(&p.global_ban);
-        let event_for_step = event.clone();
-        let Some(global_ban_reason) =
-            run_security_pipeline_step("global_ban", &channel_login, &chatter_login, async move {
-                global_ban.ban_reason(&event_for_step).await
-            })
+            let global_ban = Arc::clone(&p.global_ban);
+            let event_for_step = event.clone();
+            let Some(global_ban_reason) = run_security_pipeline_step(
+                "global_ban",
+                &channel_login,
+                &chatter_login,
+                async move { global_ban.ban_reason(&event_for_step).await },
+            )
             .await
-        else {
-            return false;
-        };
-        if let Some(global_ban_reason) = global_ban_reason {
-            info!(
-                chatter = %chatter_login,
-                channel = %channel_login,
-                "Global-Ban-Treffer — führe Channel-Ban aus"
-            );
+            else {
+                return false;
+            };
+            if let Some(global_ban_reason) = global_ban_reason {
+                info!(
+                    chatter = %chatter_login,
+                    channel = %channel_login,
+                    "Global-Ban-Treffer — führe Channel-Ban aus"
+                );
+                let pipeline = self.clone();
+                let event_for_step = event.clone();
+                let ban_channel = channel_login.clone();
+                let Some(enforced) = run_security_pipeline_step(
+                    "global_ban.enforce",
+                    &channel_login,
+                    &chatter_login,
+                    async move {
+                        pipeline
+                            .execute_auto_ban_with_evidence(
+                                &event_for_step,
+                                &ban_channel,
+                                true,
+                                BAN_REASON_GLOBAL,
+                                Some(NOTICE_GLOBAL_BAN),
+                                "global_ban",
+                                ModerationEvidence {
+                                    source_path: "global_ban",
+                                    reason: &global_ban_reason,
+                                    score: None,
+                                    account_age_days: None,
+                                },
+                            )
+                            .await
+                    },
+                )
+                .await
+                else {
+                    return false;
+                };
+                if enforced {
+                    return false;
+                }
+                // Ban nicht durchsetzbar (z. B. Chatter ist Mod) → Pipeline läuft
+                // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
+            }
+        }
+
+        // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
+        // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
+        // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
+        if mod_settings.scam_pitch_enabled {
+            let scam_pitch = Arc::clone(&p.scam_pitch);
+            let event_for_step = event.clone();
+            let pitch =
+                run_pipeline_step("scam_pitch", &channel_login, &chatter_login, async move {
+                    scam_pitch.observe(&event_for_step).await
+                })
+                .await
+                .unwrap_or(PitchDecision::None);
+            match &pitch {
+                PitchDecision::StrongTimeout { text, duration } => {
+                    debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
+                    let api = Arc::clone(&p.api);
+                    let alerter = Arc::clone(&p.alerter);
+                    let event_for_step = event.clone();
+                    let timeout_channel = channel_login.clone();
+                    let timeout_chatter = chatter_login.clone();
+                    let timeout_text = text.clone();
+                    let timeout_duration = *duration;
+                    run_pipeline_step(
+                        "scam_pitch.timeout",
+                        &channel_login,
+                        &chatter_login,
+                        async move {
+                            handle_strong_timeout(
+                                &api,
+                                &alerter,
+                                &event_for_step,
+                                &timeout_channel,
+                                &timeout_chatter,
+                                &timeout_text,
+                                timeout_duration,
+                            )
+                            .await;
+                        },
+                    )
+                    .await;
+                }
+                PitchDecision::StrongWarn { .. } | PitchDecision::PublicWarn { .. } => {
+                    debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: Warnung (kein Delete/Timeout, wie Python)");
+                    if !event.chatter_user_id.is_empty()
+                        && event.chatter_user_id != event.broadcaster_user_id
+                        && !event.is_mod_or_broadcaster()
+                    {
+                        p.alerter.send(
+                            "scam_pitch_warn",
+                            &channel_login,
+                            &chatter_login,
+                            &event.chatter_user_id,
+                            event.text(),
+                            "",
+                        );
+                    }
+                }
+                PitchDecision::Hint | PitchDecision::None => {}
+            }
+        }
+
+        // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
+        if mod_settings.spam_autoban_enabled {
             let pipeline = self.clone();
             let event_for_step = event.clone();
-            let ban_channel = channel_login.clone();
-            let Some(enforced) = run_security_pipeline_step(
-                "global_ban.enforce",
+            let spam_channel = channel_login.clone();
+            let spam_chatter = chatter_login.clone();
+            let Some(spam_handled) = run_security_pipeline_step(
+                "spam_check",
                 &channel_login,
                 &chatter_login,
                 async move {
                     pipeline
-                        .execute_auto_ban_with_evidence(
+                        .run_spam_check(
                             &event_for_step,
-                            &ban_channel,
-                            true,
-                            BAN_REASON_GLOBAL,
-                            Some(NOTICE_GLOBAL_BAN),
-                            "global_ban",
-                            ModerationEvidence {
-                                source_path: "global_ban",
-                                reason: &global_ban_reason,
-                                score: None,
-                                account_age_days: None,
-                            },
+                            &spam_channel,
+                            &spam_chatter,
+                            tracked_was_first_message,
                         )
                         .await
                 },
@@ -986,98 +1082,9 @@ impl ChatPipeline {
             else {
                 return false;
             };
-            if enforced {
+            if spam_handled {
                 return false;
             }
-            // Ban nicht durchsetzbar (z. B. Chatter ist Mod) → Pipeline läuft
-            // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
-        }
-        }
-
-        // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
-        // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
-        // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
-        if mod_settings.scam_pitch_enabled {
-        let scam_pitch = Arc::clone(&p.scam_pitch);
-        let event_for_step = event.clone();
-        let pitch = run_pipeline_step("scam_pitch", &channel_login, &chatter_login, async move {
-            scam_pitch.observe(&event_for_step).await
-        })
-        .await
-        .unwrap_or(PitchDecision::None);
-        match &pitch {
-            PitchDecision::StrongTimeout { text, duration } => {
-                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
-                let api = Arc::clone(&p.api);
-                let alerter = Arc::clone(&p.alerter);
-                let event_for_step = event.clone();
-                let timeout_channel = channel_login.clone();
-                let timeout_chatter = chatter_login.clone();
-                let timeout_text = text.clone();
-                let timeout_duration = *duration;
-                run_pipeline_step(
-                    "scam_pitch.timeout",
-                    &channel_login,
-                    &chatter_login,
-                    async move {
-                        handle_strong_timeout(
-                            &api,
-                            &alerter,
-                            &event_for_step,
-                            &timeout_channel,
-                            &timeout_chatter,
-                            &timeout_text,
-                            timeout_duration,
-                        )
-                        .await;
-                    },
-                )
-                .await;
-            }
-            PitchDecision::StrongWarn { .. } | PitchDecision::PublicWarn { .. } => {
-                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: Warnung (kein Delete/Timeout, wie Python)");
-                if !event.chatter_user_id.is_empty()
-                    && event.chatter_user_id != event.broadcaster_user_id
-                    && !event.is_mod_or_broadcaster()
-                {
-                    p.alerter.send(
-                        "scam_pitch_warn",
-                        &channel_login,
-                        &chatter_login,
-                        &event.chatter_user_id,
-                        event.text(),
-                        "",
-                    );
-                }
-            }
-            PitchDecision::Hint | PitchDecision::None => {}
-        }
-        }
-
-        // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
-        if mod_settings.spam_autoban_enabled {
-        let pipeline = self.clone();
-        let event_for_step = event.clone();
-        let spam_channel = channel_login.clone();
-        let spam_chatter = chatter_login.clone();
-        let Some(spam_handled) =
-            run_security_pipeline_step("spam_check", &channel_login, &chatter_login, async move {
-                pipeline
-                    .run_spam_check(
-                        &event_for_step,
-                        &spam_channel,
-                        &spam_chatter,
-                        tracked_was_first_message,
-                    )
-                    .await
-            })
-            .await
-        else {
-            return false;
-        };
-        if spam_handled {
-            return false;
-        }
         }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
