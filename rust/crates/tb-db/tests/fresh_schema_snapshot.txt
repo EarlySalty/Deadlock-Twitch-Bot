@@ -402,8 +402,8 @@ twitch_ad_manager_actions|completion_token|text|YES|
 twitch_ad_manager_actions|created_at|timestamp with time zone|NO|now()
 twitch_ad_manager_actions|due_at|timestamp with time zone|NO|now()
 twitch_ad_manager_actions|duration_seconds|integer|YES|
-twitch_ad_manager_actions|id|bigint|NO|nextval('twitch_ad_manager_actions_id_seq'::regclass)
 twitch_ad_manager_actions|idempotency_key|text|NO|
+twitch_ad_manager_actions|id|bigint|NO|nextval('twitch_ad_manager_actions_id_seq'::regclass)
 twitch_ad_manager_actions|lease_token|text|YES|
 twitch_ad_manager_actions|lease_until|timestamp with time zone|YES|
 twitch_ad_manager_actions|marked_unknown_at|timestamp with time zone|YES|
@@ -439,8 +439,8 @@ twitch_ad_manager_state|last_action_detail|text|YES|
 twitch_ad_manager_state|last_action_kind|text|YES|
 twitch_ad_manager_state|last_action_outcome|text|YES|
 twitch_ad_manager_state|last_ad_at|timestamp with time zone|YES|
-twitch_ad_manager_state|last_decision|text|YES|
 twitch_ad_manager_state|last_decision_reason|text|YES|
+twitch_ad_manager_state|last_decision|text|YES|
 twitch_ad_manager_state|last_history_at|timestamp with time zone|YES|
 twitch_ad_manager_state|next_ad_at|timestamp with time zone|YES|
 twitch_ad_manager_state|observed_at|timestamp with time zone|YES|
@@ -963,6 +963,11 @@ twitch_login_aliases|is_current|boolean|NO|false
 twitch_login_aliases|last_seen_at|timestamp with time zone|NO|now()
 twitch_login_aliases|login|text|NO|
 twitch_login_aliases|twitch_user_id|text|NO|
+twitch_moderation_settings|channel_user_id|text|NO|
+twitch_moderation_settings|global_ban_enabled|boolean|NO|true
+twitch_moderation_settings|scam_pitch_enabled|boolean|NO|true
+twitch_moderation_settings|spam_autoban_enabled|boolean|NO|true
+twitch_moderation_settings|sus_invite_enabled|boolean|NO|true
 twitch_observability_events|created_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_observability_events|decision|text|NO|
 twitch_observability_events|details_json|text|NO|'{}'::text
