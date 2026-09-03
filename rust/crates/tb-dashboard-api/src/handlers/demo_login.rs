@@ -108,7 +108,10 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
 
     let user_ok =
         tb_crypto::constant_time_eq(username.trim().as_bytes(), config.username.as_bytes());
-    let pass_ok = verify_password(&password, &config.password_hash);
+    let password_hash = config.password_hash.clone();
+    let pass_ok = tokio::task::spawn_blocking(move || verify_password(&password, &password_hash))
+        .await
+        .unwrap_or(false);
     if !(user_ok && pass_ok) {
         return no_store((StatusCode::UNAUTHORIZED, "Anmeldung fehlgeschlagen.").into_response());
     }
@@ -129,7 +132,10 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
     {
         Ok(Some(partner)) => partner,
         Ok(None) => {
-            warn!("AUDIT demo login denied (kein Partner fuer konfigurierte User-ID)");
+            warn!(
+                twitch_user_id = %config.twitch_user_id,
+                "AUDIT demo login denied (kein Partner fuer konfigurierte User-ID)"
+            );
             return no_store(
                 (
                     StatusCode::FORBIDDEN,
@@ -149,6 +155,21 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
             );
         }
     };
+
+    if partner.twitch_user_id.trim() != config.twitch_user_id.trim() {
+        warn!(
+            konfiguriert = %config.twitch_user_id,
+            aufgeloest = %partner.twitch_user_id,
+            "AUDIT demo login denied (aufgeloeste User-ID weicht ab)"
+        );
+        return no_store(
+            (
+                StatusCode::FORBIDDEN,
+                "Kein Zugriff: Das Konto ist nicht als Streamer-Partner freigegeben.",
+            )
+                .into_response(),
+        );
+    }
 
     let display_name = if config.display_name.is_empty() {
         partner.twitch_login.clone()
@@ -177,7 +198,11 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
         }
     };
 
-    warn!("AUDIT demo login success");
+    warn!(
+        twitch_login = %partner.twitch_login,
+        twitch_user_id = %partner.twitch_user_id,
+        "AUDIT demo login success"
+    );
 
     let cookie = build_session_cookie(
         PARTNER_COOKIE_NAME,
@@ -680,5 +705,44 @@ mod route_tests {
         assert_ne!(bound_id, "99998888");
         assert_eq!(bound_login, "pruefkonto");
         assert_ne!(bound_login, "angreifer");
+    }
+
+    #[tokio::test]
+    async fn abweichende_aufgeloeste_user_id_wird_abgelehnt() {
+        let Some(pool) = make_pool("t_demo_poison").await else {
+            return;
+        };
+        let _guard = ENV_LOCK.lock().await;
+        set_secrets();
+        sqlx::query("DELETE FROM twitch_partners")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('', '00000000', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        let resp = app(pool.clone(), state, 100)
+            .oneshot(post_req(
+                "username=google-pruefer&password=korrekt-horse-battery-42",
+            ))
+            .await
+            .unwrap();
+        clear_secrets();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(resp.headers().get(SET_COOKIE).is_none());
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dashboard_sessions WHERE session_type = 'twitch'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0);
     }
 }
