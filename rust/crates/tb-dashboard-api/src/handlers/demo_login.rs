@@ -494,7 +494,13 @@ mod route_tests {
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+            }
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return None;
+        };
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
