@@ -10,7 +10,7 @@ use axum::{
 use tracing::{info, warn};
 
 use crate::auth::session::{
-    build_session_cookie, DashboardAuthState, SameSite, PARTNER_COOKIE_NAME,
+    build_session_cookie, DashboardAuthState, PartnerSession, SameSite, PARTNER_COOKIE_NAME,
     SESSION_CREATE_TTL_SECS,
 };
 
@@ -90,6 +90,36 @@ fn verify_password(password: &str, phc_hash: &str) -> bool {
     }
 }
 
+async fn resolve_active_partner_by_user_id(
+    pool: &sqlx::PgPool,
+    user_id: &str,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let user_id = user_id.trim();
+    if user_id.is_empty() {
+        return Ok(None);
+    }
+    let row: Option<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT p.twitch_login, p.twitch_user_id
+        FROM twitch_partners p
+        WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+          AND p.twitch_user_id = $1
+        ORDER BY CASE
+            WHEN COALESCE(p.status, '') = 'active' THEN 0
+            WHEN COALESCE(p.status, '') = 'archived' THEN 1
+            WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+            ELSE 3
+        END,
+        COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn get_handler() -> Response {
     if demo_login_config_from_env().is_none() {
         return no_store(StatusCode::NOT_FOUND.into_response());
@@ -132,35 +162,37 @@ pub async fn post_handler(state: Option<Extension<DashboardAuthState>>, body: By
         );
     };
 
-    let partner = match state
-        .find_partner_for_login("", &config.twitch_user_id)
-        .await
-    {
-        Ok(Some(partner)) => partner,
-        Ok(None) => {
-            warn!(
-                twitch_user_id = %config.twitch_user_id,
-                "AUDIT demo login denied (kein Partner fuer konfigurierte User-ID)"
-            );
-            return no_store(
-                (
-                    StatusCode::FORBIDDEN,
-                    "Kein Zugriff: Das Konto ist nicht als Streamer-Partner freigegeben.",
-                )
-                    .into_response(),
-            );
-        }
-        Err(error) => {
-            warn!(%error, "Demo-Login: Partner-Lookup fehlgeschlagen");
-            return no_store(
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Login konnte gerade nicht abgeschlossen werden. Bitte erneut versuchen.",
-                )
-                    .into_response(),
-            );
-        }
-    };
+    let partner =
+        match resolve_active_partner_by_user_id(state.pool(), &config.twitch_user_id).await {
+            Ok(Some((twitch_login, twitch_user_id))) => PartnerSession {
+                twitch_login,
+                twitch_user_id,
+                display_name: String::new(),
+            },
+            Ok(None) => {
+                warn!(
+                    twitch_user_id = %config.twitch_user_id,
+                    "AUDIT demo login denied (kein Partner fuer konfigurierte User-ID)"
+                );
+                return no_store(
+                    (
+                        StatusCode::FORBIDDEN,
+                        "Kein Zugriff: Das Konto ist nicht als Streamer-Partner freigegeben.",
+                    )
+                        .into_response(),
+                );
+            }
+            Err(error) => {
+                warn!(%error, "Demo-Login: Partner-Lookup fehlgeschlagen");
+                return no_store(
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Login konnte gerade nicht abgeschlossen werden. Bitte erneut versuchen.",
+                    )
+                        .into_response(),
+                );
+            }
+        };
 
     if partner.twitch_user_id.trim() != config.twitch_user_id.trim() {
         warn!(
