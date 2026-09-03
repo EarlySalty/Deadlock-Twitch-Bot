@@ -49,6 +49,7 @@ pub mod chat_social_graph;
 pub mod clip_command_settings;
 pub mod coaching;
 pub mod demo;
+pub mod demo_login;
 pub mod discord_link;
 pub mod engagement_mode;
 pub mod engagement_settings;
