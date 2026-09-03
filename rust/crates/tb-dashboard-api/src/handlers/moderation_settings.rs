@@ -9,6 +9,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::resolve_streamer_scope;
 
 #[derive(Deserialize, Default)]
 pub struct ModerationQuery {
@@ -33,6 +34,7 @@ async fn resolve_channel_user_id(
     streamer: &Option<String>,
     pool: &PgPool,
 ) -> Result<String, Response> {
+    let scope = resolve_streamer_scope(auth, streamer.as_deref(), false)?;
     match auth {
         DashboardAuthLevel::Partner { twitch_user_id, .. } => {
             let id = twitch_user_id.trim();
@@ -46,8 +48,8 @@ async fn resolve_channel_user_id(
             Ok(id.to_string())
         }
         DashboardAuthLevel::Admin { .. } => {
-            let login = match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(s) => s.to_lowercase(),
+            let login = match scope {
+                Some(login) => login,
                 None => {
                     return Err(error_response(
                         StatusCode::BAD_REQUEST,
@@ -357,6 +359,44 @@ mod tests {
         .await
         .unwrap();
         assert!(!stored.0);
+    }
+
+    #[tokio::test]
+    async fn partner_fremder_streamer_ist_forbidden() {
+        let Some(pool) = make_pool("t_moderation_fremd").await else {
+            return;
+        };
+        let (get_status, _) = body_of(
+            get_handler(
+                partner("100"),
+                State(pool.clone()),
+                Query(ModerationQuery {
+                    streamer: Some("fremderkanal".into()),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(get_status, StatusCode::FORBIDDEN);
+
+        let (post_status, _) = body_of(
+            post_handler(
+                partner("100"),
+                State(pool),
+                Query(ModerationQuery {
+                    streamer: Some("fremderkanal".into()),
+                }),
+                Json(ModerationUpdate {
+                    global_ban_enabled: false,
+                    scam_pitch_enabled: false,
+                    spam_autoban_enabled: false,
+                    sus_invite_enabled: false,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(post_status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
