@@ -103,14 +103,9 @@ async fn resolve_active_partner_by_user_id(
         SELECT p.twitch_login, p.twitch_user_id
         FROM twitch_partners p
         WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+          AND COALESCE(p.status, '') = 'active'
           AND p.twitch_user_id = $1
-        ORDER BY CASE
-            WHEN COALESCE(p.status, '') = 'active' THEN 0
-            WHEN COALESCE(p.status, '') = 'archived' THEN 1
-            WHEN COALESCE(p.status, '') = 'departnered' THEN 2
-            ELSE 3
-        END,
-        COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+        ORDER BY COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
         LIMIT 1
         "#,
     )
@@ -885,5 +880,43 @@ mod route_tests {
         }
         assert!(saw_404, "vor dem Limit erreicht der POST den Handler");
         assert!(saw_429, "der POST-Pfad muss ratenbegrenzt sein");
+    }
+
+    #[tokio::test]
+    async fn nicht_aktiver_partner_wird_abgelehnt() {
+        let Some(pool) = make_pool("t_demo_inaktiv").await else {
+            return;
+        };
+        let _guard = ENV_LOCK.lock().await;
+        set_secrets();
+        sqlx::query("DELETE FROM twitch_partners")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('pruefkonto', $1, 'departnered')",
+        )
+        .bind(TEST_USER_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        let resp = app(pool.clone(), state, 100)
+            .oneshot(post_req(login_body(TEST_USER, &TEST_PASSWORD)))
+            .await
+            .unwrap();
+        clear_secrets();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(resp.headers().get(SET_COOKIE).is_none());
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dashboard_sessions WHERE session_type = 'twitch'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0);
     }
 }
