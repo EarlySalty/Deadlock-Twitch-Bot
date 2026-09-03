@@ -89,7 +89,45 @@ struct ProfileCache {
     by_login: HashMap<String, (Option<String>, Option<String>)>,
 }
 
-const PROFILE_TTL: Duration = Duration::from_secs(3600);
+struct CacheState {
+    good: Option<ProfileCache>,
+    last_failure: Option<Instant>,
+    in_flight: bool,
+}
+
+impl CacheState {
+    const fn empty() -> Self {
+        Self {
+            good: None,
+            last_failure: None,
+            in_flight: false,
+        }
+    }
+}
+
+struct EnrichConfig {
+    profile_ttl: Duration,
+    negative_ttl: Duration,
+    budget: Duration,
+}
+
+const ENRICH_CONFIG: EnrichConfig = EnrichConfig {
+    profile_ttl: Duration::from_secs(3600),
+    negative_ttl: Duration::from_secs(60),
+    budget: Duration::from_secs(5),
+};
+
+fn apply_cached(
+    streamers: &mut [NetworkStreamerJson],
+    by_login: &HashMap<String, (Option<String>, Option<String>)>,
+) {
+    for streamer in streamers.iter_mut() {
+        if let Some((display, avatar)) = by_login.get(&streamer.login) {
+            streamer.display_name = display.clone();
+            streamer.avatar_url = avatar.clone();
+        }
+    }
+}
 
 fn helix_client() -> Option<&'static HelixClient> {
     static HELIX: OnceLock<Option<HelixClient>> = OnceLock::new();
@@ -113,43 +151,76 @@ async fn enrich_profiles(streamers: &mut [NetworkStreamerJson]) {
     let Some(helix) = helix_client() else {
         return;
     };
-    static CACHE: Mutex<Option<ProfileCache>> = Mutex::const_new(None);
+    static CACHE: Mutex<CacheState> = Mutex::const_new(CacheState::empty());
+    enrich_with(streamers, helix, &CACHE, &ENRICH_CONFIG).await;
+}
+
+async fn enrich_with(
+    streamers: &mut [NetworkStreamerJson],
+    helix: &HelixClient,
+    cache: &Mutex<CacheState>,
+    cfg: &EnrichConfig,
+) {
     let logins: Vec<String> = streamers.iter().map(|s| s.login.clone()).collect();
-    {
-        let cache = CACHE.lock().await;
-        if let Some(hit) = cache.as_ref() {
-            if hit.at.elapsed() < PROFILE_TTL {
-                for streamer in streamers.iter_mut() {
-                    if let Some((display, avatar)) = hit.by_login.get(&streamer.login) {
-                        streamer.display_name = display.clone();
-                        streamer.avatar_url = avatar.clone();
-                    }
-                }
+
+    let stale_snapshot = {
+        let mut guard = cache.lock().await;
+        if let Some(good) = guard.good.as_ref() {
+            if good.at.elapsed() < cfg.profile_ttl {
+                apply_cached(streamers, &good.by_login);
                 return;
             }
         }
-    }
-    let refs: Vec<&str> = logins.iter().map(String::as_str).collect();
-    let Ok(users) = helix.get_users(&refs).await else {
-        return;
+        let negativ_gesperrt = guard
+            .last_failure
+            .map(|t| t.elapsed() < cfg.negative_ttl)
+            .unwrap_or(false);
+        if negativ_gesperrt || guard.in_flight {
+            if let Some(good) = guard.good.as_ref() {
+                apply_cached(streamers, &good.by_login);
+            }
+            return;
+        }
+        guard.in_flight = true;
+        guard.good.as_ref().map(|g| g.by_login.clone())
     };
-    let mut by_login = HashMap::new();
-    for streamer in streamers.iter_mut() {
-        if let Some(user) = users.get(&streamer.login) {
-            let display = Some(user.display_name.clone()).filter(|name| !name.is_empty());
-            let avatar = user
-                .profile_image_url
-                .clone()
-                .filter(|url| !url.trim().is_empty());
-            streamer.display_name = display.clone();
-            streamer.avatar_url = avatar.clone();
-            by_login.insert(streamer.login.clone(), (display, avatar));
+
+    let refs: Vec<&str> = logins.iter().map(String::as_str).collect();
+    let outcome = tokio::time::timeout(cfg.budget, helix.get_users(&refs)).await;
+
+    match outcome {
+        Ok(Ok(users)) => {
+            let mut by_login = HashMap::new();
+            for streamer in streamers.iter_mut() {
+                if let Some(user) = users.get(&streamer.login) {
+                    let display =
+                        Some(user.display_name.clone()).filter(|name| !name.is_empty());
+                    let avatar = user
+                        .profile_image_url
+                        .clone()
+                        .filter(|url| !url.trim().is_empty());
+                    streamer.display_name = display.clone();
+                    streamer.avatar_url = avatar.clone();
+                    by_login.insert(streamer.login.clone(), (display, avatar));
+                }
+            }
+            let mut guard = cache.lock().await;
+            guard.good = Some(ProfileCache {
+                at: Instant::now(),
+                by_login,
+            });
+            guard.last_failure = None;
+            guard.in_flight = false;
+        }
+        _ => {
+            if let Some(stale) = stale_snapshot.as_ref() {
+                apply_cached(streamers, stale);
+            }
+            let mut guard = cache.lock().await;
+            guard.last_failure = Some(Instant::now());
+            guard.in_flight = false;
         }
     }
-    *CACHE.lock().await = Some(ProfileCache {
-        at: Instant::now(),
-        by_login,
-    });
 }
 
 /// `GET /twitch/api/v2/public/network`
@@ -524,5 +595,153 @@ mod tests {
     fn ist_fehlende_relation_false_fuer_nicht_db_fehler() {
         assert!(!super::ist_fehlende_relation(&sqlx::Error::RowNotFound));
         assert!(!super::ist_fehlende_relation(&sqlx::Error::PoolClosed));
+    }
+}
+
+#[cfg(test)]
+mod enrich_tests {
+    use super::*;
+    use std::time::Duration;
+    use tb_transport_twitch::HelixConfig;
+    use tokio::sync::Mutex;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn streamer(login: &str) -> NetworkStreamerJson {
+        NetworkStreamerJson {
+            login: login.to_string(),
+            display_name: None,
+            avatar_url: None,
+            is_partner: true,
+            is_live: false,
+            viewer_count: 0,
+            game: None,
+            deadlock_streams_30d: 0,
+            avg_viewers_30d: 0.0,
+        }
+    }
+
+    async fn mock_helix(server: &MockServer) -> HelixClient {
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "tok", "expires_in": 3600
+            })))
+            .mount(server)
+            .await;
+        let config = HelixConfig {
+            client_id: "cid".to_string(),
+            client_secret: "sec".to_string(),
+            token_url: format!("{}/oauth2/token", server.uri()),
+            helix_base: format!("{}/helix", server.uri()),
+        };
+        HelixClient::new(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn enrich_serviert_frisch_ohne_zweiten_call() {
+        let server = MockServer::start().await;
+        let helix = mock_helix(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id":"1","login":"nani","display_name":"Nani","profile_image_url":"http://x/a.png"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cache = Mutex::new(CacheState::empty());
+        let cfg = EnrichConfig {
+            profile_ttl: Duration::from_secs(60),
+            negative_ttl: Duration::from_secs(60),
+            budget: Duration::from_secs(5),
+        };
+
+        let mut rows = vec![streamer("nani")];
+        enrich_with(&mut rows, &helix, &cache, &cfg).await;
+        assert_eq!(rows[0].display_name.as_deref(), Some("Nani"));
+        assert_eq!(rows[0].avatar_url.as_deref(), Some("http://x/a.png"));
+
+        let mut rows2 = vec![streamer("nani")];
+        enrich_with(&mut rows2, &helix, &cache, &cfg).await;
+        assert_eq!(rows2[0].display_name.as_deref(), Some("Nani"));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn enrich_reicht_stale_bei_timeout_weiter() {
+        let server = MockServer::start().await;
+        let helix = mock_helix(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id":"1","login":"nani","display_name":"Nani","profile_image_url":"http://x/a.png"}]
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(3))
+                    .set_body_json(json!({ "data": [] })),
+            )
+            .mount(&server)
+            .await;
+
+        let cache = Mutex::new(CacheState::empty());
+        let cfg = EnrichConfig {
+            profile_ttl: Duration::from_millis(0),
+            negative_ttl: Duration::from_millis(0),
+            budget: Duration::from_millis(150),
+        };
+
+        let mut rows = vec![streamer("nani")];
+        enrich_with(&mut rows, &helix, &cache, &cfg).await;
+        assert_eq!(rows[0].display_name.as_deref(), Some("Nani"));
+
+        let start = std::time::Instant::now();
+        let mut rows2 = vec![streamer("nani")];
+        enrich_with(&mut rows2, &helix, &cache, &cfg).await;
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "das eigene Timeout-Budget muss den haengenden Helix-Call kappen"
+        );
+        assert_eq!(
+            rows2[0].display_name.as_deref(),
+            Some("Nani"),
+            "abgelaufene, aber brauchbare Cache-Werte muessen weitergereicht werden"
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_negativ_cache_unterdrueckt_zweiten_call() {
+        let server = MockServer::start().await;
+        let helix = mock_helix(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cache = Mutex::new(CacheState::empty());
+        let cfg = EnrichConfig {
+            profile_ttl: Duration::from_millis(0),
+            negative_ttl: Duration::from_secs(60),
+            budget: Duration::from_secs(5),
+        };
+
+        let mut rows = vec![streamer("nani")];
+        enrich_with(&mut rows, &helix, &cache, &cfg).await;
+
+        let mut rows2 = vec![streamer("nani")];
+        enrich_with(&mut rows2, &helix, &cache, &cfg).await;
+
+        server.verify().await;
     }
 }
