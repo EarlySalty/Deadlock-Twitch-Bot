@@ -102,10 +102,14 @@ export function ModerationSection() {
         </p>
       </div>
 
-      {loading || !draft ? (
+      {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
           Einstellungen werden geladen ...
+        </div>
+      ) : !draft ? (
+        <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {error ?? 'Einstellungen konnten nicht geladen werden.'}
         </div>
       ) : (
         <div className="space-y-5">
