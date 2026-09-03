@@ -405,22 +405,25 @@ mod unit_tests {
 
     #[test]
     fn verify_password_akzeptiert_richtiges_und_lehnt_falsches_ab() {
-        let hash = make_hash("richtig-geheim-123");
-        assert!(verify_password("richtig-geheim-123", &hash));
-        assert!(!verify_password("falsch", &hash));
+        let good = tb_crypto::random_urlsafe_token(12);
+        let bad = tb_crypto::random_urlsafe_token(12);
+        let hash = make_hash(&good);
+        assert!(verify_password(&good, &hash));
+        assert!(!verify_password(&bad, &hash));
         assert!(!verify_password("", &hash));
     }
 
     #[test]
     fn verify_password_bei_kaputtem_hash_false() {
-        assert!(!verify_password("egal", "kein-phc-string"));
+        let irgendwas = tb_crypto::random_urlsafe_token(8);
+        assert!(!verify_password(&irgendwas, "kein-phc-string"));
     }
 
     #[test]
     fn form_value_liest_urlencoded() {
-        let body = Bytes::from_static(b"username=pruefer&password=a%20b%26c");
-        assert_eq!(form_value(&body, "username").as_deref(), Some("pruefer"));
-        assert_eq!(form_value(&body, "password").as_deref(), Some("a b&c"));
+        let body = Bytes::from(format!("feld_a={}&feld_b=a%20b%26c", "pruefer"));
+        assert_eq!(form_value(&body, "feld_a").as_deref(), Some("pruefer"));
+        assert_eq!(form_value(&body, "feld_b").as_deref(), Some("a b&c"));
         assert_eq!(form_value(&body, "fehlt"), None);
     }
 
@@ -449,8 +452,16 @@ mod route_tests {
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     const TEST_USER: &str = "google-pruefer";
-    const TEST_PASSWORD: &str = "korrekt-horse-battery-42";
     const TEST_USER_ID: &str = "77001122";
+
+    static TEST_PASSWORD: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| tb_crypto::random_urlsafe_token(12));
+    static WRONG_PASSWORD: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| tb_crypto::random_urlsafe_token(12));
+
+    fn login_body(user: &str, password: &str) -> String {
+        format!("username={user}&password={password}")
+    }
 
     fn test_fernet_key() -> String {
         "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string()
@@ -520,7 +531,7 @@ mod route_tests {
 
     fn set_secrets() {
         std::env::set_var("TWITCH_DEMO_LOGIN_USER", TEST_USER);
-        std::env::set_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH", make_hash(TEST_PASSWORD));
+        std::env::set_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH", make_hash(&TEST_PASSWORD));
         std::env::set_var("TWITCH_DEMO_LOGIN_TWITCH_USER_ID", TEST_USER_ID);
     }
 
@@ -545,12 +556,12 @@ mod route_tests {
             .with_state(pool)
     }
 
-    fn post_req(body: &'static str) -> Request<Body> {
+    fn post_req(body: impl Into<Body>) -> Request<Body> {
         Request::builder()
             .method("POST")
             .uri("/twitch/auth/google")
             .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from(body))
+            .body(body.into())
             .unwrap()
     }
 
@@ -586,7 +597,7 @@ mod route_tests {
         assert_eq!(g.status(), StatusCode::NOT_FOUND);
 
         let p = app(pool.clone(), state, 100)
-            .oneshot(post_req("username=x&password=y"))
+            .oneshot(post_req(login_body("x", &WRONG_PASSWORD)))
             .await
             .unwrap();
         assert_eq!(p.status(), StatusCode::NOT_FOUND);
@@ -602,7 +613,7 @@ mod route_tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state, 100)
-            .oneshot(post_req("username=google-pruefer&password=falsch"))
+            .oneshot(post_req(login_body(TEST_USER, &WRONG_PASSWORD)))
             .await
             .unwrap();
         clear_secrets();
@@ -628,7 +639,7 @@ mod route_tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state, 100)
-            .oneshot(post_req("username=fremd&password=korrekt-horse-battery-42"))
+            .oneshot(post_req(login_body("fremd", &TEST_PASSWORD)))
             .await
             .unwrap();
         clear_secrets();
@@ -650,7 +661,7 @@ mod route_tests {
         for _ in 0..5 {
             let resp = router
                 .clone()
-                .oneshot(post_req("username=google-pruefer&password=falsch"))
+                .oneshot(post_req(login_body(TEST_USER, &WRONG_PASSWORD)))
                 .await
                 .unwrap();
             match resp.status() {
@@ -674,9 +685,7 @@ mod route_tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state.clone(), 100)
-            .oneshot(post_req(
-                "username=google-pruefer&password=korrekt-horse-battery-42",
-            ))
+            .oneshot(post_req(login_body(TEST_USER, &TEST_PASSWORD)))
             .await
             .unwrap();
         clear_secrets();
@@ -706,9 +715,10 @@ mod route_tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state.clone(), 100)
-            .oneshot(post_req(
-                "username=google-pruefer&password=korrekt-horse-battery-42&twitch_user_id=99998888&twitch_login=angreifer",
-            ))
+            .oneshot(post_req(format!(
+                "{}&twitch_user_id=99998888&twitch_login=angreifer",
+                login_body(TEST_USER, &TEST_PASSWORD)
+            )))
             .await
             .unwrap();
         clear_secrets();
@@ -764,9 +774,7 @@ mod route_tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state, 100)
-            .oneshot(post_req(
-                "username=google-pruefer&password=korrekt-horse-battery-42",
-            ))
+            .oneshot(post_req(login_body(TEST_USER, &TEST_PASSWORD)))
             .await
             .unwrap();
         clear_secrets();
@@ -780,5 +788,102 @@ mod route_tests {
         .await
         .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn nur_konfigurierte_id_wird_gebunden_trotz_leerem_login_partner() {
+        let Some(pool) = make_pool("t_demo_leerlogin").await else {
+            return;
+        };
+        let _guard = ENV_LOCK.lock().await;
+        set_secrets();
+        sqlx::query("DELETE FROM twitch_partners")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, partnered_at)
+             VALUES ('', '55550000', 'active', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, partnered_at)
+             VALUES ('pruefkonto', $1, 'active', '2020-01-01')",
+        )
+        .bind(TEST_USER_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        let resp = app(pool.clone(), state, 100)
+            .oneshot(post_req(login_body(TEST_USER, &TEST_PASSWORD)))
+            .await
+            .unwrap();
+        clear_secrets();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::SEE_OTHER,
+            "Login des konfigurierten Kontos darf nicht an einer Leer-Login-Partnerzeile scheitern"
+        );
+        let payload_enc: Vec<u8> = sqlx::query_scalar(
+            "SELECT payload_enc FROM dashboard_sessions WHERE session_type = 'twitch'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let token = String::from_utf8(payload_enc).unwrap();
+        let plaintext = crate::auth::fernet::decrypt(&test_fernet_key(), &token, None).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        let bound_id = payload
+            .get("twitch_user_id")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let bound_login = payload
+            .get("twitch_login")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(bound_id, TEST_USER_ID);
+        assert_eq!(bound_login, "pruefkonto");
+    }
+
+    #[tokio::test]
+    async fn build_auth_router_get_offen_post_limitiert() {
+        let Some(pool) = make_pool("t_demo_wiring").await else {
+            return;
+        };
+        let _guard = ENV_LOCK.lock().await;
+        clear_secrets();
+        let limiter = RateLimiter::new(pool.clone(), test_fernet_key());
+        let router = crate::build_auth_router(limiter);
+
+        for _ in 0..15 {
+            let resp = router.clone().oneshot(get_req()).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "GET auf /twitch/auth/google darf nicht ratenbegrenzt sein"
+            );
+        }
+
+        let mut saw_404 = false;
+        let mut saw_429 = false;
+        for _ in 0..15 {
+            let resp = router
+                .clone()
+                .oneshot(post_req(login_body("x", &WRONG_PASSWORD)))
+                .await
+                .unwrap();
+            match resp.status() {
+                StatusCode::NOT_FOUND => saw_404 = true,
+                StatusCode::TOO_MANY_REQUESTS => saw_429 = true,
+                other => panic!("unerwarteter Status {other}"),
+            }
+        }
+        assert!(saw_404, "vor dem Limit erreicht der POST den Handler");
+        assert!(saw_429, "der POST-Pfad muss ratenbegrenzt sein");
     }
 }
