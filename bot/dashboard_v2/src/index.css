@@ -81,51 +81,23 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  /* Schmiede-Grund: Gold-Schein von oben, warmer Messing-Anflug seitlich,
-     darunter die Holzmaserung. Kein Plasma im Grund — Plasma ist Status. */
-  background:
-    radial-gradient(1200px 540px at 88% -12%, rgba(197, 160, 89, 0.16), transparent 64%),
-    radial-gradient(900px 480px at 8% -16%, rgba(224, 190, 134, 0.08), transparent 62%),
-    radial-gradient(1040px 540px at 52% 108%, rgba(197, 160, 89, 0.09), transparent 68%),
-    repeating-linear-gradient(
-      92deg,
-      rgba(0, 0, 0, 0.13) 0px,
-      rgba(0, 0, 0, 0) 2px,
-      rgba(241, 210, 153, 0.012) 3px,
-      rgba(0, 0, 0, 0) 6px,
-      rgba(0, 0, 0, 0.09) 9px,
-      rgba(0, 0, 0, 0) 14px
-    ),
-    var(--gradient-bg);
+  background: var(--gradient-bg);
   color: var(--color-text-primary);
   position: relative;
 }
 
-/* Werkstatt-Raster: geritzte Goldlinien statt weisser Gitternetz-Optik */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(197, 160, 89, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(197, 160, 89, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
   background-size: 36px 36px;
   mask-image: radial-gradient(ellipse at top, black 40%, transparent 75%);
-  opacity: 0.35;
+  opacity: 0.72;
   z-index: 0;
-}
-
-/* Koernung: STATISCH. Eine animierte Koernung flackert auf Vollflaeche
-   sichtbar — deshalb bewegungslos und mit sehr niedriger Deckkraft. */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.028;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 #root {
@@ -582,102 +554,6 @@ svg.icon-duotone {
   isolation: isolate;
 }
 
-@keyframes internal-home-gradient-flow {
-  0% {
-    background-position:
-      50% 38%,
-      14% 8%,
-      86% 10%,
-      72% 84%;
-  }
-  50% {
-    background-position:
-      46% 44%,
-      10% 18%,
-      80% 26%,
-      66% 72%;
-  }
-  100% {
-    background-position:
-      54% 40%,
-      18% 14%,
-      88% 20%,
-      76% 80%;
-  }
-}
-
-.internal-home-vibe::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(1520px 780px at 50% 44%, rgba(197, 160, 89, 0.18), transparent 74%),
-    radial-gradient(1240px 620px at 22% 22%, rgba(224, 190, 134, 0.12), transparent 76%),
-    radial-gradient(1120px 560px at 78% 22%, rgba(241, 210, 153, 0.1), transparent 78%),
-    radial-gradient(980px 620px at 70% 82%, rgba(154, 124, 66, 0.1), transparent 80%);
-  background-repeat: no-repeat;
-  background-size:
-    175% 175%,
-    165% 165%,
-    165% 165%,
-    170% 175%;
-  opacity: 0.6;
-  filter: saturate(1.02);
-  animation: internal-home-gradient-flow 36s ease-in-out infinite alternate;
-}
-
-.internal-home-vibe::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(920px 450px at 18% 24%, rgba(197, 160, 89, 0.18), transparent 72%),
-    radial-gradient(920px 450px at 82% 22%, rgba(224, 190, 134, 0.16), transparent 72%),
-    radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.20), transparent 76%),
-    radial-gradient(
-      155% 145% at 50% 50%,
-      rgba(11, 11, 11, 0) 54%,
-      rgba(11, 11, 11, 0.44) 86%,
-      rgba(11, 11, 11, 0.72) 100%
-    ),
-    linear-gradient(180deg, rgba(11, 11, 11, 0.12) 0%, rgba(11, 11, 11, 0.05) 40%, rgba(11, 11, 11, 0.32) 100%);
-  background-repeat: no-repeat;
-  background-size: 145% 145%, 145% 145%, 165% 165%, 100% 100%, 100% 100%;
-  mix-blend-mode: normal;
-  opacity: 0.96;
-}
-
-/* Subtiles Gridnetz-Pattern als zusaetzliche Hintergrund-Schicht.
-   Liegt unter den Vibe-Auras, damit die radial-Glows dezent darueber leuchten. */
-.internal-home-vibe::after {
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    radial-gradient(920px 450px at 18% 24%, rgba(197, 160, 89, 0.18), transparent 72%),
-    radial-gradient(920px 450px at 82% 22%, rgba(224, 190, 134, 0.16), transparent 72%),
-    radial-gradient(1380px 700px at 50% 50%, rgba(197, 160, 89, 0.18), transparent 76%),
-    radial-gradient(
-      155% 145% at 50% 50%,
-      rgba(11, 11, 11, 0) 54%,
-      rgba(11, 11, 11, 0.42) 86%,
-      rgba(11, 11, 11, 0.7) 100%
-    ),
-    linear-gradient(180deg, rgba(11, 11, 11, 0.1) 0%, rgba(11, 11, 11, 0.05) 40%, rgba(11, 11, 11, 0.3) 100%);
-  background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
-  background-size:
-    44px 44px,
-    44px 44px,
-    145% 145%,
-    145% 145%,
-    165% 165%,
-    100% 100%,
-    100% 100%;
-}
-
 .internal-home-vibe > * {
   position: relative;
   z-index: 1;
@@ -840,8 +716,6 @@ svg.icon-duotone {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .internal-home-vibe::before,
-  .internal-home-vibe::after,
   .internal-home-section,
   .internal-home-landing-shell,
   .internal-home-status-card,
