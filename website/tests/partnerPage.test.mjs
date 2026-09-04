@@ -60,7 +60,6 @@ test("v2 rendert Partner-Block und Partner-Übersicht direkt unter dem Hero", ()
     "<PartnerNetwork",
     "<RaidExplainer",
     "<BanFeed",
-    "<Stats",
     "<Features",
     "<ClipManager",
     "<Community",

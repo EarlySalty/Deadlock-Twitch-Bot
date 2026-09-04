@@ -7,7 +7,6 @@ import { PartnerPitch } from "@/components/partner-clean/PartnerPitch";
 import { PartnerNetwork } from "@/components/partner-clean/PartnerNetwork";
 import { RaidExplainer } from "@/components/partner-clean/RaidExplainer";
 import { BanFeed } from "@/components/partner-clean/BanFeed";
-import { Stats } from "@/components/partner-clean/Stats";
 import { Features } from "@/components/partner-clean/Features";
 import { ClipManager } from "@/components/partner-clean/ClipManager";
 import { Community } from "@/components/partner-clean/Community";
@@ -28,7 +27,6 @@ export function StreamerNetworkPage() {
         <PartnerNetwork streamers={streamers} status={status} />
         <RaidExplainer />
         <BanFeed />
-        <Stats streamers={streamers} status={status} />
         <Features />
         <ClipManager />
         <Community />
