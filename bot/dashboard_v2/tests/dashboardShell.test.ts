@@ -9,6 +9,7 @@ const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
 
 const APP = read('App.tsx');
 const SHELL = read('components/layout/DashboardShell.tsx');
+const SIDEBAR = read('components/layout/DashboardSidebar.tsx');
 const HOOK = read('hooks/useDashboardProfile.ts');
 
 const PAGES = [
@@ -143,4 +144,17 @@ test('DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus', 
 
 test('App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf', () => {
   assert.doesNotMatch(APP, /AuthBadge/);
+});
+
+test('die Sidebar-Karte richtet ihre Oberkante buendig mit den Inhaltskarten aus', () => {
+  assert.doesNotMatch(
+    SIDEBAR,
+    /lg:top-4/,
+    'Die Sticky-Sidebar darf keinen 16px-Versatz gegen die Inhaltskarten tragen',
+  );
+  assert.match(
+    SIDEBAR,
+    /lg:sticky lg:top-0/,
+    'Die Sticky-Sidebar muss ihre Oberkante per lg:top-0 auf die Inhaltskarten setzen',
+  );
 });

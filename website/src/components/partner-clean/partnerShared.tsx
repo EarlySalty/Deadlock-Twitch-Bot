@@ -1,4 +1,4 @@
-import { avatarColor, initials } from "@/lib/partnerNetwork";
+import { avatarColor, avatarUrlFuerGroesse, initials } from "@/lib/partnerNetwork";
 
 export function Avatar({
   login,
@@ -23,7 +23,7 @@ export function Avatar({
       {initials(login)}
       {avatarUrl ? (
         <img
-          src={avatarUrl}
+          src={avatarUrlFuerGroesse(avatarUrl, size)}
           alt=""
           loading="lazy"
           className="absolute inset-0 h-full w-full object-cover"

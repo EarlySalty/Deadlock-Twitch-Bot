@@ -88,3 +88,13 @@ export function twitchParent(): string {
 export function previewImageUrl(login: string): string {
   return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(login)}-640x360.jpg`;
 }
+
+export function avatarUrlFuerGroesse(
+  url: string | undefined,
+  size: number,
+): string | undefined {
+  if (!url) return url;
+  const ziel = size <= 70 ? "70x70" : size <= 150 ? "150x150" : null;
+  if (!ziel) return url;
+  return url.replace(/-\d+x\d+\.(png|jpe?g)$/i, `-${ziel}.$1`);
+}
