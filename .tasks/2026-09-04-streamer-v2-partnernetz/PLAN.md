@@ -1,6 +1,6 @@
 # Plan: /streamer/v2 Partner-Block und Partner-Übersicht
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 contract: CONTRACT.md (Ziel, REQ, INV dort)
