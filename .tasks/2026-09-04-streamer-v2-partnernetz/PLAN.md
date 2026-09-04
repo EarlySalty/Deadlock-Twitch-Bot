@@ -143,7 +143,7 @@ Rote Tests mit Fehlermeldung:
 
 - M1: fertig (Test rot, Roter Lauf oben)
 - M2: fertig (Hook useNetworkStreamers, tsc grün)
-- M3: offen
+- M3: fertig (PartnerPitch, geteilte Helfer, tsc grün)
 - M4: offen
 - M5: offen
 - M6: offen
