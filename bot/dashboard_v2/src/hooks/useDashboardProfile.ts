@@ -8,9 +8,11 @@ export function useDashboardProfile() {
   const queryClient = useQueryClient();
 
   const ownLogin = authStatus?.twitchLogin?.trim() || '';
+  const isAuthenticated = authStatus?.authenticated === true;
   const isLocalhostAdmin = Boolean(authStatus?.isLocalhost);
   const isAdminWithoutOwnLogin = Boolean(authStatus?.isAdmin) && !ownLogin;
-  const canRequestInternalHome = !loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;
+  const canRequestInternalHome =
+    isAuthenticated && !loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;
 
   const { data: profile, isLoading: loadingProfile } = useQuery({
     queryKey: ['internal-home', null],

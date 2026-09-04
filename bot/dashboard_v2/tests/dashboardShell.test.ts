@@ -49,14 +49,33 @@ test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
 });
 
-test('der Shell-Profil-Hook gatet den Fetch gegen Admin-Sitzungen ohne eigenes Konto', () => {
+test('der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto', () => {
+  assert.match(HOOK, /const isAuthenticated = authStatus\?\.authenticated === true;/);
   assert.match(HOOK, /const isLocalhostAdmin = Boolean\(authStatus\?\.isLocalhost\);/);
   assert.match(HOOK, /const isAdminWithoutOwnLogin = Boolean\(authStatus\?\.isAdmin\) && !ownLogin;/);
   assert.match(
     HOOK,
-    /const canRequestInternalHome =\s*!loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;/,
+    /const canRequestInternalHome =\s*isAuthenticated && !loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;/,
   );
   assert.match(HOOK, /enabled:\s*canRequestInternalHome/);
+});
+
+test('App.tsx gatet die Pricing-Sidebar gegen den Auth-Status', () => {
+  assert.match(APP, /function PricingRoute\(\)/, 'App.tsx braucht eine PricingRoute mit Auth-Gate');
+  const start = APP.indexOf('function PricingRoute');
+  const pricing = APP.slice(start, start + 500);
+  assert.match(pricing, /useAuthStatus\(\)/, 'PricingRoute muss den Auth-Status laden');
+  assert.match(
+    pricing,
+    /authStatus\?\.authenticated === true/,
+    'PricingRoute muss auf authentifizierte Sitzungen pruefen',
+  );
+  assert.match(
+    pricing,
+    /showSidebar=\{authenticated\}/,
+    'PricingRoute muss die Sidebar an die Auth-Entscheidung koppeln',
+  );
+  assert.match(APP, /<PricingRoute \/>/, 'Die Pricing-Route muss PricingRoute rendern');
 });
 
 test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
@@ -84,21 +103,27 @@ test('App.tsx reicht die Demo-Entscheidung an die Shell durch', () => {
   );
 });
 
-test('DashboardShell laesst im Demo-Modus Sidebar und Profil-Hook aus', () => {
+test('DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus', () => {
   assert.match(SHELL, /demoMode\?:\s*boolean/, 'Shell braucht eine demoMode-Prop');
-  const demoStart = SHELL.indexOf('demoMode ?');
-  const branchSplit = SHELL.indexOf(') : (', demoStart);
-  assert.ok(demoStart >= 0 && branchSplit > demoStart, 'Shell muss demoMode als Zweig behandeln');
-  const demoBranch = SHELL.slice(demoStart, branchSplit);
-  assert.doesNotMatch(
-    demoBranch,
-    /DashboardSidebar/,
-    'Der Demo-Zweig der Shell darf DashboardSidebar nicht mounten',
+  assert.match(SHELL, /showSidebar\?:\s*boolean/, 'Shell braucht eine showSidebar-Prop');
+  assert.match(
+    SHELL,
+    /const withSidebar = !demoMode && showSidebar;/,
+    'Shell muss Sidebar an demoMode und showSidebar koppeln',
   );
-  const sidebarBranch = SHELL.slice(branchSplit);
+  const gateStart = SHELL.indexOf('withSidebar ?');
+  const branchSplit = SHELL.indexOf(') : (', gateStart);
+  assert.ok(gateStart >= 0 && branchSplit > gateStart, 'Shell muss withSidebar als Zweig behandeln');
+  const sidebarBranch = SHELL.slice(gateStart, branchSplit);
   assert.match(
     sidebarBranch,
     /<DashboardSidebar activeRoute=\{activeRoute\} \/>/,
-    'Der Nicht-Demo-Zweig muss die Sidebar mounten',
+    'Der Sidebar-Zweig muss die Sidebar mounten',
+  );
+  const plainBranch = SHELL.slice(branchSplit);
+  assert.doesNotMatch(
+    plainBranch,
+    /DashboardSidebar/,
+    'Der Zweig ohne Sidebar-Freigabe darf DashboardSidebar nicht mounten',
   );
 });

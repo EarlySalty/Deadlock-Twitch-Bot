@@ -389,6 +389,16 @@ function AnalyticsDashboard() {
   );
 }
 
+function PricingRoute() {
+  const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+  const authenticated = !loadingAuth && authStatus?.authenticated === true;
+  return (
+    <DashboardShell activeRoute="pricing" showSidebar={authenticated}>
+      <Pricing />
+    </DashboardShell>
+  );
+}
+
 export default function App() {
   const path = normalizePathname(window.location.pathname);
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE;
@@ -423,9 +433,7 @@ export default function App() {
               <OverlayBuilderPage />
             </DashboardShell>
           ) : isPricingRoute ? (
-            <DashboardShell activeRoute="pricing">
-              <Pricing />
-            </DashboardShell>
+            <PricingRoute />
           ) : isUplinkRoute ? (
             <DashboardShell activeRoute="uplink">
               <UplinkPage />
