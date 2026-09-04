@@ -22,6 +22,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
 import { LanguageProvider, useT } from '@/context/LanguageContext';
+import { DashboardAssistent } from '@/components/assistent/DashboardAssistent';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
@@ -34,9 +35,14 @@ import {
   PREVIEW_PRICING_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
+  isPreviewModeEnabled,
 } from '@/preview/routes';
 import { shouldRetryApiQuery } from '@/api/httpError';
-import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
+import {
+  dashboardRuntimeConfig,
+  hasDemoRuntimeConfig,
+  resolveEffectiveDemoMode,
+} from '@/runtimeConfig';
 import { AlertTriangle } from 'lucide-react';
 
 // Error Boundary to prevent white screen on crashes
@@ -352,6 +358,14 @@ export default function App() {
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
 
+  const zeigeAssistent =
+    !isPreviewModeEnabled() &&
+    !hasDemoRuntimeConfig() &&
+    !resolveEffectiveDemoMode({
+      pathname: window.location.pathname,
+      runtimeConfig: dashboardRuntimeConfig,
+    });
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Die Sprachwahl liegt ueber allem: sie gilt fuer jede Route dieses
@@ -386,6 +400,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </ErrorBoundary>
+        {zeigeAssistent && <DashboardAssistent />}
       </LanguageProvider>
     </QueryClientProvider>
   );

@@ -16,6 +16,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -119,13 +120,13 @@ fn injection_regex() -> &'static Regex {
     })
 }
 
-fn looks_like_injection(question: &str) -> bool {
+pub(crate) fn looks_like_injection(question: &str) -> bool {
     injection_regex().is_match(question)
 }
 
 /// Akzeptiert ausschließlich Nutzer- und Assistentenbeiträge. Systemrollen
 /// aus dem öffentlichen Request werden verworfen.
-fn parse_history(value: &Value) -> Vec<Message> {
+pub(crate) fn parse_history(value: &Value) -> Vec<Message> {
     let Some(turns) = value.get("history").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -152,7 +153,7 @@ fn parse_history(value: &Value) -> Vec<Message> {
 }
 
 /// Whitespace-normalisiert + auf `limit` Zeichen gekürzt (an Wortgrenze, mit …).
-fn truncate(text: &str, limit: usize) -> String {
+pub(crate) fn truncate(text: &str, limit: usize) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= limit {
@@ -202,7 +203,7 @@ fn split_sentences(text: &str) -> Vec<String> {
 
 /// Zerlegt einen Text in Teile von höchstens `limit` Zeichen — bevorzugt an
 /// Satzgrenzen, sonst an Wortgrenzen. Schneidet nie mitten im Wort ab.
-fn split_message(text: &str, limit: usize) -> Vec<String> {
+pub(crate) fn split_message(text: &str, limit: usize) -> Vec<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
         return Vec::new();
@@ -256,7 +257,7 @@ fn split_message(text: &str, limit: usize) -> Vec<String> {
 
 /// `true`, wenn das Modell offensichtlich nichts Brauchbares lieferte oder den
 /// Prompt durchsickern lässt.
-fn output_unusable(text: &str) -> bool {
+pub(crate) fn output_unusable(text: &str) -> bool {
     let low = text.to_lowercase();
     if low.trim().is_empty() {
         return true;
@@ -305,7 +306,7 @@ fn knowledge_dir() -> PathBuf {
     }
 }
 
-fn knowledge_base() -> &'static KnowledgeBase {
+pub(crate) fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
     KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
         Ok(kb) => {
@@ -352,7 +353,7 @@ async fn fireworks_generate(
     }
 }
 
-fn retrieval_query(history: &[Message], question: &str) -> String {
+pub(crate) fn retrieval_query(history: &[Message], question: &str) -> String {
     let mut context: Vec<&str> = history
         .iter()
         .rev()
@@ -434,23 +435,28 @@ async fn answer_question(
 
 // ── Rate-Limiter (Sliding-Window pro Peer) ─────────────────────────────────────
 
-struct RateLimiter {
+const RATE_SWEEP_INTERVALL: usize = 256;
+const RATE_SWEEP_MAP_MAX: usize = 1000;
+
+pub(crate) struct RateLimiter {
     window: f64,
     max: usize,
     hits: Mutex<std::collections::HashMap<String, Vec<f64>>>,
+    seit_aufraeumen: AtomicUsize,
 }
 
 impl RateLimiter {
-    fn new(window: f64, max: usize) -> Self {
+    pub(crate) fn new(window: f64, max: usize) -> Self {
         Self {
             window,
             max,
             hits: Mutex::new(std::collections::HashMap::new()),
+            seit_aufraeumen: AtomicUsize::new(0),
         }
     }
 
     /// Deterministisch testbar: `now` wird hereingereicht.
-    fn allow(&self, peer: &str, now: f64) -> bool {
+    pub(crate) fn allow(&self, peer: &str, now: f64) -> bool {
         let mut map = self.hits.lock().unwrap();
         let mut recent: Vec<f64> = map
             .get(peer)
@@ -461,20 +467,29 @@ impl RateLimiter {
                     .collect()
             })
             .unwrap_or_default();
-        if recent.len() >= self.max {
-            map.insert(peer.to_string(), recent);
-            return false;
+        let erlaubt = recent.len() < self.max;
+        if erlaubt {
+            recent.push(now);
         }
-        recent.push(now);
         map.insert(peer.to_string(), recent);
-        // Sanfte Speicherbremse: abgelaufene Peers gelegentlich wegräumen.
-        if map.len() > 2048 {
-            map.retain(|_, ts| {
-                ts.retain(|t| now - *t < self.window);
-                !ts.is_empty()
-            });
+        self.vielleicht_aufraeumen(&mut map, now);
+        erlaubt
+    }
+
+    fn vielleicht_aufraeumen(
+        &self,
+        map: &mut std::collections::HashMap<String, Vec<f64>>,
+        now: f64,
+    ) {
+        let zaehler = self.seit_aufraeumen.fetch_add(1, Ordering::Relaxed) + 1;
+        if zaehler < RATE_SWEEP_INTERVALL && map.len() <= RATE_SWEEP_MAP_MAX {
+            return;
         }
-        true
+        self.seit_aufraeumen.store(0, Ordering::Relaxed);
+        map.retain(|_, ts| {
+            ts.retain(|t| now - *t < self.window);
+            !ts.is_empty()
+        });
     }
 }
 
@@ -484,7 +499,7 @@ fn limiter() -> &'static RateLimiter {
 }
 
 /// Prozess-monotone Uhr in Sekunden (Pythons `loop.time()`-Äquivalent).
-fn mono_now() -> f64 {
+pub(crate) fn mono_now() -> f64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
@@ -891,6 +906,28 @@ mod tests {
         assert!(rl.allow("q", 3.0));
         // Nach Ablauf des Fensters wieder frei.
         assert!(rl.allow("p", 70.0));
+    }
+
+    #[test]
+    fn rate_limiter_raeumt_abgelaufene_schluessel_ab() {
+        let rl = RateLimiter::new(60.0, 5);
+        for i in 0..RATE_SWEEP_INTERVALL {
+            assert!(rl.allow(&format!("alt{i}"), 0.0));
+        }
+        assert_eq!(
+            rl.hits.lock().unwrap().len(),
+            RATE_SWEEP_INTERVALL,
+            "alte Peers zunächst vorhanden"
+        );
+        for i in 0..RATE_SWEEP_INTERVALL {
+            assert!(rl.allow(&format!("neu{i}"), 100.0));
+        }
+        let map = rl.hits.lock().unwrap();
+        assert!(
+            map.keys().all(|k| k.starts_with("neu")),
+            "abgelaufene alt-Peers werden beim Sweep entfernt"
+        );
+        assert_eq!(map.len(), RATE_SWEEP_INTERVALL);
     }
 
     #[test]

@@ -63,7 +63,7 @@ fn secret_fuer(path: &str) -> Option<String> {
 /// Die Master-Session des Admin-Dashboards ist Discord-basiert und trägt gar
 /// keine Twitch-User-ID (`master_session_auth` setzt sie leer). Ohne Fallback
 /// scheiterte Uplink für genau diese Session an einem leeren Parse.
-fn twitch_identitaet(auth: &DashboardAuthLevel) -> Result<(&str, &str), Response> {
+pub(crate) fn twitch_identitaet(auth: &DashboardAuthLevel) -> Result<(&str, &str), Response> {
     match auth {
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -246,7 +246,7 @@ fn live_bewerten(
     }
 }
 
-async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
+pub(crate) async fn live_status(pool: &PgPool, streamer_id: i64) -> &'static str {
     let zeile: Option<(i32, Option<String>)> = sqlx::query_as(
         "SELECT COALESCE(is_live, 0), last_seen_at FROM twitch_live_state WHERE twitch_user_id = $1",
     )
@@ -293,7 +293,7 @@ pub fn verbindungs_status(hat_tokens: bool, needs_reauth: bool, scopes: &[String
 ///
 /// Ohne Feldschluessel gibt es keine Aussage: dann faellt alles auf "getrennt",
 /// statt einen Stand zu behaupten, den niemand geprueft hat.
-async fn verbindungen_lesen(
+pub(crate) async fn verbindungen_lesen(
     pool: &PgPool,
     config: Option<&PlatformTokenConfig>,
     streamer_id: i64,

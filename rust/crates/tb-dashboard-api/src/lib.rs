@@ -164,6 +164,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
         audience_demographics, auth_status, billing, category_activity, category_comparison,
+        dashboard_assistent,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
         engagement_mode, engagement_settings, exp_analytics, follower_funnel, greeting_settings,
@@ -739,6 +740,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(ai_analysis::ai_analysis_handler),
         )
         .route("/twitch/api/v2/ai/chat", post(ai_chat::ai_chat_handler))
+        .route(
+            "/twitch/api/v2/dashboard/assistent/ask",
+            post(dashboard_assistent::ask),
+        )
         .route(
             "/twitch/api/v2/audience-demographics",
             get(audience_demographics::audience_demographics_handler),
