@@ -1,136 +1,93 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import test from "node:test";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const copyFile = `${root}/src/data/partnerPage.ts`;
-const pageFile = `${root}/src/components/partner/PartnerPage.tsx`;
-const cardFile = `${root}/src/components/partner/StreamCard.tsx`;
-const v2Page = `${root}/src/pages/StreamerNetworkPage.tsx`;
+const pageFile = `${root}/src/pages/StreamerNetworkPage.tsx`;
 const appFile = `${root}/src/App.tsx`;
 const htmlFile = `${root}/v2/index.html`;
+const cleanDir = `${root}/src/components/partner-clean`;
 
-const networkCopyFile = `${root}/src/data/networkPage.ts`;
-
-const copy = readFileSync(copyFile, "utf8");
 const page = readFileSync(pageFile, "utf8");
-const card = readFileSync(cardFile, "utf8");
-const v2 = readFileSync(v2Page, "utf8");
 const app = readFileSync(appFile, "utf8");
 const html = readFileSync(htmlFile, "utf8");
-const networkCopy = readFileSync(networkCopyFile, "utf8");
 
-function exportedList(name) {
-  const match = copy.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`));
-  assert.ok(match, `${name} fehlt`);
-  return [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]);
-}
+const FORBIDDEN = [
+  "kostenlos verbinden",
+  "leistungen",
+  "wachstums-netzwerk",
+  "kanal-report",
+  "was du bekommst",
+  "drei schritte",
+  "module",
+];
 
 test("die v1-Landing bleibt die bestehende Seite", () => {
   assert.match(app, /from '@\/components\/sections\/Hero'/);
-  assert.doesNotMatch(app, /PartnerPage/);
+  assert.doesNotMatch(app, /partner-clean/);
+  assert.doesNotMatch(app, /StreamerNetworkPage/);
 });
 
-test("v2 hängt die Partner-Seite ein", () => {
-  assert.match(v2, /PartnerPage/);
-});
-
-test("die Partner-Netzwerk-Sektionen stehen in der Contract-Reihenfolge", () => {
-  const sections = exportedList("PARTNER_SECTIONS");
-  assert.deepEqual(sections, [
-    "hero",
-    "partner",
-    "leere",
-    "netzwerk",
-    "spamschutz",
-    "sicherheit",
-    "abschluss",
-  ]);
-
+test("v2 rendert die saubere Partner-Komposition in v1-Reihenfolge", () => {
   const order = [
-    "<NetworkHero",
-    "<PartnersSection",
-    "<VoidSection",
-    "<PartnerValuesSection",
-    "<PartnerBanFeedSection",
-    "<NetworkSecuritySection",
-    'id="abschluss"',
+    "<GlowOrb",
+    "<Navbar",
+    "<Hero",
+    "<StreamDay",
+    "<RaidExplainer",
+    "<BanFeed",
+    "<Stats",
+    "<Features",
+    "<ClipManager",
+    "<Community",
+    "<Security",
+    "<CTA",
+    "<Footer",
   ];
   let previous = -1;
   for (const marker of order) {
     const at = page.indexOf(marker);
     assert.ok(at !== -1, `Baustein fehlt in der Komposition: ${marker}`);
-    assert.ok(
-      at > previous,
-      `Baustein steht nicht in Contract-Reihenfolge: ${marker}`,
-    );
+    assert.ok(at > previous, `Baustein steht nicht in v1-Reihenfolge: ${marker}`);
     previous = at;
   }
 });
 
-test("Hero-CTA bleibt der bestehende OAuth-Start", () => {
-  assert.match(page, /buildTwitchBotAuthUrl/);
-  assert.match(page, /DISCORD_INVITE_URL/);
-  assert.match(page, /TWITCH_SECURITY_URL/);
+test("v2 nutzt keine Network*- oder alten partner/-Bausteine mehr", () => {
+  assert.doesNotMatch(page, /components\/v2\//);
+  assert.doesNotMatch(page, /components\/partner\//);
+  assert.match(page, /components\/partner-clean\//);
 });
 
-test("Live-Karten nutzen Vorschaubilder, keinen Twitch-Player", () => {
-  assert.match(card, /static-cdn\.jtvnw\.net\/previews-ttv/);
-  assert.doesNotMatch(card, /player\.twitch\.tv/);
-  assert.doesNotMatch(card, /<iframe/);
+test("Hero-CTA bleibt der bestehende OAuth-Start plus Discord", () => {
+  const hero = readFileSync(`${cleanDir}/Hero.tsx`, "utf8");
+  assert.match(hero, /buildTwitchBotAuthUrl/);
+  assert.match(hero, /DISCORD_INVITE_URL/);
+  assert.match(hero, /Jetzt Partner werden/);
 });
 
-test("Title und Meta kommen aus der Copy-Datei", () => {
+test("Title und Meta bleiben Partner-Netzwerk mit noindex", () => {
   assert.match(
     html,
     /Deadlock Partner Netzwerk - Auto-Raid & Streamer Community \(Deutsch\)/,
   );
-  assert.match(
-    html,
-    /Werde Partner der deutschen Deadlock Community\. Automatische Raids/,
-  );
-  assert.doesNotMatch(html.toLowerCase(), /kostenlos verbinden/);
-  assert.doesNotMatch(html.toLowerCase(), /wachstums-netzwerk/);
+  assert.match(html, /noindex, nofollow/);
 });
 
-test("Verkaufsverbote stehen nicht in der sichtbaren Copy", () => {
-  const forbidden = exportedList("PARTNER_FORBIDDEN");
-  const block = copy.match(/export const PARTNER_COPY = \{([\s\S]*?)\} as const;/);
-  assert.ok(block, "PARTNER_COPY fehlt");
-  const visible = block[1].toLowerCase();
-
-  for (const word of forbidden) {
+test("Verkaufsverbote stehen nicht in der sichtbaren Partner-Copy", () => {
+  const files = readdirSync(cleanDir).filter((f) => f.endsWith(".tsx"));
+  assert.ok(files.length >= 10, `partner-clean unerwartet leer: ${files.length}`);
+  const visible = files
+    .map((f) => readFileSync(join(cleanDir, f), "utf8"))
+    .join("\n")
+    .toLowerCase();
+  for (const word of FORBIDDEN) {
     assert.equal(
       visible.includes(word),
       false,
       `verbotenes Muster in der Copy: ${word}`,
-    );
-  }
-});
-
-test("Verkaufsverbote stehen nicht in der sichtbaren Netzwerk-Copy", () => {
-  const forbidden = exportedList("PARTNER_FORBIDDEN");
-  const blocks = [];
-  for (const name of ["HERO_COPY", "VALUES_COPY", "SPAM_COPY"]) {
-    const match = networkCopy.match(
-      new RegExp(`export const ${name} = \\{([\\s\\S]*?)\\} as const;`),
-    );
-    assert.ok(match, `${name} fehlt`);
-    blocks.push(match[1]);
-  }
-  const values = networkCopy.match(
-    /export const networkValues[\s\S]*?\n\];/,
-  );
-  assert.ok(values, "networkValues fehlt");
-  blocks.push(values[0]);
-
-  const visible = blocks.join("\n").toLowerCase();
-  for (const word of forbidden) {
-    assert.equal(
-      visible.includes(word),
-      false,
-      `verbotenes Muster in der Netzwerk-Copy: ${word}`,
     );
   }
 });
