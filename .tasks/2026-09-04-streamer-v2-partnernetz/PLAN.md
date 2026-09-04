@@ -145,5 +145,5 @@ Rote Tests mit Fehlermeldung:
 - M2: fertig (Hook useNetworkStreamers, tsc grün)
 - M3: fertig (PartnerPitch, geteilte Helfer, tsc grün)
 - M4: fertig (PartnerNetwork, Live-Embeds, Offline-Raster, Leerzustand, tsc grün)
-- M5: offen
+- M5: fertig (Seite umgebaut, StreamDay geloescht, 30 Tests grün, Build grün, REQ-05-Sweep sauber)
 - M6: offen

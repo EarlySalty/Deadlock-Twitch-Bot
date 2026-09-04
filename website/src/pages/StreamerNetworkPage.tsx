@@ -3,7 +3,8 @@ import { Footer } from "@/components/layout/Footer";
 import { SiteChatbot } from "@/components/layout/SiteChatbot";
 import { GlowOrb } from "@/components/effects/GlowOrb";
 import { Hero } from "@/components/partner-clean/Hero";
-import { StreamDay } from "@/components/partner-clean/StreamDay";
+import { PartnerPitch } from "@/components/partner-clean/PartnerPitch";
+import { PartnerNetwork } from "@/components/partner-clean/PartnerNetwork";
 import { RaidExplainer } from "@/components/partner-clean/RaidExplainer";
 import { BanFeed } from "@/components/partner-clean/BanFeed";
 import { Stats } from "@/components/partner-clean/Stats";
@@ -20,7 +21,8 @@ export function StreamerNetworkPage() {
       <Navbar />
       <main>
         <Hero />
-        <StreamDay />
+        <PartnerPitch />
+        <PartnerNetwork />
         <RaidExplainer />
         <BanFeed />
         <Stats />
