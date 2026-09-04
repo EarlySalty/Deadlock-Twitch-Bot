@@ -26,12 +26,13 @@ export function BanFeedEntry({ ban, isNew = false }: BanFeedEntryProps) {
   return (
     <motion.div
       layout
-      initial={isNew ? { opacity: 0, y: -12 } : false}
+      initial={{ opacity: 0, y: -12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 12 }}
       transition={{ duration: 0.35, ease: "easeOut" }}
       className="relative flex items-center gap-3 rounded-lg px-3 py-2.5"
     >
+      {/* New-entry glow */}
       {isNew && (
         <motion.div
           className="absolute inset-0 rounded-lg"
@@ -45,18 +46,22 @@ export function BanFeedEntry({ ban, isNew = false }: BanFeedEntryProps) {
         />
       )}
 
+      {/* BANNED badge */}
       <span className="shrink-0 rounded bg-danger-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-danger">
         Banned
       </span>
 
+      {/* Username */}
       <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">
         {ban.target_login}
       </span>
 
+      {/* Spam message */}
       <span className="min-w-0 max-w-[200px] truncate text-xs leading-relaxed text-[var(--color-text-secondary)] line-through opacity-60 md:max-w-[300px]">
         {ban.reason}
       </span>
 
+      {/* Relative time */}
       <span className="ml-auto shrink-0 text-xs text-[var(--color-text-secondary)]">
         {relativeTime(ban.received_at)}
       </span>

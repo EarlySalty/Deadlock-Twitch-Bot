@@ -323,6 +323,7 @@ export function RaidExplainer() {
                 variants={containerVariants}
                 initial={false}
                 animate={flow.versteckt ? "hidden" : "visible"}
+                transition={flow.versteckt ? { duration: 0 } : undefined}
                 className="space-y-3"
               >
                 {flowSteps.map((step, idx) => {
