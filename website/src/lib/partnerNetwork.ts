@@ -1,5 +1,7 @@
 import type { NetworkStreamer } from "@/hooks/useNetworkStreamers";
 
+export const PARTNER_VORSCHAU = 12;
+
 export interface Partnergliederung {
   embeds: NetworkStreamer[];
   weitereDeadlock: NetworkStreamer[];

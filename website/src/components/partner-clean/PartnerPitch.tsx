@@ -81,7 +81,7 @@ export function PartnerPitch({ streamers }: { streamers: NetworkStreamer[] }) {
 
   return (
     <section id="ablauf" className="py-24">
-      <div className="max-w-7xl mx-auto px-6">
+      <div className="max-w-[1600px] mx-auto px-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
           <ScrollReveal>
             <div className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]">

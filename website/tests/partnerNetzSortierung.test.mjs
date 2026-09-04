@@ -8,6 +8,7 @@ import {
   impactScore,
   gliederePartner,
   zuschauerSchnitt,
+  PARTNER_VORSCHAU,
 } from "../src/lib/partnerNetwork.ts";
 
 test("zuschauerSchnitt rundet auf ganze Zahlen", () => {
@@ -91,11 +92,13 @@ test("gliederePartner bei Gleichstand alphabetisch nach Name", () => {
   assert.deepEqual(allePartner.map((s) => s.login), ["alfa", "zulu"]);
 });
 
-test("PartnerNetwork rendert Ausklapp-Kopfzeilen und einen Klapp-Knopf mit aria-expanded", () => {
+test("PartnerNetwork zeigt drei Reihen Partner und klappt den Rest per Knopf aus", () => {
   const net = readFileSync(netFile, "utf8");
   assert.match(net, /weitere streamen gerade Deadlock/);
-  assert.match(net, /Alle \$\{allePartner\.length\} Partner/);
+  assert.match(net, /Alle \{partner\.length\} Partner/);
+  assert.match(net, /weitere Partner anzeigen/);
   assert.match(net, /aria-expanded/);
+  assert.equal(PARTNER_VORSCHAU, 12);
   assert.ok(
     net.includes("Gerade streamt kein Partner Deadlock. Schau später wieder rein."),
     "Leerzustand fuer 0 Deadlock-Live fehlt",
