@@ -11,7 +11,8 @@ pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4
 
 /// Bestehende öffentliche Konstante für fachliche Guard-Tests. Inzwischen gilt
 /// dieselbe Fireworks-Bindung für jeden Anwendungsfall.
-pub const FIREWORKS_ONLY_USE_CASES: &[&str] = &["ricky_crew_review", "outreach_shadow"];
+pub const FIREWORKS_ONLY_USE_CASES: &[&str] =
+    &["ricky_crew_review", "outreach_shadow", "promo_pitch"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmEndpoint {

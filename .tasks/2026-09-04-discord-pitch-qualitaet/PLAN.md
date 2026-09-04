@@ -29,6 +29,8 @@ Validierung: `/home/nathanael/.cargo/bin/cargo build -p tb-llm`
 
 Stop-Regel: Kein Modellname und keine Base-URL ändern (INV-02). Bei Build-Fehler abbrechen und klären.
 
+STATUS M1 erledigt 2026-09-05: selection.rs:14 erweitert um "promo_pitch". `cargo build -p tb-llm` EXIT=0.
+
 ---
 
 ## M2 - Neues Modul `promo_pitch.rs` (reine Logik, ohne DB, ohne Verdrahtung)

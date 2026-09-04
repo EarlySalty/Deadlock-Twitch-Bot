@@ -61,3 +61,16 @@ rust/migrations/20260903090000_twitch_moderation_settings.sql:1  additive Tabell
 bin/tb-bot/src/main.rs:568  Migrationen gated durch TB_DB_MIGRATE
 rust/migrations/20260601000000_baseline_schema.sql:1011  twitch_live_state.last_title für Stream-Titel
 rust/knowledge/bot/faq-werbung.md:1  bestehende FAQ, per REQ-08 zu aktualisieren
+
+## Rote Baseline 2026-09-05
+
+- Befehl: `/home/nathanael/.cargo/bin/cargo test -p tb-chat` (ohne TB_TEST_DATABASE_URL), Worktree HEAD ac9ea725e24aac14f6ed080a8f8168e4bd9cdaf4 (Task-Commit auf origin/main ec1ba600).
+- Ergebnis: `test result: FAILED. 701 passed; 6 failed; 4 ignored; 0 measured; 0 filtered out; finished in 270.30s`.
+- Die 6 Fehler sind alle in `standard_replies::tests` und panicken mit "TB_TEST_DATABASE_URL fehlt": sie verlangen die Test-DB hart (kein pool_or_skip). Mit gesetzter TB_TEST_DATABASE_URL laufen sie durch.
+  - standard_replies::tests::gruss_aus_dem_vorigen_stream_blockiert_nicht (standard_replies.rs:823)
+  - standard_replies::tests::gruss_bleibt_aus_wenn_der_kanal_ihn_abgeschaltet_hat (standard_replies.rs:740)
+  - standard_replies::tests::ohne_plan_zeile_gruesst_der_bot_weiter (standard_replies.rs:759)
+  - standard_replies::tests::release_antwort_haengt_nicht_am_gruss_schalter (standard_replies.rs:843)
+  - standard_replies::tests::unterdrueckter_doppelgruss_sperrt_den_naechsten_chatter_nicht (standard_replies.rs:795)
+  - standard_replies::tests::zweiter_gruss_desselben_chatters_bleibt_aus (standard_replies.rs:773)
+- Merke: ab hier gilt jeder neue rote Test, der nicht in dieser Liste steht, als Fehler. Der Endlauf wird mit Test-DB gefahren, dann sind die 6 grün.
