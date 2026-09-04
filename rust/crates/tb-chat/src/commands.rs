@@ -1417,7 +1417,7 @@ impl CommandEngine {
                 };
                 self.reply(
                     event,
-                    &format!("🎬 Clip erstellt{suffix} (ca. letzte 60s): {url}"),
+                    &format!("🎬 Clip erstellt{suffix} (ca. letzte 30s): {url}"),
                 )
                 .await;
             }
