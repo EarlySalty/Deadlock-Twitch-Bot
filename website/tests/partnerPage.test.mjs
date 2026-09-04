@@ -11,12 +11,15 @@ const v2Page = `${root}/src/pages/StreamerNetworkPage.tsx`;
 const appFile = `${root}/src/App.tsx`;
 const htmlFile = `${root}/v2/index.html`;
 
+const networkCopyFile = `${root}/src/data/networkPage.ts`;
+
 const copy = readFileSync(copyFile, "utf8");
 const page = readFileSync(pageFile, "utf8");
 const card = readFileSync(cardFile, "utf8");
 const v2 = readFileSync(v2Page, "utf8");
 const app = readFileSync(appFile, "utf8");
 const html = readFileSync(htmlFile, "utf8");
+const networkCopy = readFileSync(networkCopyFile, "utf8");
 
 function exportedList(name) {
   const match = copy.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`));
@@ -102,6 +105,32 @@ test("Verkaufsverbote stehen nicht in der sichtbaren Copy", () => {
       visible.includes(word),
       false,
       `verbotenes Muster in der Copy: ${word}`,
+    );
+  }
+});
+
+test("Verkaufsverbote stehen nicht in der sichtbaren Netzwerk-Copy", () => {
+  const forbidden = exportedList("PARTNER_FORBIDDEN");
+  const blocks = [];
+  for (const name of ["HERO_COPY", "VALUES_COPY", "SPAM_COPY"]) {
+    const match = networkCopy.match(
+      new RegExp(`export const ${name} = \\{([\\s\\S]*?)\\} as const;`),
+    );
+    assert.ok(match, `${name} fehlt`);
+    blocks.push(match[1]);
+  }
+  const values = networkCopy.match(
+    /export const networkValues[\s\S]*?\n\];/,
+  );
+  assert.ok(values, "networkValues fehlt");
+  blocks.push(values[0]);
+
+  const visible = blocks.join("\n").toLowerCase();
+  for (const word of forbidden) {
+    assert.equal(
+      visible.includes(word),
+      false,
+      `verbotenes Muster in der Netzwerk-Copy: ${word}`,
     );
   }
 });

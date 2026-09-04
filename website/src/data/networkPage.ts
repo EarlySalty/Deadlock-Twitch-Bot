@@ -79,7 +79,6 @@ export interface PlanStep {
   duration: string;
 }
 
-/** Miller-Plan: drei Schritte, die der Streamer selbst geht. */
 export const planSteps: PlanStep[] = [
   {
     index: "01",
@@ -110,7 +109,6 @@ export interface ValuePillar {
   tone: "primary" | "accent";
 }
 
-/** Reihenfolge ist Absicht: Raids zuerst, Moderation ist nicht mehr die Hauptrolle. */
 export const valuePillars: ValuePillar[] = [
   {
     id: "raids",
@@ -160,11 +158,6 @@ export interface Plan {
   note?: string;
 }
 
-/**
- * Drei Stufen nach docs/strategie/32. Free ist der heutige Ist-Zustand;
- * Plus und Creator Pro bündeln bestehende Einzelpläne neu, deshalb steht bei
- * beiden ausdrücklich, dass sie mit dem Netzwerk-Update starten.
- */
 export const plans: Plan[] = [
   {
     id: "free",
@@ -227,10 +220,6 @@ export interface Objection {
   proofHref?: string;
 }
 
-/**
- * Einwand-Bibliothek nach docs/strategie/16 und 31: erst das Label, das den
- * Einwand als berechtigt anerkennt, dann der überprüfbare Beleg.
- */
 export const objections: Objection[] = [
   {
     question: "Klingt nach Scam.",
