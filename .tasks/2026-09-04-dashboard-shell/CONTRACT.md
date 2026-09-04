@@ -1,6 +1,6 @@
 # Contract: Einheitliche Dashboard-Shell (Sidebar und Rahmen) für alle Twitch-Dashboards
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 repo: Deadlock-Twitch-Bot

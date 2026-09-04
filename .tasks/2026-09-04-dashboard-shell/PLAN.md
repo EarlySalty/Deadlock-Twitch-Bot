@@ -1,6 +1,6 @@
 # Plan: Einheitliche Dashboard-Shell
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 contract: CONTRACT.md
 research: RESEARCH.md, EVIDENCE.md

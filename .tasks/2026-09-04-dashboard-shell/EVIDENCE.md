@@ -1,6 +1,6 @@
 # Evidence: Einheitliche Dashboard-Shell (Sidebar und Rahmen)
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 contract: CONTRACT.md
 
