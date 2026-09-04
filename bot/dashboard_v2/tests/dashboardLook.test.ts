@@ -47,3 +47,9 @@ test('die Karten tragen den Verlauf oben wie auf /streamer, nicht flaechig', () 
   const stops = block(INDEX, '.panel-card {').match(/rgba\(201, 168, 106/g) ?? [];
   assert.ok(stops.length < 2, `flaechiger Doppel-Gradient: ${stops.length} Gold-Stops`);
 });
+
+test('Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring', () => {
+  assert.doesNotMatch(block(INDEX, '.sidebar-avatar-glow {'), /color-mix/);
+  assert.doesNotMatch(block(INDEX, '.sidebar-avatar-glow {'), /0 0 24px/);
+  assert.match(block(INDEX, '.sidebar-avatar-glow {'), /0 0 0 2px rgba\(255, 255, 255, 0\.06\)/);
+});

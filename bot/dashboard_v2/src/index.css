@@ -398,10 +398,7 @@ svg.icon-duotone {
 
 /* Sidebar partner-pick lift */
 .sidebar-avatar-glow {
-  box-shadow:
-    0 0 0 2px rgba(255, 255, 255, 0.06),
-    0 8px 22px color-mix(in srgb, var(--color-primary) 32%, transparent),
-    0 0 24px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06);
 }
 
 /* Tonal accent bar on the left edge of an item */
