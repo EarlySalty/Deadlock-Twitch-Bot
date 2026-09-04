@@ -10,7 +10,6 @@ import {
 import {
   gliederePartner,
   previewImageUrl,
-  zuschauerSchnitt,
   twitchParent,
   twitchUrl,
   PARTNER_VORSCHAU,
@@ -123,20 +122,11 @@ function LiveDot() {
 
 function PartnerZeile({
   partner,
-  deadlockLive,
   index,
 }: {
   partner: NetworkStreamer;
-  deadlockLive: boolean;
   index: number;
 }) {
-  const kennzahlen: string[] = [];
-  if (partner.dlStreams30d > 0) {
-    kennzahlen.push(`${partner.dlStreams30d} Deadlock-Streams`);
-  }
-  if (partner.avgViewers30d > 0) {
-    kennzahlen.push(`Ø ${zuschauerSchnitt(partner.avgViewers30d)} Zuschauer`);
-  }
   return (
     <motion.a
       href={twitchUrl(partner.login)}
@@ -154,21 +144,45 @@ function PartnerZeile({
           <span className="truncate text-sm font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
             {partner.displayName ?? partner.login}
           </span>
-          {deadlockLive ? <LiveDot /> : null}
+          <LiveDot />
         </span>
-        {deadlockLive ? (
-          <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
-            <Users size={11} />
-            {partner.viewers} Zuschauer
-          </span>
-        ) : kennzahlen.length > 0 ? (
-          <span className="block text-[11px] text-[var(--color-text-secondary)]">
-            {kennzahlen.join(", ")}
-          </span>
-        ) : null}
+        <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
+          <Users size={11} />
+          {partner.viewers} Zuschauer
+        </span>
       </span>
       <ArrowUpRight
         size={15}
+        className="shrink-0 text-[var(--color-text-secondary)] transition-colors group-hover:text-[var(--color-primary)]"
+      />
+    </motion.a>
+  );
+}
+
+function AllePartnerZeile({
+  partner,
+  index,
+}: {
+  partner: NetworkStreamer;
+  index: number;
+}) {
+  return (
+    <motion.a
+      href={twitchUrl(partner.login)}
+      target="_blank"
+      rel="noopener noreferrer"
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-40px" }}
+      transition={{ duration: 0.35, delay: (index % 8) * 0.04 }}
+      className="group flex items-center gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-3 py-3 no-underline transition-all hover:border-[var(--color-border-hover)]"
+    >
+      <Avatar login={partner.login} avatarUrl={partner.avatarUrl} size={44} />
+      <span className="min-w-0 flex-1 truncate text-lg font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
+        {partner.displayName ?? partner.login}
+      </span>
+      <ArrowUpRight
+        size={16}
         className="shrink-0 text-[var(--color-text-secondary)] transition-colors group-hover:text-[var(--color-primary)]"
       />
     </motion.a>
@@ -232,7 +246,7 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
         {sichtbar.map((p, i) => (
-          <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+          <AllePartnerZeile key={p.login} partner={p} index={i} />
         ))}
       </div>
       {rest.length > 0 ? (
@@ -263,7 +277,7 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
               >
                 <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
                   {rest.map((p, i) => (
-                    <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+                    <AllePartnerZeile key={p.login} partner={p} index={i} />
                   ))}
                 </div>
               </motion.div>
@@ -364,7 +378,7 @@ export function PartnerNetwork({
                   titel={`${weitereDeadlock.length} weitere streamen gerade Deadlock`}
                 >
                   {weitereDeadlock.map((p, i) => (
-                    <PartnerZeile key={p.login} partner={p} deadlockLive index={i} />
+                    <PartnerZeile key={p.login} partner={p} index={i} />
                   ))}
                 </Ausklappliste>
               ) : null}
