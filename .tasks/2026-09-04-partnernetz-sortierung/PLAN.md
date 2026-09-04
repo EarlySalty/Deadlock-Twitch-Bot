@@ -56,7 +56,7 @@ gesamte Datei bricht beim Import ab.
 ## Status
 
 - M1: fertig (roter Lauf oben, Test rot vor Code)
-- M2: offen
+- M2: fertig (istDeadlock, impactScore, gliederePartner in lib, tsc gruen, 4/5 gruen)
 - M3: offen
 - M4: offen
 
