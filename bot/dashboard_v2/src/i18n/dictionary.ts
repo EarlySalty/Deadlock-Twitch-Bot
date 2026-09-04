@@ -404,7 +404,6 @@ const EN: Record<string, string> = {
   'Der Upload ist fehlgeschlagen.': 'The upload failed.',
   'Das hat nicht geklappt.': 'That did not work.',
 
-  // -- Dashboard-Assistent ------------------------------------------------
   'Hilfe bekommen': 'Get help',
   'Hilfe schließen': 'Close help',
   'Hilfe im Dashboard': 'Help in the dashboard',
