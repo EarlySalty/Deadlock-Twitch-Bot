@@ -48,6 +48,7 @@ pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod clip_command_settings;
 pub mod coaching;
+pub mod dashboard_assistent;
 pub mod demo;
 pub mod demo_login;
 pub mod discord_link;

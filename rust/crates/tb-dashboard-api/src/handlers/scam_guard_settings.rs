@@ -68,6 +68,48 @@ fn valid_thresholds(threshold: f32, suggestion_floor: f32) -> bool {
     0.0 <= suggestion_floor && suggestion_floor <= threshold && threshold <= 1.0
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ScamGuardSettings {
+    pub(crate) enabled: bool,
+    pub(crate) mode: String,
+    pub(crate) threshold: f64,
+    pub(crate) suggestion_floor: f64,
+}
+
+impl Default for ScamGuardSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: "auto_ban".to_string(),
+            threshold: 0.90,
+            suggestion_floor: 0.70,
+        }
+    }
+}
+
+pub(crate) async fn load_settings(
+    pool: &PgPool,
+    channel_login: &str,
+) -> Result<ScamGuardSettings, sqlx::Error> {
+    let row: Option<(bool, String, f64, f64)> = sqlx::query_as(
+        "SELECT enabled, mode, threshold::float8, suggestion_floor::float8 \
+           FROM twitch_scam_guard_settings \
+          WHERE channel_login = $1",
+    )
+    .bind(channel_login)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((enabled, mode, threshold, suggestion_floor)) => ScamGuardSettings {
+            enabled,
+            mode,
+            threshold,
+            suggestion_floor,
+        },
+        None => ScamGuardSettings::default(),
+    })
+}
+
 pub async fn get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -78,28 +120,12 @@ pub async fn get_handler(
         Err(response) => return response,
     };
 
-    match sqlx::query!(
-        "SELECT enabled, mode, threshold::float8 AS \"threshold!\", \
-                suggestion_floor::float8 AS \"suggestion_floor!\" \
-           FROM twitch_scam_guard_settings \
-          WHERE channel_login = $1",
-        login
-    )
-    .fetch_optional(&pool)
-    .await
-    {
-        Ok(Some(row)) => Json(json!({
-            "enabled": row.enabled,
-            "mode": row.mode,
-            "threshold": row.threshold,
-            "suggestion_floor": row.suggestion_floor
-        }))
-        .into_response(),
-        Ok(None) => Json(json!({
-            "enabled": true,
-            "mode": "auto_ban",
-            "threshold": 0.90,
-            "suggestion_floor": 0.70
+    match load_settings(&pool, &login).await {
+        Ok(settings) => Json(json!({
+            "enabled": settings.enabled,
+            "mode": settings.mode,
+            "threshold": settings.threshold,
+            "suggestion_floor": settings.suggestion_floor
         }))
         .into_response(),
         Err(error) => {
