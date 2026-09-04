@@ -43,14 +43,7 @@ import {
   hasDemoRuntimeConfig,
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
-import {
-  AlertTriangle,
-  Sparkles,
-  Shield,
-  ShieldAlert,
-  ShieldCheck,
-  Wifi,
-} from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 // Error Boundary to prevent white screen on crashes
 interface ErrorBoundaryProps {
@@ -166,7 +159,7 @@ function AnalyticsDashboard() {
   );
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
-  const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
+  const { data: authStatus } = useAuthStatus();
   const isDemoShell = resolveEffectiveDemoMode({
     pathname: window.location.pathname,
     runtimeConfig: dashboardRuntimeConfig,
@@ -251,63 +244,8 @@ function AnalyticsDashboard() {
     setPendingMode(null);
   };
 
-  // Auth badge component
-  const AuthBadge = () => {
-    const badgeBase =
-      'flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold tracking-wide backdrop-blur-md';
-
-    if (loadingAuth) return null;
-
-    if (isDemoMode) {
-      return (
-        <div className={`${badgeBase} bg-warning/10 border-warning/30 text-warning`}>
-          <Sparkles className="w-4 h-4" />
-          <span>{t('Demo-Daten')}</span>
-        </div>
-      );
-    }
-
-    if (authError || !authStatus?.authenticated) {
-      return (
-        <div className={`${badgeBase} bg-error/10 border-error/30 text-error`}>
-          <ShieldAlert className="w-4 h-4" />
-          <span>{t('Nicht authentifiziert')}</span>
-        </div>
-      );
-    }
-
-    if (authStatus.isLocalhost) {
-      return (
-        <div className={`${badgeBase} bg-success/10 border-success/30 text-success`}>
-          <Wifi className="w-4 h-4" />
-          <span>{t('Localhost (Admin)')}</span>
-        </div>
-      );
-    }
-
-    if (authStatus.isAdmin) {
-      return (
-        <div className={`${badgeBase} bg-primary/10 border-primary/30 text-primary`}>
-          <ShieldCheck className="w-4 h-4" />
-          <span>{t('Admin')}</span>
-        </div>
-      );
-    }
-
-    return (
-      <div className={`${badgeBase} bg-accent/10 border-accent/30 text-accent`}>
-        <Shield className="w-4 h-4" />
-        <span>{t('Partner')}</span>
-      </div>
-    );
-  };
-
   return (
     <DashboardShell activeRoute="analyse" demoMode={isDemoMode}>
-        <div className="flex justify-end">
-          <AuthBadge />
-        </div>
-
         <PlanProvider
           plan={authStatus?.plan ?? null}
           isAdmin={authStatus?.isAdmin ?? false}
