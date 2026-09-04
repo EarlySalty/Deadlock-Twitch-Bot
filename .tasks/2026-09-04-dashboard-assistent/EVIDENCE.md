@@ -1,6 +1,6 @@
 # Evidence: KI-Hilfe-Assistent im Streamer-Dashboard
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 stand: HEAD 1540aebb (origin/main), Worktree feat/dashboard-assistent
 

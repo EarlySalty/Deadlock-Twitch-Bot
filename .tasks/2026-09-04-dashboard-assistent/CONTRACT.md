@@ -1,6 +1,6 @@
 # Contract: KI-Hilfe-Assistent im Streamer-Dashboard
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: hoch
 repo: Deadlock-Twitch-Bot

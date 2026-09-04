@@ -1,6 +1,6 @@
 # Research: KI-Hilfe-Assistent im Streamer-Dashboard
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 quelle: Explore-Agent (read-only) auf Worktree feat/dashboard-assistent, HEAD 1540aebb
 
