@@ -65,3 +65,14 @@ research: RESEARCH.md, EVIDENCE.md
 - M4: fertig. Analyse (AnalyticsDashboard), Social Media und Pricing in die Shell; Analyse behaelt Header/TabNavigation/PlanProvider, Social bekommt E6-Kopf plus AuthBadge als Aktion, Pricing behaelt PricingHero (Abweichung). Neuer Test tests/dashboardShell.test.ts in package.json scripts.test. 174 pass, 0 fail (/tmp/tb-dash-test-m4.log); tsc und vite build gruen. Rot-Gegenprobe (Pricing-Route ohne Shell): 1 fail statt 0 (/tmp/tb-dash-sabotage.log), Sabotage zurueckgenommen.
 - M5: uebersprungen (Hauptsession).
 - M6: fertig. diff-policy meldet 16 eigene Dateien und zwei P4-Blocks (bot/dashboard_v2/package.json, bot/dashboard_v2/tests/dashboardShell.test.ts), beide vom Orchestrator autorisiert (package.json per Amendment im Contract; Test-Pfad tests/ auf Ansage des Orchestrators). diff-policy liest Amendments nicht als erlaubte Pfade, die Freigabe faellt am Gate. Branch liegt 11 Commits hinter origin/main (dort ist seither die website/streamer-v2-Arbeit gelandet); meine vier Commits fassen website nicht an (git log origin/main..HEAD -- website leer). Vor dem Merge auf aktuellen origin/main nachziehen, damit nur der Dashboard-Anteil auf main geht.
+
+## Fix-Runde 1
+
+Alle vier Punkte aus REVIEW.md als neue Commits obendrauf behoben (kein amend, kein rebase). npm test 176 pass, 0 fail; tsc und vite build gruen.
+
+- Punkt 1 (MUSS, useDashboardProfile.ts): Guard canRequestInternalHome wiederhergestellt (kein Fetch fuer Discord-Master-Admin ohne Twitch-Login und fuer Localhost-Admin), enabled: canRequestInternalHome; Profilkopf faellt auf Login-Initiale oder Admin und Plan-Badge aus authStatus zurueck. Regressionstest in tests/dashboardShell.test.ts prueft canRequestInternalHome und enabled: canRequestInternalHome im Hook. Rot vor Fix: 1 fail statt 0 (Test 51, /tmp/tb-dash-fix-rot.log), gruen nach Fix.
+- Punkt 2 (SOLL 1, DashboardSidebar.tsx): Admin-Umschalten ruft queryClient.invalidateQueries() ohne Filter (mutate onSuccess), damit die Daten der aktiven Route neu laden.
+- Punkt 3 (SOLL 2, tests/dashboardShell.test.ts): Breiten-Pruefung deckt jetzt den AnalyticsDashboard-Block in App.tsx ab (kein max-w-[ und kein internal-home-vibe). Rot-Gegenprobe per Sabotage (max-w-[1700px] im Analytics-Block): 1 fail statt 0 (Test 52, /tmp/tb-dash-sabotage.log), Sabotage zurueckgenommen.
+- Punkt 4 (SOLL 3 plus Umlaute, InternalHomeLanding.tsx und neue Testdatei): Ersatzschreibweisen und Zierstriche im relokierten Admin-Auswahlblock durch echte Umlaute ersetzt (auswaehlbar/auswaehlen/Waehle/moechtest, Zierstrich-Option zu "Partner waehlen"); in der neuen Testdatei traegt zu traegt korrigiert. Nur Zeilen aus dem Diff angefasst.
+
+diff-policy: unveraendert zwei bekannte, akzeptierte P4-Blocks (package.json, tests/dashboardShell.test.ts), keine neuen Verstoesse.
