@@ -48,11 +48,18 @@ test("die Streamer-Landing v2 trägt den Community-Markennamen", () => {
     join(websiteRoot, "src/components/layout/Navbar.tsx"),
     "utf8",
   );
-  const html = readFileSync(join(websiteRoot, "v2/index.html"), "utf8");
+  const html = readFileSync(join(websiteRoot, "index.html"), "utf8");
   assert.ok(nav.includes("Deutsche Deadlock Community"), "Nav nennt die Community nicht");
   assert.match(
     html,
-    /<title>[^<]*Deadlock Partner Netzwerk[^<]*<\/title>/,
+    /<title>[^<]*Deadlock Partner-Netzwerk[^<]*<\/title>/,
     "der Seitentitel nennt das Partner-Netzwerk nicht",
   );
+});
+
+test("vite.config baut v1/index.html als eigenen Entry und kennt kein streamerV2 mehr", () => {
+  const config = readFileSync(join(websiteRoot, "vite.config.ts"), "utf8");
+  assert.match(config, /streamerV1:\s*path\.resolve\(__dirname, 'v1\/index\.html'\)/);
+  assert.doesNotMatch(config, /streamerV2/);
+  assert.doesNotMatch(config, /v2\/index\.html/);
 });
