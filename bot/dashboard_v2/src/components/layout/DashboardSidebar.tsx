@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Rise } from '@/motion/Rise';
 import { useDashboardProfile } from '@/hooks/useDashboardProfile';
@@ -82,6 +83,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     adminModeMutation,
     canAccessAnalyticsDashboard,
   } = useDashboardProfile();
+  const queryClient = useQueryClient();
   const [avatarFailed, setAvatarFailed] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
 
@@ -201,7 +203,11 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
               </div>
               <button
                 type="button"
-                onClick={() => adminModeMutation.mutate(!adminMode)}
+                onClick={() =>
+                  adminModeMutation.mutate(!adminMode, {
+                    onSuccess: () => queryClient.invalidateQueries(),
+                  })
+                }
                 disabled={adminModeMutation.isPending}
                 aria-pressed={adminMode}
                 className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
