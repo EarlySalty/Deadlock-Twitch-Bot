@@ -55,7 +55,7 @@ function seiteSlug(): string {
 export function DashboardAssistent() {
   const { language } = useLanguage();
   const t = useT();
-  const { data: authStatus } = useAuthStatus();
+  const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
 
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState('');
@@ -64,7 +64,7 @@ export function DashboardAssistent() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messageId = useRef(0);
-  const [slug] = useState(() => seiteSlug());
+  const [slug, setSlug] = useState(() => seiteSlug());
 
   const name = authStatus?.displayName || authStatus?.twitchLogin || '';
   const csrfToken = authStatus?.csrfToken ?? authStatus?.csrf_token ?? null;
@@ -72,6 +72,7 @@ export function DashboardAssistent() {
 
   useEffect(() => {
     if (!open) return;
+    setSlug(seiteSlug());
     inputRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
@@ -89,6 +90,9 @@ export function DashboardAssistent() {
     const text = raw.trim();
     if (!text || loading) return;
 
+    const aktuellerSlug = seiteSlug();
+    setSlug(aktuellerSlug);
+
     const history = messages.slice(-8).map((message) => ({
       role: message.role === 'user' ? ('user' as const) : ('assistant' as const),
       content: message.text,
@@ -100,7 +104,7 @@ export function DashboardAssistent() {
     setError(null);
 
     try {
-      const antwort = await askAssistent({ question: text, history, page: slug, language, csrfToken });
+      const antwort = await askAssistent({ question: text, history, page: aktuellerSlug, language, csrfToken });
       const teile = antwort.parts.length ? antwort.parts : antwort.answer ? [antwort.answer] : [];
       if (!teile.length) {
         setError(t('Die Antwort konnte nicht geladen werden.'));
@@ -128,6 +132,10 @@ export function DashboardAssistent() {
   const gruss = name
     ? t('Hi {name}! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.', { name })
     : t('Hi! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.');
+
+  if (authLaedt || authStatus?.authenticated !== true) {
+    return null;
+  }
 
   return (
     <div className="assistent-wrap">

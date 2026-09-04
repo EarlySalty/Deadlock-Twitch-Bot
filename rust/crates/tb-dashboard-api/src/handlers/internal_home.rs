@@ -1457,21 +1457,15 @@ pub(crate) struct BanData {
     pub(crate) events: Vec<Value>,
 }
 
-pub(crate) async fn ban_events_block(
+pub(crate) async fn ban_count_block(
     pool: &PgPool,
     resolved_user_id: &str,
     since: DateTime<Utc>,
-) -> BanData {
-    let mut data = BanData {
-        bot_bans_keyword_count: 0,
-        events: Vec::new(),
-    };
+) -> i64 {
     if resolved_user_id.is_empty() {
-        return data;
+        return 0;
     }
 
-    // KEYWORD_CLAUSE (internal_home.py:34-46): dynamische OR-LIKE-Kette.
-    // Bind-Positionen: $1=since, $2=user_id, $3.. = keyword-LIKEs.
     let mut clause_parts: Vec<String> = Vec::new();
     for i in 0..BAN_REASON_KEYWORDS.len() {
         clause_parts.push(format!("LOWER(COALESCE(b.reason, '')) LIKE ${}", i + 3));
@@ -1501,10 +1495,29 @@ pub(crate) async fn ban_events_block(
         q = q.bind(p);
     }
     match q.fetch_optional(pool).await {
-        Ok(Some(row)) => data.bot_bans_keyword_count = row.try_get::<i64, _>("c").unwrap_or(0),
-        Ok(None) => {}
-        Err(e) => tracing::warn!("internal-home ban-count query: {e}"),
+        Ok(Some(row)) => row.try_get::<i64, _>("c").unwrap_or(0),
+        Ok(None) => 0,
+        Err(e) => {
+            tracing::warn!("internal-home ban-count query: {e}");
+            0
+        }
     }
+}
+
+pub(crate) async fn ban_events_block(
+    pool: &PgPool,
+    resolved_user_id: &str,
+    since: DateTime<Utc>,
+) -> BanData {
+    let mut data = BanData {
+        bot_bans_keyword_count: 0,
+        events: Vec::new(),
+    };
+    if resolved_user_id.is_empty() {
+        return data;
+    }
+
+    data.bot_bans_keyword_count = ban_count_block(pool, resolved_user_id, since).await;
 
     let list_sql = r#"
         SELECT b.received_at, b.target_login, b.target_id, b.moderator_login, b.reason

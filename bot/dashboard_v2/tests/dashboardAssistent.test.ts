@@ -61,3 +61,15 @@ test('assistent.ts sendet page und language und setzt X-CSRF-Token bedingt', () 
 test('das Widget trägt den Knopftext "Hilfe bekommen"', () => {
   assert.match(WIDGET, /'Hilfe bekommen'/);
 });
+
+test('das Widget berechnet den Seiten-Slug beim Öffnen und beim Senden neu', () => {
+  assert.match(WIDGET, /const \[slug, setSlug\] = useState\(\(\) => seiteSlug\(\)\)/);
+  assert.match(WIDGET, /setSlug\(seiteSlug\(\)\)/);
+  assert.match(WIDGET, /const aktuellerSlug = seiteSlug\(\)/);
+  assert.match(WIDGET, /page: aktuellerSlug/);
+});
+
+test('das Widget rendert nichts, solange der Nutzer nicht eingeloggt ist', () => {
+  assert.match(WIDGET, /isLoading: authLaedt/);
+  assert.match(WIDGET, /if \(authLaedt \|\| authStatus\?\.authenticated !== true\) \{/);
+});

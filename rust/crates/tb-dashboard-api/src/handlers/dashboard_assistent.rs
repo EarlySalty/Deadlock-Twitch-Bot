@@ -16,8 +16,8 @@ use tb_llm::{Message, Request};
 use crate::auth::level::DashboardAuthLevel;
 
 use super::internal_home::{
-    access_state_block, ban_events_block, kpis_recent_block, last_stream_summary, oauth_block,
-    raid_events_block, AccessState, BanData, KpisData, OauthData,
+    access_state_block, ban_count_block, kpis_recent_block, last_stream_summary, oauth_block,
+    raid_events_block, AccessState, KpisData, OauthData,
 };
 use super::moderation_settings::{self, ModerationSettings};
 use super::platform_token::PlatformTokenConfig;
@@ -161,16 +161,30 @@ fn oauth_wort(status: &str) -> &'static str {
     }
 }
 
+fn pausengrund_text(reason: &str) -> &'static str {
+    match reason {
+        "blocked" => "gesperrt",
+        "token_error" | "token_error_expired" => "die Twitch-Verbindung muss erneuert werden",
+        "bot_banned" => "der Bot ist in deinem Kanal gebannt",
+        _ => "der Bot ist gerade pausiert",
+    }
+}
+
 fn karte_partner(access: &AccessState) -> String {
-    format!(
+    let operativ = access.operational_state.as_deref().unwrap_or("active");
+    let bot_aktiv = access.partner_status == "active" && operativ == "active";
+    let mut text = format!(
         "### Partner- und Bot-Status\nPartnerstatus: {}\nBot aktiv: {}",
         partner_status_text(&access.partner_status),
-        if access.partner_status == "active" {
-            "ja"
-        } else {
-            "nein"
+        if bot_aktiv { "ja" } else { "nein" }
+    );
+    if let Some(reason) = access.technical_pause_reason.as_deref() {
+        let reason = reason.trim();
+        if !reason.is_empty() {
+            text.push_str(&format!("\nPausengrund: {}", pausengrund_text(reason)));
         }
-    )
+    }
+    text
 }
 
 fn karte_kpis(titel: &str, kpis: &KpisData) -> String {
@@ -208,8 +222,15 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
     if raids.is_empty() {
         return None;
     }
-    let mut zeilen = vec!["### Deine letzten Raids".to_string()];
-    for raid in raids.iter().take(10) {
+    let (erfolgreiche, nicht_zustande): (Vec<&Value>, Vec<&Value>) = raids
+        .iter()
+        .partition(|raid| raid.get("success").and_then(Value::as_bool).unwrap_or(true));
+    let mut zeilen = vec![format!(
+        "### Deine letzten Raids\nRaids ausgeführt: {}, nicht zustande gekommen: {}",
+        erfolgreiche.len(),
+        nicht_zustande.len()
+    )];
+    for raid in erfolgreiche.iter().take(10) {
         let datum = raid
             .get("timestamp")
             .and_then(Value::as_str)
@@ -229,10 +250,9 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
     Some(zeilen.join("\n"))
 }
 
-fn karte_ban_zaehler(bans: &BanData) -> String {
+fn karte_ban_zaehler(anzahl: i64) -> String {
     format!(
-        "### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {}",
-        bans.bot_bans_keyword_count
+        "### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {anzahl}"
     )
 }
 
@@ -353,6 +373,27 @@ fn karten_nicht_verfuegbar(language: &str) -> String {
     }
 }
 
+fn baue_antwort(answer: &str, parts: &[String], sources: &[String], grounded: bool, page: &str) -> Value {
+    json!({
+        "answer": answer,
+        "parts": parts,
+        "sources": sources,
+        "grounded": grounded,
+        "page": page,
+    })
+}
+
+fn spawne_log(pool: &PgPool, eintrag: tb_analytics::dashboard_assistent_log::Eintrag) {
+    let log_pool = pool.clone();
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            tb_analytics::dashboard_assistent_log::insert(&log_pool, &eintrag),
+        )
+        .await;
+    });
+}
+
 fn baue_log_eintrag(
     user_id: &str,
     page: &str,
@@ -430,6 +471,18 @@ pub async fn ask(
 
     let now = mono_now();
     if !minuten_limit().allow(&user_id, now) || !tages_limit().allow(&user_id, now) {
+        spawne_log(
+            &pool,
+            baue_log_eintrag(
+                &user_id,
+                &page,
+                &language,
+                &q_clean,
+                "[abgelehnt: rate_limited]",
+                false,
+                (None, None, None),
+            ),
+        );
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({ "error": "rate_limited", "message": rate_text(&language) })),
@@ -442,13 +495,13 @@ pub async fn ask(
     let seit_30 = jetzt - chrono::Duration::days(30);
 
     let karten_result = tokio::time::timeout(Duration::from_secs(CARD_TIMEOUT_SEC), async {
-        let (access, oauth, kpis_7, kpis_30, raids, bans, moderation, scam) = tokio::join!(
+        let (access, oauth, kpis_7, kpis_30, raids, ban_anzahl, moderation, scam) = tokio::join!(
             access_state_block(&pool, &login, &user_id),
             oauth_block(&pool, &login, &user_id),
             kpis_recent_block(&pool, &login, seit_7),
             kpis_recent_block(&pool, &login, seit_30),
             raid_events_block(&pool, &login, &user_id, seit_30),
-            ban_events_block(&pool, &user_id, seit_30),
+            ban_count_block(&pool, &user_id, seit_30),
             moderation_settings::load_settings(&pool, &user_id),
             scam_guard_settings::load_settings(&pool, &login),
         );
@@ -475,7 +528,7 @@ pub async fn ask(
         if let Some(k) = karte_raids(&raids) {
             karten.push(k);
         }
-        karten.push(karte_ban_zaehler(&bans));
+        karten.push(karte_ban_zaehler(ban_anzahl));
         if let Ok(settings) = moderation {
             karten.push(karte_schutzschalter(&settings));
         }
@@ -553,6 +606,18 @@ pub async fn ask(
         Ok(response) => {
             let text = response.text.trim().to_string();
             if text.is_empty() {
+                spawne_log(
+                    &pool,
+                    baue_log_eintrag(
+                        &user_id,
+                        &page,
+                        &language,
+                        &q_clean,
+                        "[fehler: model_unavailable]",
+                        grounded,
+                        (None, None, None),
+                    ),
+                );
                 return (
                     StatusCode::BAD_GATEWAY,
                     Json(json!({ "error": "model_unavailable", "message": fehler_text(&language) })),
@@ -568,6 +633,18 @@ pub async fn ask(
         }
         Err(e) => {
             tracing::warn!(error = %e, "dashboard-assistent: Modellaufruf fehlgeschlagen");
+            spawne_log(
+                &pool,
+                baue_log_eintrag(
+                    &user_id,
+                    &page,
+                    &language,
+                    &q_clean,
+                    "[fehler: model_unavailable]",
+                    grounded,
+                    (None, None, None),
+                ),
+            );
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({ "error": "model_unavailable", "message": fehler_text(&language) })),
@@ -578,32 +655,20 @@ pub async fn ask(
 
     let parts = split_message(&text, SPLIT_LIMIT);
 
-    let eintrag = baue_log_eintrag(
-        &user_id,
-        &page,
-        &language,
-        &question,
-        &text,
-        grounded,
-        (provider, model, latency_ms),
+    spawne_log(
+        &pool,
+        baue_log_eintrag(
+            &user_id,
+            &page,
+            &language,
+            &q_clean,
+            &text,
+            grounded,
+            (provider, model, latency_ms),
+        ),
     );
-    let log_pool = pool.clone();
-    tokio::spawn(async move {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(3),
-            tb_analytics::dashboard_assistent_log::insert(&log_pool, &eintrag),
-        )
-        .await;
-    });
 
-    Json(json!({
-        "answer": text,
-        "parts": parts,
-        "sources": grounding.sources,
-        "grounded": grounded,
-        "page": page,
-    }))
-    .into_response()
+    Json(baue_antwort(&text, &parts, &grounding.sources, grounded, &page)).into_response()
 }
 
 #[cfg(test)]
@@ -773,18 +838,61 @@ mod tests {
 
     #[test]
     fn antwort_meldet_echten_grounded_wert() {
-        let production = include_str!("dashboard_assistent.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("Produktionscode steht vor dem Testmodul");
-        assert!(
-            production.contains("\"grounded\": grounded,"),
-            "Antwort schreibt den berechneten grounded-Wert"
-        );
-        assert!(
-            !production.contains("\"grounded\": true,"),
-            "grounded ist nicht mehr hart auf true"
-        );
+        let quellen = vec!["a".to_string(), "b".to_string()];
+        let parts = vec!["Teil".to_string()];
+        let wahr = baue_antwort("Antwort", &parts, &quellen, true, "uplink");
+        assert_eq!(wahr["grounded"], json!(true));
+        assert_eq!(wahr["answer"], json!("Antwort"));
+        assert_eq!(wahr["page"], json!("uplink"));
+        assert_eq!(wahr["sources"], json!(["a", "b"]));
+        assert_eq!(wahr["parts"], json!(["Teil"]));
+
+        let falsch = baue_antwort("Antwort", &parts, &quellen, false, "home");
+        assert_eq!(falsch["grounded"], json!(false));
+    }
+
+    #[test]
+    fn karte_partner_erkennt_pause_trotz_aktivem_status() {
+        let access = AccessState {
+            partner_status: "active".to_string(),
+            technical_pause_reason: Some("bot_banned".to_string()),
+            operational_state: Some("bot_banned".to_string()),
+            token_error_grace_expires_at: None,
+            token_error_error_count: 0,
+            analytics_access_allowed: true,
+        };
+        let text = karte_partner(&access);
+        assert!(text.contains("Bot aktiv: nein"));
+        assert!(text.contains("Pausengrund: der Bot ist in deinem Kanal gebannt"));
+    }
+
+    #[test]
+    fn karte_raids_zaehlt_erfolg_getrennt() {
+        let raids = vec![
+            json!({
+                "timestamp": "2026-09-01T20:00:00Z",
+                "target_login": "erfolgreich",
+                "viewer_count": 12,
+                "success": true
+            }),
+            json!({
+                "timestamp": "2026-09-02T20:00:00Z",
+                "target_login": "gescheitert",
+                "viewer_count": 5,
+                "success": false
+            }),
+            json!({
+                "timestamp": "2026-09-03T20:00:00Z",
+                "target_login": "unbekannt",
+                "viewer_count": 3,
+                "success": null
+            }),
+        ];
+        let text = karte_raids(&raids).expect("Raid-Karte");
+        assert!(text.contains("Raids ausgeführt: 2, nicht zustande gekommen: 1"));
+        assert!(text.contains("@erfolgreich"));
+        assert!(text.contains("@unbekannt"));
+        assert!(!text.contains("@gescheitert"));
     }
 
     #[test]
