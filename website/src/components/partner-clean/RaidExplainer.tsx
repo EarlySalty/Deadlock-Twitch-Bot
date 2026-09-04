@@ -1,7 +1,7 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import { ArrowRight, CheckCircle2, Power, Search, Users } from "lucide-react";
-import { ScrollReveal } from "@/components/ui/ScrollReveal";
+import { ScrollReveal, useEinblendung } from "@/components/ui/ScrollReveal";
 import { GradientText } from "@/components/ui/GradientText";
 
 const features = [
@@ -266,6 +266,7 @@ function AnimatedFlowLine() {
 }
 
 export function RaidExplainer() {
+  const flow = useEinblendung<HTMLDivElement>();
   return (
     <section id="raid" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
@@ -318,10 +319,10 @@ export function RaidExplainer() {
               </p>
 
               <motion.div
+                ref={flow.ref}
                 variants={containerVariants}
-                initial="hidden"
-                whileInView="visible"
-                viewport={{ once: true, margin: "-60px" }}
+                initial={false}
+                animate={flow.versteckt ? "hidden" : "visible"}
                 className="space-y-3"
               >
                 {flowSteps.map((step, idx) => {

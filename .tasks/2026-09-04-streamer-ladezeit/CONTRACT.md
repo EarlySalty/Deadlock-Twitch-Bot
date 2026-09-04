@@ -90,3 +90,5 @@ der Block "Dein Platz im Netzwerk" kommt spät.
 - keine
 
 ## Amendments
+
+- 2026-09-04, Erlaubter Änderungsbereich, alt: Hero.tsx, RaidExplainer.tsx, ui/BanFeedEntry.tsx, src/pages/StreamerNetworkPage.tsx verboten -> neu: diese Dateien dürfen ausschließlich ihre `motion.*`-Elemente mit `initial={{ opacity: 0 ... }}` auf das ScrollReveal-Muster umstellen (erster Render sichtbar, Animation erst nach Mount); Inhalte, Clips, Bühne und Layout bleiben unverändert; Grund: die Reste der unsichtbaren Vorrender-Ausgabe liegen im ersten Viewport und im Raid-Block, entschieden von Orchestrator (nur technisch, reversibel)

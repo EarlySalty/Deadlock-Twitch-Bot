@@ -100,3 +100,27 @@ SVG-Deko). Diese liegen ausserhalb des erlaubten Aenderungsbereichs und unter
 INV-05 (Hero unveraendert). Der Build-Grep-Gate auf 0 ist im erlaubten Scope
 nicht erreichbar; die Pruefung laeuft daher ueber die vom Contract (REQ-06)
 zugelassene Quellpruefung `initial={false}` + `useInView`.
+
+## M6: Hero und Raid-Block (Amendment A1)
+
+Nach A1 erweitert: geteilter Hook `useEinblendung()` in `ui/ScrollReveal.tsx`
+(gleiches ref/inView/getBoundingClientRect-Muster wie ScrollReveal). Genutzt in
+`partner-clean/Hero.tsx` (Badge, H1, Absatz, CTA), im Flow-Container von
+`partner-clean/RaidExplainer.tsx` (`initial="hidden" whileInView` ->
+`initial={false} animate`), und `ui/BanFeedEntry.tsx` rendert die erste Reihe
+sichtbar (`initial={isNew ? {...} : false}`, Slide nur fuer neue Live-Bans);
+JSX-Kommentare dort entfernt. `StreamerNetworkPage.tsx` hat selbst keine
+`motion.*`-Elemente, nur Komposition, daher unveraendert.
+
+Ergebnis: `opacity:0;transform:translate` (motion-Einstieg) im HTML = 0. Der
+Roh-`grep -c "opacity: 0\|opacity:0" dist/index.html` zaehlt noch 5 Zeilen,
+aber jeder volle opacity:0 ist reine Deko: 3 CSS-Regeln im `<style>` von
+RaidDemo (`rd-bounce-in`, transition/box-shadow), `rd-search-text`/`-sub`/
+`rd-raid-counter`/`rd-final-text` (JS-getriebene RaidDemo-Deko) und die
+`ViewerFlowSvg`-Kreise; dazu Teil-Deckungen `opacity:0.15/0.2/0.4/0.7`
+(Gradient-/Linien-Deko). Kein Einstiegs-`motion.*` emittiert noch opacity:0.
+
+## Status Amendment
+
+- M6: fertig. 45/45 Tests gruen, `tsc --noEmit` sauber, Build "Prerendered 1
+  page". Hero und Raid-Block sind vor der Hydration sichtbar.
