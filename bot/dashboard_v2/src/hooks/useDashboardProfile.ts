@@ -4,62 +4,12 @@ import type { InternalHomeData } from '@/api/home';
 import { fetchInternalHome } from '@/api/home';
 import { setAdminMode } from '@/api/auth';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-
-const DASHBOARD_PROFILE_CACHE_KEY = 'ddc.dashboard.profile';
-
-type ProfileCacheStorage = Pick<Storage, 'getItem' | 'setItem'>;
-
-export interface CachedDashboardProfile {
-  identityKey: string;
-  displayName: string | null;
-  avatarUrl: string | null;
-  planName: string | null;
-  twitchLogin: string | null;
-}
-
-export function readCachedDashboardProfile(
-  identityKey: string | null,
-  storage: ProfileCacheStorage | null | undefined,
-): CachedDashboardProfile | null {
-  if (!identityKey || !storage) return null;
-  let raw: string | null = null;
-  try {
-    raw = storage.getItem(DASHBOARD_PROFILE_CACHE_KEY);
-  } catch {
-    return null;
-  }
-  if (!raw) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const record = parsed as Record<string, unknown>;
-  if (record.identityKey !== identityKey) return null;
-  const asText = (value: unknown): string | null =>
-    typeof value === 'string' && value.length > 0 ? value : null;
-  return {
-    identityKey,
-    displayName: asText(record.displayName),
-    avatarUrl: asText(record.avatarUrl),
-    planName: asText(record.planName),
-    twitchLogin: asText(record.twitchLogin),
-  };
-}
-
-export function writeCachedDashboardProfile(
-  value: CachedDashboardProfile,
-  storage: ProfileCacheStorage | null | undefined,
-): void {
-  if (!value.identityKey || !storage) return;
-  try {
-    storage.setItem(DASHBOARD_PROFILE_CACHE_KEY, JSON.stringify(value));
-  } catch {
-    return;
-  }
-}
+import type { ProfileCacheStorage } from '@/hooks/dashboardProfileCache';
+import {
+  profilBereit,
+  readCachedDashboardProfile,
+  writeCachedDashboardProfile,
+} from '@/hooks/dashboardProfileCache';
 
 function dashboardProfileStorage(): ProfileCacheStorage | null {
   try {
@@ -121,12 +71,11 @@ export function useDashboardProfile() {
         identityKey,
         displayName: profile.displayName?.trim() || null,
         avatarUrl: profile.avatarUrl?.trim() || null,
-        planName: planNameFromAuth,
         twitchLogin: profile.twitchLogin?.trim() || ownLogin || null,
       },
       dashboardProfileStorage(),
     );
-  }, [identityKey, isPlaceholderData, profile, planNameFromAuth, ownLogin]);
+  }, [identityKey, isPlaceholderData, profile, ownLogin]);
 
   const adminModeMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
@@ -150,15 +99,20 @@ export function useDashboardProfile() {
     twitchLogin ||
     (canRequestInternalHome ? 'Creator' : 'Admin');
   const avatarUrl = profile?.avatarUrl?.trim() || cachedProfile?.avatarUrl || null;
-  const planName = planNameFromAuth || cachedProfile?.planName || 'Free';
+  const planName = planNameFromAuth || 'Free';
   const adminEligible = Boolean(authStatus?.adminEligible);
   const adminMode = Boolean(authStatus?.adminMode);
   const canAccessAnalyticsDashboard = Boolean(
     authStatus?.canAccessAnalyticsDashboard ?? authStatus?.access?.analytics ?? true
   );
 
-  const profileReady =
-    !loadingAuth && (Boolean(profile) || Boolean(cachedProfile) || !canRequestInternalHome);
+  const profileReady = profilBereit({
+    loadingAuth,
+    loadingProfile,
+    hasProfile: Boolean(profile),
+    hasCache: Boolean(cachedProfile),
+    canRequest: canRequestInternalHome,
+  });
 
   return {
     authStatus,
