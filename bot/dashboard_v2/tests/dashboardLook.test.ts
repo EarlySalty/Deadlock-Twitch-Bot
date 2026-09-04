@@ -36,3 +36,20 @@ test('Raster und Grund-Verlauf stammen aus der Vorlage', () => {
   assert.match(INDEX, /rgba\(255, 255, 255, 0\.045\)/);
   assert.match(INDEX, /--gradient-bg:\s*linear-gradient\(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%\)/);
 });
+
+test('das Raster wird nicht zu den Raendern hin ausgeblendet', () => {
+  assert.doesNotMatch(block(INDEX, 'body::before'), /mask-image/);
+});
+
+test('die Karten tragen den Verlauf oben wie auf /streamer, nicht flaechig', () => {
+  assert.match(block(INDEX, '.panel-card {'), /transparent 46%/);
+  assert.doesNotMatch(block(INDEX, '.panel-card {'), /linear-gradient\(0deg/);
+  const stops = block(INDEX, '.panel-card {').match(/rgba\(201, 168, 106/g) ?? [];
+  assert.ok(stops.length < 2, `flaechiger Doppel-Gradient: ${stops.length} Gold-Stops`);
+});
+
+test('Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring', () => {
+  assert.doesNotMatch(block(INDEX, '.sidebar-avatar-glow {'), /color-mix/);
+  assert.doesNotMatch(block(INDEX, '.sidebar-avatar-glow {'), /0 0 24px/);
+  assert.match(block(INDEX, '.sidebar-avatar-glow {'), /0 0 0 2px rgba\(255, 255, 255, 0\.06\)/);
+});
