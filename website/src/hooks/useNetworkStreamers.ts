@@ -54,6 +54,27 @@ function sortStreamers(list: NetworkStreamer[]): NetworkStreamer[] {
   });
 }
 
+let netzwerkPromise: Promise<NetworkStreamer[]> | null = null;
+
+function ladeNetzwerk(): Promise<NetworkStreamer[]> {
+  if (netzwerkPromise) return netzwerkPromise;
+  netzwerkPromise = (async () => {
+    const res = await fetch(NETWORK_API);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data?.streamers)) throw new Error("kein streamers-Feld");
+    const mapped = (data.streamers as NetworkStreamerJson[])
+      .filter((s) => typeof s?.login === "string" && s.login.length > 0)
+      .map(mapStreamer);
+    return sortStreamers(mapped);
+  })();
+  return netzwerkPromise;
+}
+
+if (typeof window !== "undefined") {
+  void ladeNetzwerk().catch(() => {});
+}
+
 export function useNetworkStreamers(): {
   streamers: NetworkStreamer[];
   status: NetworkStatus;
@@ -63,25 +84,17 @@ export function useNetworkStreamers(): {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(NETWORK_API);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+    ladeNetzwerk()
+      .then((liste) => {
         if (cancelled) return;
-        if (!Array.isArray(data?.streamers)) throw new Error("kein streamers-Feld");
-        const mapped = (data.streamers as NetworkStreamerJson[])
-          .filter((s) => typeof s?.login === "string" && s.login.length > 0)
-          .map(mapStreamer);
-        setStreamers(sortStreamers(mapped));
+        setStreamers(liste);
         setStatus("ready");
-      } catch (err) {
-        if (!cancelled) {
-          console.error("useNetworkStreamers: Netzwerk-API nicht ladbar:", err);
-          setStatus("error");
-        }
-      }
-    })();
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("useNetworkStreamers: Netzwerk-API nicht ladbar:", err);
+        setStatus("error");
+      });
     return () => {
       cancelled = true;
     };
