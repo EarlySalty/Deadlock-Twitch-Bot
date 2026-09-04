@@ -1014,6 +1014,7 @@ mod tests {
                 avg_viewers: avg, retention_5m: 0.0, retention_10m: ret, retention_20m: 0.0,
                 dropoff_pct: 0.0, unique_chatters: chatters, total_chatter_sessions: chatters, first_time_chatters: 0,
                 returning_chatters: 0, followers_start: 0, followers_end: 0, title: String::new(),
+                hold_pct: 0.0,
             }
         }
         // <3 Sessions → beide 0.

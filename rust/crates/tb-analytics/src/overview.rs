@@ -26,6 +26,18 @@ pub struct OverviewMetricsRow {
     pub session_count: Option<i64>,
 }
 
+const GEISTER_FILTER: &str = "
+              AND NOT (
+                  COALESCE(s.peak_viewers, 0) = 0
+                  AND (CASE
+                          WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
+                          THEN EXTRACT(EPOCH FROM (
+                              s.ended_at::text::TIMESTAMPTZ - s.started_at::text::TIMESTAMPTZ
+                          ))
+                          ELSE COALESCE(s.duration_seconds, 0)
+                      END) < 300
+              )";
+
 /// Holt aggregierte Metriken für einen Streamer im angegebenen Zeitraum.
 ///
 /// `streamer_login`: `None` → alle Streamer aggregiert.
@@ -36,7 +48,7 @@ pub async fn overview_metrics(
     streamer_login: Option<&str>,
     until: Option<&str>,
 ) -> Result<Option<OverviewMetricsRow>, sqlx::Error> {
-    sqlx::query_as::<_, OverviewMetricsRow>(
+    let sql = format!(
         r#"
         WITH sessions AS (
             SELECT
@@ -56,7 +68,7 @@ pub async fn overview_metrics(
             WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ
               AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
-              AND ($3::TEXT IS NULL OR s.started_at::text::TIMESTAMPTZ < $3::text::TIMESTAMPTZ)
+              AND ($3::TEXT IS NULL OR s.started_at::text::TIMESTAMPTZ < $3::text::TIMESTAMPTZ){GEISTER_FILTER}
         )
         SELECT
             AVG(s.avg_viewers)::FLOAT8                                AS avg_avg_viewers,
@@ -96,13 +108,14 @@ pub async fn overview_metrics(
                 END)::BIGINT                                          AS follower_valid_count,
             COUNT(*)::BIGINT                                          AS session_count
         FROM sessions s
-        "#,
-    )
-    .bind(since)
-    .bind(streamer_login)
-    .bind(until)
-    .fetch_optional(pool)
-    .await
+        "#
+    );
+    sqlx::query_as::<_, OverviewMetricsRow>(&sql)
+        .bind(since)
+        .bind(streamer_login)
+        .bind(until)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Existenz-Check: gibt 0 zurück wenn keine Sessions vorhanden.
@@ -490,6 +503,8 @@ pub struct OverviewSession {
     #[serde(rename = "followersEnd")]
     pub followers_end: i64,
     pub title: String,
+    #[serde(rename = "holdPct")]
+    pub hold_pct: f64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -524,7 +539,7 @@ pub async fn overview_sessions(
     limit: i64,
 ) -> Result<Vec<OverviewSession>, sqlx::Error> {
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
-    let raws: Vec<SessionRaw> = sqlx::query_as(
+    let sql = format!(
         r#"
         WITH base_sessions AS (
             SELECT s.id, s.started_at,
@@ -545,7 +560,7 @@ pub async fn overview_sessions(
                    s.followers_start, s.followers_end, s.stream_title
             FROM twitch_stream_sessions s
             WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
-              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2)){GEISTER_FILTER}
             ORDER BY s.started_at::text::TIMESTAMPTZ DESC
             LIMIT $3
         ),
@@ -597,16 +612,24 @@ pub async fn overview_sessions(
         LEFT JOIN filtered_chatters fc ON fc.session_id = bs.id
         LEFT JOIN session_chatter_presence scp ON scp.session_id = bs.id
         ORDER BY bs.started_at::text::TIMESTAMPTZ DESC
-        "#,
-    )
-    .bind(since)
-    .bind(streamer_login)
-    .bind(limit)
-    .bind(&bots)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+    let raws: Vec<SessionRaw> = sqlx::query_as(&sql)
+        .bind(since)
+        .bind(streamer_login)
+        .bind(limit)
+        .bind(&bots)
+        .fetch_all(pool)
+        .await?;
 
     let clamp_pct = |v: f64| v.clamp(0.0, 1.0) * 100.0;
+    let hold_pct = |avg: f64, peak: i64| {
+        if peak <= 0 {
+            0.0
+        } else {
+            (avg / peak as f64 * 100.0).clamp(0.0, 100.0)
+        }
+    };
     Ok(raws
         .into_iter()
         .map(|r| OverviewSession {
@@ -629,6 +652,7 @@ pub async fn overview_sessions(
             followers_start: r.followers_start.unwrap_or(0),
             followers_end: r.followers_end.unwrap_or(0),
             title: r.title.unwrap_or_default(),
+            hold_pct: hold_pct(r.avg_viewers.unwrap_or(0.0), r.peak_viewers.unwrap_or(0)),
         })
         .collect())
 }
@@ -1054,6 +1078,49 @@ mod tests {
         assert_eq!(s.title, "Test Titel");
         assert_eq!(s.followers_start, 1000);
         assert_eq!(s.followers_end, 1010);
+    }
+
+    #[tokio::test]
+    async fn geistersession_faellt_raus_und_holdpct_gesetzt() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_geister").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (streamer_login, started_at, ended_at, avg_viewers, peak_viewers, duration_seconds)
+            VALUES
+                ('streamer_x', NOW() - INTERVAL '2 hours',
+                 NOW() - INTERVAL '2 hours' + INTERVAL '60 seconds', 0.0, 0, 60),
+                ('streamer_x', NOW() - INTERVAL '1 day',
+                 NOW() - INTERVAL '1 day' + INTERVAL '30 minutes', 6.0, 10, 1800)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        let list = overview_sessions(&pool, since, Some("streamer_x"), 50)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1, "Geistersession (peak 0, 60 s) faellt raus");
+        assert_eq!(list[0].peak_viewers, 10);
+        assert!(
+            (list[0].hold_pct - 60.0).abs() < 0.01,
+            "avg 6 / peak 10 * 100 = 60"
+        );
+
+        let metrics = overview_metrics(&pool, since, Some("streamer_x"), None)
+            .await
+            .unwrap()
+            .expect("Sollte Metriken liefern");
+        assert_eq!(metrics.session_count, Some(1), "Geister zaehlt nicht mit");
     }
 
     #[tokio::test]
