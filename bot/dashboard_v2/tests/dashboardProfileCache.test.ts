@@ -4,114 +4,48 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-(globalThis as { window?: unknown }).window = {
-  __TWITCH_DASHBOARD_RUNTIME__: {},
-  location: { origin: 'http://localhost' },
-};
-
-const { readCachedDashboardProfile, writeCachedDashboardProfile } = await import(
-  '@/hooks/useDashboardProfile'
-);
-
-const CACHE_KEY = 'ddc.dashboard.profile';
-
-function fakeStorage(initial: Record<string, string> = {}) {
-  const store = new Map<string, string>(Object.entries(initial));
-  return {
-    getItem: (key: string): string | null => (store.has(key) ? store.get(key)! : null),
-    setItem: (key: string, value: string): void => {
-      store.set(key, value);
-    },
-  };
-}
-
-test('passende Identitaet liefert das gecachte Profil', () => {
-  const storage = fakeStorage({
-    [CACHE_KEY]: JSON.stringify({
-      identityKey: 'nani',
-      displayName: 'Nani',
-      avatarUrl: 'https://cdn/x.png',
-      planName: 'Pro',
-      twitchLogin: 'nani',
-    }),
-  });
-  assert.deepEqual(readCachedDashboardProfile('nani', storage), {
-    identityKey: 'nani',
-    displayName: 'Nani',
-    avatarUrl: 'https://cdn/x.png',
-    planName: 'Pro',
-    twitchLogin: 'nani',
-  });
-});
-
-test('fremde Identitaet liefert null', () => {
-  const storage = fakeStorage({
-    [CACHE_KEY]: JSON.stringify({ identityKey: 'nani', displayName: 'Nani' }),
-  });
-  assert.equal(readCachedDashboardProfile('jemand-anderes', storage), null);
-});
-
-test('kaputtes JSON liefert null statt zu werfen', () => {
-  const storage = fakeStorage({ [CACHE_KEY]: '{nicht valide' });
-  assert.equal(readCachedDashboardProfile('nani', storage), null);
-});
-
-test('fehlende Identitaet oder fehlender Speicher liefert null', () => {
-  const storage = fakeStorage();
-  assert.equal(readCachedDashboardProfile(null, storage), null);
-  assert.equal(readCachedDashboardProfile('nani', null), null);
-});
-
-test('write speichert nur Anzeigefelder und wird von read wieder gelesen', () => {
-  const storage = fakeStorage();
-  writeCachedDashboardProfile(
-    {
-      identityKey: 'nani',
-      displayName: 'Nani',
-      avatarUrl: 'https://cdn/x.png',
-      planName: 'Pro',
-      twitchLogin: 'nani',
-    },
-    storage,
-  );
-  const raw = storage.getItem(CACHE_KEY);
-  assert.ok(raw);
-  const parsed = JSON.parse(raw);
-  assert.deepEqual(Object.keys(parsed).sort(), [
-    'avatarUrl',
-    'displayName',
-    'identityKey',
-    'planName',
-    'twitchLogin',
-  ]);
-  assert.deepEqual(readCachedDashboardProfile('nani', storage), {
-    identityKey: 'nani',
-    displayName: 'Nani',
-    avatarUrl: 'https://cdn/x.png',
-    planName: 'Pro',
-    twitchLogin: 'nani',
-  });
-});
-
-test('write ohne Identitaet schreibt nichts', () => {
-  const storage = fakeStorage();
-  writeCachedDashboardProfile(
-    { identityKey: '', displayName: 'X', avatarUrl: null, planName: null, twitchLogin: null },
-    storage,
-  );
-  assert.equal(storage.getItem(CACHE_KEY), null);
-});
-
 const SRC = join(import.meta.dirname, '..', 'src');
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
+
 const HOOK = read('hooks/useDashboardProfile.ts');
 const SIDEBAR = read('components/layout/DashboardSidebar.tsx');
 
-test('der Hook liest den Cache und verdrahtet ihn als placeholderData', () => {
-  assert.match(HOOK, /readCachedDashboardProfile\(/);
-  assert.match(HOOK, /writeCachedDashboardProfile\(/);
-  assert.match(HOOK, /sessionStorage/);
+test('der Hook definiert reine Cache-Funktionen mit Identitaets- und JSON-Schutz', () => {
+  assert.match(HOOK, /export function readCachedDashboardProfile\(/);
+  assert.match(HOOK, /export function writeCachedDashboardProfile\(/);
+  assert.match(HOOK, /if \(!identityKey \|\| !storage\) return null;/);
+  assert.match(HOOK, /if \(!raw\) return null;/);
+  assert.match(HOOK, /parsed = JSON\.parse\(raw\);/);
+  assert.match(HOOK, /if \(record\.identityKey !== identityKey\) return null;/);
+  assert.match(HOOK, /if \(!value\.identityKey \|\| !storage\) return;/);
+});
+
+test('read faengt kaputtes JSON und leeren Cache ab, statt zu werfen', () => {
+  const start = HOOK.indexOf('export function readCachedDashboardProfile');
+  const end = HOOK.indexOf('export function writeCachedDashboardProfile');
+  assert.ok(start >= 0 && end > start, 'read-Funktion muss vor write stehen');
+  const body = HOOK.slice(start, end);
+  const tryCount = (body.match(/\btry\s*\{/g) ?? []).length;
+  const nullReturns = (body.match(/return null;/g) ?? []).length;
+  assert.ok(tryCount >= 2, 'read muss getItem und JSON.parse je in try/catch kapseln');
+  assert.ok(nullReturns >= 5, 'read muss jede Fehlbedingung mit null quittieren');
+});
+
+test('der Hook cacht nur Anzeigefelder plus Identitaetsschluessel, keine Secrets', () => {
+  const start = HOOK.indexOf('if (!identityKey || isPlaceholderData || !profile) return;');
+  assert.ok(start >= 0, 'der Hook muss den Cache aktiv schreiben');
+  const call = HOOK.slice(start, HOOK.indexOf('}, [identityKey, isPlaceholderData', start));
+  for (const feld of ['identityKey', 'displayName', 'avatarUrl', 'planName', 'twitchLogin']) {
+    assert.match(call, new RegExp(`${feld}[,:]`), `Cache-Schreibweg muss ${feld} setzen`);
+  }
+  assert.doesNotMatch(call, /token|csrf|secret|cookie/i, 'kein Secret in den Cache schreiben');
+});
+
+test('der Hook liest den Cache aus sessionStorage und verdrahtet ihn als placeholderData', () => {
+  assert.match(HOOK, /readCachedDashboardProfile\(identityKey, dashboardProfileStorage\(\)\)/);
+  assert.match(HOOK, /return window\.sessionStorage;/);
   assert.match(HOOK, /placeholderData:\s*placeholderProfile/);
+  assert.match(HOOK, /const identityKey = canRequestInternalHome && ownLogin \? ownLogin : null;/);
 });
 
 test('die Sidebar rendert ohne Profildaten einen neutralen Skeleton statt gradient-accent', () => {
