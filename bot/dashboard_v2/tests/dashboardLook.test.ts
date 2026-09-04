@@ -41,11 +41,11 @@ test('das Raster wird nicht zu den Raendern hin ausgeblendet', () => {
   assert.doesNotMatch(block(INDEX, 'body::before'), /mask-image/);
 });
 
-test('die Karten tragen den Verlauf oben wie auf /streamer, nicht flaechig', () => {
-  assert.match(block(INDEX, '.panel-card {'), /transparent 46%/);
+test('die Karten tragen den warmen Gold-Braun-Verlauf, nicht flaechig', () => {
+  assert.match(block(INDEX, '.panel-card {'), /158deg/);
+  assert.match(block(INDEX, '.panel-card {'), /rgba\(241, 210, 153, 0\.05\)/);
   assert.doesNotMatch(block(INDEX, '.panel-card {'), /linear-gradient\(0deg/);
-  const stops = block(INDEX, '.panel-card {').match(/rgba\(201, 168, 106/g) ?? [];
-  assert.ok(stops.length < 2, `flaechiger Doppel-Gradient: ${stops.length} Gold-Stops`);
+  assert.match(INDEX, /--color-border:\s*rgba\(239, 212, 157, 0\.22\)/);
 });
 
 test('Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring', () => {

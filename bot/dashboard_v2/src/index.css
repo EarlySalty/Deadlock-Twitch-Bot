@@ -22,8 +22,8 @@
      Nur die Flaechen sind schwarz; der Gold-Akzent (--color-primary) bleibt. */
   --color-bg: #0b0b0b;
   --color-background: #101010;
-  --color-card: rgba(20, 20, 20, 0.82);
-  --color-card-hover: rgba(32, 32, 32, 0.88);
+  --color-card: rgba(24, 22, 18, 0.88);
+  --color-card-hover: rgba(36, 33, 27, 0.92);
   --color-primary: #C5A059;
   --color-primary-hover: #F1D299;
   --color-primary-soft: rgba(197, 160, 89, 0.20);
@@ -51,9 +51,9 @@
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
      unlesbar — auf Metall wird mit dunkler Tinte geschrieben. */
   --color-on-gold: #241A12;
-  --color-border: rgba(239, 212, 157, 0.16);
-  --color-border-strong: rgba(239, 212, 157, 0.34);
-  --color-border-hover: rgba(239, 212, 157, 0.28);
+  --color-border: rgba(239, 212, 157, 0.22);
+  --color-border-strong: rgba(239, 212, 157, 0.40);
+  --color-border-hover: rgba(239, 212, 157, 0.34);
   --color-popover: #161616;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
@@ -160,12 +160,13 @@ svg.icon-duotone {
 }
 
 .glass {
-  background:
-    linear-gradient(180deg, rgba(239, 212, 157, 0.043) 0%, transparent 46%),
-    var(--color-card);
-  backdrop-filter: blur(16px);
+  background-color: color-mix(in srgb, var(--color-card) 82%, transparent);
+  backdrop-filter: blur(14px);
   border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-card-soft);
+  box-shadow:
+    inset 0 1px 0 rgba(241, 210, 153, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
+    0 16px 40px rgba(0, 0, 0, 0.4);
 }
 
 /* Gold-Flaeche. Traegt IMMER dunkle Tinte — Kinder erben die Farbe, damit niemand
@@ -183,13 +184,13 @@ svg.icon-duotone {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  background:
-    linear-gradient(180deg, rgba(239, 212, 157, 0.043) 0%, transparent 46%),
-    radial-gradient(100% 90% at 100% 0%, rgba(85, 151, 143, 0.035), transparent 54%),
-    var(--color-card);
+  background-color: var(--color-card);
+  background-image: linear-gradient(158deg, rgba(241, 210, 153, 0.05) 0%, rgba(0, 0, 0, 0.18) 62%, rgba(0, 0, 0, 0.3) 100%);
   border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-card-soft);
-  backdrop-filter: blur(10px);
+  box-shadow:
+    inset 0 1px 0 rgba(241, 210, 153, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 14px 34px rgba(0, 0, 0, 0.45);
 }
 
 .card-glow {
