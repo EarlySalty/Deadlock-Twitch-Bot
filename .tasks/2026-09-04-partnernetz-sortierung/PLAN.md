@@ -57,7 +57,7 @@ gesamte Datei bricht beim Import ab.
 
 - M1: fertig (roter Lauf oben, Test rot vor Code)
 - M2: fertig (istDeadlock, impactScore, gliederePartner in lib, tsc gruen, 4/5 gruen)
-- M3: offen
+- M3: fertig (Embeds nur Deadlock-live, zwei Ausklapplisten, Leerzustand, 35/35 gruen, tsc + Build gruen)
 - M4: offen
 
 ## Test-Ansatz
