@@ -152,27 +152,18 @@ function PartnerZeile({
           <span className="truncate text-sm font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
             {partner.displayName ?? partner.login}
           </span>
-          {partner.isLive ? <LiveDot /> : null}
+          {deadlockLive ? <LiveDot /> : null}
         </span>
         {deadlockLive ? (
           <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
             <Users size={11} />
             {partner.viewers} Zuschauer
           </span>
-        ) : (
-          <>
-            {partner.isLive && partner.game ? (
-              <span className="block text-[11px] text-[var(--color-text-secondary)]">
-                Live in {partner.game}
-              </span>
-            ) : null}
-            {kennzahlen.length > 0 ? (
-              <span className="block text-[11px] text-[var(--color-text-secondary)]">
-                {kennzahlen.join(", ")}
-              </span>
-            ) : null}
-          </>
-        )}
+        ) : kennzahlen.length > 0 ? (
+          <span className="block text-[11px] text-[var(--color-text-secondary)]">
+            {kennzahlen.join(", ")}
+          </span>
+        ) : null}
       </span>
       <ArrowUpRight
         size={15}
