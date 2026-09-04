@@ -29,13 +29,9 @@ pub struct OverviewMetricsRow {
 const GEISTER_FILTER: &str = "
               AND NOT (
                   COALESCE(s.peak_viewers, 0) = 0
-                  AND (CASE
-                          WHEN s.started_at IS NOT NULL AND s.ended_at IS NOT NULL
-                          THEN EXTRACT(EPOCH FROM (
-                              s.ended_at::text::TIMESTAMPTZ - s.started_at::text::TIMESTAMPTZ
-                          ))
-                          ELSE COALESCE(s.duration_seconds, 0)
-                      END) < 300
+                  AND EXTRACT(EPOCH FROM (
+                          s.ended_at::text::TIMESTAMPTZ - s.started_at::text::TIMESTAMPTZ
+                      )) < 300
               )";
 
 /// Holt aggregierte Metriken für einen Streamer im angegebenen Zeitraum.

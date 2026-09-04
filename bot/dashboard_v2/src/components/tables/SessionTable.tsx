@@ -53,7 +53,9 @@ export function SessionTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {displaySessions.map((session, index) => (
+            {displaySessions.map((session, index) => {
+              const holdPct = session.holdPct ?? 0;
+              return (
               <motion.tr
                 key={session.id}
                 initial={{ opacity: 0, x: -20 }}
@@ -75,12 +77,12 @@ export function SessionTable({
                       <div
                         className="h-full rounded-full transition-[width]"
                         style={{
-                          width: `${Math.min(session.holdPct, 100)}%`,
-                          backgroundColor: getRetentionColor(session.holdPct),
+                          width: `${Math.min(holdPct, 100)}%`,
+                          backgroundColor: getRetentionColor(holdPct),
                         }}
                       />
                     </div>
-                    <span className="text-xs">{session.holdPct.toFixed(0)}%</span>
+                    <span className="text-xs">{holdPct.toFixed(0)}%</span>
                   </div>
                 </td>
                 <td className="px-5 py-3">
@@ -102,7 +104,8 @@ export function SessionTable({
                   </button>
                 </td>
               </motion.tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
 

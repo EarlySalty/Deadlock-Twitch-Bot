@@ -464,6 +464,7 @@ impl SessionStore {
                        WHEN (game_name IS NULL OR game_name = '') AND $3 IS NOT NULL
                        THEN $3 ELSE game_name END
              WHERE id = $1
+               AND ((stream_title IS NULL OR stream_title = '') OR (game_name IS NULL OR game_name = ''))
             "#,
         )
         .bind(session_id)
