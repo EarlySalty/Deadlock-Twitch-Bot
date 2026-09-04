@@ -1,86 +1,168 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import test from "node:test";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const copyFile = `${root}/src/data/partnerPage.ts`;
-const pageFile = `${root}/src/components/partner/PartnerPage.tsx`;
-const cardFile = `${root}/src/components/partner/StreamCard.tsx`;
-const v2Page = `${root}/src/pages/StreamerNetworkPage.tsx`;
+const pageFile = `${root}/src/pages/StreamerNetworkPage.tsx`;
 const appFile = `${root}/src/App.tsx`;
 const htmlFile = `${root}/v2/index.html`;
+const cleanDir = `${root}/src/components/partner-clean`;
 
-const copy = readFileSync(copyFile, "utf8");
 const page = readFileSync(pageFile, "utf8");
-const card = readFileSync(cardFile, "utf8");
-const v2 = readFileSync(v2Page, "utf8");
 const app = readFileSync(appFile, "utf8");
 const html = readFileSync(htmlFile, "utf8");
 
-function exportedList(name) {
-  const match = copy.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`));
-  assert.ok(match, `${name} fehlt`);
-  return [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]);
+const EMPTY_STATE_TEXT =
+  "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.";
+
+const FORBIDDEN_SUBSTRINGS = [
+  "kostenlos verbinden",
+  "leistungen",
+  "wachstums-netzwerk",
+  "kanal-report",
+  "was du bekommst",
+  "drei schritte",
+  "module",
+  "dashboard mit demo-daten",
+  "demo-daten",
+  "alle funktionen",
+  "funktionen im vergleich",
+  "jetzt testen",
+  "pricing",
+  "tarif",
+  "saas",
+  "software",
+  "produkt",
+  "preismodell",
+  "preisliste",
+];
+
+const FORBIDDEN_WORDS = ["plan", "tool"];
+
+function cleanFiles() {
+  return readdirSync(cleanDir).filter((f) => f.endsWith(".tsx"));
 }
 
 test("die v1-Landing bleibt die bestehende Seite", () => {
   assert.match(app, /from '@\/components\/sections\/Hero'/);
-  assert.doesNotMatch(app, /PartnerPage/);
+  assert.doesNotMatch(app, /partner-clean/);
+  assert.doesNotMatch(app, /StreamerNetworkPage/);
 });
 
-test("v2 hängt die Partner-Seite ein", () => {
-  assert.match(v2, /PartnerPage/);
-});
-
-test("genau sechs Sektionen, in der Contract-Reihenfolge", () => {
-  const sections = exportedList("PARTNER_SECTIONS");
-  assert.deepEqual(sections, [
-    "hero",
-    "problem",
-    "bedeutung",
-    "partner",
-    "sicherheit",
-    "abschluss",
-  ]);
-  for (const id of sections) {
-    assert.match(page, new RegExp(`id="${id}"`));
+test("v2 rendert Partner-Block und Partner-Übersicht direkt unter dem Hero", () => {
+  const order = [
+    "<GlowOrb",
+    "<Navbar",
+    "<Hero",
+    "<PartnerPitch",
+    "<PartnerNetwork",
+    "<RaidExplainer",
+    "<BanFeed",
+    "<Stats",
+    "<Features",
+    "<ClipManager",
+    "<Community",
+    "<Security",
+    "<CTA",
+    "<Footer",
+  ];
+  let previous = -1;
+  for (const marker of order) {
+    const at = page.indexOf(marker);
+    assert.ok(at !== -1, `Baustein fehlt in der Komposition: ${marker}`);
+    assert.ok(at > previous, `Baustein steht nicht in Soll-Reihenfolge: ${marker}`);
+    previous = at;
   }
 });
 
-test("Hero-CTA bleibt der bestehende OAuth-Start", () => {
-  assert.match(page, /buildTwitchBotAuthUrl/);
-  assert.match(page, /DISCORD_INVITE_URL/);
-  assert.match(page, /TWITCH_SECURITY_URL/);
+test("die nummerierten Ablauf-Karten sind weg (StreamDay geloescht)", () => {
+  assert.equal(
+    existsSync(join(cleanDir, "StreamDay.tsx")),
+    false,
+    "StreamDay.tsx muss geloescht sein",
+  );
+  assert.doesNotMatch(page, /StreamDay/, "StreamDay wird noch importiert oder gerendert");
 });
 
-test("Live-Karten nutzen Vorschaubilder, keinen Twitch-Player", () => {
-  assert.match(card, /static-cdn\.jtvnw\.net\/previews-ttv/);
-  assert.doesNotMatch(card, /player\.twitch\.tv/);
-  assert.doesNotMatch(card, /<iframe/);
+test("keine Sektionsnummern 01/02/03 in der Partner-Copy", () => {
+  for (const f of cleanFiles()) {
+    const src = readFileSync(join(cleanDir, f), "utf8");
+    assert.doesNotMatch(
+      src,
+      /["'`]0[123]["'`]/,
+      `Sektionsnummer als Literal in ${f}`,
+    );
+  }
 });
 
-test("Title und Meta kommen aus der Copy-Datei", () => {
-  assert.match(html, /Deadlock Partner Netzwerk - Deutsche Deadlock Community/);
+test("v2 nutzt keine Network*- oder alten partner/-Bausteine mehr", () => {
+  assert.doesNotMatch(page, /components\/v2\//);
+  assert.doesNotMatch(page, /components\/partner\//);
+  assert.match(page, /components\/partner-clean\//);
+});
+
+test("Hero-CTA bleibt der bestehende OAuth-Start plus Discord", () => {
+  const hero = readFileSync(`${cleanDir}/Hero.tsx`, "utf8");
+  assert.match(hero, /buildTwitchBotAuthUrl/);
+  assert.match(hero, /DISCORD_INVITE_URL/);
+  assert.match(hero, /Jetzt Partner werden/);
+});
+
+test("Title und Meta bleiben Partner-Netzwerk mit noindex", () => {
   assert.match(
     html,
-    /Werde Partner der deutschen Deadlock Community\. Automatische Raids/,
+    /Deadlock Partner Netzwerk - Auto-Raid & Streamer Community \(Deutsch\)/,
   );
-  assert.doesNotMatch(html.toLowerCase(), /kostenlos verbinden/);
-  assert.doesNotMatch(html.toLowerCase(), /wachstums-netzwerk/);
+  assert.match(html, /noindex, nofollow/);
 });
 
-test("Verkaufsverbote stehen nicht in der sichtbaren Copy", () => {
-  const forbidden = exportedList("PARTNER_FORBIDDEN");
-  const block = copy.match(/export const PARTNER_COPY = \{([\s\S]*?)\} as const;/);
-  assert.ok(block, "PARTNER_COPY fehlt");
-  const visible = block[1].toLowerCase();
-
-  for (const word of forbidden) {
+test("kein SaaS-Vokabular in der sichtbaren Partner-Copy", () => {
+  const files = cleanFiles();
+  assert.ok(files.length >= 10, `partner-clean unerwartet leer: ${files.length}`);
+  const combined = files
+    .map((f) => readFileSync(join(cleanDir, f), "utf8"))
+    .join("\n");
+  const visible = combined.toLowerCase();
+  for (const word of FORBIDDEN_SUBSTRINGS) {
     assert.equal(
       visible.includes(word),
       false,
       `verbotenes Muster in der Copy: ${word}`,
     );
   }
+  for (const word of FORBIDDEN_WORDS) {
+    assert.doesNotMatch(
+      combined,
+      new RegExp(`\\b${word}\\b`, "i"),
+      `verbotenes Wort in der Copy: ${word}`,
+    );
+  }
+});
+
+test("PartnerNetwork zeigt echte Partner mit Twitch-Link und ehrlichem Leerzustand", () => {
+  const netFile = join(cleanDir, "PartnerNetwork.tsx");
+  assert.ok(existsSync(netFile), "PartnerNetwork.tsx fehlt");
+  const net = readFileSync(netFile, "utf8");
+  assert.match(net, /twitch\.tv\//, "kein Link auf das Twitch-Profil");
+  assert.match(net, /player\.twitch\.tv/, "kein Twitch-Live-Embed");
+  assert.match(net, /target="_blank"/, "Profil-Link oeffnet keinen neuen Tab");
+  assert.match(net, /rel="noopener/, "Profil-Link ohne noopener");
+  assert.ok(
+    net.includes(EMPTY_STATE_TEXT),
+    "ehrlicher Leerzustand-Text fehlt",
+  );
+  assert.doesNotMatch(
+    net,
+    /\blogin:\s*["'][A-Za-z0-9_]+["']/,
+    "hart codierte Partner-Logins gefunden",
+  );
+});
+
+test("PartnerPitch existiert als eigene Sektion", () => {
+  assert.ok(
+    existsSync(join(cleanDir, "PartnerPitch.tsx")),
+    "PartnerPitch.tsx fehlt",
+  );
 });
