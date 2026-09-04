@@ -403,6 +403,45 @@ const EN: Record<string, string> = {
   'Dieser Clip liegt schon im Pool.': 'This clip is already in the pool.',
   'Der Upload ist fehlgeschlagen.': 'The upload failed.',
   'Das hat nicht geklappt.': 'That did not work.',
+
+  // -- Dashboard-Assistent ------------------------------------------------
+  'Hilfe bekommen': 'Get help',
+  'Hilfe schließen': 'Close help',
+  'Hilfe im Dashboard': 'Help in the dashboard',
+  'Deine Hilfe': 'Your help',
+  'Fragen zum Bot und deinem Kanal': 'Questions about the bot and your channel',
+  'Chat schließen': 'Close chat',
+  'Quelle': 'Source',
+  'Antwort wird erstellt …': 'Generating answer …',
+  'Deine Frage …': 'Your question …',
+  'Deine Frage': 'Your question',
+  'Frage senden': 'Send question',
+  'Die Antwort konnte nicht geladen werden.': 'The answer could not be loaded.',
+  'Zu viele Fragen gerade. Probier es gleich noch einmal.':
+    'Too many questions right now. Try again in a moment.',
+  'Hi {name}! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.':
+    'Hi {name}! I am here to help you in the dashboard. Ask me anything about the bot, the partner network and your channel.',
+  'Hi! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.':
+    'Hi! I am here to help you in the dashboard. Ask me anything about the bot, the partner network and your channel.',
+  'Wie liefen meine letzten Streams?': 'How did my recent streams go?',
+  'Was macht der Bot für meinen Kanal?': 'What does the bot do for my channel?',
+  'Bin ich als Partner freigeschaltet?': 'Am I approved as a partner?',
+  'Ist mein Spam-Schutz an?': 'Is my spam protection on?',
+  'Wie schalte ich die Scam-Warnung ein?': 'How do I turn on the scam warning?',
+  'Welche Schutzfunktionen habe ich aktiviert?': 'Which protections have I enabled?',
+  'Wie richte ich OBS für den Uplink ein?': 'How do I set up OBS for the uplink?',
+  'Ist meine Uplink-Verbindung aktiv?': 'Is my uplink connection active?',
+  'Welche Plattformen sind mit meinem Kanal verbunden?':
+    'Which platforms are connected to my channel?',
+  'Wie plane ich meine Clips für Social Media?': 'How do I schedule my clips for social media?',
+  'Welche Plattformen kann ich anbinden?': 'Which platforms can I connect?',
+  'Wie oft werden meine Clips gepostet?': 'How often are my clips posted?',
+  'Wie viele Zuschauer hatte ich im Schnitt?': 'How many viewers did I have on average?',
+  'Wie haben sich meine Follower entwickelt?': 'How did my followers develop?',
+  'Wann laufen meine Streams am besten?': 'When do my streams perform best?',
+  'Was kann der Bot für mich tun?': 'What can the bot do for me?',
+  'Wie werde ich Partner?': 'How do I become a partner?',
+  'Wo bekomme ich Hilfe, wenn ich nicht weiterkomme?': 'Where do I get help when I am stuck?',
 };
 
 const TRANSLATIONS: Record<Language, Record<string, string>> = {

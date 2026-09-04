@@ -80,3 +80,4 @@ Stop-Regel: Headless-Chrome in der Sandbox stallt bekanntermaßen (SwiftShader);
 ## Verlauf
 
 - 2026-09-04: Contract, Research, Evidence, Plan angelegt (Orchestrator).
+- 2026-09-04, M4: verifiziert. Frontend-Widget gebaut (api/assistent.ts, components/assistent/{DashboardAssistent.tsx,vorschlaege.ts,assistent.css}, App.tsx-Einhängung im LanguageProvider, i18n-Einträge, tests/dashboardAssistent.test.ts, package.json). npm test 177/177 grün, npm run lint 0 Fehler, npm run build grün; Knopftext, assistent-knopf, dashboard/assistent/ask im gebauten Bundle nachgewiesen. Farben nur aus Design-Tokens (index.css @theme), keine ddc-design-tokens-Variablen verwendet, da diese nicht ins App-Bundle importiert werden. Kein Merge/Push/Deploy (nicht beauftragt).

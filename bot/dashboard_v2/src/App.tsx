@@ -21,6 +21,7 @@ import Pricing from '@/pages/Pricing';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
 import { LanguageProvider, useT } from '@/context/LanguageContext';
+import { DashboardAssistent } from '@/components/assistent/DashboardAssistent';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
@@ -435,6 +436,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </ErrorBoundary>
+        <DashboardAssistent />
       </LanguageProvider>
     </QueryClientProvider>
   );
