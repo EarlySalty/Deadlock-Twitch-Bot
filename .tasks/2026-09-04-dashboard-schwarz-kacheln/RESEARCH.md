@@ -1,6 +1,6 @@
 # Research: Schwarz und Kacheln der Streamer-Landingpage ins Dashboard übernehmen
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 

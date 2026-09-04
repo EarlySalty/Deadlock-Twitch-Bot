@@ -1,6 +1,6 @@
 # Plan: Schwarz und Kacheln der Landingpage ins Dashboard
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 contract: CONTRACT.md
 research: RESEARCH.md, EVIDENCE.md

@@ -1,6 +1,6 @@
 # Contract: Schwarz und Kacheln der Streamer-Landingpage ins Dashboard übernehmen
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 repo: Deadlock-Twitch-Bot
@@ -67,3 +67,6 @@ Das Streamer-Dashboard (alle Routen der gemeinsamen `DashboardShell`) sieht farb
 
 - 2026-09-04, Scope: bot/dashboard_v2/package.json nur scripts.test, Grund: expliziter Test-Runner, entschieden von Orchestrator (technisch, reversibel)
 
+- 2026-09-04, neu REQ-07: Sidebar bündig am linken Viewport-Rand (nur der Außenabstand der Shell bleibt), Shell-Rahmen nicht mehr zentriert und nicht auf 2200px gedeckelt, Hauptbereich füllt die restliche Breite; alt: mx-auto max-w-[2200px] -> neu: volle Breite; Grund: zentrierte, frei schwebende Sidebar wirkt unnatürlich, entschieden von User
+- 2026-09-04, neu REQ-08: Badge-Zeile oben rechts über dem Analyse-Kopf (AuthBadge in App.tsx mit Partner, Demo-Daten und Admin-Varianten) entfällt samt Definition, Demo-Hinweisbanner unter dem Kopf bleibt; alt: Badge-Zeile über dem Kopf -> neu: keine; Grund: Sidebar und erste Inhaltskarte sollen auf allen Routen gleich hoch beginnen, entschieden von User
+- 2026-09-04, Scope erweitert um bot/dashboard_v2/src/App.tsx (nur Badge-Zeile und AuthBadge in AnalyticsDashboard) und bot/dashboard_v2/tests/dashboardShell.test.ts (Rahmen-Assertion auf REQ-07 umstellen); Grund: REQ-07 und REQ-08, entschieden von User
