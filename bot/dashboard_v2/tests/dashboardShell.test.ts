@@ -54,7 +54,8 @@ test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
 
 test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Slot', () => {
   assert.match(SHELL, /internal-home-vibe/);
-  assert.match(SHELL, /max-w-\[2200px\]/);
+  assert.doesNotMatch(SHELL, /mx-auto/);
+  assert.doesNotMatch(SHELL, /max-w-/);
   assert.match(SHELL, /lg:grid-cols-\[220px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
@@ -138,4 +139,8 @@ test('DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus', 
     /DashboardSidebar/,
     'Der Zweig ohne Sidebar-Freigabe darf DashboardSidebar nicht mounten',
   );
+});
+
+test('App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf', () => {
+  assert.doesNotMatch(APP, /AuthBadge/);
 });
