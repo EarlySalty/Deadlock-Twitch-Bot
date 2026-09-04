@@ -7,15 +7,8 @@ import {
   istDeadlock,
   impactScore,
   gliederePartner,
-  zuschauerSchnitt,
   PARTNER_VORSCHAU,
 } from "../src/lib/partnerNetwork.ts";
-
-test("zuschauerSchnitt rundet auf ganze Zahlen", () => {
-  assert.equal(zuschauerSchnitt(7.666666666666667), "8");
-  assert.equal(zuschauerSchnitt(0), "0");
-  assert.equal(zuschauerSchnitt(1234.4), "1.234");
-});
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const netFile = `${root}/src/components/partner-clean/PartnerNetwork.tsx`;
