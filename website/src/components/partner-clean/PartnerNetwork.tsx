@@ -1,15 +1,26 @@
-import { motion, useReducedMotion } from "framer-motion";
-import { ArrowUpRight, Users } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ArrowUpRight, ChevronDown, Users } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { Avatar, LiveBadge } from "@/components/partner-clean/partnerShared";
 import {
   type NetworkStatus,
   type NetworkStreamer,
 } from "@/hooks/useNetworkStreamers";
-import { previewImageUrl, twitchParent, twitchUrl } from "@/lib/partnerNetwork";
+import {
+  gliederePartner,
+  previewImageUrl,
+  zuschauerSchnitt,
+  twitchParent,
+  twitchUrl,
+  PARTNER_VORSCHAU,
+} from "@/lib/partnerNetwork";
 
 const EMPTY_STATE_TEXT =
   "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.";
+
+const KEIN_DEADLOCK_TEXT =
+  "Gerade streamt kein Partner Deadlock. Schau später wieder rein.";
 
 function TwitchEmbed({ login }: { login: string }) {
   const src =
@@ -104,7 +115,28 @@ function LiveCard({
   );
 }
 
-function OfflineTile({ partner, index }: { partner: NetworkStreamer; index: number }) {
+function LiveDot() {
+  return (
+    <span className="v2-pulse h-2 w-2 shrink-0 rounded-full bg-[#eb0400]" />
+  );
+}
+
+function PartnerZeile({
+  partner,
+  deadlockLive,
+  index,
+}: {
+  partner: NetworkStreamer;
+  deadlockLive: boolean;
+  index: number;
+}) {
+  const kennzahlen: string[] = [];
+  if (partner.dlStreams30d > 0) {
+    kennzahlen.push(`${partner.dlStreams30d} Deadlock-Streams`);
+  }
+  if (partner.avgViewers30d > 0) {
+    kennzahlen.push(`Ø ${zuschauerSchnitt(partner.avgViewers30d)} Zuschauer`);
+  }
   return (
     <motion.a
       href={twitchUrl(partner.login)}
@@ -114,16 +146,24 @@ function OfflineTile({ partner, index }: { partner: NetworkStreamer; index: numb
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-40px" }}
       transition={{ duration: 0.35, delay: (index % 8) * 0.04 }}
-      className="group flex items-center gap-2.5 rounded-xl border border-[var(--color-border)] bg-black/20 px-3 py-2.5 no-underline opacity-80 transition-all hover:opacity-100 hover:border-[var(--color-border-hover)]"
+      className="group flex items-center gap-2.5 rounded-xl border border-[var(--color-border)] bg-black/20 px-3 py-2.5 no-underline transition-all hover:border-[var(--color-border-hover)]"
     >
       <Avatar login={partner.login} avatarUrl={partner.avatarUrl} size={38} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
-          {partner.displayName ?? partner.login}
+        <span className="flex items-center gap-2">
+          <span className="truncate text-sm font-semibold text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]">
+            {partner.displayName ?? partner.login}
+          </span>
+          {deadlockLive ? <LiveDot /> : null}
         </span>
-        {partner.dlStreams30d > 0 ? (
+        {deadlockLive ? (
+          <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
+            <Users size={11} />
+            {partner.viewers} Zuschauer
+          </span>
+        ) : kennzahlen.length > 0 ? (
           <span className="block text-[11px] text-[var(--color-text-secondary)]">
-            {partner.dlStreams30d} Deadlock-Streams in 30 Tagen
+            {kennzahlen.join(", ")}
           </span>
         ) : null}
       </span>
@@ -132,6 +172,106 @@ function OfflineTile({ partner, index }: { partner: NetworkStreamer; index: numb
         className="shrink-0 text-[var(--color-text-secondary)] transition-colors group-hover:text-[var(--color-primary)]"
       />
     </motion.a>
+  );
+}
+
+function Ausklappliste({
+  titel,
+  children,
+}: {
+  titel: string;
+  children: ReactNode;
+}) {
+  const reduce = useReducedMotion();
+  const [offen, setOffen] = useState(false);
+  return (
+    <div className="mt-8">
+      <button
+        type="button"
+        onClick={() => setOffen((v) => !v)}
+        aria-expanded={offen}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-4 py-3 text-left transition-colors hover:border-[var(--color-border-hover)]"
+      >
+        <span className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
+          {titel}
+        </span>
+        <ChevronDown
+          size={18}
+          className={`shrink-0 text-[var(--color-text-secondary)] transition-transform ${offen ? "rotate-180" : ""}`}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {offen ? (
+          <motion.div
+            key="inhalt"
+            initial={reduce ? false : { height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.3 }}
+            className="overflow-hidden"
+          >
+            <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
+              {children}
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
+  const reduce = useReducedMotion();
+  const [offen, setOffen] = useState(false);
+  const sichtbar = partner.slice(0, PARTNER_VORSCHAU);
+  const rest = partner.slice(PARTNER_VORSCHAU);
+  return (
+    <div className="mt-8">
+      <p className="mb-4 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
+        Alle {partner.length} Partner
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
+        {sichtbar.map((p, i) => (
+          <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+        ))}
+      </div>
+      {rest.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setOffen((v) => !v)}
+            aria-expanded={offen}
+            className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-4 py-3 text-left transition-colors hover:border-[var(--color-border-hover)]"
+          >
+            <span className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
+              {offen ? "Weniger anzeigen" : `${rest.length} weitere Partner anzeigen`}
+            </span>
+            <ChevronDown
+              size={18}
+              className={`shrink-0 text-[var(--color-text-secondary)] transition-transform ${offen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {offen ? (
+              <motion.div
+                key="rest"
+                initial={reduce ? false : { height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                transition={{ duration: reduce ? 0 : 0.3 }}
+                className="overflow-hidden"
+              >
+                <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
+                  {rest.map((p, i) => (
+                    <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+                  ))}
+                </div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -172,15 +312,11 @@ export function PartnerNetwork({
   status: NetworkStatus;
 }) {
   const reduce = useReducedMotion();
-
-  const live = streamers.filter((s) => s.isLive);
-  const offline = streamers.filter((s) => !s.isLive);
-  const embedded = live.slice(0, 3);
-  const previewed = live.slice(3);
+  const { embeds, weitereDeadlock, allePartner } = gliederePartner(streamers);
 
   return (
     <section id="partner" className="py-24">
-      <div className="max-w-7xl mx-auto px-6">
+      <div className="max-w-[1600px] mx-auto px-6">
         <ScrollReveal className="text-center">
           <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-3">
             Unsere Partner
@@ -209,30 +345,32 @@ export function PartnerNetwork({
             <EmptyState />
           ) : (
             <>
-              {live.length > 0 ? (
+              {embeds.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {embedded.map((p, i) => (
+                  {embeds.map((p, i) => (
                     <LiveCard key={p.login} partner={p} asPreview={Boolean(reduce)} index={i} />
                   ))}
-                  {previewed.map((p, i) => (
-                    <LiveCard key={p.login} partner={p} asPreview index={i + 3} />
-                  ))}
                 </div>
+              ) : (
+                <div className="panel-card rounded-2xl p-8 text-center max-w-xl mx-auto">
+                  <p className="text-[var(--color-text-secondary)] leading-relaxed">
+                    {KEIN_DEADLOCK_TEXT}
+                  </p>
+                </div>
+              )}
+
+              {weitereDeadlock.length > 0 ? (
+                <Ausklappliste
+                  titel={`${weitereDeadlock.length} weitere streamen gerade Deadlock`}
+                >
+                  {weitereDeadlock.map((p, i) => (
+                    <PartnerZeile key={p.login} partner={p} deadlockLive index={i} />
+                  ))}
+                </Ausklappliste>
               ) : null}
 
-              {offline.length > 0 ? (
-                <div className={live.length > 0 ? "mt-10" : ""}>
-                  {live.length > 0 ? (
-                    <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-text-secondary)] mb-5">
-                      Gerade offline
-                    </p>
-                  ) : null}
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {offline.map((p, i) => (
-                      <OfflineTile key={p.login} partner={p} index={i} />
-                    ))}
-                  </div>
-                </div>
+              {allePartner.length > 0 ? (
+                <AllePartnerBlock partner={allePartner} />
               ) : null}
             </>
           )}

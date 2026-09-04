@@ -24,7 +24,7 @@ export function StreamerNetworkPage() {
       <Navbar />
       <main>
         <Hero />
-        <PartnerPitch streamers={streamers} />
+        <PartnerPitch streamers={streamers} status={status} />
         <PartnerNetwork streamers={streamers} status={status} />
         <RaidExplainer />
         <BanFeed />

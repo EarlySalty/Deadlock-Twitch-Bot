@@ -6,7 +6,7 @@ import PricingHero from '../components/pricing/PricingHero';
 import PlanStufen from '../components/pricing/PlanStufen';
 import MySubscriptionCard from '../components/pricing/MySubscriptionCard';
 import BillingStatusBanner from '../components/pricing/BillingStatusBanner';
-import { PREVIEW_HOME_ROUTE, PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
+import { PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
 import { PricingTour } from '../components/onboarding/PricingTour';
 import { isActivePaidSubscription } from '../types/billing';
 
@@ -74,7 +74,7 @@ export default function Pricing() {
   const invoiceHref = data?.payment?.invoice_page_path ?? '/twitch/abbo/rechnungen';
 
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-10 py-10">
+    <>
       <PricingTour onComplete={() => {
         localStorage.removeItem('analytics-tour-dismissed');
         localStorage.setItem('analytics-tour-pending', '1');
@@ -149,21 +149,6 @@ export default function Pricing() {
         </div>
       </motion.div>
 
-      {/* Bottom CTA */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.4, delay: 0.6 }}
-        className="text-center mt-12 mb-8"
-      >
-        <p className="text-white/40 mb-4">Noch nicht überzeugt?</p>
-        <a
-          href={PREVIEW_HOME_ROUTE}
-          className="inline-flex items-center gap-2 text-[#00D9FF] hover:text-[#5CE7FF] font-medium transition-colors"
-        >
-          Zurück zum Dashboard
-        </a>
-      </motion.div>
-    </div>
+    </>
   );
 }
