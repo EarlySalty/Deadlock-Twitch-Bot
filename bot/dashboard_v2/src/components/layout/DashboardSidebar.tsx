@@ -82,6 +82,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     adminMode,
     adminModeMutation,
     canAccessAnalyticsDashboard,
+    profileReady,
   } = useDashboardProfile();
   const queryClient = useQueryClient();
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -140,10 +141,15 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
               onError={() => setAvatarFailed(true)}
               className="sidebar-avatar-glow h-10 w-10 shrink-0 rounded-full border border-border object-cover"
             />
-          ) : (
+          ) : profileReady ? (
             <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold">
               {displayName?.[0]?.toUpperCase() ?? '?'}
             </div>
+          ) : (
+            <div
+              aria-hidden
+              className="sidebar-avatar-skeleton h-10 w-10 shrink-0 animate-pulse rounded-full border border-border bg-white/5"
+            />
           )}
           <div data-tour-id="tour-plan" className="min-w-0">
             <div className="truncate text-sm font-semibold text-white">{displayName}</div>
