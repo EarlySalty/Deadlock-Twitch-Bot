@@ -17,10 +17,10 @@ const block = (css: string, selector: string): string => {
   return css.slice(open, close);
 };
 
-test('Kacheln tragen keine Nieten und keine Gusseisen-Streifen mehr', () => {
-  assert.doesNotMatch(INDEX, /\.panel-card::after/);
-  assert.doesNotMatch(block(INDEX, '.glass {'), /repeating-linear-gradient/);
-  assert.doesNotMatch(block(INDEX, '.panel-card {'), /repeating-linear-gradient/);
+test('die Karten tragen den alten Braun-Gold-Look mit Nieten und Streifen', () => {
+  assert.match(INDEX, /\.panel-card::after/);
+  assert.match(block(INDEX, '.glass {'), /repeating-linear-gradient/);
+  assert.match(block(INDEX, '.panel-card {'), /repeating-linear-gradient/);
 });
 
 test('die animierte Gold-Aura der Shell ist entfernt', () => {
