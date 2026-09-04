@@ -7,7 +7,8 @@ import test from "node:test";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pageFile = `${root}/src/pages/StreamerNetworkPage.tsx`;
 const appFile = `${root}/src/App.tsx`;
-const htmlFile = `${root}/v2/index.html`;
+const htmlFile = `${root}/index.html`;
+const v1HtmlFile = `${root}/v1/index.html`;
 const cleanDir = `${root}/src/components/partner-clean`;
 
 const page = readFileSync(pageFile, "utf8");
@@ -109,12 +110,30 @@ test("Hero-CTA bleibt der bestehende OAuth-Start plus Discord", () => {
   assert.match(hero, /Jetzt Partner werden/);
 });
 
-test("Title und Meta bleiben Partner-Netzwerk mit noindex", () => {
+test("index.html ist die indexierbare Partner-Landing", () => {
+  assert.match(html, /data-theme="v2"/);
+  assert.match(html, /\/src\/streamer-v2\.tsx/);
+  assert.match(html, /Deadlock Partner-Netzwerk/);
+  assert.match(html, /name="robots" content="index, follow/);
+  assert.doesNotMatch(html, /noindex/);
   assert.match(
     html,
-    /Deadlock Partner Netzwerk - Auto-Raid & Streamer Community \(Deutsch\)/,
+    /rel="canonical" href="https:\/\/deutsche-deadlock-community\.de\/streamer\/"/,
   );
-  assert.match(html, /noindex, nofollow/);
+});
+
+test("v1/index.html ist die alte Landing mit noindex", () => {
+  const v1 = readFileSync(v1HtmlFile, "utf8");
+  assert.match(v1, /\/src\/main\.tsx/);
+  assert.match(v1, /noindex, nofollow/);
+  assert.match(
+    v1,
+    /rel="canonical" href="https:\/\/deutsche-deadlock-community\.de\/streamer\/"/,
+  );
+});
+
+test("v2/index.html existiert nicht mehr", () => {
+  assert.equal(existsSync(join(root, "v2/index.html")), false);
 });
 
 test("kein SaaS-Vokabular in der sichtbaren Partner-Copy", () => {
