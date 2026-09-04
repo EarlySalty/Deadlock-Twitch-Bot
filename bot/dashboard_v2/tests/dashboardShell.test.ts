@@ -53,3 +53,20 @@ test('der Shell-Profil-Hook gatet den Fetch gegen Admin-Sitzungen ohne eigenes K
   assert.match(HOOK, /canRequestInternalHome/);
   assert.match(HOOK, /enabled:\s*canRequestInternalHome/);
 });
+
+test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
+  const analytics = APP.slice(
+    APP.indexOf('function AnalyticsDashboard'),
+    APP.indexOf('export default function App'),
+  );
+  assert.doesNotMatch(
+    analytics,
+    /internal-home-vibe/,
+    'AnalyticsDashboard darf den Shell-Hintergrund nicht selbst setzen',
+  );
+  assert.doesNotMatch(
+    analytics,
+    /max-w-\[/,
+    'AnalyticsDashboard darf keine eigene Gesamt-Maximalbreite setzen',
+  );
+});
