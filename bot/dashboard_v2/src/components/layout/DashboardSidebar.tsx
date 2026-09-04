@@ -130,7 +130,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   ];
 
   return (
-    <Rise as="aside" className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4">
+    <Rise as="aside" className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-0">
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           {shownAvatar ? (
