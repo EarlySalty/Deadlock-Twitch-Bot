@@ -4,6 +4,7 @@ import { Play, Clock, Users, TrendingUp, ChevronDown, ChevronUp, MessageCircle, 
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { fetchOverview, fetchSessionDetail } from '@/api/analytics';
+import { getHoldTone } from '@/utils/formatters';
 import type { DashboardOverview, StreamSession, TimeRange } from '@/types/analytics';
 
 interface SessionsProps {
@@ -130,7 +131,9 @@ interface SessionCardProps {
 function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: SessionCardProps) {
   const durationHours = (session.duration / 3600).toFixed(1);
   const holdPct = session.holdPct ?? 0;
-  const holdColor = holdPct >= 60 ? 'text-success' : holdPct >= 40 ? 'text-warning' : 'text-error';
+  const holdTone = getHoldTone(holdPct);
+  const holdColor =
+    holdTone === 'good' ? 'text-success' : holdTone === 'ok' ? 'text-warning' : 'text-error';
 
   return (
     <motion.div

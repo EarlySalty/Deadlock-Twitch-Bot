@@ -29,6 +29,7 @@ pub struct OverviewMetricsRow {
 pub const GEISTER_FILTER: &str = "
               AND NOT (
                   COALESCE(s.peak_viewers, 0) = 0
+                  AND COALESCE(s.start_viewers, 0) = 0
                   AND EXTRACT(EPOCH FROM (
                           s.ended_at::text::TIMESTAMPTZ - s.started_at::text::TIMESTAMPTZ
                       )) < 300

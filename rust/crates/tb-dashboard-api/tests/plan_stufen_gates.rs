@@ -34,7 +34,7 @@ const DDL: &[&str] = &[
      status TEXT, current_period_end TEXT, updated_at TEXT)",
     "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
      started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, \
-     peak_viewers INTEGER, retention_10m DOUBLE PRECISION, retention_5m REAL, \
+     peak_viewers INTEGER, start_viewers INTEGER, retention_10m DOUBLE PRECISION, retention_5m REAL, \
      unique_chatters INTEGER, follower_delta INTEGER, followers_start INTEGER, \
      followers_end INTEGER, stream_title TEXT, tags TEXT)",
     "CREATE TABLE twitch_session_viewers (session_id BIGINT, ts_utc TIMESTAMPTZ, \

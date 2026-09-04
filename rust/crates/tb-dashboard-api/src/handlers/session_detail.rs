@@ -97,10 +97,10 @@ pub async fn session_detail_handler(
 
     // ── Last-Stream-Clamp (Paywall gegen Historie-Leak) ──────────────────────
     // Ohne das konsolidierte `analytics`-Flag darf ein Partner nur die zuletzt
-    // BEENDETE eigene Session abrufen — exakt dieselbe Definition wie overview.rs
-    // (MAX(started_at) der beendeten Sessions). Localhost/Admin überspringen den
-    // Clamp. Die IDOR-Grenze (Owner-Query unten) bleibt unangetastet: das Flag
-    // weitet NUR das Zeitfenster, nie den Zugriff auf fremde Sessions.
+    // BEENDETE eigene Session abrufen, exakt dieselbe Definition wie overview.rs.
+    // Localhost/Admin überspringen den Clamp. Die IDOR-Grenze (Owner-Query unten)
+    // bleibt unangetastet: das Flag weitet NUR das Zeitfenster, nie den Zugriff
+    // auf fremde Sessions.
     if let Some(resp) = letzte_session_klemme(&pool, &auth, session_id).await {
         return resp;
     }

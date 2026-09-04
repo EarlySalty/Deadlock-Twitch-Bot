@@ -207,8 +207,6 @@ pub async fn freies_fenster_tage(pool: &PgPool, streamer: &str) -> i64 {
     tage.clamp(FREE_VERLAUF_TAGE, FREE_FENSTER_MAX_TAGE)
 }
 
-/// Die zuletzt **beendete** Session eines Streamers als `(id, started_at)`.
-///
 /// Die eine Definition von "letzter Stream" fuer die ganze Paywall. Sie haengt
 /// an zwei Stellen: am Gratis-Fenster ([`freies_fenster_tage`]) und an der
 /// Klemme der Session-Detailansicht (`session_detail::letzte_session_klemme`
@@ -235,12 +233,17 @@ pub async fn letzte_beendete_session(
          LIMIT 1",
         crate::overview::GEISTER_FILTER
     );
-    sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(&sql)
-    .bind(&login)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
+    match sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(&sql)
+        .bind(&login)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::warn!(%error, login, "letzte beendete Session nicht ladbar");
+            None
+        }
+    }
 }
 
 /// Fenster der Stufe fuer diesen Streamer und die Nachfrage nach `angefragt`

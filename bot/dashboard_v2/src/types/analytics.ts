@@ -20,7 +20,7 @@ export interface StreamSession {
   followersStart: number;
   followersEnd: number;
   title: string;
-  holdPct: number;
+  holdPct?: number;
 }
 
 export interface DailyStats {

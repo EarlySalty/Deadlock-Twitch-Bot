@@ -104,3 +104,20 @@ Befehl: `cargo test -p tb-dashboard-api -p tb-analytics -p tb-monitoring --no-fa
 - Einziger roter Test: Baseline `queue_lease_idempotenz_und_state_sind_atomar` (42P01, vorbestehend, siehe oben).
 - Frontend: `npx tsc --noEmit` exit 0, `npm run build` exit 0.
 - Clippy der drei Crates exit 0; die 2 Warnungen "this assertion has a constant value" liegen in `self_explainer.rs` (unangetastet, vorbestehend), keine neuen Warnungen aus dem Diff.
+
+## Runde 3 (Merge-Gate-Funde)
+
+### Geister-Definition gilt fuer Anker, Existenz-Check, Liste, Summary
+`GEISTER_FILTER` (`overview.rs`) ist die eine Definition, wann eine beendete Session ein Geist ist: kein Peak-Zuschauer, kein Start-Zuschauer und unter 300 s (`COALESCE(peak_viewers,0)=0 AND COALESCE(start_viewers,0)=0 AND Dauer < 300 s`). Dasselbe Fragment haengt an allen vier Lesepfaden: am Anker der letzten Session (`stufe::letzte_beendete_session`, davon abgeleitet `last_session::latest_ended_session` und die Session-Detail-Klemme), am Existenz-Check (`overview_session_count`), an der Sessions-Liste (`overview_sessions`) und an der Summary (`overview_metrics`). Damit sehen Anker, Existenz-Check, Liste und Summary exakt dieselbe Menge an Sessions; ein Geist ist nirgends Anker und zaehlt nirgends mit. Deshalb behaupten die Doku-Kommentare an `latest_ended_session`, `session_detail` und `letzte_beendete_session` keine Gleichheit mehr zu `MAX(started_at)` der beendeten Sessions (der juengste beendete Eintrag kann ein Geist sein).
+
+### Fund 2 (start_viewers)
+`GEISTER_FILTER` verlangt jetzt zusaetzlich `COALESCE(s.start_viewers, 0) = 0`. Ein Geist ist nur noch, wer nie einen Zuschauer hatte (Peak 0 und Start 0) und unter 300 s lief. Die Geister-Fixtures in T2 (`geistersession_faellt_raus_und_holdpct_gesetzt`) und im Runde-2-Test (`juengste_geistersession_ist_kein_anker_und_zaehlt_nicht`) setzen keine `start_viewers`, die Spalte ist dort NULL (COALESCE 0), der schaerfere Filter greift unveraendert.
+
+### Fund 3 (Query-Fehler sichtbar)
+`stufe::letzte_beendete_session` loggt bei einem Query-Fehler `tracing::warn!(%error, login, "letzte beendete Session nicht ladbar")` und gibt `None` zurueck, statt den Fehler still mit `.ok().flatten()` zu schlucken. `tracing` ist bereits Crate-Dependency.
+
+### Funde 4 und 5 (Frontend)
+`StreamSession.holdPct` ist optional (`holdPct?: number`); `fetchSessionDetail` liefert es nicht, die `?? 0`-Stellen bleiben. `formatters.ts` hat neu `getHoldTone(holdPct): 'good' | 'ok' | 'bad'` mit den Schwellen 60/40 als einziger Quelle; `getHoldColor` leitet die Farbe daraus ab. `Sessions.tsx` mappt `getHoldTone` auf die vollstaendigen Tailwind-Literale `text-success` / `text-warning` / `text-error`.
+
+### Fund 6 (Demo-Fixture)
+Die vier Demo-Sessions landen jetzt bei holdPct 66.1 / 65.7 / 48.2 / 47.0 (zwei ueber 60, zwei zwischen 40 und 60), berechnet aus angepassten `peakViewers` (620 / 540 / 780 / 740) bei unveraenderten `avgViewers`. Kein Test prueft die konkreten Demo-Zahlen (`demo`-Tests pruefen nur `sessions` als Array und `summary.avgViewers` als Zahl).

@@ -150,8 +150,19 @@ export function getRetentionColor(retention: number): string {
   return SCORE_BAD;
 }
 
+export function getHoldTone(holdPct: number): 'good' | 'ok' | 'bad' {
+  if (holdPct >= 60) return 'good';
+  if (holdPct >= 40) return 'ok';
+  return 'bad';
+}
+
 export function getHoldColor(holdPct: number): string {
-  if (holdPct >= 60) return SCORE_GOOD;
-  if (holdPct >= 40) return SCORE_OK;
-  return SCORE_BAD;
+  switch (getHoldTone(holdPct)) {
+    case 'good':
+      return SCORE_GOOD;
+    case 'ok':
+      return SCORE_OK;
+    default:
+      return SCORE_BAD;
+  }
 }

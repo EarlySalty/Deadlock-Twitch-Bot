@@ -4,8 +4,7 @@
 //! als auch der Paywall-Clamp in `session_detail` müssen exakt dieselbe Session
 //! als „die letzte" verstehen — sonst driften Lesefenster und Zugriffsgrenze
 //! auseinander. Diese eine Quelle garantiert die Gleichheit by construction:
-//! Overview projiziert auf `started_at` (== `MAX(started_at)`), session_detail
-//! auf `id`.
+//! Overview projiziert auf `started_at`, session_detail auf `id`.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -18,14 +17,11 @@ pub struct LastEndedSession {
 
 /// Liefert die zuletzt beendete Session für `login` (case-insensitiv).
 ///
-/// - Nur `ended_at IS NOT NULL` zählt; laufende Sessions werden ignoriert.
 /// - `login` leer (`""`) → globale letzte beendete Session (Wildcard; nur der
 ///   privilegierte Overview-Pfad nutzt das, normale Partner haben stets einen
 ///   konkreten Login).
 /// - `None`, wenn keine beendete Session existiert.
 ///
-/// `started_at` der zurückgegebenen Zeile ist identisch zu `MAX(started_at)` der
-/// beendeten Sessions; `id` ist die zugehörige Session.
 /// Die Abfrage selbst steht in [`tb_analytics::stufe::letzte_beendete_session`]:
 /// dort haengt auch das Gratis-Fenster dran, und "letzter Stream" darf in der
 /// Paywall nur einmal definiert sein.
@@ -69,7 +65,8 @@ mod tests {
                 streamer_login TEXT NOT NULL, \
                 started_at TIMESTAMPTZ NOT NULL, \
                 ended_at TIMESTAMPTZ, \
-                peak_viewers INTEGER)",
+                peak_viewers INTEGER, \
+                start_viewers INTEGER)",
         )
         .execute(pool)
         .await
