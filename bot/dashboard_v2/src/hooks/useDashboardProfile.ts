@@ -7,11 +7,16 @@ export function useDashboardProfile() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const queryClient = useQueryClient();
 
+  const ownLogin = authStatus?.twitchLogin?.trim() || '';
+  const isLocalhostAdmin = Boolean(authStatus?.isLocalhost);
+  const isAdminWithoutOwnLogin = Boolean(authStatus?.isAdmin) && !ownLogin;
+  const canRequestInternalHome = !loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;
+
   const { data: profile, isLoading: loadingProfile } = useQuery({
     queryKey: ['internal-home', null],
     queryFn: () => fetchInternalHome(null),
     staleTime: 5 * 60 * 1000,
-    enabled: !loadingAuth,
+    enabled: canRequestInternalHome,
   });
 
   const adminModeMutation = useMutation({
@@ -29,8 +34,9 @@ export function useDashboardProfile() {
     },
   });
 
-  const twitchLogin = profile?.twitchLogin?.trim() || '';
-  const displayName = profile?.displayName?.trim() || twitchLogin || 'Creator';
+  const twitchLogin = profile?.twitchLogin?.trim() || ownLogin;
+  const displayName =
+    profile?.displayName?.trim() || twitchLogin || (canRequestInternalHome ? 'Creator' : 'Admin');
   const avatarUrl = profile?.avatarUrl?.trim() || null;
   const planName = authStatus?.plan?.planName || 'Free';
   const adminEligible = Boolean(authStatus?.adminEligible);

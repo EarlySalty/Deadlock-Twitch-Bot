@@ -9,6 +9,7 @@ const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
 
 const APP = read('App.tsx');
 const SHELL = read('components/layout/DashboardShell.tsx');
+const HOOK = read('hooks/useDashboardProfile.ts');
 
 const PAGES = [
   'pages/InternalHomeLanding.tsx',
@@ -46,4 +47,9 @@ test('die Shell traegt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
   assert.match(SHELL, /lg:grid-cols-\[220px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
+});
+
+test('der Shell-Profil-Hook gatet den Fetch gegen Admin-Sitzungen ohne eigenes Konto', () => {
+  assert.match(HOOK, /canRequestInternalHome/);
+  assert.match(HOOK, /enabled:\s*canRequestInternalHome/);
 });
