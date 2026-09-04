@@ -47,7 +47,7 @@ export function SessionTable({
               <th className="px-5 py-3">Dauer</th>
               <th className="px-5 py-3">Avg</th>
               <th className="px-5 py-3">Peak</th>
-              <th className="px-5 py-3">Retention</th>
+              <th className="px-5 py-3">Bindung</th>
               <th className="px-5 py-3">Chat</th>
               <th className="px-5 py-3"></th>
             </tr>
@@ -75,12 +75,12 @@ export function SessionTable({
                       <div
                         className="h-full rounded-full transition-[width]"
                         style={{
-                          width: `${Math.min(session.retention10m, 100)}%`,
-                          backgroundColor: getRetentionColor(session.retention10m),
+                          width: `${Math.min(session.holdPct, 100)}%`,
+                          backgroundColor: getRetentionColor(session.holdPct),
                         }}
                       />
                     </div>
-                    <span className="text-xs">{session.retention10m.toFixed(0)}%</span>
+                    <span className="text-xs">{session.holdPct.toFixed(0)}%</span>
                   </div>
                 </td>
                 <td className="px-5 py-3">
