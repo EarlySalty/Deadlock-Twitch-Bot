@@ -68,6 +68,8 @@ Validierung: `/home/nathanael/.cargo/bin/cargo test -p tb-chat promo_pitch::`
 
 Stop-Regel: Kein `pub`-Machen der outreach-Filter, kein Import aus tb-engagement, keine Änderung an `outreach_shadow.rs`. Filter sind Kopie.
 
+STATUS M2 erledigt 2026-09-05: promo_pitch.rs angelegt (Prompts, PitchOccasion/PitchResponse, Parser, harte Filter inkl. contains_hard_dash/400-Zeichen/Join, PitchJudge+FireworksPitchJudge, ChannelPromo/Targeted-Textpfade mit reinen finalize-Helfern). lib.rs eingetragen und re-exportiert. `cargo test -p tb-chat promo_pitch::` = 18 passed, 0 failed.
+
 ---
 
 ## M3 - Migration `twitch_promo_pitch_log`, DDL im Test, Log-Helfer, sqlx-Offline

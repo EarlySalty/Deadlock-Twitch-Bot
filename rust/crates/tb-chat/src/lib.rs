@@ -40,6 +40,7 @@ pub mod mention_scoring;
 pub mod moderation;
 pub mod moderation_settings;
 pub mod pipeline;
+pub mod promo_pitch;
 pub mod promos;
 pub mod safe_list;
 pub mod scam_pitch;
@@ -97,6 +98,11 @@ pub use moderation::{
 pub use pipeline::{
     ChatPipeline, ChatPipelineParts, CrewRadarAlert, ModAlerter, PgHelixMentionResolver, ReviewLog,
     SCAM_PITCH_TIMEOUT_REASON,
+};
+pub use promo_pitch::{
+    build_channel_promo_text, build_targeted_pitch_text, parse_pitch_response, pitch_filter_reject,
+    ChannelPromoContext, FireworksPitchJudge, PitchJudge, PitchJudgeInput, PitchOccasion,
+    PitchRejectReason, PitchResponse, TargetedPitchContext,
 };
 pub use promos::{
     promo_invite_fallback, NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine,
