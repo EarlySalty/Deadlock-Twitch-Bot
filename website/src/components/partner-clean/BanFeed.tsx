@@ -89,7 +89,7 @@ export function BanFeed() {
                 </span>
               </div>
 
-              <div className="relative max-h-[400px] lg:max-h-[468px] overflow-hidden">
+              <div className="relative max-h-[400px] lg:max-h-[448px] overflow-hidden">
                 <div className="space-y-1">
                   <AnimatePresence initial={false}>
                     {bans.map((ban) => (
