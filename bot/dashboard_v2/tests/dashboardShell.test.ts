@@ -140,3 +140,7 @@ test('DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus', 
     'Der Zweig ohne Sidebar-Freigabe darf DashboardSidebar nicht mounten',
   );
 });
+
+test('App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf', () => {
+  assert.doesNotMatch(APP, /AuthBadge/);
+});

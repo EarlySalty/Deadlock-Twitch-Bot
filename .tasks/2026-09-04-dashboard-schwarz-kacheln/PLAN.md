@@ -48,3 +48,14 @@ research: RESEARCH.md, EVIDENCE.md
 ## Befunde ausserhalb des Scopes
 
 - bot/dashboard_v2/src/components/socialmedia/LayoutEditor.tsx:243 und :245 tragen harte warme Diagonal-Streifen (`repeating-linear-gradient(45deg, rgba(197,160,89,0.18) ...)`), die die Quell- und Ziel-Rahmen im Social-Layout-Editor braun-gestreift wirken lassen. Liegt ausserhalb des erlaubten Bereichs (weder Shell noch Kartenklassen), daher nicht geaendert.
+
+## Runde 2 (REQ-07, REQ-08)
+
+status: fertig
+
+- REQ-07: DashboardShell.tsx:20 Wurzelcontainer von `relative mx-auto max-w-[2200px]` auf `relative` (volle Breite, kein mx-auto, kein max-w-); Demo-Zweig ohne Sidebar nutzt denselben Container. Test dashboardShell.test.ts:57 auf das neue Soll umgestellt (doesNotMatch mx-auto und max-w-).
+  - TESTNACHWEIS REQ-07 Sabotage: max-w-[2200px] wieder in die Shell -> Test "die Shell traegt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Slot" not ok 3 (Ist: match auf max-w-, Soll: doesNotMatch), Sabotage zurueckgenommen -> ok 3.
+- REQ-08: App.tsx Badge-Zeile `<div className="flex justify-end"><AuthBadge /></div>` und die AuthBadge-Definition entfernt; ungenutzte lucide-Imports (Sparkles, Shield, ShieldAlert, ShieldCheck, Wifi) und die dadurch ungenutzten Destructuring-Bindungen loadingAuth und authError entfernt. i18n-Schluessel t('Partner') und t('Demo-Daten') bleiben (weiter genutzt in SocialMediaAdmin.tsx und Header.tsx), Dictionary unangetastet. Demo-Hinweisbanner bleibt.
+  - TESTNACHWEIS REQ-08: neuer Test "App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf" (doesNotMatch AuthBadge). Vor dem Fix not ok 9 (Ist: AuthBadge in App.tsx vorhanden, Soll: keins), nach dem Fix ok, npm test 184 pass 0 fail 0 skipped.
+- Validierung: npm test 184 pass/0 fail/0 skipped, tsc exit=0, vite build exit=0.
+- Sichtpruefung: screens/dashboard.png, screens/analyse.png (`/`), screens/uplink.png ersetzt (Port 4176). Sidebar bündig am linken Rand nach dem Außenabstand; Sidebar-Oberkante und erste Inhaltskarte auf gleicher Höhe (dashboard, uplink); auf `/` kein AuthBadge mehr über dem Kopf, Demo-Banner bleibt.
