@@ -18,6 +18,7 @@ import { UplinkPage } from '@/pages/Uplink';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
 import { LanguageProvider, useT } from '@/context/LanguageContext';
@@ -428,7 +429,9 @@ export default function App() {
           ) : isUplinkRoute ? (
             <UplinkPage />
           ) : isInternalHomeRoute ? (
-            <InternalHome />
+            <DashboardShell activeRoute="home">
+              <InternalHome />
+            </DashboardShell>
           ) : isAnalyticsRoute ? (
             <AnalyticsDashboard />
           ) : (

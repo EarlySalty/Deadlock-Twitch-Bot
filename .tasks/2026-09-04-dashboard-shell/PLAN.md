@@ -51,10 +51,15 @@ research: RESEARCH.md, EVIDENCE.md
 - `python3 /home/nathanael/Documents/claude-config/bin/diff-policy.py /home/nathanael/.worktrees/tb-dashboard-shell origin/main`
 - Commits klein pro Milestone, Commit-Texte ohne Gedankenstriche, Status in PLAN.md nachführen.
 
+## Abweichungen
+
+- E2/E3, Partner-Auswahl (Admin): Der Admin-Streamer-Wechsler treibt ausschliesslich die Fachinhalt-Query von Home (`['internal-home', streamerOverride]`, InternalHomeLanding.tsx). Die Shell laedt ihr Profil laut E3 ohne Override (`['internal-home', null]`, useDashboardProfile.ts). Wuerde der Wechsler in die geteilte Shell-Sidebar wandern, muesste sein `selectedStreamer`-State plus Auto-Set- und URL-Sync-Effekt entweder auf 6 fremde Routen wirken (keine davon nutzt ihn) oder ueber einen neuen Cross-Route-Context an Home zurueckgereicht werden. REQ-02 zaehlt den Partner-Wechsler nicht zu den Sidebar-Inhalten (nur Profilkopf, Main, Tools, Admin-Schalter, Hilfe). Entscheidung: Wechsler bleibt in Home und rendert als Admin-Karte oben im Main-Slot; die Shell-Sidebar erfuellt REQ-02 vollstaendig. Kein Cross-Route-State, keine Wirkung auf INV-01-Fachinhalt der anderen Seiten.
+- E3, Profilkopf-Identitaet (Admin): Da die Shell mit `null`-Override laedt, zeigt der Sidebar-Profilkopf im Admin-Modus das eigene Konto statt des ausgewaehlten Partners (vorher: ausgewaehlter Partner). Fuer Nicht-Admins unveraendert (Override ist dort ohnehin null). Von E3 so vorgezeichnet, REQ-02 legt die Identitaet nicht fest.
+
 ## Status
 
 - M1: fertig. Baseline 171 pass, 0 fail (/tmp/tb-dash-test-baseline.log); tsc und vite build gruen.
-- M2: offen
+- M2: fertig. Shell/Sidebar/Hook neu, Home gibt Rahmen und Sidebar ab, App wickelt Home in die Shell. 171 pass, 0 fail (/tmp/tb-dash-test-m2.log); tsc und vite build gruen.
 - M3: offen
 - M4: offen
 - M5: offen

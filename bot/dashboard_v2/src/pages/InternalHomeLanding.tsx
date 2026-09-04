@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -9,36 +8,22 @@ import {
 import { setAdminMode } from '@/api/auth';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import {
-  PREVIEW_CHANGELOG_ROUTE,
-  PREVIEW_HOME_ROUTE,
-  PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
-  PREVIEW_UPLINK_ROUTE,
-  PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
 import { formatNumber, formatDuration } from '@/utils/formatters';
 import {
   ArrowRight,
   BarChart3,
-  BookOpen,
-  FileText,
-  Film,
   Heart,
-  Home,
   Loader2,
   MessageSquare,
-  MonitorPlay,
-  Radio,
-  RotateCcw,
-  Settings,
   ShieldCheck,
-  Sparkles,
   TrendingUp,
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { WelcomeTour, resetWelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
 
 function MiniStat({
@@ -95,178 +80,101 @@ function MiniStat({
   );
 }
 
-function BackgroundBlobs() {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      <div className="absolute -top-32 right-[-8rem] h-[28rem] w-[28rem] rounded-full bg-primary/22 blur-3xl" />
-      <div className="absolute top-[24%] -left-28 h-[22rem] w-[22rem] rounded-full bg-accent/24 blur-3xl" />
-      <div className="absolute bottom-[-8rem] left-[34%] h-[24rem] w-[24rem] rounded-full bg-success/20 blur-3xl" />
-    </div>
-  );
-}
-
 function SkeletonBlock({ className = '' }: { className?: string }) {
   return <div className={`animate-pulse rounded-lg bg-white/6 ${className}`} />;
 }
 
 function DashboardSkeleton() {
   return (
-    <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <BackgroundBlobs />
-      <div className="relative mx-auto max-w-[2200px]">
-        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="panel-card card-glow self-start rounded-2xl p-4">
-            <div className="flex items-center gap-3">
-              <SkeletonBlock className="h-10 w-10 shrink-0 rounded-full" />
-              <div className="min-w-0 flex-1 space-y-2">
-                <SkeletonBlock className="h-3 w-3/4" />
-                <SkeletonBlock className="h-2.5 w-1/2" />
-              </div>
-            </div>
-            <div className="mt-4 border-t border-border" />
-            <div className="mt-4 space-y-2">
-              <SkeletonBlock className="h-2.5 w-12" />
-              <div className="space-y-1.5">
-                {[0, 1, 2, 3].map((i) => (
-                  <SkeletonBlock key={`nav-main-${i}`} className="h-9 w-full" />
-                ))}
-              </div>
-            </div>
-            <div className="mt-4 space-y-2">
-              <SkeletonBlock className="h-2.5 w-12" />
-              <div className="space-y-1.5">
-                {[0, 1, 2].map((i) => (
-                  <SkeletonBlock key={`nav-tools-${i}`} className="h-9 w-full" />
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          <main className="space-y-4 md:space-y-5">
-            <section className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-2.5">
-                <SkeletonBlock className="h-3 w-40" />
-                <SkeletonBlock className="h-8 w-64" />
-                <SkeletonBlock className="h-3 w-48" />
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <SkeletonBlock className="h-10 w-32" />
-                <SkeletonBlock className="h-10 w-44" />
-              </div>
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-3">
-              <div className="panel-card card-glow card-glow-soft rounded-2xl p-5">
-                <div className="mb-5 flex items-center gap-3">
-                  <SkeletonBlock className="h-9 w-9 rounded-xl" />
-                  <div className="flex-1 space-y-2">
-                    <SkeletonBlock className="h-2.5 w-24" />
-                    <SkeletonBlock className="h-4 w-36" />
-                  </div>
-                </div>
-                <div className="flex flex-col items-center">
-                  <SkeletonBlock className="h-24 w-24 rounded-full" />
-                </div>
-                <div className="mt-5 space-y-3">
-                  {[0, 1, 2, 3].map((i) => (
-                    <div key={`hs-bar-${i}`} className="flex items-center gap-3">
-                      <SkeletonBlock className="h-8 w-8 rounded-lg" />
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <SkeletonBlock className="h-3 w-full" />
-                        <SkeletonBlock className="h-1.5 w-full" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="panel-card card-glow rounded-2xl p-5 lg:col-span-2">
-                <SkeletonBlock className="h-3 w-28" />
-                <SkeletonBlock className="mt-2 h-6 w-72" />
-                <SkeletonBlock className="mt-2 h-3 w-48" />
-                <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {[0, 1, 2, 3].map((i) => (
-                    <div key={`ls-stat-${i}`} className="rounded-xl border border-border bg-background/50 p-3">
-                      <SkeletonBlock className="mb-2 h-7 w-7 rounded-lg" />
-                      <SkeletonBlock className="h-2.5 w-16" />
-                      <SkeletonBlock className="mt-2 h-5 w-12" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={`week-kpi-${i}`} className="panel-card card-glow rounded-xl p-4">
-                  <div className="mb-3 flex items-center gap-2.5">
-                    <SkeletonBlock className="h-8 w-8 rounded-lg" />
-                    <SkeletonBlock className="h-2.5 w-20" />
-                  </div>
-                  <SkeletonBlock className="h-7 w-16" />
-                  <SkeletonBlock className="mt-2 h-3 w-28" />
-                </div>
-              ))}
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-2">
-              {[0, 1].map((i) => (
-                <div key={`bottom-${i}`} className="panel-card card-glow rounded-2xl p-5 md:p-6">
-                  <SkeletonBlock className="h-3 w-20" />
-                  <SkeletonBlock className="mt-2 h-6 w-44" />
-                  <div className="mt-4 space-y-2.5">
-                    {[0, 1, 2, 3].map((j) => (
-                      <div key={`row-${i}-${j}`} className="rounded-xl border border-border bg-background/55 p-3.5">
-                        <div className="flex items-center gap-2">
-                          <SkeletonBlock className="h-5 w-24 rounded-full" />
-                          <SkeletonBlock className="h-5 w-20 rounded-full" />
-                          <SkeletonBlock className="h-5 w-14 rounded-full" />
-                        </div>
-                        <SkeletonBlock className="mt-2 h-3 w-3/4" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </section>
-          </main>
+    <>
+      <section className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between">
+        <div className="space-y-2.5">
+          <SkeletonBlock className="h-3 w-40" />
+          <SkeletonBlock className="h-8 w-64" />
+          <SkeletonBlock className="h-3 w-48" />
         </div>
-      </div>
-    </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <SkeletonBlock className="h-10 w-32" />
+          <SkeletonBlock className="h-10 w-44" />
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <div className="panel-card card-glow card-glow-soft rounded-2xl p-5">
+          <div className="mb-5 flex items-center gap-3">
+            <SkeletonBlock className="h-9 w-9 rounded-xl" />
+            <div className="flex-1 space-y-2">
+              <SkeletonBlock className="h-2.5 w-24" />
+              <SkeletonBlock className="h-4 w-36" />
+            </div>
+          </div>
+          <div className="flex flex-col items-center">
+            <SkeletonBlock className="h-24 w-24 rounded-full" />
+          </div>
+          <div className="mt-5 space-y-3">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={`hs-bar-${i}`} className="flex items-center gap-3">
+                <SkeletonBlock className="h-8 w-8 rounded-lg" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <SkeletonBlock className="h-3 w-full" />
+                  <SkeletonBlock className="h-1.5 w-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel-card card-glow rounded-2xl p-5 lg:col-span-2">
+          <SkeletonBlock className="h-3 w-28" />
+          <SkeletonBlock className="mt-2 h-6 w-72" />
+          <SkeletonBlock className="mt-2 h-3 w-48" />
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={`ls-stat-${i}`} className="rounded-xl border border-border bg-background/50 p-3">
+                <SkeletonBlock className="mb-2 h-7 w-7 rounded-lg" />
+                <SkeletonBlock className="h-2.5 w-16" />
+                <SkeletonBlock className="mt-2 h-5 w-12" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={`week-kpi-${i}`} className="panel-card card-glow rounded-xl p-4">
+            <div className="mb-3 flex items-center gap-2.5">
+              <SkeletonBlock className="h-8 w-8 rounded-lg" />
+              <SkeletonBlock className="h-2.5 w-20" />
+            </div>
+            <SkeletonBlock className="h-7 w-16" />
+            <SkeletonBlock className="mt-2 h-3 w-28" />
+          </div>
+        ))}
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        {[0, 1].map((i) => (
+          <div key={`bottom-${i}`} className="panel-card card-glow rounded-2xl p-5 md:p-6">
+            <SkeletonBlock className="h-3 w-20" />
+            <SkeletonBlock className="mt-2 h-6 w-44" />
+            <div className="mt-4 space-y-2.5">
+              {[0, 1, 2, 3].map((j) => (
+                <div key={`row-${i}-${j}`} className="rounded-xl border border-border bg-background/55 p-3.5">
+                  <div className="flex items-center gap-2">
+                    <SkeletonBlock className="h-5 w-24 rounded-full" />
+                    <SkeletonBlock className="h-5 w-20 rounded-full" />
+                    <SkeletonBlock className="h-5 w-14 rounded-full" />
+                  </div>
+                  <SkeletonBlock className="mt-2 h-3 w-3/4" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </section>
+    </>
   );
-}
-
-function SidebarLink({
-  href,
-  icon: Icon,
-  label,
-  active = false,
-}: {
-  href: string;
-  icon: LucideIcon;
-  label: string;
-  active?: boolean;
-}) {
-  const activeClasses =
-    'border border-primary/25 bg-primary/10 text-primary lg:rounded-l-none lg:border-y-0 lg:border-r-0 lg:border-t-0 lg:border-l-2 lg:border-primary lg:pl-2.5';
-  const inactiveClasses = 'border border-transparent text-text-secondary hover:bg-white/5 hover:text-white';
-
-  return (
-    <a
-      href={href}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap ${active ? activeClasses : inactiveClasses}`}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span>{label}</span>
-    </a>
-  );
-}
-
-interface SidebarNavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  active?: boolean;
 }
 
 function initialInternalHomeStreamer(): string | null {
@@ -342,9 +250,6 @@ export function InternalHomeLanding() {
   const [selectedStreamer, setSelectedStreamer] = useState<string | null>(
     initialInternalHomeStreamer
   );
-  // Laedt das Twitch-CDN-Bild nicht (geloescht, geblockt, veraltete URL), faellt der
-  // Avatar auf die Initiale zurueck statt ein leeres Kaestchen zu zeigen.
-  const [avatarFailed, setAvatarFailed] = useState(false);
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
 
   const partnerStreamers = useMemo(
@@ -379,17 +284,10 @@ export function InternalHomeLanding() {
     enabled: canRequestInternalHome,
   });
 
-  const planName = authStatus?.plan?.planName || 'Free';
-
   const queryClient = useQueryClient();
-  const adminEligible = Boolean(authStatus?.adminEligible);
   const adminMode = Boolean(authStatus?.adminMode);
   const adminModeMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
-      // Der alte Home-Query-Key darf nach dem Cookie-Wechsel nicht noch einmal
-      // im neuen Sicherheitskontext laufen. Besonders beim Aktivieren wäre
-      // ['internal-home', null] sonst ein Admin-Request ohne Streamer und würde
-      // mit 401 zur Login-Seite navigieren.
       await queryClient.cancelQueries({ queryKey: ['internal-home'] });
       const result = await setAdminMode(
         enabled,
@@ -449,44 +347,39 @@ export function InternalHomeLanding() {
       !loadingAuth && isAdminView && !loadingStreamers && partnerStreamers.length > 0;
 
     return (
-      <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-        <BackgroundBlobs />
-        <div className="relative mx-auto max-w-[2200px]">
-          <div className="panel-card rounded-2xl p-6 md:p-8">
-            {noPartnersAtAll ? (
-              <div className="space-y-2">
-                <h2 className="text-xl font-bold text-white">Kein Partner auswaehlbar</h2>
-                <p className="text-sm text-text-secondary">
-                  In der Admin-Ansicht werden nur aktive Partner-Profile angezeigt.
-                </p>
-              </div>
-            ) : needsAdminPick ? (
-              <div className="space-y-3">
-                <h2 className="text-xl font-bold text-white">Partner auswaehlen</h2>
-                <p className="text-sm text-text-secondary">
-                  Waehle einen Partner, dessen Dashboard du ansehen moechtest.
-                </p>
-                <select
-                  value={normalizedSelectedStreamer || ''}
-                  onChange={(event) => setSelectedStreamer(event.target.value || null)}
-                  className="w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
-                >
-                  <option value="">— Partner waehlen —</option>
-                  {partnerStreamers.map((channel) => (
-                    <option key={channel.login} value={channel.login}>
-                      {channel.login}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3 text-text-secondary">
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                <span>Admin-Profil wird vorbereitet ...</span>
-              </div>
-            )}
+      <div className="panel-card rounded-2xl p-6 md:p-8">
+        {noPartnersAtAll ? (
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-white">Kein Partner auswaehlbar</h2>
+            <p className="text-sm text-text-secondary">
+              In der Admin-Ansicht werden nur aktive Partner-Profile angezeigt.
+            </p>
           </div>
-        </div>
+        ) : needsAdminPick ? (
+          <div className="space-y-3">
+            <h2 className="text-xl font-bold text-white">Partner auswaehlen</h2>
+            <p className="text-sm text-text-secondary">
+              Waehle einen Partner, dessen Dashboard du ansehen moechtest.
+            </p>
+            <select
+              value={normalizedSelectedStreamer || ''}
+              onChange={(event) => setSelectedStreamer(event.target.value || null)}
+              className="w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
+            >
+              <option value="">— Partner waehlen —</option>
+              {partnerStreamers.map((channel) => (
+                <option key={channel.login} value={channel.login}>
+                  {channel.login}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-text-secondary">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <span>Admin-Profil wird vorbereitet ...</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -499,21 +392,16 @@ export function InternalHomeLanding() {
     const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
 
     return (
-      <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-        <BackgroundBlobs />
-        <div className="relative mx-auto max-w-[2200px]">
-          <div className="panel-card rounded-2xl p-6 md:p-8">
-            <h2 className="text-xl font-bold text-white">Startseite nicht verfuegbar</h2>
-            <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
-            <button
-              onClick={() => void refetch()}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
-            >
-              <ArrowRight className="h-4 w-4" />
-              Erneut laden
-            </button>
-          </div>
-        </div>
+      <div className="panel-card rounded-2xl p-6 md:p-8">
+        <h2 className="text-xl font-bold text-white">Startseite nicht verfuegbar</h2>
+        <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
+        <button
+          onClick={() => void refetch()}
+          className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
+        >
+          <ArrowRight className="h-4 w-4" />
+          Erneut laden
+        </button>
       </div>
     );
   }
@@ -521,7 +409,6 @@ export function InternalHomeLanding() {
   const home = data ?? {};
   const twitchLogin = home.twitchLogin?.trim() || '';
   const displayName = home.displayName?.trim() || twitchLogin || 'Creator';
-  const avatarUrl = avatarFailed ? null : home.avatarUrl?.trim() || null;
   const canAccessAnalyticsDashboard = Boolean(
     authStatus?.canAccessAnalyticsDashboard ?? authStatus?.access?.analytics ?? true
   );
@@ -545,20 +432,6 @@ export function InternalHomeLanding() {
   };
 
   const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
-  const mainNavItems: SidebarNavItem[] = [
-    { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: true },
-    ...(canAccessAnalyticsDashboard
-      ? [{ href: analyticsTabHref('overview'), label: 'Analyse', icon: BarChart3 }]
-      : []),
-    { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
-    { href: PREVIEW_UPLINK_ROUTE, label: 'Uplink', icon: Radio },
-  ];
-  const toolNavItems: SidebarNavItem[] = [
-    { href: PREVIEW_VERWALTUNG_ROUTE, label: 'Verwaltung', icon: Settings },
-    { href: PREVIEW_OVERLAY_ROUTE, label: 'Stream-Overlay', icon: MonitorPlay },
-    { href: PREVIEW_PRICING_ROUTE, label: `Plan: ${planName}`, icon: Sparkles },
-    { href: PREVIEW_CHANGELOG_ROUTE, label: 'Changelog', icon: FileText },
-  ];
   const scoreColorClass =
     score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
   const gaugeStrokeClass =
@@ -591,7 +464,7 @@ export function InternalHomeLanding() {
   ] as const;
 
   return (
-    <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
+    <>
       <WelcomeTour
         completionLabel="Zur Abo-Seite"
         onComplete={() => {
@@ -600,186 +473,43 @@ export function InternalHomeLanding() {
           window.location.href = PREVIEW_PRICING_ROUTE;
         }}
       />
-      <BackgroundBlobs />
 
-      <div className="relative mx-auto max-w-[2200px]">
-        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_340px] 2xl:grid-cols-[240px_minmax(0,1fr)_420px]">
-          <Rise
-            as="aside"
-            className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4"
-          >
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                {avatarUrl ? (
-                  <img
-                    src={avatarUrl}
-                    alt=""
-                    onError={() => setAvatarFailed(true)}
-                    className="sidebar-avatar-glow h-10 w-10 shrink-0 rounded-full border border-border object-cover"
-                  />
+      <div className="grid gap-4 md:gap-5 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="min-w-0 space-y-4 md:space-y-5">
+          {isAdminView ? (
+            <Rise as="section" className="panel-card card-glow rounded-2xl p-4">
+              <label
+                className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary"
+                htmlFor="internal-home-streamer-switch"
+              >
+                Partner
+              </label>
+              <select
+                id="internal-home-streamer-switch"
+                value={normalizedSelectedStreamer || ''}
+                onChange={(event) => setSelectedStreamer(event.target.value || null)}
+                disabled={loadingStreamers || partnerStreamers.length === 0}
+                className="mt-2 w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {partnerStreamers.length === 0 ? (
+                  <option value="">Keine Partner</option>
                 ) : (
-                  <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold">
-                    {displayName?.[0]?.toUpperCase() ?? '?'}
-                  </div>
+                  partnerStreamers.map((channel) => (
+                    <option key={channel.login} value={channel.login}>
+                      {channel.login}
+                    </option>
+                  ))
                 )}
-                <div data-tour-id="tour-plan" className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-white">{displayName}</div>
-                  <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-                    {planName}
-                  </div>
-                </div>
-              </div>
-
-              <div className="border-t border-border" />
-
-              <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                  Main
-                </div>
-                <nav
-                  data-tour-id="tour-nav"
-                  className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0"
-                >
-                  {mainNavItems.map((item, index) => (
-                    <motion.div
-                      key={item.href}
-                      initial={{ opacity: 0, x: -6 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.22, delay: Math.min(0.05 + index * 0.04, 0.24) }}
-                    >
-                      <SidebarLink
-                        href={item.href}
-                        icon={item.icon}
-                        label={item.label}
-                        active={item.active}
-                      />
-                    </motion.div>
-                  ))}
-                </nav>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                  Tools
-                </div>
-                <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
-                  {toolNavItems.map((item, index) => (
-                    <motion.div
-                      key={item.href}
-                      initial={{ opacity: 0, x: -6 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.22, delay: Math.min(0.1 + index * 0.04, 0.24) }}
-                    >
-                      <SidebarLink
-                        href={item.href}
-                        icon={item.icon}
-                        label={item.label}
-                      />
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-
-              {adminEligible ? (
-                <>
-                  <div className="border-t border-border" />
-                  <div className="space-y-2">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                      Admin
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => adminModeMutation.mutate(!adminMode)}
-                      disabled={adminModeMutation.isPending}
-                      aria-pressed={adminMode}
-                      className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                        adminMode
-                          ? 'border-warning/40 bg-warning/10 text-warning hover:border-warning/60'
-                          : 'border-border bg-background/60 text-text-secondary hover:border-border-hover hover:text-white'
-                      }`}
-                    >
-                      {adminModeMutation.isPending ? (
-                        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                      ) : (
-                        <ShieldCheck className="h-4 w-4 shrink-0" />
-                      )}
-                      {adminMode ? 'Admin-Modus beenden' : 'Admin-Modus aktivieren'}
-                    </button>
-                    <p className="text-[11px] leading-snug text-text-secondary">
-                      {adminMode
-                        ? 'Voller Zugriff aktiv — nicht die echte Nutzer-Ansicht.'
-                        : 'Du siehst das Dashboard wie ein normaler Nutzer.'}
-                    </p>
-                  </div>
-                </>
-              ) : null}
-
-              {isAdminView ? (
-                <>
-                  <div className="border-t border-border" />
-                  <div className="space-y-2">
-                    <label
-                      className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary"
-                      htmlFor="internal-home-streamer-switch"
-                    >
-                      Partner
-                    </label>
-                    <select
-                      id="internal-home-streamer-switch"
-                      value={normalizedSelectedStreamer || ''}
-                      onChange={(event) => setSelectedStreamer(event.target.value || null)}
-                      disabled={loadingStreamers || partnerStreamers.length === 0}
-                      className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {partnerStreamers.length === 0 ? (
-                        <option value="">Keine Partner</option>
-                      ) : (
-                        partnerStreamers.map((channel) => (
-                          <option key={channel.login} value={channel.login}>
-                            {channel.login}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                  </div>
-                </>
-              ) : null}
-
-              <div className="border-t border-border" />
-              <div data-tour-id="tour-help" className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                  Hilfe
-                </div>
-                <a
-                  href="/twitch/faq"
-                  className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
-                >
-                  <BookOpen className="h-4 w-4" />
-                  FAQ &amp; Hilfe
-                </a>
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetWelcomeTour();
-                    window.location.reload();
-                  }}
-                  className="flex w-full items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                  Tour neu starten
-                </button>
-              </div>
-            </div>
-          </Rise>
-
-          <main className="space-y-4 md:space-y-5">
+              </select>
+            </Rise>
+          ) : null}
             {adminMode ? (
               <Rise
                 className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3"
               >
                 <div className="flex items-center gap-2 text-sm font-medium text-warning">
                   <ShieldCheck className="h-4 w-4 shrink-0" />
-                  Admin-Modus aktiv — du siehst alle Inhalte entsperrt, nicht die echte Nutzer-Ansicht.
+                  Admin-Modus aktiv, du siehst alle Inhalte entsperrt, nicht die echte Nutzer-Ansicht.
                 </div>
                 <button
                   type="button"
@@ -1070,14 +800,14 @@ export function InternalHomeLanding() {
               lastStream={lastStream}
               delay={0.1}
             />
-          </main>
+        </div>
 
-          <Rise
-            step={{ seconds: 0.16 }}
-            as="aside"
-            id="changelog"
-            className="panel-card card-glow self-start rounded-2xl p-5 md:p-6 lg:col-start-2 xl:col-start-3 xl:row-start-1"
-          >
+        <Rise
+          step={{ seconds: 0.16 }}
+          as="aside"
+          id="changelog"
+          className="panel-card card-glow self-start rounded-2xl p-5 md:p-6"
+        >
             <div className="mb-4">
               <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
                 Updates
@@ -1120,9 +850,8 @@ export function InternalHomeLanding() {
                 })}
               </div>
             )}
-          </Rise>
-        </div>
+        </Rise>
       </div>
-    </div>
+    </>
   );
 }
