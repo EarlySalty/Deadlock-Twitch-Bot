@@ -297,14 +297,8 @@ function AnalyticsDashboard() {
   };
 
   return (
-    <div className="min-h-screen relative px-3 py-4 md:px-7 md:py-8">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-28 right-[-7rem] h-[25rem] w-[25rem] rounded-full bg-primary/12 blur-3xl" />
-        <div className="absolute top-[28%] -left-24 h-[20rem] w-[20rem] rounded-full bg-accent/14 blur-3xl" />
-      </div>
-      <div className="relative max-w-[1700px] mx-auto">
-        {/* Auth Status Badge */}
-        <div className="flex justify-end mb-4">
+    <DashboardShell activeRoute="analyse">
+        <div className="flex justify-end">
           <AuthBadge />
         </div>
 
@@ -391,9 +385,7 @@ function AnalyticsDashboard() {
             />
           )}
         </PlanProvider>
-
-      </div>
-    </div>
+    </DashboardShell>
   );
 }
 
@@ -419,7 +411,9 @@ export default function App() {
       <LanguageProvider>
         <ErrorBoundary>
           {isSocialMediaAdminRoute ? (
-            <SocialMediaAdminDashboard />
+            <DashboardShell activeRoute="social">
+              <SocialMediaAdminDashboard />
+            </DashboardShell>
           ) : isVerwaltungRoute ? (
             <DashboardShell activeRoute="verwaltung">
               <VerwaltungPage />
@@ -429,7 +423,9 @@ export default function App() {
               <OverlayBuilderPage />
             </DashboardShell>
           ) : isPricingRoute ? (
-            <Pricing />
+            <DashboardShell activeRoute="pricing">
+              <Pricing />
+            </DashboardShell>
           ) : isUplinkRoute ? (
             <DashboardShell activeRoute="uplink">
               <UplinkPage />

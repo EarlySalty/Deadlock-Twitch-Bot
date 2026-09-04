@@ -55,12 +55,13 @@ research: RESEARCH.md, EVIDENCE.md
 
 - E2/E3, Partner-Auswahl (Admin): Der Admin-Streamer-Wechsler treibt ausschliesslich die Fachinhalt-Query von Home (`['internal-home', streamerOverride]`, InternalHomeLanding.tsx). Die Shell laedt ihr Profil laut E3 ohne Override (`['internal-home', null]`, useDashboardProfile.ts). Wuerde der Wechsler in die geteilte Shell-Sidebar wandern, muesste sein `selectedStreamer`-State plus Auto-Set- und URL-Sync-Effekt entweder auf 6 fremde Routen wirken (keine davon nutzt ihn) oder ueber einen neuen Cross-Route-Context an Home zurueckgereicht werden. REQ-02 zaehlt den Partner-Wechsler nicht zu den Sidebar-Inhalten (nur Profilkopf, Main, Tools, Admin-Schalter, Hilfe). Entscheidung: Wechsler bleibt in Home und rendert als Admin-Karte oben im Main-Slot; die Shell-Sidebar erfuellt REQ-02 vollstaendig. Kein Cross-Route-State, keine Wirkung auf INV-01-Fachinhalt der anderen Seiten.
 - E3, Profilkopf-Identitaet (Admin): Da die Shell mit `null`-Override laedt, zeigt der Sidebar-Profilkopf im Admin-Modus das eigene Konto statt des ausgewaehlten Partners (vorher: ausgewaehlter Partner). Fuer Nicht-Admins unveraendert (Override ist dort ohnehin null). Von E3 so vorgezeichnet, REQ-02 legt die Identitaet nicht fest.
+- E6, Pricing-Kopf: Pricing behaelt seinen bestehenden `PricingHero` (zentrierter Marketing-Hero mit eigenem h1) als Seitenkopf, statt zusaetzlich eine `panel-card`-Kopfkarte nach E6 davorzusetzen. Ein zweiter Kopf ueber dem Hero wuerde die Seite doppeln, und der Hero ist Fachinhalt (INV-01), der nicht umgebaut werden soll. REQ-03 (gleicher Rahmen, Sidebar, Breite, Hintergrund) ist voll erfuellt; die redundante `max-w-7xl`-Eigenbreite und der Zurueck-Link sind raus.
 
 ## Status
 
 - M1: fertig. Baseline 171 pass, 0 fail (/tmp/tb-dash-test-baseline.log); tsc und vite build gruen.
 - M2: fertig. Shell/Sidebar/Hook neu, Home gibt Rahmen und Sidebar ab, App wickelt Home in die Shell. 171 pass, 0 fail (/tmp/tb-dash-test-m2.log); tsc und vite build gruen.
 - M3: fertig. Uplink, Verwaltung, Overlay geben Rahmen und Sidebar-Kopie ab; App wickelt sie in die Shell (activeRoute). Wicklung liegt in App.tsx (nicht in den Seiten), damit E9 sie prueft. 171 pass, 0 fail (/tmp/tb-dash-test-m3.log); tsc und vite build gruen.
-- M4: offen
-- M5: offen
-- M6: offen
+- M4: fertig. Analyse (AnalyticsDashboard), Social Media und Pricing in die Shell; Analyse behaelt Header/TabNavigation/PlanProvider, Social bekommt E6-Kopf plus AuthBadge als Aktion, Pricing behaelt PricingHero (Abweichung). Neuer Test tests/dashboardShell.test.ts in package.json scripts.test. 174 pass, 0 fail (/tmp/tb-dash-test-m4.log); tsc und vite build gruen. Rot-Gegenprobe (Pricing-Route ohne Shell): 1 fail statt 0 (/tmp/tb-dash-sabotage.log), Sabotage zurueckgenommen.
+- M5: uebersprungen (Hauptsession).
+- M6: siehe Abschluss.
