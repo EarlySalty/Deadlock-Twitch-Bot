@@ -226,14 +226,16 @@ pub async fn letzte_beendete_session(
     login: &str,
 ) -> Option<(i64, chrono::DateTime<chrono::Utc>)> {
     let login = login.trim().to_lowercase();
-    sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(
+    let sql = format!(
         "SELECT s.id, s.started_at \
          FROM twitch_stream_sessions s \
          WHERE s.ended_at IS NOT NULL AND s.started_at IS NOT NULL \
-           AND ($1 = '' OR LOWER(s.streamer_login) = $1) \
+           AND ($1 = '' OR LOWER(s.streamer_login) = $1){} \
          ORDER BY s.started_at DESC \
          LIMIT 1",
-    )
+        crate::overview::GEISTER_FILTER
+    );
+    sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(&sql)
     .bind(&login)
     .fetch_optional(pool)
     .await

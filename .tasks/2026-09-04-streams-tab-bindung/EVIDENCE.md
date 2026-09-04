@@ -75,3 +75,32 @@ Befehl: `cargo test --no-fail-fast -p tb-analytics -p tb-monitoring -p tb-dashbo
 Einziger roter Test ist die genannte Baseline.
 
 TESTNACHWEIS[TW-1]: 1825 passed, 2 ignored, 1 failed (Baseline ad_manager) | Rot-Gegenprobe: T1 Ist Some("") statt Some("Ranked Grind Titel"); T2 Ist len 2 statt 1
+
+## Roter Lauf Runde 2
+
+Neuer Regressionstest fuer die Merge-Gate-Funde 1 bis 3 (Anker und Existenz-Check sehen Geistersessions nicht mehr): `overview::tests::juengste_geistersession_ist_kein_anker_und_zaehlt_nicht`. Fixture: echte Session (id 1, peak 10, 30 min, 2026-05-01) plus juengere Geistersession (id 2, peak 0, 60 s, 2026-06-01) fuer denselben Streamer. `letzte_beendete_session` (stufe.rs) soll die echte Session liefern; `overview_session_count` mit `since` = started_at der Geistersession minus 1 s soll 0 liefern.
+
+Befehl: `cargo test -p tb-analytics --lib overview::tests::juengste_geistersession_ist_kein_anker_und_zaehlt_nicht -- --exact --nocapture` (Env: `SQLX_OFFLINE=true`, `TB_TEST_REQUIRE_DB=1`, `TB_TEST_DATABASE_URL=...:33093`).
+```
+thread 'overview::tests::juengste_geistersession_ist_kein_anker_und_zaehlt_nicht' panicked at crates/tb-analytics/src/overview.rs:1150:9:
+assertion `left == right` failed: juengste beendete Session ist Geistersession, Anker bleibt die echte
+  left: 2
+ right: 1
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 460 filtered out
+```
+Ursache: `letzte_beendete_session` nahm `MAX(started_at)` ohne Geister-Kriterium (Fund 2), also die juengere Geistersession (id 2) statt der echten (id 1). Der `overview_session_count`-Teil war ebenfalls ungefiltert (Fund 3); der Anker-Assert schlaegt zuerst zu.
+
+### Fix Runde 2
+- `GEISTER_FILTER` in `overview.rs` auf `pub` gehoben.
+- `overview_session_count` (`overview.rs`) und `letzte_beendete_session` (`stufe.rs`) setzen `GEISTER_FILTER` in ihre Query ein (Alias `s`, `ended_at IS NOT NULL` gilt schon). `latest_ended_session` in `handlers/last_session.rs` delegiert an `letzte_beendete_session` und erbt den Filter; die Testfixture dort bekam die Spalte `peak_viewers`, damit das Fragment aufloest (Sessions dort > 300 s, also keine Geister).
+- Frontend Fund 4: `getHoldColor(holdPct)` (Schwellen 60/40, Konstanten `SCORE_GOOD`/`SCORE_OK`/`SCORE_BAD` wie `getRetentionColor`) in `formatters.ts`; `SessionTable.tsx` nutzt sie fuer den Balken statt `getRetentionColor`. `Sessions.tsx` behaelt seine Tailwind-Klassen (60/40).
+
+## Gruener Lauf Runde 2
+
+Befehl: `cargo test -p tb-dashboard-api -p tb-analytics -p tb-monitoring --no-fail-fast` (Env wie oben).
+- tb-analytics lib: 461 passed, 0 failed (enthaelt T2 und den neuen Anker-Test).
+- tb-dashboard-api lib: 1114 passed, 0 failed, 1 ignored; plan_stufen_gates 12; public_streamer_comparison 6 (1 ignored).
+- tb-monitoring lib 89; write_core 15 (T1); weitere Integrationssuiten 0 failed.
+- Einziger roter Test: Baseline `queue_lease_idempotenz_und_state_sind_atomar` (42P01, vorbestehend, siehe oben).
+- Frontend: `npx tsc --noEmit` exit 0, `npm run build` exit 0.
+- Clippy der drei Crates exit 0; die 2 Warnungen "this assertion has a constant value" liegen in `self_explainer.rs` (unangetastet, vorbestehend), keine neuen Warnungen aus dem Diff.

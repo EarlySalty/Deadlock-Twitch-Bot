@@ -26,7 +26,7 @@ pub struct OverviewMetricsRow {
     pub session_count: Option<i64>,
 }
 
-const GEISTER_FILTER: &str = "
+pub const GEISTER_FILTER: &str = "
               AND NOT (
                   COALESCE(s.peak_viewers, 0) = 0
                   AND EXTRACT(EPOCH FROM (
@@ -120,15 +120,16 @@ pub async fn overview_session_count(
     since: &str,
     streamer_login: Option<&str>,
 ) -> Result<i64, sqlx::Error> {
-    let count: i64 = sqlx::query_scalar(
+    let sql = format!(
         r#"
         SELECT COUNT(*)::BIGINT
         FROM twitch_stream_sessions s
         WHERE s.started_at::text::TIMESTAMPTZ >= $1::text::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
-          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
-        "#,
-    )
+          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2)){GEISTER_FILTER}
+        "#
+    );
+    let count: i64 = sqlx::query_scalar(&sql)
     .bind(since)
     .bind(streamer_login)
     .fetch_one(pool)
@@ -1117,6 +1118,49 @@ mod tests {
             .unwrap()
             .expect("Sollte Metriken liefern");
         assert_eq!(metrics.session_count, Some(1), "Geister zaehlt nicht mit");
+    }
+
+    #[tokio::test]
+    async fn juengste_geistersession_ist_kein_anker_und_zaehlt_nicht() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_geister_anker").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers, duration_seconds)
+            VALUES
+                (1, 'streamer_x', TIMESTAMPTZ '2026-05-01 12:00:00+00',
+                 TIMESTAMPTZ '2026-05-01 12:30:00+00', 6.0, 10, 1800),
+                (2, 'streamer_x', TIMESTAMPTZ '2026-06-01 12:00:00+00',
+                 TIMESTAMPTZ '2026-06-01 12:01:00+00', 0.0, 0, 60)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let anker = crate::stufe::letzte_beendete_session(&pool, "streamer_x")
+            .await
+            .expect("beendete Session vorhanden");
+        assert_eq!(
+            anker.0, 1,
+            "juengste beendete Session ist Geistersession, Anker bleibt die echte"
+        );
+
+        let since = "2026-06-01T11:59:59+00:00";
+        let count = overview_session_count(&pool, since, Some("streamer_x"))
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "im Fenster liegt nur die Geistersession, Existenz-Check meldet leer"
+        );
     }
 
     #[tokio::test]

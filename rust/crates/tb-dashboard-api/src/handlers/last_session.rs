@@ -68,7 +68,8 @@ mod tests {
                 id BIGINT PRIMARY KEY, \
                 streamer_login TEXT NOT NULL, \
                 started_at TIMESTAMPTZ NOT NULL, \
-                ended_at TIMESTAMPTZ)",
+                ended_at TIMESTAMPTZ, \
+                peak_viewers INTEGER)",
         )
         .execute(pool)
         .await

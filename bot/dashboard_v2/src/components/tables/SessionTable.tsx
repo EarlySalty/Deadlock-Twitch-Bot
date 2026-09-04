@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { ExternalLink } from 'lucide-react';
 import type { StreamSession } from '@/types/analytics';
-import { formatNumber, formatDurationShort, formatDate, formatTime, getRetentionColor } from '@/utils/formatters';
+import { formatNumber, formatDurationShort, formatDate, formatTime, getHoldColor } from '@/utils/formatters';
 
 interface SessionTableProps {
   sessions: StreamSession[];
@@ -78,7 +78,7 @@ export function SessionTable({
                         className="h-full rounded-full transition-[width]"
                         style={{
                           width: `${Math.min(holdPct, 100)}%`,
-                          backgroundColor: getRetentionColor(holdPct),
+                          backgroundColor: getHoldColor(holdPct),
                         }}
                       />
                     </div>

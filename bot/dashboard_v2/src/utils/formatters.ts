@@ -149,3 +149,9 @@ export function getRetentionColor(retention: number): string {
   if (retention >= 30) return SCORE_WEAK;
   return SCORE_BAD;
 }
+
+export function getHoldColor(holdPct: number): string {
+  if (holdPct >= 60) return SCORE_GOOD;
+  if (holdPct >= 40) return SCORE_OK;
+  return SCORE_BAD;
+}

@@ -38,3 +38,4 @@ Roten Lauf mit Testname und Fehlermeldung in `EVIDENCE.md` unter `## Roter Lauf`
 
 ## Amendments
 - A1 (2026-09-04, nach Review-Hinweis): `bot/dashboard_v2/src/components/tables/SessionTable.tsx` (Overview-Tab) zeigt in der Spalte "Bindung" ebenfalls `holdPct` statt `retention10m`, damit beide Tabs dieselbe Kennzahl zeigen. Klasse niedrig, kein eigener Test.
+- A2 (2026-09-04, nach Merge-Gate-Befund): Die Geister-Definition (`GEISTER_FILTER`) gilt zusätzlich für `letzte_beendete_session` in `rust/crates/tb-analytics/src/stufe.rs` (Fenster-Anker `last_stream`) und für `overview_session_count` in `overview.rs` (Existenz-Check vor `Empty`), damit Anker, Existenz-Check, Liste und Summary dieselbe Session-Menge sehen. Erlaubter Bereich um `stufe.rs` und `bot/dashboard_v2/src/utils/formatters.ts` (gemeinsame Farbfunktion `getHoldColor` mit Schwellen 60/40 für beide Tabs) erweitert.
