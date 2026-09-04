@@ -85,3 +85,7 @@ und die V2 als neue /streamer speichern und alles mergen pushen deployen".
 - keine
 
 ## Amendments
+
+- 2026-09-04: Verbotene Änderungen `website/src/` alt = keine Änderung -> neu = `website/src/streamer-v2.tsx` darf einen `prerender`-Export analog `src/main.tsx` bekommen und den Client-Mount in `if (typeof window !== 'undefined')` kapseln. Grund: sonst crasht der Prerender-Import in Node am `document`-Zugriff auf Modulebene, nur so wird die neue `/streamer/`-Landing vorgerendert; Komponenten bleiben byteidentisch. entschieden von Orchestrator (Briefing).
+- 2026-09-04: `website/src/streamer-v2.tsx` plus `website/index.html` alt = mit Prerender -> neu = bricht das Prerender beim Build, wird `streamer-v2.tsx` auf den Ursprungsstand zurückgesetzt und das `prerender`-Attribut aus `index.html` entfernt (offener Punkt im Bericht). Grund: Fallback laut Briefing, Komponenten unangetastet. entschieden von Orchestrator (Briefing).
+- 2026-09-04: `website/v1/index.html` robots alt = nur `robots` auf noindex -> neu = `robots`, `googlebot` und `bingbot` auf `noindex, nofollow`. Grund: die `googlebot`-Direktive überstimmt ein reines `robots`-noindex, sonst bliebe v1 bei Google indexierbar. entschieden von Orchestrator (Briefing).

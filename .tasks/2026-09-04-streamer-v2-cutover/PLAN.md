@@ -59,5 +59,5 @@ Live-Prüfung per curl (Status, robots, Title) für `/streamer/`, `/streamer/v1/
 ## Status
 
 - M1: erledigt (Tests rot, oben festgehalten)
-- M2: offen
+- M2: erledigt. `index.html` = Partner-Landing (streamer-v2.tsx, prerender, indexierbar, SEO-Kopf partner), `v1/index.html` = alte Landing (main.tsx, noindex), `v2/index.html` gelöscht, `vite.config.ts` Entry `streamerV1`, `streamer-v2.tsx` window-Guard + prerender-Export. Tests 38/38, tsc sauber, Build grün, Prerender rendert 1 Seite; dist/index.html trägt vorgerendertes "Werde Partner", dist/v1/index.html noindex, kein dist/v2/.
 - M3: offen
