@@ -50,7 +50,7 @@ test("die Streamer-Landing v2 trägt den Community-Markennamen", () => {
   assert.ok(partnerNav.includes("PARTNER_COPY.brand"), "Partner-Nav hängt die Marke nicht ein");
   assert.match(
     html,
-    /<title>[^<]*Deutsche Deadlock Community[^<]*<\/title>/,
-    "der Seitentitel nennt die Community nicht",
+    /<title>[^<]*Deadlock Partner Netzwerk[^<]*<\/title>/,
+    "der Seitentitel nennt das Partner-Netzwerk nicht",
   );
 });

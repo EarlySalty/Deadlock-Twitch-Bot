@@ -1,5 +1,5 @@
 export const PARTNER_SEO = {
-  title: "Deadlock Partner Netzwerk - Deutsche Deadlock Community",
+  title: "Deadlock Partner Netzwerk - Auto-Raid & Streamer Community (Deutsch)",
   description:
     "Werde Partner der deutschen Deadlock Community. Automatische Raids, Discord-Sichtbarkeit und ein Netzwerk, in dem Viewer nicht verloren gehen.",
   keywords:
@@ -38,20 +38,24 @@ export const PARTNER_COPY = {
   safetyLink: "Sicherheitskonzept lesen",
   closeHeadline:
     "Dein nächster Stream endet sowieso. Die Frage ist, ob du allein endest oder als Partner.",
-  closeNote: "Partner werden ist kostenlos. Zusätzliche Tools sind optional.",
+  closeNote: "Partner werden ist kostenlos. Alles Weitere ist optional.",
+  closeSafetyLink: "So gehen wir mit deinem Konto um",
 } as const;
 
 export const PARTNER_SECTIONS = [
   "hero",
-  "problem",
-  "bedeutung",
   "partner",
+  "leere",
+  "netzwerk",
+  "spamschutz",
   "sicherheit",
   "abschluss",
 ] as const;
 
 export const PARTNER_NAV = [
   { id: "partner", label: "Partner" },
+  { id: "netzwerk", label: "Netzwerk" },
+  { id: "spamschutz", label: "Schutz" },
   { id: "sicherheit", label: "Sicherheit" },
 ] as const;
 

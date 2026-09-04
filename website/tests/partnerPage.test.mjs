@@ -33,18 +33,36 @@ test("v2 hängt die Partner-Seite ein", () => {
   assert.match(v2, /PartnerPage/);
 });
 
-test("genau sechs Sektionen, in der Contract-Reihenfolge", () => {
+test("die Partner-Netzwerk-Sektionen stehen in der Contract-Reihenfolge", () => {
   const sections = exportedList("PARTNER_SECTIONS");
   assert.deepEqual(sections, [
     "hero",
-    "problem",
-    "bedeutung",
     "partner",
+    "leere",
+    "netzwerk",
+    "spamschutz",
     "sicherheit",
     "abschluss",
   ]);
-  for (const id of sections) {
-    assert.match(page, new RegExp(`id="${id}"`));
+
+  const order = [
+    "<NetworkHero",
+    "<PartnersSection",
+    "<VoidSection",
+    "<PartnerValuesSection",
+    "<PartnerBanFeedSection",
+    "<NetworkSecuritySection",
+    'id="abschluss"',
+  ];
+  let previous = -1;
+  for (const marker of order) {
+    const at = page.indexOf(marker);
+    assert.ok(at !== -1, `Baustein fehlt in der Komposition: ${marker}`);
+    assert.ok(
+      at > previous,
+      `Baustein steht nicht in Contract-Reihenfolge: ${marker}`,
+    );
+    previous = at;
   }
 });
 
@@ -61,7 +79,10 @@ test("Live-Karten nutzen Vorschaubilder, keinen Twitch-Player", () => {
 });
 
 test("Title und Meta kommen aus der Copy-Datei", () => {
-  assert.match(html, /Deadlock Partner Netzwerk - Deutsche Deadlock Community/);
+  assert.match(
+    html,
+    /Deadlock Partner Netzwerk - Auto-Raid & Streamer Community \(Deutsch\)/,
+  );
   assert.match(
     html,
     /Werde Partner der deutschen Deadlock Community\. Automatische Raids/,

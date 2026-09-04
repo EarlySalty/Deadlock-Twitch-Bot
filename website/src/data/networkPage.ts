@@ -1,15 +1,76 @@
-/**
- * Inhalte der Streamer-Landing V2 (/streamer/v2/).
- *
- * Sprachregelung und Struktur folgen docs/strategie/31 (Positionierung,
- * BrandScript, Verbotsliste) und docs/strategie/32 (Pricing). Bewusst getrennt
- * von data/features.ts, damit die produktive Landing unter /streamer/ ihre
- * eigenen Texte behaelt.
- *
- * Regel aus Kapitel 31: keine Superlative, keine Verknappungs-Countdowns, keine
- * unbelegten Zahlen. Alle Zahlen auf dieser Seite kommen live aus der API oder
- * stehen gar nicht da.
- */
+export const HERO_COPY = {
+  chip: "Netzwerk deutscher Deadlock-Streamer",
+  headlineLead: "Kein Stream endet im",
+  headlineAccent: "Leeren.",
+  subline:
+    "Der Bot ist nur der Schlüssel. Sobald du ihn aktivierst, bist du Partner im deutschen Deadlock-Netzwerk. Gehst du offline, übergibt das Netzwerk deine Zuschauer an den nächsten deutschen Deadlock-Stream, statt sie verschwinden zu lassen.",
+  ctaPrimary: "Jetzt Partner werden",
+  ctaSecondary: "Community-Discord beitreten",
+  proofPartners: "Partner im Netzwerk",
+  proofLiveKnown: "gerade live in Deadlock",
+  proofLive: "gerade live",
+  proofBans: "Spam-Accounts entfernt, 30 Tage",
+  proofNote:
+    "Die Kennzahlen kommen live aus dem laufenden Betrieb, die Bühne darüber ist ein Beispielablauf.",
+} as const;
+
+export const VALUES_COPY = {
+  stamp: "Dabei sein heißt",
+  headline: "Was als Partner dazugehört",
+  intro:
+    "Sobald du dabei bist, läuft im Hintergrund mehr als die Übergabe am Stream-Ende: dein Go-Live taucht im Community-Discord auf, dein Chat teilt sich den Schutz mit allen Partnern, und nach dem Stream stehen deine Zahlen bereit.",
+} as const;
+
+export interface NetworkValue {
+  id: "raids" | "schutz" | "coaching" | "clips";
+  kicker: string;
+  title: string;
+  body: string;
+  tone: "primary" | "accent";
+}
+
+export const networkValues: NetworkValue[] = [
+  {
+    id: "raids",
+    kicker: "Am Stream-Ende",
+    title: "Deine Leute bleiben in der Szene",
+    body: "Endest du, führt das Netzwerk deine Zuschauer zum nächsten deutschen Deadlock-Stream, der gerade läuft. Sie versickern nicht, sie landen bei einem Partner.",
+    tone: "primary",
+  },
+  {
+    id: "schutz",
+    kicker: "Rund um die Uhr",
+    title: "Ein Chat-Schutz für alle",
+    body: "Follow-Bots, Viewbot-Werbung und Selbstpromo laufen bei jedem Partner gegen dieselbe Liste, bevor sie deinen Chat erreichen.",
+    tone: "accent",
+  },
+  {
+    id: "coaching",
+    kicker: "Nach dem Stream",
+    title: "Deine Zahlen ohne Tabellenarbeit",
+    body: "Wann Zuschauer gekommen und gegangen sind, wie der Chat lief und welche Momente getragen haben, steht danach im Dashboard bereit.",
+    tone: "primary",
+  },
+  {
+    id: "clips",
+    kicker: "Zwischen den Streams",
+    title: "Momente werden zu Clips",
+    body: "Wer !clip in den Chat schreibt, hält die Szene fest, und die starken Ausschnitte liegen fertig zum Weiterposten bereit.",
+    tone: "accent",
+  },
+];
+
+export const SPAM_COPY = {
+  stamp: "Schutz im Netzwerk",
+  headline: "Der Spam-Schutz läuft für das ganze Netzwerk",
+  intro:
+    "Was ein Partner an Werbe- und Bot-Nachrichten meldet, greift bei allen. Der Feed unten kommt aus den Partner-Chats, während du hier liest.",
+  feedTitle: "Live aus den Partner-Chats",
+  statToday: "heute geräumt",
+  stat30d: "in den letzten 30 Tagen",
+  statChannels: "geschützte Chats",
+  empty: "Der Feed ist gerade nicht abrufbar.",
+} as const;
 
 export interface PlanStep {
   index: string;
