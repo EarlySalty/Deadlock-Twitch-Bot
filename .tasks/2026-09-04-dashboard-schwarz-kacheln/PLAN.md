@@ -42,9 +42,9 @@ research: RESEARCH.md, EVIDENCE.md
 - M1: fertig, Baseline 179 pass, 0 fail, 0 skipped, tsc und vite gruen
 - M2: fertig, Test E7 b/c/d gruen, tsc und vite gruen
 - M3: fertig, Test E7 a gruen, 183 pass, 0 fail, tsc und vite gruen
-- M4: offen
+- M4: fertig, sieben Screenshots unter screens/, Hintergrund neutral schwarz mit weissem Raster, Kacheln flach mit feiner Goldkante, Gold nur Akzent; Vergleich mit vorlage-streamer.png passt
 - M5: offen
 
 ## Befunde ausserhalb des Scopes
 
-- keine
+- bot/dashboard_v2/src/components/socialmedia/LayoutEditor.tsx:243 und :245 tragen harte warme Diagonal-Streifen (`repeating-linear-gradient(45deg, rgba(197,160,89,0.18) ...)`), die die Quell- und Ziel-Rahmen im Social-Layout-Editor braun-gestreift wirken lassen. Liegt ausserhalb des erlaubten Bereichs (weder Shell noch Kartenklassen), daher nicht geaendert.
