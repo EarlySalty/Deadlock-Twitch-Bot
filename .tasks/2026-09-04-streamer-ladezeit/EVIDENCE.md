@@ -1,6 +1,6 @@
 # Evidence: /streamer Ladezeit
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 
 Stand origin/main 687040f5.

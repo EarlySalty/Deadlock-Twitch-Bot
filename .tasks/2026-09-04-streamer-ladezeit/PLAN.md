@@ -1,6 +1,6 @@
 # Plan: /streamer Ladezeit
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 contract: CONTRACT.md

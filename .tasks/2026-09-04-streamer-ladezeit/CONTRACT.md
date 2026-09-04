@@ -1,6 +1,6 @@
 # Contract: /streamer zeigt Inhalt sofort, Partner-Kacheln und Avatare laden schnell
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 repo: Deadlock-Twitch-Bot (website/)
