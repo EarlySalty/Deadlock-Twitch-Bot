@@ -205,7 +205,20 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
                 type="button"
                 onClick={() =>
                   adminModeMutation.mutate(!adminMode, {
-                    onSuccess: () => queryClient.invalidateQueries(),
+                    onSuccess: () =>
+                      queryClient.invalidateQueries({
+                        predicate: (query) => {
+                          const key = query.queryKey;
+                          if (
+                            Array.isArray(key) &&
+                            key[0] === 'internal-home' &&
+                            key[1] != null
+                          ) {
+                            return false;
+                          }
+                          return true;
+                        },
+                      }),
                   })
                 }
                 disabled={adminModeMutation.isPending}
