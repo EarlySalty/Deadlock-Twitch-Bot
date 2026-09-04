@@ -22,6 +22,12 @@ const PAGES = [
 
 const ROUTES = ['home', 'analyse', 'social', 'uplink', 'verwaltung', 'overlay', 'pricing'] as const;
 
+const ALLOWED_CONTENT_WIDTHS = new Set(['max-w-sm', 'max-w-xl', 'max-w-2xl']);
+const MAX_W_CLASS = /max-w-(?:\[[^\]]*\]|[\w-]+)/g;
+
+const forbiddenMaxWidths = (src: string): string[] =>
+  (src.match(MAX_W_CLASS) ?? []).filter((cls) => !ALLOWED_CONTENT_WIDTHS.has(cls));
+
 test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein', () => {
   assert.match(APP, /import \{ DashboardShell \} from '@\/components\/layout\/DashboardShell'/);
   for (const route of ROUTES) {
@@ -37,7 +43,12 @@ test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
   for (const page of PAGES) {
     const src = read(page);
     assert.doesNotMatch(src, /internal-home-vibe/, `${page} darf den Shell-Hintergrund nicht selbst setzen`);
-    assert.doesNotMatch(src, /max-w-\[/, `${page} darf keine eigene Gesamt-Maximalbreite setzen`);
+    const offenders = forbiddenMaxWidths(src);
+    assert.deepEqual(
+      offenders,
+      [],
+      `${page} darf keine eigene Gesamt-Maximalbreite tragen: ${offenders.join(', ')}`,
+    );
   }
 });
 
@@ -88,10 +99,11 @@ test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
     /internal-home-vibe/,
     'AnalyticsDashboard darf den Shell-Hintergrund nicht selbst setzen',
   );
-  assert.doesNotMatch(
-    analytics,
-    /max-w-\[/,
-    'AnalyticsDashboard darf keine eigene Gesamt-Maximalbreite setzen',
+  const offenders = forbiddenMaxWidths(analytics);
+  assert.deepEqual(
+    offenders,
+    [],
+    `AnalyticsDashboard darf keine eigene Gesamt-Maximalbreite tragen: ${offenders.join(', ')}`,
   );
 });
 
