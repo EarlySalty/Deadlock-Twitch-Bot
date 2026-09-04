@@ -65,3 +65,5 @@ Das Streamer-Dashboard (alle Routen der gemeinsamen `DashboardShell`) sieht farb
 
 ## Amendments
 
+- 2026-09-04, Scope: bot/dashboard_v2/package.json nur scripts.test, Grund: expliziter Test-Runner, entschieden von Orchestrator (technisch, reversibel)
+

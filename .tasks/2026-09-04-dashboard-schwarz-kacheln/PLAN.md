@@ -43,7 +43,7 @@ research: RESEARCH.md, EVIDENCE.md
 - M2: fertig, Test E7 b/c/d gruen, tsc und vite gruen
 - M3: fertig, Test E7 a gruen, 183 pass, 0 fail, tsc und vite gruen
 - M4: fertig, sieben Screenshots unter screens/, Hintergrund neutral schwarz mit weissem Raster, Kacheln flach mit feiner Goldkante, Gold nur Akzent; Vergleich mit vorlage-streamer.png passt
-- M5: offen
+- M5: fertig, diff-policy OK (16 Dateien, 247 Quellzeilen, 0 User-Freigaben), Endstand 183 pass, 0 fail, 0 skipped
 
 ## Befunde ausserhalb des Scopes
 
