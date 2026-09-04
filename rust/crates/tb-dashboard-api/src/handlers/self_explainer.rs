@@ -119,13 +119,13 @@ fn injection_regex() -> &'static Regex {
     })
 }
 
-fn looks_like_injection(question: &str) -> bool {
+pub(crate) fn looks_like_injection(question: &str) -> bool {
     injection_regex().is_match(question)
 }
 
 /// Akzeptiert ausschließlich Nutzer- und Assistentenbeiträge. Systemrollen
 /// aus dem öffentlichen Request werden verworfen.
-fn parse_history(value: &Value) -> Vec<Message> {
+pub(crate) fn parse_history(value: &Value) -> Vec<Message> {
     let Some(turns) = value.get("history").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -152,7 +152,7 @@ fn parse_history(value: &Value) -> Vec<Message> {
 }
 
 /// Whitespace-normalisiert + auf `limit` Zeichen gekürzt (an Wortgrenze, mit …).
-fn truncate(text: &str, limit: usize) -> String {
+pub(crate) fn truncate(text: &str, limit: usize) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= limit {
@@ -202,7 +202,7 @@ fn split_sentences(text: &str) -> Vec<String> {
 
 /// Zerlegt einen Text in Teile von höchstens `limit` Zeichen — bevorzugt an
 /// Satzgrenzen, sonst an Wortgrenzen. Schneidet nie mitten im Wort ab.
-fn split_message(text: &str, limit: usize) -> Vec<String> {
+pub(crate) fn split_message(text: &str, limit: usize) -> Vec<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
         return Vec::new();
@@ -256,7 +256,7 @@ fn split_message(text: &str, limit: usize) -> Vec<String> {
 
 /// `true`, wenn das Modell offensichtlich nichts Brauchbares lieferte oder den
 /// Prompt durchsickern lässt.
-fn output_unusable(text: &str) -> bool {
+pub(crate) fn output_unusable(text: &str) -> bool {
     let low = text.to_lowercase();
     if low.trim().is_empty() {
         return true;
@@ -305,7 +305,7 @@ fn knowledge_dir() -> PathBuf {
     }
 }
 
-fn knowledge_base() -> &'static KnowledgeBase {
+pub(crate) fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
     KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
         Ok(kb) => {
@@ -352,7 +352,7 @@ async fn fireworks_generate(
     }
 }
 
-fn retrieval_query(history: &[Message], question: &str) -> String {
+pub(crate) fn retrieval_query(history: &[Message], question: &str) -> String {
     let mut context: Vec<&str> = history
         .iter()
         .rev()
@@ -434,14 +434,14 @@ async fn answer_question(
 
 // ── Rate-Limiter (Sliding-Window pro Peer) ─────────────────────────────────────
 
-struct RateLimiter {
+pub(crate) struct RateLimiter {
     window: f64,
     max: usize,
     hits: Mutex<std::collections::HashMap<String, Vec<f64>>>,
 }
 
 impl RateLimiter {
-    fn new(window: f64, max: usize) -> Self {
+    pub(crate) fn new(window: f64, max: usize) -> Self {
         Self {
             window,
             max,
@@ -450,7 +450,7 @@ impl RateLimiter {
     }
 
     /// Deterministisch testbar: `now` wird hereingereicht.
-    fn allow(&self, peer: &str, now: f64) -> bool {
+    pub(crate) fn allow(&self, peer: &str, now: f64) -> bool {
         let mut map = self.hits.lock().unwrap();
         let mut recent: Vec<f64> = map
             .get(peer)
@@ -484,7 +484,7 @@ fn limiter() -> &'static RateLimiter {
 }
 
 /// Prozess-monotone Uhr in Sekunden (Pythons `loop.time()`-Äquivalent).
-fn mono_now() -> f64 {
+pub(crate) fn mono_now() -> f64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }

@@ -29,6 +29,48 @@ fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ModerationSettings {
+    pub(crate) global_ban_enabled: bool,
+    pub(crate) scam_pitch_enabled: bool,
+    pub(crate) spam_autoban_enabled: bool,
+    pub(crate) sus_invite_enabled: bool,
+}
+
+impl Default for ModerationSettings {
+    fn default() -> Self {
+        Self {
+            global_ban_enabled: true,
+            scam_pitch_enabled: true,
+            spam_autoban_enabled: true,
+            sus_invite_enabled: true,
+        }
+    }
+}
+
+pub(crate) async fn load_settings(
+    pool: &PgPool,
+    channel_user_id: &str,
+) -> Result<ModerationSettings, sqlx::Error> {
+    let row: Option<(bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT global_ban_enabled, scam_pitch_enabled, spam_autoban_enabled, sus_invite_enabled \
+           FROM twitch_moderation_settings \
+          WHERE channel_user_id = $1",
+    )
+    .bind(channel_user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((global_ban, scam_pitch, spam_autoban, sus_invite)) => ModerationSettings {
+            global_ban_enabled: global_ban,
+            scam_pitch_enabled: scam_pitch,
+            spam_autoban_enabled: spam_autoban,
+            sus_invite_enabled: sus_invite,
+        },
+        None => ModerationSettings::default(),
+    })
+}
+
 async fn resolve_channel_user_id(
     auth: &DashboardAuthLevel,
     streamer: &Option<String>,
@@ -101,28 +143,12 @@ pub async fn get_handler(
         Err(response) => return response,
     };
 
-    let row: Result<Option<(bool, bool, bool, bool)>, sqlx::Error> = sqlx::query_as(
-        "SELECT global_ban_enabled, scam_pitch_enabled, spam_autoban_enabled, sus_invite_enabled \
-           FROM twitch_moderation_settings \
-          WHERE channel_user_id = $1",
-    )
-    .bind(&channel_user_id)
-    .fetch_optional(&pool)
-    .await;
-
-    match row {
-        Ok(Some((global_ban, scam_pitch, spam_autoban, sus_invite))) => Json(json!({
-            "global_ban_enabled": global_ban,
-            "scam_pitch_enabled": scam_pitch,
-            "spam_autoban_enabled": spam_autoban,
-            "sus_invite_enabled": sus_invite
-        }))
-        .into_response(),
-        Ok(None) => Json(json!({
-            "global_ban_enabled": true,
-            "scam_pitch_enabled": true,
-            "spam_autoban_enabled": true,
-            "sus_invite_enabled": true
+    match load_settings(&pool, &channel_user_id).await {
+        Ok(settings) => Json(json!({
+            "global_ban_enabled": settings.global_ban_enabled,
+            "scam_pitch_enabled": settings.scam_pitch_enabled,
+            "spam_autoban_enabled": settings.spam_autoban_enabled,
+            "sus_invite_enabled": settings.sus_invite_enabled
         }))
         .into_response(),
         Err(error) => {

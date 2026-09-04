@@ -906,13 +906,13 @@ async fn identity_block(
 
 // ── Block: access_state / partner (api_v2.py:976-1135) ───────────────────────
 
-struct AccessState {
-    partner_status: String,
-    technical_pause_reason: Option<String>,
-    operational_state: Option<String>,
-    token_error_grace_expires_at: Option<String>,
-    token_error_error_count: i64,
-    analytics_access_allowed: bool,
+pub(crate) struct AccessState {
+    pub(crate) partner_status: String,
+    pub(crate) technical_pause_reason: Option<String>,
+    pub(crate) operational_state: Option<String>,
+    pub(crate) token_error_grace_expires_at: Option<String>,
+    pub(crate) token_error_error_count: i64,
+    pub(crate) analytics_access_allowed: bool,
 }
 
 impl AccessState {
@@ -929,7 +929,7 @@ impl AccessState {
     }
 }
 
-async fn access_state_block(
+pub(crate) async fn access_state_block(
     pool: &PgPool,
     twitch_login: &str,
     twitch_user_id: &str,
@@ -1139,14 +1139,18 @@ async fn column_exists(pool: &PgPool, table: &str, column: &str) -> bool {
 
 // ── Block: oauth (internal_home.py:449-498 + scope-snapshot api_v2.py:114-142) ─
 
-struct OauthData {
-    granted_scopes: Vec<String>,
-    missing_scopes: Vec<String>,
-    oauth_needs_reauth: bool,
-    oauth_status: String,
+pub(crate) struct OauthData {
+    pub(crate) granted_scopes: Vec<String>,
+    pub(crate) missing_scopes: Vec<String>,
+    pub(crate) oauth_needs_reauth: bool,
+    pub(crate) oauth_status: String,
 }
 
-async fn oauth_block(pool: &PgPool, resolved_login: &str, resolved_user_id: &str) -> OauthData {
+pub(crate) async fn oauth_block(
+    pool: &PgPool,
+    resolved_login: &str,
+    resolved_user_id: &str,
+) -> OauthData {
     if resolved_login.is_empty() {
         return OauthData {
             granted_scopes: Vec::new(),
@@ -1251,14 +1255,18 @@ fn read_truthy(row: &PgRow, col: &str) -> bool {
 
 // ── Block 2a: KPIs + recent_streams (internal_home.py:501-588) ───────────────
 
-struct KpisData {
-    streams_count: i64,
-    avg_viewers: f64,
-    follower_delta: i64,
-    recent_streams: Vec<Value>,
+pub(crate) struct KpisData {
+    pub(crate) streams_count: i64,
+    pub(crate) avg_viewers: f64,
+    pub(crate) follower_delta: i64,
+    pub(crate) recent_streams: Vec<Value>,
 }
 
-async fn kpis_recent_block(pool: &PgPool, resolved_login: &str, since: DateTime<Utc>) -> KpisData {
+pub(crate) async fn kpis_recent_block(
+    pool: &PgPool,
+    resolved_login: &str,
+    since: DateTime<Utc>,
+) -> KpisData {
     let mut data = KpisData {
         streams_count: 0,
         avg_viewers: 0.0,
@@ -1379,7 +1387,7 @@ fn read_f64(row: &PgRow, col: &str) -> f64 {
 
 // ── Block 2b: last_stream_summary (internal_home.py:717-734,827-839) ─────────
 
-async fn last_stream_summary(
+pub(crate) async fn last_stream_summary(
     pool: &PgPool,
     resolved_login: &str,
     recent_streams: &[Value],
@@ -1444,12 +1452,16 @@ fn parse_iso(text: &str) -> Option<DateTime<Utc>> {
 
 // ── Block 2c: ban-events (DB) (internal_home.py:591-660) ─────────────────────
 
-struct BanData {
-    bot_bans_keyword_count: i64,
-    events: Vec<Value>,
+pub(crate) struct BanData {
+    pub(crate) bot_bans_keyword_count: i64,
+    pub(crate) events: Vec<Value>,
 }
 
-async fn ban_events_block(pool: &PgPool, resolved_user_id: &str, since: DateTime<Utc>) -> BanData {
+pub(crate) async fn ban_events_block(
+    pool: &PgPool,
+    resolved_user_id: &str,
+    since: DateTime<Utc>,
+) -> BanData {
     let mut data = BanData {
         bot_bans_keyword_count: 0,
         events: Vec::new(),
@@ -1560,7 +1572,7 @@ fn opt_str(row: &PgRow, col: &str) -> String {
 
 // ── Block 2d: raid-events (DB) (internal_home.py:663-714) ────────────────────
 
-async fn raid_events_block(
+pub(crate) async fn raid_events_block(
     pool: &PgPool,
     resolved_login: &str,
     resolved_user_id: &str,

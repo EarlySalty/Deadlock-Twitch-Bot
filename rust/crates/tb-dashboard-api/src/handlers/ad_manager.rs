@@ -52,7 +52,7 @@ fn identity(auth: DashboardAuthLevel) -> Result<(String, String), IdentityError>
     }
 }
 
-async fn scopes(pool: &PgPool, uid: &str) -> Result<Vec<String>, sqlx::Error> {
+pub(crate) async fn scopes(pool: &PgPool, uid: &str) -> Result<Vec<String>, sqlx::Error> {
     let raw: Option<String> =
         sqlx::query_scalar("SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id=$1")
             .bind(uid)
