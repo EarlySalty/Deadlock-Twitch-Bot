@@ -142,7 +142,7 @@ Rote Tests mit Fehlermeldung:
 ## Status
 
 - M1: fertig (Test rot, Roter Lauf oben)
-- M2: offen
+- M2: fertig (Hook useNetworkStreamers, tsc grün)
 - M3: offen
 - M4: offen
 - M5: offen
