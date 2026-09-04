@@ -1,6 +1,6 @@
 # Evidence: v2-Cutover auf /streamer
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 
 Stand main 99758498.

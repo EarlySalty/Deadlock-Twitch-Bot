@@ -1,6 +1,6 @@
 # Contract: v2 wird /streamer, die alte Landing zieht nach /streamer/v1
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 repo: Deadlock-Twitch-Bot (website/) plus Caddyfile
