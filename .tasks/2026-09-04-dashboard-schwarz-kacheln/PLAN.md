@@ -41,7 +41,7 @@ research: RESEARCH.md, EVIDENCE.md
 
 - M1: fertig, Baseline 179 pass, 0 fail, 0 skipped, tsc und vite gruen
 - M2: fertig, Test E7 b/c/d gruen, tsc und vite gruen
-- M3: offen
+- M3: fertig, Test E7 a gruen, 183 pass, 0 fail, tsc und vite gruen
 - M4: offen
 - M5: offen
 
