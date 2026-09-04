@@ -1,6 +1,6 @@
 export const DASHBOARD_PROFILE_CACHE_KEY = 'ddc.dashboard.profile';
 
-export type ProfileCacheStorage = Pick<Storage, 'getItem' | 'setItem'>;
+export type ProfileCacheStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 export interface CachedDashboardProfile {
   identityKey: string;
@@ -47,6 +47,17 @@ export function writeCachedDashboardProfile(
   if (!value.identityKey || !storage) return;
   try {
     storage.setItem(DASHBOARD_PROFILE_CACHE_KEY, JSON.stringify(value));
+  } catch {
+    return;
+  }
+}
+
+export function clearCachedDashboardProfile(
+  storage: ProfileCacheStorage | null | undefined,
+): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(DASHBOARD_PROFILE_CACHE_KEY);
   } catch {
     return;
   }

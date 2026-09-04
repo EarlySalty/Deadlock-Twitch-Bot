@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   DASHBOARD_PROFILE_CACHE_KEY,
+  clearCachedDashboardProfile,
   profilBereit,
   readCachedDashboardProfile,
   writeCachedDashboardProfile,
@@ -108,6 +109,13 @@ test('write ohne Identitaet schreibt nichts', () => {
   assert.equal(storage.map.has(DASHBOARD_PROFILE_CACHE_KEY), false);
 });
 
+test('clear entfernt den Cache-Eintrag', () => {
+  const storage = fakeStorage();
+  storage.map.set(DASHBOARD_PROFILE_CACHE_KEY, JSON.stringify({ identityKey: 'nani' }));
+  clearCachedDashboardProfile(storage);
+  assert.equal(storage.map.has(DASHBOARD_PROFILE_CACHE_KEY), false);
+});
+
 test('profilBereit ist true nach fehlgeschlagenem Fetch ohne Cache', () => {
   assert.equal(
     profilBereit({
@@ -173,10 +181,12 @@ test('profilBereit ist true fuer Admin ohne internal-home-Anfrage', () => {
   );
 });
 
-test('Verdrahtung: der Hook nutzt die reinen Cache-Funktionen aus dem Modul', () => {
+test('Verdrahtung: der Hook nutzt die reinen Cache-Funktionen und loescht bei Logout', () => {
   assert.match(HOOK, /from '@\/hooks\/dashboardProfileCache'/);
   assert.match(HOOK, /readCachedDashboardProfile\(identityKey, dashboardProfileStorage\(\)\)/);
   assert.match(HOOK, /profilBereit\(\{/);
+  assert.match(HOOK, /clearCachedDashboardProfile\(dashboardProfileStorage\(\)\)/);
+  assert.match(HOOK, /authStatus\?\.authenticated === false/);
   assert.doesNotMatch(HOOK, /cachedProfile\?\.planName/);
 });
 

@@ -6,6 +6,7 @@ import { setAdminMode } from '@/api/auth';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import type { ProfileCacheStorage } from '@/hooks/dashboardProfileCache';
 import {
+  clearCachedDashboardProfile,
   profilBereit,
   readCachedDashboardProfile,
   writeCachedDashboardProfile,
@@ -76,6 +77,12 @@ export function useDashboardProfile() {
       dashboardProfileStorage(),
     );
   }, [identityKey, isPlaceholderData, profile, ownLogin]);
+
+  useEffect(() => {
+    if (authStatus?.authenticated === false) {
+      clearCachedDashboardProfile(dashboardProfileStorage());
+    }
+  }, [authStatus?.authenticated]);
 
   const adminModeMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
