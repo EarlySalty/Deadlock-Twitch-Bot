@@ -13,6 +13,7 @@ import {
   zuschauerSchnitt,
   twitchParent,
   twitchUrl,
+  PARTNER_VORSCHAU,
 } from "@/lib/partnerNetwork";
 
 const EMPTY_STATE_TEXT =
@@ -219,6 +220,61 @@ function Ausklappliste({
   );
 }
 
+function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
+  const reduce = useReducedMotion();
+  const [offen, setOffen] = useState(false);
+  const sichtbar = partner.slice(0, PARTNER_VORSCHAU);
+  const rest = partner.slice(PARTNER_VORSCHAU);
+  return (
+    <div className="mt-8">
+      <p className="mb-4 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
+        Alle {partner.length} Partner
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {sichtbar.map((p, i) => (
+          <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+        ))}
+      </div>
+      {rest.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setOffen((v) => !v)}
+            aria-expanded={offen}
+            className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-4 py-3 text-left transition-colors hover:border-[var(--color-border-hover)]"
+          >
+            <span className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
+              {offen ? "Weniger anzeigen" : `${rest.length} weitere Partner anzeigen`}
+            </span>
+            <ChevronDown
+              size={18}
+              className={`shrink-0 text-[var(--color-text-secondary)] transition-transform ${offen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {offen ? (
+              <motion.div
+                key="rest"
+                initial={reduce ? false : { height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                transition={{ duration: reduce ? 0 : 0.3 }}
+                className="overflow-hidden"
+              >
+                <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {rest.map((p, i) => (
+                    <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
+                  ))}
+                </div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function EmptyState() {
   return (
     <div className="panel-card rounded-2xl p-10 text-center max-w-xl mx-auto">
@@ -314,11 +370,7 @@ export function PartnerNetwork({
               ) : null}
 
               {allePartner.length > 0 ? (
-                <Ausklappliste titel={`Alle ${allePartner.length} Partner`}>
-                  {allePartner.map((p, i) => (
-                    <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
-                  ))}
-                </Ausklappliste>
+                <AllePartnerBlock partner={allePartner} />
               ) : null}
             </>
           )}
