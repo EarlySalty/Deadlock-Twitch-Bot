@@ -50,7 +50,12 @@ test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
 });
 
 test('der Shell-Profil-Hook gatet den Fetch gegen Admin-Sitzungen ohne eigenes Konto', () => {
-  assert.match(HOOK, /canRequestInternalHome/);
+  assert.match(HOOK, /const isLocalhostAdmin = Boolean\(authStatus\?\.isLocalhost\);/);
+  assert.match(HOOK, /const isAdminWithoutOwnLogin = Boolean\(authStatus\?\.isAdmin\) && !ownLogin;/);
+  assert.match(
+    HOOK,
+    /const canRequestInternalHome =\s*!loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin;/,
+  );
   assert.match(HOOK, /enabled:\s*canRequestInternalHome/);
 });
 
