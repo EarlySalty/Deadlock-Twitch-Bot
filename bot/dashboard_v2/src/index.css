@@ -66,6 +66,7 @@
   --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
   --shadow-primary-glow: 0 12px 28px rgba(197, 160, 89, 0.22);
   --shadow-primary-glow-hover: 0 16px 36px rgba(197, 160, 89, 0.35), 0 0 20px rgba(197, 160, 89, 0.12);
+  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 
 /* Base Styles */
@@ -95,7 +96,6 @@ body::before {
     linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
   background-size: 36px 36px;
-  mask-image: radial-gradient(ellipse at top, black 40%, transparent 75%);
   opacity: 0.72;
   z-index: 0;
 }
@@ -161,11 +161,11 @@ svg.icon-duotone {
 
 .glass {
   background:
-    linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
-    rgba(18, 18, 18, 0.86);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(239, 212, 157, 0.18);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+    linear-gradient(180deg, rgba(239, 212, 157, 0.043) 0%, transparent 46%),
+    var(--color-card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card-soft);
 }
 
 /* Gold-Flaeche. Traegt IMMER dunkle Tinte — Kinder erben die Farbe, damit niemand
@@ -184,10 +184,12 @@ svg.icon-duotone {
   overflow: hidden;
   isolation: isolate;
   background:
-    linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
-    rgba(18, 18, 18, 0.86);
-  border: 1px solid rgba(239, 212, 157, 0.18);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+    linear-gradient(180deg, rgba(239, 212, 157, 0.043) 0%, transparent 46%),
+    radial-gradient(100% 90% at 100% 0%, rgba(85, 151, 143, 0.035), transparent 54%),
+    var(--color-card);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card-soft);
+  backdrop-filter: blur(10px);
 }
 
 .card-glow {
