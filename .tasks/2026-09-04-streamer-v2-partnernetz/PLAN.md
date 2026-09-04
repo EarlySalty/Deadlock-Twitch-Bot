@@ -146,4 +146,4 @@ Rote Tests mit Fehlermeldung:
 - M3: fertig (PartnerPitch, geteilte Helfer, tsc grün)
 - M4: fertig (PartnerNetwork, Live-Embeds, Offline-Raster, Leerzustand, tsc grün)
 - M5: fertig (Seite umgebaut, StreamDay geloescht, 30 Tests grün, Build grün, REQ-05-Sweep sauber)
-- M6: offen
+- M6: fertig (Hero-Screenshots Desktop/Mobil; below-fold-Sektionen per DOM-Dump belegt: 53 Partner, 3 Live-Embeds, Offline-Raster, echte Twitch-Links. Full-Page-Bild der whileInView-Sektionen headless nicht möglich, Preview-Automation-Host fehlt.)
