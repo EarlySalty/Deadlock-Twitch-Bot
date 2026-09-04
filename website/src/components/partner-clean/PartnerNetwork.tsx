@@ -210,7 +210,7 @@ function Ausklappliste({
             transition={{ duration: reduce ? 0 : 0.3 }}
             className="overflow-hidden"
           >
-            <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
               {children}
             </div>
           </motion.div>
@@ -230,7 +230,7 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
       <p className="mb-4 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
         Alle {partner.length} Partner
       </p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
         {sichtbar.map((p, i) => (
           <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
         ))}
@@ -261,7 +261,7 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
                 transition={{ duration: reduce ? 0 : 0.3 }}
                 className="overflow-hidden"
               >
-                <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
                   {rest.map((p, i) => (
                     <PartnerZeile key={p.login} partner={p} deadlockLive={false} index={i} />
                   ))}
@@ -316,7 +316,7 @@ export function PartnerNetwork({
 
   return (
     <section id="partner" className="py-24">
-      <div className="max-w-7xl mx-auto px-6">
+      <div className="max-w-[1600px] mx-auto px-6">
         <ScrollReveal className="text-center">
           <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-3">
             Unsere Partner
