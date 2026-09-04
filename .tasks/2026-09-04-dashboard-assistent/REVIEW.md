@@ -129,3 +129,12 @@ Endpoints erkannt, clippy und alle Suiten grün.
 - Mangel 8: behoben in a43cb772 (Eintrag-Aufbau in Helfer `baue_log_eintrag` gezogen; Test `log_eintrag_setzt_injection_flag` prüft ohne DB, dass eine Frage mit Injection-Marker `flagged_injection = true` setzt und eine harmlose Frage `false`).
 
 Validierung: `cargo test -p tb-dashboard-api dashboard_assistent` 14 passed; `cargo test -p tb-dashboard-api -p tb-analytics` 459 + 1110 (1 ignored) + 12 passed, 0 failed; `cargo clippy -p tb-dashboard-api -- -D warnings` sauber; `npm test` 185 passed, `npm run lint` 0 errors (16 vorbestehende Warnungen in nicht angefassten Dateien), `npm run build` grün.
+
+## Fix-Runde 2
+
+- Befund 1 (BLOCKING, Widget im Demo- und Preview-Modus): behoben in 5c52969f (App.tsx berechnet `zeigeAssistent` aus `!isPreviewModeEnabled()`, `!hasDemoRuntimeConfig()` und `!resolveEffectiveDemoMode(...)` und rendert `{zeigeAssistent && <DashboardAssistent />}`; das Widget hängt damit nur noch an echten, eingeloggten Sessions außerhalb von `/twitch/demo` und Preview. Quelltext-Vertrag in tests/dashboardAssistent.test.ts ergänzt).
+- Befund 2 (NIT, 401-Weiterleitung): behoben in 5c52969f (askAssistent nutzt jetzt `fetchJson` aus core.ts statt rohem fetch; 401 läuft über den vorhandenen `handleUnauthorizedResponse`, kein zweiter Login-Weg; 429 wird aus dem `ApiHttpError` mit `status === 429` in `AssistentRateLimitError` übersetzt).
+- Befund 3 (NIT, grounded hart true): behoben in 5c52969f (Antwortfeld `"grounded": grounded` statt `true`; Test `antwort_meldet_echten_grounded_wert` prüft den Quelltext).
+- Befund 4 (NIT, Limiter räumt nicht auf): behoben in 5c52969f (RateLimiter in self_explainer.rs bekommt einen Aufräum-Sweep über `vielleicht_aufraeumen`: alle 256 Aufrufe oder bei Map über 1000 Einträgen werden Schlüssel mit ausschließlich abgelaufenen Zeitstempeln entfernt; allow/deny-Verhalten unverändert. `rate_limiter_blockt_nach_max` bleibt grün, neuer Test `rate_limiter_raeumt_abgelaufene_schluessel_ab`).
+
+Validierung Fix-Runde 2: `cargo test -p tb-dashboard-api -p tb-analytics` EXIT 0 (459 + 1112 (1 ignored) + 12 passed, 0 failed, plus Hilfs-Suiten); `cargo clippy -p tb-dashboard-api -- -D warnings` EXIT 0, sauber; `npm test` 186 passed 0 fail; `npm run lint` 0 errors (16 vorbestehende Warnungen in nicht angefassten Dateien); `npm run build` grün.
