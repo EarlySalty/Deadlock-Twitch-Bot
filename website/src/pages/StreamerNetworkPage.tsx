@@ -13,19 +13,22 @@ import { ClipManager } from "@/components/partner-clean/ClipManager";
 import { Community } from "@/components/partner-clean/Community";
 import { Security } from "@/components/partner-clean/Security";
 import { CTA } from "@/components/partner-clean/CTA";
+import { useNetworkStreamers } from "@/hooks/useNetworkStreamers";
 
 export function StreamerNetworkPage() {
+  const { streamers, status } = useNetworkStreamers();
+
   return (
     <>
       <GlowOrb />
       <Navbar />
       <main>
         <Hero />
-        <PartnerPitch />
-        <PartnerNetwork />
+        <PartnerPitch streamers={streamers} />
+        <PartnerNetwork streamers={streamers} status={status} />
         <RaidExplainer />
         <BanFeed />
-        <Stats />
+        <Stats streamers={streamers} status={status} />
         <Features />
         <ClipManager />
         <Community />

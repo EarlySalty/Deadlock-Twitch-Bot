@@ -75,8 +75,11 @@ export function useNetworkStreamers(): {
           .map(mapStreamer);
         setStreamers(sortStreamers(mapped));
         setStatus("ready");
-      } catch {
-        if (!cancelled) setStatus("error");
+      } catch (err) {
+        if (!cancelled) {
+          console.error("useNetworkStreamers: Netzwerk-API nicht ladbar:", err);
+          setStatus("error");
+        }
       }
     })();
     return () => {

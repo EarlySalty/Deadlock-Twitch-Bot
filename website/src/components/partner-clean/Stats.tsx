@@ -1,6 +1,9 @@
 import { AnimatedCounter } from "@/components/ui/AnimatedCounter";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
-import { useNetworkCount } from "@/hooks/useNetworkCount";
+import {
+  type NetworkStatus,
+  type NetworkStreamer,
+} from "@/hooks/useNetworkStreamers";
 
 interface PartnerStat {
   label: string;
@@ -16,8 +19,15 @@ const partnerStats: PartnerStat[] = [
   { label: "Online", value: 24, suffix: "/7" },
 ];
 
-export function Stats() {
-  const streamerCount = useNetworkCount();
+export function Stats({
+  streamers,
+  status,
+}: {
+  streamers: NetworkStreamer[];
+  status: NetworkStatus;
+}) {
+  const streamerCount =
+    status === "ready" && streamers.length > 0 ? streamers.length : null;
 
   return (
     <section id="stats" className="relative z-10">

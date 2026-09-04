@@ -3,7 +3,7 @@ import { ExternalLink, Radio, ShieldCheck, Users } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { GradientText } from "@/components/ui/GradientText";
 import { Avatar } from "@/components/partner-clean/partnerShared";
-import { useNetworkStreamers } from "@/hooks/useNetworkStreamers";
+import { type NetworkStreamer } from "@/hooks/useNetworkStreamers";
 import { twitchUrl } from "@/lib/partnerNetwork";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
@@ -74,8 +74,7 @@ function NetworkPulse() {
   );
 }
 
-export function PartnerPitch() {
-  const { streamers } = useNetworkStreamers();
+export function PartnerPitch({ streamers }: { streamers: NetworkStreamer[] }) {
   const reduce = useReducedMotion();
   const marquee = streamers.slice(0, 14);
   const loop = marquee.length > 0 ? [...marquee, ...marquee] : [];

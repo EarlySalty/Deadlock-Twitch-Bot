@@ -3,7 +3,7 @@ import { ArrowUpRight, Users } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { Avatar, LiveBadge } from "@/components/partner-clean/partnerShared";
 import {
-  useNetworkStreamers,
+  type NetworkStatus,
   type NetworkStreamer,
 } from "@/hooks/useNetworkStreamers";
 import { previewImageUrl, twitchParent, twitchUrl } from "@/lib/partnerNetwork";
@@ -29,14 +29,20 @@ function TwitchEmbed({ login }: { login: string }) {
   );
 }
 
-function LivePreview({ login }: { login: string }) {
+function LivePreview({ partner }: { partner: NetworkStreamer }) {
   return (
     <div className="relative aspect-video w-full overflow-hidden bg-black">
+      <span className="absolute inset-0 flex items-center justify-center">
+        <Avatar login={partner.login} avatarUrl={partner.avatarUrl} size={64} />
+      </span>
       <img
-        src={previewImageUrl(login)}
-        alt={`Vorschau von ${login}`}
+        src={previewImageUrl(partner.login)}
+        alt={`Vorschau von ${partner.login}`}
         loading="lazy"
         className="absolute inset-0 h-full w-full object-cover"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
       />
       <span className="absolute top-3 left-3">
         <LiveBadge />
@@ -92,7 +98,7 @@ function LiveCard({
       transition={{ duration: 0.4, delay: (index % 3) * 0.08 }}
       className="rounded-2xl overflow-hidden border border-[rgba(85,151,143,0.55)] bg-[var(--color-card)] shadow-[0_0_40px_-16px_rgba(201,168,106,0.85)]"
     >
-      {asPreview ? <LivePreview login={partner.login} /> : <TwitchEmbed login={partner.login} />}
+      {asPreview ? <LivePreview partner={partner} /> : <TwitchEmbed login={partner.login} />}
       <ChannelBar partner={partner} />
     </motion.div>
   );
@@ -158,8 +164,13 @@ function Skeletons() {
   );
 }
 
-export function PartnerNetwork() {
-  const { streamers, status } = useNetworkStreamers();
+export function PartnerNetwork({
+  streamers,
+  status,
+}: {
+  streamers: NetworkStreamer[];
+  status: NetworkStatus;
+}) {
   const reduce = useReducedMotion();
 
   const live = streamers.filter((s) => s.isLive);
