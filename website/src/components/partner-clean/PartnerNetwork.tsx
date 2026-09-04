@@ -26,14 +26,17 @@ function TwitchEmbed({ login }: { login: string }) {
     `https://player.twitch.tv/?channel=${encodeURIComponent(login)}` +
     `&parent=${twitchParent()}&muted=true&autoplay=true`;
   return (
-    <div className="relative aspect-video w-full overflow-hidden bg-black">
+    <div
+      className="relative aspect-video w-full overflow-hidden bg-black bg-cover bg-center"
+      style={{ backgroundImage: `url(${previewImageUrl(login)})` }}
+    >
       <iframe
         title={`Live-Stream von ${login}`}
         src={src}
         className="absolute inset-0 h-full w-full"
         allow="autoplay; fullscreen"
         allowFullScreen
-        loading="lazy"
+        loading="eager"
       />
     </div>
   );

@@ -1,5 +1,5 @@
-import { motion } from "framer-motion";
-import type { ReactNode } from "react";
+import { motion, useInView, useReducedMotion } from "framer-motion";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 interface ScrollRevealProps {
   children: ReactNode;
@@ -18,21 +18,37 @@ export function ScrollReveal({
   const isNegative = direction === "down" || direction === "right";
   const offset = isNegative ? -30 : 30;
 
-  const initial = isHorizontal
-    ? { opacity: 0, x: offset }
-    : { opacity: 0, y: offset };
+  const ref = useRef<HTMLDivElement>(null);
+  const reduce = useReducedMotion();
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+  const [hidden, setHidden] = useState(false);
 
-  const animate = isHorizontal
-    ? { opacity: 1, x: 0 }
-    : { opacity: 1, y: 0 };
+  useEffect(() => {
+    if (reduce) return;
+    const el = ref.current;
+    if (!el) return;
+    if (el.getBoundingClientRect().top > window.innerHeight) {
+      setHidden(true);
+    }
+  }, [reduce]);
+
+  const versteckt = hidden && !inView;
+
+  const target = isHorizontal
+    ? { opacity: versteckt ? 0 : 1, x: versteckt ? offset : 0 }
+    : { opacity: versteckt ? 0 : 1, y: versteckt ? offset : 0 };
 
   return (
     <motion.div
+      ref={ref}
       className={className}
-      initial={initial}
-      whileInView={animate}
-      viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.6, delay, ease: "easeOut" }}
+      initial={false}
+      animate={target}
+      transition={
+        versteckt
+          ? { duration: 0 }
+          : { duration: 0.6, delay, ease: "easeOut" }
+      }
     >
       {children}
     </motion.div>
