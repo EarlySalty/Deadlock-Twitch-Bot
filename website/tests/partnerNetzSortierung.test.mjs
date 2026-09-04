@@ -7,7 +7,14 @@ import {
   istDeadlock,
   impactScore,
   gliederePartner,
+  zuschauerSchnitt,
 } from "../src/lib/partnerNetwork.ts";
+
+test("zuschauerSchnitt rundet auf ganze Zahlen", () => {
+  assert.equal(zuschauerSchnitt(7.666666666666667), "8");
+  assert.equal(zuschauerSchnitt(0), "0");
+  assert.equal(zuschauerSchnitt(1234.4), "1.234");
+});
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const netFile = `${root}/src/components/partner-clean/PartnerNetwork.tsx`;
@@ -87,7 +94,7 @@ test("gliederePartner bei Gleichstand alphabetisch nach Name", () => {
 test("PartnerNetwork rendert Ausklapp-Kopfzeilen und einen Klapp-Knopf mit aria-expanded", () => {
   const net = readFileSync(netFile, "utf8");
   assert.match(net, /weitere streamen gerade Deadlock/);
-  assert.match(net, /Alle/);
+  assert.match(net, /Alle \$\{allePartner\.length\} Partner/);
   assert.match(net, /aria-expanded/);
   assert.ok(
     net.includes("Gerade streamt kein Partner Deadlock. Schau später wieder rein."),

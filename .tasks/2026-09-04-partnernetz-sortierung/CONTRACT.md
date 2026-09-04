@@ -105,3 +105,4 @@ uns Partner sind".
 ## Amendments
 
 - 2026-09-04, REQ-03, alt: Live in anderem Spiel mit LIVE-Punkt und Spielname -> neu: Nicht-Deadlock-Streams sind irrelevant, solche Partner erscheinen in "Alle Partner" ohne LIVE-Punkt und ohne Spielname, wie offline; Nutzer-Wortlaut "allgemeine Streams sind irrelevant", entschieden von User
+- 2026-09-04, Erlaubter Änderungsbereich, alt: PartnerPitch.tsx verboten -> neu: website/src/components/partner-clean/PartnerPitch.tsx nur für den Live-Punkt der Avatar-Laufleiste (Deadlock-Prüfung wie in PartnerNetwork, Merge-Gate-Befund 2), entschieden von Orchestrator (nur technisch, reversibel)

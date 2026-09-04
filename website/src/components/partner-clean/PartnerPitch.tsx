@@ -4,7 +4,7 @@ import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { GradientText } from "@/components/ui/GradientText";
 import { Avatar } from "@/components/partner-clean/partnerShared";
 import { type NetworkStreamer } from "@/hooks/useNetworkStreamers";
-import { twitchUrl } from "@/lib/partnerNetwork";
+import { istDeadlock, twitchUrl } from "@/lib/partnerNetwork";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 const anchors = [
@@ -176,7 +176,7 @@ export function PartnerPitch({ streamers }: { streamers: NetworkStreamer[] }) {
                       >
                         <span className="relative">
                           <Avatar login={s.login} avatarUrl={s.avatarUrl} size={56} />
-                          {s.isLive ? (
+                          {istDeadlock(s) && s.isLive ? (
                             <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-card)]" />
                           ) : null}
                         </span>

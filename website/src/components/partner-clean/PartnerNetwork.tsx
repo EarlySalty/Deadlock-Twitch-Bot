@@ -10,6 +10,7 @@ import {
 import {
   gliederePartner,
   previewImageUrl,
+  zuschauerSchnitt,
   twitchParent,
   twitchUrl,
 } from "@/lib/partnerNetwork";
@@ -133,7 +134,7 @@ function PartnerZeile({
     kennzahlen.push(`${partner.dlStreams30d} Deadlock-Streams`);
   }
   if (partner.avgViewers30d > 0) {
-    kennzahlen.push(`Ø ${partner.avgViewers30d} Zuschauer`);
+    kennzahlen.push(`Ø ${zuschauerSchnitt(partner.avgViewers30d)} Zuschauer`);
   }
   return (
     <motion.a

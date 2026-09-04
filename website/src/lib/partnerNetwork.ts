@@ -84,5 +84,9 @@ export function twitchParent(): string {
 }
 
 export function previewImageUrl(login: string): string {
-  return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${login}-640x360.jpg`;
+  return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(login)}-640x360.jpg`;
+}
+
+export function zuschauerSchnitt(n: number): string {
+  return Math.round(n).toLocaleString("de-DE", { maximumFractionDigits: 0 });
 }
