@@ -60,7 +60,7 @@ research: RESEARCH.md, EVIDENCE.md
 
 - M1: fertig. Baseline 171 pass, 0 fail (/tmp/tb-dash-test-baseline.log); tsc und vite build gruen.
 - M2: fertig. Shell/Sidebar/Hook neu, Home gibt Rahmen und Sidebar ab, App wickelt Home in die Shell. 171 pass, 0 fail (/tmp/tb-dash-test-m2.log); tsc und vite build gruen.
-- M3: offen
+- M3: fertig. Uplink, Verwaltung, Overlay geben Rahmen und Sidebar-Kopie ab; App wickelt sie in die Shell (activeRoute). Wicklung liegt in App.tsx (nicht in den Seiten), damit E9 sie prueft. 171 pass, 0 fail (/tmp/tb-dash-test-m3.log); tsc und vite build gruen.
 - M4: offen
 - M5: offen
 - M6: offen

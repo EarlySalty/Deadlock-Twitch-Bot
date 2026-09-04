@@ -421,13 +421,19 @@ export default function App() {
           {isSocialMediaAdminRoute ? (
             <SocialMediaAdminDashboard />
           ) : isVerwaltungRoute ? (
-            <VerwaltungPage />
+            <DashboardShell activeRoute="verwaltung">
+              <VerwaltungPage />
+            </DashboardShell>
           ) : isOverlayBuilderRoute ? (
-            <OverlayBuilderPage />
+            <DashboardShell activeRoute="overlay">
+              <OverlayBuilderPage />
+            </DashboardShell>
           ) : isPricingRoute ? (
             <Pricing />
           ) : isUplinkRoute ? (
-            <UplinkPage />
+            <DashboardShell activeRoute="uplink">
+              <UplinkPage />
+            </DashboardShell>
           ) : isInternalHomeRoute ? (
             <DashboardShell activeRoute="home">
               <InternalHome />

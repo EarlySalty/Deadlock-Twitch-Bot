@@ -2,19 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
-  BarChart3,
   ChevronDown,
   Copy,
   Eye,
   EyeOff,
-  Film,
-  Home,
   Loader2,
   Lock,
-  Radio,
-  Settings,
-  MonitorPlay,
-  FileText,
   UserMinus,
   UserPlus,
   Users,
@@ -42,48 +35,11 @@ import {
 import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
-import {
-  PREVIEW_CHANGELOG_ROUTE,
-  PREVIEW_HOME_ROUTE,
-  PREVIEW_OVERLAY_ROUTE,
-  PREVIEW_PRICING_ROUTE,
-  PREVIEW_UPLINK_ROUTE,
-  PREVIEW_VERWALTUNG_ROUTE,
-  analyticsTabHref,
-} from '@/preview/routes';
+import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
-
-function SidebarLink({
-  href,
-  label,
-  icon: Icon,
-  active,
-}: {
-  href: string;
-  label: string;
-  icon: typeof Home;
-  active?: boolean;
-}) {
-  const activeClasses =
-    'border border-primary/25 bg-primary/10 text-primary lg:rounded-l-none lg:border-y-0 lg:border-r-0 lg:border-t-0 lg:border-l-2 lg:border-primary lg:pl-2.5';
-  const inactiveClasses =
-    'border border-transparent text-text-secondary hover:bg-white/5 hover:text-white';
-  return (
-    <a
-      href={href}
-      aria-current={active ? 'page' : undefined}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap ${
-        active ? activeClasses : inactiveClasses
-      }`}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span>{label}</span>
-    </a>
-  );
-}
 
 /**
  * Inhalt von Schritt 5 der OBS-Anleitung, "Fenster einrichten".
@@ -949,32 +905,7 @@ export function UplinkPage() {
         : { text: isLoading ? 'Streamstatus lädt' : 'Streamstatus unbekannt', klasse: 'border-warning/30 bg-warning/10 text-warning' };
 
   return (
-    <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <div className="relative mx-auto max-w-[1800px]">
-        <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <Rise as="aside" className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4">
-            <div className="space-y-4">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                Main
-              </div>
-              <nav aria-label="Dashboard" className="lg:space-y-1">
-                <SidebarLink href={PREVIEW_HOME_ROUTE} icon={Home} label="Home" />
-                <SidebarLink href={analyticsTabHref('overview')} icon={BarChart3} label="Analyse" />
-                <SidebarLink href="/social-media-admin" icon={Film} label="Social Media Dashboard" />
-                <SidebarLink href={PREVIEW_UPLINK_ROUTE} icon={Radio} label="Uplink" active />
-              </nav>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                Tools
-              </div>
-              <div className="lg:space-y-1">
-                <SidebarLink href={PREVIEW_VERWALTUNG_ROUTE} icon={Settings} label="Verwaltung" />
-                <SidebarLink href={PREVIEW_OVERLAY_ROUTE} icon={MonitorPlay} label="Stream-Overlay" />
-                <SidebarLink href={PREVIEW_CHANGELOG_ROUTE} icon={FileText} label="Changelog" />
-              </div>
-            </div>
-          </Rise>
-
-          <main id="uplink-main" className="space-y-4">
+    <>
             <Rise className="panel-card rounded-2xl p-5 md:p-6">
               <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
                 Eigenes Modul
@@ -1301,9 +1232,6 @@ export function UplinkPage() {
                 </div>
               </details>
             </div>
-          </main>
-        </div>
-      </div>
-    </div>
+    </>
   );
 }
