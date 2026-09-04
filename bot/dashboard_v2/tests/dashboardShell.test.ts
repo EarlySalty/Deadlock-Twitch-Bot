@@ -70,3 +70,30 @@ test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
     'AnalyticsDashboard darf keine eigene Gesamt-Maximalbreite setzen',
   );
 });
+
+test('App.tsx reicht die Demo-Entscheidung an die Shell durch', () => {
+  assert.match(
+    APP,
+    /demoMode=\{isDemoMode\}/,
+    'App.tsx muss den Demo-Zustand an DashboardShell durchreichen',
+  );
+});
+
+test('DashboardShell laesst im Demo-Modus Sidebar und Profil-Hook aus', () => {
+  assert.match(SHELL, /demoMode\?:\s*boolean/, 'Shell braucht eine demoMode-Prop');
+  const demoStart = SHELL.indexOf('demoMode ?');
+  const branchSplit = SHELL.indexOf(') : (', demoStart);
+  assert.ok(demoStart >= 0 && branchSplit > demoStart, 'Shell muss demoMode als Zweig behandeln');
+  const demoBranch = SHELL.slice(demoStart, branchSplit);
+  assert.doesNotMatch(
+    demoBranch,
+    /DashboardSidebar/,
+    'Der Demo-Zweig der Shell darf DashboardSidebar nicht mounten',
+  );
+  const sidebarBranch = SHELL.slice(branchSplit);
+  assert.match(
+    sidebarBranch,
+    /<DashboardSidebar activeRoute=\{activeRoute\} \/>/,
+    'Der Nicht-Demo-Zweig muss die Sidebar mounten',
+  );
+});

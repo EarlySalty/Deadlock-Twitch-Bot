@@ -297,7 +297,7 @@ function AnalyticsDashboard() {
   };
 
   return (
-    <DashboardShell activeRoute="analyse">
+    <DashboardShell activeRoute="analyse" demoMode={isDemoMode}>
         <div className="flex justify-end">
           <AuthBadge />
         </div>
