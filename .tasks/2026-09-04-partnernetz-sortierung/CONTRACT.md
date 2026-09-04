@@ -1,6 +1,6 @@
 # Contract: Partner-Übersicht auf /streamer/v2 nach Deadlock-Live und Impact gliedern
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 klasse: mittel
 repo: Deadlock-Twitch-Bot (website/)
@@ -103,3 +103,5 @@ uns Partner sind".
   mit LIVE-Punkt)
 
 ## Amendments
+
+- 2026-09-04, REQ-03, alt: Live in anderem Spiel mit LIVE-Punkt und Spielname -> neu: Nicht-Deadlock-Streams sind irrelevant, solche Partner erscheinen in "Alle Partner" ohne LIVE-Punkt und ohne Spielname, wie offline; Nutzer-Wortlaut "allgemeine Streams sind irrelevant", entschieden von User

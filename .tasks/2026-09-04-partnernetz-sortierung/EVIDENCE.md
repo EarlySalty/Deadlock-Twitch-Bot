@@ -1,6 +1,6 @@
 # Evidence: Partner-Übersicht Sortierung
 
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 
 Jede Zeile eine echte Fundstelle, Stand main 1540aebb.
