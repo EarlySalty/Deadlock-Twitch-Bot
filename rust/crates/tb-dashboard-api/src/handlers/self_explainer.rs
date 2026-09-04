@@ -16,6 +16,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -434,10 +435,14 @@ async fn answer_question(
 
 // ── Rate-Limiter (Sliding-Window pro Peer) ─────────────────────────────────────
 
+const RATE_SWEEP_INTERVALL: usize = 256;
+const RATE_SWEEP_MAP_MAX: usize = 1000;
+
 pub(crate) struct RateLimiter {
     window: f64,
     max: usize,
     hits: Mutex<std::collections::HashMap<String, Vec<f64>>>,
+    seit_aufraeumen: AtomicUsize,
 }
 
 impl RateLimiter {
@@ -446,6 +451,7 @@ impl RateLimiter {
             window,
             max,
             hits: Mutex::new(std::collections::HashMap::new()),
+            seit_aufraeumen: AtomicUsize::new(0),
         }
     }
 
@@ -461,20 +467,29 @@ impl RateLimiter {
                     .collect()
             })
             .unwrap_or_default();
-        if recent.len() >= self.max {
-            map.insert(peer.to_string(), recent);
-            return false;
+        let erlaubt = recent.len() < self.max;
+        if erlaubt {
+            recent.push(now);
         }
-        recent.push(now);
         map.insert(peer.to_string(), recent);
-        // Sanfte Speicherbremse: abgelaufene Peers gelegentlich wegräumen.
-        if map.len() > 2048 {
-            map.retain(|_, ts| {
-                ts.retain(|t| now - *t < self.window);
-                !ts.is_empty()
-            });
+        self.vielleicht_aufraeumen(&mut map, now);
+        erlaubt
+    }
+
+    fn vielleicht_aufraeumen(
+        &self,
+        map: &mut std::collections::HashMap<String, Vec<f64>>,
+        now: f64,
+    ) {
+        let zaehler = self.seit_aufraeumen.fetch_add(1, Ordering::Relaxed) + 1;
+        if zaehler < RATE_SWEEP_INTERVALL && map.len() <= RATE_SWEEP_MAP_MAX {
+            return;
         }
-        true
+        self.seit_aufraeumen.store(0, Ordering::Relaxed);
+        map.retain(|_, ts| {
+            ts.retain(|t| now - *t < self.window);
+            !ts.is_empty()
+        });
     }
 }
 
@@ -891,6 +906,28 @@ mod tests {
         assert!(rl.allow("q", 3.0));
         // Nach Ablauf des Fensters wieder frei.
         assert!(rl.allow("p", 70.0));
+    }
+
+    #[test]
+    fn rate_limiter_raeumt_abgelaufene_schluessel_ab() {
+        let rl = RateLimiter::new(60.0, 5);
+        for i in 0..RATE_SWEEP_INTERVALL {
+            assert!(rl.allow(&format!("alt{i}"), 0.0));
+        }
+        assert_eq!(
+            rl.hits.lock().unwrap().len(),
+            RATE_SWEEP_INTERVALL,
+            "alte Peers zunächst vorhanden"
+        );
+        for i in 0..RATE_SWEEP_INTERVALL {
+            assert!(rl.allow(&format!("neu{i}"), 100.0));
+        }
+        let map = rl.hits.lock().unwrap();
+        assert!(
+            map.keys().all(|k| k.starts_with("neu")),
+            "abgelaufene alt-Peers werden beim Sweep entfernt"
+        );
+        assert_eq!(map.len(), RATE_SWEEP_INTERVALL);
     }
 
     #[test]

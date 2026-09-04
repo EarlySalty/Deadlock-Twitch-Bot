@@ -35,9 +35,14 @@ import {
   PREVIEW_PRICING_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
+  isPreviewModeEnabled,
 } from '@/preview/routes';
 import { shouldRetryApiQuery } from '@/api/httpError';
-import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
+import {
+  dashboardRuntimeConfig,
+  hasDemoRuntimeConfig,
+  resolveEffectiveDemoMode,
+} from '@/runtimeConfig';
 import {
   AlertTriangle,
   Sparkles,
@@ -415,6 +420,14 @@ export default function App() {
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
 
+  const zeigeAssistent =
+    !isPreviewModeEnabled() &&
+    !hasDemoRuntimeConfig() &&
+    !resolveEffectiveDemoMode({
+      pathname: window.location.pathname,
+      runtimeConfig: dashboardRuntimeConfig,
+    });
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Die Sprachwahl liegt ueber allem: sie gilt fuer jede Route dieses
@@ -449,7 +462,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </ErrorBoundary>
-        <DashboardAssistent />
+        {zeigeAssistent && <DashboardAssistent />}
       </LanguageProvider>
     </QueryClientProvider>
   );

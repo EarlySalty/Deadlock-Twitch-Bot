@@ -1,4 +1,4 @@
-import { buildApiUrl, withCookieCredentials } from './core';
+import { ApiHttpError, buildApiUrl, fetchJson, withCookieCredentials } from './core';
 import type { Language } from '../i18n/dictionary';
 
 export interface AssistentVerlaufEintrag {
@@ -36,7 +36,7 @@ export async function askAssistent(params: {
   const timer = setTimeout(() => controller.abort(), ASSISTENT_TIMEOUT_MS);
 
   try {
-    const response = await fetch(
+    const data = await fetchJson<Partial<AssistentAntwort>>(
       buildApiUrl('/dashboard/assistent/ask'),
       withCookieCredentials({
         method: 'POST',
@@ -49,15 +49,6 @@ export async function askAssistent(params: {
         signal: controller.signal,
       }),
     );
-
-    if (response.status === 429) {
-      throw new AssistentRateLimitError('Zu viele Fragen gerade. Probier es gleich noch einmal.');
-    }
-    if (!response.ok) {
-      throw new Error('Die Antwort konnte nicht geladen werden.');
-    }
-
-    const data = (await response.json()) as Partial<AssistentAntwort>;
     return {
       answer: typeof data.answer === 'string' ? data.answer : '',
       parts: Array.isArray(data.parts) ? data.parts : [],
@@ -65,6 +56,11 @@ export async function askAssistent(params: {
       grounded: Boolean(data.grounded),
       page: typeof data.page === 'string' ? data.page : page,
     };
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 429) {
+      throw new AssistentRateLimitError('Zu viele Fragen gerade. Probier es gleich noch einmal.');
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }

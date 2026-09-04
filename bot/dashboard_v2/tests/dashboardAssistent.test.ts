@@ -45,6 +45,13 @@ test('App.tsx bindet den Assistenten innerhalb des LanguageProvider ein', () => 
   assert.ok(widget > auf && widget < zu, 'DashboardAssistent liegt nicht im LanguageProvider');
 });
 
+test('App.tsx rendert den Assistenten nur außerhalb von Demo und Preview', () => {
+  assert.match(APP, /!isPreviewModeEnabled\(\)/);
+  assert.match(APP, /!hasDemoRuntimeConfig\(\)/);
+  assert.match(APP, /!resolveEffectiveDemoMode\(/);
+  assert.match(APP, /zeigeAssistent && <DashboardAssistent \/>/);
+});
+
 test('assistent.ts sendet page und language und setzt X-CSRF-Token bedingt', () => {
   assert.match(API, /JSON\.stringify\(\{ question, history, page, language \}\)/);
   assert.match(API, /csrfToken \?/);

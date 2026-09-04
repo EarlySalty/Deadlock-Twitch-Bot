@@ -600,7 +600,7 @@ pub async fn ask(
         "answer": text,
         "parts": parts,
         "sources": grounding.sources,
-        "grounded": true,
+        "grounded": grounded,
         "page": page,
     }))
     .into_response()
@@ -769,6 +769,22 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn antwort_meldet_echten_grounded_wert() {
+        let production = include_str!("dashboard_assistent.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("Produktionscode steht vor dem Testmodul");
+        assert!(
+            production.contains("\"grounded\": grounded,"),
+            "Antwort schreibt den berechneten grounded-Wert"
+        );
+        assert!(
+            !production.contains("\"grounded\": true,"),
+            "grounded ist nicht mehr hart auf true"
+        );
     }
 
     #[test]
