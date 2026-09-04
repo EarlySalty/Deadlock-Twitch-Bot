@@ -350,6 +350,45 @@ async fn session_lifecycle_start_sample_finalize() {
 }
 
 #[tokio::test]
+async fn offene_session_bekommt_titel_nach_verpasstem_adopt_fenster() {
+    let pool = pool_or_skip!("t4b_backfill_meta");
+    let started = Utc::now() - Duration::minutes(15);
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions
+            (streamer_login, stream_id, started_at, start_viewers, peak_viewers, samples,
+             stream_title, game_name)
+         VALUES ('drag', 's-title', $1, 15, 15, 3, '', '')",
+    )
+    .bind(started.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let tracker = tracker_with(&pool, Arc::new(NoFollowerSource));
+    let mut stream = deadlock_stream("s-title", "drag", 18);
+    stream.title = "Ranked Grind Titel".to_string();
+    stream.started_at = Some(started.to_rfc3339());
+
+    tracker
+        .ensure_session("drag", &stream, None, None, Utc::now())
+        .await
+        .expect("offene Session gefunden");
+
+    let (title, game): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT stream_title, game_name FROM twitch_stream_sessions WHERE stream_id = 's-title'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        title.as_deref(),
+        Some("Ranked Grind Titel"),
+        "Titel nachgetragen trotz verpasstem adopt-Fenster"
+    );
+    assert_eq!(game.as_deref(), Some("Deadlock"), "Spiel nachgetragen");
+}
+
+#[tokio::test]
 async fn adoptierte_session_reaktiviert_exp_snapshots() {
     let pool = pool_or_skip!("t4b_adopt_exp");
     let started = Utc::now() - Duration::minutes(20);

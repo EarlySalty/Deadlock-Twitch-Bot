@@ -225,6 +225,17 @@ impl SessionTracker {
             {
                 tracing::warn!(%error, login, "Konnte unvollständige Session nicht adoptieren");
             }
+            let title = stream.title_opt();
+            let game = stream.game_name_opt();
+            if title.is_some() || game.is_some() {
+                if let Err(error) = self
+                    .store
+                    .backfill_missing_meta(id, game.as_deref(), title.as_deref())
+                    .await
+                {
+                    tracing::warn!(%error, login, "Konnte Titel/Spiel der offenen Session nicht nachtragen");
+                }
+            }
             let started_at =
                 extract_stream_start(stream.started_at.as_deref(), previous_started_at)
                     .unwrap_or(now);

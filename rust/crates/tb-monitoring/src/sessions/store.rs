@@ -448,6 +448,32 @@ impl SessionStore {
         Ok(())
     }
 
+    pub async fn backfill_missing_meta(
+        &self,
+        session_id: i64,
+        game_name: Option<&str>,
+        stream_title: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE twitch_stream_sessions
+               SET stream_title = CASE
+                       WHEN (stream_title IS NULL OR stream_title = '') AND $2 IS NOT NULL
+                       THEN $2 ELSE stream_title END,
+                   game_name = CASE
+                       WHEN (game_name IS NULL OR game_name = '') AND $3 IS NOT NULL
+                       THEN $3 ELSE game_name END
+             WHERE id = $1
+            "#,
+        )
+        .bind(session_id)
+        .bind(stream_title)
+        .bind(game_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Speichert den gesendeten Announcement-Text an der Session
     /// (Python: UPDATE `notification_text` nach erfolgreichem Posting).
     pub async fn set_notification_text(
