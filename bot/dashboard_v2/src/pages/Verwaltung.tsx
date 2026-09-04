@@ -17,7 +17,6 @@ import { ModerationSection } from '@/components/verwaltung/ModerationSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
 import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
-  ArrowLeft,
   ArrowRight,
   Bot,
   FlaskConical,
@@ -61,14 +60,10 @@ export function VerwaltungPage() {
 
   if (isLoading || loadingAuth) {
     return (
-      <div className="min-h-screen relative px-3 py-4 md:px-7 md:py-8">
-        <div className="relative max-w-[900px] mx-auto">
-          <div className="panel-card rounded-2xl p-6 md:p-8">
-            <div className="flex items-center gap-3 text-text-secondary">
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              <span>Konto wird geladen ...</span>
-            </div>
-          </div>
+      <div className="panel-card rounded-2xl p-6 md:p-8">
+        <div className="flex items-center gap-3 text-text-secondary">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          <span>Konto wird geladen ...</span>
         </div>
       </div>
     );
@@ -77,20 +72,16 @@ export function VerwaltungPage() {
   if (isError) {
     const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
     return (
-      <div className="min-h-screen relative px-3 py-4 md:px-7 md:py-8">
-        <div className="relative max-w-[900px] mx-auto">
-          <div className="panel-card rounded-2xl p-6 md:p-8">
-            <h2 className="text-xl font-bold text-white">Konto-Daten nicht verfügbar</h2>
-            <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
-            <button
-              onClick={() => void refetch()}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
-            >
-              <ArrowRight className="h-4 w-4" />
-              Erneut laden
-            </button>
-          </div>
-        </div>
+      <div className="panel-card rounded-2xl p-6 md:p-8">
+        <h2 className="text-xl font-bold text-white">Konto-Daten nicht verfügbar</h2>
+        <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
+        <button
+          onClick={() => void refetch()}
+          className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
+        >
+          <ArrowRight className="h-4 w-4" />
+          Erneut laden
+        </button>
       </div>
     );
   }
@@ -406,14 +397,7 @@ export function VerwaltungPage() {
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0];
 
   return (
-    <div className="internal-home-vibe min-h-screen relative px-3 py-4 md:px-7 md:py-8">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-32 right-[-8rem] h-[28rem] w-[28rem] rounded-full bg-primary/22 blur-3xl" />
-        <div className="absolute top-[30%] -left-28 h-[20rem] w-[20rem] rounded-full bg-accent/20 blur-3xl" />
-      </div>
-
-      <div className="relative max-w-[900px] mx-auto space-y-4 md:space-y-5">
-
+    <>
         {partnerStatus && partnerStatus !== 'active' && partnerStatus !== 'blocked' ? (
           <Rise
             as="section"
@@ -450,39 +434,16 @@ export function VerwaltungPage() {
           </Rise>
         ) : null}
 
-        {/* Hero */}
-        <Rise
-          as="section"
-          className="panel-card rounded-2xl p-5 md:p-8"
-        >
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-1.5 text-sm font-medium text-text-secondary">
-              <User className="h-3.5 w-3.5 text-primary" />
-              Konto
-            </div>
-            <div className="space-y-2">
-              <h1 className="display-font text-4xl font-bold leading-tight md:text-5xl">
-                Dein{' '}
-                <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                  Konto
-                </span>{' '}
-                verwalten
-              </h1>
-              <p className="max-w-2xl text-sm text-text-secondary md:text-base">
-                Verbindungen, Chat-Befehle, Bot-Verhalten, Overlay und Werbung — nach Bereichen getrennt.
-              </p>
-            </div>
-            <a
-              href={PREVIEW_HOME_ROUTE}
-              className="inline-flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-white"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Zurück zur Startseite
-            </a>
+        <Rise as="section" className="panel-card rounded-2xl p-5 md:p-6">
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
+            Konto
           </div>
+          <h1 className="display-font text-2xl font-extrabold text-white">Dein Konto verwalten</h1>
+          <p className="mt-2 max-w-2xl text-sm text-text-secondary">
+            Verbindungen, Chat-Befehle, Bot-Verhalten, Overlay und Werbung, nach Bereichen getrennt.
+          </p>
         </Rise>
 
-        {/* Bereichswechsel. Sticky, damit er auch nach langem Scrollen erreichbar bleibt. */}
         <nav aria-label="Verwaltungsbereiche" className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
           {tabs.map((item) => {
             const Icon = item.icon;
@@ -504,8 +465,6 @@ export function VerwaltungPage() {
         </nav>
 
         <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
-
-      </div>
-    </div>
+    </>
   );
 }

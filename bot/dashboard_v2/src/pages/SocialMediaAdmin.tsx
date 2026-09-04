@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield, Film } from 'lucide-react';
+import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
 import { useT } from '@/context/LanguageContext';
@@ -153,27 +153,16 @@ export function SocialMediaAdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen relative px-3 py-4 md:px-7 md:py-8">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-28 right-[-7rem] h-[25rem] w-[25rem] rounded-full bg-primary/12 blur-3xl" />
-        <div className="absolute top-[28%] -left-24 h-[20rem] w-[20rem] rounded-full bg-accent/14 blur-3xl" />
-      </div>
-      <div className="relative max-w-[1700px] mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/15 border border-primary/30 grid place-items-center">
-              <Film className="w-5 h-5 text-primary" />
+    <>
+      <div className="panel-card rounded-2xl p-5 md:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
+              {isAdminView ? t('Alle Kanäle') : t('Dein Kanal')}
             </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] font-bold text-primary/90">
-                {isAdminView ? t('Alle Kanäle') : t('Dein Kanal')}
-              </div>
-              <h1 className="display-font font-extrabold text-white text-xl md:text-2xl tracking-tight leading-tight">
-                {t('Social Media')}
-              </h1>
-            </div>
+            <h1 className="display-font text-2xl font-extrabold text-white">{t('Social Media')}</h1>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -213,17 +202,12 @@ export function SocialMediaAdminDashboard() {
                 ))}
               </select>
             )}
-            <a
-              href="/analyse"
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors"
-            >
-              {t('← Analyse-Dashboard')}
-            </a>
             <AuthBadge />
           </div>
         </div>
+      </div>
 
-        <PlanProvider
+      <PlanProvider
           plan={authStatus?.plan ?? null}
           isAdmin={authStatus?.isAdmin ?? false}
           isLocalhost={authStatus?.isLocalhost ?? false}
@@ -258,7 +242,6 @@ export function SocialMediaAdminDashboard() {
         {!loadingStreamers && streamers.length === 0 && authStatus?.isAdmin && (
           <div className="mt-4 text-xs text-text-secondary">{t('Keine Streamer gefunden.')}</div>
         )}
-      </div>
-    </div>
+    </>
   );
 }

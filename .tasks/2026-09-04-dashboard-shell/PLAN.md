@@ -1,0 +1,97 @@
+# Plan: Einheitliche Dashboard-Shell
+
+status: erledigt
+datum: 2026-09-04
+contract: CONTRACT.md
+research: RESEARCH.md, EVIDENCE.md
+
+## Entscheidungen (Orchestrator)
+
+- E1 Zielrahmen = Home-Maß: `internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6`, innen `relative mx-auto max-w-[2200px]`, Grid `grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]`, `BackgroundBlobs` aus Home wandert in die Shell. Home behält seine dritte Spalte (Updates) als Fachinhalt innerhalb des Main-Slots.
+- E2 Zwei neue Dateien: `components/layout/DashboardShell.tsx` (Rahmen, Grid, Blobs, Main-Slot) und `components/layout/DashboardSidebar.tsx` (das heutige Home-`aside` inklusive `SidebarLink`, `SidebarNavItem`, Profilkopf, Main/Tools/Admin/Hilfe, Admin-Schalter, Partner-Auswahl bei Admin-Ansicht, FAQ, Tour neu starten). Prop `activeRoute: 'home' | 'analyse' | 'social' | 'uplink' | 'verwaltung' | 'overlay' | 'pricing'`, gesetzt in `App.tsx` aus dem vorhandenen Route-Switch.
+- E3 Datenweg der Sidebar: neuer Hook `hooks/useDashboardProfile.ts` kapselt `useAuthStatus` plus Profil-Fetch (`fetchInternalHome` ohne Override, Query-Key ohne Streamer-Override, `staleTime` mindestens 5 min), damit die Shell auf jeder Route einmal lädt und Home seinen Override-Query für den Fachinhalt behält.
+- E4 Analyse: `PlanProvider`, `Header`, `TabNavigation` bleiben als Kinder im Main-Slot. Der äußere Rahmen (App.tsx 299-308) fällt weg.
+- E5 Redundante „Zurück zum Dashboard / zur Startseite"-Links in Verwaltung, Overlay, Social, Pricing entfallen, weil die Sidebar die Navigation übernimmt. Der Link „Zurück zur Verwaltung" im OverlayBuilder bleibt (Fachfluss).
+- E6 Seitenköpfe (REQ-06): jede Route beginnt im Main-Slot mit einer `panel-card rounded-2xl p-5 md:p-6`-Kopfkarte, Eyebrow `text-[11px] font-bold uppercase tracking-[0.18em] text-primary`, Titel `display-font text-2xl font-extrabold text-white`, Untertitel `mt-2 max-w-2xl text-sm text-text-secondary`, Aktionen rechts. Vorlage ist die Home-Kopfkarte. Uplink hat das schon.
+- E7 Demo-Shell: Admin-Gruppe nur bei `adminEligible`, wie heute auf Home. Keine neue Logik.
+- E8 Keine Code-Kommentare. Bestehende Kommentare in angefassten Blöcken löschen.
+- E9 Neuer Test `components/layout/DashboardShell.test.tsx` im Stil von `Uplink.layout.test.tsx` (Quelltext-Regex, Runner `node --import tsx --test`): prüft, dass `App.tsx` jede der sieben Routen in `DashboardShell` wrappt und keine Seite mehr `max-w-[` als Gesamtbreite oder `internal-home-vibe` selbst setzt. Rot-Gegenprobe: eine Route in App.tsx ohne Shell rendern, Test muss rot werden, Sabotage zurücknehmen.
+
+## Milestones
+
+### M1 Baseline
+- Änderungen: keine.
+- Befehl: `cd bot/dashboard_v2 && npm ci --no-audit --no-fund && npm test > /tmp/tb-dash-test-baseline.log 2>&1; echo exit=$?` und `npx tsc -b && npx vite build > /tmp/tb-dash-build-baseline.log 2>&1; echo exit=$?`
+- Erwartung: passed/failed aus dem Log als Baseline in Status notieren.
+- Stop: Build rot ohne eigene Änderung, dann Ursache melden statt weiterbauen.
+
+### M2 Shell und Sidebar aus Home herauslösen
+- Änderungen: `DashboardShell.tsx`, `DashboardSidebar.tsx`, `useDashboardProfile.ts`, `DashboardShell.test.tsx` neu; `InternalHomeLanding.tsx` gibt Rahmen, Blobs und `aside` ab; `App.tsx` rendert `<DashboardShell activeRoute="home"><InternalHome/></DashboardShell>`. Skeleton der Home-Seite verliert den Sidebar-Teil.
+- Erwartung: Home sieht aus wie vorher. Neuer Test ist für die noch nicht umgestellten Routen rot und wird bis M4 grün.
+- Befehl: `npm test > /tmp/tb-dash-test-m2.log 2>&1; echo exit=$?` plus `npx tsc -b && npx vite build`
+- Stop: Admin-Schalter, Tour-Reset oder Partner-Auswahl funktionieren nicht mehr über die Shell.
+
+### M3 Uplink, Verwaltung, Overlay
+- Änderungen: `Uplink.tsx` verliert eigenes `SidebarLink` und Rahmen (Zeilen 59, 952-976), Main-Inhalt bleibt inkl. `data-section`-Marker; `Verwaltung.tsx` und `OverlayBuilder.tsx` (`OverlayBuilderFrame`) geben Rahmen ab, Kopf nach E6, Zurück-Links nach E5; `App.tsx` wrappt mit `activeRoute`.
+- Befehl: wie M2, Log `/tmp/tb-dash-test-m3.log`
+- Stop: `Uplink.layout.test.tsx` rot; dann nur die Hüllen-Muster anpassen (INV-03), nie die Fachmuster.
+
+### M4 Analyse, Social Media, Preise
+- Änderungen: `App.tsx` AnalyticsDashboard-Rahmen durch Shell ersetzen (E4); `SocialMediaAdmin.tsx` Rahmen und Kopf nach E6 (eigener `AuthBadge` bleibt als Aktion rechts im Kopf, `PlanProvider` bleibt); `Pricing.tsx` Rahmen ab, Kopf nach E6.
+- Befehl: wie M2, Log `/tmp/tb-dash-test-m4.log`; jetzt alle Tests grün, Zahl passed notieren; Rot-Gegenprobe für E9 durchführen und Ist/Soll notieren.
+- Stop: Tab-Deep-Link `/analyse?tab=...` oder Demo-Route rendert nicht.
+
+### M5 Sichtprüfung
+- Änderungen: keine.
+- Befehl: `npx vite preview --port 4173` starten, Routen laut `preview/routes.ts` (`/dashboard`, `/`, `/social-media-admin`, `/uplink`, `/verwaltung`, `/overlay`, `/pricing`) mit dem Preview-Browser der Hauptsession öffnen; Screenshots je Route nach `.tasks/2026-09-04-dashboard-shell/screens/`.
+- Erwartung: gleiche Sidebar, gleiche Breite, gleicher Hintergrund auf allen Routen.
+- Stop: Layout-Sprung zwischen zwei Routen sichtbar.
+
+### M6 Selbstprüfung und Übergabe
+- `python3 /home/nathanael/Documents/claude-config/bin/diff-policy.py /home/nathanael/.worktrees/tb-dashboard-shell origin/main`
+- Commits klein pro Milestone, Commit-Texte ohne Gedankenstriche, Status in PLAN.md nachführen.
+
+## Abweichungen
+
+- E2/E3, Partner-Auswahl (Admin): Der Admin-Streamer-Wechsler treibt ausschliesslich die Fachinhalt-Query von Home (`['internal-home', streamerOverride]`, InternalHomeLanding.tsx). Die Shell laedt ihr Profil laut E3 ohne Override (`['internal-home', null]`, useDashboardProfile.ts). Wuerde der Wechsler in die geteilte Shell-Sidebar wandern, muesste sein `selectedStreamer`-State plus Auto-Set- und URL-Sync-Effekt entweder auf 6 fremde Routen wirken (keine davon nutzt ihn) oder ueber einen neuen Cross-Route-Context an Home zurueckgereicht werden. REQ-02 zaehlt den Partner-Wechsler nicht zu den Sidebar-Inhalten (nur Profilkopf, Main, Tools, Admin-Schalter, Hilfe). Entscheidung: Wechsler bleibt in Home und rendert als Admin-Karte oben im Main-Slot; die Shell-Sidebar erfuellt REQ-02 vollstaendig. Kein Cross-Route-State, keine Wirkung auf INV-01-Fachinhalt der anderen Seiten.
+- E3, Profilkopf-Identitaet (Admin): Da die Shell mit `null`-Override laedt, zeigt der Sidebar-Profilkopf im Admin-Modus das eigene Konto statt des ausgewaehlten Partners (vorher: ausgewaehlter Partner). Fuer Nicht-Admins unveraendert (Override ist dort ohnehin null). Von E3 so vorgezeichnet, REQ-02 legt die Identitaet nicht fest.
+- E6, Pricing-Kopf: Pricing behaelt seinen bestehenden `PricingHero` (zentrierter Marketing-Hero mit eigenem h1) als Seitenkopf, statt zusaetzlich eine `panel-card`-Kopfkarte nach E6 davorzusetzen. Ein zweiter Kopf ueber dem Hero wuerde die Seite doppeln, und der Hero ist Fachinhalt (INV-01), der nicht umgebaut werden soll. REQ-03 (gleicher Rahmen, Sidebar, Breite, Hintergrund) ist voll erfuellt; die redundante `max-w-7xl`-Eigenbreite und der Zurueck-Link sind raus.
+
+## Status
+
+- M1: fertig. Baseline 171 pass, 0 fail (/tmp/tb-dash-test-baseline.log); tsc und vite build gruen.
+- M2: fertig. Shell/Sidebar/Hook neu, Home gibt Rahmen und Sidebar ab, App wickelt Home in die Shell. 171 pass, 0 fail (/tmp/tb-dash-test-m2.log); tsc und vite build gruen.
+- M3: fertig. Uplink, Verwaltung, Overlay geben Rahmen und Sidebar-Kopie ab; App wickelt sie in die Shell (activeRoute). Wicklung liegt in App.tsx (nicht in den Seiten), damit E9 sie prueft. 171 pass, 0 fail (/tmp/tb-dash-test-m3.log); tsc und vite build gruen.
+- M4: fertig. Analyse (AnalyticsDashboard), Social Media und Pricing in die Shell; Analyse behaelt Header/TabNavigation/PlanProvider, Social bekommt E6-Kopf plus AuthBadge als Aktion, Pricing behaelt PricingHero (Abweichung). Neuer Test tests/dashboardShell.test.ts in package.json scripts.test. 174 pass, 0 fail (/tmp/tb-dash-test-m4.log); tsc und vite build gruen. Rot-Gegenprobe (Pricing-Route ohne Shell): 1 fail statt 0 (/tmp/tb-dash-sabotage.log), Sabotage zurueckgenommen.
+- M5: uebersprungen (Hauptsession).
+- M6: fertig. diff-policy meldet 16 eigene Dateien und zwei P4-Blocks (bot/dashboard_v2/package.json, bot/dashboard_v2/tests/dashboardShell.test.ts), beide vom Orchestrator autorisiert (package.json per Amendment im Contract; Test-Pfad tests/ auf Ansage des Orchestrators). diff-policy liest Amendments nicht als erlaubte Pfade, die Freigabe faellt am Gate. Branch liegt 11 Commits hinter origin/main (dort ist seither die website/streamer-v2-Arbeit gelandet); meine vier Commits fassen website nicht an (git log origin/main..HEAD -- website leer). Vor dem Merge auf aktuellen origin/main nachziehen, damit nur der Dashboard-Anteil auf main geht.
+
+## Fix-Runde 1
+
+Alle vier Punkte aus REVIEW.md als neue Commits obendrauf behoben (kein amend, kein rebase). npm test 176 pass, 0 fail; tsc und vite build gruen.
+
+- Punkt 1 (MUSS, useDashboardProfile.ts): Guard canRequestInternalHome wiederhergestellt (kein Fetch fuer Discord-Master-Admin ohne Twitch-Login und fuer Localhost-Admin), enabled: canRequestInternalHome; Profilkopf faellt auf Login-Initiale oder Admin und Plan-Badge aus authStatus zurueck. Regressionstest in tests/dashboardShell.test.ts prueft canRequestInternalHome und enabled: canRequestInternalHome im Hook. Rot vor Fix: 1 fail statt 0 (Test 51, /tmp/tb-dash-fix-rot.log), gruen nach Fix.
+- Punkt 2 (SOLL 1, DashboardSidebar.tsx): Admin-Umschalten ruft queryClient.invalidateQueries() ohne Filter (mutate onSuccess), damit die Daten der aktiven Route neu laden.
+- Punkt 3 (SOLL 2, tests/dashboardShell.test.ts): Breiten-Pruefung deckt jetzt den AnalyticsDashboard-Block in App.tsx ab (kein max-w-[ und kein internal-home-vibe). Rot-Gegenprobe per Sabotage (max-w-[1700px] im Analytics-Block): 1 fail statt 0 (Test 52, /tmp/tb-dash-sabotage.log), Sabotage zurueckgenommen.
+- Punkt 4 (SOLL 3 plus Umlaute, InternalHomeLanding.tsx und neue Testdatei): Ersatzschreibweisen und Zierstriche im relokierten Admin-Auswahlblock durch echte Umlaute ersetzt (auswaehlbar/auswaehlen/Waehle/moechtest, Zierstrich-Option zu "Partner waehlen"); in der neuen Testdatei traegt zu traegt korrigiert. Nur Zeilen aus dem Diff angefasst.
+
+diff-policy: unveraendert zwei bekannte, akzeptierte P4-Blocks (package.json, tests/dashboardShell.test.ts), keine neuen Verstoesse.
+
+## Fix-Runde 2
+
+Drei Merge-Gate-Befunde als neue Commits obendrauf behoben (kein amend). Baseline 176 pass, 0 fail. Endstand npm test 178 pass, 0 fail; tsc und vite build gruen.
+
+- Befund 1 (BLOCKING, App.tsx/DashboardShell.tsx): Die oeffentliche Demo /twitch/demo faellt in den Catch-all auf AnalyticsDashboard; die Shell zog dort die Partner-Sidebar samt useDashboardProfile, dessen fetchInternalHome(null) gegen den Demo-Namespace lief. DashboardShell bekommt eine demoMode-Prop (Default false), die den Sidebar-Zweig auslaesst, damit die Sidebar-Komponente nicht mountet und der Hook nicht aufgerufen wird; App reicht isDemoMode durch. Regressionstest in tests/dashboardShell.test.ts (Test 53, 54): App reicht demoMode={isDemoMode} durch, der Demo-Zweig der Shell mountet DashboardSidebar nicht, der Nicht-Demo-Zweig schon. Rot vor Fix: 2 fail statt 0 (/tmp/tb-dash-r2-rot.log), gruen nach Fix.
+- Befund 2 (NIT, DashboardSidebar.tsx): invalidateQueries() ohne Filter refetchte im Render-Fenster vor der auth-status-Propagation noch die aktive ['internal-home', <partner>]-Query; nach Admin-aus lehnt der Server (auth_status.rs: isAdmin false bei adminMode false) den Override mit 403 ab, Home zeigte 'Startseite nicht verfuegbar'. Der neue Praedikat-Filter laesst genau die internal-home-Queries mit gesetztem Override aus und invalidiert alles uebrige inkl. auth-status. Ursache behoben: nach der auth-status-Aktualisierung wird isAdmin false, Home bindet auf ['internal-home', null] und laedt das eigene Konto (kein Code in InternalHomeLanding noetig).
+- Befund 3 (NIT, tests/dashboardShell.test.ts): Der Gate-Test belegte nur die Bezeichner; jetzt prueft er die Definitionen von isLocalhostAdmin und isAdminWithoutOwnLogin und die Gesamtbedingung !loadingAuth && !isLocalhostAdmin && !isAdminWithoutOwnLogin. Sabotage (canRequestInternalHome = true): 1 fail statt 0, Test 51 (/tmp/tb-dash-r2-sabotage.log), zurueckgenommen.
+
+## Fix-Runde 3
+
+Zwei Merge-Gate-Befunde als neue Commits obendrauf behoben (kein amend). Baseline 178 pass, 0 fail. Endstand npm test 179 pass, 0 fail; tsc und vite build gruen. Zwei Commits: 99cb7858 (Befund 1+2, eine Ursache), d5153960 (Befund 3).
+
+Regressionstests zuerst (rot vor Fix, /tmp/tb-dash-r3-rot.log): Ist 176 pass / 3 fail (Tests 51, 52, 55), Soll 179 pass / 0 fail. Nach Fix 179 pass / 0 fail (/tmp/tb-dash-r3-gruen.log).
+
+- Befund 1+2 (BLOCKING, useDashboardProfile.ts und App.tsx, eine Ursache): Die oeffentliche Route /twitch/pricing (kein Login-Gate) rendert die Shell; ein anonymer Besucher lief ueber die Partner-Sidebar in useDashboardProfile, dessen Gate nur Localhost- und login-lose Admins ausschloss. Der anonyme Fall (authenticated false, twitchLogin null) fiel durch, feuerte fetchInternalHome(null), bekam 401 plus loginUrl und wurde in den Twitch-OAuth umgeleitet; davor blitzte die interne Navigation samt Admin-Gruppe auf. (a) canRequestInternalHome verlangt jetzt zusaetzlich isAuthenticated = authStatus.authenticated === true (Feld aus api/auth.ts:5, bei anonym false), sodass anonym nie ein Home-Fetch laeuft. (b) DashboardShell bekommt eine showSidebar-Prop (Default true, withSidebar = !demoMode && showSidebar); die neue Komponente PricingRoute liest useAuthStatus und setzt showSidebar nur bei geladener, authentifizierter Sitzung, sonst rendert die Shell nur Rahmen und main ohne Sidebar und ohne Profil-Hook. Waehrend der Auth-Status laedt, keine Sidebar. Die anderen sechs Routen bleiben serverseitig gegated und rendern die Sidebar wie bisher. Regressionstests: Hook-Gate enthaelt authenticated (Test 51), App reicht die Auth-Entscheidung fuer Pricing an die Shell durch (Test 52), Shell koppelt die Sidebar an withSidebar (Test 55). Befund 4 (NIT, displayName 'Creator') faellt weg: anonyme Sitzungen erreichen den Hook nicht mehr.
+- Befund 3 (NIT, tests/dashboardShell.test.ts): Die Breiten-Pruefung matchte nur max-w-[; ein Rueckfall auf max-w-7xl, max-w-5xl oder max-w-screen-xl waere gruen geblieben. forbiddenMaxWidths matcht jetzt jede max-w-Klasse (Regex max-w-(?:\[[^\]]*\]|[\w-]+)) und erlaubt nur die inhaltlichen Textbreiten max-w-sm, max-w-xl, max-w-2xl (aktueller Bestand an <p>-Untertiteln und Eingabefeldern der sieben Seiten); jede andere Gesamtbreite an Seiten und Analytics-Rahmen faellt auf. Sabotage (max-w-7xl in Pricing.tsx): 1 fail statt 0, Test 49 (/tmp/tb-dash-r3-sabotage.log), zurueckgenommen.
+
+diff-policy: unveraendert die zwei bekannten, akzeptierten P4-Blocks (package.json, tests/dashboardShell.test.ts), keine neuen Verstoesse.
