@@ -129,7 +129,7 @@ interface SessionCardProps {
 
 function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: SessionCardProps) {
   const durationHours = (session.duration / 3600).toFixed(1);
-  const retentionColor = session.retention10m >= 60 ? 'text-success' : session.retention10m >= 40 ? 'text-warning' : 'text-error';
+  const holdColor = session.holdPct >= 60 ? 'text-success' : session.holdPct >= 40 ? 'text-warning' : 'text-error';
 
   return (
     <motion.div
@@ -175,10 +175,11 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
 
           <div className="flex items-center gap-4">
             <div className="text-right">
-              <div className={`text-lg font-bold ${retentionColor}`}>
-                {session.retention10m.toFixed(0)}%
+              <div className={`text-lg font-bold ${holdColor}`}>
+                {session.holdPct.toFixed(0)}%
               </div>
-              <div className="text-xs text-text-secondary">10m Retention</div>
+              <div className="text-xs text-text-secondary">Bindung</div>
+              <div className="text-xs text-text-secondary">Ø Zuschauer / Peak</div>
             </div>
             {onSessionClick && (
               <button
