@@ -245,3 +245,61 @@ Abwaegung liegt beim Implementierer.
 
 - `npm run build` Exit 0 (2972 Module, CSS index-Cwfyp5FQ.css). Log /tmp/kb4.log.
 - `npm test` Exit 0, 255 tests, 255 pass, 0 fail, 0 skipped. Log /tmp/kt4.log.
+
+---
+
+# Runde 3: M2-Fix e3de4238 (HEAD)
+
+## Urteil
+
+FREIGABE
+
+M2 ist ursaechlich behoben: die SessionDetail-Tab-Leiste nutzt jetzt den
+Dashboard-Tab-Stil ohne `bg-card` und faellt damit aus dem Karten-Schatten-Selektor.
+Kein Nicht-Karten-Element bekommt mehr den Kartenschatten. Alle Runden abgearbeitet,
+REQ-01 bis REQ-05 und INV-01 bis INV-04 erfuellt, Tests und Build gruen.
+
+## Punkt 1: Tab-Leiste ohne bg-card, Stil wie SubTabs, nur die Leiste angefasst
+
+- `src/pages/SessionDetail.tsx:248`: inaktive Tabs jetzt
+  `rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors` mit
+  `text-text-secondary hover:text-white`, aktiver Tab `bg-primary/85 text-bg`.
+  Kein `bg-card`, kein `rounded-xl`, kein `border`, kein `shadow-lg` mehr.
+- Deckungsgleich mit `src/components/layout/SubTabs.tsx:35-36`
+  (`rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors`, aktiv
+  `bg-primary/85 text-bg`, inaktiv `text-text-secondary hover:text-white`; SubTabs
+  hat zusaetzlich nur `flex items-center gap-1.5` fuer sein Icon).
+- Diff-Umfang: eine Datei, ein Hunk, 3 Zeilen geaendert, ausschliesslich die
+  Button-className der Tab-Leiste. Nichts sonst in `pages/`.
+- Contract-Amendment (CONTRACT.md:61) erlaubt genau
+  `src/pages/SessionDetail.tsx, nur die Tab-Leiste Zeilen 238-252`. Scope eingehalten.
+- Nebeneffekt positiv: das hartkodierte `text-[#0D0806]` faellt weg zugunsten `text-bg`.
+
+## Punkt 2: kein Nicht-Karten-bg-card mit rounded-xl/2xl/3xl mehr
+
+Vollstaendiger Scan aller className-Bloecke (auch Template-Literale) auf
+`bg-card`+`rounded-xl/2xl/3xl`: alle verbleibenden Treffer sind echte Karten:
+
+- `... bg-card border border-border rounded-xl p-4/5/6 ...` (padded, bordered Karten),
+- `bg-card border border-border rounded-xl overflow-hidden` (SessionTable, Category,
+  Tabellen-/Content-Wrapper),
+- `relative rounded-2xl bg-card p-6 md:p-8` (TrialCallout, Callout-Karte),
+- `h-14 rounded-xl bg-card border border-border` (Skeleton, per `:not(.h-14)` ausgeschlossen).
+
+Kein echtes Nicht-Karten-Element mehr (0). Der SessionDetail-Tab ist verschwunden.
+Der Schatten-Selektor `.bg-card.rounded-xl:not(.h-14), .rounded-2xl, .rounded-3xl` ist
+damit robust: jeder Treffer ist eine Karte oder der explizit ausgeschlossene Skeleton.
+
+## Punkt 3: Tests und Build (Zahlen)
+
+- `npm run build` Exit 0 (2972 Module). Log /tmp/kb5.log.
+- `npm test` Exit 0, 255 tests, 255 pass, 0 fail, 0 skipped. Log /tmp/kt5.log.
+
+## Gesamturteil ueber alle Runden
+
+FREIGABE. M1 (Kartenschatten nur auf Karten), der Gate-Fix zum Alpha-Verlauf mit
+funktionierendem Hover und M2 (SessionDetail-Tabs) sind sauber. REQ-01 (Karte klar
+heller als der Grund), REQ-04 (Innenkacheln dunkler, ausser dem vorbestehenden
+`bg-white/5`-Akzent, H1) und die Palette halten. Kein Scope-Verstoss. Einziger
+verbliebener Hinweis ohne Blocker-Charakter: H1 (`bg-white/5` ist als Weiss-Overlay
+heller als die Karte, vorbestehend, vom Auftrag nicht beruehrt).
