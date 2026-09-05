@@ -104,6 +104,9 @@ const PROMO_ACTIVITY_BUCKET_MAXLEN: usize = 2048;
 const PROMO_RUNTIME_STATE_MAX_AGE_SEC: u64 = 86400;
 /// Prune-Takt in Sekunden (promos.py:68: _PROMO_RUNTIME_PRUNE_INTERVAL_SEC).
 const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
+const PITCH_JUDGE_CHATTER_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+const PITCH_JUDGE_CHANNEL_WINDOW: Duration = Duration::from_secs(60 * 60);
+const PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW: usize = 30;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
@@ -513,6 +516,8 @@ pub struct PromoEngine {
     pitch_judge: Arc<dyn PitchJudge>,
     pitch_text_gen: Arc<dyn PitchTextGen>,
     pitch_review_sink: Option<Arc<dyn PitchReviewSink>>,
+    pitch_judge_last: DashMap<String, Instant>,
+    pitch_judge_channel: DashMap<String, Vec<Instant>>,
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     targeted_state: Mutex<TargetedState>,
@@ -552,6 +557,8 @@ impl PromoEngine {
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
             pitch_text_gen: Arc::new(crate::promo_pitch::FireworksPitchTextGen),
             pitch_review_sink: None,
+            pitch_judge_last: DashMap::new(),
+            pitch_judge_channel: DashMap::new(),
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
@@ -714,44 +721,39 @@ impl PromoEngine {
             .is_partner_channel_for_chat_tracking(&login)
             .await
         {
-            self.log_anlass_reject(&login, &target_user_id, "not_partner", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: kein partnerkanal");
             return;
         }
         if !self.promo_channel_allowed_db(&login).await {
-            self.log_anlass_reject(&login, &target_user_id, "not_allowed", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: nicht in allowlist");
             return;
         }
         if self.promo_blocked_by_plan_or_flag(&login).await {
-            self.log_anlass_reject(&login, &target_user_id, "promo_disabled", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: werbefrei");
             return;
         }
         if self.suppression.is_muted(&login).await {
-            self.log_anlass_reject(&login, &target_user_id, "suppressed", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: suppression");
             return;
         }
         if !self.stream_start_delay_ok(&login).await {
-            self.log_anlass_reject(&login, &target_user_id, "start_delay", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: startverzoegerung");
             return;
         }
 
         if !self.pitch_user_limit_ok(&target_user_id).await {
-            self.log_anlass_reject(&login, &target_user_id, "limit_user", text, None)
-                .await;
+            tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: user-limit");
             return;
         }
         if !self.pitch_channel_limit_ok(&login).await {
-            self.log_anlass_reject(&login, &target_user_id, "limit_channel", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: kanal-limit");
             return;
         }
 
-        let lock = self.get_send_lock(&login);
-        let _guard = lock.lock().await;
+        if !self.pitch_judge_throttle_ok(&login, &target_user_id) {
+            tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: judge-drossel");
+            return;
+        }
 
         let (game, title) = self.load_live_context(&login).await;
         let recent = self.load_recent_channel_messages(&login, 8).await;
@@ -763,13 +765,11 @@ impl PromoEngine {
             target_login: target_login.clone(),
         };
         let Some(resp) = self.pitch_judge.decide(input).await else {
-            self.log_anlass_reject(&login, &target_user_id, "kein_anlass", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: kein anlass");
             return;
         };
         let Some(occasion) = resp.occasion else {
-            self.log_anlass_reject(&login, &target_user_id, "kein_anlass", text, None)
-                .await;
+            tracing::debug!(channel = %login, "anlass-pitch: kein anlass");
             return;
         };
 
@@ -782,6 +782,15 @@ impl PromoEngine {
                 Some(resp.reply.clone()),
             )
             .await;
+            return;
+        }
+
+        let lock = self.get_send_lock(&login);
+        let _guard = lock.lock().await;
+
+        if !self.pitch_channel_limit_ok(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "limit_channel", text, None)
+                .await;
             return;
         }
 
@@ -822,10 +831,34 @@ impl PromoEngine {
             Utc::now().timestamp() as f64,
         )
         .await;
+        drop(_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
             sink.send_card(&login, &target_login, text, &resp.reply).await;
         }
+    }
+
+    fn pitch_judge_throttle_ok(&self, login: &str, chatter_id: &str) -> bool {
+        let now = Instant::now();
+        let chatter_key = format!("{login}|{chatter_id}");
+        if let Some(last) = self.pitch_judge_last.get(&chatter_key) {
+            if now.duration_since(*last) < PITCH_JUDGE_CHATTER_COOLDOWN {
+                return false;
+            }
+        }
+        {
+            let mut entry = self
+                .pitch_judge_channel
+                .entry(login.to_string())
+                .or_default();
+            entry.retain(|t| now.duration_since(*t) < PITCH_JUDGE_CHANNEL_WINDOW);
+            if entry.len() >= PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW {
+                return false;
+            }
+            entry.push(now);
+        }
+        self.pitch_judge_last.insert(chatter_key, now);
+        true
     }
 
     async fn log_anlass_reject(
@@ -3869,10 +3902,6 @@ mod db_tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Anlass-Pitch (REQ-01 bis REQ-07)
-    // -----------------------------------------------------------------------
-
     #[tokio::test]
     async fn anlass_pitch_symphooniee_wird_gesendet() {
         let pool = pool_or_skip!("promo_anlass_symphooniee");
@@ -3952,14 +3981,12 @@ mod db_tests {
             0,
             "bei promo_disabled darf der Judge gar nicht laufen"
         );
-        let row: (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-            "SELECT reject_reason, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'anlass'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(row.0.is_some(), "Verwerfungsgrund muss protokolliert sein");
-        assert!(row.1.is_none(), "sent_at muss NULL sein");
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'anlass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 0, "Gate-Block wird nicht geloggt");
     }
 
     #[tokio::test]
@@ -4021,6 +4048,32 @@ mod db_tests {
         .unwrap();
         assert!(row.0.is_some(), "harter Filter muss den Grund protokollieren");
         assert!(row.1.is_none());
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_judge_drossel_pro_chatter() {
+        let pool = pool_or_skip!("promo_anlass_drossel");
+        seed_partner_channel(&pool, "c-dr", "drkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(None, ""))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone());
+
+        let event = pitch_event(
+            "c-dr",
+            "drkanal",
+            "u-dr",
+            "Dr",
+            "deadlock ist echt unterschaetzt, wieso spielt das keiner richtig",
+        );
+        engine.on_message_pitch(&event).await;
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "zweite Nachricht desselben Chatters darf den Judge nicht erneut aufrufen"
+        );
     }
 
     // -----------------------------------------------------------------------
