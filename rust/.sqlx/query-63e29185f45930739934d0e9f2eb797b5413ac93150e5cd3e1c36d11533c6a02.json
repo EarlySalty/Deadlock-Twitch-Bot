@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT last_started_at FROM twitch_live_state\n              WHERE LOWER(streamer_login) = LOWER($1) AND is_live = 1\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_started_at",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "63e29185f45930739934d0e9f2eb797b5413ac93150e5cd3e1c36d11533c6a02"
+}

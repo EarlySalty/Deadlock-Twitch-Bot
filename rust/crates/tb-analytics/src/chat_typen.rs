@@ -348,17 +348,26 @@ async fn klassifiziere_modell_intern(
     if pakete.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
+    let max_tokens = (pakete.len() as i64) * 24 + 256;
     let mut request = tb_llm::Request::prompt(modell_prompt(pakete))
         .temperature(0.0)
-        .max_tokens((pakete.len() as i64) * 24 + 256)
+        .max_tokens(max_tokens)
         .timeout(Duration::from_secs(MODELL_TIMEOUT_SECS))
-        .json_object();
+        .json_object()
+        .denken_aus();
     if let Some(endpoint) = endpoint {
         request = request.no_ledger().endpoint(endpoint);
     }
     let response = tb_llm::complete(MODELL_USE_CASE, request).await?;
     let antwort: ModellAntwort = serde_json::from_str(response.text.trim()).map_err(|error| {
-        tb_llm::LlmError::Unparsable(format!("JSON nicht lesbar: {error}"))
+        if response.completion_tokens.is_some_and(|c| c >= max_tokens) {
+            tb_llm::LlmError::Unparsable(format!(
+                "Ausgabe-Budget erschöpft (max_tokens={max_tokens}, completion_tokens={})",
+                response.completion_tokens.unwrap_or(0)
+            ))
+        } else {
+            tb_llm::LlmError::Unparsable(format!("JSON nicht lesbar: {error}"))
+        }
     })?;
     let mut ergebnis: Vec<(i64, Nachrichtentyp)> = pakete
         .iter()
@@ -578,6 +587,52 @@ mod tests {
         assert!(body.contains("streamboo"));
         assert!(!body.contains("moin"));
         assert!(!body.contains("uptime"));
+    }
+
+    #[tokio::test]
+    async fn body_schaltet_das_denken_ab() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": "{\"labels\":[{\"i\":0,\"t\":\"Statement\"}]}"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+
+        let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
+        klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
+            .await
+            .expect("Modellantwort");
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("reasoning_effort"), "Body: {body}");
+        assert!(body.contains("none"), "Body: {body}");
+    }
+
+    #[tokio::test]
+    async fn erschoepftes_budget_nennt_die_ursache() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": ""}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 280}
+            })))
+            .mount(&server)
+            .await;
+
+        let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
+        let fehler = klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
+            .await
+            .expect_err("Budget-Fehler");
+        let text = format!("{fehler}");
+        assert!(text.contains("Budget"), "Fehlertext: {text}");
     }
 
     #[tokio::test]

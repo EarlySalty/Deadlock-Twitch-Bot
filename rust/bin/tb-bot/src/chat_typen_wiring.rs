@@ -75,6 +75,8 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
     let mut modell_anzahl = 0usize;
     let mut modell_aufrufe = 0u32;
     let mut fehler_serie = 0u32;
+    let mut fehler_gesamt = 0u32;
+    let mut letzter_fehler: Option<String> = None;
     for paket in offen.chunks(PAKET_GROESSE) {
         if zaehler.rest(Utc::now().date_naive()) == 0 {
             break;
@@ -97,13 +99,21 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
             }
             Err(error) => {
                 fehler_serie += 1;
-                tracing::warn!(%error, "Chat-Typen: Modell-Paket fehlgeschlagen, bleibt für den nächsten Lauf offen");
+                fehler_gesamt += 1;
+                letzter_fehler = Some(error.to_string());
                 if fehler_serie >= MAX_FEHLER_SERIE {
-                    tracing::warn!(fehler_serie, "Chat-Typen: zu viele Modellfehler in Folge, Lauf wird abgebrochen");
                     break;
                 }
             }
         }
+    }
+
+    if fehler_gesamt > 0 {
+        tracing::warn!(
+            fehler = fehler_gesamt,
+            letzter_fehler = letzter_fehler.as_deref().unwrap_or(""),
+            "Chat-Typen: Modell-Pakete fehlgeschlagen, bleiben für den nächsten Lauf offen"
+        );
     }
 
     let offen_rest = offen.len().saturating_sub(modell_anzahl);

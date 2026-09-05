@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 MAX(sent_at) FILTER (WHERE sent_at IS NOT NULL) AS last_sent,\n                 COUNT(*) FILTER (\n                     WHERE sent_at IS NULL AND reject_reason IS NULL\n                       AND created_at >= NOW() - INTERVAL '10 minutes'\n                 ) AS \"pending!\"\n               FROM twitch_promo_pitch_log\n              WHERE target_user_id = $1 AND pfad = 'anlass'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_sent",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "pending!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f2cb3f33d7837a25d10dbfe6dd9bfab0a095bd58f43d64a0c9ca5590d07e720b"
+}

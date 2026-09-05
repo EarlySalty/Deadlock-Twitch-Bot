@@ -561,6 +561,11 @@ twitch_channel_updates|language|text|YES|
 twitch_channel_updates|recorded_at|timestamp with time zone|NO|now()
 twitch_channel_updates|title|text|YES|
 twitch_channel_updates|twitch_user_id|text|NO|
+twitch_chat_message_labels|erstellt_am|timestamp with time zone|NO|now()
+twitch_chat_message_labels|label|text|NO|
+twitch_chat_message_labels|message_id|bigint|NO|
+twitch_chat_message_labels|modell|text|YES|
+twitch_chat_message_labels|quelle|text|NO|
 twitch_chat_messages|chatter_id|text|YES|
 twitch_chat_messages|chatter_login|text|YES|
 twitch_chat_messages|content|text|YES|
@@ -725,6 +730,18 @@ twitch_crew_review_events|review_session_id|uuid|NO|
 twitch_crew_review_events|source_message_id|text|YES|
 twitch_crew_review_events|subject_twitch_user_id|text|NO|
 twitch_crew_review_events|tombstoned_at|timestamp with time zone|YES|
+twitch_dashboard_assistent_log|answer|text|NO|
+twitch_dashboard_assistent_log|created_at|timestamp with time zone|NO|now()
+twitch_dashboard_assistent_log|flagged_injection|boolean|NO|false
+twitch_dashboard_assistent_log|grounded|boolean|NO|false
+twitch_dashboard_assistent_log|id|bigint|NO|nextval('twitch_dashboard_assistent_log_id_seq'::regclass)
+twitch_dashboard_assistent_log|language|text|NO|'de'::text
+twitch_dashboard_assistent_log|latency_ms|bigint|YES|
+twitch_dashboard_assistent_log|model|text|YES|
+twitch_dashboard_assistent_log|page|text|YES|
+twitch_dashboard_assistent_log|provider|text|YES|
+twitch_dashboard_assistent_log|question|text|NO|
+twitch_dashboard_assistent_log|twitch_user_id|text|NO|
 twitch_engagement_channel_profile|channel_login|text|NO|
 twitch_engagement_channel_profile|channel_user_id|text|YES|
 twitch_engagement_channel_profile|msg_count|integer|NO|0
@@ -1171,6 +1188,16 @@ twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
 twitch_promo_cooldowns|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|wall_ts|double precision|NO|
+twitch_promo_pitch_log|channel_login|text|NO|
+twitch_promo_pitch_log|created_at|timestamp with time zone|NO|now()
+twitch_promo_pitch_log|generated_text|text|YES|
+twitch_promo_pitch_log|id|bigint|NO|nextval('twitch_promo_pitch_log_id_seq'::regclass)
+twitch_promo_pitch_log|occasion|text|YES|
+twitch_promo_pitch_log|pfad|text|NO|
+twitch_promo_pitch_log|reject_reason|text|YES|
+twitch_promo_pitch_log|sent_at|timestamp with time zone|YES|
+twitch_promo_pitch_log|target_user_id|text|YES|
+twitch_promo_pitch_log|trigger_text|text|YES|
 twitch_raid_arrival_tracking|classification|text|NO|
 twitch_raid_arrival_tracking|confirmation_signals|text|NO|''::text
 twitch_raid_arrival_tracking|correlation_detail|text|YES|

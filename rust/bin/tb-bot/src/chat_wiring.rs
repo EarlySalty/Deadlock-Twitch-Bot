@@ -32,9 +32,7 @@ use tb_chat::conversation_scam::{
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
-use tb_chat::promos::{
-    InviteResolver, PartnerChannelCheck, PresetPicker, PromoEngine, PromoPreset, RandomPresetPicker,
-};
+use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PitchReviewSink, PromoEngine};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::style_score::{build_centroid, Centroid};
@@ -53,7 +51,7 @@ use tb_chat::{
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
 use tb_engagement::learn_irc_reader::LearnIrcReader;
-use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use tb_engagement::minimax_chat::EngagementMinimaxClient;
 use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::reaction_learning::ReactionLearning;
 use tb_engagement::sender_auth::SenderAuthStore;
@@ -62,7 +60,7 @@ use tb_engagement::types::IncomingMessage;
 use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
-use tb_transport_discord::BrokerRelay;
+use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 use tb_transport_twitch::HelixClient;
 
 use crate::raid_adapters::HelixTokenClient;
@@ -75,8 +73,6 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
-
-const MINIMAX_PRESET_SYSTEM_PROMPT: &str = "Du wählst für einen deutschen Twitch-Chat das am besten passende Discord-Einladungs-Preset aus. Du erhältst die verfügbaren Presets (jeweils im Format 'id: Text') und einige aktuelle Chat-Ausschnitte. Wähle das Preset, dessen Ton und Inhalt am besten zum Chat passen. Antworte ausschließlich mit der exakten Preset-id, ohne weitere Worte.";
 
 fn knowledge_dir() -> PathBuf {
     std::env::var("KNOWLEDGE_DIR")
@@ -628,6 +624,7 @@ pub struct ChatRuntimePorts {
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
+    pub review_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
@@ -644,6 +641,7 @@ pub async fn build_runtime(
         clip_port,
         bot_ban_handler,
         invite_relay,
+        review_relay,
         scam_notifier,
         raid_greeting,
     } = ports;
@@ -722,8 +720,13 @@ pub async fn build_runtime(
         relay: invite_relay,
         invite_channel_id: invite_channel_id_from_env(),
     });
-    let promos = Arc::new(
-        PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
+    let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.map(|relay| {
+        Arc::new(DiscordPitchReviewSink {
+            discord: Arc::new(relay),
+        }) as Arc<dyn PitchReviewSink>
+    });
+    let promos = Arc::new({
+        let mut engine = PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
             // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
             // bereits als Read-Seite in CombinedSuppression hängt. channel_settings-
             // Drops werden so 7d/3d persistiert (promo/recruitment 7d, partner_raid 3d).
@@ -735,11 +738,12 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
-            .set_preset_picker(Arc::new(MinimaxPresetPicker::new(
-                EngagementMinimaxClient::new(None, None, None, None),
-            ))),
-    );
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+        if let Some(sink) = pitch_review_sink {
+            engine = engine.set_pitch_review_sink(sink);
+        }
+        engine
+    });
 
     let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
     let mut command_engine = CommandEngine::new(
@@ -1868,92 +1872,41 @@ impl AccountAgePort for HelixAccountAge {
     }
 }
 
-struct MinimaxPresetPicker {
-    client: EngagementMinimaxClient,
-}
+const PITCH_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
+const PITCH_REVIEW_GOLD: i64 = 0x00C8_A86B;
 
-impl MinimaxPresetPicker {
-    fn new(client: EngagementMinimaxClient) -> Self {
-        Self { client }
-    }
+struct DiscordPitchReviewSink {
+    discord: Arc<dyn DiscordBackend>,
 }
 
 #[async_trait::async_trait]
-impl PresetPicker for MinimaxPresetPicker {
-    async fn pick_preset<'a>(
-        &self,
-        presets: &'a [PromoPreset],
-        snippets: &[String],
-        target_login: &str,
-    ) -> &'a PromoPreset {
-        if presets.len() <= 1 || snippets.is_empty() {
-            return RandomPresetPicker
-                .pick_preset(presets, snippets, target_login)
-                .await;
+impl PitchReviewSink for DiscordPitchReviewSink {
+    async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
+        let displays = vec![
+            format!("**Anlass-Pitch** in `{channel_login}`"),
+            format!("An **{target_login}**"),
+            format!("> {}", trigger.replace('\n', " ")),
+            format!("Antwort: {reply}"),
+        ];
+        let payload = SendRichMessage {
+            channel_id: PITCH_REVIEW_CHANNEL_ID,
+            content: None,
+            embed: serde_json::json!({}),
+            components: Some(serde_json::json!([{
+                "type": 17,
+                "accent_color": PITCH_REVIEW_GOLD,
+                "components": displays
+                    .into_iter()
+                    .map(|content| serde_json::json!({ "type": 10, "content": content }))
+                    .collect::<Vec<_>>()
+            }])),
+            allowed_role_ids: vec![],
+            view_spec: None,
+        };
+        if let Err(error) = self.discord.send_rich_message(payload).await {
+            tracing::warn!(%error, channel = channel_login, "Anlass-Pitch-Review-Karte fehlgeschlagen");
         }
-
-        let user_prompt = minimax_preset_user_prompt(presets, snippets, target_login);
-        let history = [ChatMessage {
-            role: "user".to_string(),
-            content: user_prompt,
-            name: None,
-        }];
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            self.client
-                .generate(MINIMAX_PRESET_SYSTEM_PROMPT, &history, 32, 128),
-        )
-        .await
-        {
-            Ok(Ok(response)) => {
-                if let Some(text) = response.text.as_deref() {
-                    if let Some(preset) = match_preset_id(presets, text) {
-                        return preset;
-                    }
-                }
-            }
-            Ok(Err(error)) => {
-                tracing::debug!(%error, "MiniMax preset picker failed");
-            }
-            Err(_) => {
-                tracing::debug!("MiniMax preset picker timeout");
-            }
-        }
-
-        RandomPresetPicker
-            .pick_preset(presets, snippets, target_login)
-            .await
     }
-}
-
-fn minimax_preset_user_prompt(
-    presets: &[PromoPreset],
-    snippets: &[String],
-    target_login: &str,
-) -> String {
-    let mut prompt = format!("target_login: {target_login}\n\npresets:\n");
-    for preset in presets {
-        prompt.push_str(preset.id);
-        prompt.push_str(": ");
-        prompt.push_str(preset.text);
-        prompt.push('\n');
-    }
-    prompt.push_str("\nsnippets:\n");
-    for snippet in snippets {
-        prompt.push_str("- ");
-        prompt.push_str(snippet);
-        prompt.push('\n');
-    }
-    prompt.push_str("\nReturn exactly one preset id.");
-    prompt
-}
-
-fn match_preset_id<'a>(presets: &'a [PromoPreset], reply: &str) -> Option<&'a PromoPreset> {
-    let reply = reply.trim();
-    presets
-        .iter()
-        .find(|preset| reply == preset.id)
-        .or_else(|| presets.iter().find(|preset| reply.contains(preset.id)))
 }
 
 /// Raid-Commands: manueller Raid direkt über die tb-raid-Schicht

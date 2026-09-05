@@ -92,6 +92,7 @@ pub struct Request {
     /// Twitch-Chat landen. Nur Aufrufer, die den Text ohnehin selbst parsen
     /// (der Spam-Judge), schalten das ein.
     pub allow_reasoning_content: bool,
+    pub reasoning_off: bool,
     pub accept: Option<Accept>,
     /// Wiederholungen bei HTTP 429.
     pub retry_on_429: u8,
@@ -171,6 +172,10 @@ impl Request {
     }
     pub fn allow_reasoning_content(mut self) -> Self {
         self.allow_reasoning_content = true;
+        self
+    }
+    pub fn denken_aus(mut self) -> Self {
+        self.reasoning_off = true;
         self
     }
     pub fn accept(mut self, accept: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
@@ -576,6 +581,9 @@ fn openai_compatible_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
     }
     if request.json_object {
         body["response_format"] = serde_json::json!({"type": "json_object"});
+    }
+    if request.reasoning_off {
+        body["reasoning_effort"] = serde_json::json!("none");
     }
     body
 }

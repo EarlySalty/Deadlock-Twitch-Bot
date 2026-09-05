@@ -3,7 +3,7 @@ title: Chat-Werbung des Bots
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-09-05
 source: manual
 tip_eligible: false
 ---
@@ -11,21 +11,23 @@ Was der Bot in deinen Chat schickt, wann, und wie du das komplett abstellst.
 
 ### Welche Werbung schickt der Bot in meinen Chat?
 
-Der Bot postet eine kurze Discord-Einladung in deinen Chat, damit deine Zuschauer Teil der Deadlock-Community werden können. Es geht ausschließlich um den Community-Discord — keine externen Sponsoren, keine fremden Produkte, kein Spam.
+Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, keine fremden Produkte, kein Spam. Erstens antwortet der Bot einem Zuschauer, der gerade eine passende Situation schreibt (keine Mitspieler, findet Deadlock zu unpopulär, alles zu tryhard, Solo-Queue-Frust, neu im Spiel, sucht Hilfe). Die Antwort geht zuerst auf das Gesagte ein und erwähnt danach höchstens in einem Satz die Community. Zweitens gibt es die periodische Einladung mit dem Discord-Link.
 
-- Inhalt: kurzer Hinweis-Text plus Discord-Einladungslink.
+- Anlass-Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
+- In der Anlass-Antwort steht nie ein Link und kein "komm auf Discord".
+- Den Discord-Link bekommt ein Zuschauer nur in der periodischen Einladung oder wenn er selbst nach dem Discord fragt (`!discord`, `!invite`).
 - Keine Werbung für externe Produkte oder Drittanbieter.
-- Du kannst den Text im Dashboard durch deinen eigenen ersetzen.
+- Den Text der periodischen Einladung kannst du im Dashboard durch deinen eigenen ersetzen.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
-### Wann genau wird die Werbung gepostet?
+### Wann genau wird das gepostet?
 
-Die Werbung greift nur, wenn dein Stream läuft und nur, wenn auch wirklich neue Zuschauer im Chat sind. Es gibt eingebaute Cooldowns und Mindest-Aktivitäts-Schwellen, damit es nicht spammt — typischerweise sehen Zuschauer eine Einladung höchstens alle paar Stunden.
+Beides greift nur, wenn dein Stream läuft. Die Anlass-Antwort kommt kurz nachdem ein Zuschauer eine passende Situation schreibt, spricht die Person mit ihrem Namen an und ist streng gedeckelt: pro Zuschauer höchstens einmal in sieben Tagen und pro Stream nur wenige Antworten mit Abstand. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Cooldowns, damit nichts spammt.
 
-- Triggert nur, wenn neue Chatter im aktuellen Fenster aktiv waren.
-- Cooldown verhindert wiederholte Einblendungen für dieselben Zuschauer.
-- Bei aktiven Sonder-Events kann der Bot stattdessen einen Aktions-Text einblenden.
+- Die Anlass-Antwort trifft nur echte Situationen; ohne passenden Anlass schweigt der Bot.
+- Cooldowns und Limits verhindern, dass dieselben Zuschauer wiederholt angeschrieben werden.
+- Bei aktiven Sonder-Events kann der Bot in der periodischen Einladung stattdessen einen Aktions-Text einblenden.
 
 ### Wie schalte ich die Chat-Werbung komplett ab?
 
@@ -48,7 +50,7 @@ Ja. Wenn ein Admin global einen Aktions-Text aktiviert (z. B. zu einem Community
 
 ### Kann ich nur den Werbe-Text anpassen, ohne Werbefrei zu buchen?
 
-Ja. Im Dashboard kannst du den Werbe-Text durch einen eigenen ersetzen — dann postet der Bot deinen statt des Default-Texts. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen.
+Ja. Im Dashboard kannst du den Text der periodischen Einladung durch einen eigenen ersetzen. Dann postet der Bot in der periodischen Einladung deinen Text statt des frei geschriebenen. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen. Die Anlass-Antworten auf einzelne Zuschauer bleiben davon unberührt und tragen weiterhin keinen Link.
 
 - Eigener Werbe-Text im Dashboard hinterlegbar.
 - Platzhalter {invite} wird beim Senden durch den Discord-Link ersetzt.
