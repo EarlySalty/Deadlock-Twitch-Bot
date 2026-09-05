@@ -20,18 +20,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 // Gleiche Bot-Exclusion-Liste wie in den anderen Handlers.
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if matches!(auth, DashboardAuthLevel::None) {
@@ -96,11 +85,11 @@ pub async fn viewer_overlap_handler(
     let c2_bots: Vec<String> = ((n + 3)..=(2 * n + 2)).map(|i| format!("${i}")).collect();
     let rollup_bots_a: Vec<String> = (3..=(n + 2)).map(|i| format!("${i}")).collect();
 
-    let c1_clause = format!("c1.chatter_login NOT IN ({})", c1_bots.join(", "));
-    let c2_clause = format!("c2.chatter_login NOT IN ({})", c2_bots.join(", "));
+    let c1_clause = format!("(c1.chatter_login NOT IN ({}) AND LOWER(c1.chatter_login) !~ '^justinfan[0-9]+$')", c1_bots.join(", "));
+    let c2_clause = format!("(c2.chatter_login NOT IN ({}) AND LOWER(c2.chatter_login) !~ '^justinfan[0-9]+$')", c2_bots.join(", "));
     // In totals_b CTE: gleiche Positionen wie c2_bots, aber Alias `cr`.
-    let cr_clause = format!("cr.chatter_login NOT IN ({})", c2_bots.join(", "));
-    let rollup_clause_a = format!("chatter_login NOT IN ({})", rollup_bots_a.join(", "));
+    let cr_clause = format!("(cr.chatter_login NOT IN ({}) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$')", c2_bots.join(", "));
+    let rollup_clause_a = format!("(chatter_login NOT IN ({}) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$')", rollup_bots_a.join(", "));
 
     let limit_pos = 2 * n + 3;
     let sql = format!(
@@ -243,10 +232,10 @@ pub async fn viewer_profiles_handler(
                 FROM twitch_chatter_rollup
                 WHERE LOWER(streamer_login) = $1
                   AND (chatter_login IS NULL OR chatter_login = ''
-                       OR LOWER(chatter_login) <> ALL($2::text[]))
+                       OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
             )
               AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
-                   OR LOWER(cr.chatter_login) <> ALL($2::text[]))
+                   OR (LOWER(cr.chatter_login) <> ALL($2::text[]) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY cr.chatter_login
         )
         SELECT streamer_count, COUNT(*) AS viewer_count
@@ -262,7 +251,7 @@ pub async fn viewer_profiles_handler(
           AND total_sessions >= 3
           AND total_messages = 0
           AND (chatter_login IS NULL OR chatter_login = ''
-               OR LOWER(chatter_login) <> ALL($2::text[]))
+               OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
     "#;
 
     let dist_rows = match sqlx::query(dist_sql)
@@ -390,7 +379,7 @@ pub async fn audience_sharing_handler(
         FROM twitch_chatter_rollup
         WHERE LOWER(streamer_login) = $1
           AND (chatter_login IS NULL OR chatter_login = ''
-               OR LOWER(chatter_login) <> ALL($2::text[]))
+               OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
     "#;
     let my_total: i64 = sqlx::query(my_total_sql)
         .bind(&streamer)
@@ -416,9 +405,9 @@ pub async fn audience_sharing_handler(
            AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
         WHERE LOWER(cr1.streamer_login) = $2
           AND (cr1.chatter_login IS NULL OR cr1.chatter_login = ''
-               OR LOWER(cr1.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(cr1.chatter_login) <> ALL($3::text[]) AND LOWER(cr1.chatter_login) !~ '^justinfan[0-9]+$'))
           AND (cr2.chatter_login IS NULL OR cr2.chatter_login = ''
-               OR LOWER(cr2.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(cr2.chatter_login) <> ALL($3::text[]) AND LOWER(cr2.chatter_login) !~ '^justinfan[0-9]+$'))
         GROUP BY cr2.streamer_login
         HAVING COUNT(DISTINCT cr1.chatter_login) >= 3
         ORDER BY shared_viewers DESC
@@ -488,9 +477,9 @@ pub async fn audience_sharing_handler(
            AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
         WHERE LOWER(cr1.streamer_login) = $2
           AND (cr1.chatter_login IS NULL OR cr1.chatter_login = ''
-               OR LOWER(cr1.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(cr1.chatter_login) <> ALL($3::text[]) AND LOWER(cr1.chatter_login) !~ '^justinfan[0-9]+$'))
           AND (cr2.chatter_login IS NULL OR cr2.chatter_login = ''
-               OR LOWER(cr2.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(cr2.chatter_login) <> ALL($3::text[]) AND LOWER(cr2.chatter_login) !~ '^justinfan[0-9]+$'))
         GROUP BY month, cr2.streamer_login
         ORDER BY month
     "#;
@@ -585,7 +574,7 @@ async fn backfill_last_seen(pool: &PgPool, session_ids: &[i64], bots: &[String])
                  FROM twitch_chat_messages cm
                 WHERE cm.session_id = ANY($1::bigint[])
                   AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
-                       OR LOWER(cm.chatter_login) <> ALL($2::text[]))
+                       OR (LOWER(cm.chatter_login) <> ALL($2::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))
                 GROUP BY cm.session_id, LOWER(NULLIF(cm.chatter_login, '')), cm.chatter_id
              ) agg
             WHERE sc.session_id = agg.session_id
@@ -626,7 +615,7 @@ async fn calc_watch_distribution(
         WHERE session_id = ANY($1::bigint[])
           AND COALESCE(NULLIF(chatter_login, ''), chatter_id) IS NOT NULL
           AND (chatter_login IS NULL OR chatter_login = ''
-               OR LOWER(chatter_login) <> ALL($2::text[]))
+               OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
     "#;
     let viewer_base_count: i64 = sqlx::query(base_sql)
         .bind(session_ids)
@@ -647,7 +636,7 @@ async fn calc_watch_distribution(
           AND first_message_at IS NOT NULL
           AND last_seen_at IS NOT NULL
           AND (chatter_login IS NULL OR chatter_login = ''
-               OR LOWER(chatter_login) <> ALL($2::text[]))
+               OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
     "#;
     let watch_rows = sqlx::query(watch_sql)
         .bind(session_ids)
@@ -711,7 +700,7 @@ async fn true_return_rate(
               AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
               AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
         )
         SELECT
             COUNT(DISTINCT pv.viewer_key) AS total_viewers,
@@ -721,7 +710,7 @@ async fn true_return_rate(
             ON cr.chatter_login = pv.chatter_login
            AND LOWER(cr.streamer_login) = $2
            AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
-                OR LOWER(cr.chatter_login) <> ALL($3::text[]))
+                OR (LOWER(cr.chatter_login) <> ALL($3::text[]) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$'))
            AND cr.first_seen_at < $1
     "#;
     let sql_with_end = r#"
@@ -737,7 +726,7 @@ async fn true_return_rate(
               AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
               AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($4::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($4::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
         )
         SELECT
             COUNT(DISTINCT pv.viewer_key) AS total_viewers,
@@ -747,7 +736,7 @@ async fn true_return_rate(
             ON cr.chatter_login = pv.chatter_login
            AND LOWER(cr.streamer_login) = $3
            AND (cr.chatter_login IS NULL OR cr.chatter_login = ''
-                OR LOWER(cr.chatter_login) <> ALL($4::text[]))
+                OR (LOWER(cr.chatter_login) <> ALL($4::text[]) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$'))
            AND cr.first_seen_at < $1
     "#;
 

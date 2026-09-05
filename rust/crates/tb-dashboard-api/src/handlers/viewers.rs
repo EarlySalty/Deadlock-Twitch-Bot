@@ -203,7 +203,7 @@ async fn fetch_window_viewer_rows(
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.streamer_login) = $1
              AND s.started_at >= $2
-             AND LOWER(sc.chatter_login) != ALL($3)
+             AND (LOWER(sc.chatter_login) != ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')
            GROUP BY LOWER(sc.chatter_login)"#,
         streamer,
         since,
@@ -330,7 +330,7 @@ pub async fn viewer_directory_handler(
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = ANY($1)
              AND s.started_at >= $2
-             AND LOWER(sc.chatter_login) != ALL($3)
+             AND (LOWER(sc.chatter_login) != ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')
            GROUP BY LOWER(sc.chatter_login)"#,
         &all_logins,
         since,
@@ -354,7 +354,7 @@ pub async fn viewer_directory_handler(
            WHERE LOWER(sc.chatter_login) = ANY($1)
              AND s.started_at >= $2
              AND LOWER(sc.streamer_login) != $3
-             AND LOWER(sc.chatter_login) != ALL($4)
+             AND (LOWER(sc.chatter_login) != ALL($4) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')
            GROUP BY LOWER(sc.chatter_login), LOWER(sc.streamer_login)
            ORDER BY 1, 3 DESC"#,
         &all_logins,
@@ -604,7 +604,7 @@ pub async fn viewer_detail_handler(
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2
              AND s.started_at >= $3
-             AND LOWER(sc.chatter_login) != ALL($4)"#,
+             AND (LOWER(sc.chatter_login) != ALL($4) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')"#,
         &streamer,
         &login,
         since,
@@ -1098,7 +1098,7 @@ pub async fn viewer_segments_handler(
            JOIN twitch_stream_sessions s ON s.id = sc.session_id
            WHERE LOWER(sc.chatter_login) = ANY($1)
              AND s.started_at >= $2
-             AND LOWER(sc.chatter_login) != ALL($3)
+             AND (LOWER(sc.chatter_login) != ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')
              AND LOWER(sc.streamer_login) != ALL($4)
            GROUP BY LOWER(sc.chatter_login)"#,
         &all_logins,
@@ -1142,7 +1142,7 @@ pub async fn viewer_segments_handler(
              AND s1.started_at >= $2
              AND LOWER(sc2.streamer_login) != $3
              AND s2.started_at >= $4
-             AND LOWER(sc1.chatter_login) != ALL($5)
+             AND (LOWER(sc1.chatter_login) != ALL($5) AND LOWER(sc1.chatter_login) !~ '^justinfan[0-9]+$')
              AND LOWER(sc2.streamer_login) != ALL($5)
            GROUP BY LOWER(sc2.streamer_login)
            ORDER BY 2 DESC
@@ -1174,8 +1174,8 @@ pub async fn viewer_segments_handler(
                  ON LOWER(target_rollup.chatter_login) = LOWER(other_rollup.chatter_login)
                WHERE LOWER(target_rollup.streamer_login) = $1
                  AND LOWER(other_rollup.streamer_login) = ANY($2)
-                 AND LOWER(target_rollup.chatter_login) != ALL($3)
-                 AND LOWER(other_rollup.chatter_login) != ALL($3)
+                 AND (LOWER(target_rollup.chatter_login) != ALL($3) AND LOWER(target_rollup.chatter_login) !~ '^justinfan[0-9]+$')
+                 AND (LOWER(other_rollup.chatter_login) != ALL($3) AND LOWER(other_rollup.chatter_login) !~ '^justinfan[0-9]+$')
                GROUP BY LOWER(other_rollup.streamer_login)"#,
             &streamer,
             &other_streamers,

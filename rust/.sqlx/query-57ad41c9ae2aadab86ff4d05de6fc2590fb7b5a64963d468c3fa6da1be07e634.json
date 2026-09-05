@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT m.message_ts AS \"message_ts!\",\n               m.content AS \"content!\",\n               m.chatter_login\n        FROM twitch_chat_messages m\n        JOIN twitch_stream_sessions s ON s.id = m.session_id\n        WHERE LOWER(s.streamer_login) = $1\n          AND m.message_ts >= $2\n          AND m.content IS NOT NULL\n          AND m.content != ''\n          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($3) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))\n        ORDER BY m.message_ts\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_ts!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "content!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "chatter_login",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "57ad41c9ae2aadab86ff4d05de6fc2590fb7b5a64963d468c3fa6da1be07e634"
+}

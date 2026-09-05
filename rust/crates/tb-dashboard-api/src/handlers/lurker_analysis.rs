@@ -16,18 +16,7 @@ use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 #[derive(Deserialize)]
 pub struct LurkerQuery {
@@ -87,7 +76,7 @@ pub async fn lurker_analysis_handler(
             FROM twitch_session_chatters sc
             JOIN sessions s ON s.id = sc.session_id
             WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY 1
         )
         SELECT
@@ -167,7 +156,7 @@ pub async fn lurker_analysis_handler(
             FROM twitch_session_chatters sc
             JOIN sessions s ON s.id = sc.session_id
             WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY 1
         )
         SELECT viewer_id, session_count, first_seen, last_seen

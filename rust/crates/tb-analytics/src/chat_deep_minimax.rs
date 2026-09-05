@@ -7,19 +7,7 @@
 
 use sqlx::PgPool;
 
-/// Bekannte Chat-Bots (deckungsgleich mit `bot/core/chat_bots.py`).
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Holt bis zu 1000 nicht-leere, nicht-Bot-Chat-Nachrichten einer Session,
 /// chronologisch. `session_id_raw` wird wie in Python als Roh-String gebunden
@@ -36,7 +24,7 @@ pub async fn fetch_session_messages(
         WHERE m.session_id = $1::text::bigint
           AND m.content IS NOT NULL
           AND m.content != ''
-          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($2) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))
         ORDER BY m.message_ts
         LIMIT 1000
         "#,

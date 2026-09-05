@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH per_user AS (\n            SELECT\n                COALESCE(NULLIF(sc.chatter_login,''), sc.chatter_id) AS user_id,\n                NULLIF(sc.chatter_login,'') AS chatter_login,\n                COUNT(DISTINCT sc.session_id) AS session_count,\n                MAX(CASE WHEN sc.messages > 0 THEN 1 ELSE 0 END) AS active_flag,\n                MAX(CASE WHEN sc.messages = 0 AND sc.seen_via_chatters_api IS TRUE THEN 1 ELSE 0 END) AS lurker_flag,\n                MAX(CASE WHEN LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT),'0')) IN ('1','t','true') THEN 1 ELSE 0 END) AS first_time_flag,\n                MAX(CASE WHEN sc.is_first_time_streamer IS NOT NULL THEN 1 ELSE 0 END) AS has_first_flag,\n                MAX(CASE WHEN sc.seen_via_chatters_api IS TRUE THEN 1 ELSE 0 END) AS seen_flag\n            FROM twitch_session_chatters sc\n            JOIN twitch_stream_sessions s ON s.id = sc.session_id\n            WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL\n              AND COALESCE(NULLIF(sc.chatter_login,''), sc.chatter_id) IS NOT NULL\n              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''\n                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))\n            GROUP BY user_id, chatter_login\n        ),\n        rollup AS (\n            SELECT LOWER(streamer_login) AS sl, LOWER(chatter_login) AS cl, first_seen_at\n            FROM twitch_chatter_rollup\n            WHERE LOWER(streamer_login) = $2\n              AND (chatter_login IS NULL OR chatter_login = ''\n                   OR (LOWER(chatter_login) <> ALL($3::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))\n        )\n        SELECT\n            pu.user_id AS \"user_id?\", pu.chatter_login AS \"chatter_login?\", pu.session_count::bigint AS \"session_count!\",\n            pu.active_flag::int AS \"active_flag!\", pu.lurker_flag::int AS \"lurker_flag!\",\n            pu.first_time_flag::int AS \"first_time_flag!\", pu.has_first_flag::int AS \"has_first_flag!\", pu.seen_flag::int AS \"seen_flag!\",\n            CASE WHEN r.cl IS NOT NULL AND r.first_seen_at < $1 THEN 1 ELSE 0 END AS \"seen_before!\"\n        FROM per_user pu\n        LEFT JOIN rollup r ON r.cl = LOWER(pu.chatter_login)\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "chatter_login?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "session_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "active_flag!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "lurker_flag!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "first_time_flag!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "has_first_flag!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "seen_flag!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "seen_before!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e7527f5956d6c04bc83453e6a6b60f0efbe20099572857f2314a8fd42acc0841"
+}

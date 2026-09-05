@@ -2022,20 +2022,7 @@ fn read_log_tail(filename: &str, max_lines: usize) -> Option<Vec<String>> {
 
 // ── Block 2g: health_score (api_v2.py:215-355) ───────────────────────────────
 
-/// Bekannte Service-/Chat-Bot-Accounts (Python `bot/core/chat_bots.py:8`,
-/// `KNOWN_CHAT_BOTS`). Single Source of Truth für den Community-Score-Filter.
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Baut Pythons `build_known_chat_bot_not_in_clause` nach (`chat_bots.py:34`):
 /// schließt bekannte Bot-Logins UND den eigenen Streamer-Login aus, behält aber
@@ -2061,7 +2048,7 @@ fn known_chat_bot_not_in_clause(
         .map(|i| format!("${}", start_param + i))
         .collect();
     let clause = format!(
-        "(({col}) IS NULL OR ({col}) = '' OR LOWER({col}) NOT IN ({ph}))",
+        "(({col}) IS NULL OR ({col}) = '' OR (LOWER({col}) NOT IN ({ph}) AND LOWER({col}) !~ '^justinfan[0-9]+$'))",
         col = column_expr,
         ph = placeholders.join(", ")
     );

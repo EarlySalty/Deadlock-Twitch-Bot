@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(sc.chatter_login) AS \"login!\",\n                  COUNT(DISTINCT LOWER(sc.streamer_login)) - 1 AS \"other_count!\"\n           FROM twitch_session_chatters sc\n           JOIN twitch_stream_sessions s ON s.id = sc.session_id\n           WHERE LOWER(sc.chatter_login) = ANY($1)\n             AND s.started_at >= $2\n             AND (LOWER(sc.chatter_login) != ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')\n           GROUP BY LOWER(sc.chatter_login)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "other_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "c0ab0bbacc5e2398934a954f9d946d591ddd1e3be4a9a2a7cbe5fe6318722cf2"
+}

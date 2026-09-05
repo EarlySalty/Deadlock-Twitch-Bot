@@ -17,6 +17,7 @@ pub mod admin_streamers;
 pub mod ai_analysis;
 pub mod ai_history;
 pub mod bans;
+pub mod bekannte_bots;
 pub mod billing;
 pub mod category_activity;
 pub mod chat_analytics;

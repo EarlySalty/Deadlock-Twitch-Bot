@@ -44,23 +44,7 @@ use regex::Regex;
 // importiert als WHITELISTED_BOTS via constants.py Z. 34.
 // ---------------------------------------------------------------------------
 
-/// Bekannte Service-/Chat-Bot-Accounts — werden von der Pipeline übersprungen.
-///
-/// Wörtlich aus `bot/core/chat_bots.py` Z. 8–19 (`KNOWN_CHAT_BOTS`), der als
-/// `WHITELISTED_BOTS = set(KNOWN_CHAT_BOTS)` in `bot/chat/constants.py Z. 34`
-/// re-exportiert wird.
-pub const WHITELISTED_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+pub const WHITELISTED_BOTS: &[&str] = tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 // ---------------------------------------------------------------------------
 // Mention-Extraktion — moderation.py Z. 269–271
@@ -449,13 +433,14 @@ mod tests {
 
     #[test]
     fn whitelisted_bots_enthält_alle_aus_python() {
-        // Wörtlich aus bot/core/chat_bots.py Z. 8–19
         let expected = &[
             "botrix",
             "deutschedeadlockcommunity",
             "fossabot",
+            "kofistreambot",
             "moobot",
             "nightbot",
+            "own3d",
             "pretzelrocks",
             "soundalerts",
             "streamlabs",

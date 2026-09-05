@@ -24,19 +24,7 @@ use sqlx::{PgConnection, PgPool};
 const WATCH_TIME_MIN_SAMPLES: i64 = 25;
 const WATCH_TIME_MIN_COVERAGE: f64 = 0.15;
 
-/// Bekannte Chat-Bots (deckungsgleich mit `bot/core/chat_bots.py` / audience.rs).
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
@@ -126,7 +114,7 @@ async fn backfill_last_seen(conn: &mut PgConnection, ids: &[i64]) -> Result<(), 
                     MAX(cm.message_ts) AS max_ts \
                FROM twitch_chat_messages cm \
               WHERE cm.session_id = ANY($1::bigint[]) \
-                AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($2::text[])) \
+                AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR (LOWER(cm.chatter_login) <> ALL($2::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$')) \
               GROUP BY cm.session_id, LOWER(NULLIF(cm.chatter_login, '')), cm.chatter_id \
            ) agg \
           WHERE sc.session_id = agg.session_id \
@@ -181,7 +169,7 @@ async fn calc_watch_distribution(
            FROM twitch_session_chatters \
           WHERE session_id = ANY($1::bigint[]) \
             AND COALESCE(NULLIF(chatter_login, ''), chatter_id) IS NOT NULL \
-            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2::text[]))",
+            AND (chatter_login IS NULL OR chatter_login = '' OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))",
         ids,
         &bots
     )
@@ -194,7 +182,7 @@ async fn calc_watch_distribution(
                     - EXTRACT(EPOCH FROM COALESCE(first_message_at, last_seen_at)), 0) / 60.0)::float8 AS minutes \
            FROM twitch_session_chatters \
           WHERE session_id = ANY($1::bigint[]) AND first_message_at IS NOT NULL AND last_seen_at IS NOT NULL \
-            AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($2::text[]))",
+            AND (chatter_login IS NULL OR chatter_login = '' OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))",
         ids,
         &bots
     )

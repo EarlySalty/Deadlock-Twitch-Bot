@@ -17,18 +17,7 @@ use sqlx::PgPool;
 
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Loader-Ergebnis inkl. HTTP-Status (Python gibt `(status, payload, _)` zurück).
 pub enum HypeTimeline {
@@ -180,7 +169,7 @@ pub async fn load_chat_hype_timeline(
         FROM twitch_chat_messages m
         WHERE m.session_id = $1
           AND m.chatter_login IS NOT NULL
-          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($2) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))
         GROUP BY 1
         ORDER BY 1
         "#,
@@ -335,7 +324,7 @@ pub async fn load_chat_hype_timeline(
             SELECT (COUNT(*) * 1.0 / GREATEST(1, EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60))::float8 AS avg_mpm
             FROM twitch_chat_messages m
             WHERE m.session_id = $1
-              AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($2))
+              AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($2) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))
             "#,
             rid,
             &bots
@@ -420,7 +409,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, stream_title TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, stream_title TEXT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, viewer_count INTEGER)").execute(&pool).await.unwrap();

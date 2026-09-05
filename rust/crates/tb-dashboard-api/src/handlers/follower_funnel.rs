@@ -19,18 +19,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 // Bot-Exclusion aus chatter_tracking.rs
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 #[derive(Deserialize)]
 pub struct FunnelQuery {
@@ -137,7 +126,7 @@ pub async fn follower_funnel_handler(
         let ph: Vec<String> = (3..=(KNOWN_CHAT_BOTS.len() + 2))
             .map(|i| format!("${i}"))
             .collect();
-        format!("sc.chatter_login NOT IN ({})", ph.join(", "))
+        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", ph.join(", "))
     };
     let chatter_sql = format!(
         r#"SELECT

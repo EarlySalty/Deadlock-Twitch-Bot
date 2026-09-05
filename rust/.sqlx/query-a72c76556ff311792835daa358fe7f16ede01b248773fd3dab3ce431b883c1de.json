@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) AS chatter_key,\n               COUNT(*)::bigint AS \"messages!\",\n               COUNT(DISTINCT cm.session_id)::bigint AS \"sessions!\",\n               MIN(cm.message_ts) AS \"first_seen!\",\n               MAX(cm.message_ts) AS \"last_seen!\"\n        FROM twitch_chat_messages cm\n        WHERE cm.message_ts >= $1\n          AND LOWER(cm.streamer_login) = $2\n          AND COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL\n          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR (LOWER(cm.chatter_login) <> ALL($3) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))\n        GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id)\n        ORDER BY COUNT(*) DESC\n        LIMIT 20\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chatter_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "sessions!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "first_seen!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_seen!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a72c76556ff311792835daa358fe7f16ede01b248773fd3dab3ce431b883c1de"
+}

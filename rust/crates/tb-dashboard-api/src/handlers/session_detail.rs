@@ -18,18 +18,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::level::DashboardAuthLevel;
 
 // Statische Bot-Exclusion-Liste (tb-chat/chatter_tracking.rs Z.42, chat_bots.py Z.8–19).
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 struct SessionDetailRow {
     id: i64,
@@ -173,7 +162,7 @@ pub async fn session_detail_handler(
         let placeholders: Vec<String> = (2..=(KNOWN_CHAT_BOTS.len() + 1))
             .map(|i| format!("${i}"))
             .collect();
-        format!("sc.chatter_login NOT IN ({})", placeholders.join(", "))
+        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", placeholders.join(", "))
     };
 
     let chatter_stats_sql = format!(
@@ -237,7 +226,7 @@ pub async fn session_detail_handler(
         let placeholders: Vec<String> = (2..=(KNOWN_CHAT_BOTS.len() + 1))
             .map(|i| format!("${i}"))
             .collect();
-        format!("sc.chatter_login NOT IN ({})", placeholders.join(", "))
+        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", placeholders.join(", "))
     };
     let top_sql = format!(
         r#"SELECT chatter_login, messages FROM twitch_session_chatters sc

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT message_ts AS \"message_ts!\",\n               content,\n               is_command,\n               chatter_login,\n               chatter_id\n        FROM twitch_chat_messages\n        WHERE message_ts >= $1\n          AND LOWER(streamer_login) = $2\n          AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))\n        ",
+  "query": "\n        SELECT message_ts AS \"message_ts!\",\n               content,\n               is_command,\n               chatter_login,\n               chatter_id\n        FROM twitch_chat_messages\n        WHERE message_ts >= $1\n          AND LOWER(streamer_login) = $2\n          AND (chatter_login IS NULL OR chatter_login = '' OR (LOWER(chatter_login) <> ALL($3) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))\n        ",
   "describe": {
     "columns": [
       {
@@ -44,5 +44,5 @@
       true
     ]
   },
-  "hash": "0c8eb3eea4ce6db0a860e5ee9a171da4e90674bfcd255ff7aaf6216bbbdb615e"
+  "hash": "3a12f96c9679d081cd5ce8886e5292523acec1abb5475427812218efafd2cbd3"
 }

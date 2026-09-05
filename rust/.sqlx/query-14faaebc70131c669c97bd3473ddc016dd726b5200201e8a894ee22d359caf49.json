@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH fsc AS (\n            SELECT sc.session_id,\n                   COUNT(DISTINCT CASE WHEN sc.messages > 0\n                        THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS unique_chatters\n            FROM twitch_session_chatters sc\n            JOIN twitch_stream_sessions s ON s.id = sc.session_id\n            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL\n              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))\n              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''\n                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))\n            GROUP BY sc.session_id\n        ),\n        scp AS (\n            SELECT sc.session_id, 1 AS has_any_chatters\n            FROM twitch_session_chatters sc\n            JOIN twitch_stream_sessions s ON s.id = sc.session_id\n            WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL\n              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))\n            GROUP BY sc.session_id\n        )\n        SELECT AVG(CASE\n                WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0\n                THEN LEAST(\n                    100.0,\n                    (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fsc.unique_chatters, 0)\n                          ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / NULLIF(s.peak_viewers, 0)\n                )\n                ELSE NULL\n            END)::FLOAT8\n        FROM twitch_stream_sessions s\n        LEFT JOIN fsc ON fsc.session_id = s.id\n        LEFT JOIN scp ON scp.session_id = s.id\n        WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL\n          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "14faaebc70131c669c97bd3473ddc016dd726b5200201e8a894ee22d359caf49"
+}

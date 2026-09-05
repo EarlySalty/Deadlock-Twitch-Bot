@@ -138,20 +138,7 @@ pub async fn overview_session_count(
     Ok(count)
 }
 
-/// Bekannte Chat-Bot-Logins (Python `KNOWN_CHAT_BOTS`, core/chat_bots.py) —
-/// werden aus Chatter-Zählungen gefiltert. Kleingeschrieben.
-pub const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamelements",
-    "streamlabs",
-    "wizebot",
-];
+pub use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Chatter-abgeleitete Overview-Metriken (Bot-gefiltert).
 #[derive(Debug, Default, Clone, Copy)]
@@ -188,7 +175,7 @@ pub async fn overview_chatter_metrics(
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
           AND sc.messages > 0
           AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-               OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
         "#,
         since,
         streamer_login,
@@ -226,7 +213,7 @@ pub async fn overview_chatter_metrics(
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
           AND (sc.messages > 0 OR COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE)
           AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-               OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+               OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
         "#,
         since,
         streamer_login,
@@ -429,7 +416,7 @@ pub async fn overview_chat_per_100(
             WHERE s.started_at >= $1::text::TIMESTAMPTZ AND s.ended_at IS NOT NULL
               AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
               AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY sc.session_id
         ),
         scp AS (
@@ -575,7 +562,7 @@ pub async fn overview_sessions(
             FROM twitch_session_chatters sc
             JOIN base_sessions bs ON bs.id = sc.session_id
             WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($4::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($4::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY sc.session_id
         ),
         session_chatter_presence AS (

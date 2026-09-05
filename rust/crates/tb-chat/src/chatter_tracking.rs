@@ -43,20 +43,6 @@ use tracing::{debug, warn};
 /// `TWITCH_TARGET_GAME_NAME = "Deadlock"`, lowercased via bot.py Z. 170).
 const TARGET_GAME: &str = "deadlock";
 
-/// Known-Chat-Bots (chat_bots.py Z. 8–19 `KNOWN_CHAT_BOTS`).
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
 /// Session-Cache-TTL (bot.py Z. 2174: 60 Sekunden).
 const SESSION_CACHE_TTL_SECS: i64 = 60;
 
@@ -116,7 +102,7 @@ impl ChatterTracker {
         }
 
         // Gate 4: Known-Bot-Filter (Python Z. 2156–2166: Health-Heartbeat trotzdem).
-        if KNOWN_CHAT_BOTS.contains(&chatter_login.as_str()) {
+        if tb_analytics::bekannte_bots::ist_ausgeschlossener_login(&chatter_login) {
             self.persist_health(&login, Some(&ts_iso), None, None, None)
                 .await;
             return None;
@@ -561,11 +547,12 @@ mod tests {
 
     #[test]
     fn known_bots_erkannt() {
-        assert!(KNOWN_CHAT_BOTS.contains(&"nightbot"));
-        assert!(KNOWN_CHAT_BOTS.contains(&"streamlabs"));
-        assert!(KNOWN_CHAT_BOTS.contains(&"fossabot"));
-        assert!(!KNOWN_CHAT_BOTS.contains(&"echternutzer"));
-        assert!(!KNOWN_CHAT_BOTS.contains(&""));
+        use tb_analytics::bekannte_bots::ist_ausgeschlossener_login;
+        assert!(ist_ausgeschlossener_login("nightbot"));
+        assert!(ist_ausgeschlossener_login("streamlabs"));
+        assert!(ist_ausgeschlossener_login("fossabot"));
+        assert!(!ist_ausgeschlossener_login("echternutzer"));
+        assert!(!ist_ausgeschlossener_login(""));
     }
 
     #[test]

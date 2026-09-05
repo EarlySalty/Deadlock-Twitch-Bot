@@ -10,18 +10,7 @@ use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 #[derive(Deserialize)]
 pub struct LoyaltyQuery {
@@ -60,7 +49,7 @@ pub async fn loyalty_curve_handler(
         r#"SELECT total_sessions, COUNT(DISTINCT chatter_login) AS chatter_count
            FROM twitch_chatter_rollup
            WHERE LOWER(streamer_login) = $1
-             AND chatter_login NOT IN ({})
+             AND (chatter_login NOT IN ({}) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$')
            GROUP BY total_sessions
            ORDER BY total_sessions"#,
         bot_placeholders.join(", ")

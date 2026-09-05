@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id))::bigint AS \"count!\" FROM twitch_session_chatters WHERE session_id = ANY($1::bigint[]) AND COALESCE(NULLIF(chatter_login, ''), chatter_id) IS NOT NULL AND (chatter_login IS NULL OR chatter_login = '' OR (LOWER(chatter_login) <> ALL($2::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c13b450ed5475b91d97ec269efc27e81f3c46866fc0ab0922403b85f442a7c67"
+}
