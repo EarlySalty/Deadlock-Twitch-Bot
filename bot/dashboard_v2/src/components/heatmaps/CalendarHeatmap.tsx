@@ -60,7 +60,12 @@ export function CalendarHeatmap({
       }
     });
 
-    return { weeks, maxValue: max, dataMap: map, monthLabels: labels };
+    const breiteLabels = labels.filter((label, i) => {
+      const naechsterIndex = i + 1 < labels.length ? labels[i + 1].weekIndex : weeks.length;
+      return naechsterIndex - label.weekIndex >= 3;
+    });
+
+    return { weeks, maxValue: max, dataMap: map, monthLabels: breiteLabels };
   }, [data, metric, days]);
 
   const formatDateKey = (date: Date): string => {
