@@ -54,6 +54,7 @@
 
 mod ad_manager_wiring;
 mod auto_raid;
+mod chat_typen_wiring;
 mod chat_wiring;
 mod chatters_wiring;
 mod confirm_resolver;
@@ -581,6 +582,7 @@ async fn main() {
     let outreach_shadow =
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let smalltalk_loop = smalltalk_loop_wiring::start(&supervisor, pool.clone(), &settings.broker);
+    chat_typen_wiring::spawn(&supervisor, pool.clone());
     let crew_review_trigger = ricky_review.trigger();
     let crew_review_store = ricky_review.store();
 

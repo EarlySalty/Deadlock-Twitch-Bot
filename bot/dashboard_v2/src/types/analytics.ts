@@ -174,6 +174,7 @@ export interface ChatAnalytics {
   };
   topChatters: ChatterStats[];
   messageTypes: MessageTypeStat[];
+  labelCoverage?: number;
   hourlyActivity: HourlyActivityStat[];
   rawChatStatus?: RawChatStatus;
 }

@@ -810,18 +810,19 @@ pub async fn viewer_detail_handler(
     // Personality: bis zu 2000 Chat-Nachrichten des Viewers klassifizieren
     // (Python api_viewers.py:545-573). Ohne Roh-Chat → null.
     let personality: serde_json::Value = {
-        let msg_rows = sqlx::query!(
-            r#"SELECT m.content
+        let msg_rows = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+            r#"SELECT m.content, l.label, m.chatter_login
                FROM twitch_chat_messages m
                JOIN twitch_stream_sessions s ON s.id = m.session_id
+               LEFT JOIN twitch_chat_message_labels l ON l.message_id = m.id
                WHERE LOWER(s.streamer_login) = $1
                  AND LOWER(m.chatter_login) = $2
                  AND m.message_ts >= $3
                LIMIT 2000"#,
-            &streamer,
-            &login,
-            since
         )
+        .bind(&streamer)
+        .bind(&login)
+        .bind(since)
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
@@ -830,20 +831,39 @@ pub async fn viewer_detail_handler(
         } else {
             let mut counts: std::collections::HashMap<&'static str, i64> =
                 std::collections::HashMap::new();
-            for r in &msg_rows {
-                let content = r.content.as_deref().unwrap_or("");
-                *counts.entry(classify_message(content)).or_insert(0) += 1;
+            for (content, label, chatter_login) in &msg_rows {
+                let content = content.as_deref().unwrap_or("");
+                let login = chatter_login.as_deref().unwrap_or("");
+                let typ = label
+                    .as_deref()
+                    .and_then(tb_analytics::chat_typen::Nachrichtentyp::from_api_key)
+                    .unwrap_or_else(|| {
+                        tb_analytics::chat_typen::klassifiziere_regel(content, login)
+                    });
+                if typ == tb_analytics::chat_typen::Nachrichtentyp::System {
+                    continue;
+                }
+                let key = if typ == tb_analytics::chat_typen::Nachrichtentyp::Statement {
+                    tb_analytics::chat_typen::Nachrichtentyp::Other.api_key()
+                } else {
+                    typ.api_key()
+                };
+                *counts.entry(key).or_insert(0) += 1;
             }
-            let primary = counts
-                .iter()
-                .max_by_key(|(_, &c)| c)
-                .map(|(t, _)| *t)
-                .unwrap_or("Other");
-            let distribution: serde_json::Map<String, serde_json::Value> = counts
-                .iter()
-                .map(|(k, v)| (k.to_string(), json!(v)))
-                .collect();
-            json!({ "primary": primary, "distribution": distribution })
+            if counts.is_empty() {
+                json!(null)
+            } else {
+                let primary = counts
+                    .iter()
+                    .max_by_key(|(_, &c)| c)
+                    .map(|(t, _)| *t)
+                    .unwrap_or("Other");
+                let distribution: serde_json::Map<String, serde_json::Value> = counts
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), json!(v)))
+                    .collect();
+                json!({ "primary": primary, "distribution": distribution })
+            }
         }
     };
 
@@ -877,130 +897,6 @@ pub async fn viewer_detail_handler(
         "personality": personality,
     }))
     .into_response()
-}
-
-/// Klassifiziert eine Chat-Nachricht in einen Personality-Typ (Port von
-/// `_classify_message`, api_v2.py:678). First-Match über Substring-Listen.
-fn classify_message(content: &str) -> &'static str {
-    if content.is_empty() {
-        return "Other";
-    }
-    if content.starts_with('!') {
-        return "Command";
-    }
-    let lower = content.to_lowercase();
-    let any = |words: &[&str]| words.iter().any(|w| lower.contains(w));
-    if any(&[
-        "pog", "poggers", "pogchamp", "hype", "letsgo", "lets go", "lfg", "omg", "wow", "krass",
-        "geil", "banger", "insane", "crazy", "gg", "wp", "ggs", "ez", "clutch",
-    ]) {
-        return "Hype";
-    }
-    if any(&[
-        "hi", "hello", "hey", "moin", "nabend", "guten", "welcome", "hallo", "servus", "moinmoin",
-        "ciao", "bye", "tschüss",
-    ]) {
-        return "Greeting";
-    }
-    if content.contains('?')
-        || any(&[
-            "was", "wo", "wer", "wie", "wann", "why", "how", "warum", "weshalb", "wie geht",
-            "kann man", "darf man",
-        ])
-    {
-        return "Question";
-    }
-    if any(&[
-        "gut gemacht",
-        "nice play",
-        "stark",
-        "schlecht",
-        "fehler",
-        "bug",
-        "langweilig",
-        "spannend",
-        "lustig",
-        "witzig",
-        "gefällt",
-        "liebe",
-    ]) {
-        return "Feedback";
-    }
-    if any(&[
-        "lag",
-        "fps",
-        "sound",
-        "audio",
-        "mic",
-        "ton",
-        "bild",
-        "standbild",
-        "leise",
-        "laut",
-        "verzögerung",
-        "delay",
-    ]) {
-        return "Technical";
-    }
-    if any(&[
-        "follow", "sub", "prime", "raid", "host", "danke", "thanks", "thx", "discord", "social",
-        "insta", "twitter", "yt", "youtube", "clip",
-    ]) {
-        return "Social";
-    }
-    if any(&[
-        "lol", "lmao", "haha", "lul", "kek", "xd", ":)", ":d", "f", "o7", "rofl", "hehe", "huhu",
-    ]) {
-        return "Reaction";
-    }
-    if any(&[
-        "deadlock",
-        "hero",
-        "build",
-        "skill",
-        "rank",
-        "elo",
-        "match",
-        "play",
-        "game",
-        "win",
-        "lose",
-        "mmr",
-        "lane",
-        "ult",
-        "item",
-        "soul",
-        "orb",
-        "patron",
-        "mid boss",
-        "guardian",
-        "walker",
-        "urn",
-        "shrine",
-        "abrams",
-        "bebop",
-        "dynamo",
-        "grey talon",
-        "haze",
-        "infernus",
-        "ivy",
-        "kelvin",
-        "lady geist",
-        "lash",
-        "mcginnis",
-        "mirage",
-        "pocket",
-        "seven",
-        "shiv",
-        "vindicta",
-        "viscous",
-        "warden",
-        "wraith",
-        "yamato",
-    ]) {
-        return "Game-Related";
-    }
-    "Other"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1442,6 +1338,18 @@ mod tests {
                    chatter_login TEXT NOT NULL,
                    streamer_login TEXT NOT NULL,
                    messages INTEGER DEFAULT 0
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_chat_message_labels (
+                   message_id BIGINT PRIMARY KEY,
+                   label TEXT NOT NULL,
+                   quelle TEXT NOT NULL,
+                   modell TEXT,
+                   erstellt_am TIMESTAMPTZ NOT NULL DEFAULT now()
                )"#,
         )
         .execute(&pool)

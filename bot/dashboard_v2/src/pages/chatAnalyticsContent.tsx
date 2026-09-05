@@ -23,6 +23,7 @@ import {
   ChatMinimaxDeepSection,
 } from './chatAnalyticsDeepSections';
 import { RawChatStatusBanner } from './chatAnalyticsShared';
+import { MESSAGE_TYPE_LABELS } from '@/i18n/dictionary';
 
 const CHAT_PENETRATION_ENABLED = false;
 const CHART_TOOLTIP_STYLE = {
@@ -255,7 +256,7 @@ export function ChatAktivitaetContent({
             {data.messageTypes?.map((type) => (
               <div key={type.type}>
                 <div className="mb-1 flex justify-between text-sm">
-                  <span className="text-text-secondary">{type.type}</span>
+                  <span className="text-text-secondary">{MESSAGE_TYPE_LABELS[type.type] ?? type.type}</span>
                   <span className="font-medium text-white">{type.percentage}% ({type.count})</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-background/80">
@@ -265,6 +266,9 @@ export function ChatAktivitaetContent({
             ))}
             {(!data.messageTypes || data.messageTypes.length === 0) && (
               <p className="py-4 text-center text-text-secondary">Keine Daten verfügbar</p>
+            )}
+            {data.messageTypes && data.messageTypes.length > 0 && typeof data.labelCoverage === 'number' && data.labelCoverage < 0.95 && (
+              <p className="pt-2 text-center text-xs text-text-secondary">Ein Teil der Nachrichten wird noch zugeordnet.</p>
             )}
           </div>
         </Rise>

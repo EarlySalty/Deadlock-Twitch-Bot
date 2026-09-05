@@ -14,7 +14,6 @@ use chrono_tz::Tz;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use crate::chat_analytics_lexicon::*;
 use crate::engagement_metrics::{calculate_engagement, percentile_of, quantile, EngagementInputs};
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
@@ -31,44 +30,6 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "wizebot",
 ];
 
-/// Klassifiziert eine Chat-Nachricht (Python `_classify_message`).
-/// Reihenfolge der Prüfungen ist relevant (erste Übereinstimmung gewinnt).
-pub fn classify_message(content: &str) -> &'static str {
-    if content.is_empty() {
-        return "Other";
-    }
-    let cl = content.to_lowercase();
-    if content.starts_with('!') {
-        return "Command";
-    }
-    if HYPE.iter().any(|w| cl.contains(w)) {
-        return "Hype";
-    }
-    if GREETING.iter().any(|w| cl.contains(w)) {
-        return "Greeting";
-    }
-    // "?" wird im Original-Content geprüft (Python `"?" in content`).
-    if content.contains('?') || QUESTION.iter().any(|w| cl.contains(w)) {
-        return "Question";
-    }
-    if FEEDBACK.iter().any(|w| cl.contains(w)) {
-        return "Feedback";
-    }
-    if TECHNICAL.iter().any(|w| cl.contains(w)) {
-        return "Technical";
-    }
-    if SOCIAL.iter().any(|w| cl.contains(w)) {
-        return "Social";
-    }
-    if REACTION.iter().any(|w| cl.contains(w)) {
-        return "Reaction";
-    }
-    if GAME.iter().any(|w| cl.contains(w)) {
-        return "Game-Related";
-    }
-    "Other"
-}
-
 /// Eine Roh-Chat-Nachricht aus dem Fenster (Python `all_messages`-Zeile).
 #[derive(sqlx::FromRow)]
 pub struct MessageRow {
@@ -77,6 +38,7 @@ pub struct MessageRow {
     pub is_command: Option<bool>,
     pub chatter_login: Option<String>,
     pub chatter_id: Option<String>,
+    pub label: Option<String>,
 }
 
 /// Pro-Chatter-Aggregat inkl. Rollup-Verknüpfung (Python `chatter_rows`-Zeile).
@@ -220,23 +182,24 @@ pub async fn load_chat_analytics_snapshot(
     .fetch_all(pool)
     .await?;
 
-    let all_messages: Vec<MessageRow> = sqlx::query_as!(
-        MessageRow,
+    let all_messages: Vec<MessageRow> = sqlx::query_as::<_, MessageRow>(
         r#"
-        SELECT message_ts AS "message_ts!",
-               content,
-               is_command,
-               chatter_login,
-               chatter_id
-        FROM twitch_chat_messages
-        WHERE message_ts >= $1
-          AND LOWER(streamer_login) = $2
-          AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
+        SELECT cm.message_ts AS message_ts,
+               cm.content,
+               cm.is_command,
+               cm.chatter_login,
+               cm.chatter_id,
+               l.label
+        FROM twitch_chat_messages cm
+        LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
+        WHERE cm.message_ts >= $1
+          AND LOWER(cm.streamer_login) = $2
+          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
         "#,
-        effective_since,
-        streamer,
-        &bots
     )
+    .bind(effective_since)
+    .bind(streamer)
+    .bind(&bots)
     .fetch_all(pool)
     .await?;
 
@@ -431,6 +394,7 @@ pub async fn load_chat_analytics_payload(
     let mut type_counts: HashMap<&'static str, i64> = HashMap::new();
     let mut type_order: Vec<&'static str> = Vec::new();
     let mut hour_counts: HashMap<u32, i64> = HashMap::new();
+    let mut labeled_messages = 0i64;
     for m in &snap.all_messages {
         let content = m.content.as_deref().unwrap_or("");
         if m.is_command.unwrap_or(false) {
@@ -444,15 +408,30 @@ pub async fn load_chat_analytics_payload(
         if let Some(k) = key {
             distinct.insert(k.to_string());
         }
-        let mt = classify_message(content);
-        if !type_counts.contains_key(mt) {
-            type_order.push(mt);
+        let login = m.chatter_login.as_deref().unwrap_or("");
+        let typ = m
+            .label
+            .as_deref()
+            .and_then(crate::chat_typen::Nachrichtentyp::from_api_key)
+            .inspect(|_| labeled_messages += 1)
+            .unwrap_or_else(|| crate::chat_typen::klassifiziere_regel(content, login));
+        if typ != crate::chat_typen::Nachrichtentyp::System {
+            let mt = typ.api_key();
+            if !type_counts.contains_key(mt) {
+                type_order.push(mt);
+            }
+            *type_counts.entry(mt).or_insert(0) += 1;
         }
-        *type_counts.entry(mt).or_insert(0) += 1;
         let hour = m.message_ts.with_timezone(&target_tz).hour();
         *hour_counts.entry(hour).or_insert(0) += 1;
     }
     let distinct_from_messages = distinct.len() as i64;
+    let type_total: i64 = type_counts.values().sum();
+    let label_coverage = if total_messages > 0 {
+        round3(labeled_messages as f64 / total_messages as f64)
+    } else {
+        0.0
+    };
 
     // Chatter-Einträge.
     let mut has_first_flag_data = false;
@@ -642,8 +621,8 @@ pub async fn load_chat_analytics_payload(
     let message_types_json: Vec<Value> = message_types
         .iter()
         .map(|(t, v)| {
-            let pct = if total_messages > 0 {
-                json!(round1(*v as f64 / total_messages as f64 * 100.0))
+            let pct = if type_total > 0 {
+                json!(round1(*v as f64 / type_total as f64 * 100.0))
             } else {
                 json!(0)
             };
@@ -709,6 +688,7 @@ pub async fn load_chat_analytics_payload(
         "timezone": timezone_name,
         "topChatters": top_chatters_json,
         "messageTypes": message_types_json,
+        "labelCoverage": label_coverage,
         "hourlyActivity": hourly_activity,
         "dataQuality": {
             "method": engagement.method,
@@ -732,6 +712,10 @@ pub async fn load_chat_analytics_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn classify_message(content: &str) -> &'static str {
+        crate::chat_typen::klassifiziere_regel(content, "").api_key()
+    }
 
     #[test]
     fn classify() {
@@ -782,6 +766,7 @@ mod tests {
             "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL)",
             "CREATE TABLE twitch_session_viewers (session_id BIGINT, ts_utc TIMESTAMPTZ, minutes_from_start INTEGER, viewer_count INTEGER)",
             "CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, content TEXT, is_command BOOLEAN, message_ts TIMESTAMPTZ)",
+            "CREATE TABLE twitch_chat_message_labels (message_id BIGINT PRIMARY KEY, label TEXT NOT NULL, quelle TEXT NOT NULL, modell TEXT, erstellt_am TIMESTAMPTZ NOT NULL DEFAULT now())",
             "CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE, is_first_time_streamer BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT PRIMARY KEY, last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT)",

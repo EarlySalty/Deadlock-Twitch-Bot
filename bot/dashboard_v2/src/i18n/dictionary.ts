@@ -31,6 +31,20 @@ export const LANGUAGE_LABELS: Record<Language, string> = {
   en: 'English',
 };
 
+export const MESSAGE_TYPE_LABELS: Record<string, string> = {
+  Command: 'Befehl',
+  Hype: 'Hype',
+  Greeting: 'Begrüßung',
+  Question: 'Frage',
+  Feedback: 'Feedback',
+  Technical: 'Technik',
+  Social: 'Sozial',
+  Reaction: 'Reaktion',
+  'Game-Related': 'Spielbezug',
+  Statement: 'Aussage',
+  Other: 'Sonstiges',
+};
+
 const EN: Record<string, string> = {
   // -- Seitenrahmen / App ------------------------------------------------
   'Dashboard-Fehler': 'Dashboard error',
