@@ -1,13 +1,9 @@
-//! Gemeinsames MiniMax-Usage-Ledger (zentrale Postgres über alle Crates dieses Bots).
+//! Gemeinsames LLM-Usage-Ledger (zentrale Postgres über alle Crates dieses Bots).
 //!
-//! Jeder MiniMax-Call wird hier mit den **echten** Token-Zahlen aus der
-//! API-Antwort verbucht — pro Quelle (`source`) und Zweck (`purpose`). Die Tabelle
-//! `minimax_usage` liegt in der **zentralen Postgres** (per Migration angelegt),
-//! nicht mehr in einer separaten SQLite-Datei. Der Python-Helfer
-//! `~/Documents/.claude/minimax-usage/minimax_usage.py` und der Rust-TradingBot
-//! (`tb-ai`) schreiben weiterhin in ihr eigenes SQLite — deren Anbindung an dieses
-//! Postgres ist eine **separate** Aufgabe (siehe Report), damit die cross-bot-
-//! Aggregation wieder auf einem gemeinsamen Speicher steht.
+//! Jeder KI-Call wird hier mit den **echten** Token-Zahlen aus der
+//! API-Antwort verbucht, pro Quelle (`source`) und Zweck (`purpose`). Die Tabelle
+//! `llm_usage` liegt in der **zentralen Postgres** (per Migration angelegt),
+//! nicht mehr in einer separaten SQLite-Datei.
 //!
 //! **Best-effort-Prinzip:** Tracking darf den eigentlichen LLM-Call NIE kippen.
 //! Jeder Fehler (Ledger nicht erreichbar, Schreibfehler) wird ausschließlich per
@@ -45,8 +41,8 @@ pub const SOURCE: &str = "twitch-bot";
 const ENV_DSN_PRIMARY: &str = "TWITCH_ANALYTICS_DSN";
 /// Fallback-Env-Variable, falls `TWITCH_ANALYTICS_DSN` nicht gesetzt ist.
 const ENV_DSN_FALLBACK: &str = "DATABASE_URL";
-/// Env-Variable für das rollierende 5h-Token-Budget (0/leer = aus).
-const ENV_BUDGET: &str = "MINIMAX_5H_TOKEN_BUDGET";
+/// Rollierendes 5h-Token-Budget (0 = aus). Fester Default, keine Env mehr.
+const TOKEN_BUDGET_5H: i64 = 0;
 /// Standard-Fensterbreite in Stunden (Python: `WINDOW_HOURS = 5`).
 const WINDOW_HOURS: i64 = 5;
 /// Mindestabstand zwischen zwei Budget-Prüfungen, damit nicht jeder Call die DB
@@ -80,14 +76,6 @@ fn dsn_from_env() -> Option<String> {
     None
 }
 
-/// Liest das 5h-Token-Budget aus der Umgebung. 0/leer/ungültig → 0 (aus).
-fn budget_from_env() -> i64 {
-    std::env::var(ENV_BUDGET)
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .unwrap_or(0)
-}
-
 /// Baut den Ledger-Pool gegen die zentrale Postgres.
 /// Ohne DSN (`TWITCH_ANALYTICS_DSN`/`DATABASE_URL`) scheitert der Aufbau bewusst —
 /// der Aufrufer loggt und macht best-effort weiter.
@@ -111,14 +99,14 @@ async fn build_pool() -> sqlx::Result<PgPool> {
 async fn pool() -> Option<&'static PgPool> {
     POOL.get_or_try_init(build_pool).await.map_or_else(
         |err| {
-            tracing::warn!(error = %err, "MiniMax-Usage-Ledger: Pool-Aufbau fehlgeschlagen");
+            tracing::warn!(error = %err, "LLM-Usage-Ledger: Pool-Aufbau fehlgeschlagen");
             None
         },
         Some,
     )
 }
 
-/// Verbucht einen einzelnen MiniMax-Call im Ledger unter [`SOURCE`]. **Best-effort:**
+/// Verbucht einen einzelnen KI-Call im Ledger unter [`SOURCE`]. **Best-effort:**
 /// wirft nie, blockiert den LLM-Call nicht und schluckt jeden Fehler in einen
 /// `warn`-Log.
 ///
@@ -139,7 +127,7 @@ pub async fn record(purpose: &str, model: &str, tokens_in: i64, tokens_out: i64,
     if let Err(err) =
         record_with_pool(pool, SOURCE, purpose, model, tokens_in, tokens_out, success).await
     {
-        tracing::warn!(error = %err, source = SOURCE, "MiniMax-Usage-Ledger: record fehlgeschlagen");
+        tracing::warn!(error = %err, source = SOURCE, "LLM-Usage-Ledger: record fehlgeschlagen");
     }
 }
 
@@ -174,7 +162,7 @@ async fn record_with_pool(
 
     sqlx::query(
         r#"
-        INSERT INTO minimax_usage
+        INSERT INTO llm_usage
             (ts, source, purpose, model, tokens_in, tokens_out, total, success, meta)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
@@ -199,76 +187,52 @@ async fn record_with_pool(
 /// (`ts >= datetime('now','-N hours')`), damit alle Seiten identisch zählen.
 /// **Best-effort:** bei jedem Fehler `0` + `warn`-Log.
 pub async fn window_tokens(hours: i64) -> i64 {
-    window_tokens_gefiltert(hours, ModellFilter::Alle).await
-}
-
-/// Welche Modelle ein Fenster zaehlt. Das Ledger fuehrt seit der
-/// Zentralisierung alle Anbieter; das 5h-Budget meint aber nur MiniMax.
-#[derive(Clone, Copy)]
-enum ModellFilter {
-    Alle,
-    NurMinimax,
-}
-
-async fn window_tokens_gefiltert(hours: i64, filter: ModellFilter) -> i64 {
     let Some(pool) = pool().await else {
         return 0;
     };
-    match window_tokens_with_pool(pool, hours, filter).await {
+    match window_tokens_with_pool(pool, hours).await {
         Ok(sum) => sum,
         Err(err) => {
-            tracing::warn!(error = %err, "MiniMax-Usage-Ledger: window_tokens fehlgeschlagen");
+            tracing::warn!(error = %err, "LLM-Usage-Ledger: window_tokens fehlgeschlagen");
             0
         }
     }
 }
 
-/// Kern-Abfrage des Fensters gegen einen expliziten Pool — von [`window_tokens`]
+/// Kern-Abfrage des Fensters gegen einen expliziten Pool, von [`window_tokens`]
 /// (gecachter Pool) und den Tests (Temp-Pool) genutzt.
-async fn window_tokens_with_pool(
-    pool: &PgPool,
-    hours: i64,
-    filter: ModellFilter,
-) -> sqlx::Result<i64> {
-    // `make_interval` nimmt int4 → hours auf i32 klemmen; negatives → 0.
+async fn window_tokens_with_pool(pool: &PgPool, hours: i64) -> sqlx::Result<i64> {
     let hours = i32::try_from(hours.max(0)).unwrap_or(i32::MAX);
-    // MiniMax-Modelle heissen `MiniMax-...`; Fireworks/DeepSeek und Anthropic
-    // tragen andere Namen und zaehlen nicht zum MiniMax-Budget.
-    let nur_minimax = matches!(filter, ModellFilter::NurMinimax);
     // Textbasiertes Fenster (ts ist TEXT, siehe Modul-Doc): der Schwellwert wird
     // als ISO-8601-UTC-String im **exakt gleichen** Format wie beim Schreiben
-    // gebildet (`YYYY-MM-DDThh:mm:ss+00:00`) und lexikografisch verglichen. Das
-    // spiegelt Pythons `ts >= datetime('now','-N hours')`, ohne `ts` zu casten.
+    // gebildet (`YYYY-MM-DDThh:mm:ss+00:00`) und lexikografisch verglichen.
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COALESCE(SUM(total), 0)::bigint
-        FROM minimax_usage
+        FROM llm_usage
         WHERE ts >= to_char(
             (now() AT TIME ZONE 'UTC') - make_interval(hours => $1),
             'YYYY-MM-DD"T"HH24:MI:SS'
         ) || '+00:00'
-          AND ($2 = false OR model ILIKE 'minimax%')
         "#,
     )
     .bind(hours)
-    .bind(nur_minimax)
     .fetch_one(pool)
     .await
 }
 
-/// Misst den 5h-Verbrauch und **warnt** bei Budget-Überschreitung — KEIN Block,
-/// KEIN Fehler. Budget aus Env `MINIMAX_5H_TOKEN_BUDGET` (0/leer = aus).
+/// Misst den 5h-Verbrauch und **warnt** bei Budget-Überschreitung. KEIN Block,
+/// KEIN Fehler. Budget aus der Konstante [`TOKEN_BUDGET_5H`] (0 = aus).
 ///
 /// Damit nicht jeder Call die DB für das Fenster-`SUM` anfasst, ist die Prüfung
 /// auf höchstens einmal pro [`BUDGET_CHECK_INTERVAL`] (60 s) gedrosselt: liegt die
 /// letzte Prüfung näher zurück, kehrt die Funktion sofort zurück.
 pub async fn warn_if_over_budget() {
-    let budget = budget_from_env();
+    let budget = TOKEN_BUDGET_5H;
     if budget <= 0 {
-        return; // Budget aus → nichts zu tun.
+        return;
     }
 
-    // Drosseln: nur prüfen, wenn das Intervall seit der letzten Prüfung um ist.
     {
         let mut last = LAST_BUDGET_CHECK.lock().await;
         let now = Instant::now();
@@ -280,15 +244,13 @@ pub async fn warn_if_over_budget() {
         *last = Some(now);
     }
 
-    // Nur MiniMax-Zeilen: Anthropic- und Fireworks-Tokens stehen seit der
-    // Zentralisierung im selben Ledger, gehoeren aber nicht zu diesem Budget.
-    let used = window_tokens_gefiltert(WINDOW_HOURS, ModellFilter::NurMinimax).await;
+    let used = window_tokens(WINDOW_HOURS).await;
     if used > budget {
         tracing::warn!(
             used,
             budget,
             window_hours = WINDOW_HOURS,
-            "MiniMax 5h-Token-Budget überschritten (nur Warnung, kein Block)"
+            "5h-Token-Budget überschritten (nur Warnung, kein Block)"
         );
     }
 }
@@ -335,7 +297,7 @@ mod tests {
             .expect("Schema-Pool");
         sqlx::query(
             r#"
-            CREATE TABLE minimax_usage (
+            CREATE TABLE llm_usage (
                 id BIGSERIAL PRIMARY KEY,
                 ts TEXT NOT NULL,
                 source TEXT NOT NULL,
@@ -360,7 +322,7 @@ mod tests {
         let Some(pool) = make_pool("t_mmu_record").await else {
             return;
         };
-        record_with_pool(&pool, SOURCE, "engagement", "MiniMax-M3", 120, 80, true)
+        record_with_pool(&pool, SOURCE, "engagement", "deepseek-v4-flash", 120, 80, true)
             .await
             .expect("Insert");
 
@@ -376,7 +338,7 @@ mod tests {
             i64,
         ) = sqlx::query_as(
             "SELECT ts, source, purpose, model, tokens_in, tokens_out, total, success \
-             FROM minimax_usage ORDER BY id DESC LIMIT 1",
+             FROM llm_usage ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
@@ -384,7 +346,7 @@ mod tests {
 
         assert_eq!(source, "twitch-bot");
         assert_eq!(purpose.as_deref(), Some("engagement"));
-        assert_eq!(model.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(tokens_in, 120);
         assert_eq!(tokens_out, 80);
         assert_eq!(total, 200, "total = tokens_in + tokens_out");
@@ -403,7 +365,7 @@ mod tests {
         };
         let cols: Vec<String> = sqlx::query_scalar(
             "SELECT column_name FROM information_schema.columns \
-             WHERE table_schema = current_schema() AND table_name = 'minimax_usage' \
+             WHERE table_schema = current_schema() AND table_name = 'llm_usage' \
              ORDER BY ordinal_position",
         )
         .fetch_all(&pool)
@@ -436,7 +398,7 @@ mod tests {
             .expect("Insert");
 
         let (purpose, model, success): (Option<String>, Option<String>, i64) = sqlx::query_as(
-            "SELECT purpose, model, success FROM minimax_usage ORDER BY id DESC LIMIT 1",
+            "SELECT purpose, model, success FROM llm_usage ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
@@ -451,11 +413,11 @@ mod tests {
         let Some(pool) = make_pool("t_mmu_clamp").await else {
             return;
         };
-        record_with_pool(&pool, SOURCE, "engagement", "MiniMax-M3", -5, -10, true)
+        record_with_pool(&pool, SOURCE, "engagement", "deepseek-v4-flash", -5, -10, true)
             .await
             .expect("Insert");
         let (tokens_in, tokens_out, total): (i64, i64, i64) = sqlx::query_as(
-            "SELECT tokens_in, tokens_out, total FROM minimax_usage ORDER BY id DESC LIMIT 1",
+            "SELECT tokens_in, tokens_out, total FROM llm_usage ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
@@ -474,56 +436,26 @@ mod tests {
             .to_rfc3339_opts(SecondsFormat::Secs, false);
         // Aktuell (zählt): zweimal je 100 total.
         for _ in 0..2 {
-            sqlx::query("INSERT INTO minimax_usage (ts, source, total) VALUES ($1, 'twitch-bot', 100)")
+            sqlx::query("INSERT INTO llm_usage (ts, source, total) VALUES ($1, 'twitch-bot', 100)")
                 .bind(&now_ts)
                 .execute(&pool)
                 .await
                 .unwrap();
         }
         // Alt (>5h, zählt NICHT): 999 total vor 6 Stunden.
-        sqlx::query("INSERT INTO minimax_usage (ts, source, total) VALUES ($1, 'twitch-bot', 999)")
+        sqlx::query("INSERT INTO llm_usage (ts, source, total) VALUES ($1, 'twitch-bot', 999)")
             .bind(&old_ts)
             .execute(&pool)
             .await
             .unwrap();
 
-        let sum = window_tokens_with_pool(&pool, 5, ModellFilter::Alle)
+        let sum = window_tokens_with_pool(&pool, 5)
             .await
             .expect("Fenster-Summe");
         assert_eq!(
             sum, 200,
             "nur die zwei aktuellen 100er zählen, nicht die alten 999"
         );
-
-        // Budget-Sicht: nur MiniMax-Modelle. Anthropic-Zeilen zaehlen nicht.
-        for (model, total) in [("MiniMax-M3", 50), ("claude-opus-4-6", 700)] {
-            sqlx::query(
-                "INSERT INTO minimax_usage (ts, source, model, total) VALUES ($1, 'twitch-bot', $2, $3)",
-            )
-            .bind(&now_ts)
-            .bind(model)
-            .bind(total)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-        let minimax = window_tokens_with_pool(&pool, 5, ModellFilter::NurMinimax)
-            .await
-            .expect("MiniMax-Summe");
-        assert_eq!(minimax, 50, "nur die MiniMax-Zeile zaehlt zum Budget");
-    }
-
-    #[test]
-    fn budget_from_env_parst_und_faellt_auf_null() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        std::env::set_var(ENV_BUDGET, "50000");
-        assert_eq!(budget_from_env(), 50_000);
-        std::env::set_var(ENV_BUDGET, "");
-        assert_eq!(budget_from_env(), 0);
-        std::env::set_var(ENV_BUDGET, "kaputt");
-        assert_eq!(budget_from_env(), 0);
-        std::env::remove_var(ENV_BUDGET);
-        assert_eq!(budget_from_env(), 0);
     }
 
     #[test]
