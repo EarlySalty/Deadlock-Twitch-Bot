@@ -61,7 +61,7 @@ sha2 = "0.10"
 blake2 = "0.10"
 axum = "0.7"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
+tower-http = { version = "0.7", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
 async-trait = "0.1"
 # Nur fuer `StreamExt::split` auf dem axum-WebSocket (OBS-Dock-Gateway); liegt
 # ueber sqlx ohnehin schon im Lock.
