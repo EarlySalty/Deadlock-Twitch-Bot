@@ -1556,6 +1556,14 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "yt-ok" })))
             .mount(&server)
             .await;
+        Mock::given(method("PUT"))
+            .and(path("/status"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string("Content-Length: 0 fehlt an der Resume-Abfrage"),
+            )
+            .mount(&server)
+            .await;
         let up = uploader(&server);
         let stand = up
             .resumable_offset(&format!("{}/status", server.uri()), 500)
