@@ -1,8 +1,8 @@
 name: "Rust Security"
 
 # CodeQL deckt Rust hier nicht ab: der Extraktor loest nur 42 Prozent der
-# Aufrufziele auf (siehe codeql.yml). Clippy und cargo-audit sind die
-# wirksamen Pruefungen fuer den Rust-Teil.
+# Aufrufziele auf (siehe codeql.yml). Clippy, cargo-audit und cargo-deny sind
+# die wirksamen Pruefungen fuer den Rust-Teil.
 # Woechentlich statt bei jedem Push, damit das Actions-Budget reicht. Neue
 # RustSec-Advisories tauchen ohne eigenen Commit auf, deshalb ueberhaupt ein
 # fester Termin und nicht nur ein Trigger am Code.
@@ -60,3 +60,24 @@ jobs:
       - name: Run cargo-audit
         working-directory: rust
         run: cargo audit
+
+  deny:
+    name: "cargo-deny (advisories bans sources)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3 # v2.87.3
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo-deny
+        working-directory: rust
+        run: cargo deny check advisories bans sources

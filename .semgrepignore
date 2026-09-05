@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+build/
+.venv/
+venv/
+__pycache__/
+graphify-out/
+*.lock

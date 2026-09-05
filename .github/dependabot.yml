@@ -49,3 +49,13 @@ updates:
       - "javascript"
     commit-message:
       prefix: "deps"
+
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "deps"
