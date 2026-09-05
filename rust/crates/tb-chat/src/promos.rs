@@ -714,9 +714,13 @@ impl PromoEngine {
             .is_partner_channel_for_chat_tracking(&login)
             .await
         {
+            self.log_anlass_reject(&login, &target_user_id, "not_partner", text, None)
+                .await;
             return;
         }
         if !self.promo_channel_allowed_db(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "not_allowed", text, None)
+                .await;
             return;
         }
         if self.promo_blocked_by_plan_or_flag(&login).await {
