@@ -115,10 +115,6 @@ pub enum ResumeStand {
     Fertig(String),
     /// So viele Bytes liegen drueben, hier geht es weiter.
     Offset(u64),
-    /// Die Sitzung gibt es nicht mehr (404/410), es muss eine neue begonnen
-    /// werden. Nur diese beiden Status zaehlen als verfallen; ein 500 oder 503
-    /// ist voruebergehend und darf einen mehrstuendigen Upload nicht auf null
-    /// zuruecksetzen.
     Verfallen,
 }
 
