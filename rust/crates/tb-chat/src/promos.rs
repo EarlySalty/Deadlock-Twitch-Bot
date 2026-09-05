@@ -995,6 +995,11 @@ impl PromoEngine {
                 .await;
             return;
         }
+        if !self.partner_user_limit_ok(target_user_id).await {
+            self.log_partner_reject(login, target_user_id, "limit_user", trigger, None)
+                .await;
+            return;
+        }
         if !self.partner_channel_limit_ok(login).await {
             self.log_partner_reject(login, target_user_id, "limit_channel", trigger, None)
                 .await;
@@ -1144,7 +1149,7 @@ impl PromoEngine {
                        AND created_at >= NOW() - INTERVAL '10 minutes'
                  ) AS \"pending!\"
                FROM twitch_promo_pitch_log
-              WHERE target_user_id = $1 AND pfad = 'anlass'",
+              WHERE target_user_id = $1 AND pfad IN ('anlass', 'partner')",
             target_user_id,
         )
         .fetch_one(&self.pool)
@@ -1172,7 +1177,7 @@ impl PromoEngine {
             .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
         let row = match sqlx::query!(
             "SELECT COUNT(*) AS \"count!\", MAX(sent_at) AS last FROM twitch_promo_pitch_log
-              WHERE channel_login = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL
+              WHERE channel_login = $1 AND pfad IN ('anlass', 'partner') AND sent_at IS NOT NULL
                 AND sent_at >= $2",
             login,
             stream_start,
@@ -1268,8 +1273,11 @@ impl PromoEngine {
             .await
             .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
         let row = match sqlx::query!(
-            "SELECT COUNT(*) AS \"count!\" FROM twitch_promo_pitch_log
-              WHERE channel_login = $1 AND pfad = 'partner' AND sent_at IS NOT NULL
+            "SELECT
+                 COUNT(*) FILTER (WHERE pfad = 'partner') AS \"partner_count!\",
+                 MAX(sent_at) AS last
+               FROM twitch_promo_pitch_log
+              WHERE channel_login = $1 AND pfad IN ('anlass', 'partner') AND sent_at IS NOT NULL
                 AND sent_at >= $2",
             login,
             stream_start,
@@ -1283,7 +1291,15 @@ impl PromoEngine {
                 return false;
             }
         };
-        row.count < 1
+        if row.partner_count >= 1 {
+            return false;
+        }
+        if let Some(last) = row.last {
+            if (Utc::now() - last).num_seconds() < 600 {
+                return false;
+            }
+        }
+        true
     }
 
     async fn partner_daily_limit_ok(&self) -> bool {
@@ -5158,6 +5174,55 @@ mod db_tests {
         .unwrap();
         assert_eq!(row.0, "partner");
         assert!(row.1.is_some(), "sent_at muss gesetzt sein");
+    }
+
+    #[tokio::test]
+    async fn partner_pitch_schreibt_ledger_und_review_karte() {
+        let pool = pool_or_skip!("promo_partner_ledger_karte");
+        seed_partner_channel(&pool, "c-lk", "lkkanal").await;
+        seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(None));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "stark gespielt gerade, wenn du öfter deadlock streamst gibts bei der community ein partner netzwerk mit raids und chat schutz",
+        )));
+        let sink = RecordingReviewSink::default();
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_partner_pitch_gen(gen.clone())
+            .set_pitch_review_sink(Arc::new(sink.clone()));
+
+        let event = pitch_event(
+            "c-lk",
+            "lkkanal",
+            "u-lk",
+            "Ledger",
+            "hey ich streame auch deadlock schaut gerne mal bei mir vorbei wenn ihr wollt",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(api.message_count().await, 1, "genau ein Partner-Pitch erwartet");
+
+        let ledger: (String, String, String, Option<String>) = sqlx::query_as(
+            "SELECT trigger_type, judge_verdict, action, twitch_user_id FROM twitch_scout_pitch_ledger",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ledger.0, "chat_partner_pitch");
+        assert_eq!(ledger.1, "partner_pitch");
+        assert_eq!(ledger.2, "posted");
+        assert_eq!(ledger.3.as_deref(), Some("u-lk"));
+
+        let cards = sink.cards.lock().await;
+        assert_eq!(cards.len(), 1, "eine Review-Karte erwartet");
+        assert_eq!(cards[0].4, PitchCardKind::Partner, "Karte muss als Partner markiert sein");
+        let hint = cards[0].5.as_deref().unwrap_or("");
+        assert!(
+            hint.contains("ledgerlogin"),
+            "Kandidaten-Hinweis muss den Login tragen: {hint}"
+        );
     }
 
     #[tokio::test]

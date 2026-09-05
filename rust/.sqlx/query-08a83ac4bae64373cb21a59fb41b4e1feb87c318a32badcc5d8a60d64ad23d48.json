@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COUNT(*) AS \"count!\", MAX(sent_at) AS last FROM twitch_promo_pitch_log\n              WHERE channel_login = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL\n                AND sent_at >= $2",
+  "query": "SELECT COUNT(*) AS \"count!\", MAX(sent_at) AS last FROM twitch_promo_pitch_log\n              WHERE channel_login = $1 AND pfad IN ('anlass', 'partner') AND sent_at IS NOT NULL\n                AND sent_at >= $2",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       null
     ]
   },
-  "hash": "2182c820bcbe88e60b451d22e12c333053a4a7d66b9f1a5911e31acd8961cd74"
+  "hash": "08a83ac4bae64373cb21a59fb41b4e1feb87c318a32badcc5d8a60d64ad23d48"
 }
