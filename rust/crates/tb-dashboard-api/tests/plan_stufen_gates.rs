@@ -45,6 +45,8 @@ const DDL: &[&str] = &[
     "CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, \
      streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, content TEXT, \
      is_command BOOLEAN, message_ts TIMESTAMPTZ)",
+    "CREATE TABLE twitch_chat_message_labels (message_id BIGINT PRIMARY KEY, label TEXT NOT NULL, \
+     quelle TEXT NOT NULL, modell TEXT, erstellt_am TIMESTAMPTZ NOT NULL DEFAULT now())",
     "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, \
      chatter_id TEXT, first_seen_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL, \
      total_messages INTEGER DEFAULT 0, total_sessions INTEGER DEFAULT 0, \
