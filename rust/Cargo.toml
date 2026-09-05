@@ -38,7 +38,7 @@ edition = "2021"
 [workspace.dependencies]
 thiserror = "1"
 aes-gcm = "0.10"
-aes = "0.8"
+aes = "0.9"
 cbc = { version = "0.1", features = ["block-padding"] }
 base64 = "0.22"
 hex = "0.4"
