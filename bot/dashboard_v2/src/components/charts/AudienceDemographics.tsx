@@ -48,7 +48,13 @@ interface AudienceDemographicsProps {
   data: AudienceDemographicsData;
 }
 
-const VIEWER_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488'];
+const VIEWER_COLORS = [
+  'var(--color-primary)',
+  'var(--color-accent)',
+  'var(--color-warning)',
+  'var(--color-success)',
+  'var(--color-secondary)',
+];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   const activityLabels = {
@@ -130,7 +136,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
               Viewer-Typen
             </h4>
             <div className="flex items-center gap-4">
-              <div className="w-32 h-32">
+              <div className="w-44 h-44">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -139,12 +145,16 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       nameKey="label"
                       cx="50%"
                       cy="50%"
-                      innerRadius={25}
-                      outerRadius={50}
+                      innerRadius="52%"
+                      outerRadius="80%"
                       paddingAngle={2}
                     >
                       {data.viewerTypes.map((_, index) => (
-                        <Cell key={index} fill={VIEWER_COLORS[index % VIEWER_COLORS.length]} />
+                        <Cell
+                          key={index}
+                          fill={VIEWER_COLORS[index % VIEWER_COLORS.length]}
+                          stroke="none"
+                        />
                       ))}
                     </Pie>
                     <Tooltip
@@ -213,9 +223,6 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                 ? `Peak-Zeiten (${data.timezone || 'UTC'}): ${normalizedPeakHours.map(h => `${h}:00`).join(', ')} Uhr`
                 : 'Peak-Zeiten: zu wenig Aktivitätsdaten'}
             </div>
-            {data.peakHoursMethod && (
-              <div className="mt-1 text-xs text-text-secondary">Methode: {data.peakHoursMethod}</div>
-            )}
           </div>
 
           {/* Engagement Scores */}

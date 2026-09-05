@@ -58,14 +58,14 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       label: 'Unique Viewer',
       value: data.uniqueViewers,
       icon: Users,
-      color: 'from-[#00D9FF] to-[#0093AD]',
+      color: 'from-primary to-primary',
       width: 100,
     },
     {
       label: 'Wiederkehrend',
       value: data.returningViewers,
       icon: Heart,
-      color: 'from-[#C5A059] to-[#9A7C42]',
+      color: 'from-accent to-accent',
       width: data.uniqueViewers > 0 ? (data.returningViewers / data.uniqueViewers) * 100 : 0,
     },
     {

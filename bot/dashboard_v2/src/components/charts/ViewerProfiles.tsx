@@ -7,7 +7,13 @@ interface ViewerProfilesProps {
   data: ViewerProfilesData | undefined;
 }
 
-const PROFILE_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C', '#00C46A', '#B5A488'];
+const PROFILE_COLORS = [
+  'var(--color-primary)',
+  'var(--color-accent)',
+  'var(--color-warning)',
+  'var(--color-success)',
+  'var(--color-secondary)',
+];
 const PROFILE_LABELS: Record<string, string> = {
   exclusive: 'Exklusiv',
   loyalMulti: 'Treue Multi',
@@ -46,12 +52,16 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  innerRadius={35}
-                  outerRadius={70}
+                  innerRadius="52%"
+                  outerRadius="80%"
                   paddingAngle={2}
                 >
                   {pieData.map((_, index) => (
-                    <Cell key={index} fill={PROFILE_COLORS[index % PROFILE_COLORS.length]} />
+                    <Cell
+                      key={index}
+                      fill={PROFILE_COLORS[index % PROFILE_COLORS.length]}
+                      stroke="none"
+                    />
                   ))}
                 </Pie>
                 <Tooltip

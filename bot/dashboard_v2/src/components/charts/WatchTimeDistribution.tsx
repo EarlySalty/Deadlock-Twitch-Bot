@@ -9,11 +9,11 @@ interface WatchTimeDistributionProps {
 }
 
 const SEGMENTS = [
-  { key: 'under5min' as const, label: '< 5 Min', shortLabel: '<5m', color: '#FF5A3C', description: 'Schnelle Absprünge' },
-  { key: 'min5to15' as const, label: '5-15 Min', shortLabel: '5-15m', color: '#E8A33D', description: 'Kurze Sessions' },
-  { key: 'min15to30' as const, label: '15-30 Min', shortLabel: '15-30m', color: '#E8A33D', description: 'Mittlere Sessions' },
-  { key: 'min30to60' as const, label: '30-60 Min', shortLabel: '30-60m', color: '#00FF88', description: 'Längere Sessions' },
-  { key: 'over60min' as const, label: '> 60 Min', shortLabel: '60m+', color: '#00FF88', description: 'Loyale Zuschauer' },
+  { key: 'under5min' as const, label: '< 5 Min', shortLabel: '<5m', barClass: 'bg-danger', borderClass: 'border-danger', description: 'Schnelle Absprünge' },
+  { key: 'min5to15' as const, label: '5-15 Min', shortLabel: '5-15m', barClass: 'bg-warning', borderClass: 'border-warning', description: 'Kurze Sessions' },
+  { key: 'min15to30' as const, label: '15-30 Min', shortLabel: '15-30m', barClass: 'bg-primary', borderClass: 'border-primary', description: 'Mittlere Sessions' },
+  { key: 'min30to60' as const, label: '30-60 Min', shortLabel: '30-60m', barClass: 'bg-accent', borderClass: 'border-accent', description: 'Längere Sessions' },
+  { key: 'over60min' as const, label: '> 60 Min', shortLabel: '60m+', barClass: 'bg-success', borderClass: 'border-success', description: 'Loyale Zuschauer' },
 ] as const;
 
 export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
@@ -150,8 +150,8 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                         initial={{ width: 0 }}
                         animate={{ width: `${(currVal / barMax) * 100}%` }}
                         transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
-                        className="h-full rounded"
-                        style={{ backgroundColor: segment.color, minWidth: currVal > 0 ? '2px' : '0' }}
+                        className={`h-full rounded ${segment.barClass}`}
+                        style={{ minWidth: currVal > 0 ? '2px' : '0' }}
                       />
                     </div>
                     <span className="text-xs font-medium text-white w-12 text-right">{currVal.toFixed(1)}%</span>
@@ -165,8 +165,8 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                           initial={{ width: 0 }}
                           animate={{ width: `${(prevVal / barMax) * 100}%` }}
                           transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
-                          className="h-full rounded opacity-35"
-                          style={{ backgroundColor: segment.color, minWidth: prevVal > 0 ? '2px' : '0' }}
+                          className={`h-full rounded border bg-transparent ${segment.borderClass}`}
+                          style={{ minWidth: prevVal > 0 ? '2px' : '0' }}
                         />
                       </div>
                       <span className="text-[10px] text-text-secondary w-12 text-right">{prevVal.toFixed(1)}%</span>
@@ -195,7 +195,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
             <div className="w-3 h-3 rounded bg-primary" /> Aktuell ({data.sessionCount ?? '?'} Sessions)
           </span>
           <span className="flex items-center gap-1.5">
-            <div className="w-3 h-2 rounded bg-primary opacity-35" /> Vorperiode ({data.previous!.sessionCount ?? '?'} Sessions)
+            <div className="w-3 h-3 rounded border border-primary bg-transparent" /> Vorperiode ({data.previous!.sessionCount ?? '?'} Sessions)
           </span>
         </div>
       )}
