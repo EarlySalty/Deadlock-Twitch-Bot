@@ -700,6 +700,11 @@ impl PromoEngine {
             self.record_promo_activity_inner(&mut state, &chatter, now);
         }
 
+        if !self.reserve_promo_attempt(&login, now).await {
+            tracing::debug!(channel = %login, "Promo-Attempt-Cooldown aktiv, kein Slot");
+            return;
+        }
+
         let Ok(promo_permit) = Arc::clone(&self.promo_semaphore).try_acquire_owned() else {
             tracing::debug!(channel = %login, "Promo-Semaphore voll, überspringe Promo");
             return;
@@ -710,7 +715,7 @@ impl PromoEngine {
         tokio::spawn(async move {
             let _promo_permit = promo_permit;
             engine
-                .maybe_send_promo_with_stats(&login, &channel_id, now)
+                .maybe_send_promo_with_stats(&login, &channel_id, now, true)
                 .await;
         });
     }
@@ -734,7 +739,7 @@ impl PromoEngine {
             return;
         };
 
-        if !self.pitch_judge_throttle_check(&login, &target_user_id) {
+        if !self.pitch_judge_throttle_reserve(&login, &target_user_id) {
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: judge-drossel");
             return;
         }
@@ -744,37 +749,39 @@ impl PromoEngine {
             .is_partner_channel_for_chat_tracking(&login)
             .await
         {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: kein partnerkanal");
             return;
         }
         if !self.promo_channel_allowed_db(&login).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: nicht in allowlist");
             return;
         }
         if self.promo_blocked_by_plan_or_flag(&login).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: werbefrei");
             return;
         }
         if self.suppression.is_muted(&login).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: suppression");
             return;
         }
         if !self.stream_start_delay_ok(&login).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: startverzoegerung");
             return;
         }
 
         if !self.pitch_user_limit_ok(&target_user_id).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: user-limit");
             return;
         }
         if !self.pitch_channel_limit_ok(&login).await {
+            self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, "anlass-pitch: kanal-limit");
-            return;
-        }
-
-        if !self.pitch_judge_throttle_reserve(&login, &target_user_id) {
-            tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: judge-drossel-reserve");
             return;
         }
 
@@ -874,24 +881,12 @@ impl PromoEngine {
         }
     }
 
-    fn pitch_judge_throttle_check(&self, login: &str, chatter_id: &str) -> bool {
-        let now = Instant::now();
+    fn pitch_judge_throttle_release(&self, login: &str, chatter_id: &str) {
         let chatter_key = format!("{login}|{chatter_id}");
-        if let Some(last) = self.pitch_judge_last.get(&chatter_key) {
-            if now.duration_since(*last) < PITCH_JUDGE_CHATTER_COOLDOWN {
-                return false;
-            }
+        self.pitch_judge_last.remove(&chatter_key);
+        if let Some(mut entry) = self.pitch_judge_channel.get_mut(login) {
+            entry.pop();
         }
-        if let Some(entry) = self.pitch_judge_channel.get(login) {
-            let aktiv = entry
-                .iter()
-                .filter(|t| now.duration_since(**t) < PITCH_JUDGE_CHANNEL_WINDOW)
-                .count();
-            if aktiv >= PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW {
-                return false;
-            }
-        }
-        true
     }
 
     fn pitch_judge_throttle_reserve(&self, login: &str, chatter_id: &str) -> bool {
@@ -1200,7 +1195,7 @@ impl PromoEngine {
             return;
         }
         let sent = self
-            .maybe_send_promo_with_stats(&login, &channel_id, now)
+            .maybe_send_promo_with_stats(&login, &channel_id, now, false)
             .await;
         if !sent {
             self.maybe_send_viewer_spike_promo(&login, &channel_id, now)
@@ -1216,6 +1211,7 @@ impl PromoEngine {
         login: &str,
         channel_id: &str,
         now: Instant,
+        attempt_already_reserved: bool,
     ) -> bool {
         // Guard: Channel-Allowlist.
         if !self.promo_channel_allowed_db(login).await {
@@ -1245,23 +1241,37 @@ impl PromoEngine {
             return false;
         }
 
-        {
+        if !attempt_already_reserved && !self.reserve_promo_attempt(login, now).await {
+            return false;
+        }
+
+        self.send_promo_message(login, channel_id, now, "chat_activity")
+            .await
+    }
+
+    /// Reserviert atomar den Attempt-Cooldown (≥10 min) im In-Memory-State und
+    /// persistiert ihn. Liefert false, wenn der Kanal noch in der Attempt-Sperre
+    /// steht. Der per-Message-Pfad reserviert damit synchron vor dem Semaphore,
+    /// damit ein aktiver Kanal nicht jeden Slot mit No-Op-Tasks belegt.
+    async fn reserve_promo_attempt(&self, login: &str, now: Instant) -> bool {
+        let reserved = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             if !self.promo_attempt_allowed_inner(&state, now) {
-                return false;
+                false
+            } else {
+                state.last_promo_attempt = Some(now);
+                true
             }
-            state.last_promo_attempt = Some(now);
+        };
+        if reserved {
+            self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64)
+                .await;
         }
-        // DB-Persist attempt (promos.py:879: save_promo_cooldown "attempt").
-        self.save_promo_cooldown(login, "attempt", Utc::now().timestamp() as f64)
-            .await;
-
-        self.send_promo_message(login, channel_id, now, "chat_activity")
-            .await
+        reserved
     }
 
     /// Kernfunktion Promo senden (promos.py:1096: `_send_promo_message`).
@@ -4326,7 +4336,6 @@ mod db_tests {
         }
 
         engine.on_message(&event).await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
 
         assert_eq!(
             gen.calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -4352,6 +4361,77 @@ mod db_tests {
             gen.calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "mit freiem Semaphore muss der Promo-Task genau einmal Text erzeugen"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_message_belegt_keinen_permit_wenn_nicht_faellig() {
+        let pool = pool_or_skip!("promo_on_message_attempt_cooldown");
+        seed_partner_channel(&pool, "c-nf", "nfkanal").await;
+        let gen = Arc::new(CountingTextGen::new("bei uns gibts leute zum zocken"));
+        let engine = Arc::new(
+            PromoEngine::new(
+                pool.clone(),
+                Arc::new(super::tests::MockApi::default()),
+                Arc::new(NoopSuppressionCheck),
+            )
+            .set_pitch_text_gen(gen.clone()),
+        );
+
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("nfkanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_promo_attempt = Some(now);
+            state.raw_msg_count_since_promo = PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO;
+            for idx in 0..(PROMO_ACTIVITY_MIN_MSGS + PROMO_NEW_CHATTERS_MIN) {
+                state.activity.push_back((now, format!("chatter_{idx}")));
+            }
+        }
+
+        let event = pitch_event(
+            "c-nf",
+            "nfkanal",
+            "u-nf",
+            "Nf",
+            "das ist eine ganz normale nachricht im chat",
+        );
+        engine.on_message(&event).await;
+
+        assert_eq!(
+            engine.promo_semaphore.available_permits(),
+            PROMO_MAX_CONCURRENT,
+            "eine nicht faellige Nachricht darf keinen Promo-Slot belegen"
+        );
+        assert_eq!(
+            gen.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "eine nicht faellige Nachricht darf keinen Promo-Task starten"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pitch_judge_reserve_zaehlt_beide_parallelen_aufrufe() {
+        let pool = pool_or_skip!("promo_reserve_parallel");
+        let engine = Arc::new(make_engine(pool));
+        let e1 = Arc::clone(&engine);
+        let e2 = Arc::clone(&engine);
+        let t1 = tokio::spawn(async move { e1.pitch_judge_throttle_reserve("rkanal", "chatter-a") });
+        let t2 = tokio::spawn(async move { e2.pitch_judge_throttle_reserve("rkanal", "chatter-b") });
+        let (r1, r2) = tokio::join!(t1, t2);
+        assert!(r1.unwrap(), "erste Reservierung muss durchgehen");
+        assert!(r2.unwrap(), "zweite Reservierung muss durchgehen");
+        let budget = engine
+            .pitch_judge_channel
+            .get("rkanal")
+            .map(|entry| entry.len())
+            .unwrap_or(0);
+        assert_eq!(
+            budget, 2,
+            "beide parallelen Reservierungen muessen im Kanalbudget zaehlen, war {budget}"
         );
     }
 
@@ -4392,10 +4472,12 @@ mod db_tests {
             let e1 = Arc::clone(&engine);
             let e2 = Arc::clone(&engine);
             let t1 = tokio::spawn(async move {
-                e1.maybe_send_promo_with_stats("atkanal", "c-at", now).await
+                e1.maybe_send_promo_with_stats("atkanal", "c-at", now, false)
+                    .await
             });
             let t2 = tokio::spawn(async move {
-                e2.maybe_send_promo_with_stats("atkanal", "c-at", now).await
+                e2.maybe_send_promo_with_stats("atkanal", "c-at", now, false)
+                    .await
             });
             let _ = tokio::join!(t1, t2);
         }

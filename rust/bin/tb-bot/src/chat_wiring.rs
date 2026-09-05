@@ -1879,8 +1879,8 @@ struct DiscordPitchReviewSink {
     discord: Arc<dyn DiscordBackend>,
 }
 
-fn neutralize_pitch_field(value: &str) -> String {
-    let neutralized = value
+fn neutralize_pitch_mentions(value: &str) -> String {
+    value
         .replace("@everyone", "everyone")
         .replace("@here", "here")
         .replace("<@", "< @")
@@ -1889,19 +1889,26 @@ fn neutralize_pitch_field(value: &str) -> String {
         .replace("https://", "https ://")
         .replace("http://", "http ://")
         .replace("www.", "www .")
-        .replace("discord.gg", "discord .gg");
+        .replace("discord.gg", "discord .gg")
+}
+
+fn is_pitch_bidi_control(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn neutralize_pitch_field(value: &str) -> String {
+    let neutralized = neutralize_pitch_mentions(value);
     let mut cleaned = String::with_capacity(neutralized.len());
     for character in neutralized.chars() {
-        if character.is_control()
-            || matches!(
-                character,
-                '\u{061c}'
-                    | '\u{200e}'
-                    | '\u{200f}'
-                    | '\u{202a}'..='\u{202e}'
-                    | '\u{2066}'..='\u{2069}'
-            )
-        {
+        if is_pitch_bidi_control(character) {
             cleaned.push(' ');
         } else {
             if matches!(
@@ -1916,11 +1923,27 @@ fn neutralize_pitch_field(value: &str) -> String {
     cleaned
 }
 
+fn neutralize_pitch_codespan(value: &str) -> String {
+    let neutralized = neutralize_pitch_mentions(value);
+    let mut cleaned = String::with_capacity(neutralized.len());
+    for character in neutralized.chars() {
+        if character == '`' {
+            continue;
+        }
+        if is_pitch_bidi_control(character) {
+            cleaned.push(' ');
+        } else {
+            cleaned.push(character);
+        }
+    }
+    cleaned
+}
+
 #[async_trait::async_trait]
 impl PitchReviewSink for DiscordPitchReviewSink {
     async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
         let displays = vec![
-            format!("**Anlass-Pitch** in `{}`", neutralize_pitch_field(channel_login)),
+            format!("**Anlass-Pitch** in `{}`", neutralize_pitch_codespan(channel_login)),
             format!("An **{}**", neutralize_pitch_field(target_login)),
             format!("> {}", neutralize_pitch_field(trigger)),
             format!("Antwort: {}", neutralize_pitch_field(reply)),
@@ -3071,7 +3094,7 @@ mod chat_notification_tests {
         };
 
         sink.send_card(
-            "nani @everyone <@111>",
+            "nani_fan @everyone <@111>",
             "symphooniee @here <@222>",
             "wieso ist deadlock so tot @everyone @here niemand spielt <@123456> das mehr",
             "kein stress @everyone die community <@789> ist aktiv @here",
@@ -3097,6 +3120,10 @@ mod chat_notification_tests {
         assert!(
             !rendered.contains("<@"),
             "Karte darf keine wirksame User-Mention enthalten: {rendered}"
+        );
+        assert!(
+            rendered.contains("nani_fan"),
+            "der Kanal-Codespan darf den Unterstrich nicht mit Backslash escapen: {rendered}"
         );
         assert!(
             payload.allowed_role_ids.is_empty(),
