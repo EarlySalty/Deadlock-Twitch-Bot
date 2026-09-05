@@ -350,28 +350,93 @@ fn modell_prompt(pakete: &[(i64, String)]) -> String {
 
 pub async fn klassifiziere_modell(
     pakete: &[(i64, String)],
-) -> Result<Vec<(i64, Nachrichtentyp)>, tb_llm::LlmError> {
+) -> Result<(Vec<(i64, Nachrichtentyp)>, String), tb_llm::LlmError> {
+    klassifiziere_modell_intern(pakete, None).await
+}
+
+async fn klassifiziere_modell_intern(
+    pakete: &[(i64, String)],
+    endpoint: Option<tb_llm::LlmEndpoint>,
+) -> Result<(Vec<(i64, Nachrichtentyp)>, String), tb_llm::LlmError> {
     if pakete.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), String::new()));
     }
-    let request = tb_llm::Request::prompt(modell_prompt(pakete))
+    let mut request = tb_llm::Request::prompt(modell_prompt(pakete))
         .temperature(0.0)
         .max_tokens((pakete.len() as i64) * 24 + 256)
         .timeout(Duration::from_secs(MODELL_TIMEOUT_SECS))
         .json_object();
+    if let Some(endpoint) = endpoint {
+        request = request.no_ledger().endpoint(endpoint);
+    }
     let response = tb_llm::complete(MODELL_USE_CASE, request).await?;
     let antwort: ModellAntwort = serde_json::from_str(response.text.trim()).map_err(|error| {
         tb_llm::LlmError::Unparsable(format!("JSON nicht lesbar: {error}"))
     })?;
-    let mut ergebnis: Vec<(i64, Nachrichtentyp)> =
-        pakete.iter().map(|(id, _)| (*id, Nachrichtentyp::Other)).collect();
+    let mut ergebnis: Vec<(i64, Nachrichtentyp)> = pakete
+        .iter()
+        .map(|(id, _)| (*id, Nachrichtentyp::Other))
+        .collect();
     for label in antwort.labels {
         if let Some((id, _)) = pakete.get(label.i) {
             let typ = Nachrichtentyp::from_api_key(&label.t).unwrap_or(Nachrichtentyp::Other);
             ergebnis[label.i] = (*id, typ);
         }
     }
-    Ok(ergebnis)
+    Ok((ergebnis, response.model))
+}
+
+pub async fn lade_unlabelte(
+    pool: &sqlx::PgPool,
+    limit: i64,
+) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        r#"
+        SELECT cm.id,
+               COALESCE(cm.content, '') AS content,
+               COALESCE(cm.chatter_login, '') AS chatter_login
+        FROM twitch_chat_messages cm
+        LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
+        WHERE l.message_id IS NULL
+          AND cm.message_ts < now() - interval '5 minutes'
+        ORDER BY cm.message_ts DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn speichere_labels(
+    pool: &sqlx::PgPool,
+    rows: &[(i64, Nachrichtentyp, &str, Option<String>)],
+) -> Result<u64, sqlx::Error> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let ids: Vec<i64> = rows.iter().map(|(id, _, _, _)| *id).collect();
+    let labels: Vec<String> = rows
+        .iter()
+        .map(|(_, typ, _, _)| typ.api_key().to_string())
+        .collect();
+    let quellen: Vec<String> = rows.iter().map(|(_, _, q, _)| (*q).to_string()).collect();
+    let modelle: Vec<Option<String>> = rows.iter().map(|(_, _, _, m)| m.clone()).collect();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO twitch_chat_message_labels (message_id, label, quelle, modell)
+        SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::text[])
+        ON CONFLICT (message_id) DO NOTHING
+        "#,
+    )
+    .bind(&ids)
+    .bind(&labels)
+    .bind(&quellen)
+    .bind(&modelle)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 #[cfg(test)]
@@ -471,5 +536,75 @@ mod tests {
         assert_eq!(regel("das ist der reiz.. arc raider war mir zu viel mimimi"), "Statement");
         assert_eq!(regel("Astronomie meint er übrigens, nicht Astrologie"), "Statement");
         assert_eq!(regel("Ai viewers streamboo . Com"), "Other");
+    }
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn mock_endpoint(server: &MockServer) -> tb_llm::LlmEndpoint {
+        tb_llm::LlmEndpoint {
+            provider: "fireworks",
+            base_url: server.uri(),
+            model: "accounts/fireworks/models/deepseek-v4-flash-0731".to_string(),
+            api_key: Some("k".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn modell_bekommt_nur_other_und_wird_genau_einmal_gerufen() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": "{\"labels\":[{\"i\":0,\"t\":\"Statement\"},{\"i\":1,\"t\":\"Unbekannt\"}]}"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+
+        let alle: Vec<(i64, String)> = vec![
+            (10, "moin".to_string()),
+            (11, "zzz".to_string()),
+            (12, "!uptime".to_string()),
+            (13, "Ai viewers streamboo . Com".to_string()),
+        ];
+        let others: Vec<(i64, String)> = alle
+            .iter()
+            .filter(|(_, c)| klassifiziere_regel(c, "") == Nachrichtentyp::Other)
+            .cloned()
+            .collect();
+        assert_eq!(others.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![11, 13]);
+
+        let (ergebnis, modell) = klassifiziere_modell_intern(&others, Some(mock_endpoint(&server)))
+            .await
+            .expect("Modellantwort");
+
+        assert_eq!(modell, "accounts/fireworks/models/deepseek-v4-flash-0731");
+        assert_eq!(ergebnis[0], (11, Nachrichtentyp::Statement));
+        assert_eq!(ergebnis[1], (13, Nachrichtentyp::Other));
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("zzz"));
+        assert!(body.contains("streamboo"));
+        assert!(!body.contains("moin"));
+        assert!(!body.contains("uptime"));
+    }
+
+    #[tokio::test]
+    async fn leeres_paket_ruft_das_modell_nicht() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let (ergebnis, _) = klassifiziere_modell_intern(&[], Some(mock_endpoint(&server)))
+            .await
+            .expect("leer");
+        assert!(ergebnis.is_empty());
+        assert!(server.received_requests().await.expect("req").is_empty());
     }
 }
