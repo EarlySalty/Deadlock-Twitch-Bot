@@ -581,6 +581,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn body_schaltet_das_denken_ab() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": "{\"labels\":[{\"i\":0,\"t\":\"Statement\"}]}"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+
+        let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
+        klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
+            .await
+            .expect("Modellantwort");
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("reasoning_effort"), "Body: {body}");
+        assert!(body.contains("none"), "Body: {body}");
+    }
+
+    #[tokio::test]
+    async fn erschoepftes_budget_nennt_die_ursache() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": ""}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 280}
+            })))
+            .mount(&server)
+            .await;
+
+        let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
+        let fehler = klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
+            .await
+            .expect_err("Budget-Fehler");
+        let text = format!("{fehler}");
+        assert!(text.contains("Budget"), "Fehlertext: {text}");
+    }
+
+    #[tokio::test]
     async fn leeres_paket_ruft_das_modell_nicht() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
