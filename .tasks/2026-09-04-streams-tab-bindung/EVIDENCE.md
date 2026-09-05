@@ -121,3 +121,10 @@ Befehl: `cargo test -p tb-dashboard-api -p tb-analytics -p tb-monitoring --no-fa
 
 ### Fund 6 (Demo-Fixture)
 Die vier Demo-Sessions landen jetzt bei holdPct 66.1 / 65.7 / 48.2 / 47.0 (zwei ueber 60, zwei zwischen 40 und 60), berechnet aus angepassten `peakViewers` (620 / 540 / 780 / 740) bei unveraenderten `avgViewers`. Kein Test prueft die konkreten Demo-Zahlen (`demo`-Tests pruefen nur `sessions` als Array und `summary.avgViewers` als Zahl).
+
+## Titel-Backfill historischer Sessions (2026-09-05, Live-DB)
+- Quelle 1: `twitch_stats_tracked.stream_title` (Poll-Samples innerhalb der Session, häufigster Titel), Quelle 2: `twitch_channel_updates.title` (letztes Update desselben Users zwischen 24 h vor Start und Ende).
+- 1133 beendete Sessions ohne Titel, 956 gefüllt (677 aus Samples, 279 aus Updates), 177 bleiben leer (keine Quelle). earlysalty, 30 Tage: 0 leer.
+- SQL: `titel-backfill-2026-09-05.sql`, Rücknahme-Liste: `titel-backfill-2026-09-05.tsv`. Vor dem Lauf hatten die betroffenen Zeilen `''` oder `NULL` (der Altwert wurde nicht je Zeile protokolliert; nach dem Lauf sind noch 95 beendete Sessions `NULL` und 82 `''`). Alle Leser behandeln `''` und `NULL` gleich (`overview_sessions` per `COALESCE(bs.stream_title, '')`, Frontend `session.title || 'Untitled Stream'`), eine Rücknahme per TSV-Ids auf `''` stellt deshalb das sichtbare Verhalten exakt wieder her.
+- Bei gleich häufigen Titeln innerhalb einer Session war die Wahl nicht deterministisch (`ORDER BY l.id, n DESC` ohne weiteren Tiebreak); verbindlich ist die TSV, nicht ein Wiederholungslauf des Skripts.
+- Der Samples-Join lief über `streamer = streamer_login` (exakt, ohne `LOWER`), weil `twitch_stats_tracked.twitch_user_id` bei 997698 von 4397728 Zeilen leer ist und ein ID-Join Deckung gekostet hätte; nach einer Kanal-Umbenennung kann eine Session dadurch leer bleiben, ein falscher Titel entsteht daraus nicht, weil das Zeitfenster auf die Session begrenzt ist.
