@@ -170,25 +170,20 @@ function AnalyticsDashboard() {
     runtimeConfig: dashboardRuntimeConfig,
   });
 
-  // Tracks if we already auto-set the streamer from auth (fire-once guard)
   const hasAutoSetStreamer = useRef(false);
+  const urlParsed = useRef(false);
+  const pendingUrlStreamer = useRef<string | null>(null);
 
-  // Parse URL params on mount
   useEffect(() => {
+    if (urlParsed.current) {
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     const urlStreamer = params.get('streamer');
     const urlDays = params.get('days');
 
     if (urlStreamer) {
-      const normalizedStreamer = urlStreamer.trim().toLowerCase();
-      if (
-        !isDemoShell ||
-        dashboardRuntimeConfig.allowedDemoProfiles.length === 0 ||
-        dashboardRuntimeConfig.allowedDemoProfiles.includes(normalizedStreamer)
-      ) {
-        setStreamer(normalizedStreamer);
-        hasAutoSetStreamer.current = true; // URL explicitly set — skip auto-set
-      }
+      pendingUrlStreamer.current = urlStreamer.trim().toLowerCase();
     }
     if (urlDays) {
       setDays(parseDaysParam(urlDays));
@@ -200,10 +195,29 @@ function AnalyticsDashboard() {
       setPendingSub(params.get('sub') ?? resolved.sub ?? null);
       setPendingMode(params.get('mode') ?? resolved.mode ?? null);
     }
+    urlParsed.current = true;
+  }, []);
+
+  useEffect(() => {
+    const wunschStreamer = pendingUrlStreamer.current;
+    if (!wunschStreamer || hasAutoSetStreamer.current) {
+      return;
+    }
+    if (
+      !isDemoShell ||
+      dashboardRuntimeConfig.allowedDemoProfiles.length === 0 ||
+      dashboardRuntimeConfig.allowedDemoProfiles.includes(wunschStreamer)
+    ) {
+      setStreamer(wunschStreamer);
+      hasAutoSetStreamer.current = true;
+      pendingUrlStreamer.current = null;
+    }
   }, [isDemoShell]);
 
-  // Auto-set streamer to logged-in Twitch user on first auth load
   useEffect(() => {
+    if (pendingUrlStreamer.current) {
+      return;
+    }
     const fallbackStreamer =
       authStatus?.twitchLogin ??
       authStatus?.adminDefaultStreamer ??
@@ -214,8 +228,10 @@ function AnalyticsDashboard() {
     }
   }, [authStatus, isDemoShell]);
 
-  // Update URL when params change
   useEffect(() => {
+    if (!urlParsed.current) {
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
 
     if (streamer) {
