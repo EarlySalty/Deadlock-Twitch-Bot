@@ -21,9 +21,9 @@
   /* Patch-Schwarz (#0b0b0b / #101010 / #161616), abgestimmt auf website/theme-v2.css.
      Nur die Flaechen sind schwarz; der Gold-Akzent (--color-primary) bleibt. */
   --color-bg: #0b0b0b;
-  --color-background: #101010;
-  --color-card: rgba(24, 22, 18, 0.88);
-  --color-card-hover: rgba(36, 33, 27, 0.92);
+  --color-background: #0f0f0e;
+  --color-card: #221a15;
+  --color-card-hover: #2a221c;
   --color-primary: #C5A059;
   --color-primary-hover: #F1D299;
   --color-primary-soft: rgba(197, 160, 89, 0.20);
@@ -51,10 +51,10 @@
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
      unlesbar — auf Metall wird mit dunkler Tinte geschrieben. */
   --color-on-gold: #241A12;
-  --color-border: rgba(239, 212, 157, 0.22);
-  --color-border-strong: rgba(239, 212, 157, 0.40);
-  --color-border-hover: rgba(239, 212, 157, 0.34);
-  --color-popover: #161616;
+  --color-border: rgba(239, 212, 157, 0.34);
+  --color-border-strong: rgba(239, 212, 157, 0.50);
+  --color-border-hover: rgba(239, 212, 157, 0.44);
+  --color-popover: #1a1310;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
@@ -93,10 +93,10 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
   background-size: 36px 36px;
-  opacity: 0.72;
+  opacity: 0.5;
   z-index: 0;
 }
 
@@ -160,20 +160,22 @@ svg.icon-duotone {
 }
 
 .glass {
-  background-color: color-mix(in srgb, var(--color-card) 82%, transparent);
-  background-image: repeating-linear-gradient(
-    177deg,
-    rgba(255, 255, 255, 0.016) 0px,
-    rgba(255, 255, 255, 0) 1px,
-    rgba(0, 0, 0, 0.045) 2px,
-    rgba(255, 255, 255, 0) 3px
-  );
+  background-color: var(--color-card);
+  background-image:
+    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
+    repeating-linear-gradient(
+      177deg,
+      rgba(255, 255, 255, 0.016) 0px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(0, 0, 0, 0.045) 2px,
+      rgba(255, 255, 255, 0) 3px
+    );
   backdrop-filter: blur(14px);
   border: 1px solid var(--color-border);
   box-shadow:
-    inset 0 1px 0 rgba(241, 210, 153, 0.12),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
-    0 16px 40px rgba(0, 0, 0, 0.4);
+    inset 0 1px 0 rgba(241, 210, 153, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 18px 40px rgba(0, 0, 0, 0.6);
 }
 
 /* Gold-Flaeche. Traegt IMMER dunkle Tinte — Kinder erben die Farbe, damit niemand
@@ -193,7 +195,7 @@ svg.icon-duotone {
   isolation: isolate;
   background-color: var(--color-card);
   background-image:
-    linear-gradient(158deg, rgba(241, 210, 153, 0.05) 0%, rgba(0, 0, 0, 0.18) 62%, rgba(0, 0, 0, 0.3) 100%),
+    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
     repeating-linear-gradient(
       177deg,
       rgba(255, 255, 255, 0.016) 0px,
@@ -203,9 +205,9 @@ svg.icon-duotone {
     );
   border: 1px solid var(--color-border);
   box-shadow:
-    inset 0 1px 0 rgba(241, 210, 153, 0.14),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
-    0 14px 34px rgba(0, 0, 0, 0.45);
+    inset 0 1px 0 rgba(241, 210, 153, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 18px 40px rgba(0, 0, 0, 0.6);
 }
 
 .panel-card::after {
@@ -219,6 +221,23 @@ svg.icon-duotone {
     radial-gradient(circle at 11px calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
     radial-gradient(circle at calc(100% - 11px) calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px);
   opacity: 0.6;
+}
+
+.bg-card {
+  background-color: var(--color-card);
+  background-image:
+    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
+    repeating-linear-gradient(
+      177deg,
+      rgba(255, 255, 255, 0.016) 0px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(0, 0, 0, 0.045) 2px,
+      rgba(255, 255, 255, 0) 3px
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(241, 210, 153, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 18px 40px rgba(0, 0, 0, 0.6);
 }
 
 .card-glow {
