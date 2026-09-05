@@ -11,9 +11,10 @@
 //!    Baseline springt (promos.py:1152, 1306).
 //!
 //! # Doppelsend-Lock (der Fix — promos.py:798)
-//! Pro Kanal ein `tokio::sync::Mutex<()>` in einer `DashMap`. Beide Pfade
-//! (per-Message und Periodik) halten den Lock während des gesamten
-//! Gate-Check+Send-Blocks. Ohne diesen Lock kommt der TOCTOU-Doppelsend zurück.
+//! Pro Kanal ein `tokio::sync::Mutex<()>` in einer `DashMap`. Der LLM-Text wird
+//! immer vor dem Lock erzeugt; unter dem Lock laufen nur die erneute Cooldown-
+//! Prüfung und der Send. So wartet weder die Chat-Pipeline noch ein anderer
+//! Kanal-Sender auf einen LLM-Aufruf, und der TOCTOU-Doppelsend bleibt weg.
 //!
 //! # Monotonic vs. Wall-Clock (promos.py:879–943)
 //! In-Memory-Timeouts = `std::time::Instant` (Rust-Äquivalent zu
@@ -45,8 +46,8 @@ use tracing::{debug, info, warn};
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::promo_pitch::{
-    pitch_filter_reject, ChannelPromoContext, PitchJudge, PitchJudgeInput, PitchTextGen,
-    TargetedPitchContext,
+    pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PitchJudge, PitchJudgeInput,
+    PitchTextGen, TargetedPitchContext,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -652,7 +653,7 @@ impl PromoEngine {
 
     /// Per-Message-Pfad: wird für jede eingehende Chat-Nachricht aufgerufen.
     /// (promos.py:1406–1447: `_maybe_send_activity_promo`)
-    pub async fn on_message(&self, event: &ChatMessageEvent) {
+    pub async fn on_message(self: &Arc<Self>, event: &ChatMessageEvent) {
         let login = event.broadcaster_user_login.to_lowercase();
         let chatter = event.chatter_user_login.to_lowercase();
         let text = event.text();
@@ -692,14 +693,13 @@ impl PromoEngine {
             self.record_promo_activity_inner(&mut state, &chatter, now);
         }
 
-        // Doppelsend-Lock (promos.py:798).
-        let lock = self.get_send_lock(&login);
-        let _guard = lock.lock().await;
-
-        // maybe_send_promo_with_stats (promos.py:1281).
         let channel_id = event.broadcaster_user_id.clone();
-        self.maybe_send_promo_with_stats(&login, &channel_id, now)
-            .await;
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            engine
+                .maybe_send_promo_with_stats(&login, &channel_id, now)
+                .await;
+        });
     }
 
     pub async fn on_message_pitch(&self, event: &ChatMessageEvent) {
@@ -785,6 +785,18 @@ impl PromoEngine {
             return;
         }
 
+        if pitch_injection_reject(&resp.reply, &target_login) {
+            self.log_anlass_reject(
+                &login,
+                &target_user_id,
+                "injection",
+                text,
+                Some(resp.reply.clone()),
+            )
+            .await;
+            return;
+        }
+
         let lock = self.get_send_lock(&login);
         let _guard = lock.lock().await;
 
@@ -795,6 +807,24 @@ impl PromoEngine {
         }
 
         let out_text = format!("@{target_login} {}", resp.reply);
+
+        let Some(log_id) = self
+            .insert_pitch_log_pending(PitchLogEntry {
+                channel_login: login.clone(),
+                target_user_id: Some(target_user_id.clone()),
+                pfad: "anlass",
+                occasion: Some(occasion.as_str().to_string()),
+                trigger_text: Some(text.to_string()),
+                generated_text: Some(out_text.clone()),
+                reject_reason: None,
+                sent_at: None,
+            })
+            .await
+        else {
+            tracing::warn!(channel = %login, "anlass-pitch: log nicht schreibbar, kein pitch");
+            return;
+        };
+
         let outcome = self
             .guarded_api_for("promo", &login)
             .send_message(&channel_id, &out_text)
@@ -802,28 +832,11 @@ impl PromoEngine {
         self.record_suppression_on_drop(&login, &channel_id, "promo", &outcome)
             .await;
         if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
-            self.log_anlass_reject(
-                &login,
-                &target_user_id,
-                "send_dropped",
-                text,
-                Some(out_text),
-            )
-            .await;
+            self.mark_pitch_log_dropped(log_id, "send_dropped").await;
             return;
         }
 
-        self.record_pitch_log(PitchLogEntry {
-            channel_login: login.clone(),
-            target_user_id: Some(target_user_id),
-            pfad: "anlass",
-            occasion: Some(occasion.as_str().to_string()),
-            trigger_text: Some(text.to_string()),
-            generated_text: Some(out_text),
-            reject_reason: None,
-            sent_at: Some(Utc::now()),
-        })
-        .await;
+        self.mark_pitch_log_sent(log_id).await;
         self.mark_promo_sent(
             &login,
             Instant::now(),
@@ -883,15 +896,20 @@ impl PromoEngine {
     }
 
     async fn pitch_user_limit_ok(&self, target_user_id: &str) -> bool {
-        let last = sqlx::query_scalar!(
+        let last = match sqlx::query_scalar!(
             "SELECT MAX(sent_at) FROM twitch_promo_pitch_log
               WHERE target_user_id = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL",
             target_user_id,
         )
         .fetch_one(&self.pool)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "anlass-pitch: user-limit nicht lesbar, blockiere");
+                return false;
+            }
+        };
         match last {
             Some(ts) => (Utc::now() - ts).num_seconds() >= 7 * 86400,
             None => true,
@@ -903,7 +921,7 @@ impl PromoEngine {
             .load_stream_start(login)
             .await
             .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
-        let row = sqlx::query!(
+        let row = match sqlx::query!(
             "SELECT COUNT(*) AS \"count!\", MAX(sent_at) AS last FROM twitch_promo_pitch_log
               WHERE channel_login = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL
                 AND sent_at >= $2",
@@ -912,9 +930,12 @@ impl PromoEngine {
         )
         .fetch_one(&self.pool)
         .await
-        .ok();
-        let Some(row) = row else {
-            return true;
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::warn!(%error, channel = %login, "anlass-pitch: kanal-limit nicht lesbar, blockiere");
+                return false;
+            }
         };
         if row.count >= 3 {
             return false;
@@ -1092,10 +1113,6 @@ impl PromoEngine {
                 continue;
             }
 
-            // Doppelsend-Lock (promos.py:1466).
-            let lock = self.get_send_lock(login);
-            let _guard = lock.lock().await;
-
             // Overall-Ready + Activity-Ready prüfen (promos.py:1466).
             let state_snapshot = {
                 let state_ref = self
@@ -1224,6 +1241,15 @@ impl PromoEngine {
             .await;
             return false;
         };
+
+        let lock = self.get_send_lock(login);
+        let _guard = lock.lock().await;
+        if self.suppression.is_muted(login).await {
+            return false;
+        }
+        if !self.overall_promo_ready_locked(login, now).await {
+            return false;
+        }
 
         let sent = self
             .api
@@ -1444,6 +1470,15 @@ impl PromoEngine {
             None => true,
             Some(last) => now.duration_since(last).as_secs() >= PROMO_OVERALL_COOLDOWN_MIN * 60,
         }
+    }
+
+    async fn overall_promo_ready_locked(&self, login: &str, now: Instant) -> bool {
+        let state_ref = self
+            .channel_states
+            .entry(login.to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
+        let state = state_ref.lock().await;
+        self.overall_promo_ready_inner(&state, now)
     }
 
     /// Aktivitätsschwellen-Check (promos.py:1251: `_promo_activity_ready`).
@@ -1993,7 +2028,7 @@ impl PromoEngine {
         &self,
         login: &str,
         channel_id: &str,
-        _invite: &str,
+        invite: &str,
         active_chatters: &[String],
         now: Instant,
     ) -> bool {
@@ -2045,6 +2080,13 @@ impl PromoEngine {
                     return false;
                 };
                 let text = format!("@{target_login} {body}");
+
+                let lock = self.get_send_lock(login);
+                let _guard = lock.lock().await;
+                if !self.overall_promo_ready_locked(login, now).await {
+                    return false;
+                }
+
                 let outcome = self
                     .guarded_api_for("promo", login)
                     .send_message(channel_id, &text)
@@ -2096,14 +2138,7 @@ impl PromoEngine {
             }
         }
 
-        let ctx = TargetedPitchContext {
-            target_login: String::new(),
-            target_messages: Vec::new(),
-            game,
-            title,
-            recent_chat: recent,
-        };
-        let Some(text) = self.pitch_text_gen.targeted_pitch(&ctx).await else {
+        let Some(text) = self.build_promo_text(login, invite).await else {
             self.record_pitch_log(PitchLogEntry {
                 channel_login: login.to_string(),
                 target_user_id: None,
@@ -2117,6 +2152,13 @@ impl PromoEngine {
             .await;
             return false;
         };
+
+        let lock = self.get_send_lock(login);
+        let _guard = lock.lock().await;
+        if !self.overall_promo_ready_locked(login, now).await {
+            return false;
+        }
+
         let sent = self
             .guarded_api_for("promo", login)
             .send_announcement(channel_id, &text, "purple")
@@ -2559,10 +2601,70 @@ impl PromoEngine {
         }
     }
 
+    async fn insert_pitch_log_pending(&self, entry: PitchLogEntry) -> Option<i64> {
+        match sqlx::query_scalar!(
+            "INSERT INTO twitch_promo_pitch_log
+                (channel_login, target_user_id, pfad, occasion, trigger_text,
+                 generated_text, reject_reason, sent_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id",
+            entry.channel_login,
+            entry.target_user_id,
+            entry.pfad,
+            entry.occasion,
+            entry.trigger_text,
+            entry.generated_text,
+            entry.reject_reason,
+            entry.sent_at,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(id) => Some(id),
+            Err(e) => {
+                warn!(
+                    login = %entry.channel_login,
+                    pfad = entry.pfad,
+                    "insert_pitch_log_pending fehlgeschlagen: {e}"
+                );
+                None
+            }
+        }
+    }
+
+    async fn mark_pitch_log_sent(&self, id: i64) {
+        if let Err(e) = sqlx::query!(
+            "UPDATE twitch_promo_pitch_log SET sent_at = $2 WHERE id = $1",
+            id,
+            Utc::now(),
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(id, "mark_pitch_log_sent fehlgeschlagen: {e}");
+        }
+    }
+
+    async fn mark_pitch_log_dropped(&self, id: i64, reason: &str) {
+        if let Err(e) = sqlx::query!(
+            "UPDATE twitch_promo_pitch_log SET reject_reason = $2 WHERE id = $1",
+            id,
+            reason,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(id, "mark_pitch_log_dropped fehlgeschlagen: {e}");
+        }
+    }
+
     async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
         let rows = sqlx::query_scalar!(
             "SELECT content AS \"content?\" FROM twitch_chat_messages
               WHERE LOWER(streamer_login) = LOWER($1)
+                AND message_ts >= NOW() - INTERVAL '30 minutes'
+                AND COALESCE(is_command, FALSE) = FALSE
+                AND COALESCE(content, '') NOT LIKE '!%'
               ORDER BY message_ts DESC
               LIMIT $2",
             login,
@@ -2743,6 +2845,15 @@ mod tests {
                 .await
                 .iter()
                 .map(|(_, _, color)| color.clone())
+                .collect()
+        }
+
+        pub(super) async fn announcement_texts(&self) -> Vec<String> {
+            self.announcements
+                .lock()
+                .await
+                .iter()
+                .map(|(_, text, _)| text.clone())
                 .collect()
         }
     }
@@ -3355,6 +3466,26 @@ mod db_tests {
         }
     }
 
+    struct SlowTextGen {
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl PitchTextGen for SlowTextGen {
+        async fn channel_promo(
+            &self,
+            _ctx: &ChannelPromoContext,
+            invite: &str,
+        ) -> Option<String> {
+            tokio::time::sleep(self.delay).await;
+            Some(format!("hallo {invite}"))
+        }
+        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
+            tokio::time::sleep(self.delay).await;
+            Some("hallo".to_string())
+        }
+    }
+
     struct MockPitchJudge {
         response: Option<crate::promo_pitch::PitchResponse>,
         calls: Arc<std::sync::atomic::AtomicUsize>,
@@ -3634,7 +3765,7 @@ mod db_tests {
                 chatter_login TEXT,
                 chatter_id TEXT,
                 message_id TEXT,
-                message_ts TEXT NOT NULL,
+                message_ts TIMESTAMPTZ NOT NULL,
                 is_command BOOLEAN DEFAULT FALSE,
                 content TEXT
             )"#,
@@ -3946,6 +4077,138 @@ mod db_tests {
             api.announcement_count().await,
             1,
             "Allowed-Guard delegiert den Targeted-Global-Send"
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_global_haengt_invite_an() {
+        let pool = pool_or_skip!("promo_targeted_global_invite");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                "bei uns findest du leute zum zocken".to_string(),
+            ))));
+
+        let sent = engine
+            .maybe_send_targeted_promo(
+                "gkanal",
+                "u-g",
+                "https://discord.gg/deadlock",
+                &[],
+                Instant::now(),
+            )
+            .await;
+
+        assert!(sent);
+        let texts = api.announcement_texts().await;
+        assert_eq!(texts.len(), 1);
+        assert!(
+            texts[0].ends_with("https://discord.gg/deadlock"),
+            "Global-Zweig muss den Invite anhaengen: {}",
+            texts[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn on_message_wartet_nicht_auf_textgenerator() {
+        let pool = pool_or_skip!("promo_on_message_nonblocking");
+        seed_partner_channel(&pool, "c-nb", "nbkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = Arc::new(
+            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_text_gen(Arc::new(SlowTextGen {
+                    delay: Duration::from_secs(3),
+                })),
+        );
+
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("nbkanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO;
+            for idx in 0..PROMO_ACTIVITY_MIN_MSGS {
+                state.activity.push_back((now, format!("chatter{idx}")));
+            }
+        }
+
+        let event = pitch_event(
+            "c-nb",
+            "nbkanal",
+            "u-nb",
+            "Nb",
+            "das ist eine ganz normale nachricht im chat",
+        );
+
+        let start = std::time::Instant::now();
+        engine.on_message(&event).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "on_message darf nicht auf den Textgenerator warten: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pitch_user_limit_blockt_bei_fehlender_tabelle() {
+        let pool = pool_or_skip!("promo_user_limit_no_table");
+        sqlx::query("DROP TABLE twitch_promo_pitch_log")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let engine = make_engine(pool.clone());
+        assert!(
+            !engine.pitch_user_limit_ok("u-x").await,
+            "DB-Fehler beim User-Limit muss blockieren"
+        );
+    }
+
+    #[tokio::test]
+    async fn pitch_channel_limit_blockt_bei_fehlender_tabelle() {
+        let pool = pool_or_skip!("promo_channel_limit_no_table");
+        sqlx::query("DROP TABLE twitch_promo_pitch_log")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let engine = make_engine(pool.clone());
+        assert!(
+            !engine.pitch_channel_limit_ok("kanal-x").await,
+            "DB-Fehler beim Kanal-Limit muss blockieren"
+        );
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_insert_fehler_verhindert_send() {
+        let pool = pool_or_skip!("promo_anlass_insert_fehler");
+        seed_partner_channel(&pool, "c-inserr", "inserrkanal").await;
+        sqlx::query("ALTER TABLE twitch_promo_pitch_log ADD COLUMN pflicht TEXT NOT NULL")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
+            "deadlock ist echt unterschaetzt",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone());
+
+        let event = pitch_event(
+            "c-inserr",
+            "inserrkanal",
+            "u-inserr",
+            "Inserr",
+            "deadlock ist so unpopulaer, keine ahnung warum das keiner spielt",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Insert-Fehler muss den Send verhindern"
         );
     }
 
