@@ -58,3 +58,4 @@ Die Karten des Partner-Dashboards (dashboard_v2) lesen sich als warme, erhabene 
 ## Amendments
 
 - 2026-09-05 | Erlaubter Änderungsbereich | alt: ohne tests/dashboardLook.test.ts -> neu: plus bot/dashboard_v2/tests/dashboardLook.test.ts | Grund: der Test nagelt Border-Alpha 0.22, Overlay 158deg und Raster 0.045 fest und widerspricht REQ-01 bis REQ-03; zwei Assertions werden auf den neuen Look ausgerichtet, nichts gelöscht | entschieden von Orchestrator (nur technisch, reversibel)
+- 2026-09-05 | Erlaubter Änderungsbereich | alt: src/pages gesperrt -> neu: plus bot/dashboard_v2/src/pages/SessionDetail.tsx, nur die Tab-Leiste Zeilen 238-252 | Grund: die inaktiven Tabs tragen rounded-xl plus bg-card und matchen den Karten-Selektor; eine weitere Selektor-Ausnahme in index.css wäre die dritte Krücke, die Tabs auf den Stil der anderen Tab-Leisten (SubTabs) umzustellen ist die Ursache | entschieden von Orchestrator (nur technisch, reversibel)
