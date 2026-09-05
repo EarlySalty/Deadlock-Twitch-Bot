@@ -19,8 +19,8 @@ use crate::gate;
 use crate::global_sentiment::{self, GlobalSentiment};
 use crate::lurker_signal::{lurker_hint_to_prompt_fragment, LurkerSignal};
 use crate::match_context::MatchContext;
-use crate::minimax_chat::{
-    build_baseline_system_prompt, sanitize_test_mode_text, ChatMessage, EngagementMinimaxClient,
+use crate::llm_chat::{
+    build_baseline_system_prompt, sanitize_test_mode_text, ChatMessage, EngagementLlmClient,
     GenerateError,
 };
 use crate::persona::Persona;
@@ -58,31 +58,14 @@ pub fn should_skip_trigger(content: &str) -> bool {
     false
 }
 
-/// Geschätzte MiniMax-Kosten in USD (Python `_calc_cost_usd`). Fehlen Token-
-/// Zahlen → None. Die Raten kommen aus Env (`MINIMAX_PRICE_INPUT/OUTPUT_PER_1K`);
-/// ist eine gesetzte Rate unparsebar, fallen wie in Python BEIDE auf die
-/// Defaults zurück.
+const PRICE_INPUT_PER_1K: f64 = 0.0008;
+const PRICE_OUTPUT_PER_1K: f64 = 0.0024;
+
+/// Geschätzte KI-Kosten in USD (Python `_calc_cost_usd`). Fehlen Token-Zahlen → None.
 pub fn calc_cost_usd(prompt_tokens: Option<i64>, completion_tokens: Option<i64>) -> Option<f64> {
     let pt = prompt_tokens?;
     let ct = completion_tokens?;
-    let (input_rate, output_rate) = match (
-        parse_rate("MINIMAX_PRICE_INPUT_PER_1K", 0.0008),
-        parse_rate("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024),
-    ) {
-        (Some(i), Some(o)) => (i, o),
-        _ => (0.0008, 0.0024),
-    };
-    Some((pt as f64 / 1000.0) * input_rate + (ct as f64 / 1000.0) * output_rate)
-}
-
-/// `float(os.getenv(var, default))`-Semantik: ungesetzt → Default; gesetzt +
-/// parsebar → Wert; gesetzt + unparsebar → None (löst den Beide-Defaults-Pfad
-/// aus, wie Pythons `except ValueError`).
-fn parse_rate(var: &str, default: f64) -> Option<f64> {
-    match std::env::var(var) {
-        Ok(v) => v.trim().parse::<f64>().ok(),
-        Err(_) => Some(default),
-    }
+    Some((pt as f64 / 1000.0) * PRICE_INPUT_PER_1K + (ct as f64 / 1000.0) * PRICE_OUTPUT_PER_1K)
 }
 
 /// Erstes Wort, kleingeschrieben, ohne `.,!?` am Ende (für den Starter-Repeat-Guard).
@@ -108,7 +91,7 @@ pub struct EngagementPipeline {
     pool: PgPool,
     conversation: ConversationBuffer,
     rhythm: RhythmGuard,
-    minimax: EngagementMinimaxClient,
+    llm: EngagementLlmClient,
     wiki: DeadlockWiki,
     stats: DeadlockStats,
     patches: DeadlockPatches,
@@ -129,7 +112,7 @@ impl EngagementPipeline {
     /// injiziert (Tests/Defaults); die DB-Provider entstehen aus dem Pool.
     pub fn new(
         pool: PgPool,
-        minimax: EngagementMinimaxClient,
+        llm: EngagementLlmClient,
         wiki: DeadlockWiki,
         stats: DeadlockStats,
         patches: DeadlockPatches,
@@ -137,7 +120,7 @@ impl EngagementPipeline {
         Self {
             conversation: ConversationBuffer::new(pool.clone()),
             rhythm: RhythmGuard::new(None, None, None),
-            minimax,
+            llm,
             wiki,
             stats,
             patches,
@@ -156,10 +139,10 @@ impl EngagementPipeline {
     }
 
     /// Wie [`Self::new`], aber mit den produktiven HTTP-Endpunkten.
-    pub fn with_defaults(pool: PgPool, minimax: EngagementMinimaxClient) -> Self {
+    pub fn with_defaults(pool: PgPool, llm: EngagementLlmClient) -> Self {
         Self::new(
             pool,
-            minimax,
+            llm,
             DeadlockWiki::new(),
             DeadlockStats::new(),
             DeadlockPatches::new(),
@@ -349,7 +332,7 @@ impl EngagementPipeline {
         }
 
         // --- Modell-Call ---
-        let response = match self.minimax.generate(&prompt, &history, 500, 480).await {
+        let response = match self.llm.generate(&prompt, &history, 500, 480).await {
             Ok(r) => r,
             Err(GenerateError::Unavailable(_)) => {
                 if settings.output_mode == OutputMode::Test {
@@ -366,7 +349,7 @@ impl EngagementPipeline {
                         );
                     }
                 }
-                tracing::warn!("Engagement: MiniMax-Provider nicht verfügbar");
+                tracing::warn!("Engagement: KI-Provider nicht verfügbar");
                 return HandleResult::new(Decision::ProviderError);
             }
             Err(e) => {
@@ -384,7 +367,7 @@ impl EngagementPipeline {
                         );
                     }
                 }
-                tracing::error!(error = %e, "Engagement: MiniMax-Call fehlgeschlagen");
+                tracing::error!(error = %e, "Engagement: KI-Call fehlgeschlagen");
                 return HandleResult::new(Decision::ProviderError);
             }
         };
@@ -559,14 +542,8 @@ mod tests {
 
     #[test]
     fn cost_default_raten() {
-        // Ohne gesetzte Env: 1000 Input + 1000 Output → 0.0008 + 0.0024 = 0.0032.
-        // (Env-frei im Testprozess vorausgesetzt; Defaults greifen.)
-        if std::env::var("MINIMAX_PRICE_INPUT_PER_1K").is_err()
-            && std::env::var("MINIMAX_PRICE_OUTPUT_PER_1K").is_err()
-        {
-            let cost = calc_cost_usd(Some(1000), Some(1000)).unwrap();
-            assert!((cost - 0.0032).abs() < 1e-9);
-        }
+        let cost = calc_cost_usd(Some(1000), Some(1000)).unwrap();
+        assert!((cost - 0.0032).abs() < 1e-9);
     }
 
     use crate::deadlock_patches::DeadlockPatches;
@@ -614,16 +591,16 @@ mod tests {
     }
 
     /// Pipeline mit bogus-HTTP-Providern (fail fast → leere Fragmente).
-    fn pipeline_with(pool: PgPool, minimax_uri: &str) -> EngagementPipeline {
-        let minimax = EngagementMinimaxClient::new(
+    fn pipeline_with(pool: PgPool, llm_uri: &str) -> EngagementPipeline {
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
-            Some(minimax_uri.to_string()),
-            Some("MiniMax-M3".to_string()),
+            Some(llm_uri.to_string()),
+            Some("deepseek-v4-flash".to_string()),
             None,
         );
         EngagementPipeline::new(
             pool,
-            minimax,
+            llm,
             DeadlockWiki::with_bases("http://127.0.0.1:1", "http://127.0.0.1:1/api"),
             DeadlockStats::with_base("http://127.0.0.1:1"),
             DeadlockPatches::with_url("http://127.0.0.1:1/news"),
@@ -720,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_wenn_settings_aus() {
         let Some(pool) = make_pool("t_eng_pipe_disabled").await else { return };
-        // Kein Settings-Eintrag → DISABLED (keine weiteren Gates/MiniMax nötig).
+        // Kein Settings-Eintrag → DISABLED (keine weiteren Gates/KI nötig).
         let pipe = pipeline_with(pool, "http://127.0.0.1:1");
         let r = pipe.handle(&msg()).await;
         assert_eq!(r.decision, Decision::Disabled);
@@ -728,9 +705,9 @@ mod tests {
 
     #[tokio::test]
     async fn spoke_voller_pfad() {
-        // Ledger auf Temp umbiegen, damit der MiniMax-Call den echten Usage-Ledger
+        // Ledger auf Temp umbiegen, damit der KI-Call den echten Usage-Ledger
         // nicht anfasst (greift nur, wenn dieser DB-Test überhaupt läuft).
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_spoke").await else { return };
         // output_mode='live' → senden (Default wäre 'off' = no-op).
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'live')").execute(&pool).await.unwrap();
@@ -769,7 +746,7 @@ mod tests {
     /// user-Turn), damit der Live-Kontext nicht verfälscht wird.
     #[tokio::test]
     async fn shadow_erzeugt_aber_sendet_nicht() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_shadow").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'shadow')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
@@ -806,7 +783,7 @@ mod tests {
     /// vom Twitch-Sendepfad getrennt: `response_text` ist immer leer.
     #[tokio::test]
     async fn testmodus_fremdkanal_erzeugt_aber_sendet_nicht() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_test").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'test')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
@@ -865,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn testmodus_speichert_verworfenen_text_mit_grund() {
-        crate::minimax_chat::redirect_ledger_for_tests();
+        crate::llm_chat::redirect_ledger_for_tests();
         let Some(pool) = make_pool("t_eng_pipe_test_rejected").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'test')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
@@ -909,7 +886,7 @@ mod tests {
         );
     }
 
-    /// output_mode='off' bei enabled=TRUE: no-op. Kein MiniMax-Call (Mock würde
+    /// output_mode='off' bei enabled=TRUE: no-op. Kein KI-Call (Mock würde
     /// sonst zünden), kein Output, Decision=Disabled → kein Log-Eintrag.
     #[tokio::test]
     async fn off_ist_noop_kein_call() {
@@ -918,7 +895,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
 
-        // MiniMax-URI ist tot (127.0.0.1:1): würde der Pfad MiniMax erreichen,
+        // KI-URI ist tot (127.0.0.1:1): würde der Pfad KI erreichen,
         // wäre es ProviderError statt Disabled. Disabled beweist den frühen Abbruch.
         let pipe = pipeline_with(pool.clone(), "http://127.0.0.1:1");
         let r = pipe.handle(&msg()).await;
@@ -942,7 +919,7 @@ mod tests {
 
         let pipe = pipeline_with(pool.clone(), "http://127.0.0.1:1");
         let mut m = msg();
-        m.content = "@someone hi".to_string(); // führendes @ → skip → SILENT (kein MiniMax)
+        m.content = "@someone hi".to_string(); // führendes @ → skip → SILENT (kein KI)
         let r = pipe.handle(&m).await;
         assert_eq!(r.decision, Decision::Silent);
         // User-Turn trotzdem im Buffer (für Kontext), aber keine Bot-Antwort.

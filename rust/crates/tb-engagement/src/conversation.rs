@@ -2,7 +2,7 @@
 //! `bot/engagement/conversation.py`).
 //!
 //! Hält die letzten ~100 Turns in `twitch_engagement_conversation`. User- und
-//! Bot-Turns werden abwechselnd persistiert, wie es OpenAI-/MiniMax-kompatible
+//! Bot-Turns werden abwechselnd persistiert, wie es OpenAI-/KI-kompatible
 //! Chat-Completion-APIs erwarten. `load_recent_buffer` liefert chronologisch
 //! (älteste zuerst) — die DB-Reihenfolge `ts DESC` wird dafür umgedreht.
 

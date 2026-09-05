@@ -36,7 +36,7 @@ pub struct ShadowReviewItem {
     pub response_text: String,
     /// Twitch-Message-ID, die den Lauf ausgelöst hat (falls vorhanden).
     pub triggered_by_msg_id: Option<String>,
-    /// Modell, das die Antwort erzeugt hat (z. B. `MiniMax-M3`).
+    /// Modell, das die Antwort erzeugt hat (z. B. `deepseek-v4-flash`).
     pub model: String,
     /// Zeitpunkt der Stagung (`ts`-Spalte).
     pub created_at: DateTime<Utc>,
@@ -226,7 +226,7 @@ mod tests {
         sqlx::query_scalar(
             "INSERT INTO twitch_engagement_log \
              (channel_login, triggered_by_msg_id, decision, response_text, model, ts) \
-             VALUES ('nani', 'm1', $1, $2, 'MiniMax-M3', NOW() + ($3 || ' seconds')::interval) \
+             VALUES ('nani', 'm1', $1, $2, 'deepseek-v4-flash', NOW() + ($3 || ' seconds')::interval) \
              RETURNING id",
         )
         .bind(decision)
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(items[0].id, id_old);
         assert_eq!(items[0].response_text, "alt");
         assert_eq!(items[0].channel_login, "nani");
-        assert_eq!(items[0].model, "MiniMax-M3");
+        assert_eq!(items[0].model, "deepseek-v4-flash");
         assert_eq!(items[0].triggered_by_msg_id.as_deref(), Some("m1"));
         assert_eq!(items[1].id, id_new);
         assert!(items[0].created_at <= items[1].created_at);

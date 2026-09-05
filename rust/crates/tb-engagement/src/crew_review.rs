@@ -1185,7 +1185,6 @@ mod tests {
             "TB_LLM_PROVIDER_OUTREACH_SHADOW",
             "TB_LLM_MODEL_OUTREACH_SHADOW",
             "TB_LLM_PROVIDER_DEFAULT",
-            "MINIMAX_API_KEY",
         ];
         let _snapshot = EnvSnapshot::capture(&names);
         for name in names {
@@ -1203,9 +1202,8 @@ mod tests {
         // Altanbieter- und Modellvariablen dürfen die zentrale Auswahl nicht
         // mehr verändern.
         std::env::set_var("FIREWORK_API_KEY", "dummy-legacy");
-        std::env::set_var("MINIMAX_API_KEY", "m");
-        std::env::set_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW", "minimax");
-        std::env::set_var("TB_LLM_PROVIDER_OUTREACH_SHADOW", "minimax");
+        std::env::set_var("TB_LLM_PROVIDER_RICKY_CREW_REVIEW", "llm");
+        std::env::set_var("TB_LLM_PROVIDER_OUTREACH_SHADOW", "llm");
         assert!(FireworksReviewClient::from_env().is_ok());
         assert!(crate::outreach_shadow::OutreachReviewClient::from_env().is_ok());
 

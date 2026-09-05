@@ -1,18 +1,18 @@
 //! Geschichtete Soul: dynamische Erweiterungen unter dem statischen Kern-Soul
 //! (Port von `bot/engagement/soul_store.py`).
 //!
-//! Der Kern-Soul ist eine Konstante in [`crate::minimax_chat::SOUL`]. Hier kommen
+//! Der Kern-Soul ist eine Konstante in [`crate::llm_chat::SOUL`]. Hier kommen
 //! die wachsenden Teile dazu, persistiert in `twitch_engagement_soul`:
 //! `hero_takes` (kuratierte Hero-Vorlieben = Meinung, nicht Ton) und `anchor`
 //! (selbst-gemerkte Notizen). [`SoulStore::get_soul_extension_fragment`] baut
 //! daraus EIN Fragment unter den Kern-Soul.
 //!
 //! Slice 10a (hier): Store + Fragment. Der Reflexions-Job
-//! (`reflect_and_store_anchor`, MiniMax) folgt in 10b.
+//! (`reflect_and_store_anchor`, KI) folgt in 10b.
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient, PersonaMode};
+use crate::llm_chat::{strip_think, EngagementLlmClient, PersonaMode};
 
 /// So viele jüngste Anker in den Prompt.
 const MAX_ANCHORS: i64 = 5;
@@ -240,7 +240,7 @@ impl SoulStore {
     /// per-Message. Liefert den neuen Anker oder None.
     pub async fn reflect_and_store_anchor(
         &self,
-        minimax: &EngagementMinimaxClient,
+        llm: &EngagementLlmClient,
     ) -> Option<String> {
         let rows = self.recent_convo(REFLECT_TURNS).await;
         if rows.len() < REFLECT_MIN_TURNS {
@@ -251,7 +251,7 @@ impl SoulStore {
             return None;
         }
         let transcript = build_transcript(&rows);
-        let raw = minimax
+        let raw = llm
             .raw_completion(ANCHOR_SYS, &anchor_user_prompt(&transcript), 2000, 0.7)
             .await
             .ok()?;
@@ -387,7 +387,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),
@@ -395,7 +395,7 @@ mod tests {
         );
 
         let store = SoulStore::new(pool.clone());
-        let anchor = store.reflect_and_store_anchor(&minimax).await;
+        let anchor = store.reflect_and_store_anchor(&llm).await;
         assert_eq!(anchor.as_deref(), Some("der dive war echt wild")); // Quotes weg
         // Persistiert → taucht im Fragment auf.
         assert!(store.get_soul_extension_fragment().await.contains("der dive war echt wild"));
@@ -411,14 +411,14 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),
             None,
         );
-        // < 8 Turns → None, ohne MiniMax zu rufen.
-        assert_eq!(SoulStore::new(pool).reflect_and_store_anchor(&minimax).await, None);
+        // < 8 Turns → None, ohne KI zu rufen.
+        assert_eq!(SoulStore::new(pool).reflect_and_store_anchor(&llm).await, None);
     }
 
     #[tokio::test]

@@ -304,7 +304,7 @@ mod tests {
             decision: Decision::Spoke,
             response_text: Some("antwort".to_string()),
             shadow_text: None,
-            model: Some("MiniMax-M3".to_string()),
+            model: Some("deepseek-v4-flash".to_string()),
             prompt_tokens: Some(42),
             completion_tokens: Some(7),
             latency_ms: Some(120),

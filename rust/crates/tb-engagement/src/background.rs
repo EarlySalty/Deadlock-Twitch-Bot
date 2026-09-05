@@ -19,7 +19,7 @@ use crate::audio_capture::AudioCapturer;
 use crate::channel_background::ChannelBackground;
 use crate::global_sentiment::GlobalSentiment;
 use crate::match_context::MatchContext;
-use crate::minimax_chat::EngagementMinimaxClient;
+use crate::llm_chat::EngagementLlmClient;
 use crate::reaction_learning::{
     capture_seconds as learn_capture_seconds, learn_enabled, LearnTranscriptSegment,
     ReactionLearning,
@@ -108,10 +108,10 @@ async fn jittered_sleep(base_sec: f64) {
 
 // ---- run-once-Funktionen (eine Loop-Iteration, testbar) ---------------------
 
-async fn run_thread_extractor_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
+async fn run_thread_extractor_once(pool: &PgPool, llm: &EngagementLlmClient) {
     let threads = Threads::new(pool.clone());
     for (channel, _steam) in load_enabled_channels(pool).await {
-        threads.extract_threads(&channel, minimax, 6, 80).await;
+        threads.extract_threads(&channel, llm, 6, 80).await;
     }
 }
 
@@ -128,16 +128,16 @@ async fn run_auto_closer_once(pool: &PgPool) {
     Threads::new(pool.clone()).auto_close_stale().await;
 }
 
-async fn run_global_sentiment_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    GlobalSentiment::new(pool.clone()).rebuild_global_sentiment(minimax).await;
+async fn run_global_sentiment_once(pool: &PgPool, llm: &EngagementLlmClient) {
+    GlobalSentiment::new(pool.clone()).rebuild_global_sentiment(llm).await;
 }
 
-async fn run_soul_anchor_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    SoulStore::new(pool.clone()).reflect_and_store_anchor(minimax).await;
+async fn run_soul_anchor_once(pool: &PgPool, llm: &EngagementLlmClient) {
+    SoulStore::new(pool.clone()).reflect_and_store_anchor(llm).await;
 }
 
-async fn run_channel_profile_once(pool: &PgPool, minimax: &EngagementMinimaxClient) {
-    ChannelBackground::new(pool.clone()).rebuild_all_channel_profiles(minimax).await;
+async fn run_channel_profile_once(pool: &PgPool, llm: &EngagementLlmClient) {
+    ChannelBackground::new(pool.clone()).rebuild_all_channel_profiles(llm).await;
 }
 
 /// Captured + transkribiert einen Stream-Ausschnitt eines Channels und legt das
@@ -217,17 +217,17 @@ pub async fn capture_transcript_segment(
     })
 }
 
-fn ai_client() -> EngagementMinimaxClient {
-    EngagementMinimaxClient::new(None, None, None, Some(AI_TIMEOUT))
+fn ai_client() -> EngagementLlmClient {
+    EngagementLlmClient::new(None, None, None, Some(AI_TIMEOUT))
 }
 
 // ---- Endlos-Loops -----------------------------------------------------------
 
 /// Thread-Extractor (alle 15min, pro enabled Channel).
 pub async fn schedule_thread_extractor(pool: PgPool) {
-    let minimax = EngagementMinimaxClient::new(None, None, None, None);
+    let llm = EngagementLlmClient::new(None, None, None, None);
     loop {
-        run_thread_extractor_once(&pool, &minimax).await;
+        run_thread_extractor_once(&pool, &llm).await;
         jittered_sleep(THREAD_EXTRACTOR_INTERVAL).await;
     }
 }
@@ -258,27 +258,27 @@ pub async fn schedule_conversation_trim(pool: PgPool) {
 
 /// Global-Sentiment-Rebuild (alle 20min).
 pub async fn schedule_global_sentiment(pool: PgPool) {
-    let minimax = ai_client();
+    let llm = ai_client();
     loop {
-        run_global_sentiment_once(&pool, &minimax).await;
+        run_global_sentiment_once(&pool, &llm).await;
         jittered_sleep(GLOBAL_SENTIMENT_INTERVAL).await;
     }
 }
 
 /// Soul-Anchor-Reflexion (alle 3h).
 pub async fn schedule_soul_anchor(pool: PgPool) {
-    let minimax = ai_client();
+    let llm = ai_client();
     loop {
-        run_soul_anchor_once(&pool, &minimax).await;
+        run_soul_anchor_once(&pool, &llm).await;
         jittered_sleep(SOUL_ANCHOR_INTERVAL).await;
     }
 }
 
 /// Channel-Profile-Rebuild (alle 4h).
 pub async fn schedule_channel_profile(pool: PgPool) {
-    let minimax = ai_client();
+    let llm = ai_client();
     loop {
-        run_channel_profile_once(&pool, &minimax).await;
+        run_channel_profile_once(&pool, &llm).await;
         jittered_sleep(CHANNEL_PROFILE_INTERVAL).await;
     }
 }
@@ -451,12 +451,12 @@ pub async fn schedule_learn_mapper(learn: Arc<ReactionLearning>) {
 
 /// Destilliert periodisch das Reaktionsprofil aus den gesammelten Samples.
 pub async fn schedule_learn_profile(learn: Arc<ReactionLearning>) {
-    let minimax = ai_client();
+    let llm = ai_client();
     loop {
         // Erst warten: direkt nach dem Start gibt es garantiert nichts Neues
         // zu destillieren, und ein Lauf kostet einen Modell-Call.
         jittered_sleep(LEARN_PROFILE_INTERVAL).await;
-        learn.distill_profile(&minimax).await;
+        learn.distill_profile(&llm).await;
     }
 }
 

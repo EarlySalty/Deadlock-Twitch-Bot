@@ -9,7 +9,7 @@
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient};
+use crate::llm_chat::{strip_think, EngagementLlmClient};
 
 const POOL_LIMIT: i64 = 200;
 const MIN_MSGS: usize = 15;
@@ -132,13 +132,13 @@ impl ChannelBackground {
     pub async fn rebuild_channel_profile(
         &self,
         channel_login: &str,
-        minimax: &EngagementMinimaxClient,
+        llm: &EngagementLlmClient,
     ) -> Option<String> {
         let lines = self.channel_msgs(channel_login, POOL_LIMIT).await;
         if lines.len() < MIN_MSGS {
             return None;
         }
-        let raw = minimax
+        let raw = llm
             .raw_completion(SYS, &build_profile_prompt(channel_login, &lines), BUILD_MAX_TOKENS, 0.4)
             .await
             .ok()?;
@@ -154,11 +154,11 @@ impl ChannelBackground {
     }
 
     /// Baut die Profile aller Channels mit genug Daten neu; liefert die Anzahl.
-    pub async fn rebuild_all_channel_profiles(&self, minimax: &EngagementMinimaxClient) -> i64 {
+    pub async fn rebuild_all_channel_profiles(&self, llm: &EngagementLlmClient) -> i64 {
         let channels = self.channels_with_data(MIN_MSGS as i64).await;
         let mut n = 0;
         for ch in channels {
-            if self.rebuild_channel_profile(&ch, minimax).await.is_some() {
+            if self.rebuild_channel_profile(&ch, llm).await.is_some() {
                 n += 1;
             }
         }
@@ -230,7 +230,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),
@@ -238,7 +238,7 @@ mod tests {
         );
 
         let bg = ChannelBackground::new(pool.clone());
-        let profile = bg.rebuild_channel_profile("nani", &minimax).await;
+        let profile = bg.rebuild_channel_profile("nani", &llm).await;
         assert_eq!(profile.as_deref(), Some("- spielt Haze\n- chiller vibe")); // <think> raus
         // Persistiert → Fragment.
         let frag = bg.get_channel_profile_fragment("nani").await;
@@ -252,12 +252,12 @@ mod tests {
         let Some(pool) = make_pool("t_eng_chbg_few").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('nani','user','nur eine lange nachricht')")
             .execute(&pool).await.unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),
             None,
         );
-        assert_eq!(ChannelBackground::new(pool).rebuild_channel_profile("nani", &minimax).await, None);
+        assert_eq!(ChannelBackground::new(pool).rebuild_channel_profile("nani", &llm).await, None);
     }
 }

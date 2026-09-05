@@ -8,7 +8,7 @@ use std::str::FromStr;
 use chrono::{Duration, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor, PgPool};
-use tb_engagement::minimax_chat::TestModeRejectReason;
+use tb_engagement::llm_chat::TestModeRejectReason;
 use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 use tb_engagement::stream_transcripts::StreamTranscriptSegment;
 

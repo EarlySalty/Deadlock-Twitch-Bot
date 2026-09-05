@@ -5,7 +5,7 @@
 //! (Settings → Partner → Live → Opt-out → Rhythmus → Pre-Filter → Flood/Burst)
 //! und baut bei Durchlass aus ~15 optionalen Kontext-Fragmenten (Persona,
 //! Threads, Lurker, Match, Wiki, Patches, Stats, Transkripte, Sentiment …) den
-//! System-Prompt für den MiniMax-Call. Antwortet das Modell, geht der Text in
+//! System-Prompt für den KI-Call. Antwortet das Modell, geht der Text in
 //! den Chat.
 //!
 //! Aufbau bottom-up in Teil-Slices; Slice 1 (hier): Kern-[`types`] + die reinen
@@ -28,7 +28,7 @@ pub mod irc_reader;
 pub mod learn_irc_reader;
 pub mod lurker_signal;
 pub mod match_context;
-pub mod minimax_chat;
+pub mod llm_chat;
 pub mod outreach_shadow;
 pub mod outreach_shadow_store;
 pub mod persona;

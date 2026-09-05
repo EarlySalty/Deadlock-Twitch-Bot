@@ -2,14 +2,14 @@
 //! `bot/engagement/global_sentiment.py`).
 //!
 //! Ein Background-Job wirft die letzten Chat-Nachrichten ALLER Channels zusammen
-//! und destilliert per MiniMax ein kompaktes Stimmungsbild („wie fühlt sich
+//! und destilliert per KI ein kompaktes Stimmungsbild („wie fühlt sich
 //! Deadlock gerade an"). Persistiert in `twitch_engagement_global_sentiment`;
 //! die Pipeline liest nur die neueste frische Zeile als ambientes Bauchgefühl.
 //! Halluzinations-sicher: nur echte Nachrichten, nie als Statistik vorlesen.
 
 use sqlx::PgPool;
 
-use crate::minimax_chat::{strip_think, EngagementMinimaxClient};
+use crate::llm_chat::{strip_think, EngagementLlmClient};
 
 const POOL_LIMIT: i64 = 250;
 const POOL_MAX_AGE_HOURS: i32 = 336; // 14 Tage Backstop
@@ -120,18 +120,18 @@ impl GlobalSentiment {
         }
     }
 
-    /// Pool über alle Channels → MiniMax-Destillation → persistieren
+    /// Pool über alle Channels → KI-Destillation → persistieren
     /// (Hintergrund-Job). Liefert den Text oder None.
     pub async fn rebuild_global_sentiment(
         &self,
-        minimax: &EngagementMinimaxClient,
+        llm: &EngagementLlmClient,
     ) -> Option<String> {
         let lines = self.load_pooled().await;
         if lines.len() < MIN_MSGS_TO_BUILD {
             tracing::info!(msgs = lines.len(), "GlobalSentiment: zu wenig Material, skip");
             return None;
         }
-        let raw = minimax
+        let raw = llm
             .raw_completion(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
             .await
             .ok()?;
@@ -140,7 +140,7 @@ impl GlobalSentiment {
         if text.is_empty() {
             return None;
         }
-        self.store(text, lines.len() as i64, minimax.model()).await.ok()?;
+        self.store(text, lines.len() as i64, llm.model()).await.ok()?;
         tracing::info!(msgs = lines.len(), chars = text.chars().count(), "GlobalSentiment: neu gebaut");
         Some(text.to_string())
     }
@@ -208,15 +208,15 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
-            Some("MiniMax-M3".to_string()),
+            Some("deepseek-v4-flash".to_string()),
             None,
         );
 
         let gs = GlobalSentiment::new(pool.clone());
-        let text = gs.rebuild_global_sentiment(&minimax).await;
+        let text = gs.rebuild_global_sentiment(&llm).await;
         assert_eq!(text.as_deref(), Some("- meta ist grad spicy\n- haze gefeiert")); // <think> raus
         // Frisches Fragment.
         let frag = gs.get_sentiment_fragment(FRESH_MAX_AGE_HOURS).await;
@@ -228,12 +228,12 @@ mod tests {
         let Some(pool) = make_pool("t_eng_sentiment_few").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('a','user','eine lange nachricht')")
             .execute(&pool).await.unwrap();
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some("http://127.0.0.1:1".to_string()),
             Some("m".to_string()),
             None,
         );
-        assert_eq!(GlobalSentiment::new(pool).rebuild_global_sentiment(&minimax).await, None);
+        assert_eq!(GlobalSentiment::new(pool).rebuild_global_sentiment(&llm).await, None);
     }
 }

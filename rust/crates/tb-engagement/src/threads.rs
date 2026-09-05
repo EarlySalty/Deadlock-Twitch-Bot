@@ -5,14 +5,14 @@
 //! Pipeline lädt offene Threads pro Sender und gibt sie als „niemals
 //! auspacken"-Hint weiter.
 //!
-//! Slice 15a (hier): Lese-/Lifecycle-Teil. Der MiniMax-Thread-Extractor
+//! Slice 15a (hier): Lese-/Lifecycle-Teil. Der KI-Thread-Extractor
 //! (`extract_threads`) folgt in 15b.
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use crate::llm_chat::{ChatMessage, EngagementLlmClient};
 
 const EXTRACTOR_SYSTEM_PROMPT: &str = "Du bist ein Konversations-Analyst für einen Twitch-Chat. Lies die folgenden \
 Chat-Nachrichten und identifiziere Konversations-Fäden, die für einen späteren \
@@ -252,12 +252,12 @@ impl Threads {
         Ok(true)
     }
 
-    /// Thread-Extractor (Hintergrund-Job): jüngste User-Turns → MiniMax-JSON →
+    /// Thread-Extractor (Hintergrund-Job): jüngste User-Turns → KI-JSON →
     /// upsert. Liefert die Anzahl neu eingefügter Threads.
     pub async fn extract_threads(
         &self,
         channel_login: &str,
-        minimax: &EngagementMinimaxClient,
+        llm: &EngagementLlmClient,
         hours: i32,
         limit: i64,
     ) -> i64 {
@@ -281,7 +281,7 @@ impl Threads {
             lines.join("\n")
         );
 
-        let response = match minimax
+        let response = match llm
             .generate(
                 EXTRACTOR_SYSTEM_PROMPT,
                 &[ChatMessage { role: "user".to_string(), content: user_prompt, name: None }],
@@ -295,13 +295,13 @@ impl Threads {
                 tracing::warn!(
                     %error,
                     channel = %channel_login,
-                    "Thread-Extractor: MiniMax-Aufruf fehlgeschlagen"
+                    "Thread-Extractor: KI-Aufruf fehlgeschlagen"
                 );
                 return 0;
             }
         };
         let Some(text) = response.text else {
-            tracing::warn!(channel = %channel_login, "Thread-Extractor: MiniMax ohne Text");
+            tracing::warn!(channel = %channel_login, "Thread-Extractor: KI ohne Text");
             return 0;
         };
         let cleaned = strip_codeblock(&text);
@@ -522,7 +522,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let minimax = EngagementMinimaxClient::new(
+        let llm = EngagementLlmClient::new(
             Some("k".to_string()),
             Some(server.uri()),
             Some("m".to_string()),
@@ -530,10 +530,10 @@ mod tests {
         );
 
         let t = Threads::new(pool.clone());
-        let n = t.extract_threads("nani", &minimax, 6, 80).await;
+        let n = t.extract_threads("nani", &llm, 6, 80).await;
         assert_eq!(n, 1);
         // Zweiter Lauf: gleicher Thread existiert offen → Dedup, 0 neu.
-        let n2 = t.extract_threads("nani", &minimax, 6, 80).await;
+        let n2 = t.extract_threads("nani", &llm, 6, 80).await;
         assert_eq!(n2, 0);
         // Der Thread ist offen und ladbar.
         let open = t.load_open_threads_for_user("u1", "nani", 5).await;

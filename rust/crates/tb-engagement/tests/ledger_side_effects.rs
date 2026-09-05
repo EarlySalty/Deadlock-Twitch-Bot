@@ -1,9 +1,9 @@
-//! Prozess-isolierte Verifikation des MiniMax-Usage-Ledger-Seiteneffekts.
+//! Prozess-isolierte Verifikation des KI-Usage-Ledger-Seiteneffekts.
 //!
 //! `generate()` und `raw_completion_tracked()` müssen den echten Token-Verbrauch
-//! best-effort in die zentrale `public.minimax_usage` schreiben; `raw_completion()`
-//! (untracked) darf NICHTS schreiben. Parität zu Pythons `minimax_usage.record(...)`
-//! bzw. `_track_minimax_completion(...)`.
+//! best-effort in die zentrale `public.llm_usage` schreiben; `raw_completion()`
+//! (untracked) darf NICHTS schreiben. Parität zu Pythons `llm_usage.record(...)`
+//! bzw. `_track_completion(...)`.
 //!
 //! Warum ein EIGENES Test-Binary statt eines Unit-Tests: der Ledger-Pool von tb-llm
 //! ist ein prozessweiter `OnceCell<PgPool>`. Seine PG-Verbindungen sind an das
@@ -18,15 +18,15 @@
 //! 999/111). Ohne `TB_TEST_DATABASE_URL`: Skip.
 
 use sqlx::postgres::PgPoolOptions;
-use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn client_for(server: &MockServer) -> EngagementMinimaxClient {
-    EngagementMinimaxClient::new(
+fn client_for(server: &MockServer) -> EngagementLlmClient {
+    EngagementLlmClient::new(
         Some("test-key".to_string()),
         Some(server.uri()),
-        Some("MiniMax-M3".to_string()),
+        Some("deepseek-v4-flash".to_string()),
         None,
     )
 }
@@ -79,7 +79,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             .await
             .unwrap();
         let row: (String, Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT source, purpose, model FROM public.minimax_usage \
+            "SELECT source, purpose, model FROM public.llm_usage \
              WHERE tokens_in = 777 AND tokens_out = 333 ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&verify)
@@ -103,7 +103,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             .unwrap();
         assert_eq!(text, "tiefe analyse");
         let row: (String, Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT source, purpose, model FROM public.minimax_usage \
+            "SELECT source, purpose, model FROM public.llm_usage \
              WHERE tokens_in = 888 AND tokens_out = 444 ORDER BY id DESC LIMIT 1",
         )
         .fetch_one(&verify)
@@ -126,7 +126,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             .await
             .unwrap();
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM public.minimax_usage \
+            "SELECT COUNT(*) FROM public.llm_usage \
              WHERE tokens_in = 999 AND tokens_out = 111",
         )
         .fetch_one(&verify)
