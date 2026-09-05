@@ -261,9 +261,13 @@ fn enthaelt_smiley_token(text_lower: &str, needle: &str) -> bool {
         if haystack[start..start + pattern.len()] != pattern[..] {
             continue;
         }
-        let links_frei = start == 0 || !haystack[start - 1].is_alphanumeric();
+        let links_grenze = pattern[0].is_alphanumeric();
+        let links_frei =
+            !links_grenze || start == 0 || !haystack[start - 1].is_alphanumeric();
         let ende = start + pattern.len();
-        let rechts_frei = ende == haystack.len() || !haystack[ende].is_alphanumeric();
+        let rechts_grenze = pattern[pattern.len() - 1].is_alphanumeric();
+        let rechts_frei =
+            !rechts_grenze || ende == haystack.len() || !haystack[ende].is_alphanumeric();
         if links_frei && rechts_frei {
             return true;
         }
@@ -557,6 +561,24 @@ mod tests {
             pitch_filter_reject("lief richtig gut heute :D"),
             Some(PitchRejectReason::Emoji)
         );
+    }
+
+    #[test]
+    fn emoji_faengt_angehaengte_smileys() {
+        assert_eq!(
+            pitch_filter_reject("das ging ja fix:D richtig schnell"),
+            Some(PitchRejectReason::Emoji)
+        );
+        assert_eq!(
+            pitch_filter_reject("danke<3 das hat mir echt geholfen"),
+            Some(PitchRejectReason::Emoji)
+        );
+        assert_eq!(
+            pitch_filter_reject("war ein lustiger moment lol^^ ehrlich"),
+            Some(PitchRejectReason::Emoji)
+        );
+        assert!(pitch_filter_reject("die combo dxd zieht echt gut rein").is_none());
+        assert!(pitch_filter_reject("stell das auf foo:option wenn du magst").is_none());
     }
 
     #[test]

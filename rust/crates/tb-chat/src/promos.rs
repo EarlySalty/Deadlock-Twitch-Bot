@@ -701,6 +701,7 @@ impl PromoEngine {
         }
 
         let Ok(promo_permit) = Arc::clone(&self.promo_semaphore).try_acquire_owned() else {
+            tracing::debug!(channel = %login, "Promo-Semaphore voll, überspringe Promo");
             return;
         };
 

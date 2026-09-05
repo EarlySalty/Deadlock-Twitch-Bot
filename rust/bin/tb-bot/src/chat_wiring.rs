@@ -1920,8 +1920,8 @@ fn neutralize_pitch_field(value: &str) -> String {
 impl PitchReviewSink for DiscordPitchReviewSink {
     async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
         let displays = vec![
-            format!("**Anlass-Pitch** in `{channel_login}`"),
-            format!("An **{target_login}**"),
+            format!("**Anlass-Pitch** in `{}`", neutralize_pitch_field(channel_login)),
+            format!("An **{}**", neutralize_pitch_field(target_login)),
             format!("> {}", neutralize_pitch_field(trigger)),
             format!("Antwort: {}", neutralize_pitch_field(reply)),
         ];
@@ -3062,7 +3062,7 @@ mod chat_notification_tests {
     }
 
     #[tokio::test]
-    async fn pitch_review_karte_neutralisiert_mentions_in_trigger_und_reply() {
+    async fn pitch_review_karte_neutralisiert_mentions_in_allen_feldern() {
         let backend = Arc::new(CapturingDiscordBackend {
             last: Mutex::new(None),
         });
@@ -3071,8 +3071,8 @@ mod chat_notification_tests {
         };
 
         sink.send_card(
-            "nani",
-            "symphooniee",
+            "nani @everyone <@111>",
+            "symphooniee @here <@222>",
             "wieso ist deadlock so tot @everyone @here niemand spielt <@123456> das mehr",
             "kein stress @everyone die community <@789> ist aktiv @here",
         )
