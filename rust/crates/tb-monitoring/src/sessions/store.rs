@@ -270,6 +270,10 @@ impl SessionStore {
             tx.commit().await?;
             return Ok(StartOutcome::AlreadyOpen(id));
         }
+        let title_opt = {
+            let t = new.title.trim();
+            (!t.is_empty()).then_some(t)
+        };
         let session_id: i64 = sqlx::query_scalar!(
             r#"
             INSERT INTO twitch_stream_sessions (
@@ -286,7 +290,7 @@ impl SessionStore {
             new.viewer_count,
             f64::from(new.viewer_count),
             new.followers_start,
-            &new.title,
+            title_opt,
             &new.language,
             new.is_mature,
             &new.tags,
@@ -417,8 +421,6 @@ impl SessionStore {
         Ok(true)
     }
 
-    /// Backfill für vom Scout unvollständig angelegte Sessions
-    /// (Python `_adopt_incomplete_session`) — atomar über die WHERE-Klausel.
     pub async fn adopt_incomplete(
         &self,
         session_id: i64,
@@ -427,49 +429,29 @@ impl SessionStore {
         had_deadlock: bool,
         stream_title: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            r#"
-            UPDATE twitch_stream_sessions
-               SET start_viewers = $1,
-                   peak_viewers = GREATEST(peak_viewers, $1),
-                   had_deadlock_in_session = COALESCE(had_deadlock_in_session, false) OR $2,
-                   game_name = COALESCE(game_name, $3),
-                   stream_title = COALESCE(stream_title, $4)
-             WHERE id = $5 AND samples = 0 AND start_viewers = 0
-            "#,
-            viewer_count,
-            had_deadlock,
-            game_name,
-            stream_title,
-            session_id,
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn backfill_missing_meta(
-        &self,
-        session_id: i64,
-        game_name: Option<&str>,
-        stream_title: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             UPDATE twitch_stream_sessions
-               SET stream_title = CASE
-                       WHEN (stream_title IS NULL OR stream_title = '') AND $2 IS NOT NULL
-                       THEN $2 ELSE stream_title END,
-                   game_name = CASE
-                       WHEN (game_name IS NULL OR game_name = '') AND $3 IS NOT NULL
-                       THEN $3 ELSE game_name END
-             WHERE id = $1
-               AND ((stream_title IS NULL OR stream_title = '') OR (game_name IS NULL OR game_name = ''))
+               SET start_viewers = CASE
+                       WHEN samples = 0 AND start_viewers = 0 THEN $1
+                       ELSE start_viewers END,
+                   peak_viewers = CASE
+                       WHEN samples = 0 AND start_viewers = 0 THEN GREATEST(peak_viewers, $1)
+                       ELSE peak_viewers END,
+                   had_deadlock_in_session = CASE
+                       WHEN samples = 0 AND start_viewers = 0
+                       THEN COALESCE(had_deadlock_in_session, false) OR $2
+                       ELSE had_deadlock_in_session END,
+                   game_name = COALESCE(NULLIF(game_name, ''), $3),
+                   stream_title = COALESCE(NULLIF(stream_title, ''), $4)
+             WHERE id = $5 AND ended_at IS NULL
             "#,
         )
-        .bind(session_id)
-        .bind(stream_title)
+        .bind(viewer_count)
+        .bind(had_deadlock)
         .bind(game_name)
+        .bind(stream_title)
+        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(())
