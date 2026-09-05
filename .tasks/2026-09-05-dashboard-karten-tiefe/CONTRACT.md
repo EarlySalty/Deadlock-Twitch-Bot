@@ -57,3 +57,4 @@ Die Karten des Partner-Dashboards (dashboard_v2) lesen sich als warme, erhabene 
 
 ## Amendments
 
+- 2026-09-05 | Erlaubter Änderungsbereich | alt: ohne tests/dashboardLook.test.ts -> neu: plus bot/dashboard_v2/tests/dashboardLook.test.ts | Grund: der Test nagelt Border-Alpha 0.22, Overlay 158deg und Raster 0.045 fest und widerspricht REQ-01 bis REQ-03; zwei Assertions werden auf den neuen Look ausgerichtet, nichts gelöscht | entschieden von Orchestrator (nur technisch, reversibel)
