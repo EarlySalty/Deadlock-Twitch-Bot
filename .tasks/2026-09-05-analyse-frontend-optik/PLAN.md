@@ -38,4 +38,5 @@ Validierung: `grep -rn "Roh-Chat\|Aktivitaet\|peakHoursMethod" src` liefert kein
 ## Verlauf
 
 - M1 fertig: `src/utils/zeitraum.ts` (clampDays, parseDaysParam, kalenderFenster) plus `tests/zeitraum.test.ts` und `tests/kalenderFenster.test.ts`, Testliste in package.json ergänzt. Volle Suite 222 Tests grün.
+- M2 fertig: `TimeRange = number` (types/analytics.ts), Header mit Jahr-Segment und Zahlenfeld "Tage" (Marker per layoutId wandert zum Feld bei Nicht-Voreinstellung), App.tsx nutzt parseDaysParam, Dictionary um Jahr/Tage ergänzt. Build grün, Tests 222 grün. Lint: 1 vorbestehender Error in `src/hooks/dashboardProfileCache.ts` (byte-identisch zu origin/main, eslint-10-Drift, ausserhalb Scope), keine neuen Lint-Befunde in geänderten Dateien.
 

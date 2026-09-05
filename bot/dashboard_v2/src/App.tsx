@@ -28,6 +28,7 @@ import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import { usePlan } from '@/context/PlanContext';
 import type { TimeRange } from '@/types/analytics';
+import { parseDaysParam } from '@/utils/zeitraum';
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
@@ -190,8 +191,7 @@ function AnalyticsDashboard() {
       }
     }
     if (urlDays) {
-      const d = parseInt(urlDays, 10);
-      if (d === 7 || d === 30 || d === 90) setDays(d);
+      setDays(parseDaysParam(urlDays));
     }
     const resolved = resolveTabParam(params.get('tab'));
     if (resolved) {

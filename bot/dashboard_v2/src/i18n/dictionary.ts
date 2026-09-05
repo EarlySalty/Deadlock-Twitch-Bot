@@ -47,6 +47,8 @@ const EN: Record<string, string> = {
   // -- Header -------------------------------------------------------------
   'Fokus: {focus}': 'Focus: {focus}',
   'Zeitraum: letzte {days} Tage': 'Range: last {days} days',
+  Jahr: 'Year',
+  Tage: 'Days',
   Basis: 'Basic',
   Preview: 'Preview',
   'Demo-Profil': 'Demo profile',

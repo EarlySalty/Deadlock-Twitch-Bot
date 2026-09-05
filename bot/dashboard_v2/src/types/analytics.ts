@@ -763,7 +763,7 @@ export interface AdsSchedule {
   }>;
 }
 
-export type TimeRange = 7 | 30 | 90 | 365;
+export type TimeRange = number;
 export type { TabId } from '@/components/layout/TabNavigation';
 
 // --- Lurker Analysis ---

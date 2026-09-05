@@ -5,6 +5,7 @@ import { usePlan } from '@/context/PlanContext';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import type { TimeRange } from '@/types/analytics';
+import { clampDays } from '@/utils/zeitraum';
 
 // Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
 // Auswahl behaelt ihren Ort im Raum. Kritisch gedaempft (bounce 0) — ein
@@ -47,6 +48,11 @@ export function Header({
   const { language, setLanguage } = useLanguage();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [tageInput, setTageInput] = useState(String(days));
+
+  useEffect(() => {
+    setTageInput(String(days));
+  }, [days]);
 
   const viewOptions: { value: 'basic' | 'extended'; label: string }[] = [
     { value: 'basic', label: t('Basis') },
@@ -57,7 +63,16 @@ export function Header({
     { value: 7, label: '7d' },
     { value: 30, label: '30d' },
     { value: 90, label: '90d' },
+    { value: 365, label: t('Jahr') },
   ];
+
+  const istVoreinstellung = timeRanges.some(range => range.value === days);
+
+  const uebernehmeTage = () => {
+    const naechster = clampDays(Number.parseInt(tageInput, 10));
+    onDaysChange(naechster);
+    setTageInput(String(naechster));
+  };
 
   // Escape schliesst das Menue. Ein Menue, das nur per Klick daneben weggeht,
   // sperrt den Nutzer gefuehlt ein — es muss immer einen Weg heraus geben.
@@ -272,6 +287,41 @@ export function Header({
                 <span className="relative z-10">{range.label}</span>
               </button>
             ))}
+            <div className="relative flex items-center gap-1 pl-1">
+              {!istVoreinstellung && (
+                <motion.span
+                  layoutId="headerRangeIndicator"
+                  className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                  initial={false}
+                  transition={SEGMENT_SPRING}
+                />
+              )}
+              <input
+                type="number"
+                min={7}
+                max={365}
+                value={tageInput}
+                aria-label={t('Tage')}
+                onChange={event => setTageInput(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    uebernehmeTage();
+                    event.currentTarget.blur();
+                  }
+                }}
+                onBlur={uebernehmeTage}
+                className={`relative z-10 w-14 rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold outline-none ${
+                  istVoreinstellung ? 'text-text-secondary' : 'text-[#0D0806]'
+                }`}
+              />
+              <span
+                className={`relative z-10 pr-2 text-sm font-semibold ${
+                  istVoreinstellung ? 'text-text-secondary' : 'text-[#0D0806]'
+                }`}
+              >
+                {t('Tage')}
+              </span>
+            </div>
           </div>
 
           {/* Sprachwahl */}
