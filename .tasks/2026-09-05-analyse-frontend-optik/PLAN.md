@@ -37,3 +37,5 @@ Validierung: `grep -rn "Roh-Chat\|Aktivitaet\|peakHoursMethod" src` liefert kein
 
 ## Verlauf
 
+- M1 fertig: `src/utils/zeitraum.ts` (clampDays, parseDaysParam, kalenderFenster) plus `tests/zeitraum.test.ts` und `tests/kalenderFenster.test.ts`, Testliste in package.json ergänzt. Volle Suite 222 Tests grün.
+
