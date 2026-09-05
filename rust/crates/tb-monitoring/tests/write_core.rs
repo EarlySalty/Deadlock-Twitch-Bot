@@ -231,6 +231,110 @@ async fn session_start_schreibt_boolean_session_flags() {
 }
 
 #[tokio::test]
+async fn start_session_leerer_titel_wird_null_und_adopt_fuellt_ihn() {
+    let pool = pool_or_skip!("t4b_start_leerer_titel");
+    let store = SessionStore::new(pool.clone());
+
+    let new = NewSession {
+        streamer_login: "drag".to_string(),
+        twitch_user_id: None,
+        stream_id: Some("s-leer".to_string()),
+        started_at: Utc::now(),
+        viewer_count: 0,
+        followers_start: None,
+        title: String::new(),
+        language: "de".to_string(),
+        is_mature: false,
+        tags: String::new(),
+        game_name: None,
+        had_deadlock: false,
+    };
+    let session_id = store
+        .start_session(&new)
+        .await
+        .expect("start_session")
+        .session_id();
+
+    let stored: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT stream_title, game_name FROM twitch_stream_sessions WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.0, None, "leerer Titel muss NULL sein, nicht ''");
+    assert_eq!(stored.1, None, "leeres Spiel muss NULL sein, nicht ''");
+
+    store
+        .adopt_incomplete(
+            session_id,
+            12,
+            Some("Deadlock"),
+            true,
+            Some("Ranked Grind Titel"),
+        )
+        .await
+        .expect("adopt_incomplete");
+
+    let filled: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT stream_title, game_name FROM twitch_stream_sessions WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(filled.0.as_deref(), Some("Ranked Grind Titel"));
+    assert_eq!(filled.1.as_deref(), Some("Deadlock"));
+}
+
+#[tokio::test]
+async fn adopt_incomplete_trifft_vollstaendige_session_nicht() {
+    let pool = pool_or_skip!("t4b_adopt_vollstaendig");
+    let store = SessionStore::new(pool.clone());
+
+    let new = NewSession {
+        streamer_login: "voll".to_string(),
+        twitch_user_id: None,
+        stream_id: Some("s-voll".to_string()),
+        started_at: Utc::now(),
+        viewer_count: 20,
+        followers_start: None,
+        title: "Bereits gesetzter Titel".to_string(),
+        language: "de".to_string(),
+        is_mature: false,
+        tags: String::new(),
+        game_name: Some("Deadlock".to_string()),
+        had_deadlock: true,
+    };
+    let session_id = store
+        .start_session(&new)
+        .await
+        .expect("start_session")
+        .session_id();
+
+    let sampled = store
+        .record_sample(session_id, 20, Utc::now())
+        .await
+        .expect("record_sample");
+    assert!(sampled, "record_sample muss die Session finden");
+
+    let rows = store
+        .adopt_incomplete(
+            session_id,
+            99,
+            Some("Anderes Spiel"),
+            false,
+            Some("Anderer Titel"),
+        )
+        .await
+        .expect("adopt_incomplete");
+    assert_eq!(
+        rows, 0,
+        "vollstaendige Session darf pro Poll nicht neu geschrieben werden"
+    );
+}
+
+#[tokio::test]
 async fn session_lifecycle_start_sample_finalize() {
     let pool = pool_or_skip!("t4b_lifecycle");
     let followers = Arc::new(SeqFollowers {
@@ -350,8 +454,8 @@ async fn session_lifecycle_start_sample_finalize() {
 }
 
 #[tokio::test]
-async fn offene_session_bekommt_titel_nach_verpasstem_adopt_fenster() {
-    let pool = pool_or_skip!("t4b_backfill_meta");
+async fn offene_session_bekommt_titel_auch_nach_verpasstem_adopt_fenster() {
+    let pool = pool_or_skip!("t4b_adopt_nach_fenster");
     let started = Utc::now() - Duration::minutes(15);
     sqlx::query(
         "INSERT INTO twitch_stream_sessions
@@ -374,18 +478,19 @@ async fn offene_session_bekommt_titel_nach_verpasstem_adopt_fenster() {
         .await
         .expect("offene Session gefunden");
 
-    let (title, game): (Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT stream_title, game_name FROM twitch_stream_sessions WHERE stream_id = 's-title'",
+    let (title, game, start_viewers): (Option<String>, Option<String>, i32) = sqlx::query_as(
+        "SELECT stream_title, game_name, start_viewers
+           FROM twitch_stream_sessions WHERE stream_id = 's-title'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(title.as_deref(), Some("Ranked Grind Titel"));
+    assert_eq!(game.as_deref(), Some("Deadlock"));
     assert_eq!(
-        title.as_deref(),
-        Some("Ranked Grind Titel"),
-        "Titel nachgetragen trotz verpasstem adopt-Fenster"
+        start_viewers, 15,
+        "geschlossenes Fenster: start_viewers bleibt unangetastet"
     );
-    assert_eq!(game.as_deref(), Some("Deadlock"), "Spiel nachgetragen");
 }
 
 #[tokio::test]

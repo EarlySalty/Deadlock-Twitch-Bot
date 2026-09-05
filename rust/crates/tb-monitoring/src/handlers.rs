@@ -262,14 +262,22 @@ impl MonitoringEventHandler {
         // OfflineThrottle-Freigabe nutzen, falls sie eigene Go-Live-Pfade
         // ausführen.
 
-        // Session sofort bei stream.online eroeffnen statt erst beim naechsten
-        // Poll-Tick: sonst geht der gesamte Go-Live-Chat (bis poll_interval +
-        // negativem Session-Cache) still verloren, weil Chatter ohne offene
-        // Session verworfen werden. Idempotent: run_business_effect_once
-        // (message_id) + start_session advisory-lock/AlreadyOpen verhindern eine
-        // Doppel-Session gegen den Poll-Pfad; fehlende Felder (Titel/Game/
-        // Viewer) backfillt der erste Poll via adopt_incomplete. Live-State
-        // steht bereits (oben), damit der Chat-Game-Gate ihn lesen kann.
+        let channel_info = if let Some(source) = &self.channel_info {
+            match source.channel_info(&work.broadcaster_id).await {
+                Ok(info) => info,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        broadcaster_id = %work.broadcaster_id,
+                        "Go-Live-Enrichment: Kanal-Lookup fehlgeschlagen"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         run_business_effect_once(
             &self.guard,
             work.message_id.as_deref(),
@@ -279,6 +287,14 @@ impl MonitoringEventHandler {
                 let snapshot = StreamSnapshot {
                     id: stream_id.map(str::to_string),
                     started_at: started_at.map(str::to_string),
+                    title: channel_info
+                        .as_ref()
+                        .and_then(|info| info.title.clone())
+                        .unwrap_or_default(),
+                    game_name: channel_info
+                        .as_ref()
+                        .and_then(|info| info.game_name.clone())
+                        .unwrap_or_default(),
                     ..Default::default()
                 };
                 if let Some(session_id) = self
@@ -303,50 +319,36 @@ impl MonitoringEventHandler {
         )
         .await?;
 
-        // Go-Live-Enrichment: Kategorie/Titel sofort per gezieltem
-        // /channels-Lookup setzen (sprachfilter-frei, kein Helix-Lag wie bei
-        // /streams). Best-Effort: Fehler loggen statt failen, das Polling
-        // füllt die Felder sonst beim nächsten Tick nach.
-        if announcement_action != StreamOnlineAnnouncementAction::Reconcile {
-            if let Some(source) = &self.channel_info {
-                run_business_effect_once(
-                    &self.guard,
-                    work.message_id.as_deref(),
-                    "stream_online_channel_info",
-                    epoch,
-                    || async {
-                        match source.channel_info(&work.broadcaster_id).await {
-                            Ok(Some(info)) => {
-                                if let Err(error) = self
-                                    .live_state
-                                    .apply_channel_info(
-                                        &work.broadcaster_id,
-                                        info.title.as_deref(),
-                                        info.game_name.as_deref(),
-                                    )
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        %error,
-                                        broadcaster_id = %work.broadcaster_id,
-                                        "Go-Live-Enrichment: Live-State-Update fehlgeschlagen"
-                                    );
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                tracing::warn!(
-                                    %error,
-                                    broadcaster_id = %work.broadcaster_id,
-                                    "Go-Live-Enrichment: Kanal-Lookup fehlgeschlagen"
-                                );
-                            }
+        if announcement_action != StreamOnlineAnnouncementAction::Reconcile
+            && self.channel_info.is_some()
+        {
+            run_business_effect_once(
+                &self.guard,
+                work.message_id.as_deref(),
+                "stream_online_channel_info",
+                epoch,
+                || async {
+                    if let Some(info) = channel_info.as_ref() {
+                        if let Err(error) = self
+                            .live_state
+                            .apply_channel_info(
+                                &work.broadcaster_id,
+                                info.title.as_deref(),
+                                info.game_name.as_deref(),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                %error,
+                                broadcaster_id = %work.broadcaster_id,
+                                "Go-Live-Enrichment: Live-State-Update fehlgeschlagen"
+                            );
                         }
-                        Ok(())
-                    },
-                )
-                .await?;
-            }
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
         }
 
         self.run_stream_online_followups(

@@ -669,6 +669,54 @@ async fn stream_online_enrichment_setzt_titel_und_kategorie() {
 }
 
 #[tokio::test]
+async fn stream_online_eroeffnet_session_mit_titel_und_kategorie() {
+    let pool = pool_or_skip!("t4d_online_session_meta");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack_with(
+        &pool,
+        hooks.clone(),
+        Some(Arc::new(StaticChannelInfo) as Arc<dyn ChannelInfoSource>),
+    );
+
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "77",
+            "broadcaster_user_login": "goliveguy",
+            "id": "s-77",
+            "started_at": "2026-06-10T12:00:00Z"
+        }
+    });
+    let outcome = dispatcher
+        .dispatch("stream.online", Some("m-session-meta-1"), &body)
+        .await
+        .unwrap();
+    assert!(outcome.ok && outcome.queued);
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    #[derive(sqlx::FromRow)]
+    struct SessionRow {
+        stream_title: Option<String>,
+        game_name: Option<String>,
+        had_deadlock_in_session: bool,
+    }
+    let row: SessionRow = sqlx::query_as(
+        "SELECT stream_title, game_name, had_deadlock_in_session
+           FROM twitch_stream_sessions WHERE twitch_user_id = '77'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.stream_title.as_deref(), Some("Ranked Grind"));
+    assert_eq!(row.game_name.as_deref(), Some("Deadlock"));
+    assert!(
+        row.had_deadlock_in_session,
+        "had_deadlock aus der Kategorie schon beim Anlegen"
+    );
+}
+
+#[tokio::test]
 async fn stream_offline_finalisiert_session_mit_throttle() {
     let pool = pool_or_skip!("t4d_offline");
     let hooks = Arc::new(RecordingHooks::default());
