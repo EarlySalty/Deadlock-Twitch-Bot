@@ -2886,6 +2886,7 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             llm::USE_CASE,
             tb_llm::Request::simple(llm::SYSTEM_PROMPT, llm::anfrage_json(stapel))
                 .json_object()
+                .denken_aus()
                 .timeout(MODELL_ZEITGRENZE)
                 // Das Audit verbucht nichts: es laeuft ausserhalb des Bots und
                 // haengt an keinem Streamer-Budget.
