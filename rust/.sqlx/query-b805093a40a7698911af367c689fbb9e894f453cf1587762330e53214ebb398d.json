@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_scout_pitch_ledger\n                 (streamer_login, trigger_type, judge_verdict, action, detail, twitch_user_id)\n             VALUES ($1, 'chat_partner_pitch', 'partner_pitch', 'posted', $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b805093a40a7698911af367c689fbb9e894f453cf1587762330e53214ebb398d"
+}

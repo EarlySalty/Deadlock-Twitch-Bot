@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.streamer_login AS login, MAX(s.started_at) AS \"last_session!\"\n                 FROM twitch_stream_sessions s\n                WHERE s.twitch_user_id = $1\n                  AND LOWER(s.game_name) = 'deadlock'\n                  AND s.started_at >= NOW() - INTERVAL '60 days'\n                  AND NOT EXISTS (SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id = $1)\n                  AND NOT EXISTS (SELECT 1 FROM twitch_scout_pitch_blacklist b\n                                   WHERE LOWER(b.streamer_login) = LOWER(s.streamer_login)\n                                      OR b.twitch_user_id = $1)\n                  AND NOT EXISTS (SELECT 1 FROM twitch_partner_outreach o\n                                   WHERE LOWER(o.streamer_login) = LOWER(s.streamer_login)\n                                      OR o.twitch_user_id = $1)\n                  AND NOT EXISTS (SELECT 1 FROM twitch_scout_pitch_ledger l\n                                   WHERE (LOWER(l.streamer_login) = LOWER(s.streamer_login)\n                                          OR l.twitch_user_id = $1)\n                                     AND l.action = 'posted')\n                GROUP BY s.streamer_login\n                ORDER BY MAX(s.started_at) DESC\n                LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_session!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "aa389854c9d3ecc52258b0c556c153ff61d2beff787991f0a10f84fb4e333999"
+}

@@ -509,6 +509,12 @@ pub struct PitchLogEntry {
     pub sent_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone)]
+struct PartnerCandidate {
+    login: String,
+    last_session: DateTime<Utc>,
+}
+
 pub struct PromoEngine {
     pool: PgPool,
     api: Arc<dyn ChatApi>,
@@ -1000,6 +1006,134 @@ impl PromoEngine {
             }
         }
         true
+    }
+
+    async fn partner_candidate(&self, chatter_user_id: &str) -> Option<PartnerCandidate> {
+        match sqlx::query!(
+            r#"SELECT s.streamer_login AS login, MAX(s.started_at) AS "last_session!"
+                 FROM twitch_stream_sessions s
+                WHERE s.twitch_user_id = $1
+                  AND LOWER(s.game_name) = 'deadlock'
+                  AND s.started_at >= NOW() - INTERVAL '60 days'
+                  AND NOT EXISTS (SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id = $1)
+                  AND NOT EXISTS (SELECT 1 FROM twitch_scout_pitch_blacklist b
+                                   WHERE LOWER(b.streamer_login) = LOWER(s.streamer_login)
+                                      OR b.twitch_user_id = $1)
+                  AND NOT EXISTS (SELECT 1 FROM twitch_partner_outreach o
+                                   WHERE LOWER(o.streamer_login) = LOWER(s.streamer_login)
+                                      OR o.twitch_user_id = $1)
+                  AND NOT EXISTS (SELECT 1 FROM twitch_scout_pitch_ledger l
+                                   WHERE (LOWER(l.streamer_login) = LOWER(s.streamer_login)
+                                          OR l.twitch_user_id = $1)
+                                     AND l.action = 'posted')
+                GROUP BY s.streamer_login
+                ORDER BY MAX(s.started_at) DESC
+                LIMIT 1"#,
+            chatter_user_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(row)) => Some(PartnerCandidate {
+                login: row.login,
+                last_session: row.last_session,
+            }),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(%error, "partner-pitch: kandidatenpruefung nicht lesbar, kein partner-pitch");
+                None
+            }
+        }
+    }
+
+    async fn partner_user_limit_ok(&self, chatter_user_id: &str) -> bool {
+        let row = match sqlx::query!(
+            "SELECT
+                 MAX(sent_at) FILTER (WHERE sent_at IS NOT NULL) AS last_sent,
+                 COUNT(*) FILTER (
+                     WHERE sent_at IS NULL AND reject_reason IS NULL
+                       AND created_at >= NOW() - INTERVAL '10 minutes'
+                 ) AS \"pending!\"
+               FROM twitch_promo_pitch_log
+              WHERE target_user_id = $1 AND pfad = 'partner'",
+            chatter_user_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::warn!(%error, "partner-pitch: user-limit nicht lesbar, blockiere");
+                return false;
+            }
+        };
+        if row.pending > 0 {
+            return false;
+        }
+        row.last_sent.is_none()
+    }
+
+    async fn partner_channel_limit_ok(&self, login: &str) -> bool {
+        let stream_start = self
+            .load_stream_start(login)
+            .await
+            .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
+        let row = match sqlx::query!(
+            "SELECT COUNT(*) AS \"count!\" FROM twitch_promo_pitch_log
+              WHERE channel_login = $1 AND pfad = 'partner' AND sent_at IS NOT NULL
+                AND sent_at >= $2",
+            login,
+            stream_start,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::warn!(%error, channel = %login, "partner-pitch: kanal-limit nicht lesbar, blockiere");
+                return false;
+            }
+        };
+        row.count < 1
+    }
+
+    async fn partner_daily_limit_ok(&self) -> bool {
+        let row = match sqlx::query!(
+            "SELECT COUNT(*) AS \"count!\" FROM twitch_promo_pitch_log
+              WHERE pfad = 'partner' AND sent_at IS NOT NULL
+                AND sent_at >= NOW() - INTERVAL '24 hours'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::warn!(%error, "partner-pitch: tageslimit nicht lesbar, blockiere");
+                return false;
+            }
+        };
+        row.count < 5
+    }
+
+    async fn record_partner_ledger(
+        &self,
+        own_login: &str,
+        chatter_user_id: &str,
+        channel_login: &str,
+    ) {
+        if let Err(error) = sqlx::query!(
+            "INSERT INTO twitch_scout_pitch_ledger
+                 (streamer_login, trigger_type, judge_verdict, action, detail, twitch_user_id)
+             VALUES ($1, 'chat_partner_pitch', 'partner_pitch', 'posted', $2, $3)",
+            own_login,
+            channel_login,
+            chatter_user_id,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%error, login = %own_login, "partner-pitch: ledger-eintrag fehlgeschlagen");
+        }
     }
 
     async fn load_stream_start(&self, login: &str) -> Option<DateTime<Utc>> {

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\" FROM twitch_promo_pitch_log\n              WHERE channel_login = $1 AND pfad = 'partner' AND sent_at IS NOT NULL\n                AND sent_at >= $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ad05c2e6a3fdf6770e20d43550af69e7ff62c0f7c13e2ef9b5989c13e30267e6"
+}
