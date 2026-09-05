@@ -1879,14 +1879,51 @@ struct DiscordPitchReviewSink {
     discord: Arc<dyn DiscordBackend>,
 }
 
+fn neutralize_pitch_field(value: &str) -> String {
+    let neutralized = value
+        .replace("@everyone", "everyone")
+        .replace("@here", "here")
+        .replace("<@", "< @")
+        .replace("<#", "< #")
+        .replace("<&", "< &")
+        .replace("https://", "https ://")
+        .replace("http://", "http ://")
+        .replace("www.", "www .")
+        .replace("discord.gg", "discord .gg");
+    let mut cleaned = String::with_capacity(neutralized.len());
+    for character in neutralized.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            cleaned.push(' ');
+        } else {
+            if matches!(
+                character,
+                '\\' | '*' | '_' | '~' | '`' | '|' | '[' | ']' | '(' | ')' | '>' | '#'
+            ) {
+                cleaned.push('\\');
+            }
+            cleaned.push(character);
+        }
+    }
+    cleaned
+}
+
 #[async_trait::async_trait]
 impl PitchReviewSink for DiscordPitchReviewSink {
     async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
         let displays = vec![
             format!("**Anlass-Pitch** in `{channel_login}`"),
             format!("An **{target_login}**"),
-            format!("> {}", trigger.replace('\n', " ")),
-            format!("Antwort: {reply}"),
+            format!("> {}", neutralize_pitch_field(trigger)),
+            format!("Antwort: {}", neutralize_pitch_field(reply)),
         ];
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
@@ -2954,6 +2991,116 @@ mod chat_notification_tests {
                 "broadcaster_1".to_string(),
                 "Original Announcement".to_string()
             )]
+        );
+    }
+
+    struct CapturingDiscordBackend {
+        last: Mutex<Option<SendRichMessage>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DiscordBackend for CapturingDiscordBackend {
+        async fn send_rich_message(
+            &self,
+            payload: SendRichMessage,
+        ) -> Result<
+            tb_transport_discord::SendResult,
+            tb_transport_discord::DiscordError,
+        > {
+            *self.last.lock().unwrap() = Some(payload);
+            Ok(tb_transport_discord::SendResult {
+                ok: true,
+                result: tb_transport_discord::backend::SendResultInner {
+                    message_id: "capture-0".to_string(),
+                },
+            })
+        }
+
+        async fn edit_rich_message(
+            &self,
+            _payload: tb_transport_discord::EditRichMessage,
+        ) -> Result<(), tb_transport_discord::DiscordError> {
+            Ok(())
+        }
+
+        async fn delete_message(
+            &self,
+            _payload: tb_transport_discord::DeleteMessage,
+        ) -> Result<(), tb_transport_discord::DiscordError> {
+            Ok(())
+        }
+
+        async fn send_user_dm(
+            &self,
+            _payload: tb_transport_discord::SendUserDm,
+        ) -> Result<
+            tb_transport_discord::SendResult,
+            tb_transport_discord::DiscordError,
+        > {
+            unimplemented!()
+        }
+
+        async fn send_alert_embed(
+            &self,
+            _payload: tb_transport_discord::SendAlertEmbed,
+        ) -> Result<
+            tb_transport_discord::SendResult,
+            tb_transport_discord::DiscordError,
+        > {
+            unimplemented!()
+        }
+
+        async fn remove_member_role(
+            &self,
+            _guild_id: u64,
+            _user_id: u64,
+            _role_id: u64,
+            _reason: &str,
+        ) -> Result<(), tb_transport_discord::DiscordError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn pitch_review_karte_neutralisiert_mentions_in_trigger_und_reply() {
+        let backend = Arc::new(CapturingDiscordBackend {
+            last: Mutex::new(None),
+        });
+        let sink = DiscordPitchReviewSink {
+            discord: Arc::clone(&backend) as Arc<dyn DiscordBackend>,
+        };
+
+        sink.send_card(
+            "nani",
+            "symphooniee",
+            "wieso ist deadlock so tot @everyone @here niemand spielt <@123456> das mehr",
+            "kein stress @everyone die community <@789> ist aktiv @here",
+        )
+        .await;
+
+        let payload = backend
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("Karte muss gesendet worden sein");
+        let rendered = serde_json::to_string(&payload.components).unwrap();
+
+        assert!(
+            !rendered.contains("@everyone"),
+            "Karte darf kein wirksames @everyone enthalten: {rendered}"
+        );
+        assert!(
+            !rendered.contains("@here"),
+            "Karte darf kein wirksames @here enthalten: {rendered}"
+        );
+        assert!(
+            !rendered.contains("<@"),
+            "Karte darf keine wirksame User-Mention enthalten: {rendered}"
+        );
+        assert!(
+            payload.allowed_role_ids.is_empty(),
+            "Karte darf keine Rollen-Mentions erlauben"
         );
     }
 
