@@ -389,9 +389,23 @@ pub trait PartnerChannelCheck: Send + Sync {
     async fn is_partner_channel_for_chat_tracking(&self, channel_login: &str) -> bool;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PitchCardKind {
+    Anlass,
+    Partner,
+}
+
 #[async_trait]
 pub trait PitchReviewSink: Send + Sync {
-    async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str);
+    async fn send_card(
+        &self,
+        channel_login: &str,
+        target_login: &str,
+        trigger: &str,
+        reply: &str,
+        kind: PitchCardKind,
+        candidate_hint: Option<&str>,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +801,19 @@ impl PromoEngine {
             return;
         }
 
+        if let Some(candidate) = self.partner_candidate(&target_user_id).await {
+            self.run_partner_pitch(
+                &login,
+                &channel_id,
+                &target_user_id,
+                &target_login,
+                text,
+                candidate,
+            )
+            .await;
+            return;
+        }
+
         if !self.pitch_user_limit_ok(&target_user_id).await {
             self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: user-limit");
@@ -890,8 +917,170 @@ impl PromoEngine {
         drop(_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
-            sink.send_card(&login, &target_login, text, &resp.reply).await;
+            sink.send_card(
+                &login,
+                &target_login,
+                text,
+                &resp.reply,
+                PitchCardKind::Anlass,
+                None,
+            )
+            .await;
         }
+    }
+
+    async fn run_partner_pitch(
+        &self,
+        login: &str,
+        channel_id: &str,
+        target_user_id: &str,
+        target_login: &str,
+        trigger: &str,
+        candidate: PartnerCandidate,
+    ) {
+        if !self.partner_user_limit_ok(target_user_id).await {
+            self.pitch_judge_throttle_release(login, target_user_id);
+            tracing::debug!(channel = %login, chatter = %target_user_id, "partner-pitch: user-limit");
+            return;
+        }
+        if !self.partner_channel_limit_ok(login).await {
+            self.pitch_judge_throttle_release(login, target_user_id);
+            tracing::debug!(channel = %login, "partner-pitch: kanal-limit");
+            return;
+        }
+        if !self.partner_daily_limit_ok().await {
+            self.pitch_judge_throttle_release(login, target_user_id);
+            tracing::debug!(channel = %login, "partner-pitch: tageslimit");
+            return;
+        }
+
+        let (game, title) = self.load_live_context(login).await;
+        let recent = self.load_recent_channel_messages(login, 8).await;
+        let ctx = PartnerPitchContext {
+            target_login: target_login.to_string(),
+            target_messages: vec![trigger.to_string()],
+            game,
+            title,
+            recent_chat: recent,
+        };
+        let Some(reply) = self.partner_pitch_gen.partner_pitch(&ctx).await else {
+            self.log_partner_reject(login, target_user_id, "no_text", trigger, None)
+                .await;
+            tracing::debug!(channel = %login, "partner-pitch: kein text");
+            return;
+        };
+
+        if let Some(reason) = pitch_filter_reject(&reply) {
+            self.log_partner_reject(
+                login,
+                target_user_id,
+                reason.as_str(),
+                trigger,
+                Some(reply.clone()),
+            )
+            .await;
+            return;
+        }
+        if pitch_injection_reject(&reply, target_login) {
+            self.log_partner_reject(login, target_user_id, "injection", trigger, Some(reply.clone()))
+                .await;
+            return;
+        }
+
+        let lock = self.get_send_lock(login);
+        let _guard = lock.lock().await;
+
+        if self.partner_candidate(target_user_id).await.is_none() {
+            self.log_partner_reject(login, target_user_id, "kein_kandidat_mehr", trigger, None)
+                .await;
+            return;
+        }
+        if !self.partner_channel_limit_ok(login).await {
+            self.log_partner_reject(login, target_user_id, "limit_channel", trigger, None)
+                .await;
+            return;
+        }
+
+        let out_text = format!("@{target_login} {reply}");
+
+        let Some(log_id) = self
+            .insert_pitch_log_pending(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: Some(target_user_id.to_string()),
+                pfad: "partner",
+                occasion: None,
+                trigger_text: Some(trigger.to_string()),
+                generated_text: Some(out_text.clone()),
+                reject_reason: None,
+                sent_at: None,
+            })
+            .await
+        else {
+            tracing::warn!(channel = %login, "partner-pitch: log nicht schreibbar, kein pitch");
+            return;
+        };
+
+        let outcome = self
+            .guarded_api_for("promo", login)
+            .send_message(channel_id, &out_text)
+            .await;
+        self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
+            .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+            self.mark_pitch_log_dropped(log_id, "send_dropped").await;
+            return;
+        }
+
+        self.mark_pitch_log_sent(log_id).await;
+        self.mark_promo_sent(
+            login,
+            Instant::now(),
+            "partner_pitch",
+            Utc::now().timestamp() as f64,
+        )
+        .await;
+        drop(_guard);
+
+        self.record_partner_ledger(&candidate.login, target_user_id, login)
+            .await;
+
+        if let Some(sink) = self.pitch_review_sink.as_ref() {
+            let hint = format!(
+                "Kandidat: {} streamt Deadlock, letzte Session {}",
+                candidate.login,
+                candidate.last_session.format("%Y-%m-%d")
+            );
+            sink.send_card(
+                login,
+                target_login,
+                trigger,
+                &reply,
+                PitchCardKind::Partner,
+                Some(&hint),
+            )
+            .await;
+        }
+    }
+
+    async fn log_partner_reject(
+        &self,
+        login: &str,
+        target_user_id: &str,
+        reason: &str,
+        trigger: &str,
+        generated: Option<String>,
+    ) {
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.to_string(),
+            target_user_id: Some(target_user_id.to_string()),
+            pfad: "partner",
+            occasion: None,
+            trigger_text: Some(trigger.to_string()),
+            generated_text: generated,
+            reject_reason: Some(reason.to_string()),
+            sent_at: None,
+        })
+        .await;
     }
 
     fn pitch_judge_throttle_release(&self, login: &str, chatter_id: &str) {
@@ -3774,7 +3963,7 @@ mod db_tests {
 
     #[derive(Default, Clone)]
     struct RecordingReviewSink {
-        cards: Arc<Mutex<Vec<(String, String, String, String)>>>,
+        cards: Arc<Mutex<Vec<(String, String, String, String, PitchCardKind, Option<String>)>>>,
     }
 
     #[async_trait]
@@ -3785,12 +3974,16 @@ mod db_tests {
             target_login: &str,
             trigger: &str,
             reply: &str,
+            kind: PitchCardKind,
+            candidate_hint: Option<&str>,
         ) {
             self.cards.lock().await.push((
                 channel_login.to_string(),
                 target_login.to_string(),
                 trigger.to_string(),
                 reply.to_string(),
+                kind,
+                candidate_hint.map(|h| h.to_string()),
             ));
         }
     }

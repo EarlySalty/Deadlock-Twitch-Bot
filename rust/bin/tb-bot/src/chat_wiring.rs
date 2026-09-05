@@ -32,7 +32,9 @@ use tb_chat::conversation_scam::{
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
-use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PitchReviewSink, PromoEngine};
+use tb_chat::promos::{
+    InviteResolver, PartnerChannelCheck, PitchCardKind, PitchReviewSink, PromoEngine,
+};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::style_score::{build_centroid, Centroid};
@@ -1941,13 +1943,28 @@ fn neutralize_pitch_codespan(value: &str) -> String {
 
 #[async_trait::async_trait]
 impl PitchReviewSink for DiscordPitchReviewSink {
-    async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
-        let displays = vec![
-            format!("**Anlass-Pitch** in `{}`", neutralize_pitch_codespan(channel_login)),
+    async fn send_card(
+        &self,
+        channel_login: &str,
+        target_login: &str,
+        trigger: &str,
+        reply: &str,
+        kind: PitchCardKind,
+        candidate_hint: Option<&str>,
+    ) {
+        let title = match kind {
+            PitchCardKind::Anlass => "Anlass-Pitch",
+            PitchCardKind::Partner => "Partner-Pitch",
+        };
+        let mut displays = vec![
+            format!("**{}** in `{}`", title, neutralize_pitch_codespan(channel_login)),
             format!("An **{}**", neutralize_pitch_field(target_login)),
             format!("> {}", neutralize_pitch_field(trigger)),
             format!("Antwort: {}", neutralize_pitch_field(reply)),
         ];
+        if let Some(hint) = candidate_hint {
+            displays.push(neutralize_pitch_field(hint));
+        }
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -1964,7 +1981,7 @@ impl PitchReviewSink for DiscordPitchReviewSink {
             view_spec: None,
         };
         if let Err(error) = self.discord.send_rich_message(payload).await {
-            tracing::warn!(%error, channel = channel_login, "Anlass-Pitch-Review-Karte fehlgeschlagen");
+            tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
         }
     }
 }
@@ -3098,6 +3115,8 @@ mod chat_notification_tests {
             "symphooniee @here <@222>",
             "wieso ist deadlock so tot @everyone @here niemand spielt <@123456> das mehr",
             "kein stress @everyone die community <@789> ist aktiv @here",
+            PitchCardKind::Anlass,
+            None,
         )
         .await;
 
