@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { erkenneBrowser, lesezeichenAnleitung } from '../src/utils/browserErkennung';
+import { erkenneBrowser, kartenPosition, lesezeichenAnleitung } from '../src/utils/browserErkennung';
 
 const CHROME_WIN =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -114,6 +114,50 @@ test('macOS liefert das Cmd-Kuerzel, Windows das Strg-Kuerzel', () => {
   assert.deepEqual(mac.tastenkombi, ['⌘', 'D']);
   const win = anleitungFuer({ userAgent: CHROME_WIN, platform: 'Win32' });
   assert.deepEqual(win.tastenkombi, ['Strg', 'D']);
+});
+
+test('Brave setzt die Karte links der Mitte mit Pfeil links', () => {
+  const pos = kartenPosition(anleitungFuer({ userAgent: CHROME_WIN, brave: true }));
+  assert.equal(pos.seite, 'links');
+  assert.equal(pos.top, '16px');
+  assert.equal(pos.left, 'max(16px, calc(50% - 560px))');
+  assert.equal(pos.right, undefined);
+  assert.equal(pos.pfeilLinks, true);
+});
+
+test('Chrome setzt die Karte rechts mit 140px Abstand und Pfeil rechts', () => {
+  const pos = kartenPosition(anleitungFuer({ userAgent: CHROME_WIN }));
+  assert.equal(pos.seite, 'rechts');
+  assert.equal(pos.top, '16px');
+  assert.equal(pos.right, '140px');
+  assert.equal(pos.left, undefined);
+  assert.equal(pos.pfeilLinks, false);
+});
+
+test('Safari setzt die Karte rechts mit 60px Abstand', () => {
+  const pos = kartenPosition(anleitungFuer({ userAgent: SAFARI_MAC, platform: 'MacIntel' }));
+  assert.equal(pos.seite, 'rechts');
+  assert.equal(pos.right, '60px');
+  assert.equal(pos.pfeilLinks, false);
+});
+
+test('Mobil bleibt beim Menue statt einer Pfeilkarte', () => {
+  const pos = kartenPosition(anleitungFuer({ userAgent: ANDROID_CHROME, platform: 'Linux armv8l', mobile: true }));
+  assert.equal(pos.seite, 'menue');
+  assert.equal(pos.top, undefined);
+  assert.equal(pos.pfeilLinks, false);
+});
+
+test('Desktop-Chrome mit userAgentData.mobile gilt als mobil', () => {
+  const erkennung = erkenneBrowser({ userAgent: CHROME_WIN, brave: false, platform: 'Win32', mobile: true });
+  assert.notEqual(erkennung.mobil, null);
+  const anleitung = lesezeichenAnleitung(erkennung);
+  assert.equal(anleitung.position, 'menue');
+});
+
+test('Android-UA gilt auch ohne userAgentData.mobile als mobil', () => {
+  const erkennung = erkenneBrowser({ userAgent: ANDROID_CHROME, brave: false, platform: 'Linux armv8l', mobile: false });
+  assert.equal(erkennung.mobil, 'android');
 });
 
 test('Unbekannter Browser bleibt ohne Positionsangabe', () => {

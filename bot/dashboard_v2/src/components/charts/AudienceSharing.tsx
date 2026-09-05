@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -6,17 +7,50 @@ import {
 } from 'recharts';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { AudienceSharing as AudienceSharingData } from '@/types/analytics';
+import {
+  SHARING_TOPN_OPTIONS,
+  readSharingTopN,
+  writeSharingTopN,
+  type SharingTopN,
+} from '@/utils/sharingTopN';
 
 interface AudienceSharingProps {
   data: AudienceSharingData | undefined;
 }
 
-const LINE_COLORS = ['#C5A059', '#00D9FF', '#FF5A3C'];
+const SEGMENT_SPRING = { type: 'spring', bounce: 0, duration: 0.32 } as const;
+
+const PALETTE_TOKENS = [
+  'var(--color-primary)',
+  'var(--color-info)',
+  'var(--color-danger)',
+  'var(--color-success)',
+  'var(--color-accent)',
+  'var(--color-warning)',
+  'var(--color-secondary)',
+  'var(--color-primary-hover)',
+  'var(--color-accent-hover)',
+];
+
+function lineColor(index: number): string {
+  const base = PALETTE_TOKENS[index % PALETTE_TOKENS.length];
+  const cycle = Math.floor(index / PALETTE_TOKENS.length);
+  if (cycle === 0) return base;
+  if (cycle === 1) return `color-mix(in srgb, ${base} 62%, black)`;
+  return `color-mix(in srgb, ${base} 58%, white)`;
+}
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
   const current = useMemo(() => data?.current ?? [], [data]);
   const timeline = useMemo(() => data?.timeline ?? [], [data]);
   const totalUniqueViewers = data?.totalUniqueViewers ?? 0;
+
+  const [topN, setTopN] = useState<SharingTopN>(() => readSharingTopN());
+
+  const selectTopN = (value: SharingTopN) => {
+    setTopN(value);
+    writeSharingTopN(value);
+  };
 
   // Prepare bar chart data (top 10 partners by shared viewers)
   const barData = useMemo(
@@ -32,9 +66,9 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
     }
     return [...totals.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
+      .slice(0, topN)
       .map(([s]) => s);
-  }, [timeline]);
+  }, [timeline, topN]);
 
   const lineData = useMemo(() => {
     const months = new Map<string, Record<string, number>>();
@@ -142,9 +176,33 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
           step={{ seconds: 0.2 }}
           className="panel-card rounded-2xl p-6"
         >
-          <h4 className="text-sm font-medium text-text-secondary mb-4">
-            Zuschauer-Sharing Timeline (Top 3)
-          </h4>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h4 className="text-sm font-medium text-text-secondary">
+              Zuschauer-Sharing Timeline (Top {topN})
+            </h4>
+            <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
+              {SHARING_TOPN_OPTIONS.map(option => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => selectTopN(option)}
+                  className={`relative px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                    topN === option ? 'text-[#0D0806]' : 'text-text-secondary hover:text-white'
+                  }`}
+                >
+                  {topN === option && (
+                    <motion.span
+                      layoutId="sharingTopNIndicator"
+                      className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                      initial={false}
+                      transition={SEGMENT_SPRING}
+                    />
+                  )}
+                  <span className="relative z-10">Top {option}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="h-[250px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
@@ -165,9 +223,9 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                     type="monotone"
                     dataKey={streamer}
                     name={streamer}
-                    stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                    stroke={lineColor(i)}
                     strokeWidth={2}
-                    dot={{ fill: LINE_COLORS[i % LINE_COLORS.length] }}
+                    dot={{ fill: lineColor(i) }}
                     connectNulls
                   />
                 ))}

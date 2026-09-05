@@ -14,7 +14,7 @@ export function readCachedDashboardProfile(
   storage: ProfileCacheStorage | null | undefined,
 ): CachedDashboardProfile | null {
   if (!identityKey || !storage) return null;
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = storage.getItem(DASHBOARD_PROFILE_CACHE_KEY);
   } catch {

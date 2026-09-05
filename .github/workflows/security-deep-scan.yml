@@ -1,6 +1,6 @@
-name: "🔒 Deep Security Scan (Optimized)"
+name: "Deep Security Scan"
 
-# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht.
+# Wöchentlich statt bei jedem Push, damit das Actions-Budget reicht.
 on:
   schedule:
     - cron: "17 4 * * 1"
@@ -14,34 +14,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  detect-languages:
-    name: 🔍 Detect Project Structure
-    runs-on: ubuntu-latest
-    outputs:
-      has_javascript: ${{ steps.check.outputs.has_javascript }}
-      has_package_json: ${{ steps.check.outputs.has_package_json }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Check project structure
-        id: check
-        run: |
-          if find . -type f \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
-            -not -path "*/node_modules/*" | grep -q .; then
-            echo "has_javascript=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_javascript=false" >> $GITHUB_OUTPUT
-          fi
-
-          if find . -type f -name "package.json" \
-            -not -path "*/node_modules/*" | grep -q .; then
-            echo "has_package_json=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_package_json=false" >> $GITHUB_OUTPUT
-          fi
-
   trivy-scan:
-    name: 🛡️ Trivy Security Scan
+    name: Trivy filesystem
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -50,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Trivy filesystem scan (strict)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # master
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -78,10 +52,8 @@ jobs:
           retention-days: 30
 
   security-scorecard:
-    name: 🏆 OSSF Security Scorecard
+    name: OSSF Security Scorecard
     runs-on: ubuntu-latest
-    # Scorecard bewertet den Default-Branch und braucht id-token: write.
-    # Aus einem Fork-PR heraus gibt es dieses Token nicht.
     if: github.event_name != 'pull_request'
     permissions:
       security-events: write
@@ -117,20 +89,91 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  osv-scan:
+    name: OSV Scanner
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+    with:
+      fail-on-vuln: true
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Semgrep
+        run: pipx install semgrep==1.176.1
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config p/rust \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --config p/github-actions \
+            --config p/javascript \
+            --config p/python \
+            --metrics=off \
+            --severity ERROR \
+            --error \
+            --sarif \
+            --output semgrep.sarif
+
+      - name: Upload Semgrep SARIF
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        if: always() && hashFiles('semgrep.sarif') != ''
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Upload Semgrep artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: semgrep-report
+          path: semgrep.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+        with:
+          version: v1.30.0
+          min-severity: high
+          advanced-security: true
+
   generate-summary:
-    name: 📋 Generate Summary
-    needs: [detect-languages, trivy-scan, security-scorecard]
+    name: Summary
+    needs: [trivy-scan, security-scorecard, osv-scan, semgrep, zizmor]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Create summary
         run: |
-          echo "# 🔒 Security Analysis Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Project Detection" >> $GITHUB_STEP_SUMMARY
-          echo "- JavaScript: ${{ needs.detect-languages.outputs.has_javascript == 'true' && '✅ Yes' || '❌ No' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- package.json: ${{ needs.detect-languages.outputs.has_package_json == 'true' && '✅ Found' || '❌ Not found' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Trivy: ${{ needs.trivy-scan.result == 'success' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- OSSF Scorecard: ${{ needs.security-scorecard.result == 'success' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "# Security Analysis Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Trivy: ${{ needs.trivy-scan.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OSSF Scorecard: ${{ needs.security-scorecard.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OSV Scanner: ${{ needs.osv-scan.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Semgrep: ${{ needs.semgrep.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- zizmor: ${{ needs.zizmor.result }}" >> "$GITHUB_STEP_SUMMARY"

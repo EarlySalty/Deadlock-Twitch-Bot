@@ -43,6 +43,9 @@ jobs:
           - language: rust
             build: none
             node: false
+          - language: python
+            build: none
+            node: false
 
     steps:
       - name: Checkout (full history)

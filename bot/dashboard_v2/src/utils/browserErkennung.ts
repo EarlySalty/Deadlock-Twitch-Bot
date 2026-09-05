@@ -36,12 +36,15 @@ export interface LesezeichenAnleitung {
   hinweis: string;
 }
 
-function erkenneMobil(userAgent: string, platform: string): MobilArt {
+function erkenneMobil(userAgent: string, platform: string, mobile: boolean): MobilArt {
   const text = `${userAgent} ${platform}`;
   if (/iPhone|iPad|iPod/i.test(text)) {
     return 'ios';
   }
   if (/Android/i.test(userAgent)) {
+    return 'android';
+  }
+  if (mobile) {
     return 'android';
   }
   return null;
@@ -73,7 +76,7 @@ function erkenneName(userAgent: string, brave: boolean): BrowserName {
 }
 
 export function erkenneBrowser(eingabe: BrowserEingabe): BrowserErkennung {
-  const mobil = erkenneMobil(eingabe.userAgent, eingabe.platform);
+  const mobil = erkenneMobil(eingabe.userAgent, eingabe.platform, eingabe.mobile);
   const mac =
     mobil === 'ios'
       ? false
@@ -83,6 +86,32 @@ export function erkenneBrowser(eingabe: BrowserEingabe): BrowserErkennung {
     mobil,
     mac,
   };
+}
+
+export interface KartenPosition {
+  seite: 'links' | 'rechts' | 'menue';
+  top?: string;
+  left?: string;
+  right?: string;
+  pfeilLinks: boolean;
+}
+
+export function kartenPosition(anleitung: LesezeichenAnleitung): KartenPosition {
+  if (anleitung.position === 'menue') {
+    return { seite: 'menue', pfeilLinks: false };
+  }
+  if (anleitung.position === 'links') {
+    return {
+      seite: 'links',
+      top: '16px',
+      left: 'max(16px, calc(50% - 560px))',
+      pfeilLinks: true,
+    };
+  }
+  if (anleitung.position === 'rechts' && anleitung.symbol === 'teilen') {
+    return { seite: 'rechts', top: '16px', right: '60px', pfeilLinks: false };
+  }
+  return { seite: 'rechts', top: '16px', right: '140px', pfeilLinks: false };
 }
 
 export function lesezeichenAnleitung(erkennung: BrowserErkennung): LesezeichenAnleitung {

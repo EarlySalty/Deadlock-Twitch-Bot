@@ -117,3 +117,21 @@ bestehende Testdatei geändert, nur die Testliste in package.json erweitert.
    identisch auf origin/main und liegt außerhalb des Scopes; dieser Diff bringt keinen
    neuen Lint-Fehler. Kein Merge-Blocker für diese Aufgabe, aber INV3 ist auf der
    Baseline nicht erfüllt und gehört separat behoben.
+
+## Nachtrag 2026-09-05
+
+Zwei Amendments am Contract lösen die Mobil-Abweichung aus Fund 1 sauber auf:
+
+- REQ4/REQ5: Mobil entfällt zusätzlich die Tastenkombination (kein Strg+D auf dem
+  Telefon), der Knopf "Link kopieren" bleibt aber auch mobil sichtbar. Umgesetzt in
+  LesezeichenHinweis.tsx: der Kopier-Knopf steht nicht mehr in der `!istMobil`-Bedingung,
+  der `<span />`-Platzhalter ist raus. Die Tastenkombination bleibt hinter `!istMobil`.
+- REQ2: Die reine Erkennungsfunktion wertet jetzt das Feld `mobile` aus
+  `navigator.userAgentData.mobile` zusätzlich zur User-Agent-Zeichenkette aus; ist eines
+  von beiden mobil, gilt mobil. Umgesetzt in browserErkennung.ts (`erkenneMobil` bekommt
+  `mobile` und liefert bei gesetztem Signal `android`). Neue Tests in
+  lesezeichenHinweis.test.ts: Desktop-Chrome-UA mit `mobile: true` liefert die
+  Mobil-Anleitung (Position menue), Android-UA mit `mobile: false` bleibt mobil.
+
+Die Sichtprüfung liegt als Screenshots unter `screens/` vor, v1 (brave, chrome, opera,
+safari, android) und v2 (v2-brave, v2-chrome, v2-safari).

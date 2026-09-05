@@ -16,6 +16,8 @@ packs:
     - codeql/ruby-queries
   rust:
     - codeql/rust-queries
+  python:
+    - codeql/python-queries
   c-cpp:
     - codeql/cpp-queries
   swift:

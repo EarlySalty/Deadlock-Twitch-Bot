@@ -37,17 +37,17 @@ edition = "2021"
 # Zentrale Versionspflege — jede Crate referenziert via `{ workspace = true }`.
 [workspace.dependencies]
 thiserror = "1"
-aes-gcm = "0.10"
-aes = "0.8"
+aes-gcm = "0.11"
+aes = "0.9"
 cbc = { version = "0.1", features = ["block-padding"] }
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 hmac = "0.12"
 # default-features=false: wir nutzen nur die HTML-Renderer-Funktion (html::push_html);
 # das Default-Feature "getopts" gehört zum bundled CLI-Tool des Crates und wird
 # von uns als Library-Dependency nie aufgerufen — zieht sonst getopts+deps unnötig mit.
-pulldown-cmark = { version = "0.10", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 rand = "0.8"
 zeroize = "1"
 serde_json = "1"
@@ -58,10 +58,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate", "chrono"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
-blake2 = "0.10"
+blake2 = "0.11"
 axum = "0.7"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
+tower-http = { version = "0.7", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
 async-trait = "0.1"
 # Nur fuer `StreamExt::split` auf dem axum-WebSocket (OBS-Dock-Gateway); liegt
 # ueber sqlx ohnehin schon im Lock.
