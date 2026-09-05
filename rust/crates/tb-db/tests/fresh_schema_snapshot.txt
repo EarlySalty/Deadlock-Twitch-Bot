@@ -561,6 +561,11 @@ twitch_channel_updates|language|text|YES|
 twitch_channel_updates|recorded_at|timestamp with time zone|NO|now()
 twitch_channel_updates|title|text|YES|
 twitch_channel_updates|twitch_user_id|text|NO|
+twitch_chat_message_labels|erstellt_am|timestamp with time zone|NO|now()
+twitch_chat_message_labels|label|text|NO|
+twitch_chat_message_labels|message_id|bigint|NO|
+twitch_chat_message_labels|modell|text|YES|
+twitch_chat_message_labels|quelle|text|NO|
 twitch_chat_messages|chatter_id|text|YES|
 twitch_chat_messages|chatter_login|text|YES|
 twitch_chat_messages|content|text|YES|
