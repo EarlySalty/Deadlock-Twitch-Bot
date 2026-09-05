@@ -162,7 +162,7 @@ svg.icon-duotone {
 .glass {
   background-color: var(--color-card);
   background-image:
-    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
+    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
     repeating-linear-gradient(
       177deg,
       rgba(255, 255, 255, 0.016) 0px,
@@ -170,7 +170,6 @@ svg.icon-duotone {
       rgba(0, 0, 0, 0.045) 2px,
       rgba(255, 255, 255, 0) 3px
     );
-  backdrop-filter: blur(14px);
   border: 1px solid var(--color-border);
   box-shadow:
     inset 0 1px 0 rgba(241, 210, 153, 0.18),
@@ -195,7 +194,7 @@ svg.icon-duotone {
   isolation: isolate;
   background-color: var(--color-card);
   background-image:
-    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
+    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
     repeating-linear-gradient(
       177deg,
       rgba(255, 255, 255, 0.016) 0px,
@@ -224,9 +223,8 @@ svg.icon-duotone {
 }
 
 .bg-card {
-  background-color: var(--color-card);
   background-image:
-    linear-gradient(155deg, #362c23 0%, #2a221c 32%, #221a15 68%, #1a1310 100%),
+    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
     repeating-linear-gradient(
       177deg,
       rgba(255, 255, 255, 0.016) 0px,

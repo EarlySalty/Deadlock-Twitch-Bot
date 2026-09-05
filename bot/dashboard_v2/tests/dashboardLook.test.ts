@@ -43,8 +43,8 @@ test('das Raster wird nicht zu den Raendern hin ausgeblendet', () => {
 
 test('die Karten tragen den warmen Gold-Braun-Verlauf, nicht flaechig', () => {
   assert.match(block(INDEX, '.panel-card {'), /155deg/);
-  assert.match(block(INDEX, '.panel-card {'), /#362c23/);
-  assert.match(block(INDEX, '.panel-card {'), /#1a1310/);
+  assert.match(block(INDEX, '.panel-card {'), /rgba\(241, 210, 153, 0\.1\) 0%/);
+  assert.match(block(INDEX, '.panel-card {'), /rgba\(0, 0, 0, 0\.22\) 100%/);
   assert.doesNotMatch(block(INDEX, '.panel-card {'), /linear-gradient\(0deg/);
   assert.match(INDEX, /--color-border:\s*rgba\(239, 212, 157, 0\.34\)/);
 });
