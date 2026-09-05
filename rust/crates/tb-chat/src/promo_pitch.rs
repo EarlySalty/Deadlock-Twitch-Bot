@@ -357,18 +357,31 @@ pub trait PitchJudge: Send + Sync {
 
 pub struct FireworksPitchJudge;
 
-#[async_trait]
-impl PitchJudge for FireworksPitchJudge {
-    async fn decide(&self, input: PitchJudgeInput) -> Option<PitchResponse> {
+impl FireworksPitchJudge {
+    async fn decide_intern(
+        &self,
+        input: PitchJudgeInput,
+        endpoint: Option<tb_llm::LlmEndpoint>,
+    ) -> Option<PitchResponse> {
         let user = serde_json::to_string(&input).ok()?;
-        let request = tb_llm::Request::simple(PITCH_SYSTEM_PROMPT, user)
+        let mut request = tb_llm::Request::simple(PITCH_SYSTEM_PROMPT, user)
             .temperature(0.0)
             .json_object()
             .timeout(PITCH_TIMEOUT);
+        if let Some(endpoint) = endpoint {
+            request = request.no_ledger().endpoint(endpoint);
+        }
         match tb_llm::complete(USE_CASE, request).await {
             Ok(response) => parse_pitch_response(&response.text),
             Err(_) => None,
         }
+    }
+}
+
+#[async_trait]
+impl PitchJudge for FireworksPitchJudge {
+    async fn decide(&self, input: PitchJudgeInput) -> Option<PitchResponse> {
+        self.decide_intern(input, None).await
     }
 }
 
@@ -500,6 +513,45 @@ mod tests {
     #[test]
     fn promo_pitch_steht_in_der_nur_fireworks_liste() {
         assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&USE_CASE));
+    }
+
+    #[tokio::test]
+    async fn pitch_judge_schaltet_das_denken_ab() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+                "choices": [{"message": {"content":
+                    "{\"occasion\":null,\"reply\":\"\",\"confidence\":0.0}"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+
+        let endpoint = tb_llm::LlmEndpoint {
+            provider: "fireworks",
+            base_url: server.uri(),
+            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            api_key: Some("k".to_string()),
+        };
+        let input = PitchJudgeInput {
+            trigger_text: "test".to_string(),
+            game: None,
+            title: None,
+            recent_chat: vec![],
+            target_login: "t".to_string(),
+        };
+        FireworksPitchJudge.decide_intern(input, Some(endpoint)).await;
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("reasoning_effort"), "Body: {body}");
+        assert!(body.contains("none"), "Body: {body}");
     }
 
     #[test]

@@ -3133,6 +3133,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_judge_schaltet_das_denken_ab() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": { "content": "{\"is_spam\": false, \"confidence\": 0.1}" }
+                }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 6 }
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = tb_llm::LlmEndpoint {
+            provider: "fireworks",
+            base_url: server.uri(),
+            api_key: Some("test-key".to_string()),
+            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+        };
+        call_judge(Some(&provider), false, "harmlose nachricht")
+            .await
+            .expect("Urteil parsebar");
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("reasoning_effort"), "Body: {body}");
+        assert!(body.contains("none"), "Body: {body}");
+    }
+
+    #[tokio::test]
     async fn spam_ai_review_contract_harmlos_lernt_nichts_mehr() {
         // Ein Harmlos-Urteil des Modells selbst darf kein Safe-Pattern erzeugen;
         // Safe-Lernen ist ausschließlich der menschlichen Gegenkorrektur vorbehalten.

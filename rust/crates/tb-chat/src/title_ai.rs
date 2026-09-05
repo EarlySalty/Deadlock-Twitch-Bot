@@ -1174,6 +1174,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn titel_completion_schaltet_das_denken_ab() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content":
+                    "{\"strengths\":\"a\",\"weaknesses\":\"b\",\"patterns\":\"c\",\"recommendations\":[\"x\"]}"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let history = vec![InsightHistoryItem {
+            title: "T".into(),
+            relative_perf: 1.2,
+            engagement_rate: 0.05,
+        }];
+        generate_insight_with(&server.uri(), "k", "deepseek-v4-flash", &history, "Zeitraum")
+            .await
+            .expect("Insight");
+
+        let requests = server.received_requests().await.expect("Requests");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
+        assert!(body.contains("reasoning_effort"), "Body: {body}");
+        assert!(body.contains("none"), "Body: {body}");
+    }
+
+    #[tokio::test]
     async fn generate_insight_with_leer_und_parsefehler() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
