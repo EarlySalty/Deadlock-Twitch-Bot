@@ -1,6 +1,6 @@
 # Evidence: Analyse-Backend Bot-Ausschluss, Sessionsprache, Chat-Lücken-Warnung
 
-status: überholt
+status: aktiv
 datum: 2026-09-05
 contract: CONTRACT.md
 
