@@ -233,6 +233,7 @@ impl OutreachReviewClient {
             tb_llm::Request::simple(OUTREACH_SYSTEM_PROMPT, user_data)
                 .temperature(0.0)
                 .json_object()
+                .denken_aus()
                 .timeout(FIREWORKS_TIMEOUT)
                 .no_ledger()
                 .endpoint(self.endpoint.clone()),
