@@ -251,6 +251,26 @@ fn contains_hard_dash(text: &str) -> bool {
         || text.contains(" - ")
 }
 
+fn enthaelt_smiley_token(text_lower: &str, needle: &str) -> bool {
+    let haystack: Vec<char> = text_lower.chars().collect();
+    let pattern: Vec<char> = needle.chars().collect();
+    if pattern.is_empty() || pattern.len() > haystack.len() {
+        return false;
+    }
+    for start in 0..=haystack.len() - pattern.len() {
+        if haystack[start..start + pattern.len()] != pattern[..] {
+            continue;
+        }
+        let links_frei = start == 0 || !haystack[start - 1].is_alphanumeric();
+        let ende = start + pattern.len();
+        let rechts_frei = ende == haystack.len() || !haystack[ende].is_alphanumeric();
+        if links_frei && rechts_frei {
+            return true;
+        }
+    }
+    false
+}
+
 fn contains_forbidden_emoji(text: &str) -> bool {
     let without_smiley = text.replace(":)", "");
     let ascii_lower = without_smiley.to_ascii_lowercase();
@@ -258,7 +278,7 @@ fn contains_forbidden_emoji(text: &str) -> bool {
         ":-)", ":d", ":-d", ":p", ":-p", ":(", ":-(", ";)", ";-)", "<3", "^^", "xd", ":o",
     ]
     .iter()
-    .any(|needle| ascii_lower.contains(needle))
+    .any(|needle| enthaelt_smiley_token(&ascii_lower, needle))
     {
         return true;
     }
@@ -523,6 +543,20 @@ mod tests {
     #[test]
     fn filter_laesst_smiley_durch() {
         assert!(pitch_filter_reject("kein ding, viel spaß noch :)").is_none());
+    }
+
+    #[test]
+    fn emoji_prueft_an_wortgrenzen() {
+        assert!(pitch_filter_reject("die combo dxd zieht echt gut rein").is_none());
+        assert!(pitch_filter_reject("stell das auf foo:option wenn du magst").is_none());
+        assert_eq!(
+            pitch_filter_reject("das war echt lustig xD und knapp"),
+            Some(PitchRejectReason::Emoji)
+        );
+        assert_eq!(
+            pitch_filter_reject("lief richtig gut heute :D"),
+            Some(PitchRejectReason::Emoji)
+        );
     }
 
     #[test]
