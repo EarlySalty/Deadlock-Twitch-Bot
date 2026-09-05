@@ -25,3 +25,12 @@
 - `rustfmt --check` auf twitch.rs sauber, `cargo clippy -p tb-vod-archive --tests` ohne Warnung in der Crate.
 - Self-Review `gate_hook.py --review`: ALLOW, kein Merge-Blocker; NITs 1/2 sind Live-Verifikationspunkte (ffmpeg-Downloader kennt kein `--limit-rate`; Container/Endung des Fallback-Downloads), NIT 4 (doppelte Zeitgrenze) ist per Contract REQ-2 so gewollt, NIT 5 (noexec-/tmp) auf diesem Host nicht gegeben.
 
+
+## Nachtrag: Remux nach Fallback (REQ-6..8)
+
+- Befund des Koordinators: 13-GB-VOD mit den Fallback-Args geladen, Datei heisst `.mp4`, `ffprobe` meldet `format_name=mpegts`.
+- Fix: `remux_mpegts_nach_mp4` laeuft in `lade_vod` nur nach erfolgreichem Fallback (`ffmpeg_fallback == true`). `remux_args` = `-hide_banner -loglevel error -y -i <datei> -c copy -movflags +faststart <temp>`; bei Erfolg `tokio::fs::rename(temp, pfad)` (atomar, gleiche Platte), bei Misserfolg temp geloescht und `VodArchiveError::Werkzeug { schritt: "Remux" }`. Zeitgrenze `cfg.download_timeout`.
+- Test gehaertet: `zweiter_ext_x_map_loest_ffmpeg_fallback_aus` nutzt jetzt zusaetzlich ein Fake-`cfg.ffmpeg`, das `-c copy` und `-movflags +faststart` prueft und den Zielpfad schreibt; der Test weist nach, dass der Remux-Aufruf stattfindet (Inhalt der Zieldatei ist `remuxed`, vorher `mpegts`) und die Zieldatei existiert.
+- Sabotage-Gegencheck: `+faststart` im Fix zu `faststartKAPUTT` verfaelscht -> Test rot mit `Werkzeug { schritt: "Remux", meldung: "kein faststart" }`; Fix danach wiederhergestellt.
+- Gruen: `cargo test -p tb-vod-archive` (SQLX_OFFLINE=true, Wegwerf-Postgres) -> `test result: ok. 39 passed; 0 failed`.
+- `rustfmt --check` sauber, `cargo clippy -p tb-vod-archive --tests` ohne Warnung in der Crate.

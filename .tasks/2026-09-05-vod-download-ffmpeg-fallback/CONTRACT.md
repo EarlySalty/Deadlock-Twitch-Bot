@@ -33,3 +33,16 @@ dem ffmpeg-Downloader laufen und so das VOD vollstaendig laden.
 
 rust/crates/tb-vod-archive/
 .tasks/2026-09-05-vod-download-ffmpeg-fallback/
+
+## Amendments
+
+### 2026-09-05 Remux nach dem ffmpeg-Fallback
+
+Der Koordinator hat das 13-GB-VOD mit den Fallback-Args geladen: die Datei
+heisst `.mp4`, `ffprobe` meldet aber `format_name=mpegts`. Der ffmpeg-Downloader
+mit `--hls-use-mpegts` liefert einen mpegts-Container unter mp4-Namen, der so
+nicht sauber zu YouTube passt.
+
+- REQ-6 Nach einem erfolgreichen Fallback-Download remuxt derselbe ffmpeg (`cfg.ffmpeg`) die Datei einmal mit `-c copy -movflags +faststart` in eine temporaere Datei und verschiebt sie danach atomar auf den Zielpfad. Gleiche Zeitgrenze wie der Download (`cfg.download_timeout`).
+- REQ-7 Schlaegt der Remux fehl, bleibt der Download ein Fehler mit Schritt "Remux".
+- REQ-8 Der Remux laeuft nur nach dem Fallback, nicht nach einem normalen Download.
