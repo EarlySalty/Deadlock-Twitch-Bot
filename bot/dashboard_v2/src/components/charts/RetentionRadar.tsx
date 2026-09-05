@@ -78,12 +78,12 @@ export function RetentionRadar({
 
   return (
     <Rise
-      className="panel-card p-6 rounded-2xl"
+      className="panel-card p-6 rounded-2xl h-full flex flex-col"
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
-      <div className="h-64 relative">
+      <div className="flex-1 min-h-[320px] relative">
         <ResponsiveContainer width="100%" height="100%">
-          <RadarChart data={data} margin={{ top: 20, right: 30, bottom: 20, left: 30 }}>
+          <RadarChart data={data} outerRadius="70%" margin={{ top: 20, right: 30, bottom: 20, left: 30 }}>
             <PolarGrid stroke="rgba(197, 160, 89, 0.24)" />
             <PolarAngleAxis
               dataKey="metric"
@@ -92,19 +92,21 @@ export function RetentionRadar({
             <PolarRadiusAxis
               angle={30}
               domain={[0, 100]}
-              tick={{ fill: 'var(--color-secondary)', fontSize: 10 }}
+              tick={false}
               axisLine={false}
             />
             <Tooltip content={<CustomTooltip />} />
-            <Legend
-              verticalAlign="bottom"
-              height={36}
-              formatter={(value) => (
-                <span className="text-text-secondary text-sm">
-                  {value === 'you' ? 'Dein Kanal' : 'Kategorie Ø'}
-                </span>
-              )}
-            />
+            {categoryAvg && (
+              <Legend
+                verticalAlign="bottom"
+                height={36}
+                formatter={(value) => (
+                  <span className="text-text-secondary text-sm">
+                    {value === 'you' ? 'Dein Kanal' : 'Kategorie Ø'}
+                  </span>
+                )}
+              />
+            )}
             <Radar
               name="you"
               dataKey="you"
@@ -128,7 +130,7 @@ export function RetentionRadar({
         </ResponsiveContainer>
       </div>
       <div className="mt-4 text-xs text-center text-text-secondary">
-        Basierend auf Benchmarks vs. Deadlock Kategorie
+        Scores von 0 bis 100 je Bereich
       </div>
     </Rise>
   );

@@ -8,14 +8,15 @@ interface CalendarHeatmapProps {
   data: CalendarHeatmapData[];
   title?: string;
   metric?: 'hoursWatched' | 'streamCount';
+  days?: number;
 }
 
 export function CalendarHeatmap({
   data,
   title = 'Stream-Aktivität',
   metric = 'hoursWatched',
+  days = 365,
 }: CalendarHeatmapProps) {
-  // Create lookup map and calculate layout
   const { weeks, maxValue, dataMap, monthLabels } = useMemo(() => {
     const map = new Map<string, CalendarHeatmapData>();
     let max = 0;
@@ -26,13 +27,11 @@ export function CalendarHeatmap({
       if (value > max) max = value;
     });
 
-    // Generate weeks for the last 365 days
     const weeks: Date[][] = [];
     const today = new Date();
     const startDate = new Date(today);
-    startDate.setDate(startDate.getDate() - 364);
+    startDate.setDate(startDate.getDate() - (Math.max(days, 1) - 1));
 
-    // Adjust to start from Sunday
     while (startDate.getDay() !== 0) {
       startDate.setDate(startDate.getDate() - 1);
     }
@@ -51,7 +50,6 @@ export function CalendarHeatmap({
       weeks.push(currentWeek);
     }
 
-    // Generate month labels
     const labels: { month: number; weekIndex: number }[] = [];
     let lastMonth = -1;
     weeks.forEach((week, weekIndex) => {
@@ -63,7 +61,7 @@ export function CalendarHeatmap({
     });
 
     return { weeks, maxValue: max, dataMap: map, monthLabels: labels };
-  }, [data, metric]);
+  }, [data, metric, days]);
 
   const formatDateKey = (date: Date): string => {
     return date.toISOString().split('T')[0];
@@ -71,111 +69,104 @@ export function CalendarHeatmap({
 
   return (
     <Rise
-      className="bg-card rounded-xl border border-border p-5"
+      className="bg-card rounded-xl border border-border p-5 h-full flex flex-col"
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
 
-      <div className="overflow-x-auto">
-        <div className="min-w-[800px]">
-          {/* Month Labels */}
-          <div className="flex mb-2 ml-8">
-            {monthLabels.map(({ month, weekIndex }, i) => (
+      <div className="flex-1">
+        <div
+          className="mb-1 grid"
+          style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}
+        >
+          {monthLabels.map(({ month, weekIndex }) => (
+            <div
+              key={weekIndex}
+              className="text-xs text-text-secondary"
+              style={{ gridColumn: weekIndex + 1 }}
+            >
+              {getMonthLabel(month)}
+            </div>
+          ))}
+        </div>
+
+        <div
+          className="grid gap-1"
+          style={{
+            gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
+            gridTemplateRows: 'repeat(7, auto)',
+            gridAutoFlow: 'column',
+          }}
+        >
+          {weeks.flatMap((week, weekIndex) =>
+            week.map((date, dayIndex) => {
+              const dateKey = formatDateKey(date);
+              const cellData = dataMap.get(dateKey);
+              const value = cellData
+                ? metric === 'hoursWatched'
+                  ? cellData.hoursWatched
+                  : cellData.streamCount
+                : 0;
+
+              return (
+                <motion.div
+                  key={`${weekIndex}-${dayIndex}`}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: Math.min(weekIndex * 0.01, 0.24) }}
+                  className="rounded-sm relative group cursor-pointer"
+                  style={{
+                    aspectRatio: '1',
+                    minWidth: '12px',
+                    maxWidth: '22px',
+                    backgroundColor: getHeatmapColor(value, maxValue),
+                  }}
+                >
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
+                    <div className="bg-card border border-border rounded px-2 py-1 text-xs whitespace-nowrap shadow-xl">
+                      <div className="text-white font-medium">
+                        {date.toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      </div>
+                      {cellData ? (
+                        <>
+                          <div className="text-text-secondary">
+                            {formatHours(cellData.hoursWatched)} watched
+                          </div>
+                          <div className="text-text-secondary">
+                            {cellData.streamCount} Streams
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-text-secondary">Kein Stream</div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            }),
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between mt-4 text-xs text-text-secondary">
+        <div>
+          {data.length > 0 && (
+            <span>
+              {data.reduce((sum, d) => sum + d.streamCount, 0)} Streams in {days} Tagen
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span>Weniger</span>
+          <div className="flex gap-1">
+            {[0.1, 0.3, 0.5, 0.7, 0.9].map(intensity => (
               <div
-                key={i}
-                className="text-xs text-text-secondary"
-                style={{ marginLeft: i === 0 ? weekIndex * 14 : (weekIndex - monthLabels[i - 1].weekIndex - 1) * 14 }}
-              >
-                {getMonthLabel(month)}
-              </div>
+                key={intensity}
+                className="w-3 h-3 rounded-sm"
+                style={{ backgroundColor: `rgba(0, 217, 255, ${intensity})` }}
+              />
             ))}
           </div>
-
-          {/* Grid */}
-          <div className="flex">
-            {/* Day Labels */}
-            <div className="flex flex-col gap-1 mr-2 text-xs text-text-secondary">
-              <div className="h-3"></div>
-              <div className="h-3">Mo</div>
-              <div className="h-3"></div>
-              <div className="h-3">Mi</div>
-              <div className="h-3"></div>
-              <div className="h-3">Fr</div>
-              <div className="h-3"></div>
-            </div>
-
-            {/* Weeks */}
-            <div className="flex gap-1">
-              {weeks.map((week, weekIndex) => (
-                <div key={weekIndex} className="flex flex-col gap-1">
-                  {week.map((date, dayIndex) => {
-                    const dateKey = formatDateKey(date);
-                    const cellData = dataMap.get(dateKey);
-                    const value = cellData
-                      ? metric === 'hoursWatched'
-                        ? cellData.hoursWatched
-                        : cellData.streamCount
-                      : 0;
-
-                    return (
-                      <motion.div
-                        key={dayIndex}
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: Math.min(weekIndex * 0.01, 0.24) }}
-                        className="w-3 h-3 rounded-sm relative group cursor-pointer"
-                        style={{ backgroundColor: getHeatmapColor(value, maxValue) }}
-                      >
-                        {/* Tooltip */}
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
-                          <div className="bg-card border border-border rounded px-2 py-1 text-xs whitespace-nowrap shadow-xl">
-                            <div className="text-white font-medium">
-                              {date.toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })}
-                            </div>
-                            {cellData ? (
-                              <>
-                                <div className="text-text-secondary">
-                                  {formatHours(cellData.hoursWatched)} watched
-                                </div>
-                                <div className="text-text-secondary">
-                                  {cellData.streamCount} Streams
-                                </div>
-                              </>
-                            ) : (
-                              <div className="text-text-secondary">Kein Stream</div>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Legend */}
-          <div className="flex items-center justify-between mt-4 text-xs text-text-secondary">
-            <div>
-              {data.length > 0 && (
-                <span>
-                  {data.reduce((sum, d) => sum + d.streamCount, 0)} Streams in 365 Tagen
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span>Weniger</span>
-              <div className="flex gap-1">
-                {[0.1, 0.3, 0.5, 0.7, 0.9].map(intensity => (
-                  <div
-                    key={intensity}
-                    className="w-3 h-3 rounded-sm"
-                    style={{ backgroundColor: `rgba(0, 217, 255, ${intensity})` }}
-                  />
-                ))}
-              </div>
-              <span>Mehr</span>
-            </div>
-          </div>
+          <span>Mehr</span>
         </div>
       </div>
     </Rise>

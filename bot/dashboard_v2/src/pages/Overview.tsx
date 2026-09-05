@@ -15,6 +15,7 @@ import { CategoryRankBadge } from '@/components/cards/CategoryRankBadge';
 import { formatNumber, formatPercent, formatHours } from '@/utils/formatters';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { TimeRange } from '@/types/analytics';
+import { kalenderFenster } from '@/utils/zeitraum';
 
 interface OverviewProps {
   streamer: string | null;
@@ -25,7 +26,7 @@ interface OverviewProps {
 export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   const { data: overview, isLoading, error } = useOverview(streamer, days);
   const { data: hourlyData } = useHourlyHeatmap(streamer, days);
-  const { data: calendarData } = useCalendarHeatmap(streamer, 365);
+  const { data: calendarData } = useCalendarHeatmap(streamer, kalenderFenster(days));
   const { data: timelineData } = useViewerCountTimeline(streamer, days);
 
   if (isLoading) {
@@ -126,14 +127,14 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 h-full">
           {timelineData && timelineData.length > 0 ? (
             <ViewerTimelineChart data={timelineData} title="Viewer Timeline (Live-Daten)" />
           ) : (
             <ViewerTrendChart sessions={sessions} title="Viewer Entwicklung" />
           )}
         </div>
-        <div>
+        <div className="h-full">
           <RetentionRadar scores={scores} title="Performance Mix" />
         </div>
       </div>
@@ -142,7 +143,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {hourlyData && <HourlyHeatmap data={hourlyData} />}
         <PlanGateCard featureId="calendar_heatmap" title="Kalender-Heatmap">
-          {calendarData && <CalendarHeatmap data={calendarData} />}
+          {calendarData && <CalendarHeatmap data={calendarData} days={kalenderFenster(days)} />}
         </PlanGateCard>
       </div>
 
