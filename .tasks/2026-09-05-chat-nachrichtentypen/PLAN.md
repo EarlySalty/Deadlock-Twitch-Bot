@@ -36,3 +36,6 @@ Validierung: `npm run build`, `npm run lint`, `npm test`.
 
 ## Verlauf
 
+- M0: Baseline `cargo test -p tb-analytics -p tb-dashboard-api -p tb-bot` grün (461 + 288 + 1114 usw., EXIT=0), keine rote Baseline.
+- M1: `chat_typen.rs` mit `Nachrichtentyp`, `api_key`/`from_api_key`, `klassifiziere_regel`. Rot-Lauf mit gestubbter Regel: `test result: FAILED. 1 passed; 6 failed` (u. a. `chat_typen::tests::evidence_reaction ... FAILED`, `left: "Other" right: "Reaction"`). Nach voller Regel grün: 7 passed. Beide `classify_message`-Kopien (`chat_analytics.rs`, `viewers.rs`) delegieren jetzt an das Modul. tb-analytics 468 + tb-dashboard-api 1114 grün, keine Warnungen. Abweichung von der Prompt-Vorgabe: Statement-Schwelle 5 statt 4 Wörter, weil die Evidence-Zeile "Ai viewers streamboo . Com" (4 Wörter) laut REQ-07 `Other` bleiben muss; Question auf Fragezeichen bzw. Frage-Anfangswort verengt, damit "... velocity ... sniper ..." laut Evidence `Game-Related` wird.
+

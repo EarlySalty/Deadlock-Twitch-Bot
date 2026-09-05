@@ -14,7 +14,6 @@ use chrono_tz::Tz;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use crate::chat_analytics_lexicon::*;
 use crate::engagement_metrics::{calculate_engagement, percentile_of, quantile, EngagementInputs};
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
@@ -31,42 +30,8 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "wizebot",
 ];
 
-/// Klassifiziert eine Chat-Nachricht (Python `_classify_message`).
-/// Reihenfolge der Prüfungen ist relevant (erste Übereinstimmung gewinnt).
 pub fn classify_message(content: &str) -> &'static str {
-    if content.is_empty() {
-        return "Other";
-    }
-    let cl = content.to_lowercase();
-    if content.starts_with('!') {
-        return "Command";
-    }
-    if HYPE.iter().any(|w| cl.contains(w)) {
-        return "Hype";
-    }
-    if GREETING.iter().any(|w| cl.contains(w)) {
-        return "Greeting";
-    }
-    // "?" wird im Original-Content geprüft (Python `"?" in content`).
-    if content.contains('?') || QUESTION.iter().any(|w| cl.contains(w)) {
-        return "Question";
-    }
-    if FEEDBACK.iter().any(|w| cl.contains(w)) {
-        return "Feedback";
-    }
-    if TECHNICAL.iter().any(|w| cl.contains(w)) {
-        return "Technical";
-    }
-    if SOCIAL.iter().any(|w| cl.contains(w)) {
-        return "Social";
-    }
-    if REACTION.iter().any(|w| cl.contains(w)) {
-        return "Reaction";
-    }
-    if GAME.iter().any(|w| cl.contains(w)) {
-        return "Game-Related";
-    }
-    "Other"
+    crate::chat_typen::klassifiziere_regel(content, "").api_key()
 }
 
 /// Eine Roh-Chat-Nachricht aus dem Fenster (Python `all_messages`-Zeile).
