@@ -1,6 +1,6 @@
 # Evidence: Lesezeichen-Hinweis und Name "Partner Dashboard"
 
-status: aktiv
+status: erledigt
 datum: 2026-09-05
 contract: CONTRACT.md
 
