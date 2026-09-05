@@ -381,7 +381,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds BIGINT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         if with_diag {
@@ -462,6 +462,29 @@ mod tests {
         assert_eq!(v["suspectedIngestionIssue"], false);
         assert_eq!(v["backfillState"], "not_needed");
         assert!(!v["lastMessageAt"].is_null());
+        assert!(v["gapStart"].is_null());
+    }
+
+    #[tokio::test]
+    async fn geistersessions_unter_10min_loesen_keine_luecke_aus() {
+        let Some(pool) = make_pool("t_rcs_ghost_gap", true).await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds) VALUES (3,'nani',NOW()-INTERVAL '10 days',NOW()-INTERVAL '10 days'+INTERVAL '2 hours',7200)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (3,'nani','viewer','hi',NOW()-INTERVAL '10 days')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds) VALUES (1,'nani',NOW()-INTERVAL '3 days',NOW()-INTERVAL '3 days'+INTERVAL '5 minutes',300),(2,'nani',NOW()-INTERVAL '2 days',NOW()-INTERVAL '2 days'+INTERVAL '5 minutes',300)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login) VALUES (1,'nani','viewer'),(2,'nani','viewer')").execute(&pool).await.unwrap();
+
+        let v = build_raw_chat_status(
+            &pool,
+            "nani",
+            Scope::Since(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(v["available"], true);
+        assert_eq!(v["suspectedIngestionIssue"], false);
         assert!(v["gapStart"].is_null());
     }
 
