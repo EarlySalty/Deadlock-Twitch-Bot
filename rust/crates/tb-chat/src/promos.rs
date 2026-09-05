@@ -2595,8 +2595,14 @@ impl PromoEngine {
             if let Ok(state) = v.try_lock() {
                 now.duration_since(state.last_accessed) < max_age
             } else {
-                true // Im Lock → behalten.
+                true
             }
+        });
+        self.pitch_judge_last
+            .retain(|_, last| now.duration_since(*last) < PITCH_JUDGE_CHATTER_COOLDOWN);
+        self.pitch_judge_channel.retain(|_, stamps| {
+            stamps.retain(|t| now.duration_since(*t) < PITCH_JUDGE_CHANNEL_WINDOW);
+            !stamps.is_empty()
         });
     }
 }
@@ -3230,6 +3236,47 @@ mod tests {
             .max_connections(1)
             .connect_lazy("postgres://localhost/nonexistent")
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn prune_raeumt_judge_maps_nach_cooldown() {
+        let engine = PromoEngine::new(
+            dummy_pool(),
+            Arc::new(MockApi::default()),
+            Arc::new(NoopSuppressionCheck),
+        );
+        let now = Instant::now();
+
+        let alt_chatter = now
+            .checked_sub(PITCH_JUDGE_CHATTER_COOLDOWN + Duration::from_secs(60))
+            .unwrap();
+        engine
+            .pitch_judge_last
+            .insert("kanal|alt".to_string(), alt_chatter);
+        engine
+            .pitch_judge_last
+            .insert("kanal|frisch".to_string(), now);
+
+        let alt_channel = now
+            .checked_sub(PITCH_JUDGE_CHANNEL_WINDOW + Duration::from_secs(60))
+            .unwrap();
+        engine
+            .pitch_judge_channel
+            .insert("altkanal".to_string(), vec![alt_channel]);
+        engine
+            .pitch_judge_channel
+            .insert("mischkanal".to_string(), vec![alt_channel, now]);
+
+        engine.prune_promo_runtime_state(now);
+
+        assert!(engine.pitch_judge_last.get("kanal|alt").is_none());
+        assert!(engine.pitch_judge_last.get("kanal|frisch").is_some());
+        assert!(engine.pitch_judge_channel.get("altkanal").is_none());
+        let misch = engine
+            .pitch_judge_channel
+            .get("mischkanal")
+            .expect("frischer Kanal-Eintrag bleibt");
+        assert_eq!(misch.len(), 1);
     }
 
     #[tokio::test]
