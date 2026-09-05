@@ -42,6 +42,7 @@ pub struct MessageRow {
     pub is_command: Option<bool>,
     pub chatter_login: Option<String>,
     pub chatter_id: Option<String>,
+    pub label: Option<String>,
 }
 
 /// Pro-Chatter-Aggregat inkl. Rollup-Verknüpfung (Python `chatter_rows`-Zeile).
@@ -185,23 +186,24 @@ pub async fn load_chat_analytics_snapshot(
     .fetch_all(pool)
     .await?;
 
-    let all_messages: Vec<MessageRow> = sqlx::query_as!(
-        MessageRow,
+    let all_messages: Vec<MessageRow> = sqlx::query_as::<_, MessageRow>(
         r#"
-        SELECT message_ts AS "message_ts!",
-               content,
-               is_command,
-               chatter_login,
-               chatter_id
-        FROM twitch_chat_messages
-        WHERE message_ts >= $1
-          AND LOWER(streamer_login) = $2
-          AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
+        SELECT cm.message_ts AS message_ts,
+               cm.content,
+               cm.is_command,
+               cm.chatter_login,
+               cm.chatter_id,
+               l.label
+        FROM twitch_chat_messages cm
+        LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
+        WHERE cm.message_ts >= $1
+          AND LOWER(cm.streamer_login) = $2
+          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
         "#,
-        effective_since,
-        streamer,
-        &bots
     )
+    .bind(effective_since)
+    .bind(streamer)
+    .bind(&bots)
     .fetch_all(pool)
     .await?;
 
@@ -396,6 +398,7 @@ pub async fn load_chat_analytics_payload(
     let mut type_counts: HashMap<&'static str, i64> = HashMap::new();
     let mut type_order: Vec<&'static str> = Vec::new();
     let mut hour_counts: HashMap<u32, i64> = HashMap::new();
+    let mut labeled_messages = 0i64;
     for m in &snap.all_messages {
         let content = m.content.as_deref().unwrap_or("");
         if m.is_command.unwrap_or(false) {
@@ -409,15 +412,30 @@ pub async fn load_chat_analytics_payload(
         if let Some(k) = key {
             distinct.insert(k.to_string());
         }
-        let mt = classify_message(content);
-        if !type_counts.contains_key(mt) {
-            type_order.push(mt);
+        let login = m.chatter_login.as_deref().unwrap_or("");
+        let typ = m
+            .label
+            .as_deref()
+            .and_then(crate::chat_typen::Nachrichtentyp::from_api_key)
+            .inspect(|_| labeled_messages += 1)
+            .unwrap_or_else(|| crate::chat_typen::klassifiziere_regel(content, login));
+        if typ != crate::chat_typen::Nachrichtentyp::System {
+            let mt = typ.api_key();
+            if !type_counts.contains_key(mt) {
+                type_order.push(mt);
+            }
+            *type_counts.entry(mt).or_insert(0) += 1;
         }
-        *type_counts.entry(mt).or_insert(0) += 1;
         let hour = m.message_ts.with_timezone(&target_tz).hour();
         *hour_counts.entry(hour).or_insert(0) += 1;
     }
     let distinct_from_messages = distinct.len() as i64;
+    let type_total: i64 = type_counts.values().sum();
+    let label_coverage = if total_messages > 0 {
+        round3(labeled_messages as f64 / total_messages as f64)
+    } else {
+        0.0
+    };
 
     // Chatter-Einträge.
     let mut has_first_flag_data = false;
@@ -607,8 +625,8 @@ pub async fn load_chat_analytics_payload(
     let message_types_json: Vec<Value> = message_types
         .iter()
         .map(|(t, v)| {
-            let pct = if total_messages > 0 {
-                json!(round1(*v as f64 / total_messages as f64 * 100.0))
+            let pct = if type_total > 0 {
+                json!(round1(*v as f64 / type_total as f64 * 100.0))
             } else {
                 json!(0)
             };
@@ -674,6 +692,7 @@ pub async fn load_chat_analytics_payload(
         "timezone": timezone_name,
         "topChatters": top_chatters_json,
         "messageTypes": message_types_json,
+        "labelCoverage": label_coverage,
         "hourlyActivity": hourly_activity,
         "dataQuality": {
             "method": engagement.method,
