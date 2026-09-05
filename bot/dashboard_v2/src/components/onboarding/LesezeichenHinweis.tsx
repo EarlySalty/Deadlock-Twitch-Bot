@@ -263,17 +263,13 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
             )}
 
             <div className="flex items-center justify-between gap-3">
-              {!istMobil ? (
-                <button
-                  type="button"
-                  onClick={() => void kopieren()}
-                  className="rounded-xl border border-[color:var(--color-border)] px-3 py-2 text-sm font-semibold text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
-                >
-                  {kopiert ? t('Kopiert') : t('Link kopieren')}
-                </button>
-              ) : (
-                <span />
-              )}
+              <button
+                type="button"
+                onClick={() => void kopieren()}
+                className="rounded-xl border border-[color:var(--color-border)] px-3 py-2 text-sm font-semibold text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
+              >
+                {kopiert ? t('Kopiert') : t('Link kopieren')}
+              </button>
 
               <button
                 type="button"

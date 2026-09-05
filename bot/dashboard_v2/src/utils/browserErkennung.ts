@@ -36,12 +36,15 @@ export interface LesezeichenAnleitung {
   hinweis: string;
 }
 
-function erkenneMobil(userAgent: string, platform: string): MobilArt {
+function erkenneMobil(userAgent: string, platform: string, mobile: boolean): MobilArt {
   const text = `${userAgent} ${platform}`;
   if (/iPhone|iPad|iPod/i.test(text)) {
     return 'ios';
   }
   if (/Android/i.test(userAgent)) {
+    return 'android';
+  }
+  if (mobile) {
     return 'android';
   }
   return null;
@@ -73,7 +76,7 @@ function erkenneName(userAgent: string, brave: boolean): BrowserName {
 }
 
 export function erkenneBrowser(eingabe: BrowserEingabe): BrowserErkennung {
-  const mobil = erkenneMobil(eingabe.userAgent, eingabe.platform);
+  const mobil = erkenneMobil(eingabe.userAgent, eingabe.platform, eingabe.mobile);
   const mac =
     mobil === 'ios'
       ? false

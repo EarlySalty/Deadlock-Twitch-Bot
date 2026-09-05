@@ -148,6 +148,18 @@ test('Mobil bleibt beim Menue statt einer Pfeilkarte', () => {
   assert.equal(pos.pfeilLinks, false);
 });
 
+test('Desktop-Chrome mit userAgentData.mobile gilt als mobil', () => {
+  const erkennung = erkenneBrowser({ userAgent: CHROME_WIN, brave: false, platform: 'Win32', mobile: true });
+  assert.notEqual(erkennung.mobil, null);
+  const anleitung = lesezeichenAnleitung(erkennung);
+  assert.equal(anleitung.position, 'menue');
+});
+
+test('Android-UA gilt auch ohne userAgentData.mobile als mobil', () => {
+  const erkennung = erkenneBrowser({ userAgent: ANDROID_CHROME, brave: false, platform: 'Linux armv8l', mobile: false });
+  assert.equal(erkennung.mobil, 'android');
+});
+
 test('Unbekannter Browser bleibt ohne Positionsangabe', () => {
   const erkennung = erkenneBrowser({
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) UnknownBrowser/1.0',
