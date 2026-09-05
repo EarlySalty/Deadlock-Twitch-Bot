@@ -230,7 +230,7 @@ fn baseline_from(partners: &[PartnerAggregate]) -> Baseline {
 }
 
 fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
-    let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90)
+    let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365)
         .map_err(|error| Box::new(error.into_response()))?;
     if params
         .days
@@ -238,12 +238,12 @@ fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .and_then(|raw| raw.parse::<i64>().ok())
-        .is_some_and(|raw| !(7..=90).contains(&raw))
+        .is_some_and(|raw| !(7..=365).contains(&raw))
     {
         return Err(Box::new(
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "days must be between 7 and 90"})),
+                Json(json!({"error": "days must be between 7 and 365"})),
             )
                 .into_response(),
         ));
@@ -875,8 +875,21 @@ mod tests {
         assert_eq!(range_status, StatusCode::BAD_REQUEST);
         assert_eq!(
             range_body,
-            serde_json::json!({"error": "days must be between 7 and 90"})
+            serde_json::json!({"error": "days must be between 7 and 365"})
         );
+    }
+
+    #[test]
+    fn parse_days_akzeptiert_365_und_lehnt_366_ab() {
+        let ok = parse_days(&ResearchQuery {
+            days: Some("365".into()),
+        });
+        assert_eq!(ok.ok(), Some(365));
+
+        let zu_gross = parse_days(&ResearchQuery {
+            days: Some("366".into()),
+        });
+        assert!(zu_gross.is_err());
     }
 
     #[tokio::test]

@@ -47,7 +47,7 @@ pub async fn monetization_handler(
             Ok(None) => String::new(),
             Err(resp) => return resp,
         };
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

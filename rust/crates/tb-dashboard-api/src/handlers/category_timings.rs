@@ -86,7 +86,7 @@ pub async fn category_timings_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
