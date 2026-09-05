@@ -81,12 +81,13 @@ eigenen Auftrag mit erweitertem Scope:
 Beide sind die letzten verbliebenen Live-Aufrufe der Zielklasse und sollten zeitnah
 denselben Fix bekommen.
 
-## Grüner Lauf (nach dem Fix)
+## Grüner Lauf (nach dem Fix, rebased auf origin/main 312e9468)
 
-Befehl: `cargo test -j 4 -p tb-llm -p tb-chat -p tb-engagement -p tb-social-media -p tb-stream-audit-bin -p tb-analytics --no-fail-fast`
+Befehl: `SQLX_OFFLINE=1 cargo test -j 4 -p tb-llm -p tb-chat -p tb-engagement -p tb-social-media -p tb-stream-audit-bin -p tb-analytics --no-fail-fast`
+(Toolchain 1.97.1, Test-Container tb-test-postgres, Log /tmp/denken-aus-rebased-test.log).
 
 ```
-passed=1917 failed=1 ignored=9
+passed=1918 failed=0 ignored=9
 ```
 
 Die drei neuen Tests grün:
@@ -96,12 +97,11 @@ test title_ai::tests::titel_completion_schaltet_das_denken_ab ... ok
 test scam_pitch::tests::call_judge_schaltet_das_denken_ab ... ok
 ```
 
-Einziger Fehlschlag ist die dokumentierte Baseline
-`ad_manager_store::queue_lease_idempotenz_und_state_sind_atomar`
-(fehlende Tabelle `twitch_raw_chat_ingest_health` im Test-Schema, wird in einem
-parallelen Auftrag repariert). Die zweite Baseline
+Keine Baseline-Rot mehr: der Branch ist auf origin/main 312e9468 rebased, dort ist
+`fix/baseline-tests-schema` gemergt, das die Test-Schema-Lücken für
+`ad_manager_store::queue_lease_idempotenz_und_state_sind_atomar` und
 `ledger_side_effects::engagement_client_verbucht_usage_ins_zentrale_ledger`
-läuft in dieser Umgebung inzwischen grün.
+geschlossen hat. Der gesamte Lauf ist grün.
 
 ## sqlx
 
