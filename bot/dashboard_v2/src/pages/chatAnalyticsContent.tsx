@@ -20,7 +20,7 @@ import {
   ChatNetzwerkSection,
   HypeMomenteSection,
   StimmungTopicsSection,
-  ChatMinimaxDeepSection,
+  ChatDeepLlmSection,
 } from './chatAnalyticsDeepSections';
 import { RawChatStatusBanner } from './chatAnalyticsShared';
 import { MESSAGE_TYPE_LABELS } from '@/i18n/dictionary';
@@ -371,7 +371,7 @@ export function ChatTiefeContent({
       </PlanGateCard>
 
       <PlanGateCard featureId="chat_content_analysis" title="KI Chat-Analyse">
-        <ChatMinimaxDeepSection
+        <ChatDeepLlmSection
           streamer={streamer}
           sessionId={selectedSessionId || (hypeData && hypeData.sessionId)}
         />

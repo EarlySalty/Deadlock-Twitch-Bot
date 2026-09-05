@@ -222,7 +222,7 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
             ),
             '{keys}',
             <>
-              <code className="font-mono text-orange">MINIMAX_API_KEY</code> /{' '}
+              <code className="font-mono text-orange">FIREWORKS_API_KEY</code> /{' '}
               <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
             </>,
           )}

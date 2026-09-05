@@ -252,7 +252,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
   const legacyChanges: StreamReportChange[] = legacyReport?.veraenderungen || [];
   const legacyRecommendations: StreamReportRecommendation[] = legacyReport?.empfehlungen || [];
   const wordGroups = data.word_groups || [];
-  const modelLabel = data.model === 'opus' ? 'Claude Opus' : 'Minimax';
+  const modelLabel = data.model === 'opus' ? 'Claude Opus' : 'KI';
   const dateLabel = data.generated_at
     ? new Date(data.generated_at).toLocaleString('de-DE', {
         dateStyle: 'short',

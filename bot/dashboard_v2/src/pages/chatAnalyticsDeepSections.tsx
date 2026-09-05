@@ -25,7 +25,7 @@ import type {
 } from '@/types/analytics';
 
 import { RawChatStatusBanner } from './chatAnalyticsShared';
-import { fetchChatMinimaxDeep } from '@/api/ai';
+import { fetchChatDeepLlm } from '@/api/ai';
 
 const CHART_TOOLTIP_STYLE = {
   backgroundColor: 'var(--color-popover)',
@@ -589,7 +589,7 @@ export function ChatNetzwerkSection({ data, windowStart }: { data: ChatSocialGra
   );
 }
 
-export function ChatMinimaxDeepSection({
+export function ChatDeepLlmSection({
   streamer,
   sessionId,
 }: {
@@ -605,7 +605,7 @@ export function ChatMinimaxDeepSection({
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetchChatMinimaxDeep(streamer, sessionId);
+      const res = await fetchChatDeepLlm(streamer, sessionId);
       setData(res);
     } catch (err: any) {
       setError(err.message || 'Analyse fehlgeschlagen');
@@ -632,7 +632,7 @@ export function ChatMinimaxDeepSection({
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Brain className="h-6 w-6 text-primary" />
-          <h2 className="text-xl font-bold text-white">MiniMax Chat-Analyse</h2>
+          <h2 className="text-xl font-bold text-white">KI-Chat-Analyse</h2>
           <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-primary/20">
             KI-Powered
           </span>
@@ -651,7 +651,7 @@ export function ChatMinimaxDeepSection({
       {isLoading && (
         <div className="flex flex-col items-center justify-center py-12">
           <Loader2 className="h-12 w-12 animate-spin text-primary opacity-50" />
-          <p className="mt-4 text-sm text-text-secondary">MiniMax analysiert die Nachrichten-Substanz...</p>
+          <p className="mt-4 text-sm text-text-secondary">Die KI analysiert die Nachrichten-Substanz...</p>
         </div>
       )}
 

@@ -1350,7 +1350,7 @@ export interface AIAnalysisResult {
   streamer: string;
   days: number;
   gameFilter?: 'deadlock' | 'all';
-  model?: 'minimax' | 'opus';
+  model?: 'llm' | 'opus';
   sessionKey?: string;
   followUpsRemaining?: number;
   generatedAt: string;
@@ -1369,7 +1369,7 @@ export interface AIAnalysisResult {
 
 export interface AIHistoryEntry extends AIAnalysisResult {
   id: number;
-  model: 'minimax' | 'opus';
+  model: 'llm' | 'opus';
   kritischCount: number;
   hochCount: number;
   mittelCount: number;
