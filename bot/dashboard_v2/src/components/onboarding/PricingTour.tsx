@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, ArrowRight, X } from 'lucide-react';
+import { useT } from '@/context/LanguageContext';
 
 const STORAGE_KEY = 'pricing-tour-dismissed';
 const PENDING_KEY = 'pricing-tour-pending';
@@ -109,6 +110,7 @@ function getPopoverPosition(targetRect: SpotlightRect, popoverSize: PopoverSize)
 }
 
 export function PricingTour({ onComplete }: PricingTourProps) {
+  const t = useT();
   const [isVisible, setIsVisible] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isExiting, setIsExiting] = useState(false);
@@ -360,7 +362,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
                         onClick={handleNext}
                         className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,var(--color-primary),var(--color-accent))] px-4 py-2 text-sm font-bold text-white transition-opacity hover:opacity-90"
                       >
-                        {nextStep === null ? 'Zum Analyse-Dashboard' : 'Weiter'}
+                        {nextStep === null ? t('Zur Analyse') : 'Weiter'}
                         {nextStep !== null && <ArrowRight className="h-4 w-4" />}
                       </button>
                     </div>

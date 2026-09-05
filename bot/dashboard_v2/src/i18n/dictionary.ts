@@ -76,7 +76,7 @@ const EN: Record<string, string> = {
   Freigegeben: 'Access granted',
   Freigeben: 'Grant access',
   '— Streamer wählen —': '— Select streamer —',
-  '← Analyse-Dashboard': '← Analytics dashboard',
+  '← Partner Dashboard': '← Partner dashboard',
   'Zugriff wird geprüft…': 'Checking access…',
   'Noch nicht freigeschaltet': 'Not enabled yet',
   'Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty, wenn du deine Clips hier aufbereiten möchtest.':

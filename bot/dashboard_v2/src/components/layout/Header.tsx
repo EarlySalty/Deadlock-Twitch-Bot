@@ -98,7 +98,7 @@ export function Header({
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-text-secondary mb-2">
               <Sparkles className="w-3 h-3 text-accent" />
-              Twitch Analytics
+              {t('Partner Dashboard')}
             </div>
             <h1 className="display-font text-2xl md:text-3xl font-bold text-white flex items-center gap-2">
               Channel Intelligence

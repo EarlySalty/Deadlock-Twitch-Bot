@@ -26,6 +26,7 @@ import {
 import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 import { LesezeichenHinweis } from '@/components/onboarding/LesezeichenHinweis';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
+import { useT } from '@/context/LanguageContext';
 
 function MiniStat({
   label,
@@ -253,6 +254,7 @@ export function InternalHomeLanding() {
   );
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
   const [hinweisErledigt, setHinweisErledigt] = useState(false);
+  const t = useT();
 
   const partnerStreamers = useMemo(
     () =>
@@ -582,7 +584,7 @@ export function InternalHomeLanding() {
                     href={analyticsTabHref('overview')}
                     className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-[transform,translate,scale] hover:-translate-y-0.5"
                   >
-                    Analyse Dashboard
+                    {t('Zur Analyse')}
                     <ArrowRight className="h-4 w-4" />
                   </a>
                 ) : null}
@@ -602,7 +604,7 @@ export function InternalHomeLanding() {
                   <p className="text-sm text-text-secondary">
                     {restrictedPartnerStatus === 'token_error'
                       ? 'Dein Twitch-OAuth hat aktuell einen Fehler. Home, Verwaltung und Pricing bleiben offen, bis du die Verbindung neu autorisierst.'
-                      : 'Dieser Account hat aktuell keinen Zugriff auf das Analyse-Dashboard. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.'}
+                      : 'Dieser Account hat aktuell keinen Zugriff auf die Analyse. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.'}
                   </p>
                 </div>
               </Rise>
