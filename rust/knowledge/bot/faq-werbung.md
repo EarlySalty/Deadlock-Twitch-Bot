@@ -21,6 +21,16 @@ Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, k
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
+### Bekomme ich als streamender Zuschauer einen Hinweis aufs Partner-Netzwerk?
+
+Wenn du selbst Deadlock streamst und noch nicht Partner der Deutschen Deadlock Community bist, kann der Bot dir einmalig einen kurzen Hinweis geben, während du in einem Partnerkanal schreibst. Der Hinweis kommt nur als Antwort auf eine eigene Nachricht von dir, nie von allein und nie per Timer. Er geht zuerst auf das ein, was du geschrieben hast, und erwähnt danach in dritter Person, dass es bei der Community ein Partner-Netzwerk gibt, mit gegenseitigen Raids beim Offline-Gehen und Chat-Schutz. Ein Link oder ein Aufruf beizutreten steht nie darin.
+
+- Nur an Zuschauer, die selbst Deadlock streamen und noch kein Partner sind.
+- Nur als Antwort auf eine eigene Nachricht, nie unaufgefordert.
+- Wie man mitmacht, sagt der Bot erst, wenn du nachfragst oder `!invite` tippst.
+- Streng gedeckelt: höchstens einmal pro Person, einer pro Stream, wenige pro Tag.
+- Der Werbefrei-Plan schaltet auch diesen Hinweis ab.
+
 ### Wann genau wird das gepostet?
 
 Beides greift nur, wenn dein Stream läuft. Die Anlass-Antwort kommt kurz nachdem ein Zuschauer eine passende Situation schreibt, spricht die Person mit ihrem Namen an und ist streng gedeckelt: pro Zuschauer höchstens einmal in sieben Tagen und pro Stream nur wenige Antworten mit Abstand. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Cooldowns, damit nichts spammt.
