@@ -5,10 +5,7 @@ on:
     paths:
       - "rust/**"
       - ".github/workflows/rust-sqlx-check.yml"
-  push:
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-sqlx-check.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
