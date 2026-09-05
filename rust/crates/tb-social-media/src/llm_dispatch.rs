@@ -110,14 +110,18 @@ impl LlmProvider for FireworksProvider {
         max_tokens: i64,
         temperature: f64,
     ) -> Result<LlmTextResponse, LlmError> {
+        let strict_json = system_prompt.to_lowercase().contains("strict json");
         let mut request = tb_llm::Request::simple(system_prompt, user_prompt)
             .max_tokens(max_tokens)
             .temperature(temperature)
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECONDS))
             .ledger_purpose("social-media-fireworks")
             .endpoint(self.endpoint.clone());
-        if system_prompt.to_lowercase().contains("strict json") {
+        if strict_json {
             request = request.json_object();
+        }
+        if strict_json || max_tokens <= 2000 {
+            request = request.denken_aus();
         }
 
         let response = tb_llm::complete(USE_CASE, request)
