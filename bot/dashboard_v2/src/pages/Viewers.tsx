@@ -111,15 +111,16 @@ function RawChatGapNotice({
   note?: string | null;
   compact?: boolean;
 }) {
-  const message = note || status?.note || null;
-  if (!message && !status?.suspectedIngestionIssue && status?.available !== false) {
+  const warnung = Boolean(status?.suspectedIngestionIssue);
+  const hatLuecke = warnung || Boolean(note) || status?.available === false;
+  if (!hatLuecke) {
     return null;
   }
 
   return (
     <div
       className={`rounded-xl border ${
-        status?.suspectedIngestionIssue
+        warnung
           ? 'border-warning/30 bg-warning/10 text-warning'
           : 'border-white/10 bg-white/[0.04] text-text-secondary'
       } ${compact ? 'px-3 py-2 text-xs' : 'px-4 py-3 text-sm'}`}
@@ -128,9 +129,13 @@ function RawChatGapNotice({
         <AlertTriangle className={`${compact ? 'mt-0.5 h-3.5 w-3.5' : 'mt-0.5 h-4 w-4'} shrink-0`} />
         <div>
           <p className="font-medium text-white">
-            {status?.suspectedIngestionIssue ? 'Roh-Chat-Lücke im Zeitraum' : 'Keine Roh-Chat-Nachrichten im Zeitraum'}
+            {warnung ? 'Chat-Nachrichten fehlen teilweise' : 'Keine Chat-Nachrichten im Zeitraum'}
           </p>
-          <p className="mt-1 leading-5">{message || 'Viewer-Daten bleiben sichtbar, message-basierte Details sind eingeschränkt.'}</p>
+          <p className="mt-1 leading-5">
+            {warnung
+              ? 'Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat können deshalb zu niedrig ausfallen.'
+              : 'Viewer-Daten bleiben sichtbar, Kennzahlen aus dem Chat sind für diesen Zeitraum eingeschränkt.'}
+          </p>
         </div>
       </div>
     </div>

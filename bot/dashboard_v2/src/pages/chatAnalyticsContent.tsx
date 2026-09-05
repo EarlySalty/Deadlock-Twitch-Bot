@@ -276,7 +276,7 @@ export function ChatAktivitaetContent({
                 <h2 className="text-xl font-bold text-white">Chat-Nachrichten nach Uhrzeit</h2>
                 <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-text-secondary">{data.timezone || 'UTC'}</span>
               </div>
-              <p className="mt-2 text-sm text-text-secondary">Aggregierte Roh-Chat-Nachrichten pro Stunde im gewählten Zeitraum.</p>
+              <p className="mt-2 text-sm text-text-secondary">Aggregierte Chat-Nachrichten pro Stunde im gewählten Zeitraum.</p>
             </div>
           </div>
           {hasHourlySamples ? (
@@ -307,7 +307,7 @@ export function ChatAktivitaetContent({
                 </ResponsiveContainer>
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary">
-                <span>Jeder Punkt summiert alle Roh-Chat-Nachrichten dieser Stunde.</span>
+                <span>Jeder Punkt summiert alle Chat-Nachrichten dieser Stunde.</span>
                 <span>Peak bei {peakHour.hour}:00 Uhr mit {peakHour.count.toLocaleString('de-DE')} Nachrichten</span>
               </div>
             </>

@@ -41,10 +41,10 @@ export function RawChatStatusBanner({
         <div>
           <p className="font-medium text-white">
             {status.suspectedIngestionIssue
-              ? 'Roh-Chat-Lücke erkannt'
+              ? 'Chat-Lücke erkannt'
               : partialCoverage
-                ? `Roh-Chat-Daten ab ${date}`
-                : 'Keine Roh-Chat-Nachrichten im Zeitraum'}
+                ? `Chat-Daten ab ${date}`
+                : 'Keine Chat-Nachrichten im Zeitraum'}
           </p>
           <p className="mt-1 leading-5">
             {partialCoverage

@@ -780,7 +780,7 @@ export function InternalHomeLanding() {
                         accent="success"
                       />
                       <MiniStat
-                        label="Chat-Aktivitaet"
+                        label="Chat-Aktivität"
                         value={weekComp.current_week.chat_activity}
                         suffix="/h"
                         icon={MessageSquare}

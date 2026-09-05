@@ -32,7 +32,7 @@ export function Publikum({ streamer, days, initialSub }: PublikumProps) {
     },
     {
       id: 'chat-aktivitaet',
-      label: 'Chat-Aktivitaet',
+      label: 'Chat-Aktivität',
       render: () => <ChatAktivitaet streamer={streamer ?? ''} days={days} />,
     },
     {
