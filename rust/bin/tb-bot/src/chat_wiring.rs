@@ -27,7 +27,7 @@ use tb_chat::commands::{
     RaidCommandPort, RaidStartResult, RaidStatusInfo, SuperModPort,
 };
 use tb_chat::conversation_scam::{
-    ConversationScamGuard, MiniMaxScamJudge, ScamGuardCommands, ScamGuardNotifier,
+    ConversationScamGuard, LlmScamJudge, ScamGuardCommands, ScamGuardNotifier,
 };
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
@@ -45,13 +45,13 @@ use tb_chat::{
     lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
     ChatPipelineParts, ChatterTracker, CrewGuard, CrewJudge, FunResponses, GlobalBanSweeper,
     GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
-    LfgPitchResponder, MiniMaxInviteQuestionJudge, MiniMaxLfgJudge, ModAlerter, OpenAiCrewJudge,
+    LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, OpenAiCrewJudge,
     PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
 use tb_engagement::learn_irc_reader::LearnIrcReader;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::reaction_learning::ReactionLearning;
 use tb_engagement::sender_auth::SenderAuthStore;
@@ -702,7 +702,7 @@ pub async fn build_runtime(
     let mut conversation_scam = ConversationScamGuard::new(
         pool.clone(),
         bot_user_id.clone(),
-        Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
+        Arc::new(LlmScamJudge::new(EngagementLlmClient::new(
             None, None, None, None,
         ))),
         Arc::clone(&api),
@@ -763,7 +763,7 @@ pub async fn build_runtime(
     }
     command_engine = command_engine.set_scam_port(Arc::new(ScamGuardCommands::new(
         pool.clone(),
-        EngagementMinimaxClient::new(None, None, None, None),
+        EngagementLlmClient::new(None, None, None, None),
     )));
     command_engine = command_engine.set_invite_reply_notifier(
         Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>
@@ -829,8 +829,8 @@ pub async fn build_runtime(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
-            Arc::new(MiniMaxInviteQuestionJudge::new(
-                EngagementMinimaxClient::new(None, None, None, None),
+            Arc::new(LlmInviteQuestionJudge::new(
+                EngagementLlmClient::new(None, None, None, None),
             )),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
@@ -838,7 +838,7 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new(LfgPitchResponder::new(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
-            Arc::new(MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+            Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
             ))),
             lfg_pitch_enabled_from_env(),
@@ -864,7 +864,7 @@ pub async fn build_runtime(
     // unabhängig vom Sende-Account (Python `ensure_started`).
     let engagement = Arc::new(EngagementPipeline::with_defaults(
         pool.clone(),
-        EngagementMinimaxClient::new(None, None, None, None),
+        EngagementLlmClient::new(None, None, None, None),
     ));
     let stealth = build_engagement_stealth(pool.clone()).await;
     if stealth.is_none() {
@@ -2860,7 +2860,7 @@ mod chat_notification_tests {
             conversation_scam: Arc::new(ConversationScamGuard::new(
                 pool.clone(),
                 "bot-id".to_string(),
-                Arc::new(MiniMaxScamJudge::new(EngagementMinimaxClient::new(
+                Arc::new(LlmScamJudge::new(EngagementLlmClient::new(
                     None, None, None, None,
                 ))),
                 Arc::clone(&api_trait),
@@ -2876,8 +2876,8 @@ mod chat_notification_tests {
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
                 Arc::new(PgInviteQuestionStore::new(pool.clone())),
-                Arc::new(MiniMaxInviteQuestionJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(LlmInviteQuestionJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
@@ -2885,7 +2885,7 @@ mod chat_notification_tests {
             lfg_pitch: Arc::new(LfgPitchResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
-                Arc::new(MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+                Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
                     None, None, None, None,
                 ))),
                 false,

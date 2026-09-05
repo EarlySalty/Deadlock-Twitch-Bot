@@ -1,6 +1,6 @@
 //! Zentraler Fireworks-Dispatcher für die Social-Media-Anreicherung.
 //!
-//! Frühere Ollama-, MiniMax- und Claude-Bahnen sind entfernt. Auch dieser
+//! Frühere Ollama-, KI- und Claude-Bahnen sind entfernt. Auch dieser
 //! Bereich nutzt ausschließlich [`tb_llm::complete`].
 
 use async_trait::async_trait;

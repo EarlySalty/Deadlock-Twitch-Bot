@@ -504,7 +504,7 @@ mod tests {
             ps,
             pe,
             "# Report",
-            Some("minimax"),
+            Some("llm"),
         )
         .await
         .unwrap();

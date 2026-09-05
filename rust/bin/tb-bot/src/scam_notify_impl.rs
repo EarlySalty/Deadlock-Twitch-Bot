@@ -5,7 +5,7 @@
 //! Aktionen erhalten einen `scam_revoke`-`view_spec` für den „Rückgängig"-Button.
 //!
 //! Sprache bewusst nur Deutsch (Entscheidung 2026-06-18: schlicht die
-//! MiniMax-Begründung zeigen, kein i18n-Layer).
+//! KI-Begründung zeigen, kein i18n-Layer).
 
 use std::sync::Arc;
 
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ban_post_traegt_revoke_vertrag_und_minimax_begruendung() {
+    async fn ban_post_traegt_revoke_vertrag_und_llm_begruendung() {
         let p = capture("scam", "banned").await;
 
         assert_eq!(p.channel_id, 1374364800817303632);
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(vs["chatter_login"], "sophiaa_star");
         assert_eq!(vs["action_taken"], "banned");
 
-        // Embed zeigt schlicht die MiniMax-Begründung (Entscheidung „nur Deutsch").
+        // Embed zeigt schlicht die KI-Begründung (Entscheidung „nur Deutsch").
         assert_eq!(
             p.embed["description"],
             "Aufgesetzte Freundschafts-Masche mit Pivot zu Discord."

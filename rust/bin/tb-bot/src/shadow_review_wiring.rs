@@ -185,7 +185,7 @@ mod tests {
             channel_login: "nani".into(),
             response_text: "Beispielantwort".into(),
             triggered_by_msg_id: Some("m1".into()),
-            model: "MiniMax-M3".into(),
+            model: "deepseek-v4-flash".into(),
             created_at: chrono::Utc::now(),
         };
         let sink = DiscordShadowReviewSink {
@@ -199,7 +199,7 @@ mod tests {
         };
         let embed = sink.embed_for(&item);
         assert_eq!(embed["description"], "Beispielantwort");
-        assert_eq!(embed["fields"][0]["value"], "MiniMax-M3");
+        assert_eq!(embed["fields"][0]["value"], "deepseek-v4-flash");
         assert_eq!(embed["fields"][1]["value"], "m1");
         assert_eq!(embed["footer"]["text"], "Log-ID 42");
     }
