@@ -20,7 +20,7 @@ export function Rise({ children, step = 0, className, style, as, ...rest }: Rise
   const classes = className ? (base ? `${base} ${className}` : className) : base || undefined;
 
   const handleAnimationEnd = (event: AnimationEvent<HTMLElement>) => {
-    if (event.target === event.currentTarget) {
+    if (event.target === event.currentTarget && event.animationName === 'ddc-rise-in') {
       setRisen(true);
     }
   };

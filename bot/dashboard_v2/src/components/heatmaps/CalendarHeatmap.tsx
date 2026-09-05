@@ -73,7 +73,7 @@ export function CalendarHeatmap({
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
 
-      <div className="flex-1">
+      <div className="flex-1 overflow-x-auto">
         <div
           className="mb-1 grid"
           style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}

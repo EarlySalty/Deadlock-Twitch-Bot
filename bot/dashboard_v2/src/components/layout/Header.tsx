@@ -69,7 +69,12 @@ export function Header({
   const istVoreinstellung = timeRanges.some(range => range.value === days);
 
   const uebernehmeTage = () => {
-    const naechster = clampDays(Number.parseInt(tageInput, 10));
+    const parsed = Number.parseInt(tageInput, 10);
+    if (!Number.isFinite(parsed)) {
+      setTageInput(String(days));
+      return;
+    }
+    const naechster = clampDays(parsed);
     onDaysChange(naechster);
     setTageInput(String(naechster));
   };

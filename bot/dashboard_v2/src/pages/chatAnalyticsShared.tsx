@@ -48,8 +48,10 @@ export function RawChatStatusBanner({
           </p>
           <p className="mt-1 leading-5">
             {partialCoverage
-              ? `Chat-Nachrichten werden erst seit ${date} erfasst. Kennzahlen auf Nachrichtenbasis beziehen sich auf den Zeitraum ab diesem Datum.`
-              : status.note || 'Message-basierte KPIs und Charts sind für diesen Zeitraum eingeschränkt.'}
+              ? `Chat-Nachrichten werden erst seit ${date} erfasst. Kennzahlen aus dem Chat beziehen sich auf den Zeitraum ab diesem Datum.`
+              : status.suspectedIngestionIssue
+                ? 'Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat können deshalb zu niedrig ausfallen.'
+                : 'Für diesen Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat sind eingeschränkt.'}
           </p>
         </div>
       </div>
