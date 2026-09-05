@@ -3157,8 +3157,7 @@ mod tests {
         let requests = server.received_requests().await.expect("Requests");
         assert_eq!(requests.len(), 1);
         let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
-        assert!(body.contains("reasoning_effort"), "Body: {body}");
-        assert!(body.contains("none"), "Body: {body}");
+        assert!(body.contains("\"reasoning_effort\":\"none\""), "Body: {body}");
     }
 
     #[tokio::test]
