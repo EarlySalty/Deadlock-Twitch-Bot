@@ -1105,7 +1105,7 @@ function ReportColumn({
         <div>
           <div className="mb-2 flex items-center gap-2">
             <VariantBadge variant={variant} />
-            <span className="text-xs text-white/40">{data?.model || 'KI'}</span>
+            <span className="text-xs text-white/40">{data?.model === 'opus' ? 'Claude Opus' : 'KI'}</span>
           </div>
           <h2 className="text-lg font-bold text-white">
             {isFull ? 'Full / alle Daten' : 'Compact / Evidence'}
