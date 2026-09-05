@@ -82,3 +82,4 @@ Bot-Konten und anonyme Twitch-Logins fallen aus allen Zuschauer-Auswertungen her
 ## Amendments
 
 - 2026-09-05: Pfad rust/.sqlx/** alt (nicht im erlaubten Bereich) -> neu (im erlaubten Bereich), Grund: der Anonym-Ausschluss aendert den SQL-Text mehrerer sqlx-Makros, der committete Offline-Cache aendert sich zwangslaeufig; neu erzeugt mit cargo sqlx prepare gegen die Prod-DB (Describe-only, read-only), nur Cache-Eintraege der geaenderten Abfragen, kein Drift, entschieden von Orchestrator
+- 2026-09-05: Praezisierung des vorigen Eintrags alt (nur geaenderte Abfragen) -> neu (zusaetzlich fuenf tote Orphan-Cache-Dateien entfernt, die kein lebendes query!-Makro mehr tragen: 0df9a0dd, 13578ee1, 762f88ce, f0749920, fad7e773), Grund: cargo sqlx prepare raeumt verwaiste Eintraege mit; Offline-Build von tb-bot und tb-dashboard bleibt gruen, entschieden von Orchestrator

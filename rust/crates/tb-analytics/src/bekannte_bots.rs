@@ -16,7 +16,7 @@ pub const KNOWN_CHAT_BOTS: &[&str] = &[
 pub const ANONYM_LOGIN_REGEX_SQL: &str = "^justinfan[0-9]+$";
 
 pub fn ist_anonymer_login(login: &str) -> bool {
-    match login.strip_prefix("justinfan") {
+    match login.to_ascii_lowercase().strip_prefix("justinfan") {
         Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()),
         None => false,
     }
@@ -66,7 +66,7 @@ mod tests {
         assert!(ist_anonymer_login("justinfan12345"));
         assert!(!ist_anonymer_login("justinfan"));
         assert!(!ist_anonymer_login("justinfanx"));
-        assert!(!ist_anonymer_login("Justinfan1"));
+        assert!(ist_anonymer_login("Justinfan1"));
         assert!(!ist_anonymer_login("nani"));
     }
 }

@@ -317,7 +317,7 @@ pub async fn build_raw_chat_status(
     if note.is_none() {
         if let Some(err) = &health_last_error {
             if !health_last_insert_error_at.is_null() {
-                tracing::warn!(streamer = %streamer, fehler = %err, "Roh-Chat-Speicherfehler zuletzt gemeldet");
+                tracing::debug!(streamer = %streamer, fehler = %err, "Roh-Chat-Speicherfehler zuletzt gemeldet");
                 note = Some(
                     "Beim Speichern der Chat-Nachrichten gab es zuletzt einen Fehler.".to_string(),
                 );

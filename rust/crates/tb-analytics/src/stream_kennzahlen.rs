@@ -150,17 +150,17 @@ fn gesamt_schluessel(streamer_login: &str, ausgeschlossen: &[String]) -> String 
     format!("{streamer_login}\u{1f}{}", sortiert.join("\u{1e}"))
 }
 
-/// Baut `LOWER(<spalte>) NOT IN ($n, $n+1, ...)` ab Platzhalter `start_idx`.
-/// Ohne Ausschlüsse eine Bedingung, die immer wahr ist, damit der Aufrufer
-/// den Rest der Abfrage nicht doppelt schreiben muss.
 fn nicht_in(start_idx: usize, spalte: &str, ausgeschlossen: &[String]) -> String {
     if ausgeschlossen.is_empty() {
-        return "TRUE".to_string();
+        return format!("LOWER({spalte}) !~ '^justinfan[0-9]+$'");
     }
     let platzhalter: Vec<String> = (start_idx..start_idx + ausgeschlossen.len())
         .map(|i| format!("${i}"))
         .collect();
-    format!("LOWER({spalte}) NOT IN ({})", platzhalter.join(", "))
+    format!(
+        "(LOWER({spalte}) NOT IN ({}) AND LOWER({spalte}) !~ '^justinfan[0-9]+$')",
+        platzhalter.join(", ")
+    )
 }
 
 /// Der laufende Stream eines Streamers, oder `None`, wenn keiner läuft.
