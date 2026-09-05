@@ -22,6 +22,8 @@ use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const LLM_USAGE_SCHEMA: &str = include_str!("../../tb-llm/sqlx/schema.sql");
+
 fn client_for(server: &MockServer) -> EngagementLlmClient {
     EngagementLlmClient::new(
         Some("test-key".to_string()),
@@ -69,6 +71,11 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .connect(&dsn)
         .await
         .expect("Test-DB verbinden");
+
+    sqlx::raw_sql(LLM_USAGE_SCHEMA)
+        .execute(&verify)
+        .await
+        .expect("llm_usage-Schema anlegen");
 
     // 1) generate() → engagement 777/333.
     {
