@@ -32,7 +32,7 @@ use tb_chat::conversation_scam::{
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
-use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
+use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PitchReviewSink, PromoEngine};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::style_score::{build_centroid, Centroid};
@@ -60,7 +60,7 @@ use tb_engagement::types::IncomingMessage;
 use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
-use tb_transport_discord::BrokerRelay;
+use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 use tb_transport_twitch::HelixClient;
 
 use crate::raid_adapters::HelixTokenClient;
@@ -624,6 +624,7 @@ pub struct ChatRuntimePorts {
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
+    pub review_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
@@ -640,6 +641,7 @@ pub async fn build_runtime(
         clip_port,
         bot_ban_handler,
         invite_relay,
+        review_relay,
         scam_notifier,
         raid_greeting,
     } = ports;
@@ -718,8 +720,13 @@ pub async fn build_runtime(
         relay: invite_relay,
         invite_channel_id: invite_channel_id_from_env(),
     });
-    let promos = Arc::new(
-        PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
+    let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.map(|relay| {
+        Arc::new(DiscordPitchReviewSink {
+            discord: Arc::new(relay),
+        }) as Arc<dyn PitchReviewSink>
+    });
+    let promos = Arc::new({
+        let mut engine = PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
             // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
             // bereits als Read-Seite in CombinedSuppression hängt. channel_settings-
             // Drops werden so 7d/3d persistiert (promo/recruitment 7d, partner_raid 3d).
@@ -731,8 +738,12 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
-    );
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+        if let Some(sink) = pitch_review_sink {
+            engine = engine.set_pitch_review_sink(sink);
+        }
+        engine
+    });
 
     let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
     let mut command_engine = CommandEngine::new(
@@ -1857,6 +1868,43 @@ impl AccountAgePort for HelixAccountAge {
         match self.api.user_created_at(user_id).await {
             Ok(Some(created_at)) => Some((chrono::Utc::now() - created_at).num_days()),
             _ => None,
+        }
+    }
+}
+
+const PITCH_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
+const PITCH_REVIEW_GOLD: i64 = 0x00C8_A86B;
+
+struct DiscordPitchReviewSink {
+    discord: Arc<dyn DiscordBackend>,
+}
+
+#[async_trait::async_trait]
+impl PitchReviewSink for DiscordPitchReviewSink {
+    async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str) {
+        let displays = vec![
+            format!("**Anlass-Pitch** in `{channel_login}`"),
+            format!("An **{target_login}**"),
+            format!("> {}", trigger.replace('\n', " ")),
+            format!("Antwort: {reply}"),
+        ];
+        let payload = SendRichMessage {
+            channel_id: PITCH_REVIEW_CHANNEL_ID,
+            content: None,
+            embed: serde_json::json!({}),
+            components: Some(serde_json::json!([{
+                "type": 17,
+                "accent_color": PITCH_REVIEW_GOLD,
+                "components": displays
+                    .into_iter()
+                    .map(|content| serde_json::json!({ "type": 10, "content": content }))
+                    .collect::<Vec<_>>()
+            }])),
+            allowed_role_ids: vec![],
+            view_spec: None,
+        };
+        if let Err(error) = self.discord.send_rich_message(payload).await {
+            tracing::warn!(%error, channel = channel_login, "Anlass-Pitch-Review-Karte fehlgeschlagen");
         }
     }
 }

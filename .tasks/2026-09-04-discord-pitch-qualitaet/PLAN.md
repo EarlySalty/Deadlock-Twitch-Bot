@@ -174,6 +174,8 @@ Validierung: `/home/nathanael/.cargo/bin/cargo build -p tb-bot`. Live-Nachweis i
 
 Stop-Regel: kein Discord-Post für verworfene Pitches (die stehen nur im Log). Kein neuer Discord-Kanal, kein zweiter Sendeweg.
 
+STATUS M6 erledigt 2026-09-05: `DiscordPitchReviewSink` in chat_wiring.rs (Components-V2-Goldkarte mit Kanal, Zielperson, Auslöser-Zitat und Antwort, über `BrokerRelay`/`DiscordBackend::send_rich_message` an den bestehenden Smalltalk-Review-Kanal 1374364800817303632). Neues Feld `review_relay` in `ChatRuntimePorts`, in main.rs aus `BrokerRelay::new(&settings.broker)` gesetzt, `.set_pitch_review_sink(...)` an der PromoEngine-Konstruktion. Nur gesendete Anlass-Pitches lösen eine Karte aus (Aufruf steht am Ende des Sende-Zweigs von `on_message_pitch`). `cargo build -p tb-bot` EXIT=0, keine Warnungen.
+
 ---
 
 ## M7 - Regressionstests und Guard-Test
@@ -210,6 +212,8 @@ Erwarteter Zwischenzustand: FAQ deckt sich mit dem Code.
 Validierung: Sichtprüfung der Datei; keine Gedankenstriche, echte Umlaute.
 
 Stop-Regel: Preispläne und Werbefrei-Aussagen inhaltlich nicht ändern (INV-07), nur das Werbe-Verhalten neu beschreiben.
+
+STATUS M8 erledigt 2026-09-05: `knowledge/bot/faq-werbung.md` beschreibt jetzt beide Pfade (Anlass-Antwort auf die Situation eines Zuschauers plus periodische Einladung), hält fest, dass es keine fertigen Standard-Sprüche mehr gibt, dass in der Anlass-Antwort nie ein Link steht und der Discord-Link nur in der periodischen Einladung oder auf `!discord`/`!invite` kommt, und nennt die Deckel (ein Anlass-Pitch pro Zuschauer in sieben Tagen, wenige pro Stream). `last_updated` auf 2026-09-05, Werbefrei- und Preisaussagen unverändert, keine Gedankenstriche in den geänderten Abschnitten.
 
 ---
 
