@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use reqwest::header::{CONTENT_TYPE, LOCATION, RETRY_AFTER};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
@@ -514,6 +514,7 @@ impl YouTubeUploader {
                     .put(session_url)
                     .bearer_auth(token)
                     .header(CONTENT_TYPE, "video/*")
+                    .header(CONTENT_LENGTH, "0")
                     .header("Content-Range", format!("bytes */{size_bytes}"))
                     .body(Vec::new())
             })
@@ -541,7 +542,7 @@ impl YouTubeUploader {
                 range_end(resp.headers()).map_or(0, |end| end + 1),
             ));
         }
-        if status == 404 || status == 410 {
+        if status == 404 || status == 410 || status == 411 {
             return Ok(ResumeStand::Verfallen);
         }
         Err(fehler_aus_antwort(resp, "YouTube resume query").await)
@@ -1024,7 +1025,7 @@ impl PlatformUploader for YouTubeUploader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Uploader ohne echte Wartezeiten (Backoff-Basis null).
@@ -1543,6 +1544,43 @@ mod tests {
             up.resumable_offset(&uri("/kaputt"), 500).await,
             Err(UploadError::Api(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn resume_abfrage_sendet_content_length_null() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/status"))
+            .and(header("content-length", "0"))
+            .and(header("content-range", "bytes */500"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "yt-ok" })))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let stand = up
+            .resumable_offset(&format!("{}/status", server.uri()), 500)
+            .await
+            .unwrap();
+        assert_eq!(stand, ResumeStand::Fertig("yt-ok".into()));
+    }
+
+    #[tokio::test]
+    async fn resume_offset_411_ist_verfallen() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/abgelaufen"))
+            .respond_with(
+                ResponseTemplate::new(411).set_body_string(
+                    "<!DOCTYPE html><title>Error 411 (Length Required)!!1</title>",
+                ),
+            )
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let stand = up
+            .resumable_offset(&format!("{}/abgelaufen", server.uri()), 500)
+            .await;
+        assert_eq!(stand.unwrap(), ResumeStand::Verfallen);
     }
 
     #[tokio::test]
