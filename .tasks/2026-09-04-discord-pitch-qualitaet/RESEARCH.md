@@ -1,4 +1,4 @@
-status: aktiv
+status: erledigt
 datum: 2026-09-04
 
 # Research: Discord-Pitches mit Qualität statt Preset-Sprüchen
