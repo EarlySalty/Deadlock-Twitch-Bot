@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "rsa 0.9 Marvin-Timing kommt über sqlx-mysql; Workspace baut sqlx nur mit postgres, mysql wird nie kompiliert"
