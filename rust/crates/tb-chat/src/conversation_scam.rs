@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use unicode_normalization::UnicodeNormalization;
@@ -468,18 +468,18 @@ pub trait ScamJudge: Send + Sync {
     async fn judge(&self, dialog: &mut DialogState) -> Verdict;
 }
 
-pub struct MiniMaxScamJudge {
-    client: EngagementMinimaxClient,
+pub struct LlmScamJudge {
+    client: EngagementLlmClient,
 }
 
-impl MiniMaxScamJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+impl LlmScamJudge {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
 
 #[async_trait]
-impl ScamJudge for MiniMaxScamJudge {
+impl ScamJudge for LlmScamJudge {
     async fn judge(&self, dialog: &mut DialogState) -> Verdict {
         let messages = Value::Array(
             dialog
@@ -1365,14 +1365,14 @@ pub struct StoredVerdict {
 }
 
 /// Backing für die Chat-Commands `!explain` und die `overturned`-Markierung bei
-/// `!unban`. Hält eigene DB-/MiniMax-Zugriffe, unabhängig vom Live-Detektor.
+/// `!unban`. Hält eigene DB-/KI-Zugriffe, unabhängig vom Live-Detektor.
 pub struct ScamGuardCommands {
     pool: PgPool,
-    client: EngagementMinimaxClient,
+    client: EngagementLlmClient,
 }
 
 impl ScamGuardCommands {
-    pub fn new(pool: PgPool, client: EngagementMinimaxClient) -> Self {
+    pub fn new(pool: PgPool, client: EngagementLlmClient) -> Self {
         Self { pool, client }
     }
 
@@ -1409,7 +1409,7 @@ impl ScamGuardCommands {
 
     /// Liefert eine ausführliche, in Twitch-Häppchen gesplittete Erklärung des
     /// jüngsten Scam-Urteils. Leerer Vektor = kein Fall gefunden. Fällt bei
-    /// MiniMax-Ausfall auf die gespeicherte Begründung zurück.
+    /// KI-Ausfall auf die gespeicherte Begründung zurück.
     pub async fn explain(&self, channel_login: &str, target: Option<&str>) -> Vec<String> {
         let verdict = match self.latest_scam_verdict(channel_login, target).await {
             Ok(Some(verdict)) => verdict,
@@ -1499,7 +1499,7 @@ impl crate::commands::ScamGuardCommandPort for ScamGuardCommands {
 // ---- Self-Learning ----------------------------------------------------------
 //
 // Analog zum SpamAiReviewer, aber für den LLM-Judge: ein Hintergrundjob lässt
-// MiniMax periodisch aus den jüngsten bestätigten Scams und den vom Streamer
+// KI periodisch aus den jüngsten bestätigten Scams und den vom Streamer
 // aufgehobenen Fehlalarmen kompakte Erkenntnisse destillieren. Diese fließen als
 // Zusatzhinweis in den Judge-System-Prompt ein (`DialogState::with_learnings`),
 // sodass der Wächter mit der Zeit treffsicherer wird, ohne Codeänderung.
@@ -1574,7 +1574,7 @@ pub async fn fetch_learning_corpus(pool: &PgPool, limit: i64) -> LearningCorpus 
     }
 }
 
-/// Baut die MiniMax-Nachrichten für die Destillation. Reiner, testbarer Aufbau.
+/// Baut die KI-Nachrichten für die Destillation. Reiner, testbarer Aufbau.
 pub fn build_distill_messages(corpus: &LearningCorpus) -> Value {
     fn render(samples: &[LearningSample]) -> Vec<Value> {
         samples
@@ -1630,10 +1630,10 @@ pub async fn load_learnings(pool: &PgPool) -> Result<Option<String>, String> {
     .map(|opt| opt.filter(|guidance| !guidance.trim().is_empty()))
 }
 
-/// Ein Durchlauf des Self-Learning-Jobs: Korpus laden, von MiniMax destillieren
+/// Ein Durchlauf des Self-Learning-Jobs: Korpus laden, von KI destillieren
 /// lassen, Ergebnis ablegen. Best-effort — Fehler werden geloggt, nicht
 /// propagiert; zu dünne Datenlage wird übersprungen (keine Überschreibung).
-pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxClient) {
+pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementLlmClient) {
     let corpus = fetch_learning_corpus(pool, LEARNINGS_SAMPLE_LIMIT).await;
     if corpus.total() < LEARNINGS_MIN_SAMPLES {
         debug!(
@@ -1662,7 +1662,7 @@ pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementMinimaxCl
 /// Endlos-Loop: einmal nach `initial_delay_secs`, danach alle 6 Stunden.
 pub async fn schedule_scam_learnings(pool: PgPool, initial_delay_secs: u64) {
     tokio::time::sleep(Duration::from_secs(initial_delay_secs)).await;
-    let client = EngagementMinimaxClient::new(None, None, None, None);
+    let client = EngagementLlmClient::new(None, None, None, None);
     loop {
         run_scam_learnings_once(&pool, &client).await;
         tokio::time::sleep(SCAM_LEARNINGS_INTERVAL).await;
@@ -2037,7 +2037,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2311,7 +2311,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn minimax_judge_sendet_wachsenden_dialog_ohne_transkript_truncation() {
+    async fn llm_judge_sendet_wachsenden_dialog_ohne_transkript_truncation() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -2325,13 +2325,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = EngagementMinimaxClient::new(
+        let client = EngagementLlmClient::new(
             Some("test-key".to_string()),
             Some(server.uri()),
-            Some("MiniMax-M3".to_string()),
+            Some("deepseek-v4-flash".to_string()),
             None,
         );
-        let judge = MiniMaxScamJudge::new(client);
+        let judge = LlmScamJudge::new(client);
         let mut dialog = DialogState::new(true);
         dialog.push_user_message("first substantial message with enough context");
         let first = judge.judge(&mut dialog).await;
@@ -2369,8 +2369,8 @@ mod tests {
     #[ignore = "benötigt produktive Fireworks-Zugangsdaten"]
     async fn live_fireworks_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-        let judge: Arc<dyn ScamJudge> = Arc::new(MiniMaxScamJudge::new(
-            EngagementMinimaxClient::new(None, None, None, None),
+        let judge: Arc<dyn ScamJudge> = Arc::new(LlmScamJudge::new(
+            EngagementLlmClient::new(None, None, None, None),
         ));
         let settings = GuardSettings::default();
         let enforcement_threshold = effective_scam_enforcement_threshold(&settings, Some(0));
@@ -2904,7 +2904,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY"]
     async fn live_judge_baseline_gemeldeter_recon_smalltalk() {
-        let judge = MiniMaxScamJudge::new(EngagementMinimaxClient::new(None, None, None, None));
+        let judge = LlmScamJudge::new(EngagementLlmClient::new(None, None, None, None));
         let enforcement_threshold =
             effective_scam_enforcement_threshold(&GuardSettings::default(), Some(0));
         let mut would_ban = 0usize;

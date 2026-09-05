@@ -891,7 +891,7 @@ impl ChatPipeline {
 
         // Conversation-Scam-Guard: eigener, fehlertoleranter Hintergrundpfad.
         // Der Guard lädt sein per-Kanal-Opt-out selbst und blockiert die übrige
-        // Chat-Pipeline weder durch DB- noch durch MiniMax-Latenz.
+        // Chat-Pipeline weder durch DB- noch durch KI-Latenz.
         let conversation_scam_observe = || {
             p.conversation_scam.observe(event);
         };
@@ -2061,7 +2061,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use tb_engagement::crew_review::{RICKY_TWITCH_USER_ID, RickyChatInput};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use tokio::time::{Duration, sleep};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2488,8 +2488,8 @@ mod tests {
             conversation_scam: Arc::new(ConversationScamGuard::new(
                 pool.clone(),
                 "bot-id".to_string(),
-                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(crate::conversation_scam::LlmScamJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
@@ -2506,8 +2506,8 @@ mod tests {
                 Arc::new(crate::invite_question::PgInviteQuestionStore::new(
                     pool.clone(),
                 )),
-                Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(crate::invite_question::LlmInviteQuestionJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 None,
                 None,
@@ -2730,8 +2730,8 @@ mod tests {
             conversation_scam: Arc::new(ConversationScamGuard::new(
                 pool.clone(),
                 "bot-id".to_string(),
-                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(crate::conversation_scam::LlmScamJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
@@ -3510,8 +3510,8 @@ mod tests {
             conversation_scam: Arc::new(ConversationScamGuard::new(
                 pool.clone(),
                 "bot-id".to_string(),
-                Arc::new(crate::conversation_scam::MiniMaxScamJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(crate::conversation_scam::LlmScamJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 Arc::clone(&api_trait),
                 Arc::clone(&moderation),
@@ -3526,8 +3526,8 @@ mod tests {
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
                 Arc::new(crate::invite_question::PgInviteQuestionStore::new(pool.clone())),
-                Arc::new(crate::invite_question::MiniMaxInviteQuestionJudge::new(
-                    EngagementMinimaxClient::new(None, None, None, None),
+                Arc::new(crate::invite_question::LlmInviteQuestionJudge::new(
+                    EngagementLlmClient::new(None, None, None, None),
                 )),
                 None,
                 None,

@@ -1,4 +1,4 @@
-//! `!title`-Generator-Kernlogik: Rate-Limiter, Promptbau, MiniMax-HTTP-Call,
+//! `!title`-Generator-Kernlogik: Rate-Limiter, Promptbau, KI-HTTP-Call,
 //! Usage-Ledger und Response-Verarbeitung aus `bot/title_generator/title_ai.py`.
 
 use std::collections::{HashMap, HashSet};
@@ -356,7 +356,7 @@ fn history_line(item: &PromptHistoryItem) -> String {
     )
 }
 
-/// Baut das MiniMax-Prompt (Python `build_title_prompt`). Sortiert die History
+/// Baut das KI-Prompt (Python `build_title_prompt`). Sortiert die History
 /// nach (relative_perf, engagement_rate) absteigend für die Top-Referenzen.
 ///
 /// Hinweis: Für `Hero`/`Party` greift bei `None` der Python-Default
@@ -471,7 +471,7 @@ ANTWORT-FORMAT (JSON, kein Markdown drumherum):
 }
 
 // ---------------------------------------------------------------------------
-// MiniMax-HTTP-Call (Python `generate_title` + `_get_minimax_client`)
+// KI-HTTP-Call (Python `generate_title` + `_get_client`)
 // ---------------------------------------------------------------------------
 
 /// Fehler beim Generieren eines Titels.
@@ -479,9 +479,9 @@ ANTWORT-FORMAT (JSON, kein Markdown drumherum):
 pub enum GenerateTitleError {
     /// Rate-Limit überschritten (Python `RateLimitExceeded`).
     RateLimit(RateLimitExceeded),
-    /// Kein MiniMax-Key in der Umgebung (Python `LLMSecretNotFoundError`).
+    /// Kein KI-Key in der Umgebung (Python `LLMSecretNotFoundError`).
     NoApiKey,
-    /// HTTP-/Decode-Fehler beim MiniMax-Call.
+    /// HTTP-/Decode-Fehler beim KI-Call.
     Http(String),
 }
 
@@ -576,13 +576,13 @@ pub async fn generate_title_with(
     let result = sanitize_title_result(parse_title_response(&content), keywords, rank_display);
     if result.primary.is_empty() {
         return Err(GenerateTitleError::Http(
-            "MiniMax returned no usable title".to_string(),
+            "KI returned no usable title".to_string(),
         ));
     }
     Ok(result)
 }
 
-/// Generiert einen Stream-Titel via MiniMax (Python `generate_title`).
+/// Generiert einen Stream-Titel via KI (Python `generate_title`).
 /// Reihenfolge wie Python: Rate-Limit zuerst, dann Key-Resolve, dann Call.
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_title(
@@ -744,7 +744,7 @@ pub async fn generate_insight_with(
     parse_insight_response(&content)
 }
 
-/// Wöchentliche Insight-Analyse via MiniMax (Python `generate_insight`).
+/// Wöchentliche Insight-Analyse via KI (Python `generate_insight`).
 /// Leere History / fehlender Key / Fehler → `None`.
 pub async fn generate_insight(
     history: &[InsightHistoryItem],
@@ -781,10 +781,6 @@ mod tests {
             "FIREWORKS_BASE_URL",
             "FIREWORK_MODEL",
             "FIREWORKS_MODEL",
-            "MINIMAX_TOKEN_PLAN_KEY",
-            "MINIMAX_API_KEY",
-            "MINIMAX_BASE_URL",
-            "MINIMAX_MODEL",
             "MINMAX",
         ] {
             std::env::remove_var(name);
@@ -844,13 +840,12 @@ mod tests {
         }
 
         clear_provider_env();
-        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         let endpoint = tb_llm::endpoint_for("title_ai");
         assert_eq!(endpoint.provider, "fireworks");
         assert!(endpoint.api_key.is_none());
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
-        std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "minimax");
+        std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "llm");
         let endpoint = tb_llm::endpoint_for("title_ai");
         assert_eq!(endpoint.provider, "fireworks");
         assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
@@ -1040,7 +1035,7 @@ mod tests {
         let result = generate_title_with(
             &server.uri(),
             "fakekey",
-            "MiniMax-M3",
+            "deepseek-v4-flash",
             "ranked",
             &[],
             &[],
@@ -1063,7 +1058,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let err = generate_title_with(&server.uri(), "k", "MiniMax-M3", "x", &[], &[], None, None)
+        let err = generate_title_with(&server.uri(), "k", "deepseek-v4-flash", "x", &[], &[], None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
@@ -1099,7 +1094,7 @@ mod tests {
         let result = generate_title_with(
             &server.uri(),
             "k",
-            "MiniMax-M3",
+            "deepseek-v4-flash",
             "ranked",
             &[],
             &[],
@@ -1129,7 +1124,7 @@ mod tests {
         let err = generate_title_with(
             &server.uri(),
             "k",
-            "MiniMax-M3",
+            "deepseek-v4-flash",
             "ranked",
             &[],
             &[],
@@ -1165,7 +1160,7 @@ mod tests {
         let r = generate_insight_with(
             &server.uri(),
             "k",
-            "MiniMax-M3",
+            "deepseek-v4-flash",
             &history,
             "01.06. – 28.06.2026",
         )
@@ -1185,7 +1180,7 @@ mod tests {
 
         // Leere History → None ohne HTTP-Call.
         assert!(
-            generate_insight_with("http://unused", "k", "MiniMax-M3", &[], "p")
+            generate_insight_with("http://unused", "k", "deepseek-v4-flash", &[], "p")
                 .await
                 .is_none()
         );
@@ -1203,7 +1198,7 @@ mod tests {
             engagement_rate: 0.1,
         }];
         assert!(
-            generate_insight_with(&server.uri(), "k", "MiniMax-M3", &history, "p")
+            generate_insight_with(&server.uri(), "k", "deepseek-v4-flash", &history, "p")
                 .await
                 .is_none()
         );

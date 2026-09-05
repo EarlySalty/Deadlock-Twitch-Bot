@@ -2111,10 +2111,6 @@ mod tests {
             "FIREWORKS_BASE_URL",
             "FIREWORK_MODEL",
             "FIREWORKS_MODEL",
-            "MINIMAX_TOKEN_PLAN_KEY",
-            "MINIMAX_API_KEY",
-            "MINIMAX_BASE_URL",
-            "MINIMAX_MODEL",
             "MINMAX",
         ] {
             std::env::remove_var(name);
@@ -2127,7 +2123,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear_provider_env();
-        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
 
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert!(providers.is_empty());
@@ -2138,7 +2133,7 @@ mod tests {
         assert!(providers[0].base_url.contains("fireworks.ai"));
         assert!(providers[0].model.contains("deepseek"));
 
-        std::env::set_var("TB_LLM_PROVIDER_SPAM_JUDGE", "minimax");
+        std::env::set_var("TB_LLM_PROVIDER_SPAM_JUDGE", "llm");
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].provider, "fireworks");

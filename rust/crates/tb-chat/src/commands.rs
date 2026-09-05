@@ -808,11 +808,11 @@ impl CommandEngine {
         .await;
     }
 
-    /// `!title <keywords> [--live]` — generiert einen Stream-Titel via MiniMax
+    /// `!title <keywords> [--live]` — generiert einen Stream-Titel via KI
     /// (B11). Port von `cmd_title` (chat/commands.py:770). MOD-ONLY.
     ///
     /// Schickt erst die Ack, dann läuft die schwere Arbeit (DB-Reads,
-    /// steam_lookup, MiniMax-Call) in einem `tokio::spawn`, damit ein langsamer
+    /// steam_lookup, KI-Call) in einem `tokio::spawn`, damit ein langsamer
     /// LLM-Call die Chat-Pipeline nicht blockiert. Die Antwort geht direkt über
     /// die geklonte `ChatApi`.
     async fn cmd_title(&self, event: &ChatMessageEvent, args: &str) {

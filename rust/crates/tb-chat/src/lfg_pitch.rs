@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
@@ -140,18 +140,18 @@ pub trait LfgJudge: Send + Sync {
     async fn judge(&self, input: LfgJudgeInput) -> LfgVerdict;
 }
 
-pub struct MiniMaxLfgJudge {
-    client: EngagementMinimaxClient,
+pub struct LlmLfgJudge {
+    client: EngagementLlmClient,
 }
 
-impl MiniMaxLfgJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+impl LlmLfgJudge {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
 
 #[async_trait]
-impl LfgJudge for MiniMaxLfgJudge {
+impl LfgJudge for LlmLfgJudge {
     async fn judge(&self, input: LfgJudgeInput) -> LfgVerdict {
         let user = format!(
             "Sucht diese Person gerade Mitspieler für Deadlock? yes/no/unsure\n\nNachricht: {}",
@@ -761,7 +761,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
 
     #[test]
     fn parse_lfg_verdict_liefert_yes_mit_confidence() {
@@ -781,8 +781,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn minimax_lfg_judge_ohne_provider_liefert_provider_error() {
-        let judge = MiniMaxLfgJudge::new(EngagementMinimaxClient::new(
+    async fn llm_lfg_judge_ohne_provider_liefert_provider_error() {
+        let judge = LlmLfgJudge::new(EngagementLlmClient::new(
             None,
             Some("http://127.0.0.1:1".to_string()),
             None,

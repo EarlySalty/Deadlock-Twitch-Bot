@@ -17,7 +17,7 @@
 //!
 //! Module (je ein Python-Vertrag unter `/tmp/welle-b-vertraege/`):
 //! [`spam_filter`] (zweistufiger Spam-Score), [`scam_pitch`]
-//! (Service-Pitch-Detektor + MiniMax-Review), [`promos`] (Promo-Engine mit
+//! (Service-Pitch-Detektor + KI-Review), [`promos`] (Promo-Engine mit
 //! Doppelsend-Lock), [`commands`] (die 12 Chat-Commands), [`moderation`]
 //! (HelixChatClient, Auto-Ban, TimeoutGuard, Outbound-Suppression),
 //! [`global_ban_sweep`] (Offline-Sweep-Executor).
@@ -67,7 +67,7 @@ pub use commands::{
     RaidStatusInfo, SuperModPort,
 };
 pub use conversation_scam::{
-    ConversationScamGuard, DialogState, GuardMode, GuardSettings, MiniMaxScamJudge, ScamJudge,
+    ConversationScamGuard, DialogState, GuardMode, GuardSettings, LlmScamJudge, ScamJudge,
     Verdict, VerdictKind,
 };
 pub use crew_guard::{
@@ -79,11 +79,11 @@ pub use global_chatter_ban::GlobalChatterBanEnforcer;
 pub use invite_question::{
     InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
     InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
-    InviteQuestionVerdictKind, MiniMaxInviteQuestionJudge, PgInviteQuestionStore,
+    InviteQuestionVerdictKind, LlmInviteQuestionJudge, PgInviteQuestionStore,
 };
 pub use lfg_pitch::{
     lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
-    LfgVerdictKind, MiniMaxLfgJudge, LFG_PITCH_REPLY,
+    LfgVerdictKind, LlmLfgJudge, LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,

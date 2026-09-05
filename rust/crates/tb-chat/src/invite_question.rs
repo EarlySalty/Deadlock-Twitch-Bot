@@ -1,5 +1,5 @@
 //! Deadlock-Zugangsfragen: billiger Regex-Vorfilter, Newcomer-Gate, Cooldowns,
-//! dann MiniMax-Judge und Antwort/Rückfrage.
+//! dann KI-Judge und Antwort/Rückfrage.
 //!
 //! Der KI-Call wird nicht gespawnt, sondern strikt hinter allen billigen Gates
 //! gehalten: Command-Präfix, Rückfragefenster, Regex, Rollup-Neuheit und
@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
@@ -376,18 +376,18 @@ pub trait InviteQuestionInviteUrlPort: Send + Sync {
     async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String>;
 }
 
-pub struct MiniMaxInviteQuestionJudge {
-    client: EngagementMinimaxClient,
+pub struct LlmInviteQuestionJudge {
+    client: EngagementLlmClient,
 }
 
-impl MiniMaxInviteQuestionJudge {
-    pub fn new(client: EngagementMinimaxClient) -> Self {
+impl LlmInviteQuestionJudge {
+    pub fn new(client: EngagementLlmClient) -> Self {
         Self { client }
     }
 }
 
 #[async_trait]
-impl InviteQuestionJudge for MiniMaxInviteQuestionJudge {
+impl InviteQuestionJudge for LlmInviteQuestionJudge {
     async fn judge(&self, input: InviteQuestionJudgeInput) -> InviteQuestionVerdict {
         let user = format!(
             "Fragt dieser Twitch-Chatter danach, wie er Zugang zum Spiel Deadlock bekommt \
@@ -1230,7 +1230,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-    use tb_engagement::minimax_chat::EngagementMinimaxClient;
+    use tb_engagement::llm_chat::EngagementLlmClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2396,11 +2396,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let judge = Arc::new(MiniMaxInviteQuestionJudge::new(
-            EngagementMinimaxClient::new(
+        let judge = Arc::new(LlmInviteQuestionJudge::new(
+            EngagementLlmClient::new(
                 Some("test-key".to_string()),
                 Some(server.uri()),
-                Some("MiniMax-M3".to_string()),
+                Some("deepseek-v4-flash".to_string()),
                 Some(Duration::from_secs(2)),
             ),
         ));
